@@ -1,9 +1,35 @@
 # Devantler's Monorepo
 
-This repository is a monorepo that contains all my active projects as submodules. This allows me to keep all my projects in one place and easily manage them. If you want to know more about how to work with this monorepo, please see the Getting Started Guide below.
+This repository is a monorepo that contains all my active projects as submodules. This allows me to keep all my projects in one place and easily manage them.
 
 <details>
-  <summary>Show/Hide Getting Started Guide</summary>
+  <summary>Show/Hide folder structure</summary>
+
+<!-- readme-tree start -->
+```
+.
+├── .github
+│   └── workflows
+├── .vscode
+├── _drafts
+│   └── _posts
+├── assets
+│   ├── images
+│   │   └── badges
+│   ├── pdfs
+│   └── videos
+├── github-configuration
+└── projects
+    ├── dotnet-commons
+    ├── homelab
+    ├── ksail
+    └── oci-artifacts
+
+16 directories
+```
+<!-- readme-tree end -->
+
+</details>
 
 ### Initializing the Monorepo
 
@@ -46,34 +72,3 @@ rm -rf .git/modules/<path>
 # Remove the entry in .gitmodules and remove the submodule directory located at path/to/submodule
 git rm -f <path>
 ```
-
-</details>
-
-<details>
-  <summary>Show/Hide folder structure</summary>
-
-<!-- readme-tree start -->
-```
-.
-├── .github
-│   └── workflows
-├── .vscode
-├── _drafts
-│   └── _posts
-├── assets
-│   ├── images
-│   │   └── badges
-│   ├── pdfs
-│   └── videos
-├── github-configuration
-└── projects
-    ├── dotnet-commons
-    ├── homelab
-    ├── ksail
-    └── oci-artifacts
-
-16 directories
-```
-<!-- readme-tree end -->
-
-</details>
