@@ -1,0 +1,42 @@
+{
+  "folders": [
+    {
+      "name": "🏡 Monorepo",
+      "path": "../"
+    },
+    {
+      "name": "⚙️ GitHub Config",
+      "path": "../github/config"
+    },
+    {
+      "name": "🧔🏻 GitHub Profile"
+    },
+    {
+      "name": "#️⃣ .NET Commons",
+      "path": "../projects/dotnet-commons/"
+    },
+    {
+      "name": "⬡ Data Product",
+      "path": "../projects/data-product/"
+    },
+    {
+      "name": "🛥️🐳 KSail",
+      "path": "../projects/ksail/"
+    },
+    {
+      "name": "🏠 Homelab",
+      "path": "../projects/"
+    },
+    {
+      "name": "🚚 OCI Artifacts",
+      "path": "../projects/oci-artifacts/"
+    },
+    {
+      "name": "✍🏻 Pandoc Plus",
+      "path": "../projects/pandoc-plus/"
+    }
+  ],
+  "settings": {
+    "git.ignoreSubmodules": true
+  }
+}

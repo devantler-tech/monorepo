@@ -1,0 +1,32 @@
+[submodule "github/profile"]
+	path = github/profile
+	url = git@github.com:devantler/devantler.git
+	branch = main
+[submodule "github/config"]
+	path = github/config
+	url = git@github.com:devantler/.github.git
+	branch = main
+[submodule "projects/ksail"]
+	path = projects/ksail
+	url = git@github.com:devantler/ksail.git
+	branch = main
+[submodule "projects/dotnet-commons"]
+	path = projects/dotnet-commons
+	url = git@github.com:devantler/dotnet-commons.git
+	branch = main
+[submodule "projects/homelab"]
+	path = projects/homelab
+	url = git@github.com:devantler/homelab.git
+	branch = main
+[submodule "projects/oci-artifacts"]
+	path = projects/oci-artifacts
+	url = git@github.com:devantler/oci-artifacts.git
+	branch = main
+[submodule "projects/data-product"]
+	path = projects/data-product
+	url = git@github.com:devantler/data-product.git
+	branch = main
+[submodule "projects/pandoc-plus"]
+	path = projects/pandoc-plus
+	url = git@github.com:devantler/pandoc-plus
+	branch = main
