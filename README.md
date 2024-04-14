@@ -11,21 +11,18 @@ This repository is a monorepo that contains all my active projects as submodules
 ├── .github
 │   └── workflows
 ├── .vscode
-├── _drafts
-│   └── _posts
-├── assets
-│   ├── images
-│   │   └── badges
-│   ├── pdfs
-│   └── videos
-├── github-configuration
+├── github
+│   ├── config
+│   └── profile
 └── projects
+    ├── data-product
     ├── dotnet-commons
     ├── homelab
     ├── ksail
-    └── oci-artifacts
+    ├── oci-artifacts
+    └── pandoc-plus
 
-16 directories
+13 directories
 ```
 <!-- readme-tree end -->
 
