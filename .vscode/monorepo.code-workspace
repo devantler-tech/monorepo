@@ -25,12 +25,12 @@
       "path": "../projects/ksail/"
     },
     {
-      "name": "🏠 Homelab",
-      "path": "../projects/homelab/"
-    },
-    {
       "name": "🚚 OCI Artifacts",
       "path": "../projects/oci-artifacts/"
+    },
+    {
+      "name": "🏠 Homelab",
+      "path": "../projects/homelab/"
     },
     {
       "name": "✍🏻 Pandoc Plus",
