@@ -14,6 +14,16 @@ This repository is a monorepo that contains all my active projects as submodules
 ├── github
 │   ├── config
 │   └── profile
+├── libraries
+│   ├── dotnet-age-cli
+│   ├── dotnet-flux-cli
+│   ├── dotnet-k3d-cli
+│   ├── dotnet-k9s-cli
+│   ├── dotnet-kind-cli
+│   ├── dotnet-kubeconform-cli
+│   ├── dotnet-kustomize-cli
+│   ├── dotnet-sops-cli
+│   └── dotnet-template-engine
 └── projects
     ├── data-product
     ├── dotnet-commons
@@ -22,7 +32,7 @@ This repository is a monorepo that contains all my active projects as submodules
     ├── oci-artifacts
     └── pandoc-plus
 
-13 directories
+23 directories
 ```
 <!-- readme-tree end -->
 
