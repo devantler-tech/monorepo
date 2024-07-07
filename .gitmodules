@@ -30,3 +30,39 @@
 	path = projects/pandoc-plus
 	url = git@github.com:devantler/pandoc-plus
 	branch = main
+[submodule "libraries/dotnet-template-engine"]
+	path = libraries/dotnet-template-engine
+	url = git@github.com:devantler/dotnet-template-engine.git
+	branch = main
+[submodule "libraries/dotnet-k3d-cli"]
+	path = libraries/dotnet-k3d-cli
+	url = git@github.com:devantler/dotnet-k3d-cli.git
+	branch = main
+[submodule "libraries/dotnet-sops-cli"]
+	path = libraries/dotnet-sops-cli
+	url = git@github.com:devantler/dotnet-sops-cli.git
+	branch = main
+[submodule "libraries/dotnet-age-cli"]
+	path = libraries/dotnet-age-cli
+	url = git@github.com:devantler/dotnet-age-cli.git
+	branch = main
+[submodule "libraries/dotnet-flux-cli"]
+	path = libraries/dotnet-flux-cli
+	url = git@github.com:devantler/dotnet-flux-cli.git
+	branch = main
+[submodule "libraries/dotnet-k9s-cli"]
+	path = libraries/dotnet-k9s-cli
+	url = git@github.com:devantler/dotnet-k9s-cli.git
+	branch = main
+[submodule "libraries/dotnet-kind-cli"]
+	path = libraries/dotnet-kind-cli
+	url = git@github.com:devantler/dotnet-kind-cli.git
+	branch = main
+[submodule "libraries/dotnet-kubeconform-cli"]
+	path = libraries/dotnet-kubeconform-cli
+	url = git@github.com:devantler/dotnet-kubeconform-cli.git
+	branch = main
+[submodule "libraries/dotnet-kustomize-cli"]
+	path = libraries/dotnet-kustomize-cli
+	url = git@github.com:devantler/dotnet-kustomize-cli.git
+	branch = main

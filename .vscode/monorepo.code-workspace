@@ -13,28 +13,68 @@
       "path": "../github/profile"
     },
     {
-      "name": "#️⃣ .NET Commons",
-      "path": "../projects/dotnet-commons/"
+      "name": "🚀 Projects",
+      "path": "../projects/"
     },
     {
-      "name": "⬡ Data Product",
-      "path": "../projects/data-product/"
-    },
-    {
-      "name": "🛥️🐳 KSail",
+      "name": "🚀🛥️🐳 KSail",
       "path": "../projects/ksail/"
     },
     {
-      "name": "🚚 OCI Artifacts",
+      "name": "🚀🚚 OCI Artifacts",
       "path": "../projects/oci-artifacts/"
     },
     {
-      "name": "🏠 Homelab",
+      "name": "🚀🏠 Homelab",
       "path": "../projects/homelab/"
     },
     {
-      "name": "✍🏻 Pandoc Plus",
+      "name": "🚀✍🏻 Pandoc Plus",
       "path": "../projects/pandoc-plus/"
+    },
+    {
+      "name": "🚀⬡ Data Product",
+      "path": "../projects/data-product/"
+    },
+    {
+      "name": "📦 Libraries",
+      "path": "../libraries/"
+    },
+    {
+      "name": "📦🔑 .NET Age CLI",
+      "path": "../libraries/dotnet-age-cli"
+    },
+    {
+      "name": "📦🔁 .NET Flux CLI",
+      "path": "../libraries/dotnet-flux-cli"
+    },
+    {
+      "name": "📦⓷ .NET K3d CLI",
+      "path": "../libraries/dotnet-k3d-cli"
+    },
+    {
+      "name": "📦🐶 .NET K9s CLI",
+      "path": "../libraries/dotnet-k9s-cli"
+    },
+    {
+      "name": "📦⚗️ .NET Kind CLI",
+      "path": "../libraries/dotnet-kind-cli"
+    },
+    {
+      "name": "📦☸️ .NET Kubeconform CLI",
+      "path": "../libraries/dotnet-kubeconform-cli"
+    },
+    {
+      "name": "📦Ⓚ .NET Kustomize CLI",
+      "path": "../libraries/dotnet-kustomize-cli"
+    },
+    {
+      "name": "📦🔐 .NET SOPS CLI",
+      "path": "../libraries/dotnet-sops-cli"
+    }
+    {
+      "name": "📦📄 .NET Template Engine",
+      "path": "../libraries/dotnet-template-engine"
     }
   ],
   "settings": {
