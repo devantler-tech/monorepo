@@ -37,10 +37,6 @@
       "path": "../projects/data-product/"
     },
     {
-      "name": "📦 Libraries",
-      "path": "../libraries/"
-    },
-    {
       "name": "📦🔑 .NET Age CLI",
       "path": "../libraries/dotnet-age-cli"
     },
@@ -79,10 +75,6 @@
     {
       "name": "📦☸️ .NET Kubernetes Generator",
       "path": "../libraries/dotnet-kubernetes-generator"
-    },
-    {
-      "name": "📁 Templates",
-      "path": "../templates/"
     },
     {
       "name": "📁#️⃣ .NET Template",
