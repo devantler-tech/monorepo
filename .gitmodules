@@ -66,3 +66,7 @@
 	path = libraries/dotnet-kustomize-cli
 	url = git@github.com:devantler/dotnet-kustomize-cli.git
 	branch = main
+[submodule "libraries/dotnet-kubernetes-generator"]
+	path = libraries/dotnet-kubernetes-generator
+	url = git@github.com:devantler/dotnet-kubernetes-generator.git
+	branch = main
