@@ -70,3 +70,7 @@
 	path = libraries/dotnet-kubernetes-generator
 	url = git@github.com:devantler/dotnet-kubernetes-generator.git
 	branch = main
+[submodule "templates/dotnet-template"]
+	path = templates/dotnet-template
+	url = git@github.com:devantler/dotnet-template.git
+	branch = main
