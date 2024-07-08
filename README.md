@@ -21,18 +21,21 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-k9s-cli
 │   ├── dotnet-kind-cli
 │   ├── dotnet-kubeconform-cli
+│   ├── dotnet-kubernetes-generator
 │   ├── dotnet-kustomize-cli
 │   ├── dotnet-sops-cli
 │   └── dotnet-template-engine
-└── projects
-    ├── data-product
-    ├── dotnet-commons
-    ├── homelab
-    ├── ksail
-    ├── oci-artifacts
-    └── pandoc-plus
+├── projects
+│   ├── data-product
+│   ├── dotnet-commons
+│   ├── homelab
+│   ├── ksail
+│   ├── oci-artifacts
+│   └── pandoc-plus
+└── templates
+    └── dotnet-template
 
-23 directories
+26 directories
 ```
 <!-- readme-tree end -->
 
