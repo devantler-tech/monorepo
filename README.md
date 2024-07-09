@@ -1,4 +1,4 @@
-# Devantler's Monorepo
+# 🗂️ Devantler's Monorepo
 
 This repository is a monorepo that contains all my active projects as submodules. This allows me to keep all my projects in one place and easily manage them in VSCode.
 
