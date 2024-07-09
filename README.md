@@ -2,7 +2,7 @@
 
 This repository is a monorepo that contains all my active projects as submodules. This allows me to keep all my projects in one place and easily manage them in VSCode.
 
-![image](https://github.com/devantler/monorepo/assets/26203420/724c4368-8cb0-41ad-8b58-062b7ec683df)
+<img width="1800" alt="image" src="https://github.com/devantler/monorepo/assets/26203420/74b92fbe-0449-4712-b918-115332133471">
 
 
 <details>
