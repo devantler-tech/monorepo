@@ -1,6 +1,8 @@
 # Devantler's Monorepo
 
-This repository is a monorepo that contains all my active projects as submodules. This allows me to keep all my projects in one place and easily manage them.
+This repository is a monorepo that contains all my active projects as submodules. This allows me to keep all my projects in one place and easily manage them in VSCode.
+
+<img width="1800" alt="image" src="https://github.com/devantler/monorepo/assets/26203420/bdaa5d63-1273-4dc2-b2c4-3c7ef4bf6ca6">
 
 <details>
   <summary>Show/Hide folder structure</summary>
