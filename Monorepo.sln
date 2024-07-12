@@ -43,13 +43,14 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{6BD6CE9A-FDD
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.CLIRunner", "libraries\dotnet-cli-runner\src\Devantler.CLIRunner\Devantler.CLIRunner.csproj", "{0366D203-ABA9-407D-BF9C-937101C7AC2B}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{EE514875-7A47-40B0-8EDA-767D4644FA4C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.CLIRunner.Tests.Integration", "libraries\dotnet-cli-runner\tests\Devantler.CLIRunner.Tests.Integration\Devantler.CLIRunner.Tests.Integration.csproj", "{2ED40FD5-EB20-4F36-84D4-B93692EA111B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{F9389989-86DF-4339-BEED-D47FFA6F98AE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -80,6 +81,13 @@ Global
 		{0366D203-ABA9-407D-BF9C-937101C7AC2B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0366D203-ABA9-407D-BF9C-937101C7AC2B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0366D203-ABA9-407D-BF9C-937101C7AC2B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2ED40FD5-EB20-4F36-84D4-B93692EA111B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2ED40FD5-EB20-4F36-84D4-B93692EA111B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2ED40FD5-EB20-4F36-84D4-B93692EA111B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2ED40FD5-EB20-4F36-84D4-B93692EA111B}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{10411199-A962-4DBF-B46C-E820AAA0F3AA} = {E1596040-74A3-452E-984D-F733285C5A13}
@@ -100,5 +108,7 @@ Global
 		{59D4D1C9-77B0-41EF-9FBB-46C71C467367} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
 		{6BD6CE9A-FDD0-46B7-8FDF-4E2D982F2BBE} = {59D4D1C9-77B0-41EF-9FBB-46C71C467367}
 		{0366D203-ABA9-407D-BF9C-937101C7AC2B} = {6BD6CE9A-FDD0-46B7-8FDF-4E2D982F2BBE}
+		{EE514875-7A47-40B0-8EDA-767D4644FA4C} = {59D4D1C9-77B0-41EF-9FBB-46C71C467367}
+		{2ED40FD5-EB20-4F36-84D4-B93692EA111B} = {EE514875-7A47-40B0-8EDA-767D4644FA4C}
 	EndGlobalSection
 EndGlobal
