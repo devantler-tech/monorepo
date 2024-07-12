@@ -65,6 +65,10 @@
       "path": "../libraries/dotnet-sops-cli"
     },
     {
+      "name": "📦▶️ .NET CLI Runner",
+      "path": "../libraries/dotnet-cli-runner"
+    },
+    {
       "name": "📦📄 .NET Template Engine",
       "path": "../libraries/dotnet-template-engine"
     },

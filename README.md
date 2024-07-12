@@ -18,6 +18,7 @@ This repository is a monorepo that contains all my active projects as submodules
 │   └── profile
 ├── libraries
 │   ├── dotnet-age-cli
+│   ├── dotnet-cli-runner
 │   ├── dotnet-flux-cli
 │   ├── dotnet-k3d-cli
 │   ├── dotnet-k9s-cli
@@ -37,7 +38,7 @@ This repository is a monorepo that contains all my active projects as submodules
 └── templates
     └── dotnet-template
 
-26 directories
+27 directories
 ```
 <!-- readme-tree end -->
 
