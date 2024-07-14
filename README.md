@@ -13,6 +13,7 @@ This repository is a monorepo that contains all my active projects as submodules
 ├── .github
 │   └── workflows
 ├── .vscode
+├── dotfiles
 ├── github
 │   ├── config
 │   └── profile
@@ -38,7 +39,7 @@ This repository is a monorepo that contains all my active projects as submodules
 └── templates
     └── dotnet-template
 
-27 directories
+28 directories
 ```
 <!-- readme-tree end -->
 
