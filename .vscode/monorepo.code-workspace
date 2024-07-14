@@ -5,6 +5,10 @@
       "path": "../"
     },
     {
+      "name": "🔘 dotfiles",
+      "path": "../dotfiles"
+    },
+    {
       "name": "⚙️ GitHub Config",
       "path": "../github/config"
     },

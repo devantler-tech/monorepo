@@ -78,3 +78,7 @@
 	path = libraries/dotnet-cli-runner
 	url = https://github.com/devantler/dotnet-cli-runner
 	branch = main
+[submodule "dotfiles"]
+	path = dotfiles
+	url = git@github.com:devantler/dotfiles.git
+	branch = main
