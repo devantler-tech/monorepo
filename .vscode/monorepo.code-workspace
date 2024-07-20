@@ -2,7 +2,7 @@
   "folders": [
     {
       "name": "🏡 Monorepo",
-      "path": "../"
+      "path": ".."
     },
     {
       "name": "🔘 dotfiles",
@@ -18,23 +18,23 @@
     },
     {
       "name": "🚀🛥️🐳 KSail",
-      "path": "../projects/ksail/"
+      "path": "../projects/ksail"
     },
     {
       "name": "🚀🚚 OCI Artifacts",
-      "path": "../projects/oci-artifacts/"
+      "path": "../projects/oci-artifacts"
     },
     {
       "name": "🚀🏠 Homelab",
-      "path": "../projects/homelab/"
+      "path": "../projects/homelab"
     },
     {
       "name": "🚀✍🏻 Pandoc Plus",
-      "path": "../projects/pandoc-plus/"
+      "path": "../projects/pandoc-plus"
     },
     {
       "name": "🚀⬡ Data Product",
-      "path": "../projects/data-product/"
+      "path": "../projects/data-product"
     },
     {
       "name": "📦🔑 .NET Age CLI",
