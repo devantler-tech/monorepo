@@ -37,6 +37,22 @@
       "path": "../projects/data-product"
     },
     {
+      "name": "📦▶️ .NET CLI Runner",
+      "path": "../libraries/dotnet-cli-runner"
+    },
+    {
+      "name": "📦☸️ .NET Kubernetes Generator",
+      "path": "../libraries/dotnet-kubernetes-generator"
+    },
+    {
+      "name": "📦🔓 .NET SOPS Manager",
+      "path": "../libraries/dotnet-sops-manager"
+    },
+    {
+      "name": "📦📄 .NET Template Engine",
+      "path": "../libraries/dotnet-template-engine"
+    },
+    {
       "name": "📦🔑 .NET Age CLI",
       "path": "../libraries/dotnet-age-cli"
     },
@@ -67,18 +83,6 @@
     {
       "name": "📦🔐 .NET SOPS CLI",
       "path": "../libraries/dotnet-sops-cli"
-    },
-    {
-      "name": "📦▶️ .NET CLI Runner",
-      "path": "../libraries/dotnet-cli-runner"
-    },
-    {
-      "name": "📦📄 .NET Template Engine",
-      "path": "../libraries/dotnet-template-engine"
-    },
-    {
-      "name": "📦☸️ .NET Kubernetes Generator",
-      "path": "../libraries/dotnet-kubernetes-generator"
     },
     {
       "name": "📁#️⃣ .NET Template",
