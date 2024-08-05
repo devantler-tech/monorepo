@@ -86,3 +86,7 @@
 	path = libraries/dotnet-sops-manager
 	url = git@github.com:devantler/dotnet-sops-manager.git
 	branch = main
+[submodule "libraries/dotnet-keys"]
+	path = libraries/dotnet-keys
+	url = git@github.com:devantler/dotnet-keys.git
+	branch = main

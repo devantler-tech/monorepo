@@ -41,6 +41,10 @@
       "path": "../libraries/dotnet-cli-runner"
     },
     {
+      "name": "📦🗝️ .NET Keys",
+      "path": "../libraries/dotnet-keys"
+    },
+    {
       "name": "📦☸️ .NET Kubernetes Generator",
       "path": "../libraries/dotnet-kubernetes-generator"
     },
