@@ -37,12 +37,16 @@
       "path": "../projects/data-product"
     },
     {
-      "name": "📦▶️ .NET CLI Runner",
-      "path": "../libraries/dotnet-cli-runner"
+      "name": "📦⚙️ .NET Kubernetes Resource Generator",
+      "path": "../libraries/dotnet-kubernetes-generator"
     },
     {
-      "name": "📦☸️ .NET Kubernetes Generator",
-      "path": "../libraries/dotnet-kubernetes-generator"
+      "name": "📦🛠️ .NET Kubernetes Resource Provisioner",
+      "path": "../libraries/dotnet-kubernetes-resource-provisioner"
+    },
+    {
+      "name": "📦🌐 .NET Kubernetes Cluster Provisioner",
+      "path": "../libraries/dotnet-kubernetes-cluster-provisioner"
     },
     {
       "name": "📦🔓 .NET SOPS Manager",
@@ -55,6 +59,10 @@
     {
       "name": "📦🗝️ .NET Keys",
       "path": "../libraries/dotnet-keys"
+    },
+    {
+      "name": "📦▶️ .NET CLI Runner",
+      "path": "../libraries/dotnet-cli-runner"
     },
     {
       "name": "📦🔑 .NET Age CLI",

@@ -41,9 +41,9 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-sops-manager", "dotn
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SOPSManager.Core", "libraries\dotnet-sops-manager\Devantler.SOPSManager.Core\Devantler.SOPSManager.Core.csproj", "{A4DEE9A0-C972-4866-857C-FE4F13FD1D11}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SOPSManager.LocalSOPS", "libraries\dotnet-sops-manager\Devantler.SOPSManager.LocalSOPS\Devantler.SOPSManager.LocalSOPS.csproj", "{E902771A-E4C2-4F66-9647-AFE0DA9B3352}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SOPSManager.Local", "libraries\dotnet-sops-manager\Devantler.SOPSManager.Local\Devantler.SOPSManager.Local.csproj", "{E902771A-E4C2-4F66-9647-AFE0DA9B3352}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SOPSManager.LocalSOPS.Tests", "libraries\dotnet-sops-manager\Devantler.SOPSManager.LocalSOPS.Tests\Devantler.SOPSManager.LocalSOPS.Tests.csproj", "{579937DF-2F84-46F2-8EEA-6A541BC3352E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SOPSManager.Local.Tests", "libraries\dotnet-sops-manager\Devantler.SOPSManager.Local.Tests\Devantler.SOPSManager.Local.Tests.csproj", "{579937DF-2F84-46F2-8EEA-6A541BC3352E}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-keys", "dotnet-keys", "{AA1B1CAE-D2AC-4B84-BAE8-B529DB7E9F9F}"
 EndProject
