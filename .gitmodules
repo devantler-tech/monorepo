@@ -94,3 +94,7 @@
 	path = libraries/dotnet-kubernetes-resource-provisioner
 	url = git@github.com:devantler/dotnet-kubernetes-resource-provisioner.git
 	branch = main
+[submodule "github/roadmap"]
+	path = github/roadmap
+	url = https://github.com/devantler/roadmap
+	branch = main
