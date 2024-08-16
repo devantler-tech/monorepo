@@ -95,6 +95,6 @@
 	url = git@github.com:devantler/dotnet-kubernetes-resource-provisioner.git
 	branch = main
 [submodule "github/roadmap"]
-	path = github/roadmap
+	path = github/issue-tracker
 	url = git@github.com:devantler/issue-tracker.git
 	branch = main
