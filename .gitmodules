@@ -96,5 +96,5 @@
 	branch = main
 [submodule "github/roadmap"]
 	path = github/roadmap
-	url = https://github.com/devantler/roadmap
+	url = git@github.com:devantler/issue-tracker.git
 	branch = main
