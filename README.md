@@ -16,8 +16,8 @@ This repository is a monorepo that contains all my active projects as submodules
 ├── dotfiles
 ├── github
 │   ├── config
-│   ├── profile
-│   └── roadmap
+│   ├── issue-tracker
+│   └── profile
 ├── libraries
 │   ├── dotnet-age-cli
 │   ├── dotnet-cli-runner
