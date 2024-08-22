@@ -38,12 +38,11 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-commons
 │   ├── homelab
 │   ├── ksail
-│   ├── oci-artifacts
 │   └── pandoc-plus
 └── templates
     └── dotnet-template
 
-32 directories
+31 directories
 ```
 <!-- readme-tree end -->
 
