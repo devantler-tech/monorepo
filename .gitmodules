@@ -18,10 +18,6 @@
 	path = projects/homelab
 	url = git@github.com:devantler/homelab.git
 	branch = main
-[submodule "projects/oci-artifacts"]
-	path = projects/oci-artifacts
-	url = git@github.com:devantler/oci-artifacts.git
-	branch = main
 [submodule "projects/data-product"]
 	path = projects/data-product
 	url = git@github.com:devantler/data-product.git
