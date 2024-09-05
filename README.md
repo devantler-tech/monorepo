@@ -24,6 +24,7 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-flux-cli
 │   ├── dotnet-k3d-cli
 │   ├── dotnet-k9s-cli
+│   ├── dotnet-key-manager
 │   ├── dotnet-keys
 │   ├── dotnet-kind-cli
 │   ├── dotnet-kubeconform-cli
@@ -31,7 +32,6 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-kubernetes-resource-provisioner
 │   ├── dotnet-kustomize-cli
 │   ├── dotnet-sops-cli
-│   ├── dotnet-sops-manager
 │   └── dotnet-template-engine
 ├── projects
 │   ├── data-product
