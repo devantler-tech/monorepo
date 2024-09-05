@@ -79,8 +79,8 @@
 	url = git@github.com:devantler/dotfiles.git
 	branch = main
 [submodule "libraries/dotnet-secrets-manager"]
-	path = libraries/dotnet-sops-manager
-	url = git@github.com:devantler/dotnet-sops-manager.git
+	path = libraries/dotnet-key-manager
+	url = git@github.com:devantler/dotnet-key-manager.git
 	branch = main
 [submodule "libraries/dotnet-keys"]
 	path = libraries/dotnet-keys

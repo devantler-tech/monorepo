@@ -49,8 +49,8 @@
       "path": "../libraries/dotnet-kubernetes-cluster-provisioner"
     },
     {
-      "name": "📦🔓 .NET SOPS Manager",
-      "path": "../libraries/dotnet-sops-manager"
+      "name": "📦🔓 .NET Key Manager",
+      "path": "../libraries/dotnet-key-manager"
     },
     {
       "name": "📦📄 .NET Template Engine",
