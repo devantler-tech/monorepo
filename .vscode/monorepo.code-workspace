@@ -1,106 +1,106 @@
 {
   "folders": [
     {
-        "name": "🏡 Monorepo",
-        "path": ".."
+      "name": "🏡 Monorepo",
+      "path": ".."
     },
     {
-        "name": "🔘 dotfiles",
-        "path": "../dotfiles"
+      "name": "🔘 dotfiles",
+      "path": "../dotfiles"
     },
     {
-        "name": "⚙️ GitHub Config",
-        "path": "../github/config"
+      "name": "⚙️ GitHub Config",
+      "path": "../github/config"
     },
     {
-        "name": "🧔🏻 GitHub Profile",
-        "path": "../github/profile"
+      "name": "🧔🏻 GitHub Profile",
+      "path": "../github/profile"
     },
     {
-        "name": "🎯 Issue Tracker",
-        "path": "../github/issue-tracker"
+      "name": "🎯 Issue Tracker",
+      "path": "../github/issue-tracker"
     },
     {
-        "name": "🚀🛥️🐳 KSail",
-        "path": "../projects/ksail"
+      "name": "🚀🏠 Homelab",
+      "path": "../projects/homelab"
     },
     {
-        "name": "🚀🏠 Homelab",
-        "path": "../projects/homelab"
+      "name": "🚀🛥️🐳 KSail",
+      "path": "../projects/ksail"
     },
     {
-        "name": "🚀✍🏻 Pandoc Plus",
-        "path": "../projects/pandoc-plus"
+      "name": "🚀✍🏻 Pandoc Plus",
+      "path": "../projects/pandoc-plus"
     },
     {
-        "name": "🚀⬡ Data Product",
-        "path": "../projects/data-product"
+      "name": "🚀⬡ Data Product",
+      "path": "../projects/data-product"
     },
     {
-        "name": "📦⚙️ .NET Kubernetes Resource Generator",
-        "path": "../libraries/dotnet-kubernetes-generator"
+      "name": "📦⚙️ .NET Kubernetes Resource Generator",
+      "path": "../libraries/dotnet-kubernetes-generator"
     },
     {
-        "name": "📦🛠️ .NET Kubernetes Resource Provisioner",
-        "path": "../libraries/dotnet-kubernetes-resource-provisioner"
+      "name": "📦🛠️ .NET Kubernetes Resource Provisioner",
+      "path": "../libraries/dotnet-kubernetes-resource-provisioner"
     },
     {
-        "name": "📦🌐 .NET Kubernetes Cluster Provisioner",
-        "path": "../libraries/dotnet-kubernetes-cluster-provisioner"
+      "name": "📦🌐 .NET Kubernetes Cluster Provisioner",
+      "path": "../libraries/dotnet-kubernetes-cluster-provisioner"
     },
     {
-        "name": "📦🔓 .NET Key Manager",
-        "path": "../libraries/dotnet-key-manager"
+      "name": "📦🔓 .NET Key Manager",
+      "path": "../libraries/dotnet-key-manager"
     },
     {
-        "name": "📦📄 .NET Template Engine",
-        "path": "../libraries/dotnet-template-engine"
+      "name": "📦📄 .NET Template Engine",
+      "path": "../libraries/dotnet-template-engine"
     },
     {
-        "name": "📦🗝️ .NET Keys",
-        "path": "../libraries/dotnet-keys"
+      "name": "📦🗝️ .NET Keys",
+      "path": "../libraries/dotnet-keys"
     },
     {
-        "name": "📦▶️ .NET CLI Runner",
-        "path": "../libraries/dotnet-cli-runner"
+      "name": "📦▶️ .NET CLI Runner",
+      "path": "../libraries/dotnet-cli-runner"
     },
     {
-        "name": "📦🔑 .NET Age CLI",
-        "path": "../libraries/dotnet-age-cli"
+      "name": "📦🔑 .NET Age CLI",
+      "path": "../libraries/dotnet-age-cli"
     },
     {
-        "name": "📦🔁 .NET Flux CLI",
-        "path": "../libraries/dotnet-flux-cli"
+      "name": "📦🔁 .NET Flux CLI",
+      "path": "../libraries/dotnet-flux-cli"
     },
     {
-        "name": "📦⓷ .NET K3d CLI",
-        "path": "../libraries/dotnet-k3d-cli"
+      "name": "📦⓷ .NET K3d CLI",
+      "path": "../libraries/dotnet-k3d-cli"
     },
     {
-        "name": "📦🐶 .NET K9s CLI",
-        "path": "../libraries/dotnet-k9s-cli"
+      "name": "📦🐶 .NET K9s CLI",
+      "path": "../libraries/dotnet-k9s-cli"
     },
     {
-        "name": "📦⚗️ .NET Kind CLI",
-        "path": "../libraries/dotnet-kind-cli"
+      "name": "📦⚗️ .NET Kind CLI",
+      "path": "../libraries/dotnet-kind-cli"
     },
     {
-        "name": "📦🔎 .NET Kubeconform CLI",
-        "path": "../libraries/dotnet-kubeconform-cli"
+      "name": "📦🔎 .NET Kubeconform CLI",
+      "path": "../libraries/dotnet-kubeconform-cli"
     },
     {
-        "name": "📦Ⓚ .NET Kustomize CLI",
-        "path": "../libraries/dotnet-kustomize-cli"
+      "name": "📦Ⓚ .NET Kustomize CLI",
+      "path": "../libraries/dotnet-kustomize-cli"
     },
     {
-        "name": "📦🔐 .NET SOPS CLI",
-        "path": "../libraries/dotnet-sops-cli"
+      "name": "📦🔐 .NET SOPS CLI",
+      "path": "../libraries/dotnet-sops-cli"
     },
     {
-        "name": "📁#️⃣ .NET Template",
-        "path": "../templates/dotnet-template"
+      "name": "📁#️⃣ .NET Template",
+      "path": "../templates/dotnet-template"
     }
-],
+  ],
   "settings": {
     "git.ignoreSubmodules": true
   }
