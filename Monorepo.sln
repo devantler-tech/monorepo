@@ -43,6 +43,14 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Keys.Age", "libra
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Keys.Core", "libraries\dotnet-keys\Devantler.Keys.Core\Devantler.Keys.Core.csproj", "{39BDE587-9EFA-4723-9C45-D906C4D8EB25}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-key-manager", "dotnet-key-manager", "{51AFD93D-16EA-48A5-B139-D2F6D3849E22}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KeyManager.Core", "libraries\dotnet-key-manager\Devantler.KeyManager.Core\Devantler.KeyManager.Core.csproj", "{DA40CB3B-4EAC-40CA-BC59-4CCDC75A20D6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KeyManager.Local.Age", "libraries\dotnet-key-manager\Devantler.KeyManager.Local.Age\Devantler.KeyManager.Local.Age.csproj", "{E71C9E0C-A3E1-498F-B4E3-BDCD6C9CF32B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KeyManager.Local.Age.Tests", "libraries\dotnet-key-manager\Devantler.KeyManager.Local.Age.Tests\Devantler.KeyManager.Local.Age.Tests.csproj", "{56EC754B-9594-4A5A-A11D-B7A335EC2116}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -97,6 +105,18 @@ Global
 		{39BDE587-9EFA-4723-9C45-D906C4D8EB25}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{39BDE587-9EFA-4723-9C45-D906C4D8EB25}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{39BDE587-9EFA-4723-9C45-D906C4D8EB25}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DA40CB3B-4EAC-40CA-BC59-4CCDC75A20D6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DA40CB3B-4EAC-40CA-BC59-4CCDC75A20D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DA40CB3B-4EAC-40CA-BC59-4CCDC75A20D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DA40CB3B-4EAC-40CA-BC59-4CCDC75A20D6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E71C9E0C-A3E1-498F-B4E3-BDCD6C9CF32B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E71C9E0C-A3E1-498F-B4E3-BDCD6C9CF32B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E71C9E0C-A3E1-498F-B4E3-BDCD6C9CF32B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E71C9E0C-A3E1-498F-B4E3-BDCD6C9CF32B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{56EC754B-9594-4A5A-A11D-B7A335EC2116}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{56EC754B-9594-4A5A-A11D-B7A335EC2116}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{56EC754B-9594-4A5A-A11D-B7A335EC2116}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{56EC754B-9594-4A5A-A11D-B7A335EC2116}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -120,5 +140,9 @@ Global
 		{AA1B1CAE-D2AC-4B84-BAE8-B529DB7E9F9F} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
 		{5791D474-DDEA-49C8-BBDD-58DACD53EC91} = {AA1B1CAE-D2AC-4B84-BAE8-B529DB7E9F9F}
 		{39BDE587-9EFA-4723-9C45-D906C4D8EB25} = {AA1B1CAE-D2AC-4B84-BAE8-B529DB7E9F9F}
+		{51AFD93D-16EA-48A5-B139-D2F6D3849E22} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
+		{DA40CB3B-4EAC-40CA-BC59-4CCDC75A20D6} = {51AFD93D-16EA-48A5-B139-D2F6D3849E22}
+		{E71C9E0C-A3E1-498F-B4E3-BDCD6C9CF32B} = {51AFD93D-16EA-48A5-B139-D2F6D3849E22}
+		{56EC754B-9594-4A5A-A11D-B7A335EC2116} = {51AFD93D-16EA-48A5-B139-D2F6D3849E22}
 	EndGlobalSection
 EndGlobal
