@@ -29,7 +29,7 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-kind-cli
 │   ├── dotnet-kubeconform-cli
 │   ├── dotnet-kubernetes-generator
-│   ├── dotnet-kubernetes-resource-provisioner
+│   ├── dotnet-kubernetes-provisioner
 │   ├── dotnet-kustomize-cli
 │   ├── dotnet-sops-cli
 │   └── dotnet-template-engine
