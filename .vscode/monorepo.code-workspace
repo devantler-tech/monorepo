@@ -37,16 +37,12 @@
       "path": "../projects/data-product"
     },
     {
-      "name": "📦⚙️ .NET Kubernetes Resource Generator",
+      "name": "📦⚙️ .NET Kubernetes Generator",
       "path": "../libraries/dotnet-kubernetes-generator"
     },
     {
-      "name": "📦🛠️ .NET Kubernetes Resource Provisioner",
-      "path": "../libraries/dotnet-kubernetes-resource-provisioner"
-    },
-    {
-      "name": "📦🌐 .NET Kubernetes Cluster Provisioner",
-      "path": "../libraries/dotnet-kubernetes-cluster-provisioner"
+      "name": "📦🛠️ .NET Kubernetes Provisioner",
+      "path": "../libraries/dotnet-kubernetes-provisioner"
     },
     {
       "name": "📦🔓 .NET Key Manager",

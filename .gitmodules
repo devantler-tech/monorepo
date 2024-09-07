@@ -87,8 +87,8 @@
 	url = git@github.com:devantler/dotnet-keys.git
 	branch = main
 [submodule "libraries/dotnet-kubernetes-resource-provisioner"]
-	path = libraries/dotnet-kubernetes-resource-provisioner
-	url = git@github.com:devantler/dotnet-kubernetes-resource-provisioner.git
+	path = libraries/dotnet-kubernetes-provisioner
+	url = git@github.com:devantler/dotnet-kubernetes-provisioner.git
 	branch = main
 [submodule "github/roadmap"]
 	path = github/issue-tracker
