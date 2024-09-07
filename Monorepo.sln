@@ -45,6 +45,24 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KeyManager.Local.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KeyManager.Local.Age.Tests", "libraries\dotnet-key-manager\Devantler.KeyManager.Local.Age.Tests\Devantler.KeyManager.Local.Age.Tests.csproj", "{56EC754B-9594-4A5A-A11D-B7A335EC2116}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-kubernetes-generator", "dotnet-kubernetes-generator", "{9F058515-BEC3-402D-B405-648F5B38BDEB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesResourceGenerator.Configs.K3d", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesResourceGenerator.Configs.K3d\Devantler.KubernetesResourceGenerator.Configs.K3d.csproj", "{8C4CBFF2-C2B1-411A-8413-2532F5AD17C5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesResourceGenerator.Configs.K3d.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesResourceGenerator.Configs.K3d.Tests\Devantler.KubernetesResourceGenerator.Configs.K3d.Tests.csproj", "{551CA148-4749-41FF-AFCD-16DCA309FEB1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesResourceGenerator.CustomResources.Flux", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesResourceGenerator.CustomResources.Flux\Devantler.KubernetesResourceGenerator.CustomResources.Flux.csproj", "{9277C21B-4118-4177-AC81-61ED4612D115}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesResourceGenerator.CustomResources.Flux.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesResourceGenerator.CustomResources.Flux.Tests\Devantler.KubernetesResourceGenerator.CustomResources.Flux.Tests.csproj", "{858494BE-F5AD-4AE3-852E-508EDD76432A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesResourceGenerator.Native", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesResourceGenerator.Native\Devantler.KubernetesResourceGenerator.Native.csproj", "{6EF7A113-904E-4C9D-A068-EE56AAFA28ED}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesResourceGenerator.Native.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesResourceGenerator.Native.Tests\Devantler.KubernetesResourceGenerator.Native.Tests.csproj", "{108D2282-B17B-4A22-B913-81C8A72DBFA6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Keys.Age.Tests", "libraries\dotnet-keys\Devantler.Keys.Age.Tests\Devantler.Keys.Age.Tests.csproj", "{653629C2-9D04-46C1-9BB7-7E6EE7BDEA8C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesResourceGenerator.Core", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesResourceGenerator.Core\Devantler.KubernetesResourceGenerator.Core.csproj", "{72A95FAB-288C-4709-A79F-28F819C3E112}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -103,6 +121,38 @@ Global
 		{56EC754B-9594-4A5A-A11D-B7A335EC2116}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{56EC754B-9594-4A5A-A11D-B7A335EC2116}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{56EC754B-9594-4A5A-A11D-B7A335EC2116}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8C4CBFF2-C2B1-411A-8413-2532F5AD17C5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8C4CBFF2-C2B1-411A-8413-2532F5AD17C5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8C4CBFF2-C2B1-411A-8413-2532F5AD17C5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8C4CBFF2-C2B1-411A-8413-2532F5AD17C5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{551CA148-4749-41FF-AFCD-16DCA309FEB1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{551CA148-4749-41FF-AFCD-16DCA309FEB1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{551CA148-4749-41FF-AFCD-16DCA309FEB1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{551CA148-4749-41FF-AFCD-16DCA309FEB1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9277C21B-4118-4177-AC81-61ED4612D115}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9277C21B-4118-4177-AC81-61ED4612D115}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9277C21B-4118-4177-AC81-61ED4612D115}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9277C21B-4118-4177-AC81-61ED4612D115}.Release|Any CPU.Build.0 = Release|Any CPU
+		{858494BE-F5AD-4AE3-852E-508EDD76432A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{858494BE-F5AD-4AE3-852E-508EDD76432A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{858494BE-F5AD-4AE3-852E-508EDD76432A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{858494BE-F5AD-4AE3-852E-508EDD76432A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6EF7A113-904E-4C9D-A068-EE56AAFA28ED}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6EF7A113-904E-4C9D-A068-EE56AAFA28ED}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6EF7A113-904E-4C9D-A068-EE56AAFA28ED}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6EF7A113-904E-4C9D-A068-EE56AAFA28ED}.Release|Any CPU.Build.0 = Release|Any CPU
+		{108D2282-B17B-4A22-B913-81C8A72DBFA6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{108D2282-B17B-4A22-B913-81C8A72DBFA6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{108D2282-B17B-4A22-B913-81C8A72DBFA6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{108D2282-B17B-4A22-B913-81C8A72DBFA6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{653629C2-9D04-46C1-9BB7-7E6EE7BDEA8C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{653629C2-9D04-46C1-9BB7-7E6EE7BDEA8C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{653629C2-9D04-46C1-9BB7-7E6EE7BDEA8C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{653629C2-9D04-46C1-9BB7-7E6EE7BDEA8C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{72A95FAB-288C-4709-A79F-28F819C3E112}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{72A95FAB-288C-4709-A79F-28F819C3E112}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{72A95FAB-288C-4709-A79F-28F819C3E112}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{72A95FAB-288C-4709-A79F-28F819C3E112}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -127,5 +177,14 @@ Global
 		{DA40CB3B-4EAC-40CA-BC59-4CCDC75A20D6} = {51AFD93D-16EA-48A5-B139-D2F6D3849E22}
 		{E71C9E0C-A3E1-498F-B4E3-BDCD6C9CF32B} = {51AFD93D-16EA-48A5-B139-D2F6D3849E22}
 		{56EC754B-9594-4A5A-A11D-B7A335EC2116} = {51AFD93D-16EA-48A5-B139-D2F6D3849E22}
+		{9F058515-BEC3-402D-B405-648F5B38BDEB} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
+		{8C4CBFF2-C2B1-411A-8413-2532F5AD17C5} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{551CA148-4749-41FF-AFCD-16DCA309FEB1} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{9277C21B-4118-4177-AC81-61ED4612D115} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{858494BE-F5AD-4AE3-852E-508EDD76432A} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{6EF7A113-904E-4C9D-A068-EE56AAFA28ED} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{108D2282-B17B-4A22-B913-81C8A72DBFA6} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{653629C2-9D04-46C1-9BB7-7E6EE7BDEA8C} = {AA1B1CAE-D2AC-4B84-BAE8-B529DB7E9F9F}
+		{72A95FAB-288C-4709-A79F-28F819C3E112} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
 	EndGlobalSection
 EndGlobal
