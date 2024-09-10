@@ -65,6 +65,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerat
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerator.Native.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesGenerator.Native.Tests\Devantler.KubernetesGenerator.Native.Tests.csproj", "{8B3D894C-92E3-461C-8B6C-951B3A4EE4AB}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerator.KSail", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesGenerator.KSail\Devantler.KubernetesGenerator.KSail.csproj", "{3A646495-FC2C-4FEF-A526-F24A3A4A8709}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerator.KSail.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesGenerator.KSail.Tests\Devantler.KubernetesGenerator.KSail.Tests.csproj", "{3979C33F-C2CA-4D39-996F-A194ECB3D968}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -159,6 +163,14 @@ Global
 		{8B3D894C-92E3-461C-8B6C-951B3A4EE4AB}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8B3D894C-92E3-461C-8B6C-951B3A4EE4AB}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8B3D894C-92E3-461C-8B6C-951B3A4EE4AB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3A646495-FC2C-4FEF-A526-F24A3A4A8709}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3A646495-FC2C-4FEF-A526-F24A3A4A8709}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3A646495-FC2C-4FEF-A526-F24A3A4A8709}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3A646495-FC2C-4FEF-A526-F24A3A4A8709}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3979C33F-C2CA-4D39-996F-A194ECB3D968}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3979C33F-C2CA-4D39-996F-A194ECB3D968}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3979C33F-C2CA-4D39-996F-A194ECB3D968}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3979C33F-C2CA-4D39-996F-A194ECB3D968}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -193,5 +205,7 @@ Global
 		{8D770324-D2C5-4689-B2E3-CA1557B0DEE5} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
 		{07FB64B4-250F-4A04-882B-495BA6429AA9} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
 		{8B3D894C-92E3-461C-8B6C-951B3A4EE4AB} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{3A646495-FC2C-4FEF-A526-F24A3A4A8709} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{3979C33F-C2CA-4D39-996F-A194ECB3D968} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
 	EndGlobalSection
 EndGlobal
