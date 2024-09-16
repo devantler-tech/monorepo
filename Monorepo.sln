@@ -69,6 +69,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerat
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerator.KSail.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesGenerator.KSail.Tests\Devantler.KubernetesGenerator.KSail.Tests.csproj", "{3979C33F-C2CA-4D39-996F-A194ECB3D968}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KSail.Tests", "projects\ksail\KSail.Tests\KSail.Tests.csproj", "{77B3A77F-0259-4715-8D09-8497E9FE512F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -171,6 +173,10 @@ Global
 		{3979C33F-C2CA-4D39-996F-A194ECB3D968}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3979C33F-C2CA-4D39-996F-A194ECB3D968}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3979C33F-C2CA-4D39-996F-A194ECB3D968}.Release|Any CPU.Build.0 = Release|Any CPU
+		{77B3A77F-0259-4715-8D09-8497E9FE512F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{77B3A77F-0259-4715-8D09-8497E9FE512F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{77B3A77F-0259-4715-8D09-8497E9FE512F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{77B3A77F-0259-4715-8D09-8497E9FE512F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -207,5 +213,6 @@ Global
 		{8B3D894C-92E3-461C-8B6C-951B3A4EE4AB} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
 		{3A646495-FC2C-4FEF-A526-F24A3A4A8709} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
 		{3979C33F-C2CA-4D39-996F-A194ECB3D968} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{77B3A77F-0259-4715-8D09-8497E9FE512F} = {0DFB4039-B365-44EE-BF25-7532544867FD}
 	EndGlobalSection
 EndGlobal
