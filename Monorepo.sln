@@ -75,6 +75,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerat
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerator.CertManager.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesGenerator.CertManager.Tests\Devantler.KubernetesGenerator.CertManager.Tests.csproj", "{34F94ABE-9BF5-47E8-8EFB-7D16DDB80851}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-k3d-cli", "dotnet-k3d-cli", "{61191DAE-2998-4D04-8AF4-0524F39F9B8C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.K3dCLI", "libraries\dotnet-k3d-cli\Devantler.K3dCLI\Devantler.K3dCLI.csproj", "{49DF4A0F-E18D-4024-AC77-EEAF6C83B26D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.K3dCLI.Tests", "libraries\dotnet-k3d-cli\Devantler.K3dCLI.Tests\Devantler.K3dCLI.Tests.csproj", "{054ACA0D-7699-4DEB-9B6F-4957EBCB860A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -189,6 +195,14 @@ Global
 		{34F94ABE-9BF5-47E8-8EFB-7D16DDB80851}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{34F94ABE-9BF5-47E8-8EFB-7D16DDB80851}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{34F94ABE-9BF5-47E8-8EFB-7D16DDB80851}.Release|Any CPU.Build.0 = Release|Any CPU
+		{49DF4A0F-E18D-4024-AC77-EEAF6C83B26D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{49DF4A0F-E18D-4024-AC77-EEAF6C83B26D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{49DF4A0F-E18D-4024-AC77-EEAF6C83B26D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{49DF4A0F-E18D-4024-AC77-EEAF6C83B26D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{054ACA0D-7699-4DEB-9B6F-4957EBCB860A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{054ACA0D-7699-4DEB-9B6F-4957EBCB860A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{054ACA0D-7699-4DEB-9B6F-4957EBCB860A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{054ACA0D-7699-4DEB-9B6F-4957EBCB860A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -228,5 +242,8 @@ Global
 		{77B3A77F-0259-4715-8D09-8497E9FE512F} = {0DFB4039-B365-44EE-BF25-7532544867FD}
 		{8DB10F98-485F-4A2E-9D2B-D5FAB569B26E} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
 		{34F94ABE-9BF5-47E8-8EFB-7D16DDB80851} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{61191DAE-2998-4D04-8AF4-0524F39F9B8C} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
+		{49DF4A0F-E18D-4024-AC77-EEAF6C83B26D} = {61191DAE-2998-4D04-8AF4-0524F39F9B8C}
+		{054ACA0D-7699-4DEB-9B6F-4957EBCB860A} = {61191DAE-2998-4D04-8AF4-0524F39F9B8C}
 	EndGlobalSection
 EndGlobal
