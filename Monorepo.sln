@@ -95,6 +95,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KindCLI.Tests", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KindCLI", "libraries\dotnet-kind-cli\Devantler.KindCLI\Devantler.KindCLI.csproj", "{D4FE1CE2-0AC8-4BA9-A176-219D3B989D4F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesProvisioner.Cluster.Kind.Tests", "libraries\dotnet-kubernetes-provisioner\Devantler.KubernetesProvisioner.Cluster.Kind.Tests\Devantler.KubernetesProvisioner.Cluster.Kind.Tests.csproj", "{2485C9E4-0831-4F9D-83EB-F189B7B535F3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesProvisioner.Cluster.K3d.Tests", "libraries\dotnet-kubernetes-provisioner\Devantler.KubernetesProvisioner.Cluster.K3d.Tests\Devantler.KubernetesProvisioner.Cluster.K3d.Tests.csproj", "{B5D8107C-2CC3-455E-B048-88537CB04F15}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -237,6 +241,14 @@ Global
 		{D4FE1CE2-0AC8-4BA9-A176-219D3B989D4F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D4FE1CE2-0AC8-4BA9-A176-219D3B989D4F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D4FE1CE2-0AC8-4BA9-A176-219D3B989D4F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2485C9E4-0831-4F9D-83EB-F189B7B535F3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2485C9E4-0831-4F9D-83EB-F189B7B535F3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2485C9E4-0831-4F9D-83EB-F189B7B535F3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2485C9E4-0831-4F9D-83EB-F189B7B535F3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B5D8107C-2CC3-455E-B048-88537CB04F15}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B5D8107C-2CC3-455E-B048-88537CB04F15}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B5D8107C-2CC3-455E-B048-88537CB04F15}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B5D8107C-2CC3-455E-B048-88537CB04F15}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -286,5 +298,7 @@ Global
 		{B78DD166-3F94-4A2F-A2E3-BFB89A4EF832} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
 		{03A63C72-D603-439D-80C0-E1B9448C3CA4} = {B78DD166-3F94-4A2F-A2E3-BFB89A4EF832}
 		{D4FE1CE2-0AC8-4BA9-A176-219D3B989D4F} = {B78DD166-3F94-4A2F-A2E3-BFB89A4EF832}
+		{2485C9E4-0831-4F9D-83EB-F189B7B535F3} = {4B6B2AE1-A393-45D3-B06A-7701DA8AB63A}
+		{B5D8107C-2CC3-455E-B048-88537CB04F15} = {4B6B2AE1-A393-45D3-B06A-7701DA8AB63A}
 	EndGlobalSection
 EndGlobal
