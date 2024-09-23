@@ -94,3 +94,7 @@
 	path = github/issue-tracker
 	url = git@github.com:devantler/issue-tracker.git
 	branch = main
+[submodule "libraries/dotnet-container-engine-provisioner"]
+	path = libraries/dotnet-container-engine-provisioner
+	url = git@github.com:devantler/dotnet-container-engine-provisioner.git
+	branch = main

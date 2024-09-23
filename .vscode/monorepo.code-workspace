@@ -45,6 +45,10 @@
       "path": "../libraries/dotnet-kubernetes-provisioner"
     },
     {
+      "name": "📦🐳 .NET Container Engine Provisioner",
+      "path": "../libraries/dotnet-container-engine-provisioner"
+    },
+    {
       "name": "📦🔓 .NET Key Manager",
       "path": "../libraries/dotnet-key-manager"
     },
