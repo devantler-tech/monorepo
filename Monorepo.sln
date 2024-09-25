@@ -103,6 +103,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesProvisi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesProvisioner.Resources.Native", "libraries\dotnet-kubernetes-provisioner\Devantler.KubernetesProvisioner.Resources.Native\Devantler.KubernetesProvisioner.Resources.Native.csproj", "{7C628538-3227-4F27-A8BF-89EAD86D8F9E}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-container-engine-provisioner", "dotnet-container-engine-provisioner", "{477CC396-0DA9-4C1A-8120-AD7D9FF6AA4A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.ContainerEngineProvisioner.Core", "libraries\dotnet-container-engine-provisioner\Devantler.ContainerEngineProvisioner.Core\Devantler.ContainerEngineProvisioner.Core.csproj", "{992C16F1-4655-461A-B3D9-289C99C67D54}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.ContainerEngineProvisioner.Docker", "libraries\dotnet-container-engine-provisioner\Devantler.ContainerEngineProvisioner.Docker\Devantler.ContainerEngineProvisioner.Docker.csproj", "{ECA21A98-D370-4298-AF18-9AB0040A8934}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -261,6 +267,14 @@ Global
 		{7C628538-3227-4F27-A8BF-89EAD86D8F9E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7C628538-3227-4F27-A8BF-89EAD86D8F9E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7C628538-3227-4F27-A8BF-89EAD86D8F9E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{992C16F1-4655-461A-B3D9-289C99C67D54}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{992C16F1-4655-461A-B3D9-289C99C67D54}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{992C16F1-4655-461A-B3D9-289C99C67D54}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{992C16F1-4655-461A-B3D9-289C99C67D54}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ECA21A98-D370-4298-AF18-9AB0040A8934}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ECA21A98-D370-4298-AF18-9AB0040A8934}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ECA21A98-D370-4298-AF18-9AB0040A8934}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ECA21A98-D370-4298-AF18-9AB0040A8934}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -314,5 +328,8 @@ Global
 		{B5D8107C-2CC3-455E-B048-88537CB04F15} = {4B6B2AE1-A393-45D3-B06A-7701DA8AB63A}
 		{F5687D58-346F-4BB3-8C26-0CC725E97F37} = {4B6B2AE1-A393-45D3-B06A-7701DA8AB63A}
 		{7C628538-3227-4F27-A8BF-89EAD86D8F9E} = {4B6B2AE1-A393-45D3-B06A-7701DA8AB63A}
+		{477CC396-0DA9-4C1A-8120-AD7D9FF6AA4A} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
+		{992C16F1-4655-461A-B3D9-289C99C67D54} = {477CC396-0DA9-4C1A-8120-AD7D9FF6AA4A}
+		{ECA21A98-D370-4298-AF18-9AB0040A8934} = {477CC396-0DA9-4C1A-8120-AD7D9FF6AA4A}
 	EndGlobalSection
 EndGlobal
