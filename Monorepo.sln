@@ -125,7 +125,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-k9s-cli", "dotnet-k9
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.K9sCLI", "libraries\dotnet-k9s-cli\Devantler.K9sCLI\Devantler.K9sCLI.csproj", "{1FEF250F-64C6-4B4E-99D2-BC17D445F465}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.K9sCLITests", "libraries\dotnet-k9s-cli\Devantler.K9sCLITests\Devantler.K9sCLITests.csproj", "{D8A63E1C-CA2A-4D31-BED8-4A94AB749A70}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.K9sCLI.Tests", "libraries\dotnet-k9s-cli\Devantler.K9sCLI.Tests\Devantler.K9sCLI.Tests.csproj", "{D8A63E1C-CA2A-4D31-BED8-4A94AB749A70}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "data-product", "data-product", "{DF3B70C4-8DA1-4CC5-AB5A-5EC0AC0C661A}"
 EndProject
