@@ -121,6 +121,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesProvisi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesProvisioner.GitOps.Flux.Tests", "libraries\dotnet-kubernetes-provisioner\Devantler.KubernetesProvisioner.GitOps.Flux.Tests\Devantler.KubernetesProvisioner.GitOps.Flux.Tests.csproj", "{54D4CE23-CC00-4C54-9C92-D1FD1C067D24}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-k9s-cli", "dotnet-k9s-cli", "{9CFB1B89-05FC-426C-AA8E-EA3EE54E2D50}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.K9sCLI", "libraries\dotnet-k9s-cli\Devantler.K9sCLI\Devantler.K9sCLI.csproj", "{1FEF250F-64C6-4B4E-99D2-BC17D445F465}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.K9sCLITests", "libraries\dotnet-k9s-cli\Devantler.K9sCLITests\Devantler.K9sCLITests.csproj", "{D8A63E1C-CA2A-4D31-BED8-4A94AB749A70}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -307,6 +313,14 @@ Global
 		{54D4CE23-CC00-4C54-9C92-D1FD1C067D24}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{54D4CE23-CC00-4C54-9C92-D1FD1C067D24}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{54D4CE23-CC00-4C54-9C92-D1FD1C067D24}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1FEF250F-64C6-4B4E-99D2-BC17D445F465}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1FEF250F-64C6-4B4E-99D2-BC17D445F465}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1FEF250F-64C6-4B4E-99D2-BC17D445F465}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1FEF250F-64C6-4B4E-99D2-BC17D445F465}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D8A63E1C-CA2A-4D31-BED8-4A94AB749A70}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D8A63E1C-CA2A-4D31-BED8-4A94AB749A70}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D8A63E1C-CA2A-4D31-BED8-4A94AB749A70}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D8A63E1C-CA2A-4D31-BED8-4A94AB749A70}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -369,5 +383,8 @@ Global
 		{773D0DF2-420F-4775-837C-3166407A3701} = {4B6B2AE1-A393-45D3-B06A-7701DA8AB63A}
 		{8CE924A2-36B0-461E-A5AF-447CE208556A} = {4B6B2AE1-A393-45D3-B06A-7701DA8AB63A}
 		{54D4CE23-CC00-4C54-9C92-D1FD1C067D24} = {4B6B2AE1-A393-45D3-B06A-7701DA8AB63A}
+		{9CFB1B89-05FC-426C-AA8E-EA3EE54E2D50} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
+		{1FEF250F-64C6-4B4E-99D2-BC17D445F465} = {9CFB1B89-05FC-426C-AA8E-EA3EE54E2D50}
+		{D8A63E1C-CA2A-4D31-BED8-4A94AB749A70} = {9CFB1B89-05FC-426C-AA8E-EA3EE54E2D50}
 	EndGlobalSection
 EndGlobal
