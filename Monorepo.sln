@@ -147,6 +147,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.DataProduct.Gener
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KSail.Models", "projects\ksail\KSail.Models\KSail.Models.csproj", "{F14FA298-16D0-4DF2-954D-E5EE3B27E7F1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerator.Kind", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesGenerator.Kind\Devantler.KubernetesGenerator.Kind.csproj", "{34D3B7C0-25F9-45BA-B8A8-2A3DD3062B2F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerator.Kind.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesGenerator.Kind.Tests\Devantler.KubernetesGenerator.Kind.Tests.csproj", "{3D57722B-C377-4664-BE8A-F2152460E0B2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -369,6 +373,14 @@ Global
 		{F14FA298-16D0-4DF2-954D-E5EE3B27E7F1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F14FA298-16D0-4DF2-954D-E5EE3B27E7F1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F14FA298-16D0-4DF2-954D-E5EE3B27E7F1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{34D3B7C0-25F9-45BA-B8A8-2A3DD3062B2F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{34D3B7C0-25F9-45BA-B8A8-2A3DD3062B2F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{34D3B7C0-25F9-45BA-B8A8-2A3DD3062B2F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{34D3B7C0-25F9-45BA-B8A8-2A3DD3062B2F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3D57722B-C377-4664-BE8A-F2152460E0B2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3D57722B-C377-4664-BE8A-F2152460E0B2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3D57722B-C377-4664-BE8A-F2152460E0B2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3D57722B-C377-4664-BE8A-F2152460E0B2}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -444,5 +456,7 @@ Global
 		{49F1623C-DC14-4D71-89A7-D26B8BCE2DBF} = {F8FC181E-926C-41D8-BB76-015BA6E9006B}
 		{A50F6496-9252-4A56-9491-3CE9A0745224} = {F8FC181E-926C-41D8-BB76-015BA6E9006B}
 		{F14FA298-16D0-4DF2-954D-E5EE3B27E7F1} = {0DFB4039-B365-44EE-BF25-7532544867FD}
+		{34D3B7C0-25F9-45BA-B8A8-2A3DD3062B2F} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{3D57722B-C377-4664-BE8A-F2152460E0B2} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
 	EndGlobalSection
 EndGlobal
