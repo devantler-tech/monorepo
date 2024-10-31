@@ -31,6 +31,7 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-kubeconform-cli
 │   ├── dotnet-kubernetes-generator
 │   ├── dotnet-kubernetes-provisioner
+│   ├── dotnet-kubernetes-validator
 │   ├── dotnet-kustomize-cli
 │   ├── dotnet-sops-cli
 │   └── dotnet-template-engine
@@ -43,7 +44,7 @@ This repository is a monorepo that contains all my active projects as submodules
 └── templates
     └── dotnet-template
 
-32 directories
+33 directories
 ```
 <!-- readme-tree end -->
 
