@@ -45,6 +45,10 @@
       "path": "../libraries/dotnet-kubernetes-provisioner"
     },
     {
+      "name": "📦✅ .NET Kubernetes Validator",
+      "path": "../libraries/dotnet-kubernetes-validator"
+    },
+    {
       "name": "📦🐳 .NET Container Engine Provisioner",
       "path": "../libraries/dotnet-container-engine-provisioner"
     },

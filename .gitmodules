@@ -98,3 +98,7 @@
 	path = libraries/dotnet-container-engine-provisioner
 	url = git@github.com:devantler/dotnet-container-engine-provisioner.git
 	branch = main
+[submodule "libraries/dotnet-kubernetes-validators"]
+	path = libraries/dotnet-kubernetes-validator
+	url = git@github.com:devantler/dotnet-kubernetes-validator.git
+	branch = main
