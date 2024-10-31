@@ -151,6 +151,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerat
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerator.Kind.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesGenerator.Kind.Tests\Devantler.KubernetesGenerator.Kind.Tests.csproj", "{3D57722B-C377-4664-BE8A-F2152460E0B2}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-kubeconform-cli", "dotnet-kubeconform-cli", "{81370C1E-B381-4424-AC1B-B953210FB636}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubeconformCLI.Tests", "libraries\dotnet-kubeconform-cli\Devantler.KubeconformCLI.Tests\Devantler.KubeconformCLI.Tests.csproj", "{1E2C8FF2-FE42-4697-8D32-DFC0E2CE4925}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubeconformCLI", "libraries\dotnet-kubeconform-cli\Devantler.KubeconformCLI\Devantler.KubeconformCLI.csproj", "{514095BF-35A4-44A0-B147-892BB29AE9A3}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -381,6 +387,14 @@ Global
 		{3D57722B-C377-4664-BE8A-F2152460E0B2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3D57722B-C377-4664-BE8A-F2152460E0B2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3D57722B-C377-4664-BE8A-F2152460E0B2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1E2C8FF2-FE42-4697-8D32-DFC0E2CE4925}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1E2C8FF2-FE42-4697-8D32-DFC0E2CE4925}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1E2C8FF2-FE42-4697-8D32-DFC0E2CE4925}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1E2C8FF2-FE42-4697-8D32-DFC0E2CE4925}.Release|Any CPU.Build.0 = Release|Any CPU
+		{514095BF-35A4-44A0-B147-892BB29AE9A3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{514095BF-35A4-44A0-B147-892BB29AE9A3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{514095BF-35A4-44A0-B147-892BB29AE9A3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{514095BF-35A4-44A0-B147-892BB29AE9A3}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -458,5 +472,8 @@ Global
 		{F14FA298-16D0-4DF2-954D-E5EE3B27E7F1} = {0DFB4039-B365-44EE-BF25-7532544867FD}
 		{34D3B7C0-25F9-45BA-B8A8-2A3DD3062B2F} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
 		{3D57722B-C377-4664-BE8A-F2152460E0B2} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{81370C1E-B381-4424-AC1B-B953210FB636} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
+		{1E2C8FF2-FE42-4697-8D32-DFC0E2CE4925} = {81370C1E-B381-4424-AC1B-B953210FB636}
+		{514095BF-35A4-44A0-B147-892BB29AE9A3} = {81370C1E-B381-4424-AC1B-B953210FB636}
 	EndGlobalSection
 EndGlobal
