@@ -157,6 +157,20 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubeconformCLI.Te
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubeconformCLI", "libraries\dotnet-kubeconform-cli\Devantler.KubeconformCLI\Devantler.KubeconformCLI.csproj", "{514095BF-35A4-44A0-B147-892BB29AE9A3}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-kubernetes-validator", "dotnet-kubernetes-validator", "{A6AB1A92-B637-4DED-8212-8427089537AE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.Core", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.Core\Devantler.KubernetesValidator.ClientSide.Core.csproj", "{570FCC6F-80B0-4709-AA15-8F136BE8A6C8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ServerSide.Core", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ServerSide.Core\Devantler.KubernetesValidator.ServerSide.Core.csproj", "{C5EF1DF1-8094-4916-8C1C-D3598D48750C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.YamlSyntax", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.YamlSyntax\Devantler.KubernetesValidator.ClientSide.YamlSyntax.csproj", "{841964B0-D341-48B1-B370-CF4E30EF5925}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.Schemas", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.Schemas\Devantler.KubernetesValidator.ClientSide.Schemas.csproj", "{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.Polaris", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.Polaris\Devantler.KubernetesValidator.ClientSide.Polaris.csproj", "{0FB00E91-3E8B-4294-B65D-8679D0568FFB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ServerSide.Polaris", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ServerSide.Polaris\Devantler.KubernetesValidator.ServerSide.Polaris.csproj", "{577EC95D-AEEF-4673-8662-73ED8F42CB60}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -395,6 +409,30 @@ Global
 		{514095BF-35A4-44A0-B147-892BB29AE9A3}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{514095BF-35A4-44A0-B147-892BB29AE9A3}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{514095BF-35A4-44A0-B147-892BB29AE9A3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{570FCC6F-80B0-4709-AA15-8F136BE8A6C8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{570FCC6F-80B0-4709-AA15-8F136BE8A6C8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{570FCC6F-80B0-4709-AA15-8F136BE8A6C8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{570FCC6F-80B0-4709-AA15-8F136BE8A6C8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C5EF1DF1-8094-4916-8C1C-D3598D48750C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C5EF1DF1-8094-4916-8C1C-D3598D48750C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C5EF1DF1-8094-4916-8C1C-D3598D48750C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C5EF1DF1-8094-4916-8C1C-D3598D48750C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{841964B0-D341-48B1-B370-CF4E30EF5925}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{841964B0-D341-48B1-B370-CF4E30EF5925}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{841964B0-D341-48B1-B370-CF4E30EF5925}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{841964B0-D341-48B1-B370-CF4E30EF5925}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -475,5 +513,12 @@ Global
 		{81370C1E-B381-4424-AC1B-B953210FB636} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
 		{1E2C8FF2-FE42-4697-8D32-DFC0E2CE4925} = {81370C1E-B381-4424-AC1B-B953210FB636}
 		{514095BF-35A4-44A0-B147-892BB29AE9A3} = {81370C1E-B381-4424-AC1B-B953210FB636}
+		{A6AB1A92-B637-4DED-8212-8427089537AE} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
+		{570FCC6F-80B0-4709-AA15-8F136BE8A6C8} = {A6AB1A92-B637-4DED-8212-8427089537AE}
+		{C5EF1DF1-8094-4916-8C1C-D3598D48750C} = {A6AB1A92-B637-4DED-8212-8427089537AE}
+		{841964B0-D341-48B1-B370-CF4E30EF5925} = {A6AB1A92-B637-4DED-8212-8427089537AE}
+		{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8} = {A6AB1A92-B637-4DED-8212-8427089537AE}
+		{0FB00E91-3E8B-4294-B65D-8679D0568FFB} = {A6AB1A92-B637-4DED-8212-8427089537AE}
+		{577EC95D-AEEF-4673-8662-73ED8F42CB60} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 	EndGlobalSection
 EndGlobal
