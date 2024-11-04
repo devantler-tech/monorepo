@@ -171,6 +171,14 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidat
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ServerSide.Polaris", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ServerSide.Polaris\Devantler.KubernetesValidator.ServerSide.Polaris.csproj", "{577EC95D-AEEF-4673-8662-73ED8F42CB60}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.Schemas.Tests", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.Schemas.Tests\Devantler.KubernetesValidator.ClientSide.Schemas.Tests.csproj", "{361D959E-3C25-4E96-B7BE-05CB173E625E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.YamlSyntax.Tests", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.YamlSyntax.Tests\Devantler.KubernetesValidator.ClientSide.YamlSyntax.Tests.csproj", "{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.Polaris.Tests", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.Polaris.Tests\Devantler.KubernetesValidator.ClientSide.Polaris.Tests.csproj", "{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ServerSide.Polaris.Tests", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ServerSide.Polaris.Tests\Devantler.KubernetesValidator.ServerSide.Polaris.Tests.csproj", "{E397109A-E0C5-42CB-992B-93F117EE035F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -433,6 +441,22 @@ Global
 		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Release|Any CPU.Build.0 = Release|Any CPU
+		{361D959E-3C25-4E96-B7BE-05CB173E625E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{361D959E-3C25-4E96-B7BE-05CB173E625E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{361D959E-3C25-4E96-B7BE-05CB173E625E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{361D959E-3C25-4E96-B7BE-05CB173E625E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E397109A-E0C5-42CB-992B-93F117EE035F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E397109A-E0C5-42CB-992B-93F117EE035F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E397109A-E0C5-42CB-992B-93F117EE035F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E397109A-E0C5-42CB-992B-93F117EE035F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -520,5 +544,9 @@ Global
 		{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 		{0FB00E91-3E8B-4294-B65D-8679D0568FFB} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 		{577EC95D-AEEF-4673-8662-73ED8F42CB60} = {A6AB1A92-B637-4DED-8212-8427089537AE}
+		{361D959E-3C25-4E96-B7BE-05CB173E625E} = {A6AB1A92-B637-4DED-8212-8427089537AE}
+		{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1} = {A6AB1A92-B637-4DED-8212-8427089537AE}
+		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F} = {A6AB1A92-B637-4DED-8212-8427089537AE}
+		{E397109A-E0C5-42CB-992B-93F117EE035F} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 	EndGlobalSection
 EndGlobal
