@@ -10,10 +10,6 @@
 	path = projects/ksail
 	url = git@github.com:devantler/ksail.git
 	branch = main
-[submodule "projects/dotnet-commons"]
-	path = projects/dotnet-commons
-	url = git@github.com:devantler/dotnet-commons.git
-	branch = main
 [submodule "projects/homelab"]
 	path = projects/homelab
 	url = git@github.com:devantler/homelab.git
