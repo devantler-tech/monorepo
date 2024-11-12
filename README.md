@@ -37,14 +37,13 @@ This repository is a monorepo that contains all my active projects as submodules
 │   └── dotnet-template-engine
 ├── projects
 │   ├── data-product
-│   ├── dotnet-commons
 │   ├── homelab
 │   ├── ksail
 │   └── pandoc-plus
 └── templates
     └── dotnet-template
 
-33 directories
+32 directories
 ```
 <!-- readme-tree end -->
 
