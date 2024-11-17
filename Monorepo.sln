@@ -179,6 +179,14 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidat
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ServerSide.Polaris.Tests", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ServerSide.Polaris.Tests\Devantler.KubernetesValidator.ServerSide.Polaris.Tests.csproj", "{E397109A-E0C5-42CB-992B-93F117EE035F}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-sops-cli", "dotnet-sops-cli", "{0CFEB77D-F73B-4814-BE07-0C68E1C49353}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SOPSCLI", "libraries\dotnet-sops-cli\Devantler.SOPSCLI\Devantler.SOPSCLI.csproj", "{ABA4774B-B2F1-4F52-8D69-267A6AE58633}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SOPSCLI.Tests", "libraries\dotnet-sops-cli\Devantler.SOPSCLI.Tests\Devantler.SOPSCLI.Tests.csproj", "{49E596DD-FE90-4039-A873-E65E98B11C62}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KSail.Models.Tests", "projects\ksail\KSail.Models.Tests\KSail.Models.Tests.csproj", "{5BE88C90-7FA7-4231-AA82-2AA0F5E1C3A5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -457,6 +465,18 @@ Global
 		{E397109A-E0C5-42CB-992B-93F117EE035F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E397109A-E0C5-42CB-992B-93F117EE035F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E397109A-E0C5-42CB-992B-93F117EE035F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ABA4774B-B2F1-4F52-8D69-267A6AE58633}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ABA4774B-B2F1-4F52-8D69-267A6AE58633}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ABA4774B-B2F1-4F52-8D69-267A6AE58633}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ABA4774B-B2F1-4F52-8D69-267A6AE58633}.Release|Any CPU.Build.0 = Release|Any CPU
+		{49E596DD-FE90-4039-A873-E65E98B11C62}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{49E596DD-FE90-4039-A873-E65E98B11C62}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{49E596DD-FE90-4039-A873-E65E98B11C62}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{49E596DD-FE90-4039-A873-E65E98B11C62}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5BE88C90-7FA7-4231-AA82-2AA0F5E1C3A5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5BE88C90-7FA7-4231-AA82-2AA0F5E1C3A5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5BE88C90-7FA7-4231-AA82-2AA0F5E1C3A5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5BE88C90-7FA7-4231-AA82-2AA0F5E1C3A5}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -548,5 +568,9 @@ Global
 		{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 		{E397109A-E0C5-42CB-992B-93F117EE035F} = {A6AB1A92-B637-4DED-8212-8427089537AE}
+		{0CFEB77D-F73B-4814-BE07-0C68E1C49353} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
+		{ABA4774B-B2F1-4F52-8D69-267A6AE58633} = {0CFEB77D-F73B-4814-BE07-0C68E1C49353}
+		{49E596DD-FE90-4039-A873-E65E98B11C62} = {0CFEB77D-F73B-4814-BE07-0C68E1C49353}
+		{5BE88C90-7FA7-4231-AA82-2AA0F5E1C3A5} = {0DFB4039-B365-44EE-BF25-7532544867FD}
 	EndGlobalSection
 EndGlobal
