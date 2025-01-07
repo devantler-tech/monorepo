@@ -173,6 +173,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KSail.Models.Tests", "proje
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KSail.Generator.Tests", "projects\ksail\tests\KSail.Generator.Tests\KSail.Generator.Tests.csproj", "{8BE06515-F31A-4CCF-A280-DA491150AA43}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-kubectl-cli", "dotnet-kubectl-cli", "{AF9564C8-462B-44F1-B0E2-26F0EDDFB970}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubectlCLI", "libraries\dotnet-kubectl-cli\Devantler.KubectlCLI\Devantler.KubectlCLI.csproj", "{1BEA3A92-9665-41E6-9831-7C96680B9FCE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubectlCLI.Tests", "libraries\dotnet-kubectl-cli\Devantler.KubectlCLI.Tests\Devantler.KubectlCLI.Tests.csproj", "{B39657FC-6683-4FE5-9E67-AB5B3B330459}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -439,6 +445,14 @@ Global
 		{8BE06515-F31A-4CCF-A280-DA491150AA43}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8BE06515-F31A-4CCF-A280-DA491150AA43}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8BE06515-F31A-4CCF-A280-DA491150AA43}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1BEA3A92-9665-41E6-9831-7C96680B9FCE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1BEA3A92-9665-41E6-9831-7C96680B9FCE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1BEA3A92-9665-41E6-9831-7C96680B9FCE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1BEA3A92-9665-41E6-9831-7C96680B9FCE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B39657FC-6683-4FE5-9E67-AB5B3B330459}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B39657FC-6683-4FE5-9E67-AB5B3B330459}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B39657FC-6683-4FE5-9E67-AB5B3B330459}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B39657FC-6683-4FE5-9E67-AB5B3B330459}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -527,5 +541,8 @@ Global
 		{C9D89783-F930-45DD-B8CE-F308806AC53D} = {D17FB8F7-79CA-4EDD-BE5A-AC4C0A8E6866}
 		{0D8FF19F-D911-4C27-895F-3B38ECF06101} = {D17FB8F7-79CA-4EDD-BE5A-AC4C0A8E6866}
 		{8BE06515-F31A-4CCF-A280-DA491150AA43} = {D17FB8F7-79CA-4EDD-BE5A-AC4C0A8E6866}
+		{AF9564C8-462B-44F1-B0E2-26F0EDDFB970} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
+		{1BEA3A92-9665-41E6-9831-7C96680B9FCE} = {AF9564C8-462B-44F1-B0E2-26F0EDDFB970}
+		{B39657FC-6683-4FE5-9E67-AB5B3B330459} = {AF9564C8-462B-44F1-B0E2-26F0EDDFB970}
 	EndGlobalSection
 EndGlobal
