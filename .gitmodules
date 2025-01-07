@@ -98,3 +98,7 @@
 	path = libraries/dotnet-kubernetes-validator
 	url = git@github.com:devantler/dotnet-kubernetes-validator.git
 	branch = main
+[submodule "libraries/dotnet-kubectl-cli"]
+	path = libraries/dotnet-kubectl-cli
+	url = git@github.com:devantler/dotnet-kubectl-cli.git
+	branch = main

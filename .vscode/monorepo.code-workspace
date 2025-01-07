@@ -93,6 +93,10 @@
       "path": "../libraries/dotnet-kubeconform-cli"
     },
     {
+      "name": "📦⚙️ .NET Kubectl CLI",
+      "path": "../libraries/dotnet-kubectl-cli"
+    },
+    {
       "name": "📦Ⓚ .NET Kustomize CLI",
       "path": "../libraries/dotnet-kustomize-cli"
     },
