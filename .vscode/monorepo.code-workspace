@@ -53,7 +53,7 @@
       "path": "../libraries/dotnet-container-engine-provisioner"
     },
     {
-      "name": "📦🔓 .NET Key Manager",
+      "name": "📦🔓 .NET Secret Manager",
       "path": "../libraries/dotnet-key-manager"
     },
     {
