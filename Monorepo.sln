@@ -179,6 +179,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubectlCLI", "lib
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubectlCLI.Tests", "libraries\dotnet-kubectl-cli\Devantler.KubectlCLI.Tests\Devantler.KubectlCLI.Tests.csproj", "{B39657FC-6683-4FE5-9E67-AB5B3B330459}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerator.Core.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesGenerator.Core.Tests\Devantler.KubernetesGenerator.Core.Tests.csproj", "{B87BC95E-DA5C-4438-8959-0DC0F1617012}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -453,6 +455,10 @@ Global
 		{B39657FC-6683-4FE5-9E67-AB5B3B330459}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B39657FC-6683-4FE5-9E67-AB5B3B330459}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B39657FC-6683-4FE5-9E67-AB5B3B330459}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B87BC95E-DA5C-4438-8959-0DC0F1617012}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B87BC95E-DA5C-4438-8959-0DC0F1617012}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B87BC95E-DA5C-4438-8959-0DC0F1617012}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B87BC95E-DA5C-4438-8959-0DC0F1617012}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -544,5 +550,6 @@ Global
 		{AF9564C8-462B-44F1-B0E2-26F0EDDFB970} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
 		{1BEA3A92-9665-41E6-9831-7C96680B9FCE} = {AF9564C8-462B-44F1-B0E2-26F0EDDFB970}
 		{B39657FC-6683-4FE5-9E67-AB5B3B330459} = {AF9564C8-462B-44F1-B0E2-26F0EDDFB970}
+		{B87BC95E-DA5C-4438-8959-0DC0F1617012} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
 	EndGlobalSection
 EndGlobal
