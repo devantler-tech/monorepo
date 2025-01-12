@@ -44,7 +44,7 @@ This repository is a monorepo that contains all my active projects as submodules
 └── templates
     └── dotnet-template
 
-33 directories
+34 directories
 ```
 <!-- readme-tree end -->
 
