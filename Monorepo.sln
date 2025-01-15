@@ -33,9 +33,9 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-key-manager", "dotne
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SecretManager.Core", "libraries\dotnet-key-manager\Devantler.SecretManager.Core\Devantler.SecretManager.Core.csproj", "{DA40CB3B-4EAC-40CA-BC59-4CCDC75A20D6}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SecretManager.Local.Age", "libraries\dotnet-key-manager\Devantler.SecretManager.Local.Age\Devantler.SecretManager.Local.Age.csproj", "{E71C9E0C-A3E1-498F-B4E3-BDCD6C9CF32B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SecretManager.SOPS.LocalAge", "libraries\dotnet-key-manager\Devantler.SecretManager.SOPS.LocalAge\Devantler.SecretManager.SOPS.LocalAge.csproj", "{E71C9E0C-A3E1-498F-B4E3-BDCD6C9CF32B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SecretManager.Local.Age.Tests", "libraries\dotnet-key-manager\Devantler.SecretManager.Local.Age.Tests\Devantler.SecretManager.Local.Age.Tests.csproj", "{56EC754B-9594-4A5A-A11D-B7A335EC2116}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.SecretManager.SOPS.LocalAge.Tests", "libraries\dotnet-key-manager\Devantler.SecretManager.SOPS.LocalAge.Tests\Devantler.SecretManager.SOPS.LocalAge.Tests.csproj", "{56EC754B-9594-4A5A-A11D-B7A335EC2116}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-kubernetes-generator", "dotnet-kubernetes-generator", "{9F058515-BEC3-402D-B405-648F5B38BDEB}"
 EndProject
