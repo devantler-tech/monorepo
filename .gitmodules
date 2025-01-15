@@ -74,10 +74,6 @@
 	path = dotfiles
 	url = git@github.com:devantler/dotfiles.git
 	branch = main
-[submodule "libraries/dotnet-secrets-manager"]
-	path = libraries/dotnet-key-manager
-	url = git@github.com:devantler/dotnet-key-manager.git
-	branch = main
 [submodule "libraries/dotnet-keys"]
 	path = libraries/dotnet-keys
 	url = git@github.com:devantler/dotnet-keys.git
@@ -101,4 +97,8 @@
 [submodule "libraries/dotnet-kubectl-cli"]
 	path = libraries/dotnet-kubectl-cli
 	url = git@github.com:devantler/dotnet-kubectl-cli.git
+	branch = main
+[submodule "libraries/dotnet-secret-manager"]
+	path = libraries/dotnet-secret-manager
+	url = git@github.com:devantler/dotnet-secret-manager.git
 	branch = main

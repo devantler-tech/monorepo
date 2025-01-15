@@ -54,7 +54,7 @@
     },
     {
       "name": "📦🔓 .NET Secret Manager",
-      "path": "../libraries/dotnet-key-manager"
+      "path": "../libraries/dotnet-secret-manager"
     },
     {
       "name": "📦📄 .NET Template Engine",
