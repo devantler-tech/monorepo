@@ -102,3 +102,7 @@
 	path = libraries/dotnet-secret-manager
 	url = git@github.com:devantler/dotnet-secret-manager.git
 	branch = main
+[submodule "libraries/dotnet-commons"]
+	path = libraries/dotnet-commons
+	url = git@github.com:devantler/dotnet-commons.git
+	branch = main

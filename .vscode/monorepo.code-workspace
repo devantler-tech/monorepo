@@ -105,6 +105,10 @@
       "path": "../libraries/dotnet-sops-cli"
     },
     {
+      "name": "📦🪛 .NET Commons",
+      "path": "../libraries/dotnet-commons"
+    },
+    {
       "name": "📁#️⃣ .NET Template",
       "path": "../templates/dotnet-template"
     }

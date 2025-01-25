@@ -181,6 +181,18 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubectlCLI.Tests"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesGenerator.Core.Tests", "libraries\dotnet-kubernetes-generator\Devantler.KubernetesGenerator.Core.Tests\Devantler.KubernetesGenerator.Core.Tests.csproj", "{B87BC95E-DA5C-4438-8959-0DC0F1617012}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-commons", "dotnet-commons", "{62A4FE48-765C-4147-BDEF-6E3861BAA3F1}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{470AF462-2059-4722-8B17-1EE0995966A1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Commons.Extensions", "libraries\dotnet-commons\src\Devantler.Commons.Extensions\Devantler.Commons.Extensions.csproj", "{4779B360-291A-4815-892C-F3321B161AB1}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{C9DB277D-C952-470A-B246-0500569E0324}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Commons.Extensions.Tests", "libraries\dotnet-commons\tests\Devantler.Commons.Extensions.Tests\Devantler.Commons.Extensions.Tests.csproj", "{B83F9CE8-947F-4611-BE54-BFCF2D2806B3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Commons.AutoFixture.DataAttributes.Tests.Unit", "libraries\dotnet-commons\tests\Devantler.Commons.AutoFixture.DataAttributes.Tests.Unit\Devantler.Commons.AutoFixture.DataAttributes.Tests.Unit.csproj", "{78687FAC-CA4B-4338-A631-BD909C5975D7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -459,6 +471,18 @@ Global
 		{B87BC95E-DA5C-4438-8959-0DC0F1617012}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B87BC95E-DA5C-4438-8959-0DC0F1617012}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B87BC95E-DA5C-4438-8959-0DC0F1617012}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4779B360-291A-4815-892C-F3321B161AB1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4779B360-291A-4815-892C-F3321B161AB1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4779B360-291A-4815-892C-F3321B161AB1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4779B360-291A-4815-892C-F3321B161AB1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B83F9CE8-947F-4611-BE54-BFCF2D2806B3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B83F9CE8-947F-4611-BE54-BFCF2D2806B3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B83F9CE8-947F-4611-BE54-BFCF2D2806B3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B83F9CE8-947F-4611-BE54-BFCF2D2806B3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{78687FAC-CA4B-4338-A631-BD909C5975D7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{78687FAC-CA4B-4338-A631-BD909C5975D7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{78687FAC-CA4B-4338-A631-BD909C5975D7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{78687FAC-CA4B-4338-A631-BD909C5975D7}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -551,5 +575,11 @@ Global
 		{1BEA3A92-9665-41E6-9831-7C96680B9FCE} = {AF9564C8-462B-44F1-B0E2-26F0EDDFB970}
 		{B39657FC-6683-4FE5-9E67-AB5B3B330459} = {AF9564C8-462B-44F1-B0E2-26F0EDDFB970}
 		{B87BC95E-DA5C-4438-8959-0DC0F1617012} = {9F058515-BEC3-402D-B405-648F5B38BDEB}
+		{62A4FE48-765C-4147-BDEF-6E3861BAA3F1} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
+		{470AF462-2059-4722-8B17-1EE0995966A1} = {62A4FE48-765C-4147-BDEF-6E3861BAA3F1}
+		{4779B360-291A-4815-892C-F3321B161AB1} = {470AF462-2059-4722-8B17-1EE0995966A1}
+		{C9DB277D-C952-470A-B246-0500569E0324} = {62A4FE48-765C-4147-BDEF-6E3861BAA3F1}
+		{B83F9CE8-947F-4611-BE54-BFCF2D2806B3} = {C9DB277D-C952-470A-B246-0500569E0324}
+		{78687FAC-CA4B-4338-A631-BD909C5975D7} = {C9DB277D-C952-470A-B246-0500569E0324}
 	EndGlobalSection
 EndGlobal
