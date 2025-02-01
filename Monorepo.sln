@@ -193,6 +193,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Commons.Extension
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Commons.AutoFixture.DataAttributes.Tests.Unit", "libraries\dotnet-commons\tests\Devantler.Commons.AutoFixture.DataAttributes.Tests.Unit\Devantler.Commons.AutoFixture.DataAttributes.Tests.Unit.csproj", "{78687FAC-CA4B-4338-A631-BD909C5975D7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Commons.Utils", "libraries\dotnet-commons\src\Devantler.Commons.Utils\Devantler.Commons.Utils.csproj", "{C623D985-EB39-4C5F-88CF-AEBD8552285F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Commons.Utils.Tests", "libraries\dotnet-commons\tests\Devantler.Commons.Utils.Tests\Devantler.Commons.Utils.Tests.csproj", "{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -483,6 +487,14 @@ Global
 		{78687FAC-CA4B-4338-A631-BD909C5975D7}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{78687FAC-CA4B-4338-A631-BD909C5975D7}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{78687FAC-CA4B-4338-A631-BD909C5975D7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C623D985-EB39-4C5F-88CF-AEBD8552285F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C623D985-EB39-4C5F-88CF-AEBD8552285F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C623D985-EB39-4C5F-88CF-AEBD8552285F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C623D985-EB39-4C5F-88CF-AEBD8552285F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -581,5 +593,7 @@ Global
 		{C9DB277D-C952-470A-B246-0500569E0324} = {62A4FE48-765C-4147-BDEF-6E3861BAA3F1}
 		{B83F9CE8-947F-4611-BE54-BFCF2D2806B3} = {C9DB277D-C952-470A-B246-0500569E0324}
 		{78687FAC-CA4B-4338-A631-BD909C5975D7} = {C9DB277D-C952-470A-B246-0500569E0324}
+		{C623D985-EB39-4C5F-88CF-AEBD8552285F} = {470AF462-2059-4722-8B17-1EE0995966A1}
+		{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D} = {C9DB277D-C952-470A-B246-0500569E0324}
 	EndGlobalSection
 EndGlobal
