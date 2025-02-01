@@ -65,6 +65,10 @@
       "path": "../libraries/dotnet-keys"
     },
     {
+      "name": "📦🪛 .NET Commons",
+      "path": "../libraries/dotnet-commons"
+    },
+    {
       "name": "📦▶️ .NET CLI Runner",
       "path": "../libraries/dotnet-cli-runner"
     },
@@ -103,10 +107,6 @@
     {
       "name": "📦🔐 .NET SOPS CLI",
       "path": "../libraries/dotnet-sops-cli"
-    },
-    {
-      "name": "📦🪛 .NET Commons",
-      "path": "../libraries/dotnet-commons"
     },
     {
       "name": "📁#️⃣ .NET Template",
