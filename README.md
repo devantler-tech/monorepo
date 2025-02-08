@@ -24,6 +24,7 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-commons
 │   ├── dotnet-container-engine-provisioner
 │   ├── dotnet-flux-cli
+│   ├── dotnet-helm-cli
 │   ├── dotnet-k3d-cli
 │   ├── dotnet-k9s-cli
 │   ├── dotnet-keys
@@ -45,7 +46,7 @@ This repository is a monorepo that contains all my active projects as submodules
 └── templates
     └── dotnet-template
 
-35 directories
+36 directories
 ```
 <!-- readme-tree end -->
 
