@@ -97,6 +97,10 @@
       "path": "../libraries/dotnet-kubeconform-cli"
     },
     {
+      "name": "📦⎈ .NET Helm CLI",
+      "path": "../libraries/dotnet-helm-cli"
+    },
+    {
       "name": "📦🔧 .NET Kubectl CLI",
       "path": "../libraries/dotnet-kubectl-cli"
     },

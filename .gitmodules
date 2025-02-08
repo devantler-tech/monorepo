@@ -106,3 +106,7 @@
 	path = libraries/dotnet-commons
 	url = git@github.com:devantler/dotnet-commons.git
 	branch = main
+[submodule "libraries/dotnet-helm-cli"]
+	path = libraries/dotnet-helm-cli
+	url = git@github.com:devantler/dotnet-helm-cli.git
+	branch = main
