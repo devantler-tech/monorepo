@@ -197,6 +197,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Commons.Utils", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.Commons.Utils.Tests", "libraries\dotnet-commons\tests\Devantler.Commons.Utils.Tests\Devantler.Commons.Utils.Tests.csproj", "{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.ContainerEngineProvisioner.Docker.Tests", "libraries\dotnet-container-engine-provisioner\Devantler.ContainerEngineProvisioner.Docker.Tests\Devantler.ContainerEngineProvisioner.Docker.Tests.csproj", "{B55D66FA-5584-4161-8E18-98EF0F2FCA0B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -495,6 +497,10 @@ Global
 		{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B55D66FA-5584-4161-8E18-98EF0F2FCA0B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B55D66FA-5584-4161-8E18-98EF0F2FCA0B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B55D66FA-5584-4161-8E18-98EF0F2FCA0B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B55D66FA-5584-4161-8E18-98EF0F2FCA0B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -595,5 +601,6 @@ Global
 		{78687FAC-CA4B-4338-A631-BD909C5975D7} = {C9DB277D-C952-470A-B246-0500569E0324}
 		{C623D985-EB39-4C5F-88CF-AEBD8552285F} = {470AF462-2059-4722-8B17-1EE0995966A1}
 		{BCD76F27-3D8E-47DF-B92A-F4475A7A7B4D} = {C9DB277D-C952-470A-B246-0500569E0324}
+		{B55D66FA-5584-4161-8E18-98EF0F2FCA0B} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
 	EndGlobalSection
 EndGlobal
