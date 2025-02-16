@@ -8,3 +8,4 @@ permissions:
 jobs:
   call-auto-merge-workflow:
     uses: devantler-tech/.github/.github/workflows/auto-merge.yaml@main
+    secrets: inherit
