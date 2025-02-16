@@ -2,10 +2,6 @@
 	path = projects/ksail
 	url = git@github.com:devantler-tech/ksail.git
 	branch = main
-[submodule "projects/homelab"]
-	path = projects/homelab
-	url = git@github.com:devantler/homelab.git
-	branch = main
 [submodule "projects/data-product"]
 	path = projects/data-product
 	url = git@github.com:devantler-tech/data-product.git
@@ -113,4 +109,8 @@
 [submodule "github/personal/profile"]
 	path = github/personal/profile
 	url = git@github.com:devantler/devantler.git
+	branch = main
+[submodule "platform"]
+	path = platform
+	url = git@github.com:devantler-tech/platform.git
 	branch = main
