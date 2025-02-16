@@ -15,9 +15,12 @@ This repository is a monorepo that contains all my active projects as submodules
 ├── .vscode
 ├── dotfiles
 ├── github
-│   ├── config
-│   ├── issue-tracker
-│   └── profile
+│   ├── devantler-tech
+│   │   ├── .github-private
+│   │   └── .github-public
+│   └── personal
+│       ├── .github-public
+│       └── profile
 ├── libraries
 │   ├── dotnet-age-cli
 │   ├── dotnet-cli-runner
@@ -38,15 +41,15 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-secret-manager
 │   ├── dotnet-sops-cli
 │   └── dotnet-template-engine
+├── platform
 ├── projects
 │   ├── data-product
-│   ├── homelab
 │   ├── ksail
 │   └── pandoc-plus
 └── templates
     └── dotnet-template
 
-36 directories
+39 directories
 ```
 <!-- readme-tree end -->
 
