@@ -9,15 +9,23 @@
       "path": "../dotfiles"
     },
     {
-      "name": "⚙️ GitHub - Personal",
-      "path": "../github/personal"
+      "name": "😸👨🏻‍💻 GitHub - Personal - Profile",
+      "path": "../github/personal/profile"
     },
     {
-      "name": "⚙️ GitHub - DevantlerTech",
-      "path": "../github/devantler-tech"
+      "name": "😸👨🏻‍💻⚙️ GitHub - Personal - Config",
+      "path": "../github/personal/.github-public"
     },
     {
-      "name": "🚀⛴️ DevantlerTech Platform",
+      "name": "😸💼⚙️ GitHub - DevantlerTech - Public Config",
+      "path": "../github/devantler-tech/.github-public"
+    },
+    {
+      "name": "😸💼⚙️ GitHub - DevantlerTech - Private Config",
+      "path": "../github/devantler-tech/.github-private"
+    },
+    {
+      "name": "⛴️ DevantlerTech Platform",
       "path": "../projects/homelab"
     },
     {
