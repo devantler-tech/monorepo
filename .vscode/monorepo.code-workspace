@@ -9,19 +9,15 @@
       "path": "../dotfiles"
     },
     {
-      "name": "⚙️ GitHub Config",
-      "path": "../github/config"
+      "name": "⚙️ GitHub - Personal",
+      "path": "../github/personal"
     },
     {
-      "name": "🧔🏻 GitHub Profile",
-      "path": "../github/profile"
+      "name": "⚙️ GitHub - DevantlerTech",
+      "path": "../github/devantler-tech"
     },
     {
-      "name": "🎯 Issue Tracker",
-      "path": "../github/issue-tracker"
-    },
-    {
-      "name": "🚀🏠 Homelab",
+      "name": "🚀⛴️ DevantlerTech Platform",
       "path": "../projects/homelab"
     },
     {
