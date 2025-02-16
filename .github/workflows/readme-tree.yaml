@@ -5,10 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   call-readme-tree-workflow:
     uses: devantler-tech/.github/.github/workflows/readme-tree.yaml@main

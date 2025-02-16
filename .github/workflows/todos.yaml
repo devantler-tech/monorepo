@@ -3,10 +3,6 @@ on:
   push:
     branches: [main]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   call-todos-workflow:
     uses: devantler-tech/.github/.github/workflows/todos.yaml@main
