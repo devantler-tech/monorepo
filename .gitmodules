@@ -2,10 +2,6 @@
 	path = github/profile
 	url = git@github.com:devantler/devantler.git
 	branch = main
-[submodule "github/config"]
-	path = github/config
-	url = git@github.com:devantler/.github.git
-	branch = main
 [submodule "projects/ksail"]
 	path = projects/ksail
 	url = git@github.com:devantler-tech/ksail.git
@@ -109,4 +105,16 @@
 [submodule "libraries/dotnet-helm-cli"]
 	path = libraries/dotnet-helm-cli
 	url = git@github.com:devantler-tech/dotnet-helm-cli.git
+	branch = main
+[submodule "github/devantler-tech/workflows"]
+	path = github/devantler-tech/workflows
+	url = git@github.com:devantler-tech/workflows.git
+	branch = main
+[submodule "github/devantler-tech/.github-private"]
+	path = github/devantler-tech/.github-private
+	url = git@github.com:devantler-tech/.github-private.git
+	branch = main
+[submodule "github/devantler-tech/.github-public"]
+	path = github/devantler-tech/.github-public
+	url = git@github.com:devantler-tech/.github.git
 	branch = main
