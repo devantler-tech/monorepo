@@ -6,3 +6,5 @@ on:
 jobs:
   call-todos-workflow:
     uses: devantler-tech/.github/.github/workflows/todos.yaml@main
+    with:
+      app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
