@@ -110,3 +110,7 @@
 	path = github/personal/.github-public
 	url = git@github.com:devantler/.github.git
 	branch = main
+[submodule "github/personal/profile"]
+	path = github/personal/profile
+	url = git@github.com:devantler/devantler.git
+	branch = main
