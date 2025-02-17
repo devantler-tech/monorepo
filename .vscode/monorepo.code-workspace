@@ -121,6 +121,10 @@
       "path": "../libraries/dotnet-sops-cli"
     },
     {
+      "name": "🚚🍺 Homebrew Formulas",
+      "path": "../homebrew-formulas"
+    },
+    {
       "name": "📁#️⃣ .NET Template",
       "path": "../templates/dotnet-template"
     }

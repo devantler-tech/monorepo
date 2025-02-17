@@ -114,3 +114,7 @@
 	path = platform
 	url = git@github.com:devantler-tech/platform.git
 	branch = main
+[submodule "homebrew-formulas"]
+	path = homebrew-formulas
+	url = git@github.com:devantler-tech/homebrew-formulas.git
+	branch = main
