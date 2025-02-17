@@ -21,6 +21,7 @@ This repository is a monorepo that contains all my active projects as submodules
 │   └── personal
 │       ├── .github-public
 │       └── profile
+├── homebrew-formulas
 ├── libraries
 │   ├── dotnet-age-cli
 │   ├── dotnet-cli-runner
@@ -49,7 +50,7 @@ This repository is a monorepo that contains all my active projects as submodules
 └── templates
     └── dotnet-template
 
-39 directories
+40 directories
 ```
 <!-- readme-tree end -->
 
