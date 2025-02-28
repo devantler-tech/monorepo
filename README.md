@@ -24,6 +24,8 @@ This repository is a monorepo that contains all my active projects as submodules
 ├── homebrew-formulas
 ├── libraries
 │   ├── dotnet-age-cli
+│   ├── dotnet-argocd-cli
+│   ├── dotnet-cilium-cli
 │   ├── dotnet-cli-runner
 │   ├── dotnet-commons
 │   ├── dotnet-container-engine-provisioner
@@ -41,7 +43,9 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-kustomize-cli
 │   ├── dotnet-secret-manager
 │   ├── dotnet-sops-cli
-│   └── dotnet-template-engine
+│   ├── dotnet-talosctl-cli
+│   ├── dotnet-template-engine
+│   └── dotnet-timoni-cli
 ├── platform
 ├── projects
 │   ├── data-product
@@ -50,7 +54,7 @@ This repository is a monorepo that contains all my active projects as submodules
 └── templates
     └── dotnet-template
 
-40 directories
+44 directories
 ```
 <!-- readme-tree end -->
 
