@@ -49,7 +49,7 @@
       "path": "../libraries/dotnet-kubernetes-generator"
     },
     {
-      "name": "📦🌐 .NET Kubernetes Provisioner",
+      "name": "📦✈ .NET Kubernetes Provisioner",
       "path": "../libraries/dotnet-kubernetes-provisioner"
     },
     {
@@ -81,44 +81,60 @@
       "path": "../libraries/dotnet-cli-runner"
     },
     {
-      "name": "📦🔑 .NET Age CLI",
-      "path": "../libraries/dotnet-age-cli"
-    },
-    {
-      "name": "📦🔁 .NET Flux CLI",
-      "path": "../libraries/dotnet-flux-cli"
+      "name": "📦⚗️ .NET Kind CLI",
+      "path": "../libraries/dotnet-kind-cli"
     },
     {
       "name": "📦⓷ .NET K3d CLI",
       "path": "../libraries/dotnet-k3d-cli"
     },
     {
-      "name": "📦🐶 .NET K9s CLI",
-      "path": "../libraries/dotnet-k9s-cli"
+      "name": "📦⏀ .NET Talosctl CLI",
+      "path": "../libraries/dotnet-talosctl-cli"
     },
     {
-      "name": "📦⚗️ .NET Kind CLI",
-      "path": "../libraries/dotnet-kind-cli"
+      "name": "📦⬆️ .NET Flux CLI",
+      "path": "../libraries/dotnet-flux-cli"
     },
     {
-      "name": "📦🔎 .NET Kubeconform CLI",
-      "path": "../libraries/dotnet-kubeconform-cli"
-    },
-    {
-      "name": "📦⎈ .NET Helm CLI",
-      "path": "../libraries/dotnet-helm-cli"
+      "name": "📦🐙 .NET ArgoCD ClI",
+      "path": "../libraries/dotnet-argocd-cli"
     },
     {
       "name": "📦🔧 .NET Kubectl CLI",
       "path": "../libraries/dotnet-kubectl-cli"
     },
     {
-      "name": "📦Ⓚ .NET Kustomize CLI",
-      "path": "../libraries/dotnet-kustomize-cli"
+      "name": "📦⎈ .NET Helm CLI",
+      "path": "../libraries/dotnet-helm-cli"
+    },
+    {
+      "name": "📦⎈ .NET Timoni CLI",
+      "path": "../libraries/dotnet-timoni-cli"
+    },
+    {
+      "name": "📦🌐 .NET Cilium CLI",
+      "path": "../libraries/dotnet-cilium-cli"
+    },
+    {
+      "name": "📦🔑 .NET Age CLI",
+      "path": "../libraries/dotnet-age-cli"
     },
     {
       "name": "📦🔐 .NET SOPS CLI",
       "path": "../libraries/dotnet-sops-cli"
+    },
+    {
+      "name": "📦🐶 .NET K9s CLI",
+      "path": "../libraries/dotnet-k9s-cli"
+    },
+    {
+      "name": "📦🔎 .NET Kubeconform CLI",
+      "path": "../libraries/dotnet-kubeconform-cli"
+    },
+    {
+      "name": "📦Ⓚ .NET Kustomize CLI",
+      "path": "../libraries/dotnet-kustomize-cli"
     },
     {
       "name": "🚚🍺 Homebrew Formulas",

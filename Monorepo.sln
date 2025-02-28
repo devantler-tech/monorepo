@@ -115,17 +115,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidat
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.Schemas", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.Schemas\Devantler.KubernetesValidator.ClientSide.Schemas.csproj", "{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.Polaris", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.Polaris\Devantler.KubernetesValidator.ClientSide.Polaris.csproj", "{0FB00E91-3E8B-4294-B65D-8679D0568FFB}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ServerSide.Polaris", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ServerSide.Polaris\Devantler.KubernetesValidator.ServerSide.Polaris.csproj", "{577EC95D-AEEF-4673-8662-73ED8F42CB60}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.Schemas.Tests", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.Schemas.Tests\Devantler.KubernetesValidator.ClientSide.Schemas.Tests.csproj", "{361D959E-3C25-4E96-B7BE-05CB173E625E}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.YamlSyntax.Tests", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.YamlSyntax.Tests\Devantler.KubernetesValidator.ClientSide.YamlSyntax.Tests.csproj", "{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ClientSide.Polaris.Tests", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ClientSide.Polaris.Tests\Devantler.KubernetesValidator.ClientSide.Polaris.Tests.csproj", "{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesValidator.ServerSide.Polaris.Tests", "libraries\dotnet-kubernetes-validator\Devantler.KubernetesValidator.ServerSide.Polaris.Tests\Devantler.KubernetesValidator.ServerSide.Polaris.Tests.csproj", "{E397109A-E0C5-42CB-992B-93F117EE035F}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-sops-cli", "dotnet-sops-cli", "{0CFEB77D-F73B-4814-BE07-0C68E1C49353}"
 EndProject
@@ -717,30 +709,6 @@ Global
 		{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8}.Release|x64.Build.0 = Release|Any CPU
 		{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8}.Release|x86.ActiveCfg = Release|Any CPU
 		{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8}.Release|x86.Build.0 = Release|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Debug|x64.Build.0 = Debug|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Debug|x86.Build.0 = Debug|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Release|Any CPU.Build.0 = Release|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Release|x64.ActiveCfg = Release|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Release|x64.Build.0 = Release|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Release|x86.ActiveCfg = Release|Any CPU
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB}.Release|x86.Build.0 = Release|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Debug|x64.Build.0 = Debug|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Debug|x86.Build.0 = Debug|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Release|Any CPU.Build.0 = Release|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Release|x64.ActiveCfg = Release|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Release|x64.Build.0 = Release|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Release|x86.ActiveCfg = Release|Any CPU
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60}.Release|x86.Build.0 = Release|Any CPU
 		{361D959E-3C25-4E96-B7BE-05CB173E625E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{361D959E-3C25-4E96-B7BE-05CB173E625E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{361D959E-3C25-4E96-B7BE-05CB173E625E}.Debug|x64.ActiveCfg = Debug|Any CPU
@@ -765,30 +733,6 @@ Global
 		{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1}.Release|x64.Build.0 = Release|Any CPU
 		{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1}.Release|x86.ActiveCfg = Release|Any CPU
 		{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1}.Release|x86.Build.0 = Release|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Debug|x64.Build.0 = Debug|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Debug|x86.Build.0 = Debug|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Release|Any CPU.Build.0 = Release|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Release|x64.ActiveCfg = Release|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Release|x64.Build.0 = Release|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Release|x86.ActiveCfg = Release|Any CPU
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F}.Release|x86.Build.0 = Release|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Debug|x64.Build.0 = Debug|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Debug|x86.Build.0 = Debug|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Release|Any CPU.Build.0 = Release|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Release|x64.ActiveCfg = Release|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Release|x64.Build.0 = Release|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Release|x86.ActiveCfg = Release|Any CPU
-		{E397109A-E0C5-42CB-992B-93F117EE035F}.Release|x86.Build.0 = Release|Any CPU
 		{ABA4774B-B2F1-4F52-8D69-267A6AE58633}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{ABA4774B-B2F1-4F52-8D69-267A6AE58633}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{ABA4774B-B2F1-4F52-8D69-267A6AE58633}.Debug|x64.ActiveCfg = Debug|Any CPU
@@ -1209,12 +1153,8 @@ Global
 		{C5EF1DF1-8094-4916-8C1C-D3598D48750C} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 		{841964B0-D341-48B1-B370-CF4E30EF5925} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 		{1756B6B6-217D-40B5-BFAA-04F6A04CE9B8} = {A6AB1A92-B637-4DED-8212-8427089537AE}
-		{0FB00E91-3E8B-4294-B65D-8679D0568FFB} = {A6AB1A92-B637-4DED-8212-8427089537AE}
-		{577EC95D-AEEF-4673-8662-73ED8F42CB60} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 		{361D959E-3C25-4E96-B7BE-05CB173E625E} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 		{488F1F4C-AFCE-4234-93C0-82F85FD9FBA1} = {A6AB1A92-B637-4DED-8212-8427089537AE}
-		{EF3142B0-B0C1-475F-8B52-5F7A41E74D9F} = {A6AB1A92-B637-4DED-8212-8427089537AE}
-		{E397109A-E0C5-42CB-992B-93F117EE035F} = {A6AB1A92-B637-4DED-8212-8427089537AE}
 		{0CFEB77D-F73B-4814-BE07-0C68E1C49353} = {D41DFE0B-89F2-4AAE-85D4-5F73C76B753D}
 		{ABA4774B-B2F1-4F52-8D69-267A6AE58633} = {0CFEB77D-F73B-4814-BE07-0C68E1C49353}
 		{49E596DD-FE90-4039-A873-E65E98B11C62} = {0CFEB77D-F73B-4814-BE07-0C68E1C49353}
