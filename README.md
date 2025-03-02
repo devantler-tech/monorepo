@@ -26,7 +26,6 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-age-cli
 │   ├── dotnet-argocd-cli
 │   ├── dotnet-cilium-cli
-│   ├── dotnet-cli-runner
 │   ├── dotnet-commons
 │   ├── dotnet-container-engine-provisioner
 │   ├── dotnet-flux-cli
@@ -54,7 +53,7 @@ This repository is a monorepo that contains all my active projects as submodules
 └── templates
     └── dotnet-template
 
-44 directories
+43 directories
 ```
 <!-- readme-tree end -->
 
