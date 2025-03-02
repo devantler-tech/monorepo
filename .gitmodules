@@ -54,10 +54,6 @@
 	path = templates/dotnet-template
 	url = git@github.com:devantler-tech/dotnet-template.git
 	branch = main
-[submodule "libraries/dotnet-cli-runner"]
-	path = libraries/dotnet-cli-runner
-	url = git@github.com:devantler-tech/dotnet-cli-runner.git
-	branch = main
 [submodule "dotfiles"]
 	path = dotfiles
 	url = git@github.com:devantler/dotfiles.git
