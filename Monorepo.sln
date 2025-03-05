@@ -293,6 +293,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesProvisi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesProvisioner.CNI.Cilium", "libraries\dotnet-kubernetes-provisioner\src\Devantler.KubernetesProvisioner.CNI.Cilium\Devantler.KubernetesProvisioner.CNI.Cilium.csproj", "{B7300BA0-177D-4B60-8357-8E6D2DCFB1C2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Devantler.KubernetesProvisioner.CNI.Cilium.Tests", "libraries\dotnet-kubernetes-provisioner\tests\Devantler.KubernetesProvisioner.CNI.Cilium.Tests\Devantler.KubernetesProvisioner.CNI.Cilium.Tests.csproj", "{B3D2BD58-1AAA-49AF-9775-11FF07815236}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1251,6 +1253,18 @@ Global
 		{B7300BA0-177D-4B60-8357-8E6D2DCFB1C2}.Release|x64.Build.0 = Release|Any CPU
 		{B7300BA0-177D-4B60-8357-8E6D2DCFB1C2}.Release|x86.ActiveCfg = Release|Any CPU
 		{B7300BA0-177D-4B60-8357-8E6D2DCFB1C2}.Release|x86.Build.0 = Release|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Debug|x64.Build.0 = Debug|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Debug|x86.Build.0 = Debug|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Release|x64.ActiveCfg = Release|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Release|x64.Build.0 = Release|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Release|x86.ActiveCfg = Release|Any CPU
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1398,5 +1412,6 @@ Global
 		{0605EAF9-9624-4949-9E75-04C6119DB4C7} = {D145101C-F773-0581-AC66-A5706F96A21F}
 		{42DBAE4C-FF1B-4971-816D-85A00E24237D} = {708D2106-727D-C766-9C85-5787742BAE1E}
 		{B7300BA0-177D-4B60-8357-8E6D2DCFB1C2} = {708D2106-727D-C766-9C85-5787742BAE1E}
+		{B3D2BD58-1AAA-49AF-9775-11FF07815236} = {C4705C5B-7E45-3617-7FE3-D17583F3B05F}
 	EndGlobalSection
 EndGlobal
