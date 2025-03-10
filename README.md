@@ -70,7 +70,7 @@ git submodule update --init --recursive
 Alternatively, you can clone the monorepo with the `--recurse-submodules` flag:
 
 ```bash
-git clone --recurse-submodules git@github.com:energinet-digitalisering/[department-name].git
+git clone --recurse-submodules git@github.com:devantler-tech/monorepo.git
 ```
 
 Make sure that all submodules are checked out on the correct branch the first time you clone the monorepo. Otherwise, you might risk loosing changes as the submodule will be in a detached head state.
