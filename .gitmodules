@@ -126,3 +126,11 @@
 	path = libraries/dotnet-timoni-cli
 	url = https://github.com/devantler-tech/dotnet-timoni-cli
 	branch = main
+[submodule "libraries/dotnet-kubernetes-generator"]
+	path = libraries/dotnet-kubernetes-generator
+	url = git@github.com:devantler-tech/dotnet-kubernetes-generator.git
+	branch = main
+[submodule "libraries/dotnet-kubernetes-provisioner"]
+	path = libraries/dotnet-kubernetes-provisioner
+	url = git@github.com:devantler-tech/dotnet-kubernetes-provisioner.git
+	branch = main

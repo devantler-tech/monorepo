@@ -76,7 +76,7 @@ Make sure that all submodules are checked out on the correct branch the first ti
 ### Adding a submodule
 
 ```sh
-git submodule add -b <branch> <ssh-url> <path>
+git submodule add -b main <ssh-url> <path>
 ```
 
 ### Updating a submodule
