@@ -33,11 +33,15 @@ This repository is a monorepo that contains all my active projects as submodules
 │   ├── dotnet-k3d-cli
 │   ├── dotnet-k9s-cli
 │   ├── dotnet-keys
+│   ├── dotnet-kind-cli
 │   ├── dotnet-kubeconform-cli
 │   ├── dotnet-kubectl-cli
+│   ├── dotnet-kubernetes-generator
+│   ├── dotnet-kubernetes-provisioner
 │   ├── dotnet-kubernetes-validator
 │   ├── dotnet-kustomize-cli
 │   ├── dotnet-secret-manager
+│   ├── dotnet-sops-cli
 │   ├── dotnet-talosctl-cli
 │   ├── dotnet-template-engine
 │   └── dotnet-timoni-cli
@@ -48,7 +52,7 @@ This repository is a monorepo that contains all my active projects as submodules
 └── templates
     └── dotnet-template
 
-38 directories
+42 directories
 ```
 <!-- readme-tree end -->
 
