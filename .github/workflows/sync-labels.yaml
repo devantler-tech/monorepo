@@ -9,4 +9,4 @@ permissions:
 
 jobs:
   sync-labels:
-    uses: devantler-tech/workflows/meta/sync-labels.yaml@main
+    uses: devantler-tech/workflows/.github/workflows/sync-labels.yaml@main
