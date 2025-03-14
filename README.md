@@ -49,10 +49,11 @@ This repository is a monorepo that contains all my active projects as submodules
 ├── projects
 │   ├── ksail
 │   └── pandoc-plus
-└── templates
-    └── dotnet-template
+├── templates
+│   └── dotnet-template
+└── workflows
 
-42 directories
+43 directories
 ```
 <!-- readme-tree end -->
 
