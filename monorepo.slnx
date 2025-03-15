@@ -1,0 +1,212 @@
+<Solution>
+  <Folder Name="/libraries/" />
+  <Folder Name="/libraries/dotnet-age-cli/" />
+  <Folder Name="/libraries/dotnet-age-cli/src/">
+    <Project Path="libraries/dotnet-age-cli/src/Devantler.AgeCLI/Devantler.AgeCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-age-cli/tests/">
+    <Project Path="libraries/dotnet-age-cli/tests/Devantler.AgeCLI.Tests/Devantler.AgeCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-argocd-cli/" />
+  <Folder Name="/libraries/dotnet-argocd-cli/src/">
+    <Project Path="libraries/dotnet-argocd-cli/src/Example/Example.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-argocd-cli/tests/">
+    <Project Path="libraries/dotnet-argocd-cli/tests/Example.Tests/Example.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-cilium-cli/" />
+  <Folder Name="/libraries/dotnet-cilium-cli/src/">
+    <Project Path="libraries/dotnet-cilium-cli/src/Devantler.CiliumCLI/Devantler.CiliumCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-cilium-cli/tests/">
+    <Project Path="libraries/dotnet-cilium-cli/tests/Devantler.CiliumCLI.Tests/Devantler.CiliumCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-commons/" />
+  <Folder Name="/libraries/dotnet-commons/src/">
+    <Project Path="libraries/dotnet-commons/src/Devantler.Commons.Extensions/Devantler.Commons.Extensions.csproj" />
+    <Project Path="libraries/dotnet-commons/src/Devantler.Commons.Utils/Devantler.Commons.Utils.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-commons/tests/">
+    <Project Path="libraries/dotnet-commons/tests/Devantler.Commons.Extensions.Tests/Devantler.Commons.Extensions.Tests.csproj" />
+    <Project Path="libraries/dotnet-commons/tests/Devantler.Commons.Utils.Tests/Devantler.Commons.Utils.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-container-engine-provisioner/" />
+  <Folder Name="/libraries/dotnet-container-engine-provisioner/src/">
+    <Project Path="libraries/dotnet-container-engine-provisioner/src/Devantler.ContainerEngineProvisioner.Core/Devantler.ContainerEngineProvisioner.Core.csproj" />
+    <Project Path="libraries/dotnet-container-engine-provisioner/src/Devantler.ContainerEngineProvisioner.Docker/Devantler.ContainerEngineProvisioner.Docker.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-container-engine-provisioner/tests/">
+    <Project Path="libraries/dotnet-container-engine-provisioner/tests/Devantler.ContainerEngineProvisioner.Docker.Tests/Devantler.ContainerEngineProvisioner.Docker.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-flux-cli/" />
+  <Folder Name="/libraries/dotnet-flux-cli/src/">
+    <Project Path="libraries/dotnet-flux-cli/src/Devantler.FluxCLI/Devantler.FluxCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-flux-cli/tests/">
+    <Project Path="libraries/dotnet-flux-cli/tests/Devantler.FluxCLI.Tests/Devantler.FluxCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-helm-cli/" />
+  <Folder Name="/libraries/dotnet-helm-cli/src/">
+    <Project Path="libraries/dotnet-helm-cli/src/Devantler.HelmCLI/Devantler.HelmCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-helm-cli/tests/">
+    <Project Path="libraries/dotnet-helm-cli/tests/Devantler.HelmCLI.Tests/Devantler.HelmCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-k3d-cli/" />
+  <Folder Name="/libraries/dotnet-k3d-cli/src/">
+    <Project Path="libraries/dotnet-k3d-cli/src/Devantler.K3dCLI/Devantler.K3dCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-k3d-cli/tests/">
+    <Project Path="libraries/dotnet-k3d-cli/tests/Devantler.K3dCLI.Tests/Devantler.K3dCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-k9s-cli/" />
+  <Folder Name="/libraries/dotnet-k9s-cli/src/">
+    <Project Path="libraries/dotnet-k9s-cli/src/Devantler.K9sCLI/Devantler.K9sCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-k9s-cli/tests/">
+    <Project Path="libraries/dotnet-k9s-cli/tests/Devantler.K9sCLI.Tests/Devantler.K9sCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-keys/" />
+  <Folder Name="/libraries/dotnet-keys/src/">
+    <Project Path="libraries/dotnet-keys/src/Devantler.Keys.Age/Devantler.Keys.Age.csproj" />
+    <Project Path="libraries/dotnet-keys/src/Devantler.Keys.Core/Devantler.Keys.Core.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-keys/tests/">
+    <Project Path="libraries/dotnet-keys/tests/Devantler.Keys.Age.Tests/Devantler.Keys.Age.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kind-cli/" />
+  <Folder Name="/libraries/dotnet-kind-cli/src/">
+    <Project Path="libraries/dotnet-kind-cli/src/Devantler.KindCLI/Devantler.KindCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kind-cli/tests/">
+    <Project Path="libraries/dotnet-kind-cli/tests/Devantler.KindCLI.Tests/Devantler.KindCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kubeconform-cli/" />
+  <Folder Name="/libraries/dotnet-kubeconform-cli/src/">
+    <Project Path="libraries/dotnet-kubeconform-cli/src/Devantler.KubeconformCLI/Devantler.KubeconformCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kubeconform-cli/tests/">
+    <Project Path="libraries/dotnet-kubeconform-cli/tests/Devantler.KubeconformCLI.Tests/Devantler.KubeconformCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kubectl-cli/" />
+  <Folder Name="/libraries/dotnet-kubectl-cli/src/">
+    <Project Path="libraries/dotnet-kubectl-cli/src/Devantler.KubectlCLI/Devantler.KubectlCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kubectl-cli/tests/">
+    <Project Path="libraries/dotnet-kubectl-cli/tests/Devantler.KubectlCLI.Tests/Devantler.KubectlCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kubernetes-generator/" />
+  <Folder Name="/libraries/dotnet-kubernetes-generator/src/">
+    <Project Path="libraries/dotnet-kubernetes-generator/src/Devantler.KubernetesGenerator.CertManager/Devantler.KubernetesGenerator.CertManager.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/src/Devantler.KubernetesGenerator.Core/Devantler.KubernetesGenerator.Core.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/src/Devantler.KubernetesGenerator.Flux/Devantler.KubernetesGenerator.Flux.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/src/Devantler.KubernetesGenerator.K3d/Devantler.KubernetesGenerator.K3d.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/src/Devantler.KubernetesGenerator.Kind/Devantler.KubernetesGenerator.Kind.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/src/Devantler.KubernetesGenerator.Kustomize/Devantler.KubernetesGenerator.Kustomize.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/src/Devantler.KubernetesGenerator.Native/Devantler.KubernetesGenerator.Native.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kubernetes-generator/tests/">
+    <Project Path="libraries/dotnet-kubernetes-generator/tests/Devantler.KubernetesGenerator.CertManager.Tests/Devantler.KubernetesGenerator.CertManager.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/tests/Devantler.KubernetesGenerator.Core.Tests/Devantler.KubernetesGenerator.Core.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/tests/Devantler.KubernetesGenerator.Flux.Tests/Devantler.KubernetesGenerator.Flux.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/tests/Devantler.KubernetesGenerator.K3d.Tests/Devantler.KubernetesGenerator.K3d.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/tests/Devantler.KubernetesGenerator.Kind.Tests/Devantler.KubernetesGenerator.Kind.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/tests/Devantler.KubernetesGenerator.Kustomize.Tests/Devantler.KubernetesGenerator.Kustomize.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-generator/tests/Devantler.KubernetesGenerator.Native.Tests/Devantler.KubernetesGenerator.Native.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kubernetes-provisioner/" />
+  <Folder Name="/libraries/dotnet-kubernetes-provisioner/src/">
+    <Project Path="libraries/dotnet-kubernetes-provisioner/src/Devantler.KubernetesProvisioner.Cluster.Core/Devantler.KubernetesProvisioner.Cluster.Core.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/src/Devantler.KubernetesProvisioner.Cluster.K3d/Devantler.KubernetesProvisioner.Cluster.K3d.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/src/Devantler.KubernetesProvisioner.Cluster.Kind/Devantler.KubernetesProvisioner.Cluster.Kind.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/src/Devantler.KubernetesProvisioner.CNI.Cilium/Devantler.KubernetesProvisioner.CNI.Cilium.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/src/Devantler.KubernetesProvisioner.CNI.Core/Devantler.KubernetesProvisioner.CNI.Core.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/src/Devantler.KubernetesProvisioner.GitOps.Core/Devantler.KubernetesProvisioner.GitOps.Core.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/src/Devantler.KubernetesProvisioner.GitOps.Flux/Devantler.KubernetesProvisioner.GitOps.Flux.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/src/Devantler.KubernetesProvisioner.Resources.Native/Devantler.KubernetesProvisioner.Resources.Native.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kubernetes-provisioner/tests/">
+    <Project Path="libraries/dotnet-kubernetes-provisioner/tests/Devantler.KubernetesProvisioner.Cluster.Core.Tests/Devantler.KubernetesProvisioner.Cluster.Core.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/tests/Devantler.KubernetesProvisioner.Cluster.K3d.Tests/Devantler.KubernetesProvisioner.Cluster.K3d.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/tests/Devantler.KubernetesProvisioner.Cluster.Kind.Tests/Devantler.KubernetesProvisioner.Cluster.Kind.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/tests/Devantler.KubernetesProvisioner.CNI.Cilium.Tests/Devantler.KubernetesProvisioner.CNI.Cilium.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/tests/Devantler.KubernetesProvisioner.CNI.Core.Tests/Devantler.KubernetesProvisioner.CNI.Core.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/tests/Devantler.KubernetesProvisioner.GitOps.Core.Tests/Devantler.KubernetesProvisioner.GitOps.Core.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/tests/Devantler.KubernetesProvisioner.GitOps.Flux.Tests/Devantler.KubernetesProvisioner.GitOps.Flux.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-provisioner/tests/Devantler.KubernetesProvisioner.Resources.Native.Tests/Devantler.KubernetesProvisioner.Resources.Native.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kubernetes-validator/" />
+  <Folder Name="/libraries/dotnet-kubernetes-validator/src/">
+    <Project Path="libraries/dotnet-kubernetes-validator/src/Devantler.KubernetesValidator.ClientSide.Core/Devantler.KubernetesValidator.ClientSide.Core.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-validator/src/Devantler.KubernetesValidator.ClientSide.Schemas/Devantler.KubernetesValidator.ClientSide.Schemas.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-validator/src/Devantler.KubernetesValidator.ClientSide.YamlSyntax/Devantler.KubernetesValidator.ClientSide.YamlSyntax.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-validator/src/Devantler.KubernetesValidator.ServerSide.Core/Devantler.KubernetesValidator.ServerSide.Core.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kubernetes-validator/tests/">
+    <Project Path="libraries/dotnet-kubernetes-validator/tests/Devantler.KubernetesValidator.ClientSide.Schemas.Tests/Devantler.KubernetesValidator.ClientSide.Schemas.Tests.csproj" />
+    <Project Path="libraries/dotnet-kubernetes-validator/tests/Devantler.KubernetesValidator.ClientSide.YamlSyntax.Tests/Devantler.KubernetesValidator.ClientSide.YamlSyntax.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kustomize-cli/" />
+  <Folder Name="/libraries/dotnet-kustomize-cli/src/">
+    <Project Path="libraries/dotnet-kustomize-cli/src/Devantler.KustomizeCLI/Devantler.KustomizeCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-kustomize-cli/tests/">
+    <Project Path="libraries/dotnet-kustomize-cli/tests/Devantler.KustomizeCLI.Tests/Devantler.KustomizeCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-secret-manager/" />
+  <Folder Name="/libraries/dotnet-secret-manager/src/">
+    <Project Path="libraries/dotnet-secret-manager/src/Devantler.SecretManager.Core/Devantler.SecretManager.Core.csproj" />
+    <Project Path="libraries/dotnet-secret-manager/src/Devantler.SecretManager.SOPS.LocalAge/Devantler.SecretManager.SOPS.LocalAge.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-secret-manager/tests/">
+    <Project Path="libraries/dotnet-secret-manager/tests/Devantler.SecretManager.SOPS.LocalAge.Tests/Devantler.SecretManager.SOPS.LocalAge.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-sops-cli/" />
+  <Folder Name="/libraries/dotnet-sops-cli/src/">
+    <Project Path="libraries/dotnet-sops-cli/src/Devantler.SOPSCLI/Devantler.SOPSCLI.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-sops-cli/tests/">
+    <Project Path="libraries/dotnet-sops-cli/tests/Devantler.SOPSCLI.Tests/Devantler.SOPSCLI.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-talosctl-cli/" />
+  <Folder Name="/libraries/dotnet-talosctl-cli/src/">
+    <Project Path="libraries/dotnet-talosctl-cli/src/Example/Example.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-talosctl-cli/tests/">
+    <Project Path="libraries/dotnet-talosctl-cli/tests/Example.Tests/Example.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-template-engine/" />
+  <Folder Name="/libraries/dotnet-template-engine/src/">
+    <Project Path="libraries/dotnet-template-engine/src/Devantler.TemplateEngine/Devantler.TemplateEngine.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-template-engine/tests/">
+    <Project Path="libraries/dotnet-template-engine/tests/Devantler.TemplateEngine.Tests/Devantler.TemplateEngine.Tests.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-timoni-cli/" />
+  <Folder Name="/libraries/dotnet-timoni-cli/src/">
+    <Project Path="libraries/dotnet-timoni-cli/src/Example/Example.csproj" />
+  </Folder>
+  <Folder Name="/libraries/dotnet-timoni-cli/tests/">
+    <Project Path="libraries/dotnet-timoni-cli/tests/Example.Tests/Example.Tests.csproj" />
+  </Folder>
+  <Folder Name="/projects/" />
+  <Folder Name="/projects/ksail/" />
+  <Folder Name="/projects/ksail/src/">
+    <Project Path="projects/ksail/src/KSail.Generator/KSail.Generator.csproj" />
+    <Project Path="projects/ksail/src/KSail.Models/KSail.Models.csproj" />
+    <Project Path="projects/ksail/src/KSail/KSail.csproj" />
+  </Folder>
+  <Folder Name="/projects/ksail/tests/">
+    <Project Path="projects/ksail/tests/KSail.Generator.Tests/KSail.Generator.Tests.csproj" />
+    <Project Path="projects/ksail/tests/KSail.Models.Tests/KSail.Models.Tests.csproj" />
+    <Project Path="projects/ksail/tests/KSail.Tests/KSail.Tests.csproj" />
+  </Folder>
+  <Folder Name="/templates/" />
+  <Folder Name="/templates/dotnet-template/" />
+  <Folder Name="/templates/dotnet-template/src/">
+    <Project Path="templates/dotnet-template/src/Example/Example.csproj" />
+  </Folder>
+  <Folder Name="/templates/dotnet-template/tests/">
+    <Project Path="templates/dotnet-template/tests/Example.Tests/Example.Tests.csproj" />
+  </Folder>
+</Solution>
