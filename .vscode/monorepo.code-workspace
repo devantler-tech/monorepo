@@ -9,19 +9,19 @@
       "path": "../dotfiles"
     },
     {
-      "name": "😸👨🏻‍💻 GitHub Profile",
+      "name": "😸👨🏻‍💻 GitHub Personal Profile",
       "path": "../github/personal/profile"
     },
     {
-      "name": "😸👨🏻‍💻 GitHub Config",
+      "name": "😸👨🏻‍💻 GitHub Personal Config",
       "path": "../github/personal/.github-public"
     },
     {
-      "name": "😸💼 GitHub Public Config",
+      "name": "😸💼 GitHub Organization Public Config",
       "path": "../github/devantler-tech/.github-public"
     },
     {
-      "name": "😸💼 GitHub Private Config",
+      "name": "😸💼 GitHub Organization Private Config",
       "path": "../github/devantler-tech/.github-private"
     },
     {
@@ -39,10 +39,6 @@
     {
       "name": "🚀✍🏻 Pandoc Plus",
       "path": "../projects/pandoc-plus"
-    },
-    {
-      "name": "🚀⬡ Data Product",
-      "path": "../projects/data-product"
     },
     {
       "name": "📦☸️ .NET Kubernetes Generator",
