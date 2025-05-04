@@ -138,6 +138,9 @@
     }
   ],
   "settings": {
-    "git.ignoreSubmodules": true
+    "git.ignoreSubmodules": true,
+    "markdownlint.config": {
+      "MD024": false,
+    }
   }
 }
