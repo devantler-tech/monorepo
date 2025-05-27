@@ -2,7 +2,6 @@
 
 set -e
 
-# Commit message
 COMMIT_MSG="${1:-'Auto-commit from all.sh'}"
 
 git submodule foreach --recursive "
