@@ -25,12 +25,12 @@
       "path": "../github/devantler-tech/.github-private"
     },
     {
-      "name": "🚀🌊 Reusable Workflows",
-      "path": "../github/devantler-tech/reusable-workflows"
+      "name": "🚀🌊 Workflows",
+      "path": "../github/devantler-tech/workflows"
     },
     {
-      "name": "🚀🏃🏻‍♂️ Composite Actions",
-      "path": "../github/devantler-tech/composite-actions"
+      "name": "🚀🏃🏻‍♂️ Actions",
+      "path": "../github/devantler-tech/actions"
     },
     {
       "name": "🚀⛴️ Platform",
