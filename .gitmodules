@@ -135,10 +135,6 @@
 	url = git@github.com:devantler-tech/dotnet-kubernetes-provisioner.git
 	branch = main
 [submodule "workflows"]
-	path = github/devantler-tech/workflows
+	path = github/devantler-tech/github-actions
 	url = git@github.com:devantler-tech/workflows.git
-	branch = main
-[submodule "github/devantler-tech/composite-actions/dotnet-test-action"]
-	path = github/devantler-tech/actions/dotnet-test-action
-	url = git@github.com:devantler-tech/dotnet-test-action.git
 	branch = main

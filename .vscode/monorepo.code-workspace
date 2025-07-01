@@ -25,12 +25,8 @@
       "path": "../github/devantler-tech/.github-private"
     },
     {
-      "name": "🚀🌊 Workflows",
-      "path": "../github/devantler-tech/workflows"
-    },
-    {
-      "name": "🚀🏃🏻‍♂️ Actions",
-      "path": "../github/devantler-tech/actions"
+      "name": "🚀🏃🏻‍♂️ GitHub Actions",
+      "path": "../github/devantler-tech/github-actions"
     },
     {
       "name": "🚀⛴️ Platform",
