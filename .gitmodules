@@ -94,6 +94,10 @@
 	path = github/devantler-tech/.github-public
 	url = git@github.com:devantler-tech/.github.git
 	branch = main
+[submodule "github/devantler-tech/github-actions"]
+	path = github/devantler-tech/github-actions
+	url = git@github.com:devantler-tech/github-actions.git
+	branch = main
 [submodule "github/personal/.github-public"]
 	path = github/personal/.github-public
 	url = git@github.com:devantler/.github.git
@@ -133,8 +137,4 @@
 [submodule "libraries/dotnet-kubernetes-provisioner"]
 	path = libraries/dotnet-kubernetes-provisioner
 	url = git@github.com:devantler-tech/dotnet-kubernetes-provisioner.git
-	branch = main
-[submodule "github/devantler-tech/github-actions"]
-	path = github/devantler-tech/github-actions
-	url = git@github.com:devantler-tech/github-actions.git
 	branch = main
