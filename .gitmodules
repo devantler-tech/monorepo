@@ -94,9 +94,9 @@
 	path = github/devantler-tech/.github-public
 	url = git@github.com:devantler-tech/.github.git
 	branch = main
-[submodule "github/devantler-tech/github-actions"]
-	path = github/devantler-tech/github-actions
-	url = git@github.com:devantler-tech/github-actions.git
+[submodule "github/devantler-tech/github-actions/composite-actions"]
+	path = github/devantler-tech/github-actions/composite-actions
+	url = git@github.com:devantler-tech/composite-actions.git
 	branch = main
 [submodule "github/personal/.github-public"]
 	path = github/personal/.github-public
@@ -137,4 +137,8 @@
 [submodule "libraries/dotnet-kubernetes-provisioner"]
 	path = libraries/dotnet-kubernetes-provisioner
 	url = git@github.com:devantler-tech/dotnet-kubernetes-provisioner.git
+	branch = main
+[submodule "github/devantler-tech/github-actions/reusable-workflows"]
+	path = github/devantler-tech/github-actions/reusable-workflows
+	url = git@github.com:devantler-tech/reusable-workflows.git
 	branch = main
