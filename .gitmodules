@@ -6,10 +6,6 @@
 	path = projects/data-product
 	url = git@github.com:devantler-tech/data-product.git
 	branch = main
-[submodule "projects/pandoc-plus"]
-	path = projects/pandoc-plus
-	url = git@github.com:devantler-tech/pandoc-plus.git
-	branch = main
 [submodule "libraries/dotnet-template-engine"]
 	path = libraries/dotnet-template-engine
 	url = git@github.com:devantler-tech/dotnet-template-engine.git
