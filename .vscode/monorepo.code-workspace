@@ -41,10 +41,6 @@
       "path": "../projects/ksail"
     },
     {
-      "name": "🚀✍🏻 Pandoc Plus",
-      "path": "../projects/pandoc-plus"
-    },
-    {
       "name": "📦☸️ .NET Kubernetes Generator",
       "path": "../libraries/dotnet-kubernetes-generator"
     },
