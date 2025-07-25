@@ -5,35 +5,7 @@
       "path": ".."
     },
     {
-      "name": "🔘 dotfiles",
-      "path": "../dotfiles"
-    },
-    {
-      "name": "😸👨🏻‍💻 GitHub Personal Profile",
-      "path": "../github/personal/profile"
-    },
-    {
-      "name": "😸👨🏻‍💻 GitHub Personal Config",
-      "path": "../github/personal/.github-public"
-    },
-    {
-      "name": "😸💼 GitHub Organization Public Config",
-      "path": "../github/devantler-tech/.github-public"
-    },
-    {
-      "name": "😸💼 GitHub Organization Private Config",
-      "path": "../github/devantler-tech/.github-private"
-    },
-    {
-      "name": "🚀🏃🏻‍♂️ Reusable Workflows",
-      "path": "../github/devantler-tech/github-actions/reusable-workflows"
-    },
-    {
-      "name": "🚀🏃🏻‍♂️ Composite Actions",
-      "path": "../github/devantler-tech/github-actions/composite-actions"
-    },
-    {
-      "name": "🚀⛴️ Platform",
+      "name": "☸️ Platform",
       "path": "../platform"
     },
     {
@@ -129,13 +101,41 @@
       "path": "../libraries/dotnet-kustomize-cli"
     },
     {
+      "name": "😸👨🏻‍💻 GitHub Personal Profile",
+      "path": "../github/personal/profile"
+    },
+    {
+      "name": "😸👨🏻‍💻 GitHub Personal Config",
+      "path": "../github/personal/.github-public"
+    },
+    {
+      "name": "😸💼 GitHub Organization Public Config",
+      "path": "../github/devantler-tech/.github-public"
+    },
+    {
+      "name": "😸💼 GitHub Organization Private Config",
+      "path": "../github/devantler-tech/.github-private"
+    },
+    {
+      "name": "😸🔄 Reusable Workflows",
+      "path": "../github/devantler-tech/github-actions/reusable-workflows"
+    },
+    {
+      "name": "😸🚀 Actions",
+      "path": "../github/devantler-tech/github-actions/composite-actions"
+    },
+    {
+      "name": "😸📄 .NET Template",
+      "path": "../templates/dotnet-template"
+    },
+    {
       "name": "🚚🍺 Homebrew Formulas",
       "path": "../homebrew-formulas"
     },
     {
-      "name": "📁#️⃣ .NET Template",
-      "path": "../templates/dotnet-template"
-    }
+      "name": "🔘 dotfiles",
+      "path": "../dotfiles"
+    },
   ],
   "settings": {
     "git.ignoreSubmodules": true,
