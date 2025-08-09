@@ -6,42 +6,6 @@
 	path = projects/data-product
 	url = git@github.com:devantler-tech/data-product.git
 	branch = main
-[submodule "libraries/dotnet-template-engine"]
-	path = libraries/dotnet-template-engine
-	url = git@github.com:devantler-tech/dotnet-template-engine.git
-	branch = main
-[submodule "libraries/dotnet-k3d-cli"]
-	path = libraries/dotnet-k3d-cli
-	url = git@github.com:devantler-tech/dotnet-k3d-cli.git
-	branch = main
-[submodule "libraries/dotnet-sops-cli"]
-	path = libraries/dotnet-sops-cli
-	url = git@github.com:devantler-tech/dotnet-sops-cli.git
-	branch = main
-[submodule "libraries/dotnet-age-cli"]
-	path = libraries/dotnet-age-cli
-	url = git@github.com:devantler-tech/dotnet-age-cli.git
-	branch = main
-[submodule "libraries/dotnet-flux-cli"]
-	path = libraries/dotnet-flux-cli
-	url = git@github.com:devantler-tech/dotnet-flux-cli.git
-	branch = main
-[submodule "libraries/dotnet-k9s-cli"]
-	path = libraries/dotnet-k9s-cli
-	url = git@github.com:devantler-tech/dotnet-k9s-cli.git
-	branch = main
-[submodule "libraries/dotnet-kind-cli"]
-	path = libraries/dotnet-kind-cli
-	url = git@github.com:devantler-tech/dotnet-kind-cli.git
-	branch = main
-[submodule "libraries/dotnet-kubeconform-cli"]
-	path = libraries/dotnet-kubeconform-cli
-	url = git@github.com:devantler-tech/dotnet-kubeconform-cli.git
-	branch = main
-[submodule "libraries/dotnet-kustomize-cli"]
-	path = libraries/dotnet-kustomize-cli
-	url = git@github.com:devantler-tech/dotnet-kustomize-cli.git
-	branch = main
 [submodule "templates/dotnet-template"]
 	path = templates/dotnet-template
 	url = git@github.com:devantler-tech/dotnet-template.git
@@ -50,37 +14,9 @@
 	path = dotfiles
 	url = git@github.com:devantler/dotfiles.git
 	branch = main
-[submodule "libraries/dotnet-keys"]
-	path = libraries/dotnet-keys
-	url = git@github.com:devantler-tech/dotnet-keys.git
-	branch = main
 [submodule "libraries/dotnet-kubernetes-resource-provisioner"]
 	path = libraries/dotnet-kubernetes-provisioner
 	url = git@github.com:devantler-tech/dotnet-kubernetes-provisioner.git
-	branch = main
-[submodule "libraries/dotnet-container-engine-provisioner"]
-	path = libraries/dotnet-container-engine-provisioner
-	url = git@github.com:devantler-tech/dotnet-container-engine-provisioner.git
-	branch = main
-[submodule "libraries/dotnet-kubernetes-validators"]
-	path = libraries/dotnet-kubernetes-validator
-	url = git@github.com:devantler-tech/dotnet-kubernetes-validator.git
-	branch = main
-[submodule "libraries/dotnet-kubectl-cli"]
-	path = libraries/dotnet-kubectl-cli
-	url = git@github.com:devantler-tech/dotnet-kubectl-cli.git
-	branch = main
-[submodule "libraries/dotnet-secret-manager"]
-	path = libraries/dotnet-secret-manager
-	url = git@github.com:devantler-tech/dotnet-secret-manager.git
-	branch = main
-[submodule "libraries/dotnet-commons"]
-	path = libraries/dotnet-commons
-	url = git@github.com:devantler-tech/dotnet-commons.git
-	branch = main
-[submodule "libraries/dotnet-helm-cli"]
-	path = libraries/dotnet-helm-cli
-	url = git@github.com:devantler-tech/dotnet-helm-cli.git
 	branch = main
 [submodule "github/devantler-tech/.github-private"]
 	path = github/devantler-tech/.github-private
@@ -109,30 +45,6 @@
 [submodule "homebrew-formulas"]
 	path = homebrew-formulas
 	url = git@github.com:devantler-tech/homebrew-formulas.git
-	branch = main
-[submodule "libraries/dotnet-talosctl-cli"]
-	path = libraries/dotnet-talosctl-cli
-	url = https://github.com/devantler-tech/dotnet-talosctl-cli
-	branch = main
-[submodule "libraries/dotnet-argocd-cli"]
-	path = libraries/dotnet-argocd-cli
-	url = https://github.com/devantler-tech/dotnet-argocd-cli
-	branch = main
-[submodule "libraries/dotnet-cilium-cli"]
-	path = libraries/dotnet-cilium-cli
-	url = https://github.com/devantler-tech/dotnet-cilium-cli
-	branch = main
-[submodule "libraries/dotnet-timoni-cli"]
-	path = libraries/dotnet-timoni-cli
-	url = https://github.com/devantler-tech/dotnet-timoni-cli
-	branch = main
-[submodule "libraries/dotnet-kubernetes-generator"]
-	path = libraries/dotnet-kubernetes-generator
-	url = git@github.com:devantler-tech/dotnet-kubernetes-generator.git
-	branch = main
-[submodule "libraries/dotnet-kubernetes-provisioner"]
-	path = libraries/dotnet-kubernetes-provisioner
-	url = git@github.com:devantler-tech/dotnet-kubernetes-provisioner.git
 	branch = main
 [submodule "github/devantler-tech/github-actions/reusable-workflows"]
 	path = github/devantler-tech/github-actions/reusable-workflows
