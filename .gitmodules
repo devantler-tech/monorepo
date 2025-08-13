@@ -50,3 +50,7 @@
 	path = github/devantler-tech/github-actions/reusable-workflows
 	url = git@github.com:devantler-tech/reusable-workflows.git
 	branch = main
+[submodule "projects/ksail-go-go"]
+	path = projects/ksail-go
+	url = git@github.com:devantler-tech/ksail-go.git
+	branch = main
