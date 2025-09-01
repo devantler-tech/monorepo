@@ -1,6 +1,4 @@
 {
-  "image": "mcr.microsoft.com/devcontainers/universal:3",
-  "features": {},
   "customizations": {
     "codespaces": {
       "repositories": {
@@ -8,6 +6,53 @@
           "permissions": "write-all"
         }
       }
+    },
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "aaron-bond.better-comments",
+        "JannisX11.batch-rename-extension",
+        "signageos.signageos-vscode-sops",
+        "streetsidesoftware.code-spell-checker-cspell-bundled-dictionaries",
+        "ms-azuretools.vscode-docker",
+        "docker.docker",
+        "hediet.vscode-drawio",
+        "EditorConfig.EditorConfig",
+        "dbaeumer.vscode-eslint",
+        "github.vscode-github-actions",
+        "GitHub.copilot",
+        "brandonfowler.github-releases",
+        "GitHub.remotehub",
+        "golang.go",
+        "hashicorp.terraform",
+        "hashicorp.hcl",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "tumido.crd-snippets",
+        "inercia.vscode-k3d",
+        "ms-kubernetes-tools.kind-vscode",
+        "ms-vsliveshare.vsliveshare",
+        "yzhang.markdown-all-in-one",
+        "bierner.github-markdown-preview",
+        "zizmor.zizmor-vscode",
+        "redhat.vscode-yaml",
+        "redhat.vscode-xml",
+        "ms-vscode.vscode-websearchforcopilot",
+        "ms-vscode.copilot-mermaid-diagram",
+        "vira.vsc-vira-theme",
+        "pflannery.vscode-versionlens",
+        "rangav.vscode-thunder-client",
+        "timonwong.shellcheck",
+        "josefpihrt-vscode.roslynator",
+        "ms-vscode.remote-repositories",
+        "esbenp.prettier-vscode",
+        "ms-ossdata.vscode-pgsql",
+        "tintoy.msbuild-project-tools",
+        "marp-team.marp-vscode",
+        "DavidAnson.vscode-markdownlint",
+        "yzane.markdown-pdf"
+      ]
     }
-  }
+  },
+  "features": {},
+  "image": "mcr.microsoft.com/devcontainers/universal:3"
 }
