@@ -49,7 +49,22 @@
         "tintoy.msbuild-project-tools",
         "marp-team.marp-vscode",
         "DavidAnson.vscode-markdownlint",
-        "yzane.markdown-pdf"
+        "yzane.markdown-pdf",
+        "ms-dotnettools.vscode-dotnet-runtime",
+        "ms-dotnettools.csharp",
+        "streetsidesoftware.code-spell-checker",
+        "naumovs.color-highlight",
+        "ms-azuretools.vscode-containers",
+        "streetsidesoftware.code-spell-checker-danish",
+        "GitHub.copilot-chat",
+        "bierner.markdown-checkbox",
+        "bierner.markdown-emoji",
+        "bierner.markdown-footnotes",
+        "bierner.markdown-preview-github-styles",
+        "bierner.markdown-mermaid",
+        "bierner.markdown-yaml-preamble",
+        "streetsidesoftware.code-spell-checker-medical-terms",
+        "streetsidesoftware.code-spell-checker-scientific-terms"
       ]
     }
   },
