@@ -51,12 +51,12 @@
     {
       "name": "🔘 dotfiles",
       "path": "../dotfiles"
-    },
+    }
   ],
   "settings": {
     "git.ignoreSubmodules": true,
     "markdownlint.config": {
-      "MD024": false,
+      "MD024": false
     }
   }
 }
