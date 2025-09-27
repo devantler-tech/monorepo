@@ -45,6 +45,10 @@
       "path": "../templates/dotnet-template"
     },
     {
+      "name": "😸📄 Go Template",
+      "path": "../templates/go-template"
+    },
+    {
       "name": "🚚🍺 Homebrew Formulas",
       "path": "../homebrew-formulas"
     },

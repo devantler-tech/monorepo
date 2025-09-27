@@ -54,3 +54,7 @@
 	path = projects/ksail-go
 	url = git@github.com:devantler-tech/ksail-go.git
 	branch = main
+[submodule "templates/go-template"]
+	path = templates/go-template
+	url = git@github.com:devantler-tech/go-template.git
+	branch = main
