@@ -9,6 +9,10 @@
       "path": "../platform"
     },
     {
+      "name": "🚀🛥️ KSail",
+      "path": "../projects/ksail"
+    },
+    {
       "name": "🚀🛥️ KSail Go",
       "path": "../projects/ksail-go"
     },
