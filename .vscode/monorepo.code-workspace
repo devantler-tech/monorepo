@@ -17,36 +17,16 @@
       "path": "../projects/ksail-go"
     },
     {
-      "name": "😸👨🏻‍💻 GitHub Personal Profile",
-      "path": "../github/personal/profile"
+      "name": "😸👨🏻‍💻 GitHub Personal",
+      "path": "../github/personal"
     },
     {
-      "name": "😸👨🏻‍💻 GitHub Personal Config",
-      "path": "../github/personal/.github-public"
+      "name": "😸💼 GitHub Org",
+      "path": "../github/devantler-tech"
     },
     {
-      "name": "😸💼 GitHub Org Public Config",
-      "path": "../github/devantler-tech/.github-public"
-    },
-    {
-      "name": "😸💼 GitHub Org Private Config",
-      "path": "../github/devantler-tech/.github-private"
-    },
-    {
-      "name": "😸🔄 Reusable Workflows",
-      "path": "../github/devantler-tech/github-actions/reusable-workflows"
-    },
-    {
-      "name": "😸🚀 Actions",
-      "path": "../github/devantler-tech/github-actions/composite-actions"
-    },
-    {
-      "name": "😸📄 .NET Template",
-      "path": "../templates/dotnet-template"
-    },
-    {
-      "name": "😸📄 Go Template",
-      "path": "../templates/go-template"
+      "name": "😸📄 GitHub Templates",
+      "path": "../templates"
     },
     {
       "name": "🚚🍺 Homebrew Formulas",
