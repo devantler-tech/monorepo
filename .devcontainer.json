@@ -71,5 +71,5 @@
   "features": {
     "ghcr.io/brokeyourbike/devcontainer-features/mockery-go:0.2.0": {}
   },
-  "image": "mcr.microsoft.com/devcontainers/universal:4"
+  "image": "mcr.microsoft.com/devcontainers/universal:5"
 }
