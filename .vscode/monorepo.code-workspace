@@ -2,36 +2,36 @@
   "folders": [
     {
       "name": "🏡 Monorepo",
-      "path": "..",
+      "path": ".."
     },
     {
       "name": "☸️ Platform",
-      "path": "../platform",
+      "path": "../platform"
     },
     {
       "name": "🛥️🐳 KSail",
-      "path": "../projects/ksail",
+      "path": "../projects/ksail"
     },
     {
       "name": "😸👨🏻‍💻 GitHub Personal",
-      "path": "../github/personal",
+      "path": "../github/personal"
     },
     {
       "name": "😸💼 GitHub Org",
-      "path": "../github/devantler-tech",
+      "path": "../github/devantler-tech"
     },
     {
       "name": "😸📄 GitHub Templates",
-      "path": "../templates",
+      "path": "../templates"
     },
     {
       "name": "🚚🍺 Homebrew Formulas",
-      "path": "../homebrew-formulas",
+      "path": "../homebrew-formulas"
     },
     {
       "name": "🔘 dotfiles",
-      "path": "../dotfiles",
-    },
+      "path": "../dotfiles"
+    }
   ],
   "settings": {
     "git.ignoreSubmodules": true,
