@@ -129,8 +129,7 @@ pre {
 }
 
 table {
-  display: block;
-  overflow-x: auto;
+  max-width: 100%;
 }
 
 footer {
@@ -255,27 +254,34 @@ a {
   justify-content: center !important;
 }
 
-.hero .action {
-  border-radius: 9999px !important;
+.hero .sl-link-button {
   font-weight: 600;
   letter-spacing: 0.01em;
   transition:
     box-shadow 0.25s ease,
     transform 0.25s ease,
-    background-color 0.25s ease;
+    background-color 0.25s ease,
+    border-color 0.25s ease;
 }
 
-.hero .action.primary {
+.hero .sl-link-button.primary {
   box-shadow: 0 2px 16px var(--glow-color);
 }
 
-.hero .action.primary:hover {
+.hero .sl-link-button.primary:hover {
   box-shadow: 0 4px 24px var(--glow-color);
   transform: translateY(-2px);
 }
 
-.hero .action.secondary:hover,
-.hero .action.minimal:hover {
+.hero .sl-link-button.secondary:hover {
+  background: var(--glow-color-subtle) !important;
+  border-color: var(--sl-color-accent) !important;
+  box-shadow: 0 2px 16px var(--glow-color-subtle);
+  transform: translateY(-2px);
+}
+
+.hero .sl-link-button.minimal:hover {
+  color: var(--sl-color-accent) !important;
   transform: translateY(-2px);
 }
 
@@ -361,6 +367,8 @@ blockquote p {
   margin-bottom: 0.75rem;
   border: 1px solid var(--card-border);
   border-radius: 0.5rem;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
   transition: border-color 0.2s ease;
 }
 
@@ -373,6 +381,7 @@ blockquote p {
   color: var(--sl-color-accent);
   font-weight: 500;
   padding: 0.6rem 1rem;
+  margin-left: 0 !important;
   border-radius: 0.5rem;
   background: var(--card-bg);
   transition: background 0.2s ease;
@@ -600,12 +609,7 @@ article figure img {
 
 /* ─── Pagination (Older / Newer Posts) ─── */
 
-a[href*="/blog/2"],
-a[href*="/blog/"].pagination-link {
-  border-radius: 9999px !important;
-  padding: 0.6rem 1.5rem !important;
-  font-weight: 600;
-}
+/* Removed: redundant pagination pill styling now handled by .pagination .sl-link-card a */
 
 /* ─── Global Button & Link Hover Enhancements ─── */
 
@@ -652,19 +656,47 @@ a[rel="next"]:hover {
 
 /* Tag pill links */
 a[href*="/tags/"] {
+  display: inline-flex;
+  align-items: center;
   border-radius: 9999px;
-  padding: 0.15rem 0.65rem;
-  font-size: 0.8rem;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.82rem;
   font-weight: 500;
+  line-height: 1.3;
+  color: var(--sl-color-text) !important;
   border: 1px solid var(--card-border);
+  background: var(--card-bg);
   transition:
     background-color 0.2s ease,
-    border-color 0.2s ease;
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+      transform 0.2s ease;
 }
 
+a[href*="/tags/"]:visited {
+  color: var(--sl-color-text) !important;
+}
 a[href*="/tags/"]:hover {
+  color: var(--sl-color-accent) !important;
   background: var(--glow-color-subtle) !important;
   border-color: var(--sl-color-accent) !important;
+  box-shadow: 0 2px 8px var(--glow-color-subtle);
+  transform: translateY(-1px);
+  }
+
+/* Tag pill list layout */
+li:has(> a[href*="/tags/"]) {
+  list-style: none;
+  display: inline-block;
+  margin: 0.2rem 0.15rem;
+}
+
+ul:has(> li > a[href*="/tags/"]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-left: 0;
+  margin: 0.5rem 0;
 }
 
 /* Header nav links */
@@ -714,6 +746,7 @@ button:hover {
 /* ─── Table Styling ─── */
 
 .sl-markdown-content table {
+  display: table !important;
   border-collapse: separate;
   border-spacing: 0;
   border: 1px solid var(--card-border);
@@ -722,6 +755,13 @@ button:hover {
   width: 100%;
 }
 
+/* On mobile, allow horizontal scrolling for wide tables */
+@media (max-width: 50rem) {
+  .sl-markdown-content table {
+    display: block !important;
+    overflow-x: auto;
+  }
+}
 .sl-markdown-content table thead th {
   background: var(--sl-color-accent-low);
   font-weight: 600;
@@ -773,8 +813,7 @@ figure.frame pre {
 /* ─── Blog Pagination (Older / Newer Posts) ─── */
 
 .blog-post-list ~ nav a,
-.blog-post-list + nav a,
-a[href*="/blog/"][rel],
+.blog-post-list+nav a,
 nav:has(a[href*="/blog/2"]) a,
 nav:has(a[href*="/blog/3"]) a {
   display: inline-flex;
@@ -795,8 +834,7 @@ nav:has(a[href*="/blog/3"]) a {
 }
 
 .blog-post-list ~ nav a:hover,
-.blog-post-list + nav a:hover,
-a[href*="/blog/"][rel]:hover,
+.blog-post-list+nav a:hover,
 nav:has(a[href*="/blog/2"]) a:hover,
 nav:has(a[href*="/blog/3"]) a:hover {
   gap: 0.7rem;
@@ -835,6 +873,58 @@ nav:has(a[href*="/blog/3"]) a:hover {
   transform: translateY(-2px);
 }
 
+/* ─── Blog Post Prev/Next — Full Card Clickability ─── */
+
+/* starlight-blog plugin uses .sl-link-card wrapping an <a> + <svg> icon;
+   style the card itself as the pill so both text and icon sit inside it. */
+.pagination .card-grid {
+  display: flex !important;
+  justify-content: center !important;
+}
+.pagination .sl-link-card {
+  position: relative;
+  cursor: pointer;
+  display: inline-flex !important;
+    align-items: center;
+    gap: 0.5rem;
+    width: fit-content !important;
+    padding: 0.75rem 1.5rem !important;
+    border: 1px solid var(--card-border) !important;
+    border-radius: 9999px !important;
+    background: var(--card-bg) !important;
+    box-shadow: none !important;
+  transition:
+    border-color 0.25s ease,
+      box-shadow 0.25s ease,
+      transform 0.25s ease,
+      background-color 0.25s ease;
+}
+
+.pagination .sl-link-card:hover {
+  border-color: var(--sl-color-accent) !important;
+    box-shadow: 0 2px 12px var(--glow-color-subtle) !important;
+    background: var(--glow-color-subtle) !important;
+  transform: translateY(-2px);
+}
+
+.pagination .sl-link-card a {
+  position: static;
+  display: inline;
+  padding: 0;
+  border: none !important;
+  border-radius: 0 !important;
+  background: none !important;
+  font-weight: 600;
+    color: var(--sl-color-text);
+    text-decoration: none;
+}
+
+.pagination .sl-link-card a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
 /* ─── Subtle Page Entrance Animation ─── */
 
 @keyframes fadeInUp {
@@ -1157,33 +1247,6 @@ article:hover img[loading="lazy"][width="48"] {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-}
-
-/* ─── Smooth Scroll Progress Indicator ─── */
-
-body {
-  position: relative;
-}
-
-/* ─── Back to Top ─── */
-
-body > a[href="#_top"] {
-  border-radius: 50% !important;
-  border: 1px solid var(--card-border) !important;
-  background: var(--card-bg) !important;
-  backdrop-filter: blur(8px) !important;
-  -webkit-backdrop-filter: blur(8px) !important;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2) !important;
-  transition:
-    border-color 0.25s ease,
-    box-shadow 0.25s ease,
-    transform 0.25s ease !important;
-}
-
-body > a[href="#_top"]:hover {
-  border-color: var(--sl-color-accent) !important;
-  box-shadow: 0 4px 20px var(--glow-color) !important;
-  transform: translateY(-2px) !important;
 }
 
 /* ─── GitHub Alert Boxes (starlight-github-alerts) ─── */
