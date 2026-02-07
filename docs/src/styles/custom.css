@@ -25,8 +25,8 @@ html {
   --sl-color-bg-accent: rgba(57, 255, 20, 0.06);
   --glow-color: rgba(57, 255, 20, 0.3);
   --glow-color-subtle: rgba(57, 255, 20, 0.1);
-  --card-bg: rgba(255, 255, 255, 0.03);
-  --card-border: rgba(255, 255, 255, 0.08);
+  --card-bg: rgba(255, 255, 255, 0.045);
+  --card-border: rgba(255, 255, 255, 0.12);
   --card-border-hover: rgba(57, 255, 20, 0.45);
   --hero-overlay: linear-gradient(135deg, rgba(5, 10, 8, 0.84) 0%, rgba(5, 10, 8, 0.65) 50%, rgba(5, 10, 8, 0.84) 100%);
   --hero-bottom-fade: linear-gradient(to bottom, transparent 60%, var(--sl-color-bg) 100%);
@@ -40,8 +40,8 @@ html {
   --sl-color-bg-accent: rgba(21, 128, 61, 0.05);
   --glow-color: rgba(21, 128, 61, 0.18);
   --glow-color-subtle: rgba(21, 128, 61, 0.07);
-  --card-bg: rgba(0, 0, 0, 0.02);
-  --card-border: rgba(0, 0, 0, 0.08);
+  --card-bg: rgba(0, 0, 0, 0.03);
+  --card-border: rgba(0, 0, 0, 0.1);
   --card-border-hover: rgba(21, 128, 61, 0.4);
   --hero-overlay: linear-gradient(
     135deg,
@@ -70,7 +70,7 @@ footer {
 a {
   transition:
     color 0.2s ease,
-      opacity 0.2s ease;
+    opacity 0.2s ease;
 }
 
 /* ─── Hero Section — Full-Width Background ─── */
@@ -238,14 +238,14 @@ a {
   border: 3px solid var(--sl-color-accent);
   box-shadow:
     0 0 24px var(--glow-color),
-      0 8px 32px rgba(0, 0, 0, 0.2);
+    0 8px 32px rgba(0, 0, 0, 0.2);
   transition: box-shadow 0.3s ease;
 }
 
 [data-page-title="About Me"] main img[alt="Nikolai Emil Damm"]:hover {
   box-shadow:
     0 0 36px var(--glow-color),
-      0 8px 32px rgba(0, 0, 0, 0.25);
+    0 8px 32px rgba(0, 0, 0, 0.25);
 }
 
 /* ─── Blockquote — Info Card Style ─── */
@@ -456,8 +456,8 @@ article figure img {
   border-radius: 0.5rem;
   border: 1px solid var(--card-border);
   transition:
-      transform 0.2s ease,
-      box-shadow 0.2s ease;
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .sl-markdown-content img[alt*="Badge"]:hover,
@@ -554,6 +554,95 @@ a[rel="prev"]:hover,
   border-color: var(--card-border-hover) !important;
   box-shadow: 0 4px 16px var(--glow-color-subtle) !important;
   transform: translateY(-2px) !important;
+}
+
+/* ─── Projects Page ─── */
+
+/* Project heading wrappers — border between projects */
+.projects-page > .level-h2 {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--card-border);
+}
+
+/* First project after category intro — no top border */
+.projects-page > .level-h1 + p + .level-h2 {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0.5rem;
+}
+
+/* Project headings — remove default bottom border */
+.projects-page h2 {
+  border-bottom: none;
+  padding-bottom: 0.3rem;
+}
+
+/* Tech badge images in heading — compact inline */
+.projects-page h2 img {
+  height: 20px !important;
+  width: auto !important;
+  display: inline-block !important;
+  border-radius: 4px;
+  vertical-align: middle;
+  margin-left: 0.25rem;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+.projects-page h2:hover img {
+  opacity: 1;
+}
+
+/* Project screenshot images — framed with constrained height */
+.projects-page > img {
+  border: 1px solid var(--card-border);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  margin: 0.75rem 0 1rem;
+  max-height: 360px;
+  width: auto;
+  object-fit: contain;
+  transition: all 0.3s ease;
+}
+
+.projects-page > img:hover {
+  border-color: var(--card-border-hover);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 0 16px var(--glow-color-subtle);
+  transform: translateY(-2px);
+}
+
+/* Video framing */
+.projects-page video {
+  border: 1px solid var(--card-border);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  max-width: 100%;
+  max-height: 360px;
+  margin: 0.75rem 0 1rem;
+}
+
+/* School project grade headings — clean layout */
+.projects-page h3 {
+  font-size: 0.9rem;
+  opacity: 0.8;
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0.25rem;
+}
+
+/* Sponsor badge — centered (overview pages) */
+:is([data-page-title="Projects"], [data-page-title="Templates"]) .sl-markdown-content > p:first-child {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+/* Document/thesis links — accent hover */
+.projects-page a[href*="/pdfs/"]:hover,
+.projects-page a[href*="/blog/"]:hover {
+  color: var(--sl-color-accent);
 }
 
 /* ─── Responsive Tweaks ─── */

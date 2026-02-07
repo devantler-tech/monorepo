@@ -80,7 +80,7 @@ gtag('config', 'G-MK59Q89KYW');`,
         },
         {
           label: "Templates",
-          link: "/templates/",
+          autogenerate: { directory: "templates" },
         },
       ],
       lastUpdated: true,

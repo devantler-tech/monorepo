@@ -1,0 +1,41 @@
+---
+title: Completed Projects
+description: Projects that have reached their end of life or are no longer actively maintained.
+---
+
+import { Image } from "astro:assets";
+import dataProductImg from "../../../assets/data-product.webp";
+import ociImg from "../../../assets/oci-artifacts.webp";
+import pandocPlusImg from "../../../assets/pandoc-plus.webp";
+
+<div class="projects-page">
+
+Projects that have reached their end of life or I no longer actively maintain.
+
+## [🚚 OCI Artifacts](https://github.com/devantler/oci-artifacts) ![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5.svg?style=for-the-badge&logo=Kubernetes&logoColor=white) ![OCI](https://img.shields.io/badge/Open%20Containers%20Initiative-262261.svg?style=for-the-badge&logo=Open-Containers-Initiative&logoColor=white)
+
+<Image src={ociImg} alt="OCI Artifacts" />
+
+A spin-off from my Homelab project that simplifies GitOps deployments by distributing [Kustomize](https://kustomize.io/) and [Flux HelmRelease](https://fluxcd.io/flux/components/helm/helmreleases/) components via [OCI](https://opencontainers.org/) registries. This approach — inspired by shared libraries in traditional programming — allows deploying applications with a single line of code while maintaining the flexibility of regular [Kustomize](https://kustomize.io/) and [Helm](https://helm.sh/) charts.
+
+## [⬡ Data Product](https://github.com/devantler/data-product) ![.NET](https://img.shields.io/badge/.NET-512BD4.svg?style=for-the-badge&logo=dotnet&logoColor=white)
+
+<Image src={dataProductImg} alt="Data Product" />
+
+My master thesis project: a data product inspired by the [Data Mesh](https://www.datamesh-architecture.com/) architectural pattern and [Zhamak Dehghani's book](https://www.oreilly.com/library/view/data-mesh/9781492092384/). Built in [.NET](https://dotnet.microsoft.com/) using [Source Generators](https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview) to create data products from schema definitions and YAML configuration.
+
+📄 [Read the thesis](/pdfs/thesis.pdf)
+
+## [✍🏻 Pandoc Plus](https://github.com/devantler/pandoc-plus) ![Markdown](https://img.shields.io/badge/markdown-%23000000.svg?style=for-the-badge&logo=markdown&logoColor=white) ![LaTeX](https://img.shields.io/badge/latex-%23008080.svg?style=for-the-badge&logo=latex&logoColor=white)
+
+<Image src={pandocPlusImg} alt="Pandoc Plus" />
+
+A Docker image that packages [Pandoc](https://pandoc.org/) with [LaTeX](https://www.latex-project.org/), [PlantUML](https://plantuml.com/), and Lua filters to create LaTeX-styled scientific papers from Markdown. Being a Docker image makes it trivial to use in CI pipelines — enabling you to write scientific papers following software development best practices.
+
+📄 [Example output: My thesis](/pdfs/thesis.pdf)
+
+## [🤖 Star Wars Site](https://github.com/devantler/star-wars-site) ![.NET](https://img.shields.io/badge/.NET-512BD4.svg?style=for-the-badge&logo=dotnet&logoColor=white) ![Umbraco](https://img.shields.io/badge/Umbraco-3544B1.svg?style=for-the-badge&logo=Umbraco&logoColor=white)
+
+A Star Wars-themed site built during an [Umbraco](https://umbraco.com/) hiring process to showcase [.NET](https://dotnet.microsoft.com/) and Umbraco skills. Built as a [Blazor WebAssembly](https://learn.microsoft.com/en-us/aspnet/core/blazor/) app fetching data from [Umbraco Heartcore](https://umbraco.com/products/umbraco-heartcore/), deployed to a [HashiCorp Nomad](https://www.nomadproject.io/) cluster.
+
+</div>
