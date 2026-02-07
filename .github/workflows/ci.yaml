@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+
+concurrency:
+  group: "ci-${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      docs: ${{ steps.filter.outputs.docs }}
+      docs-deps: ${{ steps.filter.outputs.docs-deps }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Detect changes
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          filters: |
+            docs:
+              - 'docs/**'
+            docs-deps:
+              - 'docs/package.json'
+              - 'docs/package-lock.json'
+
+  build-docs:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: docs/package-lock.json
+      - name: Install dependencies
+        working-directory: docs
+        run: npm ci
+      - name: Build
+        working-directory: docs
+        run: npm run build
+
+  audit-docs:
+    needs: changes
+    if: needs.changes.outputs.docs-deps == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: docs/package-lock.json
+      - name: Install dependencies
+        working-directory: docs
+        run: npm ci
+      - name: Audit
+        working-directory: docs
+        run: npm audit --omit=dev
+
+  status:
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - build-docs
+      - audit-docs
+    permissions: {}
+    steps:
+      - name: Check job results
+        run: |
+          results=("${{ needs.build-docs.result }}" "${{ needs.audit-docs.result }}")
+          for result in "${results[@]}"; do
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              echo "One or more jobs failed or were cancelled."
+              exit 1
+            fi
+          done
+          echo "All jobs passed or were skipped."
