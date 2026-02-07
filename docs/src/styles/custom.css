@@ -1,61 +1,583 @@
 /* Custom styles for devantler.tech */
 
-/* Dark mode accent colors */
-:root {
-  --sl-color-accent-low: #1a365d;
-  --sl-color-accent: #3182ce;
-  --sl-color-accent-high: #63b3ed;
+/* ─── Foundation ─── */
+
+html {
+  scroll-behavior: smooth;
 }
 
-/* Improve code block styling */
+::selection {
+  background: rgba(57, 255, 20, 0.25);
+  color: inherit;
+}
+
+:root[data-theme="light"] ::selection {
+  background: rgba(21, 128, 61, 0.2);
+}
+
+/* ─── Color Palette ─── */
+
+/* Dark mode */
+:root {
+  --sl-color-accent-low: #0a2e14;
+  --sl-color-accent: #39ff14;
+  --sl-color-accent-high: #7aff6e;
+  --sl-color-bg-accent: rgba(57, 255, 20, 0.06);
+  --glow-color: rgba(57, 255, 20, 0.3);
+  --glow-color-subtle: rgba(57, 255, 20, 0.1);
+  --card-bg: rgba(255, 255, 255, 0.03);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --card-border-hover: rgba(57, 255, 20, 0.45);
+  --hero-overlay: linear-gradient(135deg, rgba(5, 10, 8, 0.84) 0%, rgba(5, 10, 8, 0.65) 50%, rgba(5, 10, 8, 0.84) 100%);
+  --hero-bottom-fade: linear-gradient(to bottom, transparent 60%, var(--sl-color-bg) 100%);
+}
+
+/* Light mode */
+:root[data-theme="light"] {
+  --sl-color-accent-low: #d4fcd6;
+  --sl-color-accent: #15803d;
+  --sl-color-accent-high: #0d5a2a;
+  --sl-color-bg-accent: rgba(21, 128, 61, 0.05);
+  --glow-color: rgba(21, 128, 61, 0.18);
+  --glow-color-subtle: rgba(21, 128, 61, 0.07);
+  --card-bg: rgba(0, 0, 0, 0.02);
+  --card-border: rgba(0, 0, 0, 0.08);
+  --card-border-hover: rgba(21, 128, 61, 0.4);
+  --hero-overlay: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.88) 0%,
+    rgba(245, 255, 247, 0.72) 50%,
+    rgba(255, 255, 255, 0.88) 100%
+  );
+  --hero-bottom-fade: linear-gradient(to bottom, transparent 60%, var(--sl-color-bg) 100%);
+}
+
+/* ─── Global Polish ─── */
+
 pre {
   border-radius: 0.5rem;
 }
 
-/* Better table styling */
 table {
   display: block;
   overflow-x: auto;
-  white-space: nowrap;
 }
 
-/* Footer attribution */
 footer {
   text-align: center;
 }
 
-/* Hero image styling */
-.hero-image img {
-  border-radius: 50%;
-  max-width: 200px;
+a {
+  transition:
+    color 0.2s ease,
+      opacity 0.2s ease;
 }
 
-/* Project card styling */
-.project-card {
-  border: 1px solid var(--sl-color-gray-5);
-  border-radius: 0.75rem;
-  padding: 1.5rem;
-  margin-bottom: 1rem;
-  transition: border-color 0.2s;
+/* ─── Hero Section — Full-Width Background ─── */
+
+.hero {
+  position: relative;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-height: 420px;
+  padding: 4rem 2rem 3rem !important;
+  text-align: center;
 }
 
-.project-card:hover {
-  border-color: var(--sl-color-accent);
+/* Matrix image as full-width background */
+.hero > img {
+  position: absolute !important;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  object-fit: cover;
+  z-index: 0;
+  border-radius: 0 !important;
+  opacity: 0.55;
+  pointer-events: none;
 }
 
-/* Badge images inline */
+/* Dark overlay gradient */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--hero-overlay);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Bottom fade into page background */
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--hero-bottom-fade);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Hero content sits above overlays */
+.hero > .sl-flex.stack {
+  position: relative;
+  z-index: 2;
+  align-items: center !important;
+}
+
+.hero .copy {
+  align-items: center !important;
+}
+
+/* Hero title — animated gradient text */
+.hero h1 {
+  background: linear-gradient(
+    135deg,
+    var(--sl-color-accent-high),
+    var(--sl-color-accent),
+    #a3ffb0,
+    var(--sl-color-accent-high)
+  );
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.02em;
+  font-size: 3.5rem;
+  line-height: 1.1;
+  animation: shimmer 6s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+/* Hero tagline */
+.hero .tagline {
+  opacity: 0.9;
+  max-width: 48ch;
+  text-align: center;
+  font-size: 1.15rem;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Hero action buttons */
+.hero .actions {
+  justify-content: center !important;
+}
+
+.hero .action {
+  border-radius: 9999px !important;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: all 0.25s ease;
+}
+
+.hero .action.primary {
+  box-shadow: 0 2px 16px var(--glow-color);
+}
+
+.hero .action.primary:hover {
+  box-shadow: 0 4px 24px var(--glow-color);
+  transform: translateY(-2px);
+}
+
+.hero .action.secondary:hover,
+.hero .action.minimal:hover {
+  transform: translateY(-2px);
+}
+
+/* ─── Cards ─── */
+
+.card {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--card-border) !important;
+  border-radius: 0.75rem !important;
+  transition: all 0.3s ease !important;
+  backdrop-filter: blur(4px);
+}
+
+.card:hover {
+  border-color: var(--card-border-hover) !important;
+  box-shadow: 0 4px 24px var(--glow-color-subtle);
+  transform: translateY(-2px);
+}
+
+.card .icon {
+  filter: drop-shadow(0 0 6px var(--glow-color-subtle));
+}
+
+.sl-link-card {
+  border-radius: 0.75rem !important;
+  transition: all 0.3s ease !important;
+}
+
+.sl-link-card:hover {
+  border-color: var(--card-border-hover) !important;
+  box-shadow: 0 4px 24px var(--glow-color-subtle);
+  transform: translateY(-2px);
+}
+
 .badges img {
   display: inline-block;
   margin-right: 0.25rem;
   vertical-align: middle;
 }
 
-/* Details/summary styling for CV sections */
-details {
-  margin-bottom: 0.5rem;
+/* ─── About Page — Profile ─── */
+
+[data-page-title="About Me"] main img[alt="Nikolai Emil Damm"] {
+  border: 3px solid var(--sl-color-accent);
+  box-shadow:
+    0 0 24px var(--glow-color),
+      0 8px 32px rgba(0, 0, 0, 0.2);
+  transition: box-shadow 0.3s ease;
 }
 
-details summary {
+[data-page-title="About Me"] main img[alt="Nikolai Emil Damm"]:hover {
+  box-shadow:
+    0 0 36px var(--glow-color),
+      0 8px 32px rgba(0, 0, 0, 0.25);
+}
+
+/* ─── Blockquote — Info Card Style ─── */
+
+blockquote {
+  background: var(--card-bg);
+  border-left: 3px solid var(--sl-color-accent);
+  border-radius: 0 0.5rem 0.5rem 0;
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
+  backdrop-filter: blur(4px);
+}
+
+blockquote p {
+  margin: 0.3rem 0;
+}
+
+/* ─── Details / Summary — CV Expandables ─── */
+
+.sl-markdown-content details {
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--card-border);
+  border-radius: 0.5rem;
+  transition: border-color 0.2s ease;
+}
+
+.sl-markdown-content details:hover {
+  border-color: var(--card-border-hover);
+}
+
+.sl-markdown-content details summary {
   cursor: pointer;
   color: var(--sl-color-accent);
+  font-weight: 500;
+  padding: 0.6rem 1rem;
+  border-radius: 0.5rem;
+  background: var(--card-bg);
+  transition: background 0.2s ease;
+  list-style: none;
+}
+
+.sl-markdown-content details summary::before {
+  content: "\25B8\00a0";
+  display: inline-block;
+  transition: transform 0.2s ease;
+}
+
+.sl-markdown-content details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.sl-markdown-content details summary::-webkit-details-marker {
+  display: none;
+}
+
+.sl-markdown-content details summary:hover {
+  background: var(--glow-color-subtle);
+}
+
+.sl-markdown-content details[open] summary {
+  border-radius: 0.5rem 0.5rem 0 0;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.sl-markdown-content details > :not(summary) {
+  padding: 0 1rem;
+}
+
+.sl-markdown-content details > :last-child {
+  padding-bottom: 0.75rem;
+}
+
+/* ─── Section Headings ─── */
+
+.sl-markdown-content h2 {
+  padding-bottom: 0.4rem;
+  border-bottom: 2px solid var(--glow-color-subtle);
+}
+
+.sl-markdown-content h3 span[style*="float"] {
+  font-weight: 400;
+  opacity: 0.7;
+  font-size: 0.85em;
+}
+
+/* ─── Connect Section — Styled Links ─── */
+
+[data-page-title="About Me"] .sl-markdown-content #connect ~ ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+[data-page-title="About Me"] .sl-markdown-content #connect ~ ul a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1.25rem;
+  border: 1px solid var(--card-border);
+  border-radius: 9999px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all 0.25s ease;
+}
+
+[data-page-title="About Me"] .sl-markdown-content #connect ~ ul a:hover {
+  border-color: var(--sl-color-accent);
+  background: var(--glow-color-subtle);
+  box-shadow: 0 2px 12px var(--glow-color-subtle);
+  transform: translateY(-1px);
+}
+
+/* ─── "Browse all posts" Link ─── */
+
+.sl-markdown-content > p:last-of-type > a[href="/blog/"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  color: var(--sl-color-accent);
+  text-decoration: none;
+  padding: 0.6rem 1.5rem;
+  border: 1px solid var(--card-border);
+  border-radius: 9999px;
+  transition: all 0.25s ease;
+}
+
+.sl-markdown-content > p:last-of-type > a[href="/blog/"]:hover {
+  gap: 0.7rem;
+  border-color: var(--sl-color-accent);
+  background: var(--glow-color-subtle);
+  box-shadow: 0 2px 12px var(--glow-color-subtle);
+  transform: translateY(-1px);
+}
+
+/* ─── Blog Article Cards ─── */
+
+.blog-post-list article,
+main article {
+  border: 1px solid var(--card-border);
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  background: var(--card-bg);
+  transition: all 0.3s ease;
+}
+
+main article:hover {
+  border-color: var(--card-border-hover);
+  box-shadow: 0 4px 20px var(--glow-color-subtle);
+}
+
+/* Blog cover image polish */
+main article figure img,
+article figure img {
+  border-radius: 0.5rem;
+  border: 1px solid var(--card-border);
+}
+
+/* ─── Talk Video Section ─── */
+
+.sl-markdown-content a:has(img[alt*="talk"]),
+.sl-markdown-content a:has(img[alt*="Talk"]) {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  border: 1px solid var(--card-border);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  margin: 1rem 0;
+  background: var(--card-bg);
+  transition: all 0.3s ease;
+}
+
+.sl-markdown-content a:has(img[alt*="talk"]):hover,
+.sl-markdown-content a:has(img[alt*="Talk"]):hover {
+  border-color: var(--card-border-hover);
+  box-shadow: 0 4px 20px var(--glow-color-subtle);
+  transform: translateY(-2px);
+}
+
+.sl-markdown-content a:has(img[alt*="talk"]) img,
+.sl-markdown-content a:has(img[alt*="Talk"]) img {
+  border-radius: 0.5rem;
+  max-width: 100%;
+}
+
+/* ─── Badges & Certificates Grid ─── */
+
+.sl-markdown-content .badges,
+.sl-markdown-content p:has(> img[alt*="Badge"]),
+.sl-markdown-content p:has(> img[alt*="Certification"]),
+.sl-markdown-content p:has(> img[alt*="KodeKloud"]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.sl-markdown-content img[alt*="Badge"],
+.sl-markdown-content img[alt*="Certification"],
+.sl-markdown-content img[alt*="Speaker"],
+.sl-markdown-content img[alt*="KodeKloud"],
+.sl-markdown-content img[alt*="Cilium"] {
+  border-radius: 0.5rem;
+  border: 1px solid var(--card-border);
+  transition:
+      transform 0.2s ease,
+      box-shadow 0.2s ease;
+}
+
+.sl-markdown-content img[alt*="Badge"]:hover,
+.sl-markdown-content img[alt*="Certification"]:hover,
+.sl-markdown-content img[alt*="Speaker"]:hover,
+.sl-markdown-content img[alt*="KodeKloud"]:hover,
+.sl-markdown-content img[alt*="Cilium"]:hover {
+  transform: scale(1.03);
+  box-shadow: 0 4px 16px var(--glow-color-subtle);
+}
+
+/* ─── Pagination (Older / Newer Posts) ─── */
+
+a[href*="/blog/2"],
+a[href*="/blog/"].pagination-link {
+  border-radius: 9999px !important;
+  padding: 0.6rem 1.5rem !important;
+  font-weight: 600;
+}
+
+/* ─── Global Button & Link Hover Enhancements ─── */
+
+/* Sidebar navigation links */
+nav.sidebar-content a:hover,
+.sidebar-content a:hover {
+  color: var(--sl-color-accent) !important;
+  transition: color 0.2s ease;
+}
+
+/* Table of contents links */
+starlight-toc a:hover,
+.right-sidebar a:hover {
+  color: var(--sl-color-accent) !important;
+  transition: color 0.2s ease;
+}
+
+/* Pagination / prev-next links */
+a.pagination-link:hover,
+.pagination-links a:hover,
+a[rel="prev"]:hover,
+a[rel="next"]:hover {
+  border-color: var(--card-border-hover) !important;
+  box-shadow: 0 2px 12px var(--glow-color-subtle);
+  transform: translateY(-1px);
+  transition: all 0.25s ease;
+}
+
+/* Tag pill links */
+a[href*="/tags/"]:hover {
+  background: var(--glow-color-subtle) !important;
+  border-color: var(--sl-color-accent) !important;
+  transition: all 0.2s ease;
+}
+
+/* Header nav links */
+.header a:hover,
+header a:hover {
+  color: var(--sl-color-accent) !important;
+  transition: color 0.2s ease;
+}
+
+/* Theme toggle and icon buttons */
+starlight-theme-select button:hover,
+starlight-menu-button button:hover {
+  color: var(--sl-color-accent) !important;
+  transition: color 0.2s ease;
+}
+
+/* Generic button hover */
+button:hover {
+  transition: all 0.2s ease;
+}
+
+/* ─── Image Polish ─── */
+
+.sl-markdown-content img {
+  border-radius: 0.5rem;
+}
+
+/* ─── Pagination Link (prev/next) ─── */
+
+a[rel="next"],
+a[rel="prev"],
+.pagination-links a {
+  border-radius: 0.75rem !important;
+  border: 1px solid var(--card-border) !important;
+  background: var(--card-bg) !important;
+  transition: all 0.25s ease !important;
+}
+
+a[rel="next"]:hover,
+a[rel="prev"]:hover,
+.pagination-links a:hover {
+  border-color: var(--card-border-hover) !important;
+  box-shadow: 0 4px 16px var(--glow-color-subtle) !important;
+  transform: translateY(-2px) !important;
+}
+
+/* ─── Responsive Tweaks ─── */
+
+@media (max-width: 50rem) {
+  .hero {
+    min-height: 320px;
+    padding: 3rem 1.5rem 2rem !important;
+  }
+
+  .hero h1 {
+    font-size: 2.25rem;
+  }
+
+  [data-page-title="About Me"] .sl-markdown-content #connect ~ ul {
+    flex-direction: column;
+  }
+
+  [data-page-title="About Me"] .sl-markdown-content #connect ~ ul a {
+    justify-content: center;
+  }
+
+  main article {
+    padding: 1rem;
+    margin-bottom: 1rem;
+  }
 }

@@ -10,6 +10,9 @@ tags:
   - architecture
   - open-source
 excerpt: The journey of building KSail through three major rewrites and what I learned along the way.
+cover:
+  alt: KSail logo
+  image: ../../../assets/ksail-logo.jpeg
 ---
 
 Building a developer tool is rarely a straight path. [KSail](https://github.com/devantler-tech/ksail) started as a humble shell script in late 2023 and has evolved through three major rewrites to become what it is today: a Go-based CLI that bundles common Kubernetes tooling into a single binary. This post tells the story of that journey.

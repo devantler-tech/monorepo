@@ -1,10 +1,10 @@
 ---
-title: Nikolai Emil | Devantler
+title: Home
 description: Personal site of Nikolai Emil Damm — software engineer, open-source advocate, and Kubernetes enthusiast.
 template: splash
 hero:
-  title: Nikolai Emil | Devantler
-  tagline: I am an ambitious software engineer with an agile mindset, and the desire to overcome innovative challenges. For that open source is my toolbox 🧰
+  title: Nikolai Emil Damm
+  tagline: Developer Experience Engineer building tools that make Kubernetes development effortless. Open-source advocate and cloud-native enthusiast.
   image:
     file: ../../assets/matrix.png
     alt: Matrix-style background
@@ -58,4 +58,27 @@ import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 ## Latest from the Blog
 
-Check out the [blog](/blog/) for posts on Kubernetes, developer tooling, AI-assisted development, and more.
+<CardGrid>
+  <LinkCard
+    title="Building an AI Assistant for Kubernetes"
+    description="How I built KSail's interactive Copilot-powered chat assistant using Go and Bubbletea TUI."
+    href="/blog/building-an-ai-assistant-for-kubernetes-with-github-copilot-sdk/"
+  />
+  <LinkCard
+    title="Kubernetes Clusters on Hetzner with KSail"
+    description="A step-by-step guide to creating Talos Linux clusters on Hetzner Cloud."
+    href="/blog/creating-development-kubernetes-clusters-on-hetzner-with-ksail-and-talos/"
+  />
+  <LinkCard
+    title="AI-Powered GitHub Issues"
+    description="How I use Copilot with Claude Opus to create well-structured, impactful issues."
+    href="/blog/ai-powered-github-issues-with-copilot-and-claude-opus/"
+  />
+  <LinkCard
+    title="From Shell Scripts to .NET to Go"
+    description="The journey of building KSail through three major rewrites."
+    href="/blog/building-ksail-from-shell-to-dotnet-to-go/"
+  />
+</CardGrid>
+
+[Browse all posts &rarr;](/blog/)

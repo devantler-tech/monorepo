@@ -9,6 +9,9 @@ tags:
   - talos
   - local-development
 excerpt: A guide to creating local Kubernetes development clusters using KSail with Talos Linux in Docker.
+cover:
+  alt: KSail with Talos
+  image: ../../../assets/ksail-talos.png
 ---
 
 [Talos Linux](https://www.talos.dev/) is a minimal, immutable operating system designed specifically for Kubernetes. While it's often used in production environments, you can also run Talos locally in Docker for development. Combined with [KSail](https://github.com/devantler-tech/ksail), you get a security-focused local development experience. This post shows you how.

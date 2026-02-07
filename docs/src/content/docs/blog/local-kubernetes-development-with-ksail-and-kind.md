@@ -9,6 +9,9 @@ tags:
   - kind
   - local-development
 excerpt: A guide to creating local Kubernetes development clusters using KSail with Kind (vanilla Kubernetes) in Docker.
+cover:
+  alt: KSail with Kind
+  image: ../../../assets/ksail-kind.png
 ---
 
 Getting started with Kubernetes development shouldn't require cloud infrastructure or complex setup procedures. With [Kind](https://kind.sigs.k8s.io/) (Kubernetes in Docker) and [KSail](https://github.com/devantler-tech/ksail), you can have a local cluster running in under a minute. This post shows you how.

@@ -10,6 +10,9 @@ tags:
   - copilot
   - tui
 excerpt: How I built KSail's interactive AI chat assistant using Go, GitHub Copilot SDK, and Bubbletea TUI framework.
+cover:
+  alt: KSail Copilot Chat in action
+  image: ../../../assets/ksail-copilot-chat-1.png
 ---
 
 What if managing Kubernetes clusters was as simple as having a conversation?
@@ -26,15 +29,15 @@ Before diving into the implementation, let's see what we're building. Here's `ks
 
 **1. Start the conversation** — ask to create a cluster on Hetzner
 
-![Starting the chat with a Hetzner cluster request](/assets/images/ksail-copilot-chat-hetzner-start.png)
+![Starting the chat with a Hetzner cluster request](../../../assets/ksail-copilot-chat-hetzner-start.png)
 
 **2. Task complete** — the assistant finishes provisioning the cluster
 
-![Cluster creation finished in chat](/assets/images/ksail-copilot-chat-hetzner-finished.png)
+![Cluster creation finished in chat](../../../assets/ksail-copilot-chat-hetzner-finished.png)
 
 **3. Verification** — the cluster appears in Hetzner Cloud
 
-![Verification in Hetzner Cloud dashboard](/assets/images/ksail-copilot-chat-hetzner-verificiation.png)
+![Verification in Hetzner Cloud dashboard](../../../assets/ksail-copilot-chat-hetzner-verificiation.png)
 
 The entire workflow happens in the terminal — no context switching, no remembering flags.
 
@@ -42,13 +45,13 @@ The entire workflow happens in the terminal — no context switching, no remembe
 
 KSail already makes Kubernetes development easier by bundling common tools into a single Go binary. But users still need to remember commands, flags, and workflows. The chat feature completes the progression:
 
-| Before KSail | With KSail CLI | With KSail Chat |
-|--------------|----------------|------------------|
-| 5+ tools to install | 1 binary | 1 binary |
-| Memorize each tool's flags | Read `--help` | Just describe what you want |
-| Copy commands from docs | Run unified commands | "Create a cluster" |
+| Before KSail               | With KSail CLI       | With KSail Chat             |
+| -------------------------- | -------------------- | --------------------------- |
+| 5+ tools to install        | 1 binary             | 1 binary                    |
+| Memorize each tool's flags | Read `--help`        | Just describe what you want |
+| Copy commands from docs    | Run unified commands | "Create a cluster"          |
 
-KSail already knows *how* to do everything — now it understands *what* you want to do. The assistant needs to understand KSail's capabilities, execute real commands (not just explain them), work entirely in the terminal, and respect security boundaries. Building that required three key pieces working together.
+KSail already knows _how_ to do everything — now it understands _what_ you want to do. The assistant needs to understand KSail's capabilities, execute real commands (not just explain them), work entirely in the terminal, and respect security boundaries. Building that required three key pieces working together.
 
 ## The Tech Stack
 
@@ -80,19 +83,19 @@ AI responses often include markdown formatting. [glamour](https://github.com/cha
 
 ## Architecture Overview
 
-The SDK, TUI, and renderer handle *how* the interface works. The harder question: how do we make the AI actually *useful*? An LLM that just talks is nice, but we need it to execute real commands and stay within security boundaries.
+The SDK, TUI, and renderer handle _how_ the interface works. The harder question: how do we make the AI actually _useful_? An LLM that just talks is nice, but we need it to execute real commands and stay within security boundaries.
 
 ### Auto-Generated Tools from Cobra Commands
 
-![ksail-copilot-chat-2](/assets/images/ksail-copilot-chat-2.png)
+![ksail-copilot-chat-2](../../../assets/ksail-copilot-chat-2.png)
 
 KSail has 92+ CLI commands, all built with [Cobra](https://github.com/spf13/cobra). This consistency is what makes auto-generation possible — every command has the same structure: name, description, flags with types and defaults.
 
 I built a [generator](https://pkg.go.dev/github.com/devantler-tech/ksail/v5/pkg/svc/chat/generator) that walks KSail's command tree, converts each command's flags to JSON Schema, and creates tool handlers that invoke the actual KSail logic. The AI doesn't shell out to `ksail` — it calls the same Go functions the CLI uses.
 
-**The lesson learned**: auto-discovering all 92 commands broke things. LLMs have a practical limit on how many tools they can reason about effectively — this is a known issue called *tool overload*. When presented with too many options, the model's ability to select the right tool degrades significantly. Some commands (like internal debug utilities) also shouldn't be exposed at all. The solution was to keep auto-discovery but add an exclusion filter — now only ~25 curated commands become tools. Best of both worlds: no manual sync, but a focused toolset the model can actually use well.
+**The lesson learned**: auto-discovering all 92 commands broke things. LLMs have a practical limit on how many tools they can reason about effectively — this is a known issue called _tool overload_. When presented with too many options, the model's ability to select the right tool degrades significantly. Some commands (like internal debug utilities) also shouldn't be exposed at all. The solution was to keep auto-discovery but add an exclusion filter — now only ~25 curated commands become tools. Best of both worlds: no manual sync, but a focused toolset the model can actually use well.
 
-Tools let the assistant *act*. But to use them well, it needs context about KSail itself.
+Tools let the assistant _act_. But to use them well, it needs context about KSail itself.
 
 ### Embedded Documentation Context
 
@@ -120,7 +123,7 @@ Beyond the core AI integration, the TUI includes thoughtful UX details:
 
 ## Building with AI Assistance
 
-Here's the meta part: an AI assistant built *using* AI assistance. The same pattern — removing cognitive overhead — applied to the development process itself.
+Here's the meta part: an AI assistant built _using_ AI assistance. The same pattern — removing cognitive overhead — applied to the development process itself.
 
 VS Code's agent mode with Claude Opus 4.5 was invaluable throughout this project. But TUI development presents a unique challenge — the AI can't "see" what renders in your terminal. How do you debug visual issues with a text-based assistant?
 
@@ -200,4 +203,4 @@ Feedback and contributions welcome!
 
 ---
 
-*This post was written with AI assistance (Claude Opus 4.5 via VS Code), following my outline and intent.*
+_This post was written with AI assistance (Claude Opus 4.5 via VS Code), following my outline and intent._

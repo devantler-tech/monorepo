@@ -6,6 +6,9 @@ authors:
 tags:
   - personal
 excerpt: A welcome post to introduce myself and the site.
+cover:
+  alt: Welcome to devantler.tech
+  image: ../../../assets/profile.jpg
 ---
 
 Hello everyone! Welcome to my site 👋🏻

@@ -8,6 +8,9 @@ tags:
   - developer-experience
   - tooling
 excerpt: Setting up MacOS as a developer machine can be a daunting task. In this post, I will share my learnings and experiences to help you get started.
+cover:
+  alt: MacBook developer setup
+  image: ../../../assets/macbook-1.jpg
 ---
 
 In this post, I will share my experience setting up MacOS as a developer machine. I will cover the following topics:

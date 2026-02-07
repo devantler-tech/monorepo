@@ -31,7 +31,7 @@ export default defineConfig({
         {
           icon: "rss",
           label: "RSS",
-          href: "/rss.xml",
+          href: "/blog/rss.xml",
         },
       ],
       editLink: {
