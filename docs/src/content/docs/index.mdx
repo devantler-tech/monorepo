@@ -1,0 +1,61 @@
+---
+title: Nikolai Emil | Devantler
+description: Personal site of Nikolai Emil Damm — software engineer, open-source advocate, and Kubernetes enthusiast.
+template: splash
+hero:
+  title: Nikolai Emil | Devantler
+  tagline: I am an ambitious software engineer with an agile mindset, and the desire to overcome innovative challenges. For that open source is my toolbox 🧰
+  image:
+    file: ../../assets/matrix.png
+    alt: Matrix-style background
+  actions:
+    - text: About Me
+      link: /about/
+      icon: right-arrow
+      variant: primary
+    - text: Blog
+      link: /blog/
+      variant: secondary
+    - text: GitHub
+      link: https://github.com/devantler
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+## What I Do
+
+<CardGrid>
+  <Card title="Platform Engineering" icon="setting">
+    Building and maintaining Kubernetes platforms with GitOps, Flux, Talos Linux, and CNCF technologies.
+  </Card>
+  <Card title="Developer Tooling" icon="rocket">
+    Creating tools like [KSail](https://ksail.devantler.tech) that simplify Kubernetes development and operations.
+  </Card>
+  <Card title="Open Source" icon="github">
+    Contributing to the open-source ecosystem with reusable workflows, actions, and templates.
+  </Card>
+  <Card title="Knowledge Sharing" icon="document">
+    Writing about software development, cloud-native technologies, and modern engineering practices.
+  </Card>
+</CardGrid>
+
+## Featured Projects
+
+<CardGrid>
+  <LinkCard
+    title="🛥️ KSail"
+    description="A Go CLI for provisioning GitOps-enabled Kubernetes clusters. One binary, multiple distributions."
+    href="https://ksail.devantler.tech"
+  />
+  <LinkCard
+    title="☸️ Platform"
+    description="GitOps-based Kubernetes platform running on Talos Linux with Flux, Cilium, and Traefik."
+    href="/projects/"
+  />
+</CardGrid>
+
+## Latest from the Blog
+
+Check out the [blog](/blog/) for posts on Kubernetes, developer tooling, AI-assisted development, and more.

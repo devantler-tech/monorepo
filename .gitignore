@@ -1,1 +1,6 @@
 .DS_Store
+
+# Docs build artifacts
+docs/node_modules/
+docs/dist/
+docs/.astro/

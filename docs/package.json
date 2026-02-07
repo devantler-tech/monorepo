@@ -1,0 +1,24 @@
+{
+  "name": "devantler-site",
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "sync-projects": "node scripts/sync-projects.mjs"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.37.5",
+    "astro": "^5.17.1",
+    "astro-mermaid": "^1.1.0",
+    "mermaid": "^10.9.5",
+    "sharp": "^0.34.5",
+    "starlight-blog": "^0.25.2",
+    "starlight-links-validator": "^0.19.2"
+  },
+  "devDependencies": {
+    "starlight-github-alerts": "^0.1.1"
+  }
+}
