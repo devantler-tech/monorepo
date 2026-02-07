@@ -1,0 +1,61 @@
+/* Custom styles for devantler.tech */
+
+/* Dark mode accent colors */
+:root {
+  --sl-color-accent-low: #1a365d;
+  --sl-color-accent: #3182ce;
+  --sl-color-accent-high: #63b3ed;
+}
+
+/* Improve code block styling */
+pre {
+  border-radius: 0.5rem;
+}
+
+/* Better table styling */
+table {
+  display: block;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+/* Footer attribution */
+footer {
+  text-align: center;
+}
+
+/* Hero image styling */
+.hero-image img {
+  border-radius: 50%;
+  max-width: 200px;
+}
+
+/* Project card styling */
+.project-card {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+  transition: border-color 0.2s;
+}
+
+.project-card:hover {
+  border-color: var(--sl-color-accent);
+}
+
+/* Badge images inline */
+.badges img {
+  display: inline-block;
+  margin-right: 0.25rem;
+  vertical-align: middle;
+}
+
+/* Details/summary styling for CV sections */
+details {
+  margin-bottom: 0.5rem;
+}
+
+details summary {
+  cursor: pointer;
+  color: var(--sl-color-accent);
+}
