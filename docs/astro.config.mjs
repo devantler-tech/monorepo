@@ -68,6 +68,10 @@ function gtag(){dataLayer.push(arguments);}
 gtag('js', new Date());
 gtag('config', 'G-MK59Q89KYW');`,
         },
+        {
+          tag: "script",
+          content: `document.addEventListener('DOMContentLoaded',()=>{document.addEventListener('click',e=>{const a=e.target.closest('a');if(a)return;const article=e.target.closest('main article, .blog-post-list article');if(!article)return;const link=article.querySelector('h2 a');if(link){window.location.href=link.href;}});});`,
+        },
       ],
       sidebar: [
         {
