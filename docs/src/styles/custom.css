@@ -412,7 +412,11 @@ blockquote p {
 }
 
 .sl-markdown-content details > :not(summary) {
-  padding: 0 1rem;
+  padding: 0.5rem 1.25rem;
+}
+
+.sl-markdown-content details > ul {
+  padding-left: 2.5rem;
 }
 
 .sl-markdown-content details > :last-child {
