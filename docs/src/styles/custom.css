@@ -674,7 +674,7 @@ a[href*="/tags/"] {
     background-color 0.2s ease,
     border-color 0.2s ease,
     box-shadow 0.2s ease,
-      transform 0.2s ease;
+    transform 0.2s ease;
 }
 
 a[href*="/tags/"]:visited {
@@ -686,7 +686,7 @@ a[href*="/tags/"]:hover {
   border-color: var(--sl-color-accent) !important;
   box-shadow: 0 2px 8px var(--glow-color-subtle);
   transform: translateY(-1px);
-  }
+}
 
 /* Tag pill list layout */
 li:has(> a[href*="/tags/"]) {
@@ -889,7 +889,7 @@ nav:has(a[href*="/blog/3"]) a:hover {
   position: relative;
   cursor: pointer;
   display: inline-flex !important;
-    align-items: center;
+  align-items: center;
     gap: 0.5rem;
     width: fit-content !important;
     padding: 0.75rem 1.5rem !important;
@@ -899,14 +899,14 @@ nav:has(a[href*="/blog/3"]) a:hover {
     box-shadow: none !important;
   transition:
     border-color 0.25s ease,
-      box-shadow 0.25s ease,
+    box-shadow 0.25s ease,
       transform 0.25s ease,
       background-color 0.25s ease;
 }
 
 .pagination .sl-link-card:hover {
   border-color: var(--sl-color-accent) !important;
-    box-shadow: 0 2px 12px var(--glow-color-subtle) !important;
+  box-shadow: 0 2px 12px var(--glow-color-subtle) !important;
     background: var(--glow-color-subtle) !important;
   transform: translateY(-2px);
 }
@@ -919,7 +919,7 @@ nav:has(a[href*="/blog/3"]) a:hover {
   border-radius: 0 !important;
   background: none !important;
   font-weight: 600;
-    color: var(--sl-color-text);
+  color: var(--sl-color-text);
     text-decoration: none;
 }
 
