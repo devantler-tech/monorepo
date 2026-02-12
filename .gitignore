@@ -6,3 +6,4 @@ docs/dist/
 docs/.astro/
 *.png
 .playwright-mcp/
+!docs/src/assets/*.png
