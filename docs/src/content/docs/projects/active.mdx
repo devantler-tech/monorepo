@@ -19,8 +19,10 @@ A tool that bundles common Kubernetes tooling into a single binary. It provides 
 
 - **One Binary**: Embeds cluster provisioning, GitOps engines, and deployment tooling — no tool sprawl
 - **Simple Clusters**: Spin up Vanilla, K3s, or Talos clusters with one command across Docker or [Hetzner Cloud](https://www.hetzner.com/cloud/)
+- **Mirror Registries**: Avoid rate limits and store images once — same mirrors used by different clusters
 - **GitOps Native**: Built-in [Flux](https://fluxcd.io/) or [ArgoCD](https://argo-cd.readthedocs.io/) support with bootstrap, push, and reconcile commands
 - **Customizable Stack**: Select your CNI, CSI, policy engine, cert-manager, and mirror registries
+- **SOPS Built In**: Encrypt, decrypt, and edit secrets with integrated cipher commands
 - **AI Assistant**: Interactive chat powered by [GitHub Copilot](https://github.com/features/copilot) for configuration and troubleshooting
 
 📖 [Full Documentation](https://ksail.devantler.tech) · 📝 [Read about the journey from .NET to Go](/blog/building-ksail-from-shell-to-dotnet-to-go/)
@@ -49,9 +51,12 @@ A collection of [composite GitHub Actions](https://docs.github.com/en/actions/cr
 
 - **Auto Merge**: Approve and auto-merge PRs from trusted bots/users
 - **Cleanup GHCR**: Clean up old [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) packages
+- **Dockerfile Lint**: Lint Dockerfiles using [Hadolint](https://github.com/hadolint/hadolint)
+- **.NET Test**: Test [.NET](https://dotnet.microsoft.com/) solutions or projects
 - **Flux GitOps Deploy**: Push manifests to OCI and deploy using [Flux](https://fluxcd.io/)
 - **Setup KSail**: Install [KSail](https://github.com/devantler-tech/ksail) CLI via [Homebrew](https://brew.sh/)
 - **Install Cilium/Flux**: Install [Cilium](https://cilium.io/) and [Flux](https://fluxcd.io/) in Kubernetes clusters
+- **Sync Labels**: Sync GitHub labels across repositories
 - **TODOs**: Create GitHub issues from TODO comments in code
 
 </div>
