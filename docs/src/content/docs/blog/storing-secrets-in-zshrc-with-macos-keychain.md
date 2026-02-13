@@ -28,7 +28,7 @@ Use the `security` CLI to add a value to your Keychain:
 > Prepend the command with a space (note the leading space above) to prevent it from being saved in your `.zsh_history`.
 
 - `-a "$USER"` — associates the entry with your macOS user account.
-- `-s 'my_secret_name'` — a label to identify the secret (e.g., `gh_packages_token`).
+- `-s 'my_secret_name'` — a label to identify the secret (e.g., `GITHUB_TOKEN`).
 - `-w 'SECRET_VALUE'` — the actual secret value.
 
 ## Retrieve a Secret
@@ -46,7 +46,7 @@ This prints the secret to stdout, making it easy to capture in a variable.
 Export the secret as an environment variable by adding this to `~/.zshrc`:
 
 ```bash
-export GH_PACKAGES_TOKEN=$(security find-generic-password -a "$USER" -s "gh_packages_token" -w)
+export GITHUB_TOKEN=$(security find-generic-password -a "$USER" -s "GITHUB_TOKEN" -w)
 ```
 
 ## Summary
