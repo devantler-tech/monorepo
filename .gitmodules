@@ -1,7 +1,3 @@
-[submodule "projects/data-product"]
-	path = projects/data-product
-	url = git@github.com:devantler-tech/data-product.git
-	branch = main
 [submodule "templates/dotnet-template"]
 	path = templates/dotnet-template
 	url = git@github.com:devantler-tech/dotnet-template.git
@@ -9,10 +5,6 @@
 [submodule "dotfiles"]
 	path = dotfiles
 	url = git@github.com:devantler/dotfiles.git
-	branch = main
-[submodule "libraries/dotnet-kubernetes-resource-provisioner"]
-	path = libraries/dotnet-kubernetes-provisioner
-	url = git@github.com:devantler-tech/dotnet-kubernetes-provisioner.git
 	branch = main
 [submodule "github/devantler-tech/.github-private"]
 	path = github/devantler-tech/.github-private
