@@ -18,8 +18,10 @@ These are the projects I am currently working on and actively maintaining. I'm a
 A tool that bundles common Kubernetes tooling into a single binary. It provides a **VSCode Extension**, **CLI**, **AI-Enabled Chat TUI**, or **MCP interface** to create clusters, deploy workloads, and operate cloud-native stacks across different distributions and providers.
 
 - **One Binary**: Embeds cluster provisioning, GitOps engines, and deployment tooling — no tool sprawl
-- **Simple Clusters**: Spin up Vanilla, K3s, or Talos clusters with one command across Docker or [Hetzner Cloud](https://www.hetzner.com/cloud/)
+- **Simple Clusters**: Spin up Vanilla, K3s, Talos, or VCluster clusters with one command across Docker or [Hetzner Cloud](https://www.hetzner.com/cloud/)
+- **No Lock-In**: Uses native configs (`kind.yaml`, `k3d.yaml`, Talos patches, `vcluster.yaml`) — run clusters with or without KSail
 - **Mirror Registries**: Avoid rate limits and store images once — same mirrors used by different clusters
+- **Everything as Code**: Cluster settings, distribution configs, and workloads in version-controlled files
 - **GitOps Native**: Built-in [Flux](https://fluxcd.io/) or [ArgoCD](https://argo-cd.readthedocs.io/) support with bootstrap, push, and reconcile commands
 - **Customizable Stack**: Select your CNI, CSI, policy engine, cert-manager, and mirror registries
 - **SOPS Built In**: Encrypt, decrypt, and edit secrets with integrated cipher commands
