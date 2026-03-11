@@ -10,7 +10,7 @@
     "sync-projects": "node scripts/sync-projects.mjs"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.37.5",
+    "@astrojs/starlight": "^0.38.0",
     "astro": "^6.0.0",
     "astro-mermaid": "^1.1.0",
     "mermaid": "^11.0.0",
