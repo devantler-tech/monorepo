@@ -16,7 +16,7 @@
     "mermaid": "^11.0.0",
     "sharp": "^0.34.5",
     "starlight-blog": "^0.26.0",
-    "starlight-links-validator": "^0.20.0"
+    "starlight-links-validator": "^0.21.0"
   },
   "devDependencies": {
     "starlight-github-alerts": "^0.2.0"
