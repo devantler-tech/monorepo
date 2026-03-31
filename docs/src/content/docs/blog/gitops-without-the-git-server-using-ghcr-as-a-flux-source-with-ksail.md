@@ -1,5 +1,5 @@
 ---
-title: "GitOps Without the Git Server: Using GHCR as a Flux Source with KSail"
+title: "GitOps Without the Git Server: OCI Registries as a Flux Source with KSail"
 date: 2026-03-25
 authors:
   - devantler
@@ -8,7 +8,8 @@ tags:
   - gitops
   - flux
   - oci
-excerpt: Most local Flux setups point at a Git repo. OCI registries are cleaner — here's a full walkthrough using KSail's workload push command and GHCR, including CI pipeline usage.
+  - ksail
+excerpt: Most local Flux setups point at a Git repo. OCI registries are cleaner — here's a full walkthrough using KSail's local registry and workload push command, plus how to extend the same workflow to GHCR for CI.
 cover:
   alt: OCI artifacts as a Flux source with KSail
   image: ../../../assets/oci-artifacts.webp
@@ -16,16 +17,16 @@ cover:
 
 The standard advice for running Flux locally is to point it at a Git repository. In practice that means either pushing to a remote repo and waiting for Flux to poll it, maintaining a local Git server, or wrestling with Flux's lack of support for local file paths. None of these are great for a tight development loop.
 
-Flux has supported OCI repositories as sources since v2.0.0, and this is a much cleaner approach for local development. Instead of a Git repo, Flux watches an OCI artifact in a container registry. You push your manifests as a versioned artifact, Flux pulls and applies it. KSail has a `workload push` command that handles the packaging and push step, so the workflow after editing manifests comes down to two commands.
+Flux has supported OCI repositories as sources since v2.0.0, and this is a much cleaner approach for local development. Instead of a Git repo, Flux watches an OCI artifact in a container registry. You push your manifests as a versioned artifact, Flux pulls and applies it. KSail takes care of the registry for you — when you create a local cluster with a GitOps engine, KSail automatically provisions a local Docker-based OCI registry alongside the cluster. No external accounts, no tokens, no network dependency. The workflow after editing manifests comes down to two commands.
 
 Here's a complete walkthrough.
 
 ## Prerequisites
 
-You need Docker installed and a GHCR token. For GHCR, a Personal Access Token with `write:packages` scope works fine locally. In CI, the built-in `GITHUB_TOKEN` with `packages: write` permission is enough.
+You need Docker installed and running. Verify with:
 
 ```bash
-echo $GHCR_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+docker ps
 ```
 
 KSail itself only needs Docker — it bundles kubectl, helm, flux, kustomize, kind, and more into a single binary.
@@ -34,9 +35,12 @@ KSail itself only needs Docker — it bundles kubectl, helm, flux, kustomize, ki
 brew install --cask devantler-tech/tap/ksail
 ```
 
+That's it for local development. No registry accounts or tokens needed — KSail provisions a local registry automatically.
+
 ## Setting Up a Cluster with Flux
 
 ```bash
+mkdir my-cluster && cd my-cluster
 ksail cluster init \
   --name dev \
   --distribution Vanilla \
@@ -50,33 +54,19 @@ This scaffolds:
 - `k8s/kustomization.yaml` — root Kustomization manifest
 - Flux HelmRelease and OCI source configs
 
-Edit `ksail.yaml` to point at your GHCR repository. Add a `workload.tag` while you're there:
-
-```yaml
-apiVersion: v1alpha1
-kind: Cluster
-metadata:
-  name: dev
-spec:
-  distribution: Vanilla
-  gitops:
-    engine: Flux
-    registries:
-      - host: ghcr.io
-        username: YOUR_GITHUB_USERNAME
-  workload:
-    tag: dev
-```
-
-The `spec.workload.tag` field sets the OCI artifact tag used when pushing. For local iteration `dev` is convenient — every push overwrites the same tag, and Flux detects changes via digest rather than tag, so reconciliation still fires correctly.
-
 Create the cluster:
 
 ```bash
 ksail cluster create
 ```
 
-Flux bootstraps during `cluster create`. By the time the command finishes, Flux is running and watching the OCI source you configured.
+During `cluster create`, KSail:
+
+1. Provisions a local OCI registry as a Docker container
+2. Creates the Kind cluster and attaches it to the registry
+3. Bootstraps Flux and configures it to watch the local registry as an OCI source
+
+By the time the command finishes, Flux is running and watching the local registry. No manual registry configuration needed.
 
 ## Pushing Manifests
 
@@ -113,31 +103,45 @@ ksail workload push
 ksail workload reconcile
 ```
 
-`workload push` packages your `k8s/` directory as an OCI artifact and pushes it to GHCR. `workload reconcile` triggers Flux to pull the latest artifact and waits for all Kustomizations to report Ready.
+`workload push` packages your `k8s/` directory as an OCI artifact and pushes it to the local registry. It auto-detects the registry from the running cluster — no flags or configuration needed. `workload reconcile` triggers Flux to pull the latest artifact and waits for all Kustomizations to report Ready.
 
-On a decent connection the round trip from `workload push` to reconciliation complete is typically under 15 seconds for a small manifest set.
+The round trip from `workload push` to reconciliation complete is typically under 10 seconds since everything stays on localhost.
 
-## How Tag Resolution Works
+## How Registry and Tag Resolution Works
 
-When you run `ksail workload push`, the tag for the artifact follows this priority chain:
+When you run `ksail workload push`, the registry is resolved using this priority chain:
 
-1. An explicit `oci://` ref on the command line: `ksail workload push ghcr.io/org/repo:v1.2.3`
+1. An explicit `oci://` ref on the command line: `ksail workload push oci://localhost:5050/k8s:v1.2.3`
+2. CLI flag or environment variable (`--registry` / `KSAIL_REGISTRY`)
+3. `spec.cluster.localRegistry` in `ksail.yaml`
+4. Cluster GitOps resources (FluxInstance or ArgoCD Application)
+5. Auto-detection from Docker containers matching the cluster name
+
+For local development, option 5 handles everything — you don't need to configure anything.
+
+The tag follows a similar priority:
+
+1. Tag from the `oci://` ref on the command line
 2. `spec.workload.tag` in `ksail.yaml`
-3. A tag already embedded in the registry URL from config
+3. Tag embedded in the registry URL from config
 4. The default: `dev`
 
-This makes local and CI behavior easy to separate. Locally you set `spec.workload.tag: dev` in `ksail.yaml` and forget about it. In CI you override at the command line to tie the artifact to a specific commit:
+Locally the `dev` tag is convenient — every push overwrites the same tag, and Flux detects changes via digest rather than tag, so reconciliation still fires correctly.
+
+## Extending to GHCR for CI
+
+The same OCI workflow translates directly to CI pipelines by pointing at an external registry like GitHub Container Registry (GHCR). This gives you immutable versioned artifacts tied to specific commits.
+
+Override the registry at the command line to tie the artifact to a commit SHA:
 
 ```bash
-ksail workload push ghcr.io/YOUR_ORG/my-manifests:${{ github.sha }}
+ksail workload push oci://ghcr.io/YOUR_ORG/my-manifests:${{ github.sha }}
 ksail workload reconcile
 ```
 
 Each commit produces an immutable artifact. If a deployment goes wrong you can point Flux at an earlier digest and reconcile back to a known-good state.
 
-## Using It in CI
-
-The `workload push` command includes retry logic specifically for GHCR (added in v5.67.0), which handles the transient authentication errors that GHCR occasionally returns under load. For pipelines that push during high-traffic windows this meaningfully improves reliability — previously a flaky GHCR response would fail the whole step.
+The `workload push` command includes retry logic specifically for GHCR (added in v5.67.0), which handles the transient authentication errors that GHCR occasionally returns under load. For pipelines that push during high-traffic windows this meaningfully improves reliability.
 
 A minimal GitHub Actions workflow step:
 
@@ -147,22 +151,34 @@ A minimal GitHub Actions workflow step:
     echo "${{ secrets.GITHUB_TOKEN }}" | \
       docker login ghcr.io -u ${{ github.actor }} --password-stdin
     ksail workload push \
-      ghcr.io/${{ github.repository_owner }}/my-cluster-manifests:${{ github.sha }}
+      oci://ghcr.io/${{ github.repository_owner }}/my-cluster-manifests:${{ github.sha }}
   env:
     KSAIL_CLUSTER_NAME: staging
 ```
 
 The `KSAIL_CLUSTER_NAME` environment variable tells KSail which cluster configuration to load when you have multiple clusters defined.
 
+For cloud clusters (e.g., Hetzner) where there's no local Docker daemon, an external registry is required. Use the `--local-registry` flag during `cluster init` to configure it:
+
+```bash
+ksail cluster init \
+  --distribution Talos \
+  --provider Hetzner \
+  --gitops-engine Flux \
+  --local-registry '${GITHUB_USER}:${GITHUB_TOKEN}@ghcr.io/your-org/your-cluster'
+```
+
+The `--local-registry` flag accepts the format `[user:pass@]host[:port][/path]`. Environment variable placeholders like `${GITHUB_TOKEN}` are expanded at runtime, keeping credentials out of your config files.
+
 ## What About `workload watch`?
 
-For purely local iteration where you don't want to think about pushing at all, `ksail workload watch` is lower friction:
+For purely local iteration where you don't want to think about pushing at all, `ksail workload watch` is even lower friction:
 
 ```bash
 ksail workload watch --path ./k8s
 ```
 
-This watches the `k8s/` directory and applies changes directly with kubectl, bypassing the OCI push step. If Flux is running it will also trigger selective Kustomization reconciliation on affected CRs automatically.
+This watches the `k8s/` directory and applies changes directly with kubectl, bypassing the OCI push step entirely. If Flux is running it will also trigger selective Kustomization reconciliation on affected CRs automatically.
 
 The OCI push workflow is the better choice when:
 
@@ -178,11 +194,11 @@ The OCI push workflow is the better choice when:
 
 Both workflows coexist without conflict. It's a per-session choice.
 
-## A Note on Registry Permissions
+## A Note on Secret Management
 
-GHCR packages inherit from your repository's visibility by default. For anything sensitive, set the package visibility explicitly in GitHub's package settings, or use a private repository.
+Regardless of whether you use a local registry or GHCR, secrets shouldn't be in your manifests in plain text. KSail has built-in SOPS integration (`ksail cipher encrypt`) for secret management — encrypt secrets before they land in `k8s/`.
 
-KSail has built-in SOPS integration (`ksail cipher encrypt`) for secret management. Secrets shouldn't be in your manifests regardless of registry visibility — encrypt them before they land in `k8s/`.
+If you use GHCR, packages inherit from your repository's visibility by default. For anything sensitive, set the package visibility explicitly in GitHub's package settings, or use a private repository.
 
 ---
 
