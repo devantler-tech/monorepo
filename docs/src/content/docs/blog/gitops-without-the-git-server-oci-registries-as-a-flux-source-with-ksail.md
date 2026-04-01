@@ -136,10 +136,9 @@ Override the registry at the command line to tie the artifact to a commit SHA:
 
 ```bash
 ksail workload push oci://ghcr.io/YOUR_ORG/my-manifests:${{ github.sha }}
-ksail workload reconcile
 ```
 
-Each commit produces an immutable artifact. If a deployment goes wrong you can point Flux at an earlier digest and reconcile back to a known-good state.
+Each commit produces an immutable artifact. Flux picks up changes on its regular polling interval — `workload reconcile` is not needed in CI since it requires cluster access (kubeconfig) which is typically unavailable on GitHub Actions runners. If a deployment goes wrong you can point Flux at an earlier digest and it will reconcile back to a known-good state automatically.
 
 The `workload push` command includes retry logic specifically for GHCR (added in v5.67.0), which handles the transient authentication errors that GHCR occasionally returns under load. For pipelines that push during high-traffic windows this meaningfully improves reliability.
 
