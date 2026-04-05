@@ -1,0 +1,36 @@
+rules:
+  impostor-commit:
+    ignore:
+      - ci-doctor.lock.yml
+      - daily-workflow-maintenance.lock.yml
+      - site-maintainer.lock.yml
+  template-injection:
+    ignore:
+      - ci-doctor.lock.yml
+      - daily-workflow-maintenance.lock.yml
+      - site-maintainer.lock.yml
+  ref-version-mismatch:
+    ignore:
+      - ci-doctor.lock.yml
+      - daily-workflow-maintenance.lock.yml
+      - site-maintainer.lock.yml
+  excessive-permissions:
+    ignore:
+      - ci-doctor.lock.yml
+      - daily-workflow-maintenance.lock.yml
+      - site-maintainer.lock.yml
+  artipacked:
+    ignore:
+      - ci-doctor.lock.yml
+      - daily-workflow-maintenance.lock.yml
+      - site-maintainer.lock.yml
+  dangerous-triggers:
+    ignore:
+      - ci-doctor.lock.yml
+      - daily-workflow-maintenance.lock.yml
+      - site-maintainer.lock.yml
+  unpinned-uses:
+    ignore:
+      - ci-doctor.lock.yml
+      - daily-workflow-maintenance.lock.yml
+      - site-maintainer.lock.yml
