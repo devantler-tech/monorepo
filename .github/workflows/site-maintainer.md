@@ -6,6 +6,9 @@ description: |
   issue/PR management. Operates in multiple modes selected by trigger event.
 
 on:
+  bots:
+    - "github-merge-queue[bot]"
+
   push:
     branches: [main]
   schedule:
@@ -22,9 +25,6 @@ on:
 permissions: read-all
 
 timeout-minutes: 45
-
-bots:
-  - "github-merge-queue[bot]"
 
 network:
   allowed: [defaults, node, github]
