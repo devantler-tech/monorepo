@@ -92,9 +92,9 @@ Select your operating mode based on the trigger event:
 | `pull_request` (opened, synchronize) | **Repo Assist** |
 | `workflow_dispatch` | **Full Sweep** — run Content Sync, then Site QA, then Content Review |
 
-Use cache memory at `/tmp/memory/` to track rotation state:
-- `/tmp/memory/site-qa-rotation.json` — tracks which Site QA task ran last (`multi-device`, `accessibility`, `link-checker`)
-- `/tmp/memory/content-review-rotation.json` — tracks which Content Review task ran last (`unbloat`, `editorial`)
+Use cache memory at `/tmp/gh-aw/cache-memory/` to track rotation state:
+- `/tmp/gh-aw/cache-memory/site-qa-rotation.json` — tracks which Site QA task ran last (`multi-device`, `accessibility`, `link-checker`)
+- `/tmp/gh-aw/cache-memory/content-review-rotation.json` — tracks which Content Review task ran last (`unbloat`, `editorial`)
 
 ## Voice & Tone
 
@@ -181,7 +181,7 @@ Verify all internal links, image references, and Astro frontmatter are valid.
 
 ## Mode 2: Site QA
 
-Triggered on daily schedule. Rotates through three tasks. Check `/tmp/memory/site-qa-rotation.json` to determine which task to run next.
+Triggered on daily schedule. Rotates through three tasks. Check `/tmp/gh-aw/cache-memory/site-qa-rotation.json` to determine which task to run next.
 
 ### 2A. Multi-Device Testing
 
@@ -261,7 +261,7 @@ Extract and test all links in `docs/`.
 find docs/src/content -name '*.md' -o -name '*.mdx' | xargs grep -ohE 'https?://[^ )"]+' | sort -u
 ```
 
-2. Load unfixable links cache from `/tmp/memory/unfixable-links.json`
+2. Load unfixable links cache from `/tmp/gh-aw/cache-memory/unfixable-links.json`
 3. Test each link with curl (skip cached unfixable links):
 
 ```bash
@@ -269,7 +269,7 @@ curl -sL -o /dev/null -w "%{http_code}" --max-time 10 "$url"
 ```
 
 4. For broken links (4xx/5xx):
-   - Research the correct URL using `web-search`
+   - Research the correct URL using `web-fetch`
    - If fixable, update the link in the source file
    - If unfixable, add to cache with reason and date
 
@@ -286,7 +286,7 @@ curl -sL -o /dev/null -w "%{http_code}" --max-time 10 "$url"
 
 #### Output
 
-- **If links fixed**: Create a PR with the fixes (use `draft: false` — link fixes are low risk)
+- **If links fixed**: Create a draft PR with the fixes
 - **If only unfixable found**: Create an issue listing them
 - **If all links working**: Call `noop`
 
@@ -302,7 +302,7 @@ Review ONE file per run for verbosity and content that belongs in sub-project re
 
 #### Process
 
-1. Load cleaned-files cache from `/tmp/memory/cleaned-files.json`
+1. Load cleaned-files cache from `/tmp/gh-aw/cache-memory/cleaned-files.json`
 2. Find the next uncleaned file in `docs/src/content/`:
 
 ```bash
@@ -336,7 +336,7 @@ Multi-perspective content quality review using analytical lenses.
 
 #### Process
 
-1. Load focus-area state from `/tmp/memory/editorial-focus.json`
+1. Load focus-area state from `/tmp/gh-aw/cache-memory/editorial-focus.json`
 2. Select the next review lens in rotation
 3. Inventory all content pages in `docs/src/content/`
 4. Select a target article not recently reviewed

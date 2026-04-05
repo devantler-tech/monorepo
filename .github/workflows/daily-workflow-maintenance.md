@@ -173,8 +173,7 @@ done
 The gh-aw compiler does not automatically add `permission-workflows: write` to the GitHub App token permissions, but this permission is required to push `.github/workflows/*.lock.yml` files. After every compilation, inject it:
 
 ```bash
-sed -i '' '/permission-pull-requests: write/a\
-          permission-workflows: write' .github/workflows/daily-workflow-maintenance.lock.yml
+sed -i '/permission-pull-requests: write/a\          permission-workflows: write' .github/workflows/daily-workflow-maintenance.lock.yml
 ```
 
 Verify the injection:
