@@ -33,7 +33,7 @@ A tool that bundles common Kubernetes tooling into a single binary. It provides 
 
 <Image src={platformImg} alt="Platform overview" />
 
-A [Flux](https://fluxcd.io/) GitOps-based Kubernetes cluster running on [Hetzner Cloud](https://www.hetzner.com/cloud/) servers and local hardware (Mac Mini via [UTM](https://mac.getutm.app)). It demonstrates a production-grade approach to working with Kubernetes using [Talos Linux](https://www.talos.dev/) and [Talos Omni](https://www.siderolabs.com/platform/saas-for-kubernetes/).
+A [Flux](https://fluxcd.io/) GitOps-based Kubernetes cluster running on [Hetzner Cloud](https://www.hetzner.com/cloud/). It demonstrates a production-grade approach to working with Kubernetes using [Talos Linux](https://www.talos.dev/) and [Talos Omni](https://www.siderolabs.com/platform/saas-for-kubernetes/).
 
 I use this cluster to learn and experiment with new technologies — striving to implement the latest CNCF projects to keep my skills sharp. I also run self-hosted services for entertainment, personal projects, and to own my own data.
 
@@ -43,9 +43,9 @@ I use this cluster to learn and experiment with new technologies — striving to
 
 A collection of [reusable GitHub Actions workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows) that encapsulate common CI/CD patterns. Used across all DevantlerTech projects to ensure consistency and reduce duplication.
 
-- **CI Workflows**: [Go](https://go.dev/) testing/linting, [.NET](https://dotnet.microsoft.com/) testing, documentation linting, GitOps validation
-- **CD Workflows**: Cluster bootstrap, GitOps deploy, [GitHub Pages](https://pages.github.com/) publish, application/library releases
-- **Automation**: Auto-merge for trusted bots, [semantic-release](https://semantic-release.gitbook.io/), TODO scanning, [Kyverno](https://kyverno.io/) policy sync
+- **CI Workflows**: [Go](https://go.dev/) testing/linting, [.NET](https://dotnet.microsoft.com/) testing, documentation linting
+- **CD Workflows**: [GitHub Pages](https://pages.github.com/) publish, application/library releases
+- **Automation**: Auto-merge for trusted bots, [semantic-release](https://semantic-release.gitbook.io/), TODO scanning, [Kyverno](https://kyverno.io/) policy sync, [Zizmor](https://github.com/woodruffw/zizmor) workflow analysis
 
 ## [⚡ Actions](https://github.com/devantler-tech/actions) ![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-2088FF.svg?style=for-the-badge&logo=GitHub-Actions&logoColor=white)
 
@@ -53,11 +53,8 @@ A collection of [composite GitHub Actions](https://docs.github.com/en/actions/cr
 
 - **Auto Merge**: Approve and auto-merge PRs from trusted bots/users
 - **Cleanup GHCR**: Clean up old [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) packages
-- **Dockerfile Lint**: Lint Dockerfiles using [Hadolint](https://github.com/hadolint/hadolint)
 - **.NET Test**: Test [.NET](https://dotnet.microsoft.com/) solutions or projects
-- **Flux GitOps Deploy**: Push manifests to OCI and deploy using [Flux](https://fluxcd.io/)
 - **Setup KSail**: Install [KSail](https://github.com/devantler-tech/ksail) CLI via [Homebrew](https://brew.sh/)
-- **Install Cilium/Flux**: Install [Cilium](https://cilium.io/) and [Flux](https://fluxcd.io/) in Kubernetes clusters
 - **Sync Labels**: Sync GitHub labels across repositories
 - **TODOs**: Create GitHub issues from TODO comments in code
 
