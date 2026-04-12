@@ -46,3 +46,7 @@
 	path = projects/ksail
 	url = git@github.com:devantler-tech/ksail.git
 	branch = main
+[submodule "github/devantler-tech/maintenance"]
+	path = github/devantler-tech/maintenance
+	url = git@github.com:devantler-tech/maintenance.git
+	branch = main
