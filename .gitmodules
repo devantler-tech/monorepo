@@ -6,10 +6,6 @@
 	path = dotfiles
 	url = git@github.com:devantler/dotfiles.git
 	branch = main
-[submodule "github/devantler-tech/.github-private"]
-	path = github/devantler-tech/.github-private
-	url = git@github.com:devantler-tech/.github-private.git
-	branch = main
 [submodule "github/devantler-tech/.github-public"]
 	path = github/devantler-tech/.github-public
 	url = git@github.com:devantler-tech/.github.git
