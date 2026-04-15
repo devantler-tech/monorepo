@@ -71,7 +71,7 @@ The result: adding a new CLI command under a consolidated parent automatically m
 
 ## KSail Is Now in the MCP Registry
 
-The server is registered in the [MCP Registry](https://github.com/mcp) as `io.github.devantler-tech/ksail`. This means MCP clients that support registry-based discovery can find and configure it without manual setup.
+The server is registered in the [MCP Registry](https://registry.modelcontextprotocol.io/?q=ksail) as `io.github.devantler-tech/ksail`. This means MCP clients that support registry-based discovery can find and configure it without manual setup.
 
 ## The Practical Trade-Off
 
