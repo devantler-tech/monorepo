@@ -52,38 +52,50 @@ import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 <CardGrid>
   <LinkCard
     title="🛥️ KSail"
-    description="A Go CLI for provisioning GitOps-enabled Kubernetes clusters. One binary, multiple distributions."
+    description="A Go CLI that bundles kubectl, helm, kind, k3d, flux, and argocd into a single binary. One tool for GitOps-enabled Kubernetes clusters."
     href="https://ksail.devantler.tech"
   />
   <LinkCard
     title="☸️ Platform"
-    description="GitOps-based Kubernetes platform running on Talos Linux with Flux, Cilium, and Traefik."
-    href="/projects/active/#%EF%B8%8F-platform--"
+    description="A GitOps-driven Kubernetes platform on Talos Linux and Hetzner Cloud — powered by Flux, Cilium, and Traefik."
+    href="/projects/active/"
+  />
+  <LinkCard
+    title="🔄 Reusable Workflows"
+    description="A curated library of GitHub Actions reusable workflows for Go, .NET, docs, releases, and repo automation."
+    href="https://github.com/devantler-tech/reusable-workflows"
+  />
+  <LinkCard
+    title="⚡ Actions"
+    description="Composite GitHub Actions for common CI/CD needs: auto-merge, GHCR cleanup, label sync, TODO scanning, and more."
+    href="https://github.com/devantler-tech/actions"
   />
 </CardGrid>
+
+[Browse all projects &rarr;](/projects/)
 
 ## Latest from the Blog
 
 <CardGrid>
   <LinkCard
+    title="I Built an MCP Server into My Kubernetes CLI"
+    description="KSail now ships with a built-in MCP server so Claude, Cursor, and other AI assistants can manage clusters directly."
+    href="/blog/mcp-server-for-kubernetes-cluster-management/"
+  />
+  <LinkCard
+    title="GitOps Without the Git Server"
+    description="Using OCI registries as a Flux source with KSail — a cleaner alternative to local Git servers for tight dev loops."
+    href="/blog/gitops-without-the-git-server-oci-registries-as-a-flux-source-with-ksail/"
+  />
+  <LinkCard
+    title="Storing Secrets in .zshrc with macOS Keychain"
+    description="A quick, practical guide for keeping sensitive environment variables out of plaintext dotfiles."
+    href="/blog/storing-secrets-in-zshrc-with-macos-keychain/"
+  />
+  <LinkCard
     title="Building an AI Assistant for Kubernetes"
-    description="How I built KSail's interactive Copilot-powered chat assistant using Go and Bubbletea TUI."
+    description="How I built KSail's interactive Copilot-powered chat assistant using Go and the Bubbletea TUI framework."
     href="/blog/building-an-ai-assistant-for-kubernetes-with-github-copilot-sdk/"
-  />
-  <LinkCard
-    title="Kubernetes Clusters on Hetzner with KSail"
-    description="A step-by-step guide to creating Talos Linux clusters on Hetzner Cloud."
-    href="/blog/creating-development-kubernetes-clusters-on-hetzner-with-ksail-and-talos/"
-  />
-  <LinkCard
-    title="AI-Powered GitHub Issues"
-    description="How I use Copilot with Claude Opus to create well-structured, impactful issues."
-    href="/blog/ai-powered-github-issues-with-copilot-and-claude-opus/"
-  />
-  <LinkCard
-    title="From Shell Scripts to .NET to Go"
-    description="The journey of building KSail through three major rewrites."
-    href="/blog/building-ksail-from-shell-to-dotnet-to-go/"
   />
 </CardGrid>
 

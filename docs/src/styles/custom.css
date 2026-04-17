@@ -4,6 +4,11 @@
 
 html {
   scroll-behavior: smooth;
+  overflow-x: hidden;
+}
+
+body {
+  overflow-x: hidden;
 }
 
 /* Smooth theme transitions */
@@ -144,15 +149,24 @@ a {
 
 /* ─── Hero Section — Full-Width Background ─── */
 
+/* Break the hero out of the content column so the matrix background
+   truly covers the viewport edge-to-edge on the splash page. */
+[data-has-hero] main > .hero,
+main > .hero,
 .hero {
   position: relative;
   display: flex !important;
   flex-direction: column !important;
   align-items: center !important;
   justify-content: center !important;
-  min-height: 420px;
-  padding: 4rem 2rem 3rem !important;
+  min-height: 520px;
+  padding: 5rem 2rem 4rem !important;
   text-align: center;
+  width: 100vw;
+  max-width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  overflow: hidden;
 }
 
 /* Matrix image as full-width background */
@@ -167,6 +181,10 @@ a {
   border-radius: 0 !important;
   opacity: 0.55;
   pointer-events: none;
+}
+
+:root[data-theme="light"] .hero > img {
+  opacity: 0.28;
 }
 
 /* Dark overlay gradient */
@@ -241,10 +259,10 @@ a {
 
 /* Hero tagline */
 .hero .tagline {
-  opacity: 0.92;
-  max-width: 48ch;
+  opacity: 0.94;
+  max-width: 56ch;
   text-align: center;
-  font-size: 1.15rem;
+  font-size: 1.18rem;
   text-shadow: 0 1px 12px rgba(0, 0, 0, 0.25);
   line-height: 1.65;
 }
@@ -301,7 +319,9 @@ a {
 
 .card:hover {
   border-color: var(--card-border-hover) !important;
-  box-shadow: 0 4px 24px var(--glow-color-subtle);
+  box-shadow:
+    0 4px 24px var(--glow-color-subtle),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
   transform: translateY(-2px);
 }
 
@@ -327,6 +347,97 @@ a {
   display: inline-block;
   margin-right: 0.25rem;
   vertical-align: middle;
+}
+
+/* ─── About Page — Meta Info Card ─── */
+
+.sl-markdown-content dl.about-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.25rem 1.5rem;
+  margin: 1.5rem 0 2rem;
+  padding: 1.25rem 1.5rem;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-left: 3px solid var(--sl-color-accent);
+  border-radius: 0.5rem;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.sl-markdown-content dl.about-meta > div {
+  display: flex;
+  flex-direction: column;
+  padding: 0.4rem 0;
+}
+
+.sl-markdown-content dl.about-meta dt {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sl-color-accent);
+  opacity: 0.85;
+  margin: 0;
+}
+
+.sl-markdown-content dl.about-meta dd {
+  margin: 0.15rem 0 0;
+  font-size: 0.98rem;
+  font-weight: 500;
+}
+
+/* ─── About Page — Connect Bar ─── */
+
+.sl-markdown-content ul.connect-bar {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 2rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.sl-markdown-content ul.connect-bar li {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: inline-flex;
+}
+
+.sl-markdown-content ul.connect-bar a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 1.25rem;
+  border: 1px solid var(--card-border);
+  border-radius: 9999px;
+  font-weight: 500;
+  font-size: 0.95rem;
+  text-decoration: none;
+  background: var(--card-bg);
+  transition:
+    border-color 0.25s ease,
+    background-color 0.25s ease,
+    box-shadow 0.25s ease,
+    transform 0.25s ease;
+}
+
+.sl-markdown-content ul.connect-bar a:hover {
+  border-color: var(--sl-color-accent);
+  background: var(--glow-color-subtle);
+  box-shadow: 0 2px 12px var(--glow-color-subtle);
+  transform: translateY(-1px);
+  color: var(--sl-color-accent);
+}
+
+@media (max-width: 50rem) {
+  .sl-markdown-content ul.connect-bar {
+    flex-direction: column;
+  }
+  .sl-markdown-content ul.connect-bar a {
+    justify-content: center;
+  }
 }
 
 /* ─── About Page — Profile ─── */
@@ -1089,8 +1200,8 @@ a[rel="prev"]:hover,
 
 @media (max-width: 50rem) {
   .hero {
-    min-height: 320px;
-    padding: 3rem 1.5rem 2rem !important;
+    min-height: 360px;
+    padding: 3rem 1.5rem 2.5rem !important;
   }
 
   [data-page-title="About Me"] .sl-markdown-content #connect ~ ul {

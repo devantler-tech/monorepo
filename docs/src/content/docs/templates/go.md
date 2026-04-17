@@ -1,25 +1,34 @@
 ---
 title: 🐹 Go Template
-description: A simple Go template for new projects with CI/CD, testing, and code quality tooling.
+description: A Go starter template with CI/CD, testing, and code quality tooling.
 ---
 
-A simple Go template for new projects with CI/CD, testing, and code quality tooling.
+A minimal, batteries-included template for new Go projects. Skip the boilerplate — start shipping.
 
 **Repository**: [devantler-tech/go-template](https://github.com/devantler-tech/go-template)
 
-## Features
+## What's Inside
 
-- **CI/CD pipelines with GitHub Actions**
-- **Test projects and collect coverage with Codecov**
-- **Go Report Card integration**
-- **Dependency management with Renovate**
+- **CI/CD** — GitHub Actions workflows for build, test, lint, and release
+- **Testing** — `go test` with coverage reporting via [Codecov](https://about.codecov.io/)
+- **Quality** — [Go Report Card](https://goreportcard.com/) integration for continuous code-quality feedback
+- **Dependency management** — [Renovate](https://docs.renovatebot.com/) keeps Go modules and Actions up to date
+- **Release automation** — Semantic versioning and automated GitHub Releases
 
 ## Getting Started
 
 ```bash
-# Clone the template
+# Create a new repo from the template
 gh repo create my-project --template devantler-tech/go-template --public --clone
 
 # Install dependencies
 cd my-project && go mod tidy
+
+# Run tests
+go test ./...
 ```
+
+## Links
+
+- 📦 [Template on GitHub](https://github.com/devantler-tech/go-template)
+- 🔄 [Reusable workflows used by this template](https://github.com/devantler-tech/reusable-workflows)
