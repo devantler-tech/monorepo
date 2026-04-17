@@ -96,7 +96,7 @@ gtag('config', 'G-MK59Q89KYW');`,
         },
         {
           tag: "script",
-          content: `document.addEventListener('DOMContentLoaded',()=>{document.addEventListener('click',e=>{const a=e.target.closest('a');if(a)return;const article=e.target.closest('main article, .blog-post-list article');if(!article)return;const link=article.querySelector('h2 a');if(link){window.location.href=link.href;}});});`,
+          content: `document.addEventListener('DOMContentLoaded',()=>{const sel='main article, .blog-post-list article';function navigate(article){const link=article.querySelector('h2 a');if(link)window.location.href=link.href;}document.addEventListener('click',e=>{if(e.target.closest('a'))return;const article=e.target.closest(sel);if(article)navigate(article);});document.querySelectorAll(sel).forEach(el=>{const link=el.querySelector('h2 a');if(!link)return;el.setAttribute('tabindex','0');el.setAttribute('aria-label',link.textContent.trim());el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();navigate(el);}});});});`,
         },
       ],
       sidebar: [
