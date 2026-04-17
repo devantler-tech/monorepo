@@ -3,6 +3,7 @@ import mermaid from "astro-mermaid";
 import { defineConfig } from "astro/config";
 import starlightBlog from "starlight-blog";
 import starlightGithubAlerts from "starlight-github-alerts";
+import starlightLinksValidator from "starlight-links-validator";
 
 export default defineConfig({
   site: "https://devantler.tech",
@@ -12,6 +13,7 @@ export default defineConfig({
       title: "Nikolai Emil | Devantler",
       description:
         "Personal site of Nikolai Emil Damm — software engineer, open-source advocate, and Kubernetes enthusiast.",
+      defaultLocale: "en",
       logo: {
         src: "./src/assets/author.png",
         replacesTitle: false,
@@ -52,8 +54,32 @@ export default defineConfig({
           },
         }),
         starlightGithubAlerts(),
+        starlightLinksValidator({
+          errorOnRelativeLinks: false,
+          exclude: ["/blog/**", "/blog/"],
+        }),
       ],
       head: [
+        {
+          tag: "meta",
+          attrs: { property: "og:image", content: "https://devantler.tech/author.png" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:type", content: "website" },
+        },
+        {
+          tag: "meta",
+          attrs: { name: "twitter:card", content: "summary_large_image" },
+        },
+        {
+          tag: "meta",
+          attrs: { name: "twitter:image", content: "https://devantler.tech/author.png" },
+        },
+        {
+          tag: "meta",
+          attrs: { name: "author", content: "Nikolai Emil Damm" },
+        },
         {
           tag: "script",
           attrs: {
