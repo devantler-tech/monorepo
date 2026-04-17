@@ -96,7 +96,7 @@ gtag('config', 'G-MK59Q89KYW');`,
         },
         {
           tag: "script",
-          content: `document.addEventListener('DOMContentLoaded',()=>{const sel='main article, .blog-post-list article';function navigate(article){const link=article.querySelector('h2 a');if(link)window.location.href=link.href;}document.addEventListener('click',e=>{if(e.target.closest('a'))return;const article=e.target.closest(sel);if(article)navigate(article);});document.querySelectorAll(sel).forEach(el=>{const link=el.querySelector('h2 a');if(!link)return;el.setAttribute('tabindex','0');el.setAttribute('aria-label',link.textContent.trim());el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();navigate(el);}});});});`,
+          content: `document.addEventListener('DOMContentLoaded',()=>{const sel='main article, .blog-post-list article';function navigate(article){const link=article.querySelector('h2 a');if(link)window.location.href=link.href;}document.addEventListener('click',e=>{if(e.target.closest('a'))return;const article=e.target.closest(sel);if(article)navigate(article);});document.querySelectorAll(sel).forEach(el=>{const link=el.querySelector('h2 a');if(!link)return;el.setAttribute('tabindex','0');el.setAttribute('role','link');el.setAttribute('aria-label',link.textContent.trim());el.addEventListener('keydown',e=>{if(e.target!==el)return;if(e.key==='Enter'||e.code==='Space'||e.key===' '||e.key==='Spacebar'){e.preventDefault();navigate(el);}});});});`,
         },
       ],
       sidebar: [
