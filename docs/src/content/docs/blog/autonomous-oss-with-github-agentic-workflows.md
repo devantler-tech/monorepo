@@ -17,7 +17,7 @@ cover:
   image: ../../../assets/agentic-workflows.png
 ---
 
-A Mac Mini runs 24/7 in my apartment. It doesn't serve media, it doesn't compile code, it doesn't host a website. Its only job is to fire scheduled prompts at GitHub agents so they can work on [KSail](https://github.com/devantler-tech/ksail) while I sleep.
+A Mac Mini runs 24/7 in my house on Funen. It doesn't serve media, it doesn't compile code, it doesn't host a website. Its only job is to fire scheduled prompts at GitHub agents so they can work on [KSail](https://github.com/devantler-tech/ksail) while I sleep.
 
 That sounds like a recipe for chaos. Left to their own devices, autonomous agents tend to produce a lot of *output* and not a lot of *outcomes* — PRs that don't compile, issues that duplicate each other, roadmaps that drift from reality. I've been running this setup long enough to have seen all of those failure modes first-hand.
 
@@ -55,7 +55,7 @@ Each workflow has a single sentence that describes what it's allowed to do. None
 The workflows run on GitHub-hosted runners, but the *prompts* that kick them off are scheduled on my Mac Mini via a simple cron-like setup. Why a physical machine and not just GitHub's built-in schedule triggers? Two reasons:
 
 1. **I can dispatch prompts on demand.** When I'm drafting an idea and want Repo Assist to pick it up immediately, I trigger it from the Mac Mini rather than waiting for the next 12-hour window.
-2. **The prompts are themselves versioned locally**, so I can iterate on them the same way I iterate on code — edit, test, commit, push. Keeping them under my desk keeps the feedback loop tight.
+2. **The prompts are themselves versioned locally**, so I can iterate on them the same way I iterate on code — edit, test, commit, push. Keeping them on a machine I can see keeps the feedback loop tight.
 
 The flow from idea to merged PR looks like this:
 
@@ -123,29 +123,28 @@ The workflow is explicitly designed so **nothing merges without my approval**. A
 
 ## Lessons Learned
 
-A year into running this, a few things stand out:
+A year into running this, a few things stand out — most of them are about what *changes* when AI becomes autonomous rather than assistive.
 
-**What worked:**
+**The model matters more than the prompt.** A weaker model produces worse initial output and falls apart on anything with a large scope. When I run the same workflow against a mid-tier model and a frontier model, the frontier model is the one that actually ships usable code. The prompt matters, but it's the multiplier — not the base.
 
-- **Constraining workflows to a single outcome.** Early versions of Repo Assist tried to do everything in one run. It would label an issue, then try to fix the issue, then try to write docs for the fix, and end up doing all three badly. Splitting that into a weighted choice over 12 narrow tasks made the output dramatically better.
-- **Making every guardrail deterministic.** Anything probabilistic in the pipeline — another agent doing code review, an LLM judging correctness — introduces flakiness. The deterministic stack (lint, test, E2E) is what lets me trust the output.
-- **Keeping drafts drafts.** An agent PR that's in draft is a suggestion. An agent PR that's ready for review is a request. Treating those as distinct states is what keeps my inbox manageable.
+**Before Agentic Workflows, working with AI was tedious.** I'd open a chat, paste context, iterate, copy results back, paste into a PR. The per-task overhead was high enough that I used AI sparingly. Scheduled agentic workflows flipped that — the AI runs whether I'm paying attention or not, and I review in batch rather than drive in loops.
 
-**What didn't work (initially):**
+**I cannot trust AI to do a good job.** That sounds harsh, but it's the frame that makes the whole system work. I don't ask "is this PR correct?" — I assume it isn't, and I lean on the guardrails to prove me wrong. When CI, lint, and the E2E matrix all go green, I've got something like evidence. Without that stack, every agent PR would be a coin flip.
 
-- **Giving Repo Assist too much latitude.** The first version could open any number of PRs per run and routinely opened five or six draft PRs in one go, most of them mediocre. Capping it at four PRs and ten issues forced quality over quantity.
-- **Trusting test coverage that didn't exist.** Early on I merged a couple of agent PRs in areas with weak test coverage. Both regressed behavior I cared about. The lesson wasn't "trust agents less" — it was "agents expose every gap in your test suite, so close the gaps first."
-- **Running too many workflows at once.** When Weekly Strategy, Daily Docs, and Repo Assist all ran back-to-back, they'd occasionally step on each other's branches. Staggered schedules fixed it.
+**The grunt of the work shifts from coding to validation.** My days look different now. I spend less time writing code and more time reading diffs, promoting drafts, and deciding whether a change fits the roadmap. The work didn't disappear — it moved from producer to editor.
 
-**What surprised me:**
+**Autonomous AI requires good tooling, full stop.** Without GHAS and StepSecurity I'd be anxious every time an agent opened a PR. CodeQL catches the confidently-wrong security mistakes; StepSecurity tells me exactly which hosts a runner is talking to. These aren't optional for me anymore. Anyone running autonomous workflows without equivalent hardening is taking a risk they probably don't fully appreciate.
 
-- **CI Doctor paid for itself almost immediately.** The pattern-matching against previous investigations means recurring failures get diagnosed in minutes instead of hours. It's the workflow I'd miss most if I had to remove one.
-- **The Mac Mini matters less than I thought.** Most of the schedule triggers could move to GitHub's cron. The machine's real value is as a scratchpad for prompts I'm iterating on.
+**Working code beats sexy code — a mentality I had to buy into the hard way.** My instinct is to factor, generalize, make it elegant. Newer models tend to satisfy that same itch, and when they do it well, it feels great. But when they duplicate code that shouldn't be duplicated, it feels *really* bad — worse than if I'd written the duplication myself. The compromise I've landed on: let the agent ship working code first, and treat refactoring as a separate, deliberate task rather than something to sneak into every PR.
+
+**Adding things to the feedback loop pays off immediately.** CI Doctor is the clearest example. The moment I wired up failure analysis into the pipeline, recurring failures started getting diagnosed in minutes instead of hours. Every new signal I've added to the loop — test coverage reports, benchmark regressions, lint summaries — has had a similar effect. The feedback loop is where most of the leverage is.
+
+**Scheduling from a physical machine isn't strictly necessary, but I like the Master Control mentality.** Most of these schedules could move to GitHub's built-in cron. The reason I keep the Mac Mini is that it's a single place where I can see what's running, what's queued, and what I'm iterating on. It's a dashboard I can glance at, not just a trigger. That feeling of having a central is worth more to me than the pure technical utility of the machine.
 
 ## Closing
 
 Autonomy is a spectrum, not a binary. The goal of this setup isn't to remove myself from the project — it's to move the tedious parts up the spectrum (triage, labelling, dependency updates, stale-PR nudges, docs drift) while keeping the parts that benefit from human judgment (scope decisions, design trade-offs, what actually gets merged) firmly with me.
 
-The Mac Mini under my desk isn't replacing me. It's freeing up the time I used to spend on janitorial work so I can spend it on the parts of the project that are actually interesting.
+The Mac Mini in my house isn't replacing me. It's freeing up the time I used to spend on janitorial work so I can spend it on the parts of the project that are actually interesting.
 
 If you want to see the workflow files themselves, they live in [`.github/workflows/`](https://github.com/devantler-tech/ksail/tree/main/.github/workflows) in the KSail repo — every `*.md` file in that folder is one of the agentic workflows described here. The compiled `*.lock.yml` files are the GitHub Actions that actually run. The whole system is built on top of [githubnext/agentics](https://github.com/githubnext/agentics), which provides the `gh-aw` CLI and the workflow prompt framework. Clone, adapt, and let me know what you build.
