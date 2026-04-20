@@ -98,6 +98,7 @@ jobs:
         run: npm audit --omit=dev
 
   status:
+    name: "CI - Required Checks"
     runs-on: ubuntu-latest
     if: always()
     needs:
@@ -111,12 +112,8 @@ jobs:
           egress-policy: audit
 
       - name: Check job results
-        run: |
-          results=("${{ needs.build-docs.result }}" "${{ needs.audit-docs.result }}")
-          for result in "${results[@]}"; do
-            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
-              echo "One or more jobs failed or were cancelled."
-              exit 1
-            fi
-          done
-          echo "All jobs passed or were skipped."
+        uses: devantler-tech/actions/require-checks-in-pr@1f66c91d45d374ceac9fe830a783444ebc9be958 # v3.2.0
+        with:
+          job-results: >-
+            ${{ needs.build-docs.result }}
+            ${{ needs.audit-docs.result }}
