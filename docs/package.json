@@ -19,5 +19,8 @@
   },
   "devDependencies": {
     "starlight-github-alerts": "^0.2.0"
+  },
+  "overrides": {
+    "uuid": "^14.0.0"
   }
 }
