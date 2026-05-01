@@ -91,7 +91,7 @@ jobs:
       - audit-docs
     permissions: {}
     steps:
-      - uses: tv2/gh-shared-actions/actions/aggregate-job-results@v0
+      - uses: tv2/gh-shared-actions/actions/aggregate-job-results@e8fcd9dc6887d34bb7624b3490b7ece4568b91b5 # v0
         with:
           job-results: >-
             ${{ needs.build-docs.result }}
