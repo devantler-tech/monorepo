@@ -85,14 +85,13 @@ jobs:
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
-    if: always()
+    if: ${{ always() }}
     needs:
       - build-docs
       - audit-docs
     permissions: {}
     steps:
-      - name: Check job results
-        uses: devantler-tech/actions/require-checks-in-pr@17691ce06f7c2324d7a41a60ec9cc3baf471bfea # v3.2.4
+      - uses: tv2/gh-shared-actions/actions/aggregate-job-results@v0
         with:
           job-results: >-
             ${{ needs.build-docs.result }}

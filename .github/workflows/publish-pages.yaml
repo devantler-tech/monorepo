@@ -57,3 +57,15 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+
+  ci-required-checks:
+    name: CI - Required Checks
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    if: ${{ always() }}
+    steps:
+      - uses: tv2/gh-shared-actions/actions/aggregate-job-results@v0
+        with:
+          job-results: >-
+            ${{ needs.build.result }}
+            ${{ needs.deploy.result }}
