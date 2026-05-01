@@ -235,16 +235,3 @@ jobs:
             const { main } = require('${{ runner.temp }}/gh-aw/actions/create_labels.cjs');
             await main();
 
-  status:
-    name: "Agentic Maintenance - Required Checks"
-    runs-on: ubuntu-latest
-    needs: [close-expired-entities, run_operation, apply_safe_outputs, create_labels]
-    if: ${{ always() }}
-    steps:
-      - uses: tv2/gh-shared-actions/actions/aggregate-job-results@v0
-        with:
-          job-results: >-
-            ${{ needs.close-expired-entities.result }}
-            ${{ needs.run_operation.result }}
-            ${{ needs.apply_safe_outputs.result }}
-            ${{ needs.create_labels.result }}
