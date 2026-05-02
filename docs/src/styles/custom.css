@@ -1362,6 +1362,11 @@ article:hover img[loading="lazy"][width="48"] {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  header .site-title span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 /* ─── GitHub Alert Boxes (starlight-github-alerts) ─── */
