@@ -52,6 +52,7 @@ The copyleft was solving a problem I didn't have (ensuring source availability â
 
 The [PolyForm Project](https://polyformproject.org/) is a group of licensing lawyers and technologists developing standardized, plain-language software licenses. Their [Shield license](https://polyformproject.org/licenses/shield/1.0.0) is specifically designed for the scenario I was facing:
 
+> [!QUOTE]
 > Any purpose is a permitted purpose, except for providing any product that competes with the software or any product the licensor or any of its affiliates provides using the software.
 
 In [PR #4603](https://github.com/devantler-tech/ksail/pull/4603), I switched KSail from GPL-3.0-only to PolyForm Shield 1.0.0. Here's how the three requirements stack up:
@@ -84,6 +85,7 @@ The only thing you can't do is build a product that competes with KSail itself.
 
 The PolyForm Shield license defines competition broadly:
 
+> [!QUOTE]
 > Goods and services compete even when they provide functionality through different kinds of interfaces or for different technical platforms. Applications can compete with services, libraries with plugins, frameworks with development tools, and so on, even if they're written in different programming languages or for different computer architectures. Goods and services compete even when provided free of charge. If you market a product as a practical substitute for the software or another product, it definitely competes.
 
 This is intentionally wide. A SaaS platform that wraps KSail's functionality competes. A free CLI tool marketed as "a better KSail" competes. A rewrite in Rust that positions itself as a KSail replacement competes.
@@ -140,8 +142,9 @@ For details, see the [Licensing FAQ](https://ksail.devantler.tech/faq/#licensing
 
 ## Closing Thoughts
 
-As I wrote on [LinkedIn](https://www.linkedin.com/feed/update/urn:li:activity:7325551820929011712):
+As I wrote on [LinkedIn](https://www.linkedin.com/posts/nikolai-emil-damm-14a786150_why-is-the-polyform-shield-license-100-share-7457445076651196416-5m8V):
 
+> [!QUOTE]
 > Why is the PolyForm Shield License 1.0.0 not more popular? It seems like a great license to protect OSS dev tools from being commercialized or wrapped in managed or hosted service. Yes it is not OSI-Approved and it would strictly speaking be "source-available", but it feels like less of a risk than choosing Apache 2.0 or any of the other OSI-Approved licenses that do not limit commercial use.
 
 I think the PolyForm Shield license fills a real gap. For solo maintainers and small teams building developer tools, the choice today is often between "let anyone commercialize your work" (permissive licenses) and "force copyleft on everyone" (GPL/AGPL). PolyForm Shield sits in the middle: use it for anything, just don't compete with it.
