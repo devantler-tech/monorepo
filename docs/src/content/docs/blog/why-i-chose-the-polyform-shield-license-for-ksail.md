@@ -115,7 +115,7 @@ I considered several alternatives before settling on PolyForm Shield. Here's why
 
 I want to be honest about what PolyForm Shield costs.
 
-### It's Not OSI-Approved
+### It's Not OSI-approved
 
 The [Open Source Definition](https://opensource.org/osd) requires that licenses not discriminate against fields of endeavor (clause 6) or restrict other software (clause 9). The non-compete clause violates both. By the OSI definition, KSail is **source-available**, not open source.
 
