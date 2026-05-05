@@ -10,8 +10,8 @@ tags:
   - polyform
 excerpt: KSail's license changed three times in 18 months. Here's why it went from Apache-2.0 to GPL-3.0 to PolyForm Shield 1.0.0, and why I think more dev tools should consider it.
 cover:
-  alt: KSail logo
-  image: ../../../assets/ksail-logo.jpeg
+  alt: PolyForm Shield License — use it for anything, just don't compete with it
+  image: ../../../assets/polyform-shield-license.png
 ---
 
 If you build a developer tool and release it under a permissive license, anyone can take your work, wrap it in a managed service, and sell it back to your users. You get nothing — not revenue, not attribution, not even a thank-you. This is the licensing problem that every solo maintainer of a useful tool will eventually face.
