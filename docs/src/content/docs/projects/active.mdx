@@ -17,16 +17,6 @@ These are the projects I am currently working on and actively maintaining. I'm a
 
 A tool that bundles common Kubernetes tooling into a single binary. It provides a **VSCode Extension**, **CLI**, **AI-Enabled Chat TUI**, or **MCP interface** to create clusters, deploy workloads, and operate cloud-native stacks across different distributions and providers.
 
-- **One Binary**: Embeds cluster provisioning, GitOps engines, and deployment tooling — no tool sprawl
-- **Simple Clusters**: Spin up Vanilla, K3s, Talos, VCluster, or KWOK clusters with one command across Docker, [Hetzner Cloud](https://www.hetzner.com/cloud/), or [Sidero Omni](https://www.siderolabs.com/platform/saas-for-kubernetes/)
-- **No Lock-In**: Uses native configs (`kind.yaml`, `k3d.yaml`, Talos patches, `vcluster.yaml`) — run clusters with or without KSail
-- **Mirror Registries**: Avoid rate limits and store images once — same mirrors used by different clusters
-- **Everything as Code**: Cluster settings, distribution configs, and workloads in version-controlled files
-- **GitOps Native**: Built-in [Flux](https://fluxcd.io/) or [ArgoCD](https://argo-cd.readthedocs.io/) support with bootstrap, push, and reconcile commands
-- **Customizable Stack**: Select your CNI, CSI, policy engine, cert-manager, and mirror registries
-- **SOPS Built In**: Encrypt, decrypt, and edit secrets with integrated cipher commands
-- **AI Assistant**: Interactive chat powered by [GitHub Copilot](https://github.com/features/copilot) for configuration and troubleshooting
-
 📖 [Full Documentation](https://ksail.devantler.tech) · 📝 [Read about the journey from .NET to Go](/blog/building-ksail-from-shell-to-dotnet-to-go/)
 
 ## [☸️ Platform](https://github.com/devantler-tech/platform) ![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5.svg?style=for-the-badge&logo=Kubernetes&logoColor=white) ![Flux](https://img.shields.io/badge/Flux-5468FF.svg?style=for-the-badge&logo=Flux&logoColor=white) ![Talos Linux](https://img.shields.io/badge/Talos-FF7300.svg?style=for-the-badge&logo=Talos&logoColor=white)
@@ -51,18 +41,8 @@ A collection of [reusable GitHub Actions workflows](https://docs.github.com/en/a
 
 A collection of [composite GitHub Actions](https://docs.github.com/en/actions/tutorials/create-actions/create-a-composite-action) that provide small, reusable components for CI/CD workflows.
 
-- **Aggregate Job Checks**: Aggregate multiple job results into a single required check
-- **Approve PR**: Approve a PR using a GitHub App identity
-- **Enable Auto-Merge**: Enable auto-merge on a pull request
-- **Cleanup GHCR**: Clean up old [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) packages
-- **Login to GHCR**: Authenticate with the GitHub Container Registry
-- **.NET Test**: Test [.NET](https://dotnet.microsoft.com/) solutions or projects
-- **Setup Copilot Skills**: Install agent skills via `gh skill`
-- **Setup Go Toolchain**: Set up Go with optional private module support
-- **Setup KSail**: Install [KSail](https://github.com/devantler-tech/ksail) CLI via [Homebrew](https://brew.sh/)
-- **Sync Labels**: Sync GitHub labels across repositories
-- **TODOs**: Create GitHub issues from TODO comments in code
-- **Update Copilot Skills**: Run `gh skill update --all` and report changes
-- **Upsert Issue**: Create, update, reopen, or close a GitHub issue by title
+- **CI/CD**: Aggregate job checks, .NET Test, Setup Go Toolchain, Setup KSail
+- **Registry & Identity**: Login/Cleanup GHCR, Approve PR, Enable Auto-Merge
+- **Automation**: TODOs, Upsert Issue, Sync Labels, Setup/Update Copilot Skills
 
 </div>
