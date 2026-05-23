@@ -106,11 +106,11 @@ gtag('config', 'G-MK59Q89KYW');`,
         },
         {
           label: "Projects",
-          autogenerate: { directory: "projects" },
+          items: [{ autogenerate: { directory: "projects" } }],
         },
         {
           label: "Templates",
-          autogenerate: { directory: "templates" },
+          items: [{ autogenerate: { directory: "templates" } }],
         },
       ],
       lastUpdated: true,
