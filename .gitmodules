@@ -46,3 +46,11 @@
 	path = github/devantler-tech/maintenance
 	url = git@github.com:devantler-tech/maintenance.git
 	branch = main
+[submodule "applications/wedding-app"]
+	path = applications/wedding-app
+	url = git@github.com:devantler-tech/wedding-app.git
+	branch = main
+[submodule "applications/ascoachingogvaner"]
+	path = applications/ascoachingogvaner
+	url = git@github.com:devantler-tech/ascoachingogvaner.git
+	branch = main
