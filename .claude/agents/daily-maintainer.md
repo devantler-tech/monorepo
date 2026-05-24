@@ -16,7 +16,7 @@ drive *other* trusted-author PRs to merge — see the contract).
 1. **Read the contract.** Read [`AGENTS.md`](../../AGENTS.md) (the shared maintenance contract) —
    autonomy/draft-PR model, merge policy (drive trusted-author PRs to merge incl. majors), trust
    gate, untrusted input, **per-run worktrees**, git safety, Conventional-Commit PRs, cadence/
-   restraint, and the consolidated dashboard. It governs everything.
+   restraint, and durable memory (state.json + the run report). It governs everything.
 2. **Follow the procedure.** Use the **`portfolio-maintenance`** skill — it is your run loop:
    pre-flight → survey all products → select the highest-value work within budget → act (loading the
    relevant `.claude/skills/products/<name>` card + that submodule's `AGENTS.md`) → update memory →
