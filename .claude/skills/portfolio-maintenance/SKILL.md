@@ -67,7 +67,7 @@ For each selected product:
 ## 4. Always: update state.json + one consolidated report
 - **state.json** (the single source of truth — machine-local, never costs a PR): update `last_run`,
   `rotation_cursor`, per-product `last_worked`/`weekly`/`needs_attention` (open maintainer-decisions
-  live here until resolved — GitHub Issues are disabled on the monorepo), and caches (prune CI
+  live here until resolved and are surfaced in the run report), and caches (prune CI
   entries >7 days); append a dated entry to `runs`.
 
   ```jsonc

@@ -129,7 +129,7 @@ PR every run to keep current). Durable memory is one source of truth plus a surf
    truth for cross-run orchestration: rotation cursor, per-product `last_worked`/`weekly`/
    `needs_attention`, CI/link caches, the `runs` log, and `learnings`. Not version-controlled, so
    updating it never costs a PR. **Open maintainer-decisions** live in `needs_attention` until
-   resolved (GitHub Issues are disabled on the monorepo).
+   resolved and are raised in the run report (open a GitHub Issue when one warrants visible tracking).
 2. **The end-of-run report** surfaces state to the maintainer every run — products surveyed, what
    changed (with PR links), and **what now needs the maintainer** (open drafts awaiting promotion,
    blockers, external PRs, open decisions). Live truth for PRs/CI/issues is GitHub itself; per-product

@@ -1,12 +1,12 @@
 ---
 name: maintain-monorepo
-description: Maintenance task menu for devantler-tech/monorepo itself — the devantler.tech Astro Starlight docs site (docs/), CI/CD, submodule-README→docs sync, and PR triage. GitHub Issues are DISABLED here (PR/label/comment only). Use when the daily maintainer selects the monorepo/site.
+description: Maintenance task menu for devantler-tech/monorepo itself — the devantler.tech Astro Starlight docs site (docs/), CI/CD, submodule-README→docs sync, and issue/PR triage. GitHub Issues are ENABLED here. Use when the daily maintainer selects the monorepo/site.
 ---
 
 # Maintain: Monorepo + devantler.tech site
 
-**Repo** `devantler-tech/monorepo` · **path** repo root + `docs/` · **⚠️ Issues DISABLED**
-(PRs, labels, PR comments only — no issue triage/creation here). Shared rules: monorepo
+**Repo** `devantler-tech/monorepo` · **path** repo root + `docs/` · **Issues ENABLED**
+(issue + PR triage/creation, labels, comments). Shared rules: monorepo
 [`AGENTS.md`](../../../../AGENTS.md). Memory = `state.json` under `products.monorepo`
 (cursors/caches) + the end-of-run report; there is no version-controlled dashboard.
 
@@ -21,4 +21,4 @@ description: Maintenance task menu for devantler-tech/monorepo itself — the de
 - **C. Site QA** — rotate one sub-task/run (`site_qa_cursor`: link-check → accessibility → multi-device → …). Use `npm --prefix docs`; for browser checks start preview backgrounded, CAPTURE the PID, and ALWAYS `kill` it (free port 4321) even on failure. **Link-check:** extract URLs from `docs/src/content`, `curl -sL -o /dev/null -w "%{http_code}"`; skip the `unfixable_links` cache; broken → fix (draft `docs: fix broken links`) or cache with reason. **Accessibility:** heading hierarchy, alt text, descriptive link text, ARIA, skip-link, WCAG-AA green (`#39ff14` dark / `#15803d` light). **Multi-device** (Playwright installed globally; chromium cached; if unavailable skip + advance cursor): iPhone 12/Pixel 5/iPad/iPad Pro/Desktop × `/`,`/about/`,`/projects/`,`/templates/`,`/blog/` (note: `/` is a Starlight splash with no sidebar by design; a refused GA `gtag` request is the sandbox, not a bug).
 - **D. Content Sync** (don't `git submodule update --remote`): per-project descriptions live in `docs/src/content/docs/projects/active.mdx` under `##` headings (NOT `projects/index.mdx`). Map ksail→`## KSail` (**brief + link to ksail.devantler.tech only — never duplicate KSail docs**), platform→`## Platform`, actions→`## Actions`, reusable-workflows→`## Reusable Workflows`, go/dotnet-template→`docs/src/content/docs/templates/{go,dotnet}.md`. Private `applications/*` are intentionally NOT mapped. **Never modify blog posts.** Build-verify → draft `docs: sync project descriptions`.
 - **E. Content Review (Mondays only;** rotate unbloat ↔ editorial in `content_review`): **Unbloat** one not-recently-cleaned file (skip frontmatter `disable-agentic-editing: true`), cut duplication/verbosity ≥20% w/o losing accuracy. **Editorial** rotate lens weekly (Technical Rigor → Clarity → Onboarding → Portfolio Balance).
-- **F. Repo Assist (PR-only):** triage/label new PRs; comment on open PRs lacking an AI comment (1–3/run); self-spotted fixes → draft PR (no `Fixes #N` — Issues disabled); ≤3 stale-PR nudges.
+- **F. Repo Assist:** triage/label new issues + PRs; comment on the oldest open item lacking an AI comment (1–3/run); self-spotted fixes → draft PR (use `Fixes #N` when it closes an issue); ≤3 stale-PR/issue nudges.
