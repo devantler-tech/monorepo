@@ -40,7 +40,8 @@ primitives:
   — how it improves its own definition over time (evidence-driven, guard-railed).
 - **Per-product skills:** [`.claude/skills/products/`](.claude/skills/products/) — thin task menus
   (each defers to its submodule's `AGENTS.md` `## Maintenance` section once distributed).
-- **Dashboard:** [`MAINTENANCE.md`](MAINTENANCE.md) — the single portfolio-wide status board.
+- **Durable memory:** machine-local `state.json` + the end-of-run report (see *Durable memory* below)
+  — there is **no** version-controlled status board.
 
 Everything below is the **shared maintenance contract** every product follows. A submodule's own
 `AGENTS.md` references it; repo-specific rules in a submodule card win for that repo.
@@ -93,7 +94,7 @@ open the PR, then `git -C <repo_path> worktree remove` to clean up (`<repo_path>
 filesystem path such as `projects/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the
 slug only for `gh` commands). Worktree isolation is verified working across all submodules. Populate an un-checked-out submodule at its pinned commit with
 `git submodule update --init <path>` (never `--remote`). If a repo's working area is unexpectedly
-dirty or you can't get an isolated tree, do GitHub-API-only work (triage/comment/dashboard) there.
+dirty or you can't get an isolated tree, do GitHub-API-only work (triage/comment) there.
 
 ### Git safety
 Never `git reset --hard`, `git stash`, force-push, or discard changes you did not author. Never
@@ -116,18 +117,23 @@ a task explicitly calls for it. Leave every checkout/worktree clean when done.
 Runs **twice daily** (07:00 & 19:00 local). Per run, aim for **≤3 products and ≤4 new GitHub
 artifacts** (PRs + issues + first-time comments); a quiet run that only reports is a *good* run —
 never manufacture work. A later run the same day should be even more restrained; dedupe against what
-an earlier run did (visible in the dashboard / state.json `runs` and on GitHub). Heavy tasks (E2E
+an earlier run did (visible in state.json `runs` and on GitHub). Heavy tasks (E2E
 audits, live-cluster reliability, content review) run ~weekly; the KSail Monthly Strategy at month
 start. Never spin up real clusters more than once a day portfolio-wide.
 
-### Durable memory — one consolidated dashboard
-There are **no** per-repo "Monthly Activity" issues. Durable memory is two layers:
-1. **Machine-local** `~/.claude/scheduled-tasks/daily-ai-assistant/state.json` — fast-churning
-   orchestration state (rotation cursor, per-product last-worked, CI/link caches). Not version-
-   controlled.
-2. **[`MAINTENANCE.md`](MAINTENANCE.md)** — one portfolio-wide dashboard: per-product status +
-   **pending maintainer actions** (open drafts awaiting promotion, blockers, external PRs). Surfaced
-   in every run report and updated in-repo via the normal draft-PR flow when it materially changes.
+### Durable memory — machine-local state + the run report
+There are **no** per-repo "Monthly Activity" issues and **no** version-controlled status board (a
+dashboard file only duplicated GitHub + state.json, went stale between runs, and cost a bookkeeping
+PR every run to keep current). Durable memory is one source of truth plus a surfacing step:
+1. **Machine-local** `~/.claude/scheduled-tasks/daily-ai-assistant/state.json` — the single source of
+   truth for cross-run orchestration: rotation cursor, per-product `last_worked`/`weekly`/
+   `needs_attention`, CI/link caches, the `runs` log, and `learnings`. Not version-controlled, so
+   updating it never costs a PR. **Open maintainer-decisions** live in `needs_attention` until
+   resolved (GitHub Issues are disabled on the monorepo).
+2. **The end-of-run report** surfaces state to the maintainer every run — products surveyed, what
+   changed (with PR links), and **what now needs the maintainer** (open drafts awaiting promotion,
+   blockers, external PRs, open decisions). Live truth for PRs/CI/issues is GitHub itself; per-product
+   status is derivable from `gh pr list` / `gh run list`, so it is never duplicated into a file.
 
 ### Self-improvement (continuous, evidence-driven)
 Your definition is version-controlled, so you continuously improve it to get better at maintaining

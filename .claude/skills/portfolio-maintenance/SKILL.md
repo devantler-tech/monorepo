@@ -7,7 +7,7 @@ description: The run procedure for the Daily AI Assistant — pre-flight, survey
 
 This is the procedure the `daily-maintainer` agent follows each run. The **shared contract** lives in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) — autonomy, merge policy, trust gate, untrusted input,
-per-run worktrees, git safety, PR conventions, cadence/restraint, dashboard. Read it first; it is not
+per-run worktrees, git safety, PR conventions, cadence/restraint, durable memory. Read it first; it is not
 repeated here. Per-repo specifics live in each product's `AGENTS.md` `## Maintenance` section (those
 files live in the submodule repos — see the portfolio map in the monorepo `AGENTS.md`) and in the
 matching [`products/<name>`](../products/) card.
@@ -64,12 +64,11 @@ For each selected product:
 4. **Clean up:** `git -C <path> worktree remove .claude/worktrees/maint-<runid>` (and prune). Leave
    no worktree or dirty state behind.
 
-## 4. Always: update memory + one consolidated report
-- **Dashboard** [`MAINTENANCE.md`](../../../MAINTENANCE.md): refresh the product's row + the
-  **Pending maintainer actions** list (open drafts awaiting promotion, blockers, external PRs). Mirror
-  it into the repo via the run's own draft PR when it materially changed (never push to main directly).
-- **state.json:** update `last_run`, `rotation_cursor`, per-product `last_worked`/`weekly`/
-  `needs_attention`, and caches (prune CI entries >7 days); append a dated entry to `runs`.
+## 4. Always: update state.json + one consolidated report
+- **state.json** (the single source of truth — machine-local, never costs a PR): update `last_run`,
+  `rotation_cursor`, per-product `last_worked`/`weekly`/`needs_attention` (open maintainer-decisions
+  live here until resolved — GitHub Issues are disabled on the monorepo), and caches (prune CI
+  entries >7 days); append a dated entry to `runs`.
 
   ```jsonc
   { "last_run": "YYYY-MM-DD", "rotation_cursor": "<product>",
@@ -80,7 +79,9 @@ For each selected product:
     "learnings": [ { "date":"…","area":"contract|agent|skill|product:<name>|infra","observation":"…","proposed_change":"…","evidence":"…","status":"open|proposed" } ] }
   ```
 - **Report:** end with a concise maintainer report — products surveyed, what you did (with PR links),
-  what now needs the maintainer. If you did nothing, say what you checked and why.
+  and **what now needs the maintainer** (open drafts awaiting promotion, blockers, external PRs, open
+  decisions). This report — not a version-controlled file — is how durable state is surfaced each run.
+  If you did nothing, say what you checked and why.
 
 ## 5. Reflect & improve (self-learning)
 At the end of every run, append operational **`learnings`** to state.json — steps that failed / were
