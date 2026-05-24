@@ -23,7 +23,7 @@ checkout has every product present and a single autonomous maintainer can work a
 | .NET template | `devantler-tech/dotnet-template` | `templates/dotnet-template` | [link](templates/dotnet-template/AGENTS.md) |
 | GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | [link](github/devantler-tech/github-actions/actions/AGENTS.md) |
 | Reusable Workflows | `devantler-tech/reusable-workflows` | `github/devantler-tech/github-actions/reusable-workflows` | [link](github/devantler-tech/github-actions/reusable-workflows/AGENTS.md) |
-| Homebrew tap | `devantler-tech/homebrew-formulas` | `homebrew-formulas` | [link](homebrew-formulas/AGENTS.md) |
+| Homebrew tap | `devantler-tech/homebrew-tap` (submodule path `homebrew-formulas`) | `homebrew-formulas` | [link](homebrew-formulas/AGENTS.md) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
 
