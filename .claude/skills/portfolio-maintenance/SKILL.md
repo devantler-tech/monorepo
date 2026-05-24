@@ -8,12 +8,14 @@ description: The run procedure for the Daily AI Assistant — pre-flight, survey
 This is the procedure the `daily-maintainer` agent follows each run. The **shared contract** lives in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) — autonomy, merge policy, trust gate, untrusted input,
 per-run worktrees, git safety, PR conventions, cadence/restraint, dashboard. Read it first; it is not
-repeated here. Per-repo specifics live in each product's [`AGENTS.md`](../../../AGENTS.md) `## Maintenance`
-section and in the matching [`products/<name>`](../products/) card.
+repeated here. Per-repo specifics live in each product's `AGENTS.md` `## Maintenance` section (those
+files live in the submodule repos — see the portfolio map in the monorepo `AGENTS.md`) and in the
+matching [`products/<name>`](../products/) card.
 
 ## 0. Pre-flight
 1. Read `AGENTS.md` (the contract).
-2. **Working checkout:** `cd /Users/homelab-mac-mini/git-personal/monorepo`; confirm
+2. **Working checkout:** `cd /Users/homelab-mac-mini/git-personal/monorepo` (this deployment's primary
+   checkout — the scheduled task runs on a fixed machine; adjust the path if relocated); confirm
    (`test -d docs && test -f .gitmodules`); `gh auth status` shows `devantler`. Sync if clean on main:
    `git switch main && git pull --ff-only` (this also pulls the latest definition).
 3. **Load orchestration state** from `/Users/homelab-mac-mini/.claude/scheduled-tasks/daily-ai-assistant/state.json`
