@@ -17,8 +17,10 @@ a safety/security guardrail, never hand-edit generated files. Match each repo's 
 and load its product card + `AGENTS.md ## Maintenance` for validate commands, protected files, labels,
 and its roadmap home.
 
-> **Lean on the specialist skills** for heavy thinking: `engineering:architecture` (ADRs) and
-> `engineering:system-design` for non-trivial design; `engineering:testing-strategy` for test plans;
+> **Lean on the specialist skills** for heavy thinking, **if they're available in your environment**
+> (these ship with the Claude Code `engineering` plugin — they are *not* defined in this repo; if a
+> given skill isn't installed, just apply the same reasoning yourself): `engineering:architecture` (ADRs)
+> and `engineering:system-design` for non-trivial design; `engineering:testing-strategy` for test plans;
 > `engineering:tech-debt` to prioritise refactors; `engineering:code-review` to self-review a diff
 > before opening the PR; `engineering:debug` for a stubborn bug.
 

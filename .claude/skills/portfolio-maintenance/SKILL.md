@@ -31,14 +31,15 @@ card.
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
 
 ## 1. Survey (cheap, read-only, across ALL products)
-A few `gh` calls, not a deep audit, per product (`devantler-tech/<repo>`):
-- Open PRs: `gh pr list --repo <repo> --state open --json number,title,author,isDraft,reviewDecision,mergeStateStatus,statusCheckRollup,updatedAt,labels`.
-- Recent CI failures (~2 days): `gh run list --repo <repo> --status failure --limit 10 --json databaseId,workflowName,headSha,createdAt,url`.
+A few `gh` calls, not a deep audit, per product. Everywhere below, `--repo <owner>/<repo>` takes the
+full slug `devantler-tech/<repo>` (e.g. `--repo devantler-tech/ksail`):
+- Open PRs: `gh pr list --repo devantler-tech/<repo> --state open --json number,title,author,isDraft,reviewDecision,mergeStateStatus,statusCheckRollup,updatedAt,labels`.
+- Recent CI failures (~2 days): `gh run list --repo devantler-tech/<repo> --status failure --limit 10 --json databaseId,workflowName,headSha,createdAt,url`.
 - Open Dependabot/Renovate PRs, unlabelled/untriaged issues & PRs, stale PRs (>14d).
 - **Roadmap state** (the *advance* signal): open issues, esp. `roadmap`-labelled epics and any
   `enhancement`/`performance`/`refactor` issues ready to pick up; open milestones; `gh issue list
-  --repo <repo> --state open --json number,title,labels,updatedAt`. Note products with **no roadmap
-  yet** — they're prime strategy-review candidates.
+  --repo devantler-tech/<repo> --state open --json number,title,labels,updatedAt`. Note products with
+  **no roadmap yet** — they're prime strategy-review candidates.
 - **Shared libraries** (`devantler-tech/actions`, `reusable-workflows`, `skills`, and `plugins` once it
   exists): open PRs/issues + recent failures, as for any product. ~Monthly, also do the **holistic
   review** (contract *Holistic review*): scan the whole suite for generic patterns that should be
