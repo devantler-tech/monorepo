@@ -10,6 +10,12 @@ description: Maintenance task menu for devantler-tech/monorepo itself — the de
 [`AGENTS.md`](../../../../AGENTS.md). Memory = `state.json` under `products.monorepo`
 (cursors/caches) + the end-of-run report; there is no version-controlled dashboard.
 
+**Roadmap & enhancement:** the site/repo roadmap lives in **GitHub Issues** here (`roadmap`-labelled
+epics + milestones). Beyond the maintenance menu below, **advance** the site via
+[`product-engineering`](../../product-engineering/SKILL.md): docs/site features, accessibility,
+performance (bundle size / Lighthouse), and content quality (the Site QA + Content Review tasks below
+are the recurring slice of that). Validate with the `docs` build before any PR.
+
 ## Repo-specific conventions
 - **Branch** `claude/<area>-<desc>`. Submodule pointers often show as modified — **expected, not yours**; detect real dirtiness with `git status --porcelain --ignore-submodules=all`; never stage pointer bumps; never `git submodule update --remote`.
 - **Validate:** before any `docs/` PR, `[ -d docs/node_modules ] || (cd docs && npm ci)` then `cd docs && npm run build` (use `npm --prefix docs …`). Workflows → `actionlint`. Never edit auto-generated files / `*.lock.yml`.

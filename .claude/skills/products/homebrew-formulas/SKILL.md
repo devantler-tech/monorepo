@@ -12,3 +12,9 @@ ships **Casks** (`Casks/*.rb`, GoReleaser-generated `# DO NOT EDIT`) — never c
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a
 pointer by design — the menu is maintained once, in the tap's own `AGENTS.md`.
+
+## Roadmap & enhancement
+The tap's roadmap lives in **GitHub Issues** on `devantler-tech/homebrew-tap` (`roadmap` label).
+**Advance** via [`product-engineering`](../../product-engineering/SKILL.md) is deliberately limited
+here — Casks are GoReleaser-generated (`# DO NOT EDIT`), so enhancement = CI / tap hygiene only, never
+version/sha bumps.

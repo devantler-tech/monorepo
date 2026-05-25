@@ -12,3 +12,11 @@ section of `projects/ksail/AGENTS.md` (on the submodule's latest `main`):
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a
 pointer by design — the menu is maintained once, in the product's own `AGENTS.md`, so it stays
 correct for every tool (Claude, Copilot, Cursor, …).
+
+## Roadmap & enhancement
+KSail's roadmap lives in **GitHub Issues** on `devantler-tech/ksail` (`roadmap`-labelled epics +
+milestones) — the portfolio's most active tracker. To **advance** it (strategy review, decompose &
+triage, implement, coverage, performance, refactor) follow
+[`product-engineering`](../../product-engineering/SKILL.md). KSail's heavy cadences — weekly E2E + live
+reliability and the **Monthly KSail Strategy** (month start) — are defined in its `AGENTS.md
+## Maintenance`.

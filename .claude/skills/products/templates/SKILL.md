@@ -12,3 +12,9 @@ section of each `AGENTS.md` (on the submodule's latest `main`):
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a
 pointer by design — each menu is maintained once, in the template's own `AGENTS.md`.
+
+## Roadmap & enhancement
+Each template's roadmap lives in **GitHub Issues** on its repo (`roadmap` label). **Advance** via
+[`product-engineering`](../../product-engineering/SKILL.md), but the bias is to keep the scaffold
+**minimal, idiomatic, and current** — advance = better defaults, toolchain currency, exemplary
+tests/CI, and keeping the two templates aligned where it makes sense; **don't add product features**.

@@ -12,3 +12,9 @@ a cluster.
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a
 pointer by design — the menu is maintained once, in the product's own `AGENTS.md`.
+
+## Roadmap & enhancement
+Platform's roadmap lives in **GitHub Issues** on `devantler-tech/platform` (`roadmap` epics +
+milestones). **Advance** via [`product-engineering`](../../product-engineering/SKILL.md) — but
+**static validation only, never run a cluster**: here "advance" means manifest/Helm/Flux structure &
+quality, policy & security posture, and Kustomize hygiene, not code unit tests.
