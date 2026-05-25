@@ -6,7 +6,7 @@ description: Maintenance task menu for devantler-tech/ksail (a Go CLI for local 
 # Maintain: KSail
 
 The canonical KSail maintenance task menu lives **in the repo itself** — read the **`## Maintenance`**
-section of `projects/ksail/AGENTS.md` (on the submodule's latest `main`):
+section of `applications/ksail/AGENTS.md` (on the submodule's latest `main`):
 <https://github.com/devantler-tech/ksail/blob/main/AGENTS.md>.
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a
