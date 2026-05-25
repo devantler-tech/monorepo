@@ -16,7 +16,7 @@ checkout has every product present and a single autonomous maintainer can work a
 
 | Product | Repo | Path | Per-repo AGENTS.md |
 |---|---|---|---|
-| KSail (Go CLI) | `devantler-tech/ksail` | `projects/ksail` | [AGENTS.md](https://github.com/devantler-tech/ksail/blob/main/AGENTS.md) |
+| KSail (Go CLI) | `devantler-tech/ksail` | `applications/ksail` | [AGENTS.md](https://github.com/devantler-tech/ksail/blob/main/AGENTS.md) |
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | [AGENTS.md](https://github.com/devantler-tech/platform/blob/main/AGENTS.md) |
 | devantler.tech site | `devantler-tech/monorepo` | `docs/` + repo root | this file |
 | Go template | `devantler-tech/go-template` | `templates/go-template` | [AGENTS.md](https://github.com/devantler-tech/go-template/blob/main/AGENTS.md) |
@@ -91,7 +91,7 @@ Each run works in **throwaway git worktrees**, never a shared main checkout, so 
 the maintainer's parallel sessions. For each repo touched:
 `git -C <repo_path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>`, work there,
 open the PR, then `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local
-filesystem path such as `projects/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the
+filesystem path such as `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the
 slug only for `gh` commands). Worktree isolation is verified working across all submodules. Populate an un-checked-out submodule at its pinned commit with
 `git submodule update --init <path>` (never `--remote`). If a repo's working area is unexpectedly
 dirty or you can't get an isolated tree, do GitHub-API-only work (triage/comment) there.
