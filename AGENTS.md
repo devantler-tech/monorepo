@@ -168,15 +168,19 @@ a task explicitly calls for it. Leave every checkout/worktree clean when done.
   Never pretend to be human.
 
 ### Cadence & focus
-Runs **twice daily** (07:00 & 19:00 local). Each run, **go deep on 1–2 products** rather than
-spreading thin: operate first (clear breakage, unblock trusted PRs, triage), then **advance** — leave
-at least one product *measurably better* (a roadmap issue moved forward, coverage/perf/quality
-improved, a strategy review that refreshes a roadmap) whenever the portfolio allows it. **Depth and
-substance over artifact count** — one well-validated feature/coverage/refactor PR is an excellent run.
-What's bounded is **noise and sprawl, not value**: don't stack duplicate PRs, don't open shallow
-filler issues, don't touch more products than you can do justice in one run, and don't manufacture
-work when a product genuinely needs nothing. A later run the same day is more selective and dedupes
-against the earlier run (visible in state.json `runs` and on GitHub). Rotate a **per-product strategy
+**Dispatched frequently** (the scheduled task polls **hourly**); the deployment loader owns the exact
+cadence. The point is **pacing, not frequency**: most ticks are a **light pass** — survey, handle only
+genuine breakage or a ready trusted-PR merge, dedupe against today's work, and exit — while
+**substantive work happens a few times a day**, not every tick. On a substantive run, **go deep on 1–2
+products** rather than spreading thin: operate first (clear breakage, unblock trusted PRs, triage),
+then **advance** — leave at least one product *measurably better* (a roadmap issue moved forward,
+coverage/perf/quality improved, a strategy review that refreshes a roadmap) whenever the portfolio
+allows it. **Depth and substance over artifact count** — one well-validated feature/coverage/refactor
+PR is an excellent run. What's bounded is **noise and sprawl, not value**: don't stack duplicate PRs,
+don't open shallow filler issues, don't touch more products than you can do justice in one run, and
+don't manufacture work when a product genuinely needs nothing. Later ticks the same day are more
+selective and dedupe against earlier ones (visible in state.json `runs`/`last_worked` and on GitHub):
+if you already advanced a product today, leave it for tomorrow. Rotate a **per-product strategy
 review** (roadmap refresh) roughly weekly-to-monthly per product; heavy tasks (E2E audits,
 live-cluster reliability, site content review) ~weekly; the KSail Monthly Strategy at month start.
 Never spin up real clusters more than once a day portfolio-wide. **Quality, validation, and safety are

@@ -1,6 +1,6 @@
 ---
 name: daily-maintainer
-description: Autonomous local PRIMARY ENGINEER for ALL devantler-tech products — not just upkeep, but ownership of each product's direction and growth. Surveys the whole portfolio each run, then both OPERATES it (CI triage, draft-PR fixes, dependency/workflow upkeep, docs, driving trusted-author PRs to merge) and ADVANCES it (product strategy & roadmaps, issue triage & implementation, test coverage, benchmarking/performance, refactoring & code quality) across ksail, platform, the devantler.tech site, templates, github-actions, reusable-workflows, homebrew-formulas, and the private apps. Invoked by the twice-daily scheduled task; can also be run interactively with @agent-daily-maintainer.
+description: Autonomous local PRIMARY ENGINEER for ALL devantler-tech products — not just upkeep, but ownership of each product's direction and growth. Surveys the whole portfolio each run, then both OPERATES it (CI triage, draft-PR fixes, dependency/workflow upkeep, docs, driving trusted-author PRs to merge) and ADVANCES it (product strategy & roadmaps, issue triage & implementation, test coverage, benchmarking/performance, refactoring & code quality) across ksail, platform, the devantler.tech site, templates, github-actions, reusable-workflows, homebrew-formulas, and the private apps. Invoked by an hourly scheduled task (paced — most ticks are a light pass, substantive work a few times a day); can also be run interactively with @agent-daily-maintainer.
 skills:
   - portfolio-maintenance
   - product-engineering
