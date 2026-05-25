@@ -19,10 +19,16 @@ card.
 1. Read `AGENTS.md` (the contract).
 2. **Working checkout:** `cd /Users/homelab-mac-mini/git-personal/monorepo` (this deployment's primary
    checkout — the scheduled task runs on a fixed machine; adjust the path if relocated); confirm
-   (`test -d docs && test -f .gitmodules`); `gh auth status` shows `devantler`. Sync if clean on main:
-   `git switch main && git pull --ff-only` (this also pulls the latest definition).
-3. **Load orchestration state** from `/Users/homelab-mac-mini/.claude/scheduled-tasks/daily-ai-assistant/state.json`
-   (create from the skeleton in §4 if missing). It may be stale — verify against live state.
+   (`test -d docs && test -f .gitmodules`); `gh auth status` shows `devantler`. **Sync the definition:**
+   this checkout carries permanent submodule-pointer drift, so don't gate on a fully clean tree — if
+   `main` is behind `origin/main` and the only dirt is submodule pointers, fast-forward with
+   `git fetch origin main && git merge --ff-only origin/main` (it never checks out submodule contents;
+   `--ff-only` refuses anything that isn't a clean fast-forward).
+3. **Load durable memory:** **`view` your native memory** (Claude: the memory tool / the project
+   `memory/` dir + `MEMORY.md`) — the single source of truth for cross-run orchestration (rotation
+   cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent
+   run notes, `learnings`). It may be stale — verify against live GitHub. *(The legacy `state.json` is
+   retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
 
 ## 1. Survey (cheap, read-only, across ALL products)
 A few `gh` calls, not a deep audit, per product (`devantler-tech/<repo>`):
@@ -33,13 +39,17 @@ A few `gh` calls, not a deep audit, per product (`devantler-tech/<repo>`):
   `enhancement`/`performance`/`refactor` issues ready to pick up; open milestones; `gh issue list
   --repo <repo> --state open --json number,title,labels,updatedAt`. Note products with **no roadmap
   yet** — they're prime strategy-review candidates.
-- From state.json: each product's `last_worked`, `roadmap` (last strategy review + current theme),
+- **Shared libraries** (`devantler-tech/actions`, `reusable-workflows`, `skills`, and `plugins` once it
+  exists): open PRs/issues + recent failures, as for any product. ~Monthly, also do the **holistic
+  review** (contract *Holistic review*): scan the whole suite for generic patterns that should be
+  extracted/propagated into these libs.
+- From **native memory**: each product's `last_worked`, `roadmap` (last strategy review + current theme),
   `weekly` timestamps, and `needs_attention`.
 
 Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../products/platform/SKILL.md) ·
 [monorepo + site](../products/monorepo/SKILL.md) · [templates](../products/templates/SKILL.md) ·
-[github-actions](../products/github-actions/SKILL.md) · [homebrew-formulas](../products/homebrew-formulas/SKILL.md) ·
-[applications](../products/applications/SKILL.md).
+[github-actions](../products/github-actions/SKILL.md) · [skills (+ plugins)](../products/skills/SKILL.md) ·
+[homebrew-formulas](../products/homebrew-formulas/SKILL.md) · [applications](../products/applications/SKILL.md).
 
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep on 1–2 products** rather
@@ -92,31 +102,33 @@ For each selected product:
 4. **Clean up:** `git -C <path> worktree remove .claude/worktrees/maint-<runid>` (and prune). Leave
    no worktree or dirty state behind.
 
-## 4. Always: update state.json + one consolidated report
-- **state.json** (the single source of truth — machine-local, never costs a PR): update `last_run`,
-  `rotation_cursor`, per-product `last_worked`/`weekly`/`roadmap`/`needs_attention` (open
-  maintainer-decisions live here until resolved and are surfaced in the run report), and caches (prune
-  CI entries >7 days); append a dated entry to `runs`. The `roadmap` cursor is lightweight — the
-  durable roadmap is GitHub Issues (`roadmap`-labelled epics + milestones), not state.json.
+## 4. Always: update native memory + one consolidated report
+- **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
+  back what changed so the next run picks up cleanly — `last_run`, `rotation_cursor`, each touched
+  product's `last_worked`/`weekly`/roadmap cursor/`needs_attention`, the CI & link caches (prune CI
+  entries >7 days), recent run notes, and any new `learnings`. Keep memory **coherent and organised**:
+  a small set of well-named files (e.g. `portfolio-status.md`, `caches.md`, `learnings.md`, plus
+  `feedback_*.md`) with `MEMORY.md` as a true index; **edit in place and prune stale content** rather
+  than appending forever; don't create a new file per fact. The roadmap cursor is lightweight — the
+  durable roadmap is GitHub Issues (`roadmap`-labelled epics + milestones), not memory.
 
-  ```jsonc
-  { "last_run": "YYYY-MM-DD", "rotation_cursor": "<product>",
-    "products": { "ksail": { "last_worked": "…", "weekly": {"e2e_audit":null,"reliability":null,"flaky":null},
-        "roadmap": { "last_strategy_review": "YYYY-MM-DD|null", "current_theme": "…", "notes": "…" }, "needs_attention": [] },
-      "platform": {…}, "monorepo": {…ci_investigation_cache, unfixable_links, site_qa_cursor, content_review…},
-      "templates": {…}, "github-actions": {…}, "homebrew-formulas": {…}, "applications": {…} },
-    "runs": [ { "date":"…","products":[…],"actions":[…],"notes":[…] } ],
-    "learnings": [ { "date":"…","area":"contract|agent|skill|product:<name>|infra","observation":"…","proposed_change":"…","evidence":"…","status":"open|proposed" } ] }
-  ```
+  Suggested files (markdown, organise as works best — not a rigid schema):
+  - `portfolio-status.md` — `last_run`, `rotation_cursor`, and per product: `last_worked`, `weekly`
+    timestamps, roadmap cursor (last strategy review + current theme), open `needs_attention`.
+  - `caches.md` — CI-investigation cache (signature/PR/run-ids/dates), `unfixable_links` / `watch_links`
+    / `resolved_links`, site QA / content-review cursors.
+  - `learnings.md` — self-improvement learnings (`date` / `area` / `observation` / `proposed_change` /
+    `evidence` / `status`); one concern each, prune when its PR merges.
+  - `feedback_*.md` — durable maintainer feedback (keep).
 - **Report:** end with a concise maintainer report — products surveyed, what you did (with PR links),
   and **what now needs the maintainer** (open drafts awaiting promotion, blockers, external PRs, open
   decisions). This report — not a version-controlled file — is how durable state is surfaced each run.
   If you did nothing, say what you checked and why.
 
 ## 5. Reflect & improve (self-learning)
-At the end of every run, append operational **`learnings`** to state.json — steps that failed / were
-flaky / slow / wasted effort, coverage gaps, stale or ambiguous instructions, security/reliability
-weaknesses in your own workflow. **~Weekly** (or sooner for a clear high-value / security /
+At the end of every run, record operational **`learnings`** in native memory (`learnings.md`) — steps
+that failed / were flaky / slow / wasted effort, coverage gaps, stale or ambiguous instructions,
+security/reliability weaknesses in your own workflow. **~Weekly** (or sooner for a clear high-value / security /
 reliability fix), distil them into ONE guard-railed **draft PR** that improves your own definition —
 the contract, this agent/skill set, or a submodule's `## Maintenance` — per the
 [`self-improvement`](../self-improvement/SKILL.md) skill. Evidence from your OWN runs only (never

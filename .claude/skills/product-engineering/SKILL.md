@@ -35,7 +35,8 @@ The roadmap of record is **GitHub Issues** (Issues are enabled on every repo) �
   AGENTS.md, recent commits, open issues, and the actual code — not just metadata.
 - **Output:** create or refresh a small set (≈3–7) of `roadmap` issues, each *problem → proposed
   direction → rough size*. Don't dump a huge backlog; a tight, current roadmap beats a long stale one.
-  Record `roadmap.last_strategy_review` + `current_theme` in state.json (a pointer, not the roadmap).
+  Record the roadmap cursor (`last_strategy_review` + `current_theme`) in **native memory** (a pointer,
+  not the roadmap).
 - **Decompose** an epic into small, independently-shippable child issues (*problem → proposal →
   acceptance criteria*), linked to the epic.
 
@@ -85,6 +86,25 @@ Targeted, **behaviour-preserving** improvement, backed by tests.
   is a no-op. Keep diffs reviewable (split large refactors into incremental PRs). Run the linter/formatter
   (`golangci-lint`, `dotnet format`, `actionlint`, the repo's formatter) and the full test suite before
   the PR; if tests are thin in the area, add them *first* (a separate PR) so the refactor is safe.
+
+## 7. Holistic review & shared-library stewardship
+Sections 1–6 work one product at a time. **~Monthly (on rotation), zoom out and look at the whole suite
+at once** — the highest-leverage advance work is often cross-cutting (contract → *Holistic review*).
+- **Spot generic patterns.** When the same approach has independently shown up in **2+ products** (a CI
+  step, a release/`.releaserc` setup, a workflow, a lint/test config, an agent skill, a docs
+  convention), it's now *generic* — it belongs in a **shared library**, not copied per repo:
+  - CI building blocks → `devantler-tech/actions` (composite actions) / `devantler-tech/reusable-workflows`.
+  - Agent skills → `devantler-tech/skills` (generic Copilot/agent skills, `gh skill`-installable).
+  - Plugins → `devantler-tech/plugins` **once it exists** — if a plugin-shaped pattern is ready and the
+    repo doesn't exist, propose creating it (flag to the maintainer) rather than forcing it elsewhere.
+- **Extract & propagate.** Add the capability to the shared lib (with its own tests, **additive &
+  backward-compatible** — blast radius is every consumer), then migrate consumers to it and retire the
+  per-repo copies. Land big extractions as a `roadmap`/`enhancement` issue + incremental PRs.
+- **Reconcile drift.** Pinned action versions, toolchains, conventions, and `AGENTS.md ## Maintenance`
+  sections should converge toward the best pattern across the suite.
+- **Native vs. standard** (contract → *Design principles*): keep anything generic in a portable/standard
+  form (`AGENTS.md`, `gh`-installable skills); reserve Claude-native primitives for Claude-specific power.
+  This is what keeps a Claude → Copilot/ChatGPT switch painless.
 
 ## Per-product notes (where "advance" means different things)
 - **ksail** (Go CLI): features/UX, coverage on command/reconcile paths, `-bench` on hot loops; weekly
