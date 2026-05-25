@@ -54,3 +54,11 @@
 	path = applications/ascoachingogvaner
 	url = git@github.com:devantler-tech/ascoachingogvaner.git
 	branch = main
+[submodule "libraries/skills"]
+	path = libraries/skills
+	url = git@github.com:devantler-tech/skills.git
+	branch = main
+[submodule "libraries/plugins"]
+	path = libraries/plugins
+	url = git@github.com:devantler-tech/plugins.git
+	branch = main

@@ -13,3 +13,10 @@ section of each `AGENTS.md` (on the submodule's latest `main`):
 **Blast radius:** changes here ripple to every consumer repo — prefer additive, backward-compatible
 changes. Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card
 is a pointer by design — each menu is maintained once, in the repo's own `AGENTS.md`.
+
+## Roadmap & enhancement
+Roadmaps for both repos live in **GitHub Issues** (`roadmap` label) on `devantler-tech/actions` and
+`devantler-tech/reusable-workflows`. **Advance** via
+[`product-engineering`](../../product-engineering/SKILL.md): new composite actions / workflow
+capabilities and their tests — but because of the blast radius, keep everything **additive &
+backward-compatible** and never break a consumer.
