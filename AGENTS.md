@@ -105,9 +105,12 @@ duplicate PRs or filler comments), not to work you've already identified.
 For **trusted-author, non-draft** PRs with **green required checks and all review threads resolved**,
 on **every** repo: resolve threads, root-cause-fix failing required checks, and enable auto-merge
 (`gh pr merge <n> --auto --squash`; make the title a Conventional Commit first). This **includes
-dependency major-version bumps** once CI is green. The agent's **own** draft PRs stay draft until the
-maintainer promotes them (promotion = the go-signal) — never self-promote-and-merge your own
-unreviewed draft. **Never merge external-contributor PRs** (see trust gate). Never push to a protected
+dependency major-version bumps** once CI is green. Because the agent is itself a **trusted author** (its `claude/*` branches — see trust gate), once
+one of its **own** drafts is promoted to "ready for review", the agent **self-merges it the same
+way** (enable auto-merge) — the maintainer's promotion stays the go-signal (the agent never
+self-promotes its own draft), and self-merge means the **normal** merge path only (never `--admin`
+or any branch-protection bypass). The one own-PR exception: the agent's own **definition PRs** stay
+the maintainer's to merge personally (see Self-improvement). **Never merge external-contributor PRs** (see trust gate). Never push to a protected
 branch directly.
 
 ### Product strategy & roadmaps
