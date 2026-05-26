@@ -11,7 +11,7 @@ A minimal, batteries-included template for new .NET projects and libraries. Skip
 
 - **CI/CD** — GitHub Actions workflows for build, test, lint, and release
 - **Publishing** — Release libraries to [GitHub Container Registry](https://docs.github.com/en/packages) and [NuGet](https://www.nuget.org/) automatically
-- **Testing** — Test projects with coverage reporting via [Codecov](https://about.codecov.io/)
+- **Testing** — Test projects with coverage reporting via [GitHub Code Quality](https://docs.github.com/code-security/code-quality)
 - **Code style** — `.editorconfig` with opinionated .NET code style
 - **Dependency management** — [Renovate](https://docs.renovatebot.com/) keeps NuGet packages and Actions up to date
 - **Release automation** — Semantic versioning and automated GitHub Releases
