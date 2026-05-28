@@ -56,7 +56,9 @@ The roadmap of record is **GitHub Issues** (Issues are enabled on every repo) �
 1. Pick a **ready, well-specified** issue (prefer ones you or the maintainer scoped; for a big design,
    write/extend an ADR or system-design note first and link it).
 2. Isolate a worktree, implement at the **root cause**, and **write tests** that pin the new behaviour
-   and its edge cases (tests are part of the change, not optional).
+   and its edge cases (tests are part of the change, not optional). **Update the docs the change
+   touches in the same PR** (help/generated reference, README, `AGENTS.md`, the relevant site page) —
+   docs are part of the change too; re-run, never hand-edit, any doc generator.
 3. **Validate** (the card's build + test command) — never open a PR that breaks build/validation.
 4. Open a **draft PR**: Conventional-Commit title (`feat:`/`fix:`/`refactor:`/`perf:`/`test:`/`docs:`),
    AI-disclosure line, labels, and **`Fixes #N`** so it closes the issue on merge. Body = what & why,
@@ -89,8 +91,24 @@ Targeted, **behaviour-preserving** improvement, backed by tests.
   (`golangci-lint`, `dotnet format`, `actionlint`, the repo's formatter) and the full test suite before
   the PR; if tests are thin in the area, add them *first* (a separate PR) so the refactor is safe.
 
-## 7. Holistic review & shared-library stewardship
-Sections 1–6 work one product at a time. **~Monthly (on rotation), zoom out and look at the whole suite
+## 7. Documentation
+Treat docs as part of the product — keep them **in sync** with what ships and **improve** what exists.
+- **Sync (definition of done).** A feature/fix that changes behaviour, flags, commands, config, or UX
+  updates the affected docs **in the same PR**: the CLI `--help`/generated reference, README, the
+  repo's `AGENTS.md`, and the relevant devantler.tech `docs/` page. Re-run the doc generator (e.g.
+  KSail's command reference); **never hand-edit generated docs**. If a change already merged without
+  its docs, **backfill** them in a focused `docs:` PR.
+- **Improve (on the docs cadence).** Pick an under-served area and make it genuinely better: fix
+  inaccuracies and stale examples, fill a missing how-to/quickstart/troubleshooting entry, tighten
+  clarity and onboarding flow, repair dead links and broken samples, align terminology. Verify
+  examples actually run; build-verify the site (the monorepo card's `docs` build) before the PR.
+- **Scope.** Spans **every product's own docs** (README, `AGENTS.md`, usage/reference) and the central
+  **devantler.tech site** (`docs/`). The site's recurring slice (Site QA, Content Sync, Content Review)
+  lives in the [monorepo card](../products/monorepo/SKILL.md); this section is the cross-product
+  discipline that also covers per-product docs. `docs:`-titled PRs are first-class advance work.
+
+## 8. Holistic review & shared-library stewardship
+Sections 1–7 work one product at a time. **~Monthly (on rotation), zoom out and look at the whole suite
 at once** — the highest-leverage advance work is often cross-cutting (contract → *Holistic review*).
 - **Spot generic patterns.** When the same approach has independently shown up in **2+ products** (a CI
   step, a release/`.releaserc` setup, a workflow, a lint/test config, an agent skill, a docs
