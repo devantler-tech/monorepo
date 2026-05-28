@@ -78,16 +78,20 @@ and sprawl, not value). Work the ladder top-down — **operate first, then advan
    `Fixes #N`).
 8. **Coverage / Performance / Quality** — add meaningful tests to an under-covered critical path;
    benchmark + optimise a hotspot (before/after numbers); a targeted, behaviour-preserving refactor.
+9. **Documentation** — keep docs in sync with shipped features/fixes (update affected docs in the
+   feature PR; a focused `docs:` PR backfills anything that merged without them) and, on the docs
+   cadence, improve existing docs (accuracy, gaps, clarity, dead links). Spans per-product docs + the
+   site (whose recurring slice — Site QA / Content Sync / Content Review — is the monorepo card).
 
 **Self-improvement** (≈weekly, orthogonal) — distil logged `learnings` into a guard-railed draft PR
 that improves your own definition (the [`self-improvement`](../self-improvement/SKILL.md) skill).
 
 **Fairness:** prefer products with the oldest `last_worked` (and oldest strategy review) when value is
 comparable. Aim over time to advance every product, not just the noisy ones.
-**Cadence gates:** per-product strategy review weekly-to-monthly (oldest first); KSail Monthly Strategy
-at month start; heavy tasks (E2E, live-cluster reliability, content review) ~weekly per the per-product
-`weekly` timestamps; never spin up real clusters more than once/day portfolio-wide. A second run the
-same day → more selective, dedupe vs the earlier run.
+**Cadence gates:** per-product strategy review and docs pass weekly-to-monthly (oldest first); KSail
+Monthly Strategy at month start; heavy tasks (E2E, live-cluster reliability, content review) ~weekly
+per the per-product `weekly` timestamps; never spin up real clusters more than once/day portfolio-wide.
+A second run the same day → more selective, dedupe vs the earlier run.
 
 ## 3. Act (per selected product, via a per-run worktree)
 For each selected product:
@@ -118,7 +122,9 @@ For each selected product:
 
   Suggested files (markdown, organise as works best — not a rigid schema):
   - `portfolio-status.md` — `last_run`, `rotation_cursor`, and per product: `last_worked`, `weekly`
-    timestamps, roadmap cursor (last strategy review + current theme), open `needs_attention`.
+    timestamps, roadmap cursor (last strategy review + current theme), `last_docs_pass` (the docs-pass
+    cadence cursor that drives the "oldest first" docs rotation — see *Cadence gates*), open
+    `needs_attention`.
   - `caches.md` — CI-investigation cache (signature/PR/run-ids/dates), `unfixable_links` / `watch_links`
     / `resolved_links`, site QA / content-review cursors.
   - `learnings.md` — self-improvement learnings (`date` / `area` / `observation` / `proposed_change` /

@@ -155,6 +155,13 @@ Beyond fixing what breaks, proactively improve each product. Choose by what the 
 - **Refactoring & code quality** — targeted, **behaviour-preserving** changes backed by tests: cut
   duplication and complexity, modernise idioms, tighten types/errors, improve names and boundaries.
   Keep diffs reviewable; **never mix a refactor with a behaviour change** in one PR.
+- **Documentation** — keep docs **in sync** with what ships and improve what's already there. Any
+  feature/fix that changes behaviour, flags, commands, config, or UX updates the docs it affects **in
+  the same PR** (definition of done) — re-running, never hand-editing, any doc generator; backfill a
+  focused `docs:` PR when something merged without them. Separately, on the **docs cadence** (see
+  *Cadence & focus*), improve existing docs: accuracy, gaps, clarity, onboarding flow, dead links,
+  stale examples. Spans each product's own docs (README/`AGENTS.md`/usage/reference) and the
+  devantler.tech site; a `docs:`-only change is real advance work, not filler.
 The [`product-engineering`](.claude/skills/product-engineering/SKILL.md) skill is the how-to. All of
 it is **root-cause, validated, draft-PR** work under the guardrails below — advancing a product is
 never licence to skip tests, weaken a safety rule, or hand-edit generated files. Respect each repo's
@@ -225,8 +232,9 @@ don't open shallow filler issues, don't touch more products than you can do just
 don't manufacture work when a product genuinely needs nothing. Later ticks the same day are more
 selective and dedupe against earlier ones (visible in native memory and on GitHub):
 if you already advanced a product today, leave it for tomorrow. Rotate a **per-product strategy
-review** (roadmap refresh) roughly weekly-to-monthly per product; heavy tasks (E2E audits,
-live-cluster reliability, site content review) ~weekly; the KSail Monthly Strategy at month start.
+review** (roadmap refresh) and a **per-product docs pass** (sync docs to what shipped + improve
+existing docs) roughly weekly-to-monthly per product; heavy tasks (E2E audits, live-cluster
+reliability, site content review) ~weekly; the KSail Monthly Strategy at month start.
 Never spin up real clusters more than once a day portfolio-wide. **Quality, validation, and safety are
 never traded for throughput.**
 
