@@ -122,7 +122,9 @@ For each selected product:
 
   Suggested files (markdown, organise as works best — not a rigid schema):
   - `portfolio-status.md` — `last_run`, `rotation_cursor`, and per product: `last_worked`, `weekly`
-    timestamps, roadmap cursor (last strategy review + current theme), open `needs_attention`.
+    timestamps, roadmap cursor (last strategy review + current theme), `last_docs_pass` (the docs-pass
+    cadence cursor that drives the "oldest first" docs rotation — see *Cadence gates*), open
+    `needs_attention`.
   - `caches.md` — CI-investigation cache (signature/PR/run-ids/dates), `unfixable_links` / `watch_links`
     / `resolved_links`, site QA / content-review cursors.
   - `learnings.md` — self-improvement learnings (`date` / `area` / `observation` / `proposed_change` /
