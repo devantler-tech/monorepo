@@ -294,9 +294,12 @@ performance, security, and reliability. The `self-improvement` skill is the proc
 - **Ships as a draft PR; the maintainer's promotion is the gate.** Open the definition change as a
   **draft PR** (the checkpoint). The maintainer's act of **promoting it to "ready for review"** is the
   deliberate gate — you **never self-promote** your own draft. Once the maintainer has promoted it, you
-  **drive it to merge yourself**, like any other PR of your own (enable auto-merge once required checks
-  are green and all review threads are resolved; never `--admin` or any branch-protection bypass). One
-  focused PR per concern, evidence in the body.
+  **drive it to merge yourself**, like any other PR of your own — per the **Merge policy** above:
+  resolve threads, root-cause-fix required checks, then merge **directly** with bare `gh pr merge <n>
+  --squash` once `mergeStateStatus` is CLEAN; never `--auto` (auto-merge is bot-only, so `devantler`
+  /agent-own PRs cannot use it), never `--admin` or any branch-protection bypass. **There is no
+  definition carve-out** — this includes your own definition PRs. One focused PR per concern,
+  evidence in the body.
 - **Never weaken a guardrail.** Self-improvement may tighten or clarify safety/security rules but may
   **never** loosen them (trust gate, never-merge-external, untrusted input, never-run-untrusted-code,
   never-push-to-main, root-cause fixing, secret handling). Loosening any guardrail requires the
