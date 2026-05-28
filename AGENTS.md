@@ -103,13 +103,22 @@ duplicate PRs or filler comments), not to work you've already identified.
 
 ### Merge policy — drive trusted-author PRs to merge (incl. majors)
 For **trusted-author, non-draft** PRs with **green required checks and all review threads resolved**,
-on **every** repo: resolve threads, root-cause-fix failing required checks, and enable auto-merge
-(`gh pr merge <n> --auto --squash`; make the title a Conventional Commit first). This **includes
-dependency major-version bumps** once CI is green. The agent's **own** PRs are themselves
+on **every** repo: resolve threads, root-cause-fix failing required checks, set a Conventional-Commit
+title, then **merge with the command that matches the author** — a **single-author bot**
+(dependabot/renovate/github-actions/ksail-bot) arms pre-CLEAN auto-merge (`gh pr merge <n> --auto
+--squash`); a **human-trusted author — `devantler`, i.e. every agent-own PR — cannot use `--auto`**
+(auto-merge is bot-only) and merges **directly** with bare `gh pr merge <n> --squash` once
+`mergeStateStatus` is CLEAN. **Before any merge, emit the raw gating evidence** an unattended run is
+checked against: a *fresh* `gh pr view <n> --json number,isDraft,author,mergeStateStatus` **plus** `gh
+api repos/<owner>/<repo>/rules/branches/<default>` showing a non-empty required-status-checks set —
+skipping that branch-protection call is what makes the autonomous self-merge fail-close
+nondeterministically (the recurring own-PR merge denials). This **includes dependency major-version
+bumps** once CI is green. The agent's **own** PRs are themselves
 trusted-author PRs (it authors them from its `claude/*` branches — see trust gate), so the **same
 conditions and steps apply**: once one of its own drafts is **promoted to "ready for review"** and its
 **required checks are green with all review threads resolved**, the agent **drives it to merge itself**
-the same way (resolve threads, root-cause-fix required checks, enable auto-merge). This applies to
+the same way (resolve threads, root-cause-fix required checks, then merge **directly** with bare `gh
+pr merge <n> --squash` — never `--auto`, which is bot-only). This applies to
 **all** the agent's own PRs, **including its own definition PRs** (see Self-improvement) — there is no
 definition carve-out. The maintainer's **promotion** is the go-signal and the deliberate gate (the
 agent never self-promotes its own draft), and self-merge means the **normal** merge path only — never
@@ -285,9 +294,12 @@ performance, security, and reliability. The `self-improvement` skill is the proc
 - **Ships as a draft PR; the maintainer's promotion is the gate.** Open the definition change as a
   **draft PR** (the checkpoint). The maintainer's act of **promoting it to "ready for review"** is the
   deliberate gate — you **never self-promote** your own draft. Once the maintainer has promoted it, you
-  **drive it to merge yourself**, like any other PR of your own (enable auto-merge once required checks
-  are green and all review threads are resolved; never `--admin` or any branch-protection bypass). One
-  focused PR per concern, evidence in the body.
+  **drive it to merge yourself**, like any other PR of your own — per the **Merge policy** above:
+  resolve threads, root-cause-fix required checks, then merge **directly** with bare `gh pr merge <n>
+  --squash` once `mergeStateStatus` is CLEAN; never `--auto` (auto-merge is bot-only, so `devantler`
+  /agent-own PRs cannot use it), never `--admin` or any branch-protection bypass. **There is no
+  definition carve-out** — this includes your own definition PRs. One focused PR per concern,
+  evidence in the body.
 - **Never weaken a guardrail.** Self-improvement may tighten or clarify safety/security rules but may
   **never** loosen them (trust gate, never-merge-external, untrusted input, never-run-untrusted-code,
   never-push-to-main, root-cause fixing, secret handling). Loosening any guardrail requires the
