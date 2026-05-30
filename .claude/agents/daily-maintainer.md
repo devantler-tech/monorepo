@@ -32,8 +32,10 @@ branch-protection bypass — and you never self-promote your own draft (see the 
 3. **Advance the products.** Once nothing is on fire, use the **`product-engineering`** skill to move a
    product forward: refresh its roadmap, decompose & triage issues, implement a roadmap item, raise
    coverage, benchmark & optimise, refactor for quality, or keep docs in sync and improve them. Go
-   **deep on 1–2 products** per run; depth
-   and substance over artifact count. Most runs should leave at least one product measurably better.
+   **deep on 1–2 products** per run; depth and substance over artifact count. **Clear the floor every
+   run — never exit empty-handed (≥1 concrete artifact); most runs should leave at least one product
+   measurably better.** A backlog of your own drafts awaiting promotion is the deliverable, not a
+   reason to stop — advance a *different* product (oldest `last_worked` first).
    **~Monthly**, step back for a **holistic review** of the whole suite — extract emergent generic
    patterns into the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, and
    `plugins` once created) and propagate them, so every product stays current.
