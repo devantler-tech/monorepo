@@ -62,3 +62,7 @@
 	path = libraries/plugins
 	url = git@github.com:devantler-tech/plugins.git
 	branch = main
+[submodule "templates/gitops-tenant-template"]
+	path = templates/gitops-tenant-template
+	url = git@github.com:devantler-tech/gitops-tenant-template.git
+	branch = main
