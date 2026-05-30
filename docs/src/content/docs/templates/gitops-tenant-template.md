@@ -24,11 +24,11 @@ template-sync overwrites the files the template **owns** (the shared `cd.yaml`, 
 
 ```bash
 # Create a new private repo from the template
-gh repo create devantler-tech/<tenant> --template devantler-tech/gitops-tenant-template --private --clone
+gh repo create devantler-tech/my-tenant --template devantler-tech/gitops-tenant-template --private --clone
 
 # Replace the scaffolding with your app (code, Dockerfile, deploy/ manifests, ci.yaml),
 # then validate locally:
-cd <tenant>
+cd my-tenant
 kubectl kustomize deploy/        # manifests build
 actionlint .github/workflows/*   # workflows parse
 ```
