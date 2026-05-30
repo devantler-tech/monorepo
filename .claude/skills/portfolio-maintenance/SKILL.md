@@ -55,7 +55,11 @@ Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../product
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep on 1–2 products** rather
 than spreading thin (contract *Cadence & focus*: depth and substance over artifact count; bound noise
-and sprawl, not value). Work the ladder top-down — **operate first, then advance**:
+and sprawl, not value). **Every run must clear the floor — at least one concrete artifact** (a PR, a
+substantive issue, a triage/strategy pass, an unblocking review-thread resolution, or a trusted-PR
+merge); a survey-and-exit run that authors nothing is a **failure, not a valid outcome** (contract
+*Mandate*). An existing backlog of your own drafts awaiting promotion is **not** a reason to stop —
+advance a *different* product. Work the ladder top-down — **operate first, then advance**:
 
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.
@@ -69,7 +73,8 @@ and sprawl, not value). Work the ladder top-down — **operate first, then advan
 4. **Confident fixes** — clear bug, broken link, missing alt text, manifest misconfig, version bump.
 5. **Upkeep** — workflow health, dependency bundling, docs sync/trim, manifest cleanup.
 
-**Advance (move it forward) — the default once nothing above is pending.** Use the
+**Advance (move it forward) — the default once nothing above is pending, and the floor's backstop:
+when the operate ladder is clear you still advance at least one product (never exit empty-handed).** Use the
 [`product-engineering`](../product-engineering/SKILL.md) skill; pick what the chosen product needs most:
 6. **Strategy & roadmap** — if a product has no roadmap or its review is due (cadence), run a strategy
    review and create/refresh its `roadmap` issues; decompose an epic into actionable issues; triage
@@ -133,7 +138,9 @@ For each selected product:
 - **Report:** end with a concise maintainer report — products surveyed, what you did (with PR links),
   and **what now needs the maintainer** (open drafts awaiting promotion, blockers, external PRs, open
   decisions). This report — not a version-controlled file — is how durable state is surfaced each run.
-  If you did nothing, say what you checked and why.
+  A run that authored nothing is a **failure mode** (see the floor in §2), not a normal outcome — if it
+  truly happened, say exactly what you checked, why every ladder rung was genuinely empty, and what
+  you'll pick up next run; don't let "nothing actionable" become a habit.
 
 ## 5. Reflect & improve (self-learning)
 At the end of every run, record operational **`learnings`** in native memory (`learnings.md`) — steps
