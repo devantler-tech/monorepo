@@ -70,6 +70,16 @@ advance a *different* product. Work the ladder top-down — **operate first, the
    they wait** — root-cause-fix their failing CI and resolve their review threads *before* promotion
    (both allowed on a draft); only the **promotion** (draft → ready) is the maintainer's — you never
    self-promote, and the merge waits for it. Never auto-drive or merge external PRs.
+   - **Confirm by `state`/`mergedAt`, never by `mergeStateStatus`, in Enable-Auto-Merge repos.** Repos
+     with a `🔀 Enable Auto-Merge` workflow (monorepo, actions, reusable-workflows, go-template,
+     dotnet-template, skills, plugins, …) arm the `app/botantler` App on **promotion**, so it merges a
+     CLEAN trusted/own PR the instant its gates clear — often before a poll loop can observe `CLEAN`.
+     After you resolve threads + greenlight required checks, confirm the merge with
+     `gh pr view <n> --json state,mergedAt` and stop as soon as `state==MERGED` (or read the default
+     branch's top-commit subject for `(#N)`). Do **not** poll `mergeStateStatus`/`mergeable` and do
+     **not** fire a manual `gh pr merge` — a merged PR reports those as `UNKNOWN` for minutes while the
+     merge completes, so polling them (or attempting a now-moot manual merge, which the classifier
+     denies) only burns the run. Credit the auto-merge workflow, not a `gh pr merge` call.
 3. **Contributor-facing** — triage/label new issues+PRs; one insightful comment on the oldest
    un-commented open item.
 4. **Confident fixes** — clear bug, broken link, missing alt text, manifest misconfig, version bump.
