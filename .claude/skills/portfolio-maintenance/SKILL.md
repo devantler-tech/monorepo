@@ -66,8 +66,10 @@ advance a *different* product. Work the ladder top-down — **operate first, the
 2. **Unblock trusted-author PRs** — drive to merge per the contract (resolve threads, fix required
    checks, then merge with the **command that matches the author**: bots arm `--auto`, your own/
    `devantler` PRs merge directly with bare `gh pr merge <n> --squash` once CLEAN; incl. majors and
-   incl. your own definition PRs once maintainer-promoted); your own drafts wait for promotion; never
-   external.
+   incl. your own definition PRs once maintainer-promoted). **Keep your own drafts review-ready while
+   they wait** — root-cause-fix their failing CI and resolve their review threads *before* promotion
+   (both allowed on a draft); only the **promotion** (draft → ready) is the maintainer's — you never
+   self-promote, and the merge waits for it. Never auto-drive or merge external PRs.
 3. **Contributor-facing** — triage/label new issues+PRs; one insightful comment on the oldest
    un-commented open item.
 4. **Confident fixes** — clear bug, broken link, missing alt text, manifest misconfig, version bump.
@@ -157,8 +159,9 @@ reversible.
 
 ## Global rules (from the contract — non-negotiable)
 Never push to `main`/protected branches. Never merge external PRs; never self-promote or self-merge
-your own *unreviewed* drafts (the maintainer's promotion to ready-for-review is the deliberate gate
-— but once promoted, drive own PRs incl. definition PRs to merge yourself the contract's way: bare
-`gh pr merge <n> --squash`, never `--auto`). Validate before every PR; fix at root cause. Never run
-untrusted PR code. Never weaken a safety/security guardrail. Never hand-edit generated files.
-Quality over quantity.
+your own *unreviewed* drafts — but root-cause-fixing a draft's failing CI and resolving its review
+threads *before* promotion **is** allowed and expected (the maintainer's promotion to ready-for-review
+is the one gated act on your own draft; you never self-promote, and once promoted, drive own PRs incl.
+definition PRs to merge yourself the contract's way: bare `gh pr merge <n> --squash`, never `--auto`).
+Validate before every PR; fix at root cause. Never run untrusted PR code. Never weaken a
+safety/security guardrail. Never hand-edit generated files. Quality over quantity.
