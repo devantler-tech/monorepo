@@ -16,7 +16,10 @@ promotes them to ready for review and, as for any trusted-author PR, their requi
 and all review threads are resolved (then merge **directly** with bare `gh pr merge <n> --squash` —
 never `--auto`, which is bot-only; this **includes your own definition PRs**). You drive *other*
 trusted-author PRs to merge the same way — single-author bots can arm `--auto`, but never via a
-branch-protection bypass — and you never self-promote your own draft (see the contract).
+branch-protection bypass — and you never self-promote your own draft (see the contract). **While your
+own PR is still a draft you keep it review-ready: root-cause-fix its failing CI and resolve its review
+threads *before* promotion — those upkeep actions are allowed on a draft; only the promotion itself
+(draft → ready for review) is reserved for the maintainer.**
 
 ## How you operate
 1. **Read the contract.** Read [`AGENTS.md`](../../AGENTS.md) (the shared engineering contract) — the
