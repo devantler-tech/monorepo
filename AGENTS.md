@@ -105,6 +105,10 @@ actionable change — fix, cleanup, larger restructure, breaking change, new/bum
 it and open a **draft PR** with the rationale/trade-offs in the body. New dependencies and breaking
 changes don't need prior sign-off; flag them prominently in the body. The maintainer's signal to
 proceed is **promoting the draft to "ready for review"** (or merging) — not approval before drafting.
+A draft is not a frozen artifact: **keep your own drafts review-ready while they await promotion** —
+root-cause-fix their failing CI and resolve their review threads (both ALLOWED before promotion, no
+sign-off needed); only the promotion act itself is the maintainer's, so a draft you hand over should
+already be green with threads resolved.
 Prefer a draft PR over deferring; reserve a report-only note for things that genuinely aren't a diff
 (environment/infra/repo-config/external blockers). Restraint applies to *noise* (don't stack
 duplicate PRs or filler comments on the **same** concern), not to work you've already identified.
@@ -128,10 +132,16 @@ api repos/<owner>/<repo>/rules/branches/<default>` showing a non-empty required-
 skipping that branch-protection call is what makes the autonomous self-merge fail-close
 nondeterministically (the recurring own-PR merge denials). This **includes dependency major-version
 bumps** once CI is green. The agent's **own** PRs are themselves
-trusted-author PRs (it authors them from its `claude/*` branches — see trust gate), so the **same
-conditions and steps apply**: once one of its own drafts is **promoted to "ready for review"** and its
-**required checks are green with all review threads resolved**, the agent **drives it to merge itself**
-the same way (resolve threads, root-cause-fix required checks, then merge **directly** with bare `gh
+trusted-author PRs (it authors them from its `claude/*` branches — see trust gate). **While its own PR
+is still a draft, the agent actively keeps it review-ready: it root-cause-fixes the draft's failing CI
+checks and resolves its review threads (e.g. from `copilot-pull-request-reviewer[bot]`) — these upkeep
+actions are explicitly ALLOWED *before* promotion and need no prior sign-off. The *only* act reserved
+for the maintainer is the promotion itself (draft → "ready for review"): the agent never promotes its
+own draft, but it does not sit on a red or unresolved draft waiting for one either** — a draft handed
+to the maintainer should already be green with its threads resolved, ready to promote. Once a draft *is*
+promoted, the **same conditions and steps apply** as for any trusted-author PR: with its **required
+checks green and all review threads resolved**, the agent **drives it to merge itself** the same way
+(resolve any remaining threads, root-cause-fix required checks, then merge **directly** with bare `gh
 pr merge <n> --squash` — never `--auto`, which is bot-only). This applies to
 **all** the agent's own PRs, **including its own definition PRs** (see Self-improvement) — there is no
 definition carve-out. The maintainer's **promotion** is the go-signal and the deliberate gate (the
@@ -319,7 +329,9 @@ performance, security, and reliability. The `self-improvement` skill is the proc
   only from your own observations and the maintainer's direct direction.
 - **Ships as a draft PR; the maintainer's promotion is the gate.** Open the definition change as a
   **draft PR** (the checkpoint). The maintainer's act of **promoting it to "ready for review"** is the
-  deliberate gate — you **never self-promote** your own draft. Once the maintainer has promoted it, you
+  deliberate gate — you **never self-promote** your own draft, but you DO keep it review-ready
+  meanwhile (root-cause-fix its failing CI and resolve its review threads — both allowed *before*
+  promotion). Once the maintainer has promoted it, you
   **drive it to merge yourself**, like any other PR of your own — per the **Merge policy** above:
   resolve threads, root-cause-fix required checks, then merge **directly** with bare `gh pr merge <n>
   --squash` once `mergeStateStatus` is CLEAN; never `--auto` (auto-merge is bot-only, so `devantler`

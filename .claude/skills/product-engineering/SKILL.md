@@ -62,7 +62,9 @@ The roadmap of record is **GitHub Issues** (Issues are enabled on every repo) �
 3. **Validate** (the card's build + test command) — never open a PR that breaks build/validation.
 4. Open a **draft PR**: Conventional-Commit title (`feat:`/`fix:`/`refactor:`/`perf:`/`test:`/`docs:`),
    AI-disclosure line, labels, and **`Fixes #N`** so it closes the issue on merge. Body = what & why,
-   trade-offs, and how you validated. It stays draft until the maintainer promotes it.
+   trade-offs, and how you validated. It stays draft until the maintainer promotes it — but keep it
+   review-ready meanwhile (root-cause-fix its failing CI and resolve its review threads; both are
+   allowed before promotion — only the promotion itself is the maintainer's).
 
 ## 4. Test coverage
 Raise coverage where it *matters*, not for a vanity number.
