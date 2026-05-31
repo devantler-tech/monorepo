@@ -42,7 +42,7 @@ A collection of [reusable GitHub Actions workflows](https://docs.github.com/en/a
 
 - **CI Workflows**: [Go](https://go.dev/) testing/linting, [.NET](https://dotnet.microsoft.com/) testing, documentation linting
 - **CD Workflows**: [GitHub Pages](https://pages.github.com/) publish, application/library releases, workflow-run cleanup
-- **Automation**: Auto-merge for trusted bots, [semantic-release](https://semantic-release.gitbook.io/), TODO scanning, [Kyverno](https://kyverno.io/) policy sync, [Zizmor](https://github.com/woodruffw/zizmor) workflow analysis, [Copilot skills](https://docs.github.com/en/copilot/how-tos/copilot-cli) updates
+- **Automation**: Auto-merge for trusted bots, [semantic-release](https://semantic-release.gitbook.io/), TODO scanning, [Kyverno](https://kyverno.io/) policy sync, [Zizmor](https://github.com/woodruffw/zizmor) workflow analysis, [agent skills](https://github.com/devantler-tech/skills) updates
 
 ## [⚡ Actions](https://github.com/devantler-tech/actions) ![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-2088FF.svg?style=for-the-badge&logo=GitHub-Actions&logoColor=white)
 
@@ -54,12 +54,13 @@ A collection of [composite GitHub Actions](https://docs.github.com/en/actions/tu
 - **Cleanup GHCR**: Clean up old [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) packages
 - **Login to GHCR**: Authenticate with the GitHub Container Registry
 - **.NET Test**: Test [.NET](https://dotnet.microsoft.com/) solutions or projects
-- **Setup Copilot Skills**: Install agent skills via `gh skill`
+- **Setup Agent Skills**: Install agent skills via `gh skill` for one or more agents (e.g. GitHub Copilot, Claude Code)
 - **Setup Go Toolchain**: Set up Go with optional private module support
 - **Setup KSail**: Install [KSail](https://github.com/devantler-tech/ksail) CLI via [Homebrew](https://brew.sh/)
 - **Sync Labels**: Sync GitHub labels across repositories
 - **TODOs**: Create GitHub issues from TODO comments in code
-- **Update Copilot Skills**: Run `gh skill update --all` and report changes
+- **Update Agent Skills**: Run `gh skill update --all` and report changes
+- **Upload Coverage**: Upload a Cobertura XML coverage report to GitHub Code Quality
 - **Upsert Issue**: Create, update, reopen, or close a GitHub issue by title
 
 </div>
