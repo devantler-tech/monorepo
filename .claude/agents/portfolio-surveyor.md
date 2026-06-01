@@ -25,10 +25,10 @@ Enumerate across ALL repos in one shot (an org-wide search naturally covers ever
 public and private — no per-repo loop needed to enumerate):
 
 1. **Open PRs (org-wide, one call):**
-   `gh search prs --owner devantler-tech --state open --limit 100 --json number,repository,title,author,isDraft,labels,updatedAt,url`
+   `gh search prs --owner devantler-tech --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
 2. **Open issues (org-wide, one call):**
-   `gh search issues --owner devantler-tech --state open --limit 100 --json number,repository,title,labels,updatedAt,url`
-   (ignore anything that is a PR; treat label-less issues as untriaged.)
+   `gh search issues --owner devantler-tech --state open --limit 300 --json number,repository,title,labels,updatedAt,url`
+   (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
 3. **Deepen only the merge candidates.** For the *few* **trusted-author, non-draft** PRs only
    (`devantler`, `ksail-bot`, `dependabot[bot]`, `github-actions[bot]`, `renovate[bot]` — **exact
    login match, never a substring**; `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the
@@ -51,7 +51,9 @@ Portfolio repos (the org-wide search covers them; this is the canonical list to 
 `ascoachingogvaner` (private).
 
 Keep your *own* footprint small: prefer `--jq` to project just the fields you need, never echo raw
-JSON blobs — summarise as you go.
+JSON blobs — summarise as you go. **No silent truncation:** the `--limit` on the org-wide searches is
+a generous ceiling, not an expected cap — if a result set actually reaches it, raise the limit (or
+paginate) and say so, rather than surveying a partial list.
 
 ## Return — one compact digest (target < ~1.5K tokens), this exact shape
 Markdown; **omit products with no signal entirely** (don't echo empty lists):

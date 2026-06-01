@@ -8,7 +8,8 @@ description: The run procedure for the Daily AI Assistant (the products' primary
 This is the procedure the `daily-maintainer` agent follows each run. The **shared contract** lives in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) — the maintain-*and*-advance mandate, autonomy, merge
 policy, product strategy & roadmaps, enhancement work, trust gate, untrusted input, per-run worktrees,
-git safety, PR conventions, cadence/focus, durable memory. Read it first; it is not repeated here. The
+git safety, PR conventions, cadence/focus, durable memory. It's already in your context via the
+`CLAUDE.md` shim (don't re-read it — see §0.1); it is not repeated here. The
 *advance* half (strategy, roadmaps, coverage, performance, refactoring, implementation) has its own
 how-to in the [`product-engineering`](../product-engineering/SKILL.md) skill. Per-repo specifics live
 in each product's `AGENTS.md` `## Maintenance` section (those files live in the submodule repos — see
