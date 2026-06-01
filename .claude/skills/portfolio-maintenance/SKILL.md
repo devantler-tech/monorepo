@@ -8,7 +8,8 @@ description: The run procedure for the Daily AI Assistant (the products' primary
 This is the procedure the `daily-maintainer` agent follows each run. The **shared contract** lives in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) — the maintain-*and*-advance mandate, autonomy, merge
 policy, product strategy & roadmaps, enhancement work, trust gate, untrusted input, per-run worktrees,
-git safety, PR conventions, cadence/focus, durable memory. Read it first; it is not repeated here. The
+git safety, PR conventions, cadence/focus, durable memory. It's already in your context via the
+`CLAUDE.md` shim (don't re-read it — see §0.1); it is not repeated here. The
 *advance* half (strategy, roadmaps, coverage, performance, refactoring, implementation) has its own
 how-to in the [`product-engineering`](../product-engineering/SKILL.md) skill. Per-repo specifics live
 in each product's `AGENTS.md` `## Maintenance` section (those files live in the submodule repos — see
@@ -16,7 +17,9 @@ the portfolio map in the monorepo `AGENTS.md`) and in the matching [`products/<n
 card.
 
 ## 0. Pre-flight
-1. Read `AGENTS.md` (the contract).
+1. **The contract is already in context** — `AGENTS.md` is loaded via the project's `CLAUDE.md`
+   (`@AGENTS.md` shim). Follow it; **don't re-read it** (a redundant read just burns ~6–7K tokens).
+   Only if it is somehow *not* already in your context should you read it once.
 2. **Working checkout:** `cd /Users/homelab-mac-mini/git-personal/monorepo` (this deployment's primary
    checkout — the scheduled task runs on a fixed machine; adjust the path if relocated); confirm
    (`test -d docs && test -f .gitmodules`); `gh auth status` shows `devantler`. **Sync the definition:**
@@ -30,22 +33,29 @@ card.
    run notes, `learnings`). It may be stale — verify against live GitHub. *(The legacy `state.json` is
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
 
-## 1. Survey (cheap, read-only, across ALL products)
-A few `gh` calls, not a deep audit, per product. Everywhere below, `--repo <owner>/<repo>` takes the
-full slug `devantler-tech/<repo>` (e.g. `--repo devantler-tech/ksail`):
-- Open PRs: `gh pr list --repo devantler-tech/<repo> --state open --json number,title,author,isDraft,reviewDecision,mergeStateStatus,statusCheckRollup,updatedAt,labels`.
-- Recent CI failures (~2 days): `gh run list --repo devantler-tech/<repo> --status failure --limit 10 --json databaseId,workflowName,headSha,createdAt,url`.
-- Open Dependabot/Renovate PRs, unlabelled/untriaged issues & PRs, stale PRs (>14d).
-- **Roadmap state** (the *advance* signal): open issues, esp. `roadmap`-labelled epics and any
-  `enhancement`/`performance`/`refactor` issues ready to pick up; open milestones; `gh issue list
-  --repo devantler-tech/<repo> --state open --json number,title,labels,updatedAt`. Note products with
-  **no roadmap yet** — they're prime strategy-review candidates.
-- **Shared libraries** (`devantler-tech/actions`, `reusable-workflows`, `skills`, and `plugins` once it
-  exists): open PRs/issues + recent failures, as for any product. ~Monthly, also do the **holistic
-  review** (contract *Holistic review*): scan the whole suite for generic patterns that should be
-  extracted/propagated into these libs.
-- From **native memory**: each product's `last_worked`, `roadmap` (last strategy review + current theme),
-  `weekly` timestamps, and `needs_attention`.
+## 1. Survey (delegate to a read-only subagent — keep the JSON out of your context)
+**Spawn the [`portfolio-surveyor`](../../agents/portfolio-surveyor.md) subagent** (read-only) to run
+the whole portfolio survey and return **one compact digest** — so the ~40 calls of raw `gh` JSON
+accumulate in *its* throwaway context, not yours; you receive only the digest. The surveyor:
+- enumerates org-wide in two calls (`gh search prs/issues --owner devantler-tech --state open …`)
+  instead of looping `gh pr/issue list` per repo, then **deepens only the merge candidates** with a
+  targeted `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup` (heavy fields
+  pulled for the few **trusted-author non-draft** PRs, not for every PR in every repo);
+- checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure
+  --limit 3` each;
+- flags untriaged issues/PRs, stale PRs (>14d), Dependabot/Renovate PRs, `roadmap`-ready issues, and
+  products with **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs as
+  static-review-only.
+
+The returned digest (operate + advance signals, products-with-no-signal omitted) is your survey
+result. **Overlay your native-memory cadence cursors yourself** — each product's `last_worked`,
+`roadmap` (last strategy review + current theme), `weekly` timestamps, `needs_attention`, and the
+CI/link caches — since the surveyor reads only live GitHub, not memory. ~Monthly, also do the
+**holistic review** (contract *Holistic review*): scan the suite for generic patterns to extract into
+the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, `plugins`).
+
+*(Fallback: if you cannot spawn a subagent in this environment, run the same leaned survey inline —
+org-wide `gh search` first, deepen only the candidates — never the old per-repo `gh pr/issue list` loop.)*
 
 Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../products/platform/SKILL.md) ·
 [monorepo + site](../products/monorepo/SKILL.md) · [templates](../products/templates/SKILL.md) ·
@@ -122,8 +132,14 @@ For each selected product:
    [`product-engineering`](../product-engineering/SKILL.md) skill (strategy/roadmap, implement,
    coverage, perf, refactor procedures).
 3. **Validate before any PR** (the card's command — build + tests; add/extend tests for behaviour
-   changes). Open a **draft** PR (Conventional-Commit title, AI-disclosure line, labels; `Fixes #N`
-   when it closes an issue). Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff.
+   changes). **Keep verbose output out of your context:** tee build/test/lint output to a file and
+   surface only the summary + failing lines (e.g. `<cmd> 2>&1 | tee /tmp/val.log | tail -n 40`, then
+   `grep -nE 'FAIL|error|Error|warning' /tmp/val.log`); read more from the file only when a failure
+   needs it. For **read-heavy investigation** (locating code across many files or understanding a
+   subsystem before changing it), delegate to a subagent (the built-in **`Explore`** type) that
+   returns just the conclusion — keep the edits and `gh pr create` in your own loop. Open a **draft**
+   PR (Conventional-Commit title, AI-disclosure line, labels; `Fixes #N` when it closes an issue).
+   Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff.
 4. **Clean up:** `git -C <path> worktree remove .claude/worktrees/maint-<runid>` (and prune). Leave
    no worktree or dirty state behind.
 
@@ -134,8 +150,12 @@ For each selected product:
   entries >7 days), recent run notes, and any new `learnings`. Keep memory **coherent and organised**:
   a small set of well-named files (e.g. `portfolio-status.md`, `caches.md`, `learnings.md`, plus
   `feedback_*.md`) with `MEMORY.md` as a true index; **edit in place and prune stale content** rather
-  than appending forever; don't create a new file per fact. The roadmap cursor is lightweight — the
-  durable roadmap is GitHub Issues (`roadmap`-labelled epics + milestones), not memory.
+  than appending forever; don't create a new file per fact. **Bound the every-run read:** keep the
+  run-history / recent-run notes to the **last ~10 runs (or ~7 days)**, rolling older entries into a
+  one-line summary, and **don't duplicate live PR/CI metadata into memory** — GitHub is the source of
+  truth (the surveyor re-derives it each run), so memory holds cursors and durable notes, not a copy
+  of open PRs. This keeps the start-of-run `view` small as history accumulates. The roadmap cursor is
+  lightweight — the durable roadmap is GitHub Issues (`roadmap`-labelled epics + milestones), not memory.
 
   Suggested files (markdown, organise as works best — not a rigid schema):
   - `portfolio-status.md` — `last_run`, `rotation_cursor`, and per product: `last_worked`, `weekly`

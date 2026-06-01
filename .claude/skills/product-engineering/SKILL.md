@@ -15,7 +15,11 @@ uptime. Every kind of work below ships under the **same discipline** — per-run
 (build + tests), root-cause, **draft PR** with the AI-disclosure line, one concern per PR, never weaken
 a safety/security guardrail, never hand-edit generated files. Match each repo's existing conventions
 and load its product card + `AGENTS.md ## Maintenance` for validate commands, protected files, labels,
-and its roadmap home.
+and its roadmap home. **Keep verbose tool output out of your context** — the coverage runs, benchmarks,
+builds, and linters below can emit hundreds of lines; tee them to a file and surface only the summary
+plus the numbers/failures you need (e.g. `<cmd> 2>&1 | tee /tmp/out.log | tail -n 40`), and delegate
+read-heavy investigation to a subagent (the built-in `Explore` type) that returns just the conclusion.
+Same work, fewer tokens.
 
 > **Lean on the specialist skills** for heavy thinking, **if they're available in your environment**
 > (these ship with the Claude Code `engineering` plugin — they are *not* defined in this repo; if a
