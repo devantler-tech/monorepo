@@ -18,7 +18,12 @@ It is intentionally **stack-neutral**: it carries no application code or languag
 
 ## What the template owns vs. what you own
 
-template-sync overwrites the files the template **owns** — the shared CI/CD plumbing (`cd.yaml`, `release.yaml`, `template-sync.yaml`, `validate-scaffold.yaml`), the `CLAUDE.md` shim, and the `zizmor.yml` pinning policy — and never touches the files **you own**. Declare the files you own — your app code, `Dockerfile`, `deploy/` manifests, `ci.yaml`, `dependabot.yml`, `AGENTS.md`, `README.md`, and project metadata (`.releaserc`, `.gitignore`, `LICENSE`) — in a **`.templatesyncignore`** (same syntax as `.gitignore`). See the template's [README](https://github.com/devantler-tech/gitops-tenant-template#what-the-template-owns-vs-what-you-own) for the authoritative file-by-file list.
+| Ownership | Files | Notes |
+| --- | --- | --- |
+| Template-owned | Shared CI/CD plumbing (`cd.yaml`, `release.yaml`, `template-sync.yaml`, `validate-scaffold.yaml`), `CLAUDE.md`, `zizmor.yml` | Overwritten by `template-sync` |
+| You own | App code, `Dockerfile`, `deploy/` manifests, `ci.yaml`, `dependabot.yml`, `AGENTS.md`, `README.md`, `.releaserc`, `.gitignore`, `LICENSE` | Declare in `.templatesyncignore` (same syntax as `.gitignore`) |
+
+See the template's [README](https://github.com/devantler-tech/gitops-tenant-template#what-the-template-owns-vs-what-you-own) for the authoritative file-by-file list.
 
 ## Getting Started
 
