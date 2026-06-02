@@ -80,25 +80,17 @@ export default defineConfig({
           tag: "meta",
           attrs: { name: "author", content: "Nikolai Emil Damm" },
         },
-        // Umami privacy-first web analytics (self-hosted on the platform at
-        // analytics.platform.devantler.tech). The tracking script is injected only
-        // once a website-id is configured, so builds without it stay clean. Create
-        // the site in the Umami dashboard to get its id, then set
-        // PUBLIC_UMAMI_WEBSITE_ID (and optionally PUBLIC_UMAMI_SRC) in the build env.
-        ...(process.env.PUBLIC_UMAMI_WEBSITE_ID
-          ? [
-              {
-                tag: "script",
-                attrs: {
-                  src:
-                    process.env.PUBLIC_UMAMI_SRC ||
-                    "https://analytics.platform.devantler.tech/script.js",
-                  "data-website-id": process.env.PUBLIC_UMAMI_WEBSITE_ID,
-                  defer: true,
-                },
-              },
-            ]
-          : []),
+        // Umami privacy-first web analytics (self-hosted on the platform). The
+        // website-id is fixed and managed declaratively — the matching Umami
+        // "website" is provisioned from Git on the platform (no UI click-ops).
+        {
+          tag: "script",
+          attrs: {
+            src: "https://analytics.platform.devantler.tech/script.js",
+            "data-website-id": "2f8d150e-c6f0-4a90-ab77-431c9ef9dc59",
+            defer: true,
+          },
+        },
         {
           tag: "script",
           content: `document.addEventListener('DOMContentLoaded',()=>{const sel='main article, .blog-post-list article';function navigate(article){const link=article.querySelector('h2 a');if(link)window.location.href=link.href;}document.addEventListener('click',e=>{if(e.target.closest('a'))return;const article=e.target.closest(sel);if(article)navigate(article);});document.querySelectorAll(sel).forEach(el=>{const link=el.querySelector('h2 a');if(!link)return;el.setAttribute('tabindex','0');el.setAttribute('role','link');el.setAttribute('aria-label',link.textContent.trim());el.addEventListener('keydown',e=>{if(e.target!==el)return;if(e.key==='Enter'||e.code==='Space'||e.key===' '||e.key==='Spacebar'){e.preventDefault();navigate(el);}});});});`,
