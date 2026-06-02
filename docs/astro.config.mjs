@@ -80,19 +80,19 @@ export default defineConfig({
           tag: "meta",
           attrs: { name: "author", content: "Nikolai Emil Damm" },
         },
+        // Umami privacy-first web analytics (self-hosted on the platform). The
+        // website-id is fixed and managed declaratively — the matching Umami
+        // "website" is provisioned from Git on the platform (no UI click-ops).
+        // data-domains restricts the tracker to the trusted host so the public
+        // website-id can't be used to send events from a spoofed site.
         {
           tag: "script",
           attrs: {
-            src: "https://www.googletagmanager.com/gtag/js?id=G-MK59Q89KYW",
-            async: true,
+            src: "https://analytics.platform.devantler.tech/script.js",
+            "data-website-id": "2f8d150e-c6f0-4a90-ab77-431c9ef9dc59",
+            "data-domains": "devantler.tech",
+            defer: true,
           },
-        },
-        {
-          tag: "script",
-          content: `window.dataLayer = window.dataLayer || [];
-function gtag(){dataLayer.push(arguments);}
-gtag('js', new Date());
-gtag('config', 'G-MK59Q89KYW');`,
         },
         {
           tag: "script",
