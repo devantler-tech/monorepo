@@ -23,6 +23,7 @@ keeping them healthy *and* moving them forward.
 | Go template | `devantler-tech/go-template` | `templates/go-template` | [AGENTS.md](https://github.com/devantler-tech/go-template/blob/main/AGENTS.md) |
 | .NET template | `devantler-tech/dotnet-template` | `templates/dotnet-template` | [AGENTS.md](https://github.com/devantler-tech/dotnet-template/blob/main/AGENTS.md) |
 | GitOps-tenant template | `devantler-tech/gitops-tenant-template` | `templates/gitops-tenant-template` | [AGENTS.md](https://github.com/devantler-tech/gitops-tenant-template/blob/main/AGENTS.md) |
+| Platform template | `devantler-tech/platform-template` | `templates/platform-template` | [AGENTS.md](https://github.com/devantler-tech/platform-template/blob/main/AGENTS.md) |
 | GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | [AGENTS.md](https://github.com/devantler-tech/actions/blob/main/AGENTS.md) |
 | Reusable Workflows | `devantler-tech/reusable-workflows` | `github/devantler-tech/github-actions/reusable-workflows` | [AGENTS.md](https://github.com/devantler-tech/reusable-workflows/blob/main/AGENTS.md) |
 | Homebrew tap | `devantler-tech/homebrew-tap` (renamed from `homebrew-formulas`; the submodule URL redirects) | `homebrew-formulas` | [AGENTS.md](https://github.com/devantler-tech/homebrew-tap/blob/main/AGENTS.md) |
