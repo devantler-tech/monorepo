@@ -19,6 +19,7 @@ are the recurring slice of that). Validate with the `docs` build before any PR.
 ## Repo-specific conventions
 - **Branch** `claude/<area>-<desc>`. Submodule pointers often show as modified — **expected, not yours**; detect real dirtiness with `git status --porcelain --ignore-submodules=all`; never stage pointer bumps; never `git submodule update --remote`.
 - **Validate:** before any `docs/` PR, `[ -d docs/node_modules ] || (cd docs && npm ci)` then `cd docs && npm run build` (use `npm --prefix docs …`). Workflows → `actionlint`. Never edit auto-generated files / `*.lock.yml`.
+- **Agent/review files:** this repo holds the portfolio **exemplar** [`.github/copilot-instructions.md`](../../../../.github/copilot-instructions.md) (the file Copilot code review reads — keep it ≤4000 chars and in sync with `AGENTS.md` + the `.claude/` cards) and is the home of the per-repo copilot-instructions **rollout issue**. Keep `AGENTS.md`, the `.claude/` skills/cards, and this file from drifting apart (see `product-engineering` §7).
 - **Labels** (apply only from this set): `automation`, `documentation`, `ci`, `dependencies`, `submodules`, `bug`, `enhancement`, `question`, `duplicate`, `wontfix`, `needs triage`, `needs investigation`, `performance`, `refactor`, `security`, `repo-assist`, `agentic-workflows`, `good first issue`, `help wanted`, `spam`, `blocked`, `next`.
 
 ## Task menu (1–3 highest-value; Content Review gated to Mondays)

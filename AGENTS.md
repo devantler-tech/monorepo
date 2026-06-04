@@ -184,6 +184,19 @@ Beyond fixing what breaks, proactively improve each product. Choose by what the 
   *Cadence & focus*), improve existing docs: accuracy, gaps, clarity, onboarding flow, dead links,
   stale examples. Spans each product's own docs (README/`AGENTS.md`/usage/reference) and the
   devantler.tech site; a `docs:`-only change is real advance work, not filler.
+- **Agent & instruction files** — the files that steer AI tools are a maintained product too; keep them
+  **accurate and in sync so they never go stale** (a wrong one silently misleads every future agent and
+  reviewer). The set, per repo: `AGENTS.md` (canonical, cross-tool) + its `## Maintenance`;
+  **`.github/copilot-instructions.md`** and any `.github/instructions/**/*.instructions.md` (these — **not**
+  `AGENTS.md` — are what **Copilot code review** reads, repo-wide + path-specific); the `CLAUDE.md`/
+  `GEMINI.md` shims; and this repo's `.claude/` skills, agents, and product cards. *Definition of done:* a
+  PR that changes a command, flag, path, label, generated-file list, validate step, or convention updates
+  **every** agent file that referenced it **in the same PR** — never let `AGENTS.md`, a `.claude/` card, and
+  a `copilot-instructions.md` drift apart. **Every repo should carry a `.github/copilot-instructions.md`**;
+  create a concise, review-focused one where missing (≤4000 chars — review truncates past that — short
+  imperative rules, *not* a dump of `AGENTS.md`; the monorepo's own file is the exemplar, the
+  `product-engineering` skill §7 has the skeleton + rollout). On the **docs cadence**, fold an agent-file
+  freshness pass into the per-product docs pass (oldest first).
 The [`product-engineering`](.claude/skills/product-engineering/SKILL.md) skill is the how-to. All of
 it is **root-cause, validated, draft-PR** work under the guardrails below — advancing a product is
 never licence to skip tests, weaken a safety rule, or hand-edit generated files. Respect each repo's
