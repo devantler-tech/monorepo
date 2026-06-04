@@ -11,9 +11,9 @@ flag violations of the rules below.
   squash-merge title feeds the changelog, so a non-conventional or bracket-prefixed title is a defect.
 - **Root-cause fixes only.** Flag anything that masks a failure instead of fixing it: checks skipped or
   set `continue-on-error` to dodge red CI, deleted or weakened assertions, `--no-verify`, silenced linters.
-- **Never hand-edit generated files.** Here: `docs/package-lock.json` (let npm regenerate it),
-  `*.lock.yml` compiled workflows, and submodule pointers (they often show as modified but are **not**
-  part of a normal content PR — flag an unexplained pointer bump).
+- **Never hand-edit generated files.** Here: `docs/package-lock.json` (let npm regenerate it) and
+  submodule pointers (they often show as modified but are **not** part of a normal content PR — flag
+  an unexplained pointer bump).
 - **Behaviour / flag / command / config / UX change ⇒ its docs updated in the same PR.** A missing doc
   update is a review finding.
 - **No secrets in plaintext** — flag committed tokens, keys, or kubeconfigs.
