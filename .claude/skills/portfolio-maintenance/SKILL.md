@@ -105,10 +105,14 @@ when the operate ladder is clear you still advance at least one product (never e
    `Fixes #N`).
 8. **Coverage / Performance / Quality** — add meaningful tests to an under-covered critical path;
    benchmark + optimise a hotspot (before/after numbers); a targeted, behaviour-preserving refactor.
-9. **Documentation** — keep docs in sync with shipped features/fixes (update affected docs in the
-   feature PR; a focused `docs:` PR backfills anything that merged without them) and, on the docs
-   cadence, improve existing docs (accuracy, gaps, clarity, dead links). Spans per-product docs + the
-   site (whose recurring slice — Site QA / Content Sync / Content Review — is the monorepo card).
+9. **Documentation & agent files** — keep docs in sync with shipped features/fixes (update affected docs
+   in the feature PR; a focused `docs:` PR backfills anything that merged without them) and, on the docs
+   cadence, improve existing docs (accuracy, gaps, clarity, dead links). **This includes the agent /
+   instruction files** — keep `AGENTS.md`, the `.claude/` cards, and each repo's
+   `.github/copilot-instructions.md` (the file Copilot code review reads, *not* `AGENTS.md`) in sync, and
+   create the copilot-instructions file where a repo lacks one (see `product-engineering` §7). Spans
+   per-product docs + the site (whose recurring slice — Site QA / Content Sync / Content Review — is the
+   monorepo card).
 
 **Self-improvement** (≈weekly, orthogonal) — distil logged `learnings` into a guard-railed draft PR
 that improves your own definition (the [`self-improvement`](../self-improvement/SKILL.md) skill).
