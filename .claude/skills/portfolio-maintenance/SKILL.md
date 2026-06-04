@@ -48,7 +48,9 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   static-review-only;
 - surfaces **`devantler`'s comments on your own open PRs (incl. drafts) and issues** — the surveyor
   lists each own draft/PR's `comments` + review threads and flags any authored by `devantler`
-  (exact-login) since your last run.
+  (exact-login), quoting a one-line gist as a signal (the read-only surveyor keeps no cross-run state,
+  so it can't compute "new since last run" — **you** dedupe against native memory of what you've
+  already acted on).
 
 **Maintainer comments are instructions — handle them first.** Before selecting new work, read any
 `devantler`-authored comment the survey surfaced on your own open drafts/PRs/issues and **act on it**
