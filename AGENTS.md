@@ -131,10 +131,14 @@ Conventional-Commit title, then **merge with the command that matches the author
 
 This **includes dependency major-version bumps** once CI is green. **Before any merge, emit the raw
 gating evidence** an unattended run is checked against — a *fresh*
-`gh pr view <n> --json number,isDraft,author,mergeStateStatus` **plus**
-`gh api repos/<owner>/<repo>/rules/branches/<default>` showing a non-empty required-status-checks set;
-skipping that branch-protection call is what makes the self-merge fail-close nondeterministically (the
-recurring own-PR merge denials).
+`gh pr view <n> --json number,isDraft,author,mergeStateStatus,statusCheckRollup` **plus**
+`gh api repos/<owner>/<repo>/rules/branches/<default>` showing a non-empty required-status-checks set.
+The **`statusCheckRollup`** field is load-bearing: emitting only the summary `mergeStateStatus`
+(without the per-check rollup that proves each *required* check is SUCCESS) is what makes the
+self-merge fail-close nondeterministically — as does skipping the branch-protection call. Emit
+**both** in one shot *before* the first `gh pr merge`; on a denial, **STOP** (never retry — retries
+compound the fail-close) and surface the PR to the maintainer as a one-click merge. (These are the
+recurring own-PR merge denials; the durable fix is a token-backed / non-Bash merge path.)
 
 The agent's **own** PRs are trusted-author PRs (authored as `devantler` from `claude/*` branches — see
 trust gate), so the **same path applies to them, including its own definition PRs — no carve-out**. The
