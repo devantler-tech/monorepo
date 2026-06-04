@@ -21,6 +21,7 @@
     "starlight-github-alerts": "^0.2.0"
   },
   "overrides": {
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.0",
+    "@astrojs/markdown-remark": "^7.2.0"
   }
 }
