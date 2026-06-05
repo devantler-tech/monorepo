@@ -6,6 +6,10 @@ updates:
       interval: "daily"
     cooldown:
       default-days: 7
+      # Internal devantler-tech actions/reusable-workflows are trusted (our own
+      # code) — bump immediately, never hold them in cooldown.
+      exclude:
+        - "devantler-tech/*"
 
   - package-ecosystem: "gitsubmodule"
     directory: "/"
