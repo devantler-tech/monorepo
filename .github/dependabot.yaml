@@ -13,6 +13,14 @@ updates:
 
   - package-ecosystem: "gitsubmodule"
     directory: "/"
+    # Opt in to the org-level "Git Source" private registry (https://github.com, a
+    # classic PAT) so Dependabot can reach our PRIVATE submodules — wedding-app and
+    # ascoachingogvaner (org-private) and dotfiles (devantler/dotfiles, another
+    # account). Without access the whole "submodules in /." job fails with
+    # git_dependencies_not_reachable. The credential lives in the org's Dependabot
+    # private-registries UI (not a repo secret); .gitmodules keeps its SSH URLs, so
+    # local `git submodule` operations are unaffected.
+    registries: "*"
     schedule:
       interval: "daily"
 
