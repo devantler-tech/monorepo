@@ -1,72 +1,72 @@
 [submodule "templates/dotnet-template"]
 	path = templates/dotnet-template
-	url = https://github.com/devantler-tech/dotnet-template.git
+	url = git@github.com:devantler-tech/dotnet-template.git
 	branch = main
 [submodule "dotfiles"]
 	path = dotfiles
-	url = https://github.com/devantler/dotfiles.git
+	url = git@github.com:devantler/dotfiles.git
 	branch = main
 [submodule "github/devantler-tech/.github-public"]
 	path = github/devantler-tech/.github-public
-	url = https://github.com/devantler-tech/.github.git
+	url = git@github.com:devantler-tech/.github.git
 	branch = main
 [submodule "github/devantler-tech/github-actions/actions"]
 	path = github/devantler-tech/github-actions/actions
-	url = https://github.com/devantler-tech/actions.git
+	url = git@github.com:devantler-tech/actions.git
 	branch = main
 [submodule "github/personal/.github-public"]
 	path = github/personal/.github-public
-	url = https://github.com/devantler/.github.git
+	url = git@github.com:devantler/.github.git
 	branch = main
 [submodule "github/personal/profile"]
 	path = github/personal/profile
-	url = https://github.com/devantler/devantler.git
+	url = git@github.com:devantler/devantler.git
 	branch = main
 [submodule "platform"]
 	path = platform
-	url = https://github.com/devantler-tech/platform.git
+	url = git@github.com:devantler-tech/platform.git
 	branch = main
 [submodule "homebrew-formulas"]
 	path = homebrew-formulas
-	url = https://github.com/devantler-tech/homebrew-formulas.git
+	url = git@github.com:devantler-tech/homebrew-formulas.git
 	branch = main
 [submodule "github/devantler-tech/github-actions/reusable-workflows"]
 	path = github/devantler-tech/github-actions/reusable-workflows
-	url = https://github.com/devantler-tech/reusable-workflows.git
+	url = git@github.com:devantler-tech/reusable-workflows.git
 	branch = main
 [submodule "templates/go-template"]
 	path = templates/go-template
-	url = https://github.com/devantler-tech/go-template.git
+	url = git@github.com:devantler-tech/go-template.git
 	branch = main
 [submodule "applications/ksail"]
 	path = applications/ksail
-	url = https://github.com/devantler-tech/ksail.git
+	url = git@github.com:devantler-tech/ksail.git
 	branch = main
 [submodule "github/devantler-tech/maintenance"]
 	path = github/devantler-tech/maintenance
-	url = https://github.com/devantler-tech/maintenance.git
+	url = git@github.com:devantler-tech/maintenance.git
 	branch = main
 [submodule "applications/wedding-app"]
 	path = applications/wedding-app
-	url = https://github.com/devantler-tech/wedding-app.git
+	url = git@github.com:devantler-tech/wedding-app.git
 	branch = main
 [submodule "applications/ascoachingogvaner"]
 	path = applications/ascoachingogvaner
-	url = https://github.com/devantler-tech/ascoachingogvaner.git
+	url = git@github.com:devantler-tech/ascoachingogvaner.git
 	branch = main
 [submodule "libraries/skills"]
 	path = libraries/skills
-	url = https://github.com/devantler-tech/skills.git
+	url = git@github.com:devantler-tech/skills.git
 	branch = main
 [submodule "libraries/plugins"]
 	path = libraries/plugins
-	url = https://github.com/devantler-tech/plugins.git
+	url = git@github.com:devantler-tech/plugins.git
 	branch = main
 [submodule "templates/gitops-tenant-template"]
 	path = templates/gitops-tenant-template
-	url = https://github.com/devantler-tech/gitops-tenant-template.git
+	url = git@github.com:devantler-tech/gitops-tenant-template.git
 	branch = main
 [submodule "templates/platform-template"]
 	path = templates/platform-template
-	url = https://github.com/devantler-tech/platform-template.git
+	url = git@github.com:devantler-tech/platform-template.git
 	branch = main

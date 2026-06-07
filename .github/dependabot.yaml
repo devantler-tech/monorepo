@@ -1,4 +1,18 @@
 version: 2
+
+# Credential Dependabot's gitsubmodule updater uses to reach our PRIVATE submodules:
+# applications/wedding-app + applications/ascoachingogvaner (org-private) and dotfiles
+# (devantler/dotfiles, a different account). Without it Dependabot cannot clone those
+# three and the whole "submodules in /." job fails with git_dependencies_not_reachable.
+# This only feeds Dependabot's internal HTTPS fetch — .gitmodules keeps its SSH URLs,
+# so local `git submodule` operations are unaffected. PAT lives as a Dependabot secret.
+registries:
+  github-submodules:
+    type: git
+    url: https://github.com
+    username: x-access-token
+    password: ${{secrets.DEPENDABOT_SUBMODULE_PAT}}
+
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -13,6 +27,7 @@ updates:
 
   - package-ecosystem: "gitsubmodule"
     directory: "/"
+    registries: "*"
     schedule:
       interval: "daily"
 
