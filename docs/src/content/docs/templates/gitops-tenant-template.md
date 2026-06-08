@@ -1,6 +1,6 @@
 ---
 title: 🚀 GitOps Tenant Template
-description: A stack-neutral template for GitOps tenants on the devantler-tech platform, with signed build → publish → release plumbing.
+description: A stack-neutral template for GitOps tenants on the devantler-tech platform, with signed build → publish → release plumbing kept current via template-sync.
 ---
 
 A template for **GitOps tenants** on the [devantler-tech platform](https://github.com/devantler-tech/platform) — an application that runs on the platform from its own repository. Skip the CI/CD boilerplate — bring your own stack and start shipping.

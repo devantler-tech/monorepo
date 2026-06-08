@@ -1,6 +1,6 @@
 ---
 title: 📁 .NET Template
-description: A .NET starter template with CI/CD, testing, publishing, and code quality tooling.
+description: A minimal .NET template with CI/CD, GitHub Packages/NuGet publishing, GitHub Code Quality coverage, EditorConfig, and Dependabot.
 ---
 
 A minimal, batteries-included template for new .NET projects and libraries. Skip the boilerplate — start shipping.
