@@ -12,7 +12,7 @@ A minimal, batteries-included template for new Go projects. Skip the boilerplate
 - **CI/CD** — GitHub Actions workflows for build, test, lint, and release
 - **Testing** — `go test` with coverage reporting via [GitHub Code Quality](https://docs.github.com/code-security/code-quality)
 - **Quality** — [Go Report Card](https://goreportcard.com/) integration for continuous code-quality feedback
-- **Dependency management** — [Renovate](https://docs.renovatebot.com/) keeps Go modules and Actions up to date
+- **Dependency management** — [Dependabot](https://docs.github.com/code-security/dependabot) keeps Go modules and Actions up to date
 - **Release automation** — Semantic versioning and automated GitHub Releases
 
 ## Getting Started
