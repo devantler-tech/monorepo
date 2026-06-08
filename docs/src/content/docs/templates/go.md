@@ -1,6 +1,6 @@
 ---
 title: 🐹 Go Template
-description: A Go starter template with CI/CD, testing, and code quality tooling.
+description: A minimal Go template with CI/CD, test coverage via GitHub Code Quality, Go Report Card, and Renovate.
 ---
 
 A minimal, batteries-included template for new Go projects. Skip the boilerplate — start shipping.

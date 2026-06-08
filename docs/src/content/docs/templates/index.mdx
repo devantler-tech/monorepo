@@ -4,30 +4,24 @@ description: Opinionated starter templates with CI/CD, testing, and code quality
 ---
 
 import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+import { getCollection } from "astro:content";
+
+export const templates = (await getCollection("docs"))
+  .filter((entry) => entry.id.startsWith("templates/") && entry.id !== "templates/index")
+  .sort((a, b) => a.id.localeCompare(b.id));
 
 [![Sponsor](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub&color=%23fe8e86)](https://github.com/sponsors/devantler)
 
 Starter templates that skip the boilerplate and get you straight to shipping. Each comes with GitHub Actions workflows, code quality tooling, and automated dependency management.
 
 <CardGrid>
-  <LinkCard
-    title="🐹 Go Template"
-    description="A minimal Go template with CI/CD, test coverage via GitHub Code Quality, Go Report Card, and Renovate."
-    href="/templates/go/"
-  />
-  <LinkCard
-    title="📁 .NET Template"
-    description="A minimal .NET template with CI/CD, NuGet/GHCR publishing, GitHub Code Quality coverage, EditorConfig, and Renovate."
-    href="/templates/dotnet/"
-  />
-  <LinkCard
-    title="☸️ Platform Template"
-    description="A batteries-included Kubernetes platform (Flux GitOps + KSail + Talos) you instantiate from a template and bootstrap onto Hetzner Cloud, fully unattended."
-    href="/templates/platform-template/"
-  />
-  <LinkCard
-    title="🚀 GitOps Tenant Template"
-    description="A stack-neutral template for GitOps tenants on the devantler-tech platform, with signed build → publish → release plumbing kept current via template-sync."
-    href="/templates/gitops-tenant-template/"
-  />
+  {
+    templates.map((template) => (
+      <LinkCard
+        title={template.data.title}
+        description={template.data.description}
+        href={`/${template.id}/`}
+      />
+    ))
+  }
 </CardGrid>
