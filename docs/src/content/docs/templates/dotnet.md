@@ -1,6 +1,6 @@
 ---
 title: 📁 .NET Template
-description: A minimal .NET template with CI/CD, NuGet/GHCR publishing, GitHub Code Quality coverage, EditorConfig, and Renovate.
+description: A minimal .NET template with CI/CD, GitHub Packages/NuGet publishing, GitHub Code Quality coverage, EditorConfig, and Dependabot.
 ---
 
 A minimal, batteries-included template for new .NET projects and libraries. Skip the boilerplate — start shipping.

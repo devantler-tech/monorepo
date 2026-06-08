@@ -1,6 +1,6 @@
 ---
 title: 🐹 Go Template
-description: A minimal Go template with CI/CD, test coverage via GitHub Code Quality, Go Report Card, and Renovate.
+description: A minimal Go template with CI/CD, test coverage via GitHub Code Quality, Go Report Card, and Dependabot.
 ---
 
 A minimal, batteries-included template for new Go projects. Skip the boilerplate — start shipping.
