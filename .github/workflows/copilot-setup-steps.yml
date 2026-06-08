@@ -17,7 +17,7 @@ jobs:
       contents: read
     steps:
       - name: Install gh-aw extension
-        uses: github/gh-aw-actions/setup-cli@4c7307f890279fa5971acae8899475901fea9447 # v0.77.4
+        uses: github/gh-aw-actions/setup-cli@3928d9c902852a519b0a03ea19f4fe43c085c753 # v0.77.6
         with:
           version: v0.68.2
       - name: Verify gh-aw installation
