@@ -33,6 +33,12 @@ hero:
 ---
 
 import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+import { getCollection } from "astro:content";
+
+export const latestPosts = (await getCollection("docs"))
+  .filter((entry) => entry.id.startsWith("blog/"))
+  .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf())
+  .slice(0, 4);
 
 ## What I Do
 
@@ -81,26 +87,15 @@ import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 ## Latest from the Blog
 
 <CardGrid>
-  <LinkCard
-    title="I Built an MCP Server into My Kubernetes CLI"
-    description="KSail now ships with a built-in MCP server so Claude, Cursor, and other AI assistants can manage clusters directly."
-    href="/blog/mcp-server-for-kubernetes-cluster-management/"
-  />
-  <LinkCard
-    title="GitOps Without the Git Server"
-    description="Using OCI registries as a Flux source with KSail — a cleaner alternative to local Git servers for tight dev loops."
-    href="/blog/gitops-without-the-git-server-oci-registries-as-a-flux-source-with-ksail/"
-  />
-  <LinkCard
-    title="Storing Secrets in .zshrc with macOS Keychain"
-    description="A quick, practical guide for keeping sensitive environment variables out of plaintext dotfiles."
-    href="/blog/storing-secrets-in-zshrc-with-macos-keychain/"
-  />
-  <LinkCard
-    title="Local Kubernetes Development with KSail and Kind"
-    description="Get a full local Kubernetes cluster running in minutes with KSail and Kind — no cloud account required."
-    href="/blog/local-kubernetes-development-with-ksail-and-kind/"
-  />
+  {
+    latestPosts.map((post) => (
+      <LinkCard
+        title={post.data.title}
+        description={post.data.excerpt}
+        href={`/${post.id}/`}
+      />
+    ))
+  }
 </CardGrid>
 
 [Browse all posts &rarr;](/blog/)
