@@ -18,6 +18,7 @@ jobs:
     outputs:
       docs: ${{ steps.filter.outputs.docs }}
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
+      active-projects: ${{ steps.filter.outputs.active-projects }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -33,6 +34,11 @@ jobs:
             docs-deps:
               - 'docs/package.json'
               - 'docs/package-lock.json'
+            active-projects:
+              - 'docs/src/content/docs/projects/active.mdx'
+              - 'docs/scripts/check-active-projects-drift.sh'
+              - 'github/devantler-tech/github-actions/actions'
+              - 'github/devantler-tech/github-actions/reusable-workflows'
 
   build-docs:
     needs: changes
@@ -82,6 +88,31 @@ jobs:
         working-directory: docs
         run: npm audit --omit=dev
 
+  drift-check-active-projects:
+    needs: changes
+    if: needs.changes.outputs.active-projects == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      # The source-of-truth repos are public submodules; check out only those
+      # two at their pinned commits (no GitHub API, no other submodules). The
+      # .gitmodules URLs are SSH (git@github.com:), which the runner has no key
+      # for, so point them at public HTTPS first to clone anonymously.
+      - name: Check out source submodules
+        run: |
+          git submodule set-url github/devantler-tech/github-actions/actions https://github.com/devantler-tech/actions.git
+          git submodule set-url github/devantler-tech/github-actions/reusable-workflows https://github.com/devantler-tech/reusable-workflows.git
+          git submodule update --init --depth 1 \
+            github/devantler-tech/github-actions/actions \
+            github/devantler-tech/github-actions/reusable-workflows
+      - name: Check Active Projects lists for drift
+        run: bash docs/scripts/check-active-projects-drift.sh
+
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
@@ -89,6 +120,7 @@ jobs:
     needs:
       - build-docs
       - audit-docs
+      - drift-check-active-projects
     permissions: {}
     steps:
       - name: Check job results
@@ -97,3 +129,4 @@ jobs:
           job-results: >-
             ${{ needs.build-docs.result }}
             ${{ needs.audit-docs.result }}
+            ${{ needs.drift-check-active-projects.result }}
