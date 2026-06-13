@@ -9,8 +9,15 @@
 # already-checked-out submodules, never the GitHub API.
 #
 #   - Actions list       — one bullet per composite action, so it maps 1:1 to
-#                          the `*/action.yaml` directories. Enforced as a strict
-#                          count equality.
+#                          the `*/action.yaml` directories. A bullet *count*
+#                          alone cannot catch a rename (or a net-zero add+remove)
+#                          — the count stays equal while a bullet silently goes
+#                          stale — so we additionally pin the exact directory
+#                          names via an inline `actions-dirs: a,b,c` marker in
+#                          active.mdx and enforce SET equality between that
+#                          marker and the live action directories (plus the
+#                          original bullet-count tripwire, so the marker can't be
+#                          updated without revisiting the prose bullets).
 #   - Reusable Workflows — the site list is *categorical* (CI / CD / Automation
 #                          buckets), not one bullet per workflow, so a bullet
 #                          count cannot map 1:1. Instead we tripwire on the
@@ -54,18 +61,43 @@ count_section_bullets() {
   ' "$mdx"
 }
 
-# --- Actions: strict 1:1 count -------------------------------------------------
-actions_count=$(find "$actions_dir" -mindepth 2 -maxdepth 2 -name action.yaml -type f | wc -l | tr -d ' ')
+# --- Actions: bullet-count tripwire + directory-name set equality --------------
+# Live action directory names (each dir holding an action.yaml), sorted & unique.
+actions_live=$(
+  find "$actions_dir" -mindepth 2 -maxdepth 2 -name action.yaml -type f \
+    | awk -F/ '{ print $(NF - 1) }' | sort -u
+)
+actions_count=$(printf '%s\n' "$actions_live" | grep -c . || true)
 actions_bullets=$(count_section_bullets "$actions_anchor")
 
-if [ "$actions_count" -ne "$actions_bullets" ]; then
+# Declared directory names from the inline `actions-dirs: a,b,c` marker.
+actions_marker=$(
+  grep -oE 'actions-dirs:[[:space:]]*[a-z0-9,_-]+' "$mdx" \
+    | sed -E 's/^actions-dirs:[[:space:]]*//' | head -n1 || true
+)
+actions_declared=$(printf '%s' "$actions_marker" | tr ',' '\n' | sed '/^$/d' | sort -u)
+
+if [ -z "$actions_marker" ]; then
+  echo "::error file=docs/src/content/docs/projects/active.mdx::Missing 'actions-dirs: a,b,c' marker \
+in the '## ⚡ Actions' section of docs/src/content/docs/projects/active.mdx." >&2
+  fail=1
+elif [ "$actions_count" -ne "$actions_bullets" ]; then
   echo "::error file=docs/src/content/docs/projects/active.mdx::Actions list drift: \
 ${actions_count} composite action(s) in the actions submodule but ${actions_bullets} bullet(s) under \
 '## ⚡ Actions'. An action was added or removed in devantler-tech/actions but the list was not updated — \
 update the '## ⚡ Actions' section of docs/src/content/docs/projects/active.mdx." >&2
   fail=1
+elif [ "$actions_declared" != "$actions_live" ]; then
+  only_live=$(comm -23 <(printf '%s\n' "$actions_live") <(printf '%s\n' "$actions_declared") | paste -sd, -)
+  only_marker=$(comm -13 <(printf '%s\n' "$actions_live") <(printf '%s\n' "$actions_declared") | paste -sd, -)
+  echo "::error file=docs/src/content/docs/projects/active.mdx::Actions list drift: the 'actions-dirs' \
+marker does not match the action directories in devantler-tech/actions. \
+Missing from marker: [${only_live:-none}]. Stale in marker (no longer a real action): [${only_marker:-none}]. \
+An action was added, removed, or renamed — update the matching bullet AND the 'actions-dirs' marker in the \
+'## ⚡ Actions' section of docs/src/content/docs/projects/active.mdx." >&2
+  fail=1
 else
-  echo "OK: Actions list in sync (${actions_count} actions == ${actions_bullets} bullets)."
+  echo "OK: Actions list in sync (${actions_count} actions == ${actions_bullets} bullets, marker set matches)."
 fi
 
 # --- Reusable Workflows: count tripwire vs. inline marker ----------------------
