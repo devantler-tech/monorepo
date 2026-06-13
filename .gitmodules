@@ -70,3 +70,7 @@
 	path = templates/platform-template
 	url = git@github.com:devantler-tech/platform-template.git
 	branch = main
+[submodule "applications/unifi"]
+	path = applications/unifi
+	url = git@github.com:devantler-tech/unifi.git
+	branch = main

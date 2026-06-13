@@ -31,6 +31,7 @@ keeping them healthy *and* moving them forward.
 | Agent plugins (shared lib) | `devantler-tech/plugins` (renamed from `copilot-plugins`) | `libraries/plugins` | [repo](https://github.com/devantler-tech/plugins) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
+| UniFi network (private) | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
 
 > Submodule `AGENTS.md` links use full GitHub URLs because those files live in the submodule repos, not this repo's tree (a relative link would 404 on GitHub).
 
