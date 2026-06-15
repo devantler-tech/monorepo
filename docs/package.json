@@ -22,6 +22,7 @@
   },
   "overrides": {
     "uuid": "^14.0.0",
-    "@astrojs/markdown-remark": "^7.2.0"
+    "@astrojs/markdown-remark": "^7.2.0",
+    "esbuild": "^0.28.1"
   }
 }
