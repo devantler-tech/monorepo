@@ -278,7 +278,13 @@ the maintainer's parallel sessions. For each repo touched:
 `git -C <repo_path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>`, work there,
 open the PR, then `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local
 filesystem path such as `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the
-slug only for `gh` commands). Worktree isolation is verified working across all submodules. Populate an un-checked-out submodule at its pinned commit with
+slug only for `gh` commands). **Submodule worktree isolation is inconsistent** — most submodules carry
+a stray shared `core.worktree` that makes `git worktree add` resolve back into the main checkout (only
+the stale `projects/ksail` gitdir is correct; `templates/gitops-tenant-template` was fixed 2026-06-17).
+Before relying on an isolated submodule worktree, confirm `git -C <wt> rev-parse --show-toplevel`
+returns the worktree's own path, not a `.git/modules/<name>` path; the diagnosis table and the verified
+per-submodule fix are in [`.claude/worktree-isolation.md`](.claude/worktree-isolation.md). Populate an
+un-checked-out submodule at its pinned commit with
 `git submodule update --init <path>` (never `--remote`). If a repo's working area is unexpectedly
 dirty or you can't get an isolated tree, do GitHub-API-only work (triage/comment) there.
 
