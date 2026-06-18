@@ -27,10 +27,6 @@
     {
       "name": "🚚🍺 Homebrew Formulas",
       "path": "../homebrew-formulas"
-    },
-    {
-      "name": "🔘 dotfiles",
-      "path": "../dotfiles"
     }
   ],
   "settings": {
