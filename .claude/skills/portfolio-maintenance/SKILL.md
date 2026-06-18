@@ -73,7 +73,7 @@ org-wide `gh search` first, deepen only the candidates — never the old per-rep
 
 Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../products/platform/SKILL.md) ·
 [monorepo + site](../products/monorepo/SKILL.md) · [templates](../products/templates/SKILL.md) ·
-[github-actions](../products/github-actions/SKILL.md) · [skills (+ plugins)](../products/skills/SKILL.md) ·
+[github-actions](../products/github-actions/SKILL.md) · [skills (+ plugins)](../products/agent-skills/SKILL.md) ·
 [homebrew-formulas](../products/homebrew-formulas/SKILL.md) · [applications](../products/applications/SKILL.md).
 
 ## 2. Select (the heart of it)
