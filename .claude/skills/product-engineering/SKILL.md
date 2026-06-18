@@ -157,8 +157,8 @@ at once** — the highest-leverage advance work is often cross-cutting (contract
   step, a release/`.releaserc` setup, a workflow, a lint/test config, an agent skill, a docs
   convention), it's now *generic* — it belongs in a **shared library**, not copied per repo:
   - CI building blocks → `devantler-tech/actions` (composite actions) / `devantler-tech/reusable-workflows`.
-  - Agent skills → `devantler-tech/skills` (generic Copilot/agent skills, `gh skill`-installable).
-  - Plugins → `devantler-tech/plugins` **once it exists** — if a plugin-shaped pattern is ready and the
+  - Agent skills → `devantler-tech/agent-skills` (generic Copilot/agent skills, `gh skill`-installable).
+  - Plugins → `devantler-tech/agent-plugins` **once it exists** — if a plugin-shaped pattern is ready and the
     repo doesn't exist, propose creating it (flag to the maintainer) rather than forcing it elsewhere.
 - **Extract & propagate.** Add the capability to the shared lib (with its own tests, **additive &
   backward-compatible** — blast radius is every consumer), then migrate consumers to it and retire the

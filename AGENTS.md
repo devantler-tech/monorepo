@@ -27,8 +27,8 @@ keeping them healthy *and* moving them forward.
 | GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | [AGENTS.md](https://github.com/devantler-tech/actions/blob/main/AGENTS.md) |
 | Reusable Workflows | `devantler-tech/reusable-workflows` | `github/devantler-tech/github-actions/reusable-workflows` | [AGENTS.md](https://github.com/devantler-tech/reusable-workflows/blob/main/AGENTS.md) |
 | Homebrew tap | `devantler-tech/homebrew-tap` (renamed from `homebrew-formulas`; the submodule URL redirects) | `homebrew-formulas` | [AGENTS.md](https://github.com/devantler-tech/homebrew-tap/blob/main/AGENTS.md) |
-| Agent skills (shared lib) | `devantler-tech/skills` | `libraries/skills` | [repo](https://github.com/devantler-tech/skills) |
-| Agent plugins (shared lib) | `devantler-tech/plugins` (renamed from `copilot-plugins`) | `libraries/plugins` | [repo](https://github.com/devantler-tech/plugins) |
+| Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | [repo](https://github.com/devantler-tech/agent-skills) |
+| Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | [repo](https://github.com/devantler-tech/agent-plugins) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
 | UniFi network (private) | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
@@ -37,10 +37,10 @@ keeping them healthy *and* moving them forward.
 
 **Shared libraries** (leverage points across the whole suite — see *Holistic review* and the
 `product-engineering` skill): the CI building blocks `devantler-tech/actions` +
-`devantler-tech/reusable-workflows`, and the agent extensions `devantler-tech/skills` (generic,
-cross-tool agent skills) + `devantler-tech/plugins` (a tool-neutral marketplace bundling those skills
+`devantler-tech/reusable-workflows`, and the agent extensions `devantler-tech/agent-skills` (generic,
+cross-tool agent skills) + `devantler-tech/agent-plugins` (a tool-neutral marketplace bundling those skills
 for VS Code / Copilot CLI / Claude Code; rescope in progress —
-[plugins#7](https://github.com/devantler-tech/plugins/issues/7)). A generic pattern proven in one
+[plugins#7](https://github.com/devantler-tech/agent-plugins/issues/7)). A generic pattern proven in one
 product belongs in a shared library so *every* product inherits it — keep them **industry-standard and
 tool-neutral** (the portability principle).
 
@@ -341,7 +341,7 @@ work misses:
   lint/test setup, an agent skill, a docs convention) has independently appeared in 2+ products, it has
   become *generic* — extract it into the right **shared library** so every product inherits it instead
   of drifting: CI → `devantler-tech/actions` / `reusable-workflows`; agent skills →
-  `devantler-tech/skills`; (plugins → `devantler-tech/plugins` once created). Then propagate consumers
+  `devantler-tech/agent-skills`; (plugins → `devantler-tech/agent-plugins` once created). Then propagate consumers
   to the shared version.
 - **Consistency & drift.** Versions, pinned actions, toolchains, conventions, and `AGENTS.md
   ## Maintenance` sections aligned across the suite; divergence reconciled toward the best pattern.

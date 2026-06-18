@@ -1,17 +1,17 @@
 ---
 name: maintain-skills
-description: Maintenance + advance task menu for the shared AGENT-EXTENSION libraries — devantler-tech/skills (generic Copilot/agent skills, gh-skill-installable) and devantler-tech/plugins (once it exists). Generic, cross-tool, industry-standard building blocks reused across the suite; high-care and backward-compatible. Use when the daily maintainer selects skills/plugins or runs the holistic shared-library review.
+description: Maintenance + advance task menu for the shared AGENT-EXTENSION libraries — devantler-tech/agent-skills (generic Copilot/agent skills, gh-skill-installable) and devantler-tech/agent-plugins (once it exists). Generic, cross-tool, industry-standard building blocks reused across the suite; high-care and backward-compatible. Use when the daily maintainer selects skills/plugins or runs the holistic shared-library review.
 ---
 
 # Maintain: Skills + Plugins (shared agent extensions)
 
 The shared **agent-extension** libraries — the agentic counterpart to the CI building blocks in the
 [github-actions](../github-actions/SKILL.md) card:
-- `devantler-tech/skills` — generic Copilot/agent skills, `gh skill`-installable. **Not a submodule** —
+- `devantler-tech/agent-skills` — generic Copilot/agent skills, `gh skill`-installable. **Not a submodule** —
   work via the GitHub API, or clone it standalone into a per-run worktree if you need to build/validate.
-  Read its `## Maintenance` in <https://github.com/devantler-tech/skills/blob/main/AGENTS.md> (create
+  Read its `## Maintenance` in <https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md> (create
   that section if missing — align it with the others).
-- `devantler-tech/plugins` — **does not exist yet.** If a plugin-shaped pattern becomes ready, propose
+- `devantler-tech/agent-plugins` — **does not exist yet.** If a plugin-shaped pattern becomes ready, propose
   creating the repo (flag the maintainer) rather than forcing it into `skills` or a product.
 
 **These are shared libraries — design for reuse, not for one product.** Keep them **generic and
@@ -28,5 +28,5 @@ Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md)
 by design.
 
 ## Roadmap & enhancement
-Roadmap lives in **GitHub Issues** on `devantler-tech/skills` (`roadmap` label). The strategic frame:
+Roadmap lives in **GitHub Issues** on `devantler-tech/agent-skills` (`roadmap` label). The strategic frame:
 *what generic capability would most help the suite next?* — surface candidates from the holistic review.
