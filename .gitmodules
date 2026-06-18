@@ -2,10 +2,6 @@
 	path = templates/dotnet-template
 	url = git@github.com:devantler-tech/dotnet-template.git
 	branch = main
-[submodule "dotfiles"]
-	path = dotfiles
-	url = git@github.com:devantler/dotfiles.git
-	branch = main
 [submodule "github/devantler-tech/.github-public"]
 	path = github/devantler-tech/.github-public
 	url = git@github.com:devantler-tech/.github.git
@@ -26,9 +22,9 @@
 	path = platform
 	url = git@github.com:devantler-tech/platform.git
 	branch = main
-[submodule "homebrew-formulas"]
-	path = homebrew-formulas
-	url = git@github.com:devantler-tech/homebrew-formulas.git
+[submodule "homebrew-tap"]
+	path = homebrew-tap
+	url = git@github.com:devantler-tech/homebrew-tap.git
 	branch = main
 [submodule "github/devantler-tech/github-actions/reusable-workflows"]
 	path = github/devantler-tech/github-actions/reusable-workflows
@@ -73,4 +69,8 @@
 [submodule "applications/unifi"]
 	path = applications/unifi
 	url = git@github.com:devantler-tech/unifi.git
+	branch = main
+[submodule "applications/fleet-gitops"]
+	path = applications/fleet-gitops
+	url = git@github.com:devantler-tech/fleet-gitops.git
 	branch = main
