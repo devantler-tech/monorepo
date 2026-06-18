@@ -174,8 +174,12 @@ at once** — the highest-leverage advance work is often cross-cutting (contract
   E2E + reliability and the Monthly Strategy are its heavy cadence (see its card/`AGENTS.md`).
 - **go-template / dotnet-template**: keep the scaffold minimal, idiomatic, current — advance = better
   defaults, toolchain currency, exemplary tests/CI; **don't add product features**.
-- **platform** (GitOps): **static validation only, never run a cluster** — advance = manifest/Helm/Flux
-  structure & quality, policy/security posture, Kustomize hygiene; "tests" are validation, not unit tests.
+- **platform** (GitOps): two surfaces (see the [platform card](../products/platform/SKILL.md)). **Repo** —
+  **static validation, never spin up a cluster to test a diff**; advance = manifest/Helm/Flux structure &
+  quality, policy/security posture, Kustomize hygiene ("tests" are validation, not unit tests). **Live** —
+  **read-only** health investigation of the running prod cluster + observability (Flux Kustomizations/
+  HelmReleases, Coroot, Kubescape, Kyverno, k8s events) feeding reliability/policy/observability/cost
+  enhancements; never spin up real clusters >1×/day.
 - **actions / reusable-workflows**: load-bearing for every repo — advance = new composite actions or
   workflow capabilities, **additive & backward-compatible**, with their own tests; never break consumers.
 - **monorepo + site**: advance = docs/site features, accessibility, performance (bundle/Lighthouse),
