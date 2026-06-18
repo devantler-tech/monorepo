@@ -2,10 +2,6 @@
 	path = templates/dotnet-template
 	url = git@github.com:devantler-tech/dotnet-template.git
 	branch = main
-[submodule "dotfiles"]
-	path = dotfiles
-	url = git@github.com:devantler/dotfiles.git
-	branch = main
 [submodule "github/devantler-tech/.github-public"]
 	path = github/devantler-tech/.github-public
 	url = git@github.com:devantler-tech/.github.git
