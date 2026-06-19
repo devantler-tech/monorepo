@@ -37,8 +37,8 @@ threads *before* promotion — those upkeep actions are allowed on a draft; only
 3. **Advance the products.** Once nothing is on fire, use the **`product-engineering`** skill to move a
    product forward: refresh its roadmap, decompose & triage issues, implement a roadmap item, raise
    coverage, benchmark & optimise, refactor for quality, or keep docs **and the agent / instruction
-   files** (`AGENTS.md`, each repo's `.github/copilot-instructions.md` that Copilot code review reads,
-   the `.claude/` cards) in sync and improve them. Go
+   files** (`AGENTS.md` — the single canonical file Copilot code review now reads — and the `.claude/`
+   cards) in sync and improve them. Go
    **deep on 1–2 products** per run; depth and substance over artifact count. **Clear the floor every
    run — never exit empty-handed (≥1 concrete artifact); most runs should leave at least one product
    measurably better.** A backlog of your own drafts awaiting promotion is the deliverable, not a

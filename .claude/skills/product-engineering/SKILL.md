@@ -117,38 +117,23 @@ Treat docs as part of the product — keep them **in sync** with what ships and 
 The files that steer AI tools are part of the product; a stale one silently misleads every future agent
 and reviewer, so hold them to the same definition-of-done as docs (contract → *Enhancement work →
 Agent & instruction files*).
-- **The set, per repo:** `AGENTS.md` (canonical) + its `## Maintenance`; `.github/copilot-instructions.md`
-  and any `.github/instructions/**/*.instructions.md`; the `CLAUDE.md`/`GEMINI.md` shims; this repo's
+- **The set, per repo:** `AGENTS.md` (the **single canonical** instruction file) + its `## Maintenance`;
+  any optional `.github/instructions/**/*.instructions.md`; the `CLAUDE.md`/`GEMINI.md` shims; this repo's
   `.claude/` skills, agents, and product cards.
 - **Sync (DoD).** Any PR that changes a command, flag, path, label, validate step, generated-file list,
   or convention updates **every** agent file that mentioned it **in the same PR**. When you edit
-  `AGENTS.md`, grep the matching `.claude/` card and `copilot-instructions.md` for the same fact and fix
-  all copies together.
-- **What Copilot code review reads.** `.github/copilot-instructions.md` (repo-wide) and
-  `.github/instructions/NAME.instructions.md` (path-specific, `applyTo: "**/*.go"`-style frontmatter) —
-  it does **not** read `AGENTS.md`. Hard limit: review uses only the **first ~4000 chars** of each file,
-  so write a short, imperative *review checklist*, not a copy of `AGENTS.md`. Use `excludeAgent:
-  "code-review"` / `"copilot-coding-agent"` in an `.instructions.md` only to target one agent.
-- **Rollout (where missing).** Every repo should carry a `.github/copilot-instructions.md`; the monorepo's
-  own file is the living exemplar. Create one in a `docs:`/`chore:` draft PR from the skeleton below,
-  tailored to the repo's stack — pick the oldest repo still missing one (tracked in the rollout issue in
-  `devantler-tech/monorepo`).
+  `AGENTS.md`, grep the matching `.claude/` card and any `.github/instructions/` file for the same fact
+  and fix all copies together.
+- **What Copilot code review reads.** `AGENTS.md` at the repo root ([since 2026-06-18](https://github.blog/changelog/2026-06-18-copilot-code-review-agents-md-support-and-ui-improvements/)) — the
+  same canonical file humans and other agents read, so there is **no separate review-only file to
+  maintain**. For the rare case a path needs its own checklist, add `.github/instructions/NAME.instructions.md`
+  (path-scoped, `applyTo: "**/*.go"`-style frontmatter; `excludeAgent: "code-review"` /
+  `"copilot-coding-agent"` targets one agent). ksail is the example.
+- **Retire `.github/copilot-instructions.md`.** Copilot reading `AGENTS.md` directly makes the old
+  parallel review-only file redundant. If a repo still has one, delete it in a `chore:`/`docs:` PR —
+  fold anything unique it still carries into `AGENTS.md` first.
 - **Freshness pass (docs cadence).** When a product's docs pass comes due (oldest first), also skim its
   agent files for drift against the current code/commands and fix it in the same `docs:` PR.
-
-Skeleton — fill the stack block, keep the whole file ≤4000 chars:
-```markdown
-# Copilot code review — <repo>
-<one line: what this repo is>. Canonical conventions: ../AGENTS.md. Flag violations below.
-## Always
-- PR title = Conventional Commits (squash → changelog); no bracket prefixes.
-- Root-cause only — flag skipped/disabled checks, deleted/weakened assertions, --no-verify.
-- Never hand-edit generated files: <name them>; re-run the generator.
-- Behaviour / flag / command / config / UX change ⇒ its docs updated in the same PR.
-- No secrets in plaintext (<SOPS / sealed-secrets where applicable>).
-## <Stack — Go / .NET / Astro-Starlight / GitOps / Actions / …>
-- <idioms a reviewer should enforce; the validate command; what "good" looks like here>
-```
 
 ## 8. Holistic review & shared-library stewardship
 Sections 1–7 work one product at a time. **~Monthly (on rotation), zoom out and look at the whole suite
