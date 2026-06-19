@@ -90,7 +90,10 @@ advance a *different* product. Work the ladder top-down — **operate first, the
 2. **Unblock trusted-author PRs** — drive to merge per the contract (resolve threads, fix required
    checks, then merge with the **command that matches the author**: bots arm `--auto`, your own/
    `devantler` PRs merge directly with bare `gh pr merge <n> --squash` once CLEAN; incl. majors and
-   incl. your own definition PRs once maintainer-promoted). **Keep your own drafts review-ready while
+   incl. your own definition PRs once maintainer-promoted). The merge is **low-ceremony** — a single
+   fresh `gh pr view <n>` showing `isDraft:false`, a trusted author, and `CLEAN` is enough; a refused
+   merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
+   variant-evidence retries. **Keep your own drafts review-ready while
    they wait** — root-cause-fix their failing CI and resolve their review threads *before* promotion
    (both allowed on a draft); only the **promotion** (draft → ready) is the maintainer's — you never
    self-promote, and the merge waits for it. Never auto-drive or merge external PRs.
@@ -102,8 +105,8 @@ advance a *different* product. Work the ladder top-down — **operate first, the
      `gh pr view <n> --json state,mergedAt` and stop as soon as `state==MERGED` (or read the default
      branch's top-commit subject for `(#N)`). Do **not** poll `mergeStateStatus`/`mergeable` and do
      **not** fire a manual `gh pr merge` — a merged PR reports those as `UNKNOWN` for minutes while the
-     merge completes, so polling them (or attempting a now-moot manual merge, which the classifier
-     denies) only burns the run. Credit the auto-merge workflow, not a `gh pr merge` call.
+     merge completes, so polling them (or firing a now-moot manual merge) only burns the run. Credit
+     the auto-merge workflow, not a `gh pr merge` call.
 3. **Contributor-facing** — triage/label new issues+PRs; one insightful comment on the oldest
    un-commented open item.
 4. **Confident fixes** — clear bug, broken link, missing alt text, manifest misconfig, version bump.
