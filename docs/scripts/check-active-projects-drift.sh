@@ -26,6 +26,23 @@
 #                          `reusable-workflows-count: N` marker. Adding or
 #                          removing a workflow therefore forces a human to
 #                          revisit the category bullets and bump the marker.
+#   - Submodules         — the page is a *curated* view of the monorepo's
+#                          submodule set (the source-of-truth is .gitmodules):
+#                          some submodules are their own H2 product section,
+#                          some are grouped under "Self-Hosted Personal Apps",
+#                          some are listed on the Templates page instead, and
+#                          several are infra/config repos not surfaced as
+#                          projects at all. A count or section scan can't model
+#                          that curation, so we pin the FULL submodule set via a
+#                          `projects-submodules: path=disposition,...` marker and
+#                          enforce SET equality between the marker's paths and
+#                          the live .gitmodules paths. Adding or removing a
+#                          submodule therefore forces a human to record it and
+#                          decide whether/how it appears — a brand-new product
+#                          can no longer land in the monorepo while silently
+#                          going unrepresented on the site. (This check reads
+#                          only the tracked .gitmodules file, so it needs no
+#                          submodule checkout and stays network-free.)
 #
 # Run from the repository root (CI sets the working directory there); falls back
 # to a path relative to this script for local runs.
@@ -37,6 +54,7 @@ repo_root="${GITHUB_WORKSPACE:-$(cd "$script_dir/../.." && pwd)}"
 mdx="$repo_root/docs/src/content/docs/projects/active.mdx"
 actions_dir="$repo_root/github/devantler-tech/github-actions/actions"
 rw_workflows_dir="$repo_root/github/devantler-tech/github-actions/reusable-workflows/.github/workflows"
+gitmodules="$repo_root/.gitmodules"
 
 # Anchor each H2 section on the source repo URL it links to — unique and stable.
 actions_anchor="](https://github.com/devantler-tech/actions)"
@@ -51,6 +69,7 @@ die_missing() {
 [ -f "$mdx" ] || die_missing "active.mdx" "$mdx"
 [ -d "$actions_dir" ] || die_missing "actions submodule" "$actions_dir"
 [ -d "$rw_workflows_dir" ] || die_missing "reusable-workflows submodule" "$rw_workflows_dir"
+[ -f "$gitmodules" ] || die_missing ".gitmodules" "$gitmodules"
 
 # Count "- " bullets in the H2 section whose header line contains $1.
 count_section_bullets() {
@@ -117,6 +136,43 @@ update the 'reusable-workflows-count' marker to ${rw_count}." >&2
   fail=1
 else
   echo "OK: Reusable Workflows in sync (${rw_count} workflow_call workflows == marker ${rw_expected})."
+fi
+
+# --- Submodules: every submodule is consciously represented (or excluded) ------
+# Live submodule paths from .gitmodules (a tracked file at the repo root, so no
+# submodule contents are needed here), sorted & unique.
+submodules_live=$(
+  grep -E '^[[:space:]]*path[[:space:]]*=' "$gitmodules" \
+    | awk -F'=' '{ gsub(/[[:space:]]/, "", $2); print $2 }' | sort -u
+)
+
+# Declared paths from the inline `projects-submodules: path=disposition,...`
+# marker — take the path (left of '=') from each comma-separated entry.
+submodules_marker=$(
+  grep -oE 'projects-submodules:[[:space:]]*[a-z0-9/=,._-]+' "$mdx" \
+    | sed -E 's/^projects-submodules:[[:space:]]*//' | head -n1 || true
+)
+submodules_declared=$(
+  printf '%s' "$submodules_marker" | tr ',' '\n' | sed -E 's/=.*$//; /^[[:space:]]*$/d' | sort -u
+)
+
+if [ -z "$submodules_marker" ]; then
+  echo "::error file=docs/src/content/docs/projects/active.mdx::Missing \
+'projects-submodules: path=disposition,...' marker in \
+docs/src/content/docs/projects/active.mdx." >&2
+  fail=1
+elif [ "$submodules_declared" != "$submodules_live" ]; then
+  only_live=$(comm -23 <(printf '%s\n' "$submodules_live") <(printf '%s\n' "$submodules_declared") | paste -sd, -)
+  only_marker=$(comm -13 <(printf '%s\n' "$submodules_live") <(printf '%s\n' "$submodules_declared") | paste -sd, -)
+  echo "::error file=docs/src/content/docs/projects/active.mdx::Submodule drift: the \
+'projects-submodules' marker does not match the submodules in .gitmodules. \
+Missing from marker: [${only_live:-none}]. Stale in marker (no longer a submodule): [${only_marker:-none}]. \
+A submodule was added or removed — record it in the 'projects-submodules' marker with its disposition \
+(section / grouped / templates-page / infra / omitted) and, if it should appear as a project, update the page." >&2
+  fail=1
+else
+  sub_n=$(printf '%s\n' "$submodules_live" | grep -c .)
+  echo "OK: Submodule representation in sync (${sub_n} submodules all accounted for in the marker)."
 fi
 
 exit "$fail"
