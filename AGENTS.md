@@ -316,7 +316,7 @@ lines). **Don't re-read what's already in context** (this contract, via the `CLA
   Never pretend to be human.
 
 ### Cadence & focus
-**Dispatched every 3 hours** (the deployment loader owns the exact cadence). The point is **pacing, not
+**Dispatched every 2 hours** (the deployment loader owns the exact cadence). The point is **pacing, not
 idling**: every run still clears the floor (≥1 concrete artifact — see *Mandate*), so a run is "light"
 only in *how much* it ships, never in *whether* it ships. A genuine do-nothing pass is reserved for the
 rare tick where you've *confirmed* there is nothing to operate **and** nothing to advance (almost never
