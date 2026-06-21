@@ -37,6 +37,7 @@ jobs:
             active-projects:
               - 'docs/src/content/docs/projects/active.mdx'
               - 'docs/scripts/check-active-projects-drift.sh'
+              - '.gitmodules'
               - 'github/devantler-tech/github-actions/actions'
               - 'github/devantler-tech/github-actions/reusable-workflows'
 
