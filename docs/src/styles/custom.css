@@ -174,13 +174,10 @@ main > .hero,
 /* On splash (hero) pages, let the full-bleed hero rise *behind* the fixed glass
    header instead of starting below it — so the header's backdrop-blur sits over
    the matrix art and there's no plain band between the navbar and the hero
-   image. The layout normally reserves header clearance via .main-frame's top
-   padding; cancel it only on hero pages (the hero's own top padding, which
+   image. The layout normally reserves header clearance with top padding on these
+   wrappers; cancel it only on hero pages (the hero's own top padding, which
    includes --sl-nav-height, keeps the title clear of the header). */
-[data-has-hero] .main-frame {
-  padding-top: 0;
-}
-
+[data-has-hero] .main-frame,
 [data-has-hero] .content-panel:first-child {
   padding-top: 0;
 }
