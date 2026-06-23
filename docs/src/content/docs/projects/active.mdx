@@ -56,6 +56,8 @@ A collection of [reusable GitHub Actions workflows](https://docs.github.com/en/a
 
 {/* reusable-workflows-count: 15 — this categorical list covers every reusable (workflow_call) workflow in devantler-tech/reusable-workflows; the docs CI drift-check fails when a workflow is added or removed there. When that happens, review the category bullets above and bump this number to match. */}
 
+{/* reusable-workflows-names: create-release,delete-workflow-runs,dependency-review,deploy-github-pages,enable-auto-merge,publish-app,publish-dotnet-library,publish-manifests,run-dotnet-tests,scan-for-todo-comments,scan-for-workflow-vulnerabilities,sync-cluster-policies,template-sync,update-agent-skills,validate-go-project — the exact set of reusable (workflow_call) workflow filenames (minus .yaml) in devantler-tech/reusable-workflows. The docs CI drift-check asserts this set EQUALS the live workflow_call workflows, so an added, removed, OR renamed workflow breaks the build even when the count is unchanged (a count alone misses renames and net-zero swaps). When that happens, review the category bullets above and update this marker together with the count. */}
+
 ## [⚡ Actions](https://github.com/devantler-tech/actions) ![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-2088FF.svg?style=for-the-badge&logo=GitHub-Actions&logoColor=white)
 
 A collection of [composite GitHub Actions](https://docs.github.com/en/actions/tutorials/create-actions/create-a-composite-action) that provide small, reusable components for CI/CD workflows.

@@ -20,12 +20,21 @@
 #                          updated without revisiting the prose bullets).
 #   - Reusable Workflows — the site list is *categorical* (CI / CD / Automation
 #                          buckets), not one bullet per workflow, so a bullet
-#                          count cannot map 1:1. Instead we tripwire on the
-#                          number of reusable (`workflow_call`) workflows versus
-#                          an expected count declared inline in active.mdx via a
-#                          `reusable-workflows-count: N` marker. Adding or
-#                          removing a workflow therefore forces a human to
-#                          revisit the category bullets and bump the marker.
+#                          count cannot map 1:1. We tripwire on the number of
+#                          reusable (`workflow_call`) workflows versus an expected
+#                          count declared inline in active.mdx via a
+#                          `reusable-workflows-count: N` marker — but a count
+#                          alone, exactly like the Actions bullet count, cannot
+#                          catch a rename or a net-zero add+remove (the count
+#                          stays equal while a category bullet silently goes
+#                          stale), so we additionally pin the exact workflow names
+#                          via a `reusable-workflows-names: a,b,c` marker and
+#                          enforce SET equality between it and the live
+#                          `workflow_call` workflows (keeping the count tripwire so
+#                          the names marker can't be updated without revisiting the
+#                          category bullets). Adding, removing, OR renaming a
+#                          workflow therefore forces a human to revisit the
+#                          category bullets and update both markers.
 #   - Submodules         — the page is a *curated* view of the monorepo's
 #                          submodule set (the source-of-truth is .gitmodules):
 #                          some submodules are their own H2 product section,
@@ -119,12 +128,28 @@ else
   echo "OK: Actions list in sync (${actions_count} actions == ${actions_bullets} bullets, marker set matches)."
 fi
 
-# --- Reusable Workflows: count tripwire vs. inline marker ----------------------
-rw_count=$(grep -lE '^[[:space:]]*workflow_call:' "$rw_workflows_dir"/*.yaml 2>/dev/null | wc -l | tr -d ' ')
+# --- Reusable Workflows: count tripwire + workflow-name set equality -----------
+# Live reusable (workflow_call) workflow names (basename minus .yaml), sorted & unique.
+rw_live=$(
+  grep -lE '^[[:space:]]*workflow_call:' "$rw_workflows_dir"/*.yaml 2>/dev/null \
+    | awk -F/ '{ name = $NF; sub(/\.yaml$/, "", name); print name }' | sort -u
+)
+rw_count=$(printf '%s\n' "$rw_live" | grep -c . || true)
 rw_expected=$(grep -oE 'reusable-workflows-count:[[:space:]]*[0-9]+' "$mdx" | grep -oE '[0-9]+' | head -n1 || true)
+
+# Declared workflow names from the inline `reusable-workflows-names: a,b,c` marker.
+rw_marker=$(
+  grep -oE 'reusable-workflows-names:[[:space:]]*[a-z0-9,_-]+' "$mdx" \
+    | sed -E 's/^reusable-workflows-names:[[:space:]]*//' | head -n1 || true
+)
+rw_declared=$(printf '%s' "$rw_marker" | tr ',' '\n' | sed '/^$/d' | sort -u)
 
 if [ -z "$rw_expected" ]; then
   echo "::error file=docs/src/content/docs/projects/active.mdx::Missing 'reusable-workflows-count: N' \
+marker in the '## 🔄 Reusable Workflows' section of docs/src/content/docs/projects/active.mdx." >&2
+  fail=1
+elif [ -z "$rw_marker" ]; then
+  echo "::error file=docs/src/content/docs/projects/active.mdx::Missing 'reusable-workflows-names: a,b,c' \
 marker in the '## 🔄 Reusable Workflows' section of docs/src/content/docs/projects/active.mdx." >&2
   fail=1
 elif [ "$rw_count" -ne "$rw_expected" ]; then
@@ -134,8 +159,18 @@ declares ${rw_expected}. A workflow was added or removed in devantler-tech/reusa
 the category bullets under '## 🔄 Reusable Workflows' in docs/src/content/docs/projects/active.mdx and \
 update the 'reusable-workflows-count' marker to ${rw_count}." >&2
   fail=1
+elif [ "$rw_declared" != "$rw_live" ]; then
+  only_live=$(comm -23 <(printf '%s\n' "$rw_live") <(printf '%s\n' "$rw_declared") | paste -sd, -)
+  only_marker=$(comm -13 <(printf '%s\n' "$rw_live") <(printf '%s\n' "$rw_declared") | paste -sd, -)
+  echo "::error file=docs/src/content/docs/projects/active.mdx::Reusable Workflows drift: the \
+'reusable-workflows-names' marker does not match the workflow_call workflows in \
+devantler-tech/reusable-workflows. Missing from marker: [${only_live:-none}]. \
+Stale in marker (no longer a workflow_call workflow): [${only_marker:-none}]. A workflow was added, \
+removed, or renamed — review the category bullets under '## 🔄 Reusable Workflows' AND update the \
+'reusable-workflows-names' marker in docs/src/content/docs/projects/active.mdx." >&2
+  fail=1
 else
-  echo "OK: Reusable Workflows in sync (${rw_count} workflow_call workflows == marker ${rw_expected})."
+  echo "OK: Reusable Workflows in sync (${rw_count} workflow_call workflows == marker ${rw_expected}, name set matches)."
 fi
 
 # --- Submodules: every submodule is consciously represented (or excluded) ------
