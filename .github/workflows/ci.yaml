@@ -36,6 +36,7 @@ jobs:
               - 'docs/package-lock.json'
             active-projects:
               - 'docs/src/content/docs/projects/active.mdx'
+              - 'docs/src/content/docs/templates/**'
               - 'docs/scripts/check-active-projects-drift.sh'
               - '.gitmodules'
               - 'github/devantler-tech/github-actions/actions'

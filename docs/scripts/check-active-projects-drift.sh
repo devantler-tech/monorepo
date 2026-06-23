@@ -52,6 +52,27 @@
 #                          going unrepresented on the site. (This check reads
 #                          only the tracked .gitmodules file, so it needs no
 #                          submodule checkout and stays network-free.)
+#   - Templates page     — the four template submodules are dispositioned
+#                          `=templates-page` in the submodule marker above
+#                          because they are surfaced on the Templates page
+#                          (docs/src/content/docs/templates/), not here. That
+#                          page's index CardGrid is auto-derived from the
+#                          `templates/*` doc collection, so the *list* cannot
+#                          drift — but the set of template doc PAGES is itself
+#                          hand-maintained, and nothing tied it to the
+#                          dispositioned submodule set. A new template repo could
+#                          be recorded as `=templates-page` (the submodule check
+#                          forces that) yet never get a doc page — silently
+#                          vanishing from the site — and a renamed/removed
+#                          template page could likewise linger. So we enforce SET
+#                          equality between the basenames of the
+#                          `=templates-page` submodules and the source repos that
+#                          the template doc pages declare in their
+#                          `**Repository**: [devantler-tech/<repo>]` line. Adding,
+#                          removing, or renaming a template therefore forces both
+#                          the doc page and the marker disposition to be updated
+#                          in lockstep. (Reads only the marker and the in-repo doc
+#                          pages, so it stays network-free.)
 #
 # Run from the repository root (CI sets the working directory there); falls back
 # to a path relative to this script for local runs.
@@ -64,6 +85,7 @@ mdx="$repo_root/docs/src/content/docs/projects/active.mdx"
 actions_dir="$repo_root/github/devantler-tech/github-actions/actions"
 rw_workflows_dir="$repo_root/github/devantler-tech/github-actions/reusable-workflows/.github/workflows"
 gitmodules="$repo_root/.gitmodules"
+templates_dir="$repo_root/docs/src/content/docs/templates"
 
 # Anchor each H2 section on the source repo URL it links to — unique and stable.
 actions_anchor="](https://github.com/devantler-tech/actions)"
@@ -79,6 +101,7 @@ die_missing() {
 [ -d "$actions_dir" ] || die_missing "actions submodule" "$actions_dir"
 [ -d "$rw_workflows_dir" ] || die_missing "reusable-workflows submodule" "$rw_workflows_dir"
 [ -f "$gitmodules" ] || die_missing ".gitmodules" "$gitmodules"
+[ -d "$templates_dir" ] || die_missing "templates docs directory" "$templates_dir"
 
 # Count "- " bullets in the H2 section whose header line contains $1.
 count_section_bullets() {
@@ -208,6 +231,39 @@ A submodule was added or removed — record it in the 'projects-submodules' mark
 else
   sub_n=$(printf '%s\n' "$submodules_live" | grep -c .)
   echo "OK: Submodule representation in sync (${sub_n} submodules all accounted for in the marker)."
+fi
+
+# --- Templates page: every templates-page submodule has a doc page (& vice versa) ---
+# Basenames of the submodules dispositioned `=templates-page` in the marker above
+# (the path is always `templates/<repo>`, so the basename is the repo name).
+templates_declared=$(
+  printf '%s' "$submodules_marker" | tr ',' '\n' \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    | grep -E '=templates-page$' \
+    | sed -E 's/=templates-page$//; s#^.*/##' | sort -u
+)
+
+# Source repos the live template doc pages declare in their `**Repository**:`
+# line — one per page under docs/src/content/docs/templates/*.md (the index is
+# an .mdx file, so the *.md glob excludes it), sorted & unique.
+templates_live=$(
+  grep -hoE '^\*\*Repository\*\*:[[:space:]]*\[devantler-tech/[a-z0-9._-]+\]' "$templates_dir"/*.md 2>/dev/null \
+    | sed -E 's#.*\[devantler-tech/##; s/\]$//' | sort -u
+)
+
+if [ "$templates_declared" != "$templates_live" ]; then
+  only_decl=$(comm -23 <(printf '%s\n' "$templates_declared") <(printf '%s\n' "$templates_live") | paste -sd, -)
+  only_page=$(comm -13 <(printf '%s\n' "$templates_declared") <(printf '%s\n' "$templates_live") | paste -sd, -)
+  echo "::error file=docs/src/content/docs/projects/active.mdx::Templates page drift: the submodules \
+dispositioned '=templates-page' in the 'projects-submodules' marker do not match the template doc pages \
+under docs/src/content/docs/templates/. Dispositioned templates-page but missing a doc page (or its \
+'**Repository**: [devantler-tech/<repo>]' link is wrong): [${only_decl:-none}]. Has a doc page but not \
+dispositioned templates-page in the marker: [${only_page:-none}]. Add/remove the template doc page and \
+keep the 'projects-submodules' marker disposition in lockstep." >&2
+  fail=1
+else
+  tpl_n=$(printf '%s\n' "$templates_declared" | grep -c .)
+  echo "OK: Templates page in sync (${tpl_n} templates-page submodules == ${tpl_n} template doc pages, repo set matches)."
 fi
 
 exit "$fail"
