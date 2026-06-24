@@ -26,7 +26,7 @@ keeping them healthy *and* moving them forward.
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | [AGENTS.md](https://github.com/devantler-tech/platform-template/blob/main/AGENTS.md) |
 | GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | [AGENTS.md](https://github.com/devantler-tech/actions/blob/main/AGENTS.md) |
 | Reusable Workflows | `devantler-tech/reusable-workflows` | `github/devantler-tech/github-actions/reusable-workflows` | [AGENTS.md](https://github.com/devantler-tech/reusable-workflows/blob/main/AGENTS.md) |
-| Homebrew tap | `devantler-tech/homebrew-tap` (renamed from `homebrew-formulas`; the submodule URL redirects) | `homebrew-formulas` | [AGENTS.md](https://github.com/devantler-tech/homebrew-tap/blob/main/AGENTS.md) |
+| Homebrew tap | `devantler-tech/homebrew-tap` (repo renamed from `homebrew-formulas`) | `homebrew-tap` | [AGENTS.md](https://github.com/devantler-tech/homebrew-tap/blob/main/AGENTS.md) |
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | [repo](https://github.com/devantler-tech/agent-skills) |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | [repo](https://github.com/devantler-tech/agent-plugins) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |

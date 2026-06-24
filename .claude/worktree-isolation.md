@@ -43,7 +43,7 @@ A submodule's git directory lives at `<repo>/.git/modules/<name>/`. The breakage
 | `applications/ascoachingogvaner` | set | unset | ❌ broken |
 | `github/devantler-tech/github-actions/actions` | set | unset | ❌ broken |
 | `github/devantler-tech/github-actions/reusable-workflows` | set | unset | ❌ broken |
-| `homebrew-formulas` | set | unset | ❌ broken |
+| `homebrew-tap` | set | unset | ❌ broken |
 | `libraries/agent-plugins` | set | unset | ❌ broken |
 | `libraries/agent-skills` | set | unset | ❌ broken |
 | `templates/dotnet-template` | set | unset | ❌ broken |
