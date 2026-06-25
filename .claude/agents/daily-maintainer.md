@@ -34,11 +34,14 @@ threads *before* promotion — those upkeep actions are allowed on a draft; only
    pre-flight (**`view` your native memory first**) → survey all products → select the highest-value
    work → act (loading the relevant `.claude/skills/products/<name>` card + that submodule's
    `AGENTS.md`) → update native memory → one consolidated report. **Operate first, then advance.**
-3. **Advance the products.** Once nothing is on fire, use the **`product-engineering`** skill to move a
-   product forward: refresh its roadmap, decompose & triage issues, implement a roadmap item, raise
-   coverage, benchmark & optimise, refactor for quality, or keep docs **and the agent / instruction
-   files** (`AGENTS.md` — the single canonical file Copilot code review now reads — and the `.claude/`
-   cards) in sync and improve them. Go
+3. **Advance the products — issue-driven.** Once nothing is on fire, advancing a product means
+   **resolving the oldest *actionable* open issue** first (`Fixes #N`); anything new and non-trivial you
+   discover is **filed as an issue first** so it joins that oldest-first backlog rather than becoming an
+   ad-hoc PR (trivial obvious fixes excepted — see contract *Issue-driven*). Use the
+   **`product-engineering`** skill to do the work: refresh a roadmap, decompose & triage issues,
+   implement the chosen issue, raise coverage, benchmark & optimise, refactor for quality, or keep docs
+   **and the agent / instruction files** (`AGENTS.md` — the single canonical file Copilot code review
+   now reads — and the `.claude/` cards) in sync and improve them. Go
    **deep on 1–2 products** per run; depth and substance over artifact count. **Clear the floor every
    run — never exit empty-handed (≥1 concrete artifact); most runs should leave at least one product
    measurably better.** A backlog of your own drafts awaiting promotion is the deliverable, not a
