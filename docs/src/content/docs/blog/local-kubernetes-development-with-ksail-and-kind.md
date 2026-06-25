@@ -8,6 +8,7 @@ tags:
   - ksail
   - kind
   - local-development
+description: A guide to creating local Kubernetes development clusters using KSail with Kind (vanilla Kubernetes) in Docker.
 excerpt: A guide to creating local Kubernetes development clusters using KSail with Kind (vanilla Kubernetes) in Docker.
 cover:
   alt: KSail with Kind

@@ -8,6 +8,7 @@ tags:
   - licensing
   - open-source
   - polyform
+description: KSail's license changed three times in 18 months. Here's why it went from Apache-2.0 to GPL-3.0 to PolyForm Shield 1.0.0, and why I think more dev tools should consider it.
 excerpt: KSail's license changed three times in 18 months. Here's why it went from Apache-2.0 to GPL-3.0 to PolyForm Shield 1.0.0, and why I think more dev tools should consider it.
 cover:
   alt: PolyForm Shield License — use it for anything, just don't compete with it

@@ -9,6 +9,7 @@ tags:
   - mcp
   - devtools
   - golang
+description: KSail now ships with a built-in MCP server that lets Claude, Cursor, and other AI assistants manage Kubernetes clusters directly. Here's how it works and what you can do with it.
 excerpt: KSail now ships with a built-in MCP server that lets Claude, Cursor, and other AI assistants manage Kubernetes clusters directly. Here's how it works and what you can do with it.
 cover:
   alt: KSail MCP Server connecting AI assistants to Kubernetes clusters

@@ -9,6 +9,7 @@ tags:
   - talos
   - hetzner
   - cloud
+description: A step-by-step guide to creating Talos Linux Kubernetes clusters on Hetzner Cloud using KSail.
 excerpt: A step-by-step guide to creating Talos Linux Kubernetes clusters on Hetzner Cloud using KSail.
 cover:
   alt: Talos Linux on Hetzner Cloud

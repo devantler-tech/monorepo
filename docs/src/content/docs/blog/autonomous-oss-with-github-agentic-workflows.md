@@ -11,6 +11,7 @@ tags:
   - automation
   - ksail
   - developer-experience
+description: A Mac Mini runs 24/7 at home, firing scheduled prompts that open PRs against KSail. Here's how I've set it up and what I've learned running it.
 excerpt: A Mac Mini runs 24/7 at home, firing scheduled prompts that open PRs against KSail. Here's how I've set it up and what I've learned running it.
 cover:
   alt: Autonomous OSS development with GitHub Agentic Workflows

@@ -8,6 +8,7 @@ tags:
   - security
   - zsh
   - developer-experience
+description: A quick guide on using macOS Keychain to avoid storing secrets in plaintext in your .zshrc.
 excerpt: A quick guide on using macOS Keychain to avoid storing secrets in plaintext in your .zshrc.
 cover:
   alt: macOS Keychain security

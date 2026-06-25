@@ -9,6 +9,7 @@ tags:
   - copilot
   - productivity
   - developer-experience
+description: How I leverage GitHub Copilot with Claude Opus 4.5 to analyze codebases, investigate context, and create well-structured GitHub issues that save time for myself and my team.
 excerpt: How I leverage GitHub Copilot with Claude Opus 4.5 to analyze codebases, investigate context, and create well-structured GitHub issues that save time for myself and my team.
 cover:
   alt: AI-powered GitHub Issues

@@ -9,6 +9,7 @@ tags:
   - go
   - copilot
   - tui
+description: How I built KSail's interactive AI chat assistant using Go, GitHub Copilot SDK, and Bubbletea TUI framework.
 excerpt: How I built KSail's interactive AI chat assistant using Go, GitHub Copilot SDK, and Bubbletea TUI framework.
 cover:
   alt: KSail Copilot Chat in action
