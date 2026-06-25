@@ -176,6 +176,26 @@ Conventional-Commit title, then **merge with the command that matches the author
   (auto-merge is bot-only) and merges **directly** with bare `gh pr merge <n> --squash` once
   `mergeStateStatus` is CLEAN.
 
+**Bot PRs are first-priority work, not background noise — a red `dependabot`/`renovate` PR is driven
+green, never dismissed as "self-managing".** Sweep **every** open `dependabot[bot]`/`renovate[bot]` PR
+across the portfolio each run (`gh search prs --owner devantler-tech --author app/dependabot --state
+open`; likewise `--author app/renovate`) and **drive each toward green** exactly like any trusted PR —
+do not generalise "bots rebase themselves" into "leave their failing CI alone":
+- **CLEAN** → merge it (bot path above; if `--auto` arming is denied, fall back to a direct `gh pr merge
+  <n> --squash`, then surface-as-one-click only if *that* is refused). Never end a run with a CLEAN
+  trusted bot PR unmerged.
+- **stale / behind main / DIRTY** → `@dependabot rebase` (or `@dependabot recreate`).
+- **transient CI flake** (disk-full `no space left on device`, runner OOM, network) → re-run the failed
+  jobs / rebase to retrigger — don't label it "flaky" and walk away.
+- **real adaptation needed** (an API change in the bumped dep, a lint/vuln finding, a toolchain-floor
+  bump) → **fix it by pushing a commit to the bot branch** (bots are trusted, so building/running/pushing
+  their branch inside `devantler-tech` is allowed). The bump *is* the issue; the fix unblocks it.
+- **genuine maintainer-decision block** (e.g. an unlicensed transitive dependency → license/compliance
+  call) → triage + surface. This and an **archived** repo (read-only — stale bot PRs can't be merged;
+  verify `gh repo view --json isArchived`) are the *only* "leave it" cases.
+Letting bot PRs sit red is a failure mode — they are part of the first-priority PR sweep that runs
+**before** issue/advance work.
+
 This **includes dependency major-version bumps** once CI is green. The merge itself is
 **low-ceremony**: a **single fresh** `gh pr view <n> --json number,isDraft,author,mergeStateStatus,statusCheckRollup`
 showing `isDraft:false`, a trusted author, owner `devantler-tech`, and `mergeStateStatus:CLEAN` is
