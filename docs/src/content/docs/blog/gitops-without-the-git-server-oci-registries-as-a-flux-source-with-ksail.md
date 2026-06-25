@@ -9,6 +9,7 @@ tags:
   - flux
   - oci
   - ksail
+description: Most local Flux setups point at a Git repo. OCI registries are cleaner — here's a full walkthrough using KSail's local registry and workload push command, plus how to extend the same workflow to GHCR for CI.
 excerpt: Most local Flux setups point at a Git repo. OCI registries are cleaner — here's a full walkthrough using KSail's local registry and workload push command, plus how to extend the same workflow to GHCR for CI.
 cover:
   alt: OCI artifacts as a Flux source with KSail

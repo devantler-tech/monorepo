@@ -5,6 +5,7 @@ authors:
   - devantler
 tags:
   - personal
+description: A welcome post to introduce myself and the site.
 excerpt: A welcome post to introduce myself and the site.
 cover:
   alt: Welcome to devantler.tech

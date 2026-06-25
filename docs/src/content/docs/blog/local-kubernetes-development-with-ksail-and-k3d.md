@@ -9,6 +9,7 @@ tags:
   - k3s
   - k3d
   - local-development
+description: A guide to creating local Kubernetes development clusters using KSail with K3d (K3s in Docker).
 excerpt: A guide to creating local Kubernetes development clusters using KSail with K3d (K3s in Docker).
 cover:
   alt: KSail with K3d

@@ -9,6 +9,7 @@ tags:
   - dotnet
   - architecture
   - open-source
+description: The journey of building KSail through three major rewrites and what I learned along the way.
 excerpt: The journey of building KSail through three major rewrites and what I learned along the way.
 cover:
   alt: KSail logo

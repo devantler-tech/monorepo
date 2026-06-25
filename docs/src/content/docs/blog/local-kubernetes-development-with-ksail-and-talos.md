@@ -8,6 +8,7 @@ tags:
   - ksail
   - talos
   - local-development
+description: A guide to creating local Kubernetes development clusters using KSail with Talos Linux in Docker.
 excerpt: A guide to creating local Kubernetes development clusters using KSail with Talos Linux in Docker.
 cover:
   alt: KSail with Talos
