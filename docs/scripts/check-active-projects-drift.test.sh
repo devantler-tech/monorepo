@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 #
 # Self-test for check-active-projects-drift.sh — proves the drift guard PASSES a
-# fully-consistent fixture and FAILS each individual drift scenario (a missing
-# marker, a count tripwire, and a set-equality mismatch for every one of the
-# four checks: Actions, Reusable Workflows, Submodules, Templates page). Run in
-# CI so the guard's correctness is continuously verified — a refactor that
-# silently weakens any check is caught here, not in production drift.
+# fully-consistent fixture and FAILS each individual drift scenario, asserting on
+# the guard's actual error so every case pins its OWN branch (a refactor that
+# made one check's failure get mis-attributed to another's message would be
+# caught here). Covered failure branches: a missing marker for each of the three
+# markers that have one (actions-dirs, reusable-workflows-count,
+# reusable-workflows-names, projects-submodules), the count tripwire for Actions
+# and Reusable Workflows, the set-equality mismatch for all four checks (Actions,
+# Reusable Workflows, Submodules, Templates page — both directions for Templates),
+# and the hard die_missing guard fired when a required submodule/file is absent
+# (distinct from drift: it exits with a "is the submodule checked out?" error
+# rather than a drift message). Run in CI so the guard's correctness is
+# continuously verified — a refactor that silently weakens any check is caught
+# here, not in production drift.
 #
 # The guard reads its repo root from $GITHUB_WORKSPACE (falling back to the
 # checkout when unset), so every case points it at a self-contained fixture tree
@@ -28,11 +36,17 @@ pass_case() { # name root
   fi
 }
 
-fail_case() { # name root
-  if GITHUB_WORKSPACE="$2" bash "$guard" >/dev/null 2>&1; then
+# Assert the guard FAILS *and* its combined stdout+stderr contains the expected
+# literal marker substring — so the case proves it tripped its own branch, not
+# merely that something somewhere failed.
+fail_match() { # name root expected-substring
+  local out
+  if out="$(GITHUB_WORKSPACE="$2" bash "$guard" 2>&1)"; then
     printf '  ❌ %s — expected FAIL but the guard PASSED\n' "$1"; fail=1
+  elif printf '%s\n' "$out" | grep -qF -- "$3"; then
+    printf '  ✅ %s — failed on the expected branch\n' "$1"
   else
-    printf '  ✅ %s — failed as expected\n' "$1"
+    printf '  ❌ %s — FAILED but not on the expected branch (wanted: %s)\n' "$1" "$3"; fail=1
   fi
 }
 
@@ -101,42 +115,66 @@ title: Active Projects
 EOF
 }
 
+# Path to the fixture's active.mdx — every drift case mutates this file.
+mdx_path() { printf '%s/docs/src/content/docs/projects/active.mdx' "$1"; }
+
 # 0. fully-consistent fixture → pass (the happy path; guards against a guard
 #    that fails-closed on a correct page).
 good="$tmp/good"; build_fixture "$good"
 pass_case "fully-consistent fixture" "$good"
 
-# 1. Actions: marker absent → fail (missing-marker branch).
+# 1. Actions: marker absent → missing-marker branch.
 c="$tmp/actions-missing-marker"; build_fixture "$c"
-sed -i.bak '/actions-dirs:/d' "$c/docs/src/content/docs/projects/active.mdx"
-fail_case "Actions: missing actions-dirs marker" "$c"
+sed -i.bak '/actions-dirs:/d' "$(mdx_path "$c")"
+fail_match "Actions: missing actions-dirs marker" "$c" \
+  "Missing 'actions-dirs: a,b,c' marker"
 
 # 2. Actions: a third action dir but the bullets/marker still list two →
 #    bullet-count tripwire fires.
 c="$tmp/actions-count"; build_fixture "$c"
 mkdir -p "$c/github/devantler-tech/github-actions/actions/gamma"
 printf 'name: gamma\n' > "$c/github/devantler-tech/github-actions/actions/gamma/action.yaml"
-fail_case "Actions: count tripwire (3 dirs, 2 bullets)" "$c"
+fail_match "Actions: count tripwire (3 dirs, 2 bullets)" "$c" \
+  "composite action(s) in the actions submodule but"
 
 # 3. Actions: count matches but a marker name is renamed → set-equality fires.
 c="$tmp/actions-set"; build_fixture "$c"
-sed -i.bak 's/actions-dirs: alpha,beta/actions-dirs: alpha,gamma/' \
-  "$c/docs/src/content/docs/projects/active.mdx"
-fail_case "Actions: set mismatch (marker renames beta→gamma)" "$c"
+sed -i.bak 's/actions-dirs: alpha,beta/actions-dirs: alpha,gamma/' "$(mdx_path "$c")"
+fail_match "Actions: set mismatch (marker renames beta→gamma)" "$c" \
+  "the 'actions-dirs' marker does not match"
 
-# 4. Reusable Workflows: count marker disagrees with the live workflow count.
+# 4. Reusable Workflows: count marker absent → missing-marker branch.
+c="$tmp/rw-missing-count"; build_fixture "$c"
+sed -i.bak '/reusable-workflows-count:/d' "$(mdx_path "$c")"
+fail_match "Reusable Workflows: missing reusable-workflows-count marker" "$c" \
+  "Missing 'reusable-workflows-count: N'"
+
+# 5. Reusable Workflows: names marker absent (count present) → missing-names branch.
+c="$tmp/rw-missing-names"; build_fixture "$c"
+sed -i.bak '/reusable-workflows-names:/d' "$(mdx_path "$c")"
+fail_match "Reusable Workflows: missing reusable-workflows-names marker" "$c" \
+  "Missing 'reusable-workflows-names: a,b,c'"
+
+# 6. Reusable Workflows: count marker disagrees with the live workflow count.
 c="$tmp/rw-count"; build_fixture "$c"
-sed -i.bak 's/reusable-workflows-count: 2/reusable-workflows-count: 3/' \
-  "$c/docs/src/content/docs/projects/active.mdx"
-fail_case "Reusable Workflows: count tripwire (marker 3, live 2)" "$c"
+sed -i.bak 's/reusable-workflows-count: 2/reusable-workflows-count: 3/' "$(mdx_path "$c")"
+fail_match "Reusable Workflows: count tripwire (marker 3, live 2)" "$c" \
+  "but the marker declares"
 
-# 5. Reusable Workflows: count matches but a name is renamed → set-equality fires.
+# 7. Reusable Workflows: count matches but a name is renamed → set-equality fires.
 c="$tmp/rw-set"; build_fixture "$c"
 sed -i.bak 's/reusable-workflows-names: cd-two,ci-one/reusable-workflows-names: cd-three,ci-one/' \
-  "$c/docs/src/content/docs/projects/active.mdx"
-fail_case "Reusable Workflows: set mismatch (marker renames cd-two→cd-three)" "$c"
+  "$(mdx_path "$c")"
+fail_match "Reusable Workflows: set mismatch (marker renames cd-two→cd-three)" "$c" \
+  "'reusable-workflows-names' marker does not match"
 
-# 6. Submodules: a new submodule in .gitmodules not recorded in the marker →
+# 8. Submodules: marker absent → missing-marker branch.
+c="$tmp/submodule-missing-marker"; build_fixture "$c"
+sed -i.bak '/projects-submodules:/d' "$(mdx_path "$c")"
+fail_match "Submodules: missing projects-submodules marker" "$c" \
+  "Missing 'projects-submodules: path=disposition,...'"
+
+# 9. Submodules: a new submodule in .gitmodules not recorded in the marker →
 #    submodule set-equality fires.
 c="$tmp/submodule-set"; build_fixture "$c"
 cat >> "$c/.gitmodules" <<'EOF'
@@ -144,23 +182,46 @@ cat >> "$c/.gitmodules" <<'EOF'
 	path = applications/newthing
 	url = https://github.com/devantler-tech/newthing.git
 EOF
-fail_case "Submodules: unrecorded new submodule" "$c"
+fail_match "Submodules: unrecorded new submodule" "$c" \
+  "Submodule drift: the 'projects-submodules' marker does not match"
 
-# 7. Templates page: a templates-page submodule (recorded in .gitmodules so the
-#    submodule check still passes) has no matching template doc page → templates
-#    set-equality fires in isolation.
-c="$tmp/templates-set"; build_fixture "$c"
+# 10. Templates page (forward): a templates-page submodule (recorded in
+#     .gitmodules so the submodule check still passes) has no matching template
+#     doc page → templates set-equality fires on the "missing a doc page" side.
+c="$tmp/templates-missing-page"; build_fixture "$c"
 sed -i.bak 's#templates/foo-template=templates-page#templates/foo-template=templates-page,templates/baz-template=templates-page#' \
-  "$c/docs/src/content/docs/projects/active.mdx"
+  "$(mdx_path "$c")"
 cat >> "$c/.gitmodules" <<'EOF'
 [submodule "baz-template"]
 	path = templates/baz-template
 	url = https://github.com/devantler-tech/baz-template.git
 EOF
-fail_case "Templates: templates-page submodule with no doc page" "$c"
+fail_match "Templates: templates-page submodule with no doc page" "$c" \
+  "link is wrong): [baz-template]"
+
+# 11. Templates page (reverse): a template doc page whose repo is NOT
+#     dispositioned =templates-page in the marker (and not a submodule, so the
+#     submodule check still passes) → templates set-equality fires on the
+#     "has a doc page but not dispositioned" side.
+c="$tmp/templates-extra-page"; build_fixture "$c"
+cat > "$c/docs/src/content/docs/templates/qux.md" <<'EOF'
+---
+title: Qux Template
+---
+**Repository**: [devantler-tech/qux-template](https://github.com/devantler-tech/qux-template)
+EOF
+fail_match "Templates: doc page not dispositioned templates-page" "$c" \
+  "not dispositioned templates-page in the marker: [qux-template]"
+
+# 12. die_missing: a required submodule is absent → hard error (exit 1 with the
+#     "is the submodule checked out?" message), distinct from a drift failure.
+c="$tmp/missing-submodule"; build_fixture "$c"
+rm -rf "$c/github/devantler-tech/github-actions/actions"
+fail_match "die_missing: actions submodule not checked out" "$c" \
+  "actions submodule not found"
 
 if [ "$fail" -ne 0 ]; then
   printf '❌ active-projects drift-guard self-test FAILED\n' >&2
   exit 1
 fi
-printf '✅ active-projects drift-guard self-test passed (8 cases)\n'
+printf '✅ active-projects drift-guard self-test passed (13 cases)\n'
