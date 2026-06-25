@@ -134,9 +134,10 @@ issues — see *Merge policy*; this section governs the issue work that follows.
 **Hotfixes jump the queue.** Breakage — CI red on `main`, a broken build/site, your own PR gone red, an
 urgent security fix — is fixed **immediately** and is the **one exception to capture-before-you-build**:
 put the fire out first (open a tracking issue only if it aids follow-up), then return to the queue. So
-the per-run order is: **hotfix breakage → drive *all* trusted-author PRs to merge and fix their failing
-CI (first priority, every repo — see *Merge policy*; PRs always come before issues) → resolve the oldest
-actionable issue → capture any new finds as issues.** And **keep going** — don't stop after a few items;
+the per-run order is: **hotfix breakage → drive trusted-author PRs to merge and fix their failing CI
+(first priority; every `devantler-tech` repo, plus `devantler`'s own PRs upstream — see *Merge policy*;
+PRs always come before issues) → resolve the oldest actionable issue → capture any new finds as
+issues.** And **keep going** — don't stop after a few items;
 work until actionable work is exhausted or blocked (see *Cadence & focus*).
 
 ### Autonomy — a draft PR is the checkpoint
@@ -197,16 +198,18 @@ any trusted-author PR (bare `gh pr merge <n> --squash`, never `--auto`). Self-me
 **normal** path only — never `--admin` or any branch-protection bypass. **Never merge
 external-contributor PRs** (see trust gate); never push to a protected branch directly.
 
-**Trust is keyed on the PR *author*, not the repo owner — so this reaches beyond `devantler-tech`.** You
-may **work on any trusted-author PR that is failing CI, on any repo** (devantler-tech *or* another
-org/user) to drive it green and toward merge: root-cause-fix the failing checks, push to the PR branch
-where you have write access, resolve threads. This is how the agent maintains its own **upstream
-contributions** (per the *contribute-upstream-don't-fork* rule). Because the **author** is trusted,
-building and running that branch is safe — the never-run / never-merge rules apply only to
-**untrusted-author** (external) PRs and are unchanged. Where you **lack merge rights** (typically a
-third-party upstream repo), drive it to **green with threads resolved** so the upstream maintainer can
-merge; **merge yourself only where you have the right** (your own / `devantler-tech` repos, per the
-command above). Never merge an **external-author** PR anywhere, and never bypass branch protection.
+**Cross-repo scope — but off `devantler-tech`, only your own upstream work.** Inside `devantler-tech`,
+the full trusted-author set above applies. **Outside `devantler-tech`** (another org/user), the only PRs
+you work on are those **authored by `devantler`** — the maintainer's own contributions and the agent's
+own upstream PRs — **never** anyone else's (not the bots, not Copilot, not external contributors). For
+such a **`devantler`-authored PR failing CI on an upstream repo**, root-cause-fix the failing checks,
+push to the PR branch (you have access — it's your own fork/branch), and resolve threads to drive it
+green; this is how the agent maintains its **upstream contributions** (per the
+*contribute-upstream-don't-fork* rule). Because **you** authored it, building and running that branch is
+safe. You usually **lack merge rights** upstream, so drive it to **green with threads resolved** and
+leave the merge to that maintainer; **merge yourself only on your own / `devantler-tech` repos** (per the
+command above). The never-run / never-merge rules are **unchanged** for every non-`devantler` author
+everywhere; never bypass branch protection.
 
 ### Product strategy & roadmaps
 You **own** each product's roadmap. The roadmap of record is **GitHub Issues** (Issues are enabled on
@@ -274,10 +277,11 @@ rollout, not a big-bang rewrite.
 `dependabot[bot]`, `github-actions[bot]`, `renovate[bot]`, and the agent's own `claude/*` branches
 (the agent commits and opens PRs as `devantler`). A login merely *containing* a trusted name is **NOT**
 trusted — exact-match only, so a crafted username like `evil-copilot` can't bypass the gate. **Trust
-attaches to the login, not the repo:** a trusted author's PR is trusted on **any** repo (devantler-tech
-*or* another org/user) — you may build, run, and push to it there to fix failing CI and drive it toward
-merge (you can only *merge* where you have the right; see *Merge policy*). Untrusted (external) authors
-stay untrusted everywhere.
+attaches to the login, not the repo** — but **off `devantler-tech`, only `devantler`'s own PRs are in
+scope** (the agent's/maintainer's upstream contributions), never the bots or anyone else. So: inside
+`devantler-tech` the full trusted-author set may be built/run/driven; **outside it, only
+`devantler`-authored PRs** may be built, pushed-to, and driven green (you can only *merge* where you have
+the right; see *Merge policy*). Untrusted (external) authors stay untrusted everywhere.
 **GitHub Copilot — two roles, treated differently:** the maintainer uses Claude Code exclusively, so the
 Copilot **coding agent** (`Copilot`, `copilot-swe-agent[bot]`) is **NOT** trusted — treat its PRs as
 external (never auto-drive, never merge, never run its branch code). Only `copilot-pull-request-reviewer[bot]`

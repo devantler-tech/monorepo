@@ -83,9 +83,10 @@ Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../product
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
 rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and
 sprawl, not value). **PRs come first:** driving **trusted-author PRs** to merge — and fixing their
-failing CI, on **any** repo (devantler-tech *or* another org/user; trust is keyed on the author, see
-contract *Merge policy*/*Trust gate*) — is the **first-priority work every run, ahead of issues** (only
-live breakage outranks it). Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
+failing CI — is the **first-priority work every run, ahead of issues** (only live breakage outranks it).
+Scope: every **`devantler-tech`** repo's trusted-author PRs, **plus `devantler`'s own PRs upstream**
+(other orgs/users — the maintainer's/agent's own contributions only, never another author's; see
+contract *Merge policy*/*Trust gate*). Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
 are the work queue**, you resolve the **oldest actionable** one first, and new non-trivial finds are
 **filed as issues before** they're built (trivial obvious fixes excepted). **Every run must clear the
 floor — at least one concrete artifact** (ideally a merged/drafted PR or a draft resolving the oldest
@@ -103,11 +104,12 @@ promotion is **not** a reason to stop — advance a *different* product. Work th
    **all** repos, drive every **trusted-author** PR to merge per the contract (resolve threads, fix
    required checks, then merge with the **command that matches the author**: bots arm `--auto`, your own/
    `devantler` PRs merge directly with bare `gh pr merge <n> --squash` once CLEAN; incl. majors and
-   incl. your own definition PRs once maintainer-promoted). **Trust is keyed on the author, not the
-   repo:** you may also **fix failing CI on a trusted-author PR in another org/user's repo** (e.g. the
-   agent's own upstream contributions) — build/run/push to its branch where you have access and drive it
-   green; *merge* only where you have the right (upstream, leave the merge to that maintainer). Never run
-   or merge **external-author** PRs (trust gate). The merge is **low-ceremony** — a single
+   incl. your own definition PRs once maintainer-promoted). **Off `devantler-tech`, only your own
+   upstream work:** you may also **fix failing CI on a `devantler`-authored PR in another org/user's
+   repo** (the maintainer's/agent's own upstream contributions — never the bots or anyone else) —
+   build/push to its branch (it's your own) and drive it green; *merge* only where you have the right
+   (upstream, leave the merge to that maintainer). Never run or merge a **non-`devantler`** PR off
+   `devantler-tech`, and never run/merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony** — a single
    fresh `gh pr view <n>` showing `isDraft:false`, a trusted author, and `CLEAN` is enough; a refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
    variant-evidence retries. **Keep your own drafts review-ready while

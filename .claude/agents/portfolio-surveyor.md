@@ -1,6 +1,6 @@
 ---
 name: portfolio-surveyor
-description: Read-only portfolio surveyor for the Daily AI Assistant. Runs the cheap org-wide GitHub survey across all devantler-tech repos — plus the agent's own trusted-author PRs in other orgs/users — and returns ONE compact, fixed-shape digest of operate + advance signals — keeping the ~40-call raw JSON out of the orchestrator's context. Invoked by the portfolio-maintenance run loop's Survey step.
+description: Read-only portfolio surveyor for the Daily AI Assistant. Runs the cheap org-wide GitHub survey across all devantler-tech repos — plus the agent's own (`devantler`) PRs in other orgs/users — and returns ONE compact, fixed-shape digest of operate + advance signals — keeping the ~40-call raw JSON out of the orchestrator's context. Invoked by the portfolio-maintenance run loop's Survey step.
 tools: Bash, Read, Grep, Glob
 model: inherit
 ---

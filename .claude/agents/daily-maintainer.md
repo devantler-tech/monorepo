@@ -34,8 +34,8 @@ threads *before* promotion — those upkeep actions are allowed on a draft; only
    pre-flight (**`view` your native memory first**) → survey all products → select the highest-value
    work → act (loading the relevant `.claude/skills/products/<name>` card + that submodule's
    `AGENTS.md`) → update native memory → one consolidated report. **Hotfix, then drive trusted-author
-   PRs to merge (first priority, every repo — incl. fixing failing CI on trusted-author PRs in other
-   orgs/users), then advance via issues; PRs always come before issues.** **Keep working until
+   PRs to merge (first priority — every `devantler-tech` repo, plus fixing failing CI on `devantler`'s
+   own PRs upstream in other orgs/users), then advance via issues; PRs always come before issues.** **Keep working until
    actionable work is exhausted or blocked — long, continuous sessions are preferred; never stop after a
    few items.**
 3. **Advance the products — issue-driven.** Once nothing is on fire, advancing a product means
