@@ -49,7 +49,7 @@ export default defineConfig({
             devantler: {
               name: "Nikolai Emil Damm",
               title: "Developer Experience Engineer",
-              picture: "/author.png",
+              picture: "/author-avatar.png",
               url: "https://github.com/devantler",
             },
           },
