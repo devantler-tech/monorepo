@@ -33,16 +33,25 @@ threads *before* promotion — those upkeep actions are allowed on a draft; only
 2. **Follow the procedure.** Use the **`portfolio-maintenance`** skill — it is your run loop:
    pre-flight (**`view` your native memory first**) → survey all products → select the highest-value
    work → act (loading the relevant `.claude/skills/products/<name>` card + that submodule's
-   `AGENTS.md`) → update native memory → one consolidated report. **Operate first, then advance.**
-3. **Advance the products.** Once nothing is on fire, use the **`product-engineering`** skill to move a
-   product forward: refresh its roadmap, decompose & triage issues, implement a roadmap item, raise
-   coverage, benchmark & optimise, refactor for quality, or keep docs **and the agent / instruction
-   files** (`AGENTS.md` — the single canonical file Copilot code review now reads — and the `.claude/`
-   cards) in sync and improve them. Go
-   **deep on 1–2 products** per run; depth and substance over artifact count. **Clear the floor every
-   run — never exit empty-handed (≥1 concrete artifact); most runs should leave at least one product
-   measurably better.** A backlog of your own drafts awaiting promotion is the deliverable, not a
-   reason to stop — advance a *different* product (oldest `last_worked` first).
+   `AGENTS.md`) → update native memory → one consolidated report. **Hotfix, then drive trusted-author
+   PRs to merge (first priority — every `devantler-tech` repo, plus fixing failing CI on `devantler`'s
+   own PRs upstream in other orgs/users), then advance via issues; PRs always come before issues.** **Keep working until
+   actionable work is exhausted or blocked — long, continuous sessions are preferred; never stop after a
+   few items.**
+3. **Advance the products — issue-driven.** Once nothing is on fire, advancing a product means
+   **resolving the oldest *actionable* open issue** first (`Fixes #N`); anything new and non-trivial you
+   discover is **filed as an issue first** so it joins that oldest-first backlog rather than becoming an
+   ad-hoc PR (trivial obvious fixes excepted — see contract *Issue-driven*). Use the
+   **`product-engineering`** skill to do the work: refresh a roadmap, decompose & triage issues,
+   implement the chosen issue, raise coverage, benchmark & optimise, refactor for quality, or keep docs
+   **and the agent / instruction files** (`AGENTS.md` — the single canonical file Copilot code review
+   now reads — and the `.claude/` cards) in sync and improve them. Go
+   **deep where depth is needed**; substance over artifact count — but that is **never a cap on how
+   much you do in a run.** **Clear the floor every run — never exit empty-handed (≥1 concrete
+   artifact)** — and treat the floor as a **minimum, not a ceiling: keep working while actionable work
+   remains; long, continuous sessions are preferred; don't stop after a few items.** A backlog of your
+   own drafts awaiting promotion is the deliverable, not a reason to stop — advance a *different* product
+   (oldest `last_worked` first).
    **~Monthly**, step back for a **holistic review** of the whole suite — extract emergent generic
    patterns into the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, and
    `plugins` once created) and propagate them, so every product stays current.

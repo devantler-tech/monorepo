@@ -43,6 +43,9 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   pulled for the few **trusted-author non-draft** PRs, not for every PR in every repo);
 - checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure
   --limit 3` each;
+- also enumerates **`devantler`'s own PRs across *all* orgs** (`gh search prs --author devantler
+  --state open`), not just devantler-tech, so cross-org **upstream-contribution** PRs with failing CI
+  surface for a fix too (trust is author-keyed — contract *Merge policy*/*Trust gate*);
 - flags untriaged issues/PRs, stale PRs (>14d), Dependabot/Renovate PRs, `roadmap`-ready issues, and
   products with **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs as
   static-review-only;
@@ -77,20 +80,36 @@ Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../product
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md).
 
 ## 2. Select (the heart of it)
-Pick the **highest-value work across the whole portfolio**, then **go deep on 1–2 products** rather
-than spreading thin (contract *Cadence & focus*: depth and substance over artifact count; bound noise
-and sprawl, not value). **Every run must clear the floor — at least one concrete artifact** (a PR, a
-substantive issue, a triage/strategy pass, an unblocking review-thread resolution, or a trusted-PR
-merge); a survey-and-exit run that authors nothing is a **failure, not a valid outcome** (contract
-*Mandate*). An existing backlog of your own drafts awaiting promotion is **not** a reason to stop —
-advance a *different* product. Work the ladder top-down — **operate first, then advance**:
+Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
+rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and
+sprawl, not value). **PRs come first:** driving **trusted-author PRs** to merge — and fixing their
+failing CI — is the **first-priority work every run, ahead of issues** (only live breakage outranks it).
+Scope: every **`devantler-tech`** repo's trusted-author PRs, **plus `devantler`'s own PRs upstream**
+(other orgs/users — the maintainer's/agent's own contributions only, never another author's; see
+contract *Merge policy*/*Trust gate*). Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
+are the work queue**, you resolve the **oldest actionable** one first, and new non-trivial finds are
+**filed as issues before** they're built (trivial obvious fixes excepted). **Every run must clear the
+floor — at least one concrete artifact** (ideally a merged/drafted PR or a draft resolving the oldest
+actionable issue; else a newly-filed well-formed issue, a triage/strategy pass, an unblocking
+review-thread resolution, or a trusted-PR merge) — but the floor is a **minimum, not a ceiling: keep
+working while actionable work remains, prefer long continuous sessions, and don't stop after a few
+items** (end only when work is exhausted or blocked). A survey-and-exit run that authors nothing is a
+**failure, not a valid outcome** (contract *Mandate*). An existing backlog of your own drafts awaiting
+promotion is **not** a reason to stop — advance a *different* product. Work the ladder top-down —
+**hotfix/operate first, then advance**:
 
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.
-2. **Unblock trusted-author PRs** — drive to merge per the contract (resolve threads, fix required
-   checks, then merge with the **command that matches the author**: bots arm `--auto`, your own/
+2. **Drive trusted-author PRs to merge — the first-priority sweep, ahead of issues, every run.** Across
+   **all** repos, drive every **trusted-author** PR to merge per the contract (resolve threads, fix
+   required checks, then merge with the **command that matches the author**: bots arm `--auto`, your own/
    `devantler` PRs merge directly with bare `gh pr merge <n> --squash` once CLEAN; incl. majors and
-   incl. your own definition PRs once maintainer-promoted). The merge is **low-ceremony** — a single
+   incl. your own definition PRs once maintainer-promoted). **Off `devantler-tech`, only your own
+   upstream work:** you may also **fix failing CI on a `devantler`-authored PR in another org/user's
+   repo** (the maintainer's/agent's own upstream contributions — never the bots or anyone else) —
+   build/push to its branch (it's your own) and drive it green; *merge* only where you have the right
+   (upstream, leave the merge to that maintainer). Never run or merge a **non-`devantler`** PR off
+   `devantler-tech`, and never run/merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony** — a single
    fresh `gh pr view <n>` showing `isDraft:false`, a trusted author, and `CLEAN` is enough; a refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
    variant-evidence retries. **Keep your own drafts review-ready while
@@ -109,19 +128,31 @@ advance a *different* product. Work the ladder top-down — **operate first, the
      the auto-merge workflow, not a `gh pr merge` call.
 3. **Contributor-facing** — triage/label new issues+PRs; one insightful comment on the oldest
    un-commented open item.
-4. **Confident fixes** — clear bug, broken link, missing alt text, manifest misconfig, version bump.
+4. **Confident fixes** — a *trivial, obvious* fix (broken link, missing alt text, typo, manifest
+   misconfig, version bump) may go straight to a small PR (the issue-first carve-out). A **non-trivial**
+   bug you spot is **filed as an issue first** (it joins the oldest-first backlog), not turned straight
+   into a PR — unless it's live breakage, which is rung 1.
 5. **Upkeep** — workflow health, dependency bundling, docs sync/trim, manifest cleanup.
 
 **Advance (move it forward) — the default once nothing above is pending, and the floor's backstop:
-when the operate ladder is clear you still advance at least one product (never exit empty-handed).** Use the
-[`product-engineering`](../product-engineering/SKILL.md) skill; pick what the chosen product needs most:
-6. **Strategy & roadmap** — if a product has no roadmap or its review is due (cadence), run a strategy
-   review and create/refresh its `roadmap` issues; decompose an epic into actionable issues; triage
-   existing issues into the roadmap.
-7. **Implement** — take a ready, well-specified issue and ship it (tests + validate + draft PR,
-   `Fixes #N`).
-8. **Coverage / Performance / Quality** — add meaningful tests to an under-covered critical path;
-   benchmark + optimise a hotspot (before/after numbers); a targeted, behaviour-preserving refactor.
+when the operate ladder is clear you still advance at least one product (never exit empty-handed).**
+Advance work is **issue-driven** (contract *Issue-driven*): its heart is **resolving the oldest
+actionable open issue**, and any new non-trivial find is **filed as an issue first** to enter that same
+backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
+6. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
+   open issue that's actually startable; skip one only if it's blocked, too under-specified to begin, or
+   it already has an open PR. A **bare assignee does *not* reserve** an issue (only an open PR does), so
+   if nobody has opened one you may pick it up regardless of who's assigned. If it **already has a
+   trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave **draft** PRs for
+   the maintainer and keep **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
+   validate + **draft PR**, `Fixes #N`.
+7. **Capture new finds as issues** — a coverage hole, perf hotspot, refactor target, docs gap, security
+   weakness, or enhancement you notice becomes a **well-formed issue** (*problem → proposal → acceptance
+   criteria*, labelled), not an ad-hoc PR; it restocks the backlog #6 drains. The how-to per kind
+   (coverage, benchmarking, refactoring) is in [`product-engineering`](../product-engineering/SKILL.md) §4–6.
+8. **Strategy & roadmap** — if a product has no roadmap or its review is due (cadence), run a strategy
+   review and create/refresh its `roadmap` issues; decompose an epic into actionable child issues; triage
+   existing issues into the roadmap. This is the bulk way to stock the backlog #6 drains.
 9. **Documentation & agent files** — keep docs in sync with shipped features/fixes (update affected docs
    in the feature PR; a focused `docs:` PR backfills anything that merged without them) and, on the docs
    cadence, improve existing docs (accuracy, gaps, clarity, dead links). **This includes the agent /
@@ -134,8 +165,10 @@ when the operate ladder is clear you still advance at least one product (never e
 **Self-improvement** (≈weekly, orthogonal) — distil logged `learnings` into a guard-railed draft PR
 that improves your own definition (the [`self-improvement`](../self-improvement/SKILL.md) skill).
 
-**Fairness:** prefer products with the oldest `last_worked` (and oldest strategy review) when value is
-comparable. Aim over time to advance every product, not just the noisy ones.
+**Fairness & ordering:** issue **age is the primary sort** for what to resolve (oldest actionable
+first — contract *Issue-driven*); when issue value/age is comparable, prefer the product with the
+oldest `last_worked` (and oldest strategy review). Aim over time to advance every product, not just the
+noisy ones.
 **Cadence gates:** per-product strategy review and docs pass weekly-to-monthly (oldest first); KSail
 Monthly Strategy at month start; heavy tasks (E2E, live-cluster reliability, content review) ~weekly
 per the per-product `weekly` timestamps; never spin up real clusters more than once/day portfolio-wide.
