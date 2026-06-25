@@ -1,6 +1,6 @@
 ---
 name: portfolio-surveyor
-description: Read-only portfolio surveyor for the Daily AI Assistant. Runs the cheap org-wide GitHub survey across all devantler-tech repos and returns ONE compact, fixed-shape digest of operate + advance signals — keeping the ~40-call raw JSON out of the orchestrator's context. Invoked by the portfolio-maintenance run loop's Survey step.
+description: Read-only portfolio surveyor for the Daily AI Assistant. Runs the cheap org-wide GitHub survey across all devantler-tech repos — plus the agent's own trusted-author PRs in other orgs/users — and returns ONE compact, fixed-shape digest of operate + advance signals — keeping the ~40-call raw JSON out of the orchestrator's context. Invoked by the portfolio-maintenance run loop's Survey step.
 tools: Bash, Read, Grep, Glob
 model: inherit
 ---
@@ -67,6 +67,15 @@ public and private — no per-repo loop needed to enumerate):
    (untriaged); Dependabot/Renovate PRs. From (2): `roadmap`-labelled epics and ready
    `enhancement`/`performance`/`refactor`/`bug`/`documentation` issues; flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates).
+6. **`devantler`'s own PRs across ALL orgs (cross-org upstream contributions).** Trust is keyed on the
+   **author**, so `devantler`'s PRs are workable on any repo, not just devantler-tech:
+   `gh search prs --author devantler --state open --limit 100 --json number,repository,isDraft,title,url`
+   — **drop the `devantler-tech/*` rows** (already covered by step 1); for the remaining **non-draft**
+   PRs in other orgs/users, deepen with
+   `gh pr view <n> --repo <owner>/<repo> --json number,state,mergeStateStatus,statusCheckRollup,reviewThreads,url`
+   and report any with **failing CI** as a **CROSS-ORG NEEDS-FIX** signal (the orchestrator fixes the CI
+   and drives it green; merge is usually the upstream maintainer's). Stay **read-only** — you only report
+   the signal; you never check out or build the branch.
 
 Portfolio repos (the org-wide search covers them; this is the canonical list to reason over):
 `ksail`, `platform`, `monorepo`, `go-template`, `dotnet-template`, `gitops-tenant-template`,
@@ -90,6 +99,7 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no own/trus
 - <repo>: CI red on main — <workflow> (<run url>)
 - <repo> #<n> "<title>" — <bot-author>, trusted non-draft, mergeStateStatus=<…> → MERGE-READY | NEEDS-FIX: <check/threads>
 - <repo> #<n> "<title>" — `devantler` non-draft, mergeStateStatus=CLEAN, checks green → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no> (orchestrator applies creation-record test; NOT asserted mine)
+- CROSS-ORG <owner>/<repo> #<n> "<title>" — `devantler`, failing CI: <check> → fix CI & drive green (merge is upstream's)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
 
@@ -107,5 +117,7 @@ Digest rules:
   and tag it `OWNERSHIP-UNVERIFIED`, never `MERGE-READY`/"own". (Bot-trusted authors have no ambiguity.)
 - **Trust labels are advisory flags, not actions:** mark external/Copilot PRs so the orchestrator
   reviews them statically; never imply they are mergeable.
+- **Cross-org own PRs:** report a `devantler`-authored PR in a non-devantler-tech repo with failing CI
+  as `CROSS-ORG` (a fix-the-CI signal); you stay read-only — never build/run it (the orchestrator does).
 - If a query fails (auth, rate limit), note it in one line under the relevant repo rather than
   retrying noisily — the orchestrator decides how to proceed.

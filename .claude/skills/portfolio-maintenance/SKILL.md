@@ -43,6 +43,9 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   pulled for the few **trusted-author non-draft** PRs, not for every PR in every repo);
 - checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure
   --limit 3` each;
+- also enumerates **`devantler`'s own PRs across *all* orgs** (`gh search prs --author devantler
+  --state open`), not just devantler-tech, so cross-org **upstream-contribution** PRs with failing CI
+  surface for a fix too (trust is author-keyed — contract *Merge policy*/*Trust gate*);
 - flags untriaged issues/PRs, stale PRs (>14d), Dependabot/Renovate PRs, `roadmap`-ready issues, and
   products with **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs as
   static-review-only;
@@ -77,23 +80,34 @@ Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../product
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md).
 
 ## 2. Select (the heart of it)
-Pick the **highest-value work across the whole portfolio**, then **go deep on 1–2 products** rather
-than spreading thin (contract *Cadence & focus*: depth and substance over artifact count; bound noise
-and sprawl, not value). Work is **issue-driven** (contract *Issue-driven*): **GitHub Issues are the
-work queue**, you resolve the **oldest actionable** one first, and new non-trivial finds are **filed as
-issues before** they're built (trivial obvious fixes excepted). **Every run must clear the floor — at
-least one concrete artifact** (ideally a draft PR resolving the oldest actionable issue; else a PR, a
-newly-filed well-formed issue, a triage/strategy pass, an unblocking review-thread resolution, or a
-trusted-PR merge); a survey-and-exit run that authors nothing is a **failure, not a valid outcome**
-(contract *Mandate*). An existing backlog of your own drafts awaiting promotion is **not** a reason to
-stop — advance a *different* product. Work the ladder top-down — **hotfix/operate first, then advance**:
+Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
+rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and
+sprawl, not value). **PRs come first:** driving **trusted-author PRs** to merge — and fixing their
+failing CI, on **any** repo (devantler-tech *or* another org/user; trust is keyed on the author, see
+contract *Merge policy*/*Trust gate*) — is the **first-priority work every run, ahead of issues** (only
+live breakage outranks it). Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
+are the work queue**, you resolve the **oldest actionable** one first, and new non-trivial finds are
+**filed as issues before** they're built (trivial obvious fixes excepted). **Every run must clear the
+floor — at least one concrete artifact** (ideally a merged/drafted PR or a draft resolving the oldest
+actionable issue; else a newly-filed well-formed issue, a triage/strategy pass, an unblocking
+review-thread resolution, or a trusted-PR merge) — but the floor is a **minimum, not a ceiling: keep
+working while actionable work remains, prefer long continuous sessions, and don't stop after a few
+items** (end only when work is exhausted or blocked). A survey-and-exit run that authors nothing is a
+**failure, not a valid outcome** (contract *Mandate*). An existing backlog of your own drafts awaiting
+promotion is **not** a reason to stop — advance a *different* product. Work the ladder top-down —
+**hotfix/operate first, then advance**:
 
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.
-2. **Unblock trusted-author PRs** — drive to merge per the contract (resolve threads, fix required
-   checks, then merge with the **command that matches the author**: bots arm `--auto`, your own/
+2. **Drive trusted-author PRs to merge — the first-priority sweep, ahead of issues, every run.** Across
+   **all** repos, drive every **trusted-author** PR to merge per the contract (resolve threads, fix
+   required checks, then merge with the **command that matches the author**: bots arm `--auto`, your own/
    `devantler` PRs merge directly with bare `gh pr merge <n> --squash` once CLEAN; incl. majors and
-   incl. your own definition PRs once maintainer-promoted). The merge is **low-ceremony** — a single
+   incl. your own definition PRs once maintainer-promoted). **Trust is keyed on the author, not the
+   repo:** you may also **fix failing CI on a trusted-author PR in another org/user's repo** (e.g. the
+   agent's own upstream contributions) — build/run/push to its branch where you have access and drive it
+   green; *merge* only where you have the right (upstream, leave the merge to that maintainer). Never run
+   or merge **external-author** PRs (trust gate). The merge is **low-ceremony** — a single
    fresh `gh pr view <n>` showing `isDraft:false`, a trusted author, and `CLEAN` is enough; a refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
    variant-evidence retries. **Keep your own drafts review-ready while
