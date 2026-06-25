@@ -12,8 +12,9 @@ clone or GitHub-API-only mode, and it risks colliding with the maintainer's para
 sessions if that fallback is missed.
 
 This is a **per-machine git-config** condition, not a version-controlled defect in this repo — so the
-shippable output is this documented, verified procedure plus the diagnosis below, applied per submodule
-incrementally as each is verified.
+shippable output is this documented, verified procedure plus the diagnosis below. It was rolled out
+across **all** active submodules on `~/git-personal/monorepo` on 2026-06-25; it re-applies to any fresh
+clone, where the condition recurs.
 
 ## Root cause
 
@@ -30,33 +31,42 @@ A submodule's git directory lives at `<repo>/.git/modules/<name>/`. The breakage
   of the shared config into each worktree's own `config.worktree` (the main worktree's lives at
   `.git/modules/<name>/config.worktree`; each linked worktree's at
   `.git/modules/<name>/worktrees/<id>/config.worktree`). **Setting the `worktreeConfig` flag alone is
-  not enough** — if the stray shared `core.worktree` remains, it is still inherited (see `platform`,
-  `go-template` below: flag on, still broken).
+  not enough** — if the stray shared `core.worktree` remains, it is still inherited (as `platform` and
+  `go-template` were before 2026-06-25: flag on, yet still broken until the stray value was removed).
 
-## Diagnosis (captured 2026-06-17 on the scheduled clone `~/git-personal/monorepo`)
+## Diagnosis & rollout (swept 2026-06-25 on `~/git-personal/monorepo`)
 
-`BROKEN` = stray `core.worktree` present in the shared `.git/modules/<name>/config`.
+`BROKEN` = stray `core.worktree` in the shared `.git/modules/<name>/config`, inherited by every linked
+worktree. The 2026-06-25 sweep found **every active submodule broken** except the two already isolated
+(`templates/gitops-tenant-template`, fixed 2026-06-17, and `projects/ksail`) and **fixed +
+probe-verified all of them** — repairing live linked worktrees in place (see *Live linked worktrees*
+below). Current state:
 
 | Submodule | shared `core.worktree` | `extensions.worktreeConfig` | State |
 |---|---|---|---|
-| `applications/ksail` | set | unset | ❌ broken |
-| `applications/ascoachingogvaner` | set | unset | ❌ broken |
-| `github/devantler-tech/github-actions/actions` | set | unset | ❌ broken |
-| `github/devantler-tech/github-actions/reusable-workflows` | set | unset | ❌ broken |
-| `homebrew-tap` | set | unset | ❌ broken |
-| `libraries/agent-plugins` | set | unset | ❌ broken |
-| `libraries/agent-skills` | set | unset | ❌ broken |
-| `templates/dotnet-template` | set | unset | ❌ broken |
-| `templates/platform-template` | set | unset | ❌ broken |
-| `platform` | set | **true** | ❌ broken (flag set, but stray value still inherited) |
-| `templates/go-template` | set | **true** | ❌ broken (flag set, but stray value still inherited) |
-| `templates/gitops-tenant-template` | ~~set~~ → **unset** | true | ✅ **fixed 2026-06-17** (verified, see below) |
-| `projects/ksail` | unset | true | ✅ correct — but this is the **stale** old ksail module path (pre-rename to `applications/ksail`), not an active submodule |
+| `applications/ascoachingogvaner` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `applications/ksail` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `applications/unifi` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `github/devantler-tech/.github-public` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `github/devantler-tech/github-actions/actions` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `github/devantler-tech/github-actions/reusable-workflows` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `github/personal/.github-public` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `github/personal/profile` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `templates/dotnet-template` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `templates/platform-template` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `platform` | ~~set~~ → unset | true | ✅ fixed 2026-06-25 — **6 live worktrees repaired in place** |
+| `templates/go-template` | ~~set~~ → unset | true | ✅ fixed 2026-06-25 — **1 live worktree repaired in place** |
+| `templates/gitops-tenant-template` | unset | true | ✅ fixed & verified 2026-06-17 |
+| `projects/ksail` | unset | true | ✅ already isolated — **active, do not delete** (see below) |
 
-> **Correction to #1838's hypothesis:** the issue assumed `applications/ksail` was the cleanly-isolated
-> example. It is not — the *live* `applications/ksail` module carries the stray `core.worktree`. The
-> correctly-configured module the maintainer observed is the **orphaned `projects/ksail`** gitdir left
-> from the old layout. In practice **every active portfolio submodule was broken** before this fix.
+> **`projects/ksail` is ACTIVE — never treat it as orphaned.** An earlier revision of this doc called it
+> "the **stale** old ksail module path … not an active submodule." **That was wrong and dangerous.** It
+> is a *second, live* checkout of `devantler-tech/ksail` — separate from the monorepo submodule at
+> `applications/ksail` — that the maintainer uses for parallel interactive sessions. The global
+> `~/.claude/CLAUDE.md` names `projects/ksail` as an active submodule, and on 2026-06-25 its gitdir held
+> **~23 live linked worktrees, 240+ branches, a stash, and unpushed commits**. It is absent from the
+> tracked `.gitmodules` (de-registered there) but very much in use locally; deleting its gitdir breaks
+> every one of those sessions. See *Orphaned gitdirs* for the verification that prevents this.
 
 ### Re-generate the table for any submodule
 
@@ -98,10 +108,9 @@ git config -f "$M/config" --unset core.worktree
 
 ```sh
 P=<submodule-working-path>            # e.g. templates/gitops-tenant-template
-rtk proxy git -C "$P" worktree add .probe-iso -b probe/iso   # add a throwaway worktree
-rtk proxy git -C "$P/.probe-iso" rev-parse --show-toplevel    # MUST print …/$P/.probe-iso, NOT …/.git/modules/…
+rtk proxy git -C "$P" worktree add --detach .probe-iso        # throwaway, no branch to clean up
+git -C "$P/.probe-iso" rev-parse --show-toplevel              # MUST print …/$P/.probe-iso, NOT …/.git/modules/…
 rtk proxy git -C "$P" worktree remove --force .probe-iso      # clean up
-rtk proxy git -C "$P" branch -D probe/iso
 rtk proxy git -C "$P" worktree prune
 ```
 
@@ -113,13 +122,65 @@ A fixed submodule prints the probe's **own** path; a broken one prints a path un
 to `…/templates/gitops-tenant-template/.probe-iso` (its own tree), and the main checkout still resolves
 correctly. This submodule is left fixed.
 
+### Live linked worktrees — repair in place (don't skip)
+
+A submodule that is broken **and** in active use (random-slug `.claude/worktrees/<adj>-<name>-<hex>`
+entries in `git worktree list`) can be repaired **without** waiting for the sessions to go quiet — the
+earlier "skip live ones until quiet" guidance is **superseded**. Such live worktrees have **no own
+`core.worktree`**, so they inherit the stray shared value and resolve into `.git/modules/<name>` (an
+active collision). Pin each one's own path **before** removing the shared value, so no worktree is ever
+left without a resolvable `core.worktree`:
+
+```sh
+M=.git/modules/<name>; ABS=<abs path to submodule main checkout>
+git config -f "$M/config" extensions.worktreeConfig true
+git config -f "$M/config.worktree" core.worktree "$ABS"               # pin the MAIN worktree
+for d in "$ABS"/.claude/worktrees/*/; do                              # pin EACH live worktree
+  d=${d%/}; G=$(git -C "$d" rev-parse --absolute-git-dir)
+  git config -f "$G/config.worktree" core.worktree "$d"
+done
+git config -f "$M/config" --unset core.worktree                       # now safe to drop the shared value
+```
+
+Once every worktree resolves via its **own** per-worktree config, dropping the shared value changes
+nothing for any of them — it only stops *new* worktrees inheriting the bad value. This is strictly an
+improvement even mid-session: an actively-colliding worktree starts resolving to its own tree on its
+next git command. **Verified 2026-06-25** on `platform` (6 live worktrees) and `templates/go-template`
+(1) — all resolved to their own trees afterwards, with no session disruption.
+
+### Orphaned gitdirs — verify before deleting
+
+A `.git/modules/<name>` that is absent from the tracked `.gitmodules` is **not automatically safe to
+delete**. "Not in `.gitmodules`" only means *de-registered there* — the gitdir can still be a live local
+workspace. **Before removing any gitdir, confirm all of:**
+
+1. **No live worktrees** — `rtk proxy git --git-dir=<M> worktree list` shows only the main entry (no
+   `.claude/worktrees/*`).
+2. **No unpushed commits** — `git --git-dir=<M> log --branches --tags --not --remotes --oneline` is empty.
+3. **No stash** — `git --git-dir=<M> stash list` is empty.
+4. **Not named active anywhere** — cross-check the global `~/.claude/CLAUDE.md` (it names `projects/ksail`
+   as an active second checkout) and any **working tree** still on disk at the old path.
+
+Always **back up the gitdir** first (`tar -czf <bak> -C .git/modules <name>`) before `rm -rf`, and if a
+stale working tree exists at the old path, back up and remove it (and its `.git/config` `[submodule …]`
+section) too. **Cautionary tale (2026-06-25):** `projects/ksail` was wrongly annotated "stale/orphaned"
+in this doc and removed — it actually had ~23 live sessions, and was only recoverable because of the
+pre-removal backup. The genuinely-orphaned gitdirs cleanly removed that day (de-registered renames /
+leftovers with **zero** live worktrees) were: `dotfiles`, `github/devantler-tech/.github-private`,
+`homebrew-formulas` (→ `homebrew-tap`), `libraries/plugins` (→ `agent-plugins`), and `libraries/skills`
+(→ `agent-skills`).
+
 ## Rollout status
 
-- ✅ `templates/gitops-tenant-template` — fixed & verified (2026-06-17).
-- ⏳ All other active portfolio submodules in the table above — **apply the procedure incrementally**,
-  one at a time, verifying each. Skip a submodule that currently has a parallel linked worktree (check
-  `rtk proxy git -C <path> worktree list` — a random-slug `.claude/worktrees/<adj>-<name>-<hex>` entry
-  means a live session) until it is quiet, to avoid disrupting an in-flight session.
-- The stray `core.worktree` originates from how these submodules were first initialized; new submodules
-  should be configured with `extensions.worktreeConfig=true` and **no** shared `core.worktree` from the
-  start.
+- ✅ **All active submodules fixed & probe-verified (2026-06-25)** — every initialized submodule on
+  `~/git-personal/monorepo` now has `extensions.worktreeConfig=true` and **no** shared `core.worktree`,
+  so `git worktree add` resolves to an isolated tree. `templates/gitops-tenant-template` was done first
+  (2026-06-17); the rest, including `platform` (6 live worktrees) and `templates/go-template` (1),
+  followed on 2026-06-25 via the live-worktree repair above.
+- ✅ **Orphaned gitdirs pruned (2026-06-25)** — de-registered leftovers removed per *Orphaned gitdirs*
+  (with backups): `dotfiles`, `github/devantler-tech/.github-private`, `homebrew-formulas`,
+  `libraries/plugins`, `libraries/skills` (plus their stale working trees and `.git/config` sections).
+  `projects/ksail` was **kept** — it is an active second checkout, not an orphan.
+- This is **per-machine** state: a fresh clone reproduces the stray `core.worktree`, so the procedure
+  above still applies there. New submodules should be initialized with `extensions.worktreeConfig=true`
+  and **no** shared `core.worktree` from the start.
