@@ -38,8 +38,8 @@ gh repo create my-platform --template devantler-tech/platform-template --private
 
 Then, in your new repository:
 
-1. **Install a GitHub App** (or fine-grained PAT) granted **Contents: write, Secrets: write, Environments: write, Actions: write** — the bootstrap writes cluster-derived credentials back as `prod` environment secrets, which the default `GITHUB_TOKEN` cannot do.
-2. **Set the Variables + Secrets** (`DOMAIN`, `CLOUDFLARE_ZONE`, `ADMIN_EMAIL`, `HETZNER_LOCATION`, `HCLOUD_TOKEN`, `CLOUDFLARE_API_TOKEN`, …). A few cluster secrets (`SOPS_AGE_KEY`, `KUBE_CONFIG`, `TALOS_CONFIG`) are auto-generated — you never set those.
+1. **Install a GitHub App** (or fine-grained PAT) granted **Contents: write, Secrets: write, Environments: write, Actions: write** — the bootstrap writes cluster-derived credentials back as `prod` environment secrets, which the default `GITHUB_TOKEN` cannot do. Then expose its credentials to the workflow as the `APP_ID` variable and the `APP_PRIVATE_KEY` secret.
+2. **Set the Variables + Secrets** (variables `DOMAIN`, `CLOUDFLARE_ZONE`, `CLOUDFLARE_ACCOUNT_ID`, `ADMIN_EMAIL`, `HETZNER_LOCATION`; secrets `HCLOUD_TOKEN`, `GHCR_TOKEN`, `CLOUDFLARE_API_TOKEN`, …). A few cluster secrets (`SOPS_AGE_KEY`, `KUBE_CONFIG`, `TALOS_CONFIG`) are auto-generated — you never set those.
 3. **Run the Bootstrap workflow** (Actions → 🌱 Bootstrap → *Run workflow*, choose `prod`, type `yes`). It provisions the Talos cluster via `ksail cluster create`, persists credentials back as `prod` secrets, points Cloudflare DNS at the new load balancer, and commits the rendered + encrypted tree back to your repo.
 
 The authoritative, step-by-step guide — prerequisites, configuration tables, verification, teardown, and troubleshooting — lives in the template's [`docs/BOOTSTRAP.md`](https://github.com/devantler-tech/platform-template/blob/main/docs/BOOTSTRAP.md).
