@@ -30,12 +30,18 @@ See the template's [README](https://github.com/devantler-tech/gitops-tenant-temp
 ```bash
 # Create a new private repo from the template
 gh repo create devantler-tech/my-tenant --template devantler-tech/gitops-tenant-template --private --clone
-
-# Replace the scaffolding with your app (code, Dockerfile, deploy/ manifests, ci.yaml),
-# then validate locally:
 cd my-tenant
-kubectl kustomize deploy/        # manifests build
-actionlint .github/workflows/*   # workflows parse
+
+# Rename the placeholders in deploy/ to your tenant name (defaults to the repo
+# directory name, or pass one). Run this FIRST — it rewrites the `app` and
+# `REPLACE_ME` placeholders consistently. Doing it by hand is easy to get
+# half-wrong; delete the one-shot helper once adopted.
+scripts/rename-placeholders.sh        # or: scripts/rename-placeholders.sh my-tenant
+
+# Replace the rest of the scaffolding with your app (code, Dockerfile, ci.yaml),
+# then validate locally:
+kubectl kustomize deploy/             # manifests build
+actionlint .github/workflows/*        # workflows parse
 ```
 
 Then register the tenant on the platform by following [`platform/docs/TENANTS.md`](https://github.com/devantler-tech/platform/blob/main/docs/TENANTS.md).
