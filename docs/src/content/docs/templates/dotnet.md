@@ -21,9 +21,15 @@ A minimal, batteries-included template for new .NET projects and libraries. Skip
 ```bash
 # Create a new repo from the template
 gh repo create my-project --template devantler-tech/dotnet-template --public --clone
+cd my-project
+
+# Repoint the `Example` scaffold (.slnx, src/, tests/, README) to your project
+# name in one shot — run this first. With no argument it derives a PascalCase
+# name from your origin GitHub remote. Review the result with `git diff`.
+./scripts/rename-placeholders.sh Widget   # e.g. your project name
 
 # Restore packages
-cd my-project && dotnet restore
+dotnet restore
 
 # Run tests
 dotnet test
