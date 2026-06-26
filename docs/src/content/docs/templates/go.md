@@ -20,9 +20,12 @@ A minimal, batteries-included template for new Go projects. Skip the boilerplate
 ```bash
 # Create a new repo from the template
 gh repo create my-project --template devantler-tech/go-template --public --clone
+cd my-project
 
-# Install dependencies
-cd my-project && go mod tidy
+# Repoint the module path (go.mod, imports, README badges) in one shot — run this
+# first. With no argument it derives the path from your origin GitHub remote.
+# The script also runs `go mod tidy`; review the result with `git diff`.
+scripts/rename-placeholders.sh github.com/<you>/my-project
 
 # Run tests
 go test ./...
