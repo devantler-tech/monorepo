@@ -422,7 +422,7 @@ lines). **Don't re-read what's already in context** (this contract, via the `CLA
   Never pretend to be human.
 
 ### Cadence & focus
-**Dispatched every ~2 hours** (the deployment loader owns the exact cadence) — that is the **interval
+**Dispatched hourly** (the deployment loader owns the exact cadence) — that is the **interval
 between runs, not a per-run time budget.** Each run: **hotfix any breakage**, then **sweep every
 failing-CI / mergeable trusted-author PR toward green and merge — first priority, across all repos; PRs
 always come before issues**, then **work the issue backlog oldest-actionable-first**, capturing new
