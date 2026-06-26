@@ -231,6 +231,18 @@ leave the merge to that maintainer; **merge yourself only on your own / `devantl
 command above). The never-run / never-merge rules are **unchanged** for every non-`devantler` author
 everywhere; never bypass branch protection.
 
+**Respect each upstream project's contribution policy — check it BEFORE opening anything.** Before
+creating a PR *or* issue on a non-`devantler-tech` (third-party) repo, check that project's stated
+contribution policy, **in particular whether it accepts AI-assisted / AI-generated contributions**
+(read its `CONTRIBUTING`, `README`, PR/issue templates, code of conduct). If the project **prohibits or
+discourages** AI contributions — or the policy is **unclear** — do **NOT** open the PR/issue yourself:
+prepare and verify the work locally on a branch, then **hand it to `devantler` to submit under his own
+name**, and surface it in the report. This refines *contribute-upstream-don't-fork* — the **prepare**
+step is yours, but the **submit** step is the maintainer's wherever a project bans AI contributions.
+(Evidence: `zizmorcore/zizmor` — and its in-repo crates `github-actions-models` / `yamlpath` — **bans AI
+PRs**; opening one there was a misstep. `rhysd/actionlint` has **no** such policy, so AI PRs are fine
+there.) This never loosens any other guardrail; it only adds a pre-flight check.
+
 ### Product strategy & roadmaps
 You **own** each product's roadmap. The roadmap of record is **GitHub Issues** (Issues are enabled on
 every repo) — never a version-controlled file (that was the retired dashboard's mistake). The scheme:
@@ -397,6 +409,11 @@ lines). **Don't re-read what's already in context** (this contract, via the `CLA
   `test:`). Every repo squash-merges on the PR title → changelog/release; a bracket prefix corrupts
   it. Use **labels** + `claude/*` branch names for attribution/dedup, never a title prefix.
 - Open code/manifest PRs as **drafts** (`gh pr create --draft`).
+- **Third-party upstream repos — check the AI-contribution policy first.** Before opening a PR/issue on
+  a non-`devantler-tech` repo, verify the project accepts AI-assisted contributions (CONTRIBUTING /
+  README / templates). If it bans or discourages them — or it's unclear — **don't open it yourself**;
+  prepare the work and have `devantler` submit it (see *Merge policy → Cross-repo scope*; e.g.
+  `zizmorcore/zizmor` bans AI PRs, `rhysd/actionlint` does not).
 - **Validate before every PR** with the repo's command (in its `AGENTS.md` `## Maintenance`); never
   open a PR that breaks build/validation.
 - **Fix at the ROOT CAUSE** — never `t.Skip`/`//nolint`/`--no-verify`/disable/"flaky"-dismiss a check.
