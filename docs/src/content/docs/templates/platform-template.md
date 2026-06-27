@@ -23,6 +23,7 @@ A high-level inventory of what Flux reconciles onto the cluster. The exact set i
 - **Autoscaling** — Cluster Autoscaler, Vertical Pod Autoscaler, KEDA + KEDA HTTP add-on
 - **Observability** — kube-prometheus-stack (Prometheus, Grafana, Alertmanager), Loki (logs), Grafana Alloy (collection), OpenCost (cost)
 - **Backup / DR** — Velero with CloudNativePG backups to S3-compatible storage (Cloudflare R2 in prod)
+- **Virtualization** — KubeVirt + CDI (Containerized Data Importer), so VM workloads run alongside containers (local/CI only; opted out of the Hetzner/prod overlay)
 - **Demo apps** — Homepage (dashboard), Headlamp (Kubernetes web UI), and whoami, so the platform stands up with something to look at
 
 To run **your own** application on the platform, add it as a GitOps tenant from its own repository — see the [GitOps Tenant Template](/templates/gitops-tenant-template/).
