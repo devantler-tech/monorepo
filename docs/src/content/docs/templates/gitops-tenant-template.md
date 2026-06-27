@@ -21,7 +21,7 @@ It is intentionally **stack-neutral**: it carries no application code or languag
 | Ownership | Files | Notes |
 | --- | --- | --- |
 | Template-owned | Shared CI/CD plumbing under `.github/workflows/` (`cd.yaml`, `release.yaml`, `template-sync.yaml`, `validate-scaffold.yaml`, `sync-labels.yaml`), `scripts/rename-placeholders.sh`, `CLAUDE.md`, `zizmor.yml` | Overwritten by `template-sync` |
-| You own | App code, `Dockerfile`, `deploy/` manifests, `.github/workflows/ci.yaml`, `.github/dependabot.yml`, `AGENTS.md`, `.claude/skills/maintain/SKILL.md`, `README.md`, `.releaserc`, `.gitignore`, `LICENSE`, `.templatesyncignore` | Declare in `.templatesyncignore` (same syntax as `.gitignore`), using these full paths |
+| You own | App code, `Dockerfile`, `deploy/` manifests, `.github/CODEOWNERS`, `.github/workflows/ci.yaml`, `.github/dependabot.yml`, `AGENTS.md`, `.claude/skills/maintain/SKILL.md`, `README.md`, `.releaserc`, `.gitignore`, `LICENSE`, `.templatesyncignore` | Declare in `.templatesyncignore` (same syntax as `.gitignore`), using these full paths |
 
 See the template's [README](https://github.com/devantler-tech/gitops-tenant-template#what-the-template-owns-vs-what-you-own) for the authoritative file-by-file list.
 
