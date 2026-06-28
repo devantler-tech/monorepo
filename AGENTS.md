@@ -108,6 +108,15 @@ better**, not just unbroken. The floor is about *authored output*; it never lice
 the bar — quality, validation, and safety are never traded for it. And the floor is a **minimum, not a
 ceiling**: clearing it is never a reason to stop while more is actionable — keep working (see *Cadence &
 focus*).
+**Aim higher than the easiest qualifying artifact — the floor's options are NOT co-equal.** A draft PR
+that *advances a substantive issue* — a feature increment, a meaningful fix, or **the oldest
+`enhancement`/`roadmap` issue decomposed and started** — is the **goal**. A coverage bump, a docs polish,
+a self-test guard, or a triage pass is a **legitimate fallback when nothing larger is startable — not the
+first thing to reach for.** Repeatedly picking the small, safe, completable-in-one-tick artifact while
+substantive issues age untouched in the backlog is the **central failure mode this contract guards
+against**: it clears the floor while leaving the products where they were. Easy wins are real work, but
+they **must not crowd out the meaningful work the products actually need** (see *Issue-driven → Drain
+oldest-first* and *Cadence & focus → Substantive-progress gate*).
 
 ### Issue-driven — issues are the unit of work
 GitHub Issues are the **advance work queue**, and **resolving them is the primary advance output of
@@ -121,9 +130,23 @@ issues — see *Merge policy*; this section governs the issue work that follows.
    chasing shiny new work ahead of older issues. **Trivial, obvious fixes are the carve-out** — a typo,
    a dead link, a missing alt-text, a one-line correction may go straight to a small PR (still a valid
    artifact); don't manufacture issue noise for them.
-2. **Drain oldest-first.** Each run, resolve the **oldest *actionable* open issue** and ship a draft
-   `Fixes #N` PR. Among open issues prefer the oldest; skip one only when it is genuinely not startable —
-   blocked/waiting on something, too under-specified to begin, or it already has an open PR. **A bare
+2. **Drain oldest-first — and "big" is NOT a reason to skip.** Each run, resolve the **oldest
+   *actionable* open issue** and ship a draft `Fixes #N` PR. Among open issues prefer the oldest.
+   **"Actionable" is deliberately narrow — skip an older issue ONLY when one of these is true and you can
+   *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
+   external dependency (a specific upstream PR/release) or an **open maintainer decision** you can cite;
+   or (c) it is too under-specified to even begin. **Size, difficulty, architectural weight, a
+   `roadmap`/`enhancement`/`security`/`performance`/`repo-assist`/`automation` label, or a vague
+   "maintainer-hot" feel are NOT valid skip reasons.** A large or hard issue **is the work, not an excuse
+   to pass it over**: when the oldest actionable issue is big, **decompose it into a small, well-specified
+   first child and ship that increment as a draft PR** (`Fixes #child`, link the parent) — make real
+   progress on the big thing across runs instead of perpetually deferring it whole. Before skipping any
+   issue as "blocked"/"gated", **re-verify the blocker against live state** (memory's "gated" notes go
+   stale) and **name the concrete blocker in the report**; an
+   unverifiable or merely-inherited "gated" is not a skip. **"Repo Assist"/`automation` roadmap issues are
+   KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
+   interactive-PR HANDS-OFF rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
+   about an *issue's* label or its bot author. **A bare
    assignee does *not* reserve an issue:** if nobody has opened a PR for it, you may pick it up
    regardless of who is assigned — an assignment alone is not work-in-progress. If an issue **already
    has an open PR**, don't duplicate it: drive a **trusted-author, non-draft** PR to merge per *Merge
@@ -286,10 +309,17 @@ decomposition exist to keep that queue stocked with well-formed, ready work. Imp
 Beyond fixing what breaks, proactively improve each product — **all of it routed through issues** (see
 *Issue-driven*): each enhancement below is **captured as an issue first** (unless genuinely trivial)
 and then implemented from the backlog **oldest-actionable-first**, never picked up ad-hoc and turned
-straight into a PR. Choose by what the product needs most:
-- **Implement a roadmap issue** — take a ready, well-specified issue; for a non-trivial design,
-  reason it through first (an ADR / system-design pass for big calls); implement with tests under the
-  normal draft-PR + validate discipline; `Fixes #N`.
+straight into a PR. These levers are **not co-equal — default to the first, not the easiest:**
+implementing the oldest substantive issue is the **primary** advance output; coverage, performance,
+refactor, and docs are how you fill in *around* it or when nothing larger is startable, **never a
+standing substitute** for moving the real backlog:
+- **Implement (or decompose-and-start) the oldest substantive issue** — take the oldest actionable
+  `enhancement`/`roadmap`/`bug`/`security` issue; if it is **large, decompose it into a small,
+  well-specified first child and ship that increment** (`Fixes #child`, link the parent) rather than
+  deferring the whole thing — a big issue moves forward across runs, it does not wait for a run big
+  enough to finish it. For a non-trivial design, reason it through first (an ADR / system-design pass for
+  big calls); implement with tests under the normal draft-PR + validate discipline; `Fixes #N`. **Being
+  large or hard is never why you skip it — see *Issue-driven → Drain oldest-first*.**
 - **Test coverage** — find under-tested *critical* paths (use the repo's coverage tooling); add
   **meaningful** tests that pin real behaviour and edge cases. Never chase a coverage % with vacuous
   tests; never weaken an assertion to make a test pass.
@@ -467,6 +497,15 @@ gates: a **per-product strategy review** (roadmap refresh) and **per-product doc
 per product (oldest first); heavy tasks (E2E audits, live-cluster reliability, site content review)
 ~weekly; the KSail Monthly Strategy at month start; **never spin up real clusters more than once a day**
 portfolio-wide.
+**Substantive-progress gate (guards against easy-work drift).** Coverage bumps, docs polish, and
+self-test guards are valuable but **must not become every tick's output**: do **not** let the advance
+pick be a small coverage/docs/guard artifact for **more than ~2 consecutive runs** while any substantive
+`enhancement`/`roadmap`/`bug` issue is startable (decompose-and-start counts as startable — see
+*Issue-driven → Drain oldest-first*). Across each week the backlog's **oldest substantive issues must
+visibly move** — a feature increment shipped, an epic's first child landed, a meaningful fix made — not
+merely its coverage % and docs freshness. If the substantive backlog *is* genuinely all blocked, that is
+**rare**: say so in the report with the **specific, live-verified blocker per issue**, rather than
+quietly defaulting to another easy artifact.
 
 ### Holistic review & shared-library stewardship
 Most runs are bottom-up (one product at a time). **Periodically (~monthly, on rotation) step back and
