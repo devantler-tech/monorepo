@@ -70,14 +70,18 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
 ## 3. Plan & implement
 1. **Pick the oldest *actionable* open issue — and "big" is not a reason to skip it.** Prefer the
    **oldest** startable issue. Skip an older one **only** if (a) it already has an open PR, (b) it is
-   blocked on a **named, live-verified** external dependency or an **open maintainer decision** you can
-   cite, or (c) it is too under-specified to begin. **Size, difficulty, a `roadmap`/`enhancement`/
+   blocked on a **named, live-verified** external dependency you can cite, or (c) it is too
+   under-specified to begin. **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
    when the oldest issue is large, **decompose it into a small first child and ship that increment**
    (`Fixes #child`, link the parent) so the big thing advances across runs. ("Repo Assist"/`automation`
    roadmap issues are KSail's own *feature specs*, part of the queue — not maintainer-interactive work.)
-   Re-verify any "gated" against live state before trusting it (memory goes stale) and name the blocker
-   in the report. A **bare assignee does *not* reserve** it (only an open PR does), so if nobody's opened
+   **A "maintainer decision" is NOT a skip reason:** the maintainer doesn't want to make issue-level
+   calls, so **investigate deeply, decide yourself, and ship a draft PR** — that draft is where he
+   redirects anything he disapproves of. If you genuinely need him, get his attention *actively* — the
+   **ask tool** (interactive) or an **`@devantler` issue mention** — never a passive "awaiting-maintainer"
+   note. Re-verify any "gated" against live state before trusting it (memory goes stale) and name the
+   blocker in the report. A **bare assignee does *not* reserve** it (only an open PR does), so if nobody's opened
    a PR you may take it regardless of who's assigned; if a **trusted-author, non-draft** PR already
    exists, drive *that* to merge instead of duplicating (leave draft/external PRs per the trust gate). For
    a big design, write/extend an ADR or system-design note first and link it.

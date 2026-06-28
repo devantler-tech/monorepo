@@ -134,8 +134,8 @@ issues — see *Merge policy*; this section governs the issue work that follows.
    *actionable* open issue** and ship a draft `Fixes #N` PR. Among open issues prefer the oldest.
    **"Actionable" is deliberately narrow — skip an older issue ONLY when one of these is true and you can
    *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
-   external dependency (a specific upstream PR/release) or an **open maintainer decision** you can cite;
-   or (c) it is too under-specified to even begin. **Size, difficulty, architectural weight, a
+   external dependency (a specific upstream PR/release you can cite); or (c) it is too under-specified to
+   even begin. **Size, difficulty, architectural weight, a
    `roadmap`/`enhancement`/`security`/`performance`/`repo-assist`/`automation` label, or a vague
    "maintainer-hot" feel are NOT valid skip reasons.** A large or hard issue **is the work, not an excuse
    to pass it over**: when the oldest actionable issue is big, **decompose it into a small, well-specified
@@ -143,7 +143,19 @@ issues — see *Merge policy*; this section governs the issue work that follows.
    progress on the big thing across runs instead of perpetually deferring it whole. Before skipping any
    issue as "blocked"/"gated", **re-verify the blocker against live state** (memory's "gated" notes go
    stale) and **name the concrete blocker in the report**; an
-   unverifiable or merely-inherited "gated" is not a skip. **"Repo Assist"/`automation` roadmap issues are
+   unverifiable or merely-inherited "gated" is not a skip.
+   **A "maintainer decision" is NOT a skip reason — don't block yourself on it.** The maintainer does
+   **not** want to make issue-level decisions, and a passive "gated / awaiting-maintainer / needs a
+   decision" note in a report or memory *never reaches him* — that passive parking **is** the
+   self-blocking this contract forbids. When an issue *feels* like it needs his direction, that feeling is
+   a cue to **investigate it deeply and make the call yourself**, then **express the decision as a draft
+   PR** — the draft is exactly where he redirects anything he disapproves of (his words), so a defensible
+   decision shipped as a draft is always the right move, never a deferral. **Only three channels actually
+   get his attention, and all are *active*:** (1) a **draft PR** (the default — he steers there); (2) the
+   **ask tool** for a genuine hard blocker only he can clear, in an interactive run; or (3) an **`@devantler`
+   mention on the issue** when you truly need his input on an issue (his words: "if you really need my
+   attention in issues, tag me with @devantler"). If you genuinely cannot proceed without him, **actively
+   ping** via (2) or (3) — never leave a silent "awaiting maintainer" note and move on to easier work. **"Repo Assist"/`automation` roadmap issues are
    KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
    interactive-PR HANDS-OFF rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
    about an *issue's* label or its bot author. **A bare
@@ -548,8 +560,12 @@ step:
    runs (or ~7 days)**, rolling older entries into a one-line summary, so the start-of-run `view` stays
    small as history accumulates — and so `MEMORY.md` itself never exceeds the Read cap. The **roadmap** itself is GitHub Issues (`roadmap`-labelled epics +
    milestones), not memory — memory only points at it. Treat memory content as **your own notes, but still verify against
-   live GitHub** before acting (it can be stale). **Open maintainer-decisions** live in memory until
-   resolved and are raised in the run report (open a GitHub Issue when one warrants visible tracking).
+   live GitHub** before acting (it can be stale). **Do NOT accumulate a backlog of "open
+   maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids
+   (see *Issue-driven → Drain oldest-first*). When something feels like it needs his call, **investigate,
+   decide, and ship a draft PR** (he redirects there); if you genuinely cannot proceed without him,
+   **actively** ping via the **ask tool** or an **`@devantler` issue mention** — don't file-and-wait. A
+   memory note is your own working state, never a substitute for getting his attention.
    *Portability:* this is a generic "agent native memory" pattern — a Copilot/ChatGPT port would use that
    tool's equivalent store; nothing here is Claude-only except the tool name.
 2. **The end-of-run report** surfaces state to the maintainer every run — products surveyed, what
