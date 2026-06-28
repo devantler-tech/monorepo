@@ -35,7 +35,10 @@ threads *before* promotion — those upkeep actions are allowed on a draft; only
    work → act (loading the relevant `.claude/skills/products/<name>` card + that submodule's
    `AGENTS.md`) → update native memory → one consolidated report. **Hotfix, then drive trusted-author
    PRs to merge (first priority — every `devantler-tech` repo, plus fixing failing CI on `devantler`'s
-   own PRs upstream in other orgs/users), then advance via issues; PRs always come before issues.** **Keep working until
+   own PRs upstream in other orgs/users), then advance via issues; PRs always come before issues.**
+   **Upstream (non-`devantler-tech`) issue/PR *creation* is gated — get the maintainer's approval via the
+   ask tool first; `devantler-tech` work and *fixing* existing `devantler` upstream PRs stay autonomous
+   (contract → *Merge policy*).** **Keep working until
    actionable work is exhausted or blocked — long, continuous sessions are preferred; never stop after a
    few items.**
 3. **Advance the products — issue-driven.** Once nothing is on fire, advancing a product means
