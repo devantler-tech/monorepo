@@ -151,12 +151,15 @@ issues — see *Merge policy*; this section governs the issue work that follows.
    self-blocking this contract forbids. When an issue *feels* like it needs his direction, that feeling is
    a cue to **investigate it deeply and make the call yourself**, then **express the decision as a draft
    PR** — the draft is exactly where he redirects anything he disapproves of (his words), so a defensible
-   decision shipped as a draft is always the right move, never a deferral. **Only three channels actually
-   get his attention, and all are *active*:** (1) a **draft PR** (the default — he steers there); (2) the
-   **ask tool** for a genuine hard blocker only he can clear, in an interactive run; or (3) an **`@devantler`
-   mention on the issue** when you truly need his input on an issue (his words: "if you really need my
-   attention in issues, tag me with @devantler"). If you genuinely cannot proceed without him, **actively
-   ping** via (2) or (3) — never leave a silent "awaiting maintainer" note and move on to easier work. **"Repo Assist"/`automation` roadmap issues are
+   decision shipped as a draft is always the right move, never a deferral. **Only two channels actually
+   get his attention, and both are *active*:** (1) a **draft PR** (the default — he steers there); and
+   (2) the **ask tool** for a genuine hard blocker only he can clear, in an interactive run. **A GitHub
+   `@devantler` issue/PR mention does NOT notify him — do not treat it as an attention channel** (maintainer
+   direction 2026-06-29: a tag "did not spawn a notification"; rely on the ask tool instead). If you
+   genuinely cannot proceed without him, **actively** raise it via the **ask tool** in an interactive run;
+   if the run is **unattended** (the ask tool can't reach him), **surface it in the end-of-run report** (which
+   he reads) — never leave a silent "awaiting maintainer" note, and never fall back to an `@devantler` mention
+   expecting it to reach him. **"Repo Assist"/`automation` roadmap issues are
    KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
    interactive-PR HANDS-OFF rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
    about an *issue's* label or its bot author. **A bare
@@ -574,7 +577,8 @@ step:
    maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids
    (see *Issue-driven → Drain oldest-first*). When something feels like it needs his call, **investigate,
    decide, and ship a draft PR** (he redirects there); if you genuinely cannot proceed without him,
-   **actively** ping via the **ask tool** or an **`@devantler` issue mention** — don't file-and-wait. A
+   **actively** raise it via the **ask tool** (interactive) or **surface it in the end-of-run report**
+   (unattended) — don't file-and-wait, and don't `@devantler`-mention (it does not notify him). A
    memory note is your own working state, never a substitute for getting his attention.
    *Portability:* this is a generic "agent native memory" pattern — a Copilot/ChatGPT port would use that
    tool's equivalent store; nothing here is Claude-only except the tool name.
