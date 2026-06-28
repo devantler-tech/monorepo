@@ -164,6 +164,13 @@ across products is exactly what's wanted; only duplicate/filler PRs on one conce
 maintainer-sequenced queue on **one** product (e.g. a recovery sprint) holds back only *that* product's
 lane — it never gates advance work on the **other** products.
 
+**This autonomy is for `devantler-tech` work.** Opening draft PRs and filing issues on `devantler-tech`
+repos needs no prior sign-off (only promotion does) — keep doing it. For **upstream**
+(non-`devantler-tech`) repos the rule flips: **get the maintainer's approval via the ask tool *before*
+creating any issue or PR** (see *Merge policy → Ask the maintainer before creating ANY upstream issue or
+PR*). *Fixing* an already-open `devantler` upstream PR stays autonomous; only *creating* a new upstream
+artifact is gated.
+
 ### Merge policy — drive trusted-author PRs to merge (incl. majors)
 **Driving trusted-author PRs to merge is the first-priority work each run — ahead of issues** (only
 live breakage on `main` outranks it). Sweep them **first**, every run, across **all** repos. On
@@ -225,14 +232,28 @@ own upstream PRs — **never** anyone else's (not the bots, not Copilot, not ext
 such a **`devantler`-authored PR failing CI on an upstream repo**, root-cause-fix the failing checks,
 push to the PR branch (you have access — it's your own fork/branch), and resolve threads to drive it
 green; this is how the agent maintains its **upstream contributions** (per the
-*contribute-upstream-don't-fork* rule). Because **you** authored it, building and running that branch is
+*contribute-upstream-don't-fork* rule) — **fixing** an already-open upstream PR like this is autonomous;
+**creating** a new upstream PR or issue is **not** (get the maintainer's approval via the ask tool
+first — see *Ask the maintainer before creating ANY upstream issue or PR* above). Because **you**
+authored it, building and running that branch is
 safe. You usually **lack merge rights** upstream, so drive it to **green with threads resolved** and
 leave the merge to that maintainer; **merge yourself only on your own / `devantler-tech` repos** (per the
 command above). The never-run / never-merge rules are **unchanged** for every non-`devantler` author
 everywhere; never bypass branch protection.
 
+**Ask the maintainer before creating ANY upstream issue or PR — `devantler-tech` is exempt.** A hard
+gate the maintainer directed (2026-06-28): **never autonomously open an issue or a PR on a repo
+*outside* the `devantler-tech` org.** Prepare and verify the work locally, then **surface it and get the
+maintainer's explicit approval via the ask tool *before* anything is created upstream** ("ALWAYS use the
+ASK tool when wanting to upstream anything"). Only **creation** is gated — *fixing* an already-open
+`devantler`-authored upstream PR (push a CI fix, resolve threads, drive it green per *Cross-repo scope*)
+stays autonomous, and **everything inside `devantler-tech` is unchanged** (keep opening draft PRs and
+filing issues there autonomously per *Autonomy*/*Issue-driven*). If a run is unattended and the ask tool
+can't reach the maintainer, do **not** create it — prepare it locally and surface it in the report.
+
 **Respect each upstream project's contribution policy — check it BEFORE opening anything.** Before
-creating a PR *or* issue on a non-`devantler-tech` (third-party) repo, check that project's stated
+creating a PR *or* issue on a non-`devantler-tech` (third-party) repo — **once the maintainer has
+approved it per the gate above** — check that project's stated
 contribution policy, **in particular whether it accepts AI-assisted / AI-generated contributions**
 (read its `CONTRIBUTING`, `README`, PR/issue templates, code of conduct). If the project **prohibits or
 discourages** AI contributions — or the policy is **unclear** — do **NOT** open the PR/issue yourself:
@@ -409,11 +430,14 @@ lines). **Don't re-read what's already in context** (this contract, via the `CLA
   `test:`). Every repo squash-merges on the PR title → changelog/release; a bracket prefix corrupts
   it. Use **labels** + `claude/*` branch names for attribution/dedup, never a title prefix.
 - Open code/manifest PRs as **drafts** (`gh pr create --draft`).
-- **Third-party upstream repos — check the AI-contribution policy first.** Before opening a PR/issue on
-  a non-`devantler-tech` repo, verify the project accepts AI-assisted contributions (CONTRIBUTING /
-  README / templates). If it bans or discourages them — or it's unclear — **don't open it yourself**;
-  prepare the work and have `devantler` submit it (see *Merge policy → Cross-repo scope*; e.g.
-  `zizmorcore/zizmor` bans AI PRs, `rhysd/actionlint` does not).
+- **Third-party upstream repos — get maintainer approval (ask tool) first, then check the AI policy.**
+  **Never autonomously open an issue or PR on a repo outside `devantler-tech`** — prepare it locally and
+  get the maintainer's explicit approval via the **ask tool** first (the hard gate in *Merge policy →
+  Ask the maintainer before creating ANY upstream issue or PR*). Only then verify the project accepts
+  AI-assisted contributions (CONTRIBUTING / README / templates); if it bans or discourages them — or
+  it's unclear — **don't open it yourself**, prepare the work and have `devantler` submit it (e.g.
+  `zizmorcore/zizmor` bans AI PRs, `rhysd/actionlint` does not). **`devantler-tech` repos are exempt —
+  open drafts/issues there autonomously, as before.**
 - **Validate before every PR** with the repo's command (in its `AGENTS.md` `## Maintenance`); never
   open a PR that breaks build/validation.
 - **Fix at the ROOT CAUSE** — never `t.Skip`/`//nolint`/`--no-verify`/disable/"flaky"-dismiss a check.

@@ -21,6 +21,11 @@ plus the numbers/failures you need (e.g. `<cmd> 2>&1 | tee /tmp/out.log | tail -
 read-heavy investigation to a subagent (the built-in `Explore` type) that returns just the conclusion.
 Same work, fewer tokens.
 
+> **Upstream caveat.** Everything below assumes **`devantler-tech`** work (autonomous as ever). For a
+> **non-`devantler-tech`** (upstream/third-party) repo, *creating* an issue or PR first needs the
+> maintainer's approval via the **ask tool** (contract → *Merge policy → Ask the maintainer before
+> creating ANY upstream issue or PR*); *fixing* an existing `devantler` upstream PR stays autonomous.
+
 > **Lean on the specialist skills** for heavy thinking, **if they're available in your environment**
 > (these ship with the Claude Code `engineering` plugin — they are *not* defined in this repo; if a
 > given skill isn't installed, just apply the same reasoning yourself): `engineering:architecture` (ADRs)

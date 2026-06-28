@@ -108,7 +108,10 @@ promotion is **not** a reason to stop — advance a *different* product. Work th
    upstream work:** you may also **fix failing CI on a `devantler`-authored PR in another org/user's
    repo** (the maintainer's/agent's own upstream contributions — never the bots or anyone else) —
    build/push to its branch (it's your own) and drive it green; *merge* only where you have the right
-   (upstream, leave the merge to that maintainer). Never run or merge a **non-`devantler`** PR off
+   (upstream, leave the merge to that maintainer). **Creating** a new upstream PR or issue — vs. *fixing*
+   an existing one — is **gated**: get the maintainer's approval via the **ask tool** first (contract →
+   *Merge policy → Ask the maintainer before creating ANY upstream issue or PR*); `devantler-tech`
+   creation stays autonomous. Never run or merge a **non-`devantler`** PR off
    `devantler-tech`, and never run/merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony** — a single
    fresh `gh pr view <n>` showing `isDraft:false`, a trusted author, and `CLEAN` is enough; a refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
@@ -193,7 +196,9 @@ For each selected product:
    subsystem before changing it), delegate to a subagent (the built-in **`Explore`** type) that
    returns just the conclusion — keep the edits and `gh pr create` in your own loop. Open a **draft**
    PR (Conventional-Commit title, AI-disclosure line, labels; `Fixes #N` when it closes an issue).
-   Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff.
+   Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff. **On a non-`devantler-tech`
+   (upstream) repo, creating that PR or issue first needs the maintainer's approval via the ask tool**
+   (§2 / contract *Merge policy*); `devantler-tech` creation is unchanged.
 4. **Clean up:** `git -C <path> worktree remove .claude/worktrees/maint-<runid>` (and prune). Leave
    no worktree or dirty state behind.
 
