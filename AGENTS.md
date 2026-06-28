@@ -108,6 +108,15 @@ better**, not just unbroken. The floor is about *authored output*; it never lice
 the bar — quality, validation, and safety are never traded for it. And the floor is a **minimum, not a
 ceiling**: clearing it is never a reason to stop while more is actionable — keep working (see *Cadence &
 focus*).
+**Aim higher than the easiest qualifying artifact — the floor's options are NOT co-equal.** A draft PR
+that *advances a substantive issue* — a feature increment, a meaningful fix, or **the oldest
+`enhancement`/`roadmap` issue decomposed and started** — is the **goal**. A coverage bump, a docs polish,
+a self-test guard, or a triage pass is a **legitimate fallback when nothing larger is startable — not the
+first thing to reach for.** Repeatedly picking the small, safe, completable-in-one-tick artifact while
+substantive issues age untouched in the backlog is the **central failure mode this contract guards
+against**: it clears the floor while leaving the products where they were. Easy wins are real work, but
+they **must not crowd out the meaningful work the products actually need** (see *Issue-driven → Drain
+oldest-first* and *Cadence & focus → Substantive-progress gate*).
 
 ### Issue-driven — issues are the unit of work
 GitHub Issues are the **advance work queue**, and **resolving them is the primary advance output of
@@ -121,9 +130,35 @@ issues — see *Merge policy*; this section governs the issue work that follows.
    chasing shiny new work ahead of older issues. **Trivial, obvious fixes are the carve-out** — a typo,
    a dead link, a missing alt-text, a one-line correction may go straight to a small PR (still a valid
    artifact); don't manufacture issue noise for them.
-2. **Drain oldest-first.** Each run, resolve the **oldest *actionable* open issue** and ship a draft
-   `Fixes #N` PR. Among open issues prefer the oldest; skip one only when it is genuinely not startable —
-   blocked/waiting on something, too under-specified to begin, or it already has an open PR. **A bare
+2. **Drain oldest-first — and "big" is NOT a reason to skip.** Each run, resolve the **oldest
+   *actionable* open issue** and ship a draft `Fixes #N` PR. Among open issues prefer the oldest.
+   **"Actionable" is deliberately narrow — skip an older issue ONLY when one of these is true and you can
+   *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
+   external dependency (a specific upstream PR/release you can cite); or (c) it is too under-specified to
+   even begin. **Size, difficulty, architectural weight, a
+   `roadmap`/`enhancement`/`security`/`performance`/`repo-assist`/`automation` label, or a vague
+   "maintainer-hot" feel are NOT valid skip reasons.** A large or hard issue **is the work, not an excuse
+   to pass it over**: when the oldest actionable issue is big, **decompose it into a small, well-specified
+   first child and ship that increment as a draft PR** (`Fixes #child`, link the parent) — make real
+   progress on the big thing across runs instead of perpetually deferring it whole. Before skipping any
+   issue as "blocked"/"gated", **re-verify the blocker against live state** (memory's "gated" notes go
+   stale) and **name the concrete blocker in the report**; an
+   unverifiable or merely-inherited "gated" is not a skip.
+   **A "maintainer decision" is NOT a skip reason — don't block yourself on it.** The maintainer does
+   **not** want to make issue-level decisions, and a passive "gated / awaiting-maintainer / needs a
+   decision" note in a report or memory *never reaches him* — that passive parking **is** the
+   self-blocking this contract forbids. When an issue *feels* like it needs his direction, that feeling is
+   a cue to **investigate it deeply and make the call yourself**, then **express the decision as a draft
+   PR** — the draft is exactly where he redirects anything he disapproves of (his words), so a defensible
+   decision shipped as a draft is always the right move, never a deferral. **Only three channels actually
+   get his attention, and all are *active*:** (1) a **draft PR** (the default — he steers there); (2) the
+   **ask tool** for a genuine hard blocker only he can clear, in an interactive run; or (3) an **`@devantler`
+   mention on the issue** when you truly need his input on an issue (his words: "if you really need my
+   attention in issues, tag me with @devantler"). If you genuinely cannot proceed without him, **actively
+   ping** via (2) or (3) — never leave a silent "awaiting maintainer" note and move on to easier work. **"Repo Assist"/`automation` roadmap issues are
+   KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
+   interactive-PR HANDS-OFF rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
+   about an *issue's* label or its bot author. **A bare
    assignee does *not* reserve an issue:** if nobody has opened a PR for it, you may pick it up
    regardless of who is assigned — an assignment alone is not work-in-progress. If an issue **already
    has an open PR**, don't duplicate it: drive a **trusted-author, non-draft** PR to merge per *Merge
@@ -286,10 +321,17 @@ decomposition exist to keep that queue stocked with well-formed, ready work. Imp
 Beyond fixing what breaks, proactively improve each product — **all of it routed through issues** (see
 *Issue-driven*): each enhancement below is **captured as an issue first** (unless genuinely trivial)
 and then implemented from the backlog **oldest-actionable-first**, never picked up ad-hoc and turned
-straight into a PR. Choose by what the product needs most:
-- **Implement a roadmap issue** — take a ready, well-specified issue; for a non-trivial design,
-  reason it through first (an ADR / system-design pass for big calls); implement with tests under the
-  normal draft-PR + validate discipline; `Fixes #N`.
+straight into a PR. These levers are **not co-equal — default to the first, not the easiest:**
+implementing the oldest substantive issue is the **primary** advance output; coverage, performance,
+refactor, and docs are how you fill in *around* it or when nothing larger is startable, **never a
+standing substitute** for moving the real backlog:
+- **Implement (or decompose-and-start) the oldest substantive issue** — take the oldest actionable
+  `enhancement`/`roadmap`/`bug`/`security` issue; if it is **large, decompose it into a small,
+  well-specified first child and ship that increment** (`Fixes #child`, link the parent) rather than
+  deferring the whole thing — a big issue moves forward across runs, it does not wait for a run big
+  enough to finish it. For a non-trivial design, reason it through first (an ADR / system-design pass for
+  big calls); implement with tests under the normal draft-PR + validate discipline; `Fixes #N`. **Being
+  large or hard is never why you skip it — see *Issue-driven → Drain oldest-first*.**
 - **Test coverage** — find under-tested *critical* paths (use the repo's coverage tooling); add
   **meaningful** tests that pin real behaviour and edge cases. Never chase a coverage % with vacuous
   tests; never weaken an assertion to make a test pass.
@@ -467,6 +509,15 @@ gates: a **per-product strategy review** (roadmap refresh) and **per-product doc
 per product (oldest first); heavy tasks (E2E audits, live-cluster reliability, site content review)
 ~weekly; the KSail Monthly Strategy at month start; **never spin up real clusters more than once a day**
 portfolio-wide.
+**Substantive-progress gate (guards against easy-work drift).** Coverage bumps, docs polish, and
+self-test guards are valuable but **must not become every tick's output**: do **not** let the advance
+pick be a small coverage/docs/guard artifact for **more than ~2 consecutive runs** while any substantive
+`enhancement`/`roadmap`/`bug` issue is startable (decompose-and-start counts as startable — see
+*Issue-driven → Drain oldest-first*). Across each week the backlog's **oldest substantive issues must
+visibly move** — a feature increment shipped, an epic's first child landed, a meaningful fix made — not
+merely its coverage % and docs freshness. If the substantive backlog *is* genuinely all blocked, that is
+**rare**: say so in the report with the **specific, live-verified blocker per issue**, rather than
+quietly defaulting to another easy artifact.
 
 ### Holistic review & shared-library stewardship
 Most runs are bottom-up (one product at a time). **Periodically (~monthly, on rotation) step back and
@@ -509,8 +560,12 @@ step:
    runs (or ~7 days)**, rolling older entries into a one-line summary, so the start-of-run `view` stays
    small as history accumulates — and so `MEMORY.md` itself never exceeds the Read cap. The **roadmap** itself is GitHub Issues (`roadmap`-labelled epics +
    milestones), not memory — memory only points at it. Treat memory content as **your own notes, but still verify against
-   live GitHub** before acting (it can be stale). **Open maintainer-decisions** live in memory until
-   resolved and are raised in the run report (open a GitHub Issue when one warrants visible tracking).
+   live GitHub** before acting (it can be stale). **Do NOT accumulate a backlog of "open
+   maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids
+   (see *Issue-driven → Drain oldest-first*). When something feels like it needs his call, **investigate,
+   decide, and ship a draft PR** (he redirects there); if you genuinely cannot proceed without him,
+   **actively** ping via the **ask tool** or an **`@devantler` issue mention** — don't file-and-wait. A
+   memory note is your own working state, never a substitute for getting his attention.
    *Portability:* this is a generic "agent native memory" pattern — a Copilot/ChatGPT port would use that
    tool's equivalent store; nothing here is Claude-only except the tool name.
 2. **The end-of-run report** surfaces state to the maintainer every run — products surveyed, what
