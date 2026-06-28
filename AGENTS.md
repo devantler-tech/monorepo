@@ -29,6 +29,7 @@ keeping them healthy *and* moving them forward.
 | Homebrew tap | `devantler-tech/homebrew-tap` (repo renamed from `homebrew-formulas`) | `homebrew-tap` | [AGENTS.md](https://github.com/devantler-tech/homebrew-tap/blob/main/AGENTS.md) |
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | [AGENTS.md](https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md) |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | [AGENTS.md](https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md) |
+| UniFi Crossplane provider (shared lib) | `devantler-tech/provider-upjet-unifi` | `libraries/provider-upjet-unifi` | [AGENTS.md](https://github.com/devantler-tech/provider-upjet-unifi/blob/main/AGENTS.md) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
 | UniFi network (private) | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |

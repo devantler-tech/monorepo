@@ -74,3 +74,7 @@
 	path = applications/fleet-gitops
 	url = git@github.com:devantler-tech/fleet-gitops.git
 	branch = main
+[submodule "libraries/provider-upjet-unifi"]
+	path = libraries/provider-upjet-unifi
+	url = git@github.com:devantler-tech/provider-upjet-unifi.git
+	branch = main
