@@ -56,10 +56,12 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   already acted on);
 - surfaces **each own draft PR's unresolved bot-reviewer thread count** (CodeRabbit `coderabbitai`,
   `copilot-pull-request-reviewer[bot]`) so a run can **drain them** — query per draft via the GraphQL
-  `reviewThreads(first:50){nodes{isResolved comments(first:1){nodes{author{login}}}}}` and report
-  `unresolved=<n>`. Across hourly runs older drafts accumulate CodeRabbit threads the live watcher
-  (alive only in the *spawning* session) never sees; the survey must catch them (contract *Autonomy →
-  Watch the PRs you spawn*).
+  `reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}` and report
+  `unresolved=<n>`. **Paginate `reviewThreads` (follow `pageInfo.hasNextPage`/`endCursor`) — never let
+  the page size silently cap the count**; a heavily-reviewed draft can exceed one page, and an
+  undercount would falsely report a draft as drained (contract *No silent caps*). Across hourly runs
+  older drafts accumulate CodeRabbit threads the live watcher (alive only in the *spawning* session)
+  never sees; the survey must catch them (contract *Autonomy → Watch the PRs you spawn*).
 - for **merge-queue repos**, reports each queued trusted/own PR's latest `merge_group` run conclusion
   (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still queued").
 
