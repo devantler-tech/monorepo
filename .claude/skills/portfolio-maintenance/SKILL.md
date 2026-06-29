@@ -53,7 +53,17 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   lists each own draft/PR's `comments` + review threads and flags any authored by `devantler`
   (exact-login), quoting a one-line gist as a signal (the read-only surveyor keeps no cross-run state,
   so it can't compute "new since last run" — **you** dedupe against native memory of what you've
-  already acted on).
+  already acted on);
+- surfaces **each own draft PR's unresolved bot-reviewer thread count** (CodeRabbit `coderabbitai`,
+  `copilot-pull-request-reviewer[bot]`) so a run can **drain them** — query per draft via the GraphQL
+  `reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}` and report
+  `unresolved=<n>`. **Paginate `reviewThreads` (follow `pageInfo.hasNextPage`/`endCursor`) — never let
+  the page size silently cap the count**; a heavily-reviewed draft can exceed one page, and an
+  undercount would falsely report a draft as drained (contract *No silent caps*). Across hourly runs
+  older drafts accumulate CodeRabbit threads the live watcher (alive only in the *spawning* session)
+  never sees; the survey must catch them (contract *Autonomy → Watch the PRs you spawn*).
+- for **merge-queue repos**, reports each queued trusted/own PR's latest `merge_group` run conclusion
+  (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still queued").
 
 **Maintainer comments are instructions — handle them first.** Before selecting new work, read any
 `devantler`-authored comment the survey surfaced on your own open drafts/PRs/issues and **act on it**
@@ -115,8 +125,13 @@ promotion is **not** a reason to stop — advance a *different* product. Work th
    `devantler-tech`, and never run/merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony** — a single
    fresh `gh pr view <n>` showing `isDraft:false`, a trusted author, and `CLEAN` is enough; a refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
-   variant-evidence retries. **Keep your own drafts review-ready while
-   they wait** — root-cause-fix their failing CI and resolve their review threads *before* promotion
+   variant-evidence retries. **On merge-queue repos, root-cause a stall/kick-out before re-queuing**
+   (contract *Merge policy → Merge-queue repos*): a PR that "was queued" but didn't merge has usually been
+   **evicted by a failed `merge_group` run** — pull that run (`gh run list --event merge_group` → `pr-<n>`
+   → `--log-failed`) and diagnose before re-`--auto`-ing; if it's a known systemic flake, fix the root
+   cause first rather than looping the PR through the queue. **Keep your own drafts review-ready while
+   they wait** — root-cause-fix their failing CI and **resolve their bot-reviewer threads (CodeRabbit etc.)
+   on EVERY run, sweeping all open drafts, not just the one you just opened** — *before* promotion
    (both allowed on a draft); only the **promotion** (draft → ready) is the maintainer's — you never
    self-promote, and the merge waits for it. Never auto-drive or merge external PRs.
    - **Confirm by `state`/`mergedAt`, never by `mergeStateStatus`, in Enable-Auto-Merge repos.** Repos
