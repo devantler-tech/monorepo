@@ -153,13 +153,10 @@ issues — see *Merge policy*; this section governs the issue work that follows.
    PR** — the draft is exactly where he redirects anything he disapproves of (his words), so a defensible
    decision shipped as a draft is always the right move, never a deferral. **Only two channels actually
    get his attention, and both are *active*:** (1) a **draft PR** (the default — he steers there); and
-   (2) the **ask tool** for a genuine hard blocker only he can clear, in an interactive run. **A GitHub
-   `@devantler` issue/PR mention does NOT notify him — do not treat it as an attention channel** (maintainer
-   direction 2026-06-29: a tag "did not spawn a notification"; rely on the ask tool instead). If you
-   genuinely cannot proceed without him, **actively** raise it via the **ask tool** in an interactive run;
-   if the run is **unattended** (the ask tool can't reach him), **surface it in the end-of-run report** (which
-   he reads) — never leave a silent "awaiting maintainer" note, and never fall back to an `@devantler` mention
-   expecting it to reach him. **"Repo Assist"/`automation` roadmap issues are
+   (2) the **ask tool** — the native **`AskUserQuestion`** clickable prompt (present an enumerable decision
+   as **one-click options**, not free text). The **end-of-run report** (he rarely reads it) and a **GitHub
+   `@devantler` mention** (it does not notify him) are **NOT** attention channels. Never leave a silent
+   "awaiting maintainer" note and move on to easier work. **"Repo Assist"/`automation` roadmap issues are
    KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
    interactive-PR HANDS-OFF rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
    about an *issue's* label or its bot author. **A bare
@@ -577,15 +574,16 @@ step:
    maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids
    (see *Issue-driven → Drain oldest-first*). When something feels like it needs his call, **investigate,
    decide, and ship a draft PR** (he redirects there); if you genuinely cannot proceed without him,
-   **actively** raise it via the **ask tool** (interactive) or **surface it in the end-of-run report**
-   (unattended) — don't file-and-wait, and don't `@devantler`-mention (it does not notify him). A
+   **actively** raise it via the **ask tool** (`AskUserQuestion`) or **ship the decision as a draft PR** —
+   don't file-and-wait. The end-of-run report (he rarely reads it) and an `@devantler` mention (no
+   notification) are NOT attention channels. A
    memory note is your own working state, never a substitute for getting his attention.
    *Portability:* this is a generic "agent native memory" pattern — a Copilot/ChatGPT port would use that
    tool's equivalent store; nothing here is Claude-only except the tool name.
-2. **The end-of-run report** surfaces state to the maintainer every run — products surveyed, what
-   changed (with PR links), and **what now needs the maintainer** (open drafts awaiting promotion,
-   blockers, external PRs, open decisions). Live truth for PRs/CI/issues is GitHub itself; per-product
-   status is derivable from `gh pr list` / `gh run list`, so it is never duplicated into a file.
+2. **The end-of-run report** is a per-run record (products surveyed, what changed with PR links). It is
+   **not** an attention channel — he rarely reads it — so anything that needs his action goes via a draft
+   PR or `AskUserQuestion`, never parked in the report. Live truth for PRs/CI/issues is GitHub itself;
+   per-product status is derivable from `gh pr list` / `gh run list`, so it is never duplicated into a file.
 
 ### Self-improvement (continuous, evidence-driven)
 Your definition is version-controlled, so you continuously improve it to get better at maintaining
