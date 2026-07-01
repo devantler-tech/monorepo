@@ -56,13 +56,22 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   already acted on);
 - surfaces **the full hygiene triad for EVERY open own/trusted PR — (a) failing checks, (b)
   unresolved bot-reviewer thread count (CodeRabbit `coderabbitai`,
-  `copilot-pull-request-reviewer[bot]`), (c) `mergeable`/`mergeStateStatus` (CONFLICTING/DIRTY =
+  `copilot-pull-request-reviewer[bot]`) *plus review-body finding count*, (c)
+  `mergeable`/`mergeStateStatus` (CONFLICTING/DIRTY =
   needs a rebase/update-branch)** — so a run can **drain all three**, not just threads. Query threads
   per PR via the GraphQL
   `reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}` and report
   `unresolved=<n>`. **Paginate `reviewThreads` (follow `pageInfo.hasNextPage`/`endCursor`) — never let
   the page size silently cap the count**; a heavily-reviewed draft can exceed one page, and an
-  undercount would falsely report a draft as drained (contract *No silent caps*). Across hourly runs
+  undercount would falsely report a draft as drained (contract *No silent caps*). **(b) has a second
+  surface the thread query cannot see:** CodeRabbit findings anchored *outside the PR diff* are
+  emitted as a collapsed `⚠️ Outside diff range comments (N)` section in the **review body** (a
+  `> [!CAUTION]` block) — never a thread, no `isResolved` state, and they can be Major (maintainer
+  direction 2026-07-02; live cases ksail #5551/#5652). Per PR also check
+  `gh api repos/<owner>/<repo>/pulls/<n>/reviews --jq '[.[]|select(.user.login=="coderabbitai[bot]"
+  and (.body|contains("Outside diff range")))]|length'` and report `body_findings=<n>`; the acting
+  run verifies each against current code, fixes-or-refutes, and **replies on the PR as the
+  resolution record** (no thread exists to resolve). Across hourly runs
   older PRs accumulate red checks, threads, and conflicts the live watcher (alive only in the
   *spawning* session) never sees; the survey must catch them (contract *Autonomy → Watch the PRs you
   spawn*). **Externally-gated / parked PRs are IN the sweep** — a merge gate excuses the merge, never
