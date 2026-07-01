@@ -54,14 +54,21 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   (exact-login), quoting a one-line gist as a signal (the read-only surveyor keeps no cross-run state,
   so it can't compute "new since last run" — **you** dedupe against native memory of what you've
   already acted on);
-- surfaces **each own draft PR's unresolved bot-reviewer thread count** (CodeRabbit `coderabbitai`,
-  `copilot-pull-request-reviewer[bot]`) so a run can **drain them** — query per draft via the GraphQL
+- surfaces **the full hygiene triad for EVERY open own/trusted PR — (a) failing checks, (b)
+  unresolved bot-reviewer thread count (CodeRabbit `coderabbitai`,
+  `copilot-pull-request-reviewer[bot]`), (c) `mergeable`/`mergeStateStatus` (CONFLICTING/DIRTY =
+  needs a rebase/update-branch)** — so a run can **drain all three**, not just threads. Query threads
+  per PR via the GraphQL
   `reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}` and report
   `unresolved=<n>`. **Paginate `reviewThreads` (follow `pageInfo.hasNextPage`/`endCursor`) — never let
   the page size silently cap the count**; a heavily-reviewed draft can exceed one page, and an
   undercount would falsely report a draft as drained (contract *No silent caps*). Across hourly runs
-  older drafts accumulate CodeRabbit threads the live watcher (alive only in the *spawning* session)
-  never sees; the survey must catch them (contract *Autonomy → Watch the PRs you spawn*).
+  older PRs accumulate red checks, threads, and conflicts the live watcher (alive only in the
+  *spawning* session) never sees; the survey must catch them (contract *Autonomy → Watch the PRs you
+  spawn*). **Externally-gated / parked PRs are IN the sweep** — a merge gate excuses the merge, never
+  the hygiene (maintainer direction 2026-07-01) — and so are **`coderabbitai[bot]`-authored PRs**
+  (e.g. "CodeRabbit Generated Unit Tests": drive their red CI like any org-installed bot's, or close
+  with reasoning).
 - for **merge-queue repos**, reports each queued trusted/own PR's latest `merge_group` run conclusion
   (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still queued").
 
@@ -132,11 +139,16 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    (contract *Merge policy → Merge-queue repos*): a PR that "was queued" but didn't merge has usually been
    **evicted by a failed `merge_group` run** — pull that run (`gh run list --event merge_group` → `pr-<n>`
    → `--log-failed`) and diagnose before re-`--auto`-ing; if it's a known systemic flake, fix the root
-   cause first rather than looping the PR through the queue. **Keep your own drafts review-ready while
-   they wait** — root-cause-fix their failing CI and **resolve their bot-reviewer threads (CodeRabbit etc.)
-   on EVERY run, sweeping all open drafts, not just the one you just opened** — *before* promotion
-   (both allowed on a draft); only the **promotion** (draft → ready) is the maintainer's — you never
-   self-promote, and the merge waits for it. Never auto-drive or merge external PRs.
+   cause first rather than looping the PR through the queue. **Keep EVERY open own PR hygienic while
+   it waits — the full triad, on EVERY run, sweeping ALL open own/trusted PRs, not just the one you
+   just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**, and
+   **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
+   force-push). **A merge-gated or parked PR is NOT exempt** (maintainer direction 2026-07-01): the
+   gate excuses the *merge*, never red CI / open threads / conflicts — those rot on the maintainer's
+   dashboard. All of this is allowed *before* promotion; only the **promotion** (draft → ready) is the
+   maintainer's — you never self-promote, and the merge waits for it. **`coderabbitai[bot]`-authored
+   PRs are in this sweep** (fix their CI or close with reasoning — never leave them red for days).
+   Never auto-drive or merge external PRs.
    - **Confirm by `state`/`mergedAt`, never by `mergeStateStatus`, in Enable-Auto-Merge repos.** Repos
      with a `🔀 Enable Auto-Merge` workflow (monorepo, actions, reusable-workflows, go-template,
      dotnet-template, skills, plugins, …) arm the `app/botantler` App on **promotion**, so it merges a
