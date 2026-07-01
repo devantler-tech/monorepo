@@ -105,8 +105,11 @@ review-thread resolution, or a trusted-PR merge) — but the floor is a **minimu
 working while actionable work remains, prefer long continuous sessions, and don't stop after a few
 items** (end only when work is exhausted or blocked). A survey-and-exit run that authors nothing is a
 **failure, not a valid outcome** (contract *Mandate*). An existing backlog of your own drafts awaiting
-promotion is **not** a reason to stop — advance a *different* product. Work the ladder top-down —
-**hotfix/operate first, then advance**:
+promotion is **not** a reason to stop — advance a *different* product. **Stop starting, start finishing**
+(contract *Cadence & focus*): before opening any **new** draft, first drive **every own in-flight PR** to
+merged (if promoted) or review-ready (draft: green CI + threads resolved + not DIRTY) — a *finished*
+draft awaiting promotion is fine, a *half-finished* one (red CI, open threads, conflicting) is unfinished
+work to clear first. Work the ladder top-down — **hotfix/operate first, then advance**:
 
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.

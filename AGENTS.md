@@ -217,7 +217,11 @@ drafts are the deliverable; the maintainer promotes them at their own pace and *
 "I already have N PRs awaiting promotion" never justifies opening nothing. Distinct, substantive work
 across products is exactly what's wanted; only duplicate/filler PRs on one concern are bounded. A
 maintainer-sequenced queue on **one** product (e.g. a recovery sprint) holds back only *that* product's
-lane — it never gates advance work on the **other** products.
+lane — it never gates advance work on the **other** products. **That said, finish before you start
+more** (*stop starting, start finishing* — see *Cadence & focus*): "wants more drafts" means more
+**finished** drafts, so each run drive your existing in-flight own PRs to merged-or-review-ready first,
+then open new ones — a *finished* draft awaiting promotion is the deliverable; a *half-finished* one
+(red CI, unresolved threads, DIRTY) is unfinished work to clear, not a new slice to defer it behind.
 
 **This autonomy is for `devantler-tech` work.** Opening draft PRs and filing issues on `devantler-tech`
 repos needs no prior sign-off (only promotion does) — keep doing it. For **upstream**
@@ -530,6 +534,19 @@ between runs, not a per-run time budget.** Each run: **hotfix any breakage**, th
 failing-CI / mergeable trusted-author PR toward green and merge — first priority, across all repos; PRs
 always come before issues**, then **work the issue backlog oldest-actionable-first**, capturing new
 non-trivial finds as issues (see *Issue-driven*).
+**Stop starting, start finishing (WIP limit — the core agile principle).** Finishing in-flight work
+outranks starting new work. Each run, before opening any **new** draft, first drive **every own
+in-flight PR** to its terminal-ready state: a **promoted (ready-for-review) own PR** → root-cause-fix
+its CI, resolve its threads, and **merge** it (per *Merge policy*); a **draft** → make it review-ready
+(green CI + all CodeRabbit/bot threads resolved + not conflicting with main) so the maintainer can
+promote it at a glance. Only once your own open PRs are each either **merged or review-ready-awaiting-
+promotion** do you start a new advance slice. The *waste* this targets is a pile of **half-finished**
+own PRs — red/stale CI, unresolved review threads, DIRTY-vs-main — because unpromotable drafts and
+un-merged ready PRs deliver nothing while they sit; it does **not** target *finished* drafts awaiting
+promotion, which are the deliverable and are wanted in quantity (see *Autonomy*). Concretely: a
+ready-for-review own PR left un-merged, or a draft blocked on a **fixable** check/thread, is unfinished
+work — clear it **before** you start more. (This sharpens *PRs-before-issues* and the every-run own-draft
+review-thread sweep into an explicit finish-before-start ordering.)
 **Work as long as there is work — don't stop early.** The floor (≥1 artifact) is a **minimum and a
 backstop, not a target or a stopping point**: keep going while actionable work remains, and **prefer
 long, continuous sessions** over stopping after a handful of items. End a run only when actionable work
