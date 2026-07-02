@@ -68,8 +68,13 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   emitted as a collapsed `⚠️ Outside diff range comments (N)` section in the **review body** (a
   `> [!CAUTION]` block) — never a thread, no `isResolved` state, and they can be Major (maintainer
   direction 2026-07-02; live cases ksail #5551/#5652). Per PR also check
-  `gh api repos/<owner>/<repo>/pulls/<n>/reviews --jq '[.[]|select(.user.login=="coderabbitai[bot]"
-  and (.body|contains("Outside diff range")))]|length'` and report `body_findings=<n>`; the acting
+  `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate | jq -s
+  '[.[][]|select(.user.login=="coderabbitai[bot]"
+  and (.body|contains("Outside diff range")))]|length'` and report `body_findings=<n>` —
+  **`--paginate` + external `jq -s`** because the reviews endpoint returns only its first page (30)
+  by default, so an unpaginated count silently misses older review bodies on a long-lived PR (same
+  *No silent caps* rule as the thread query; `gh api --slurp` is rejected alongside `--jq`, so slurp
+  the concatenated pages with `jq -s` and flatten via `.[][]`); the acting
   run verifies each against current code, fixes-or-refutes, and **replies on the PR as the
   resolution record** (no thread exists to resolve). Across hourly runs
   older PRs accumulate red checks, threads, and conflicts the live watcher (alive only in the
