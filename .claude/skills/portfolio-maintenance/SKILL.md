@@ -64,13 +64,15 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   `unresolved=<n>`. **Paginate `reviewThreads` (follow `pageInfo.hasNextPage`/`endCursor`) — never let
   the page size silently cap the count**; a heavily-reviewed draft can exceed one page, and an
   undercount would falsely report a draft as drained (contract *No silent caps*). **(b) has a second
-  surface the thread query cannot see:** CodeRabbit findings anchored *outside the PR diff* are
-  emitted as a collapsed `⚠️ Outside diff range comments (N)` section in the **review body** (a
-  `> [!CAUTION]` block) — never a thread, no `isResolved` state, and they can be Major (maintainer
-  direction 2026-07-02; live cases ksail #5551/#5652). Per PR also check
+  surface the thread query cannot see:** CodeRabbit findings it does not post inline are emitted as
+  collapsed sections in the **review body** — `⚠️ Outside diff range comments (N)` (a `> [!CAUTION]`
+  block; can be Major — maintainer direction 2026-07-02; live cases ksail #5551/#5652) **and**
+  `🧹 Nitpick comments (N)` (maintainer direction 2026-07-03; live case .github#80) — never a
+  thread, no `isResolved` state. Per PR also check
   `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate | jq -s
   '[.[][]|select(.user.login=="coderabbitai[bot]"
-  and (.body|contains("Outside diff range")))]|length'` and report `body_findings=<n>` —
+  and ((.body|contains("Outside diff range")) or (.body|contains("Nitpick comments"))))]|length'`
+  and report `body_findings=<n>` —
   **`--paginate` + external `jq -s`** because the reviews endpoint returns only its first page (30)
   by default, so an unpaginated count silently misses older review bodies on a long-lived PR (same
   *No silent caps* rule as the thread query; `gh api --slurp` is rejected alongside `--jq`, so slurp
