@@ -51,6 +51,24 @@ public and private — no per-repo loop needed to enumerate):
      **Never label a `devantler` PR `MERGE-READY` or "own"**; the orchestrator applies its creation-record
      test and decides. (Bot-trusted authors — `ksail-bot`, `dependabot[bot]`, `github-actions[bot]`,
      `renovate[bot]` — carry no such ambiguity: classify them `MERGE-READY` vs `NEEDS-FIX` as usual.)
+   - **Hygiene triad per open own/trusted PR — including drafts and gated/parked PRs.** For every
+     open `devantler`/trusted-bot PR (drafts included), report (a) failing checks, (b) unresolved
+     review threads **plus CodeRabbit review-BODY finding count**, (c) `mergeStateStatus`
+     conflicts. For (b)'s body surface: CodeRabbit emits non-inline findings as collapsed sections
+     in review bodies, each titled `<emoji> <Category> comments (N)` inside a `<summary>` tag —
+     `⚠️ Outside diff range comments (N)`, `🧹 Nitpick comments (N)`, `♻️ Duplicate comments (N)`,
+     and any future category — which never become threads. Match the shape, not a hard-coded title
+     list; exclude only `🔇 Additional comments (N)` (CodeRabbit's non-actionable/informational
+     section). Count them per PR with
+     `gh api repos/devantler-tech/<repo>/pulls/<n>/reviews --paginate | jq -s
+     '[.[][]|select(.user.login=="coderabbitai[bot]")
+     | (.body|[scan("<summary>(?!🔇)[^<]*comments \\([0-9]+\\)</summary>")]|length)]|add // 0'`
+     (`--paginate` + external `jq -s` — the
+     endpoint returns only its first page by default; count matching **sections and sum**, never
+     `select`-per-review — one review can carry two finding sections and a per-review count would
+     report it as 1) and report `body_findings=<n>` alongside
+     `unresolved=<n>` threads; a PR is review-ready only when BOTH are 0, checks are green, and it
+     is not CONFLICTING.
    - **Maintainer comments on the agent's OWN PRs (incl. drafts).** For each PR authored by `devantler`
      — **including drafts** (the maintainer steers via draft-PR comments) — also pull `comments` and the
      review-thread replies and **flag any authored by `devantler`** (exact login):
@@ -98,6 +116,7 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no own/trus
 - MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator acts on this FIRST (instruction)
 - <repo>: CI red on main — <workflow> (<run url>)
 - <repo> #<n> "<title>" — <bot-author>, trusted non-draft, mergeStateStatus=<…> → MERGE-READY | NEEDS-FIX: <check/threads>
+- <repo> #<n> (own/trusted, draft or not) — triad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
 - <repo> #<n> "<title>" — `devantler` non-draft, mergeStateStatus=CLEAN, checks green → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no> (orchestrator applies creation-record test; NOT asserted mine)
 - CROSS-ORG <owner>/<repo> #<n> "<title>" — `devantler`, failing CI: <check> → fix CI & drive green (merge is upstream's)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
