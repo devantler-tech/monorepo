@@ -220,8 +220,10 @@ from the wrong distribution, ksail #5652's custom-CIDR server subnet using the w
 neither has an `isResolved` state, and a `reviewThreads`-only sweep — or a body grep for just one
 section title — is blind to them while they silently age. So the sweep checks BOTH surfaces per PR:
 the unresolved-thread query AND each `coderabbitai` review body
-(`gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate`, filter author + section titles
-`Outside diff range` **or** `Nitpick comments`; paginate — the endpoint returns only its first page
+(`gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate`, filter author + the section **shape**
+`<summary><emoji> <Category> comments (N)</summary>` — every finding section is titled that way, so
+match the shape rather than a title list, excluding only `🔇 Additional comments (N)` (CodeRabbit's
+non-actionable/informational section); paginate — the endpoint returns only its first page
 by default and a long-lived PR accumulates more reviews than one page; if CodeRabbit ships a new
 collapsed section title, it counts too — the rule is *all body findings*, not a title list) — verify
 each body finding against current code, fix the valid ones (push) or refute with reasoning, and

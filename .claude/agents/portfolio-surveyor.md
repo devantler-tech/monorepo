@@ -55,11 +55,15 @@ public and private — no per-repo loop needed to enumerate):
      open `devantler`/trusted-bot PR (drafts included), report (a) failing checks, (b) unresolved
      review threads **plus CodeRabbit review-BODY finding count**, (c) `mergeStateStatus`
      conflicts. For (b)'s body surface: CodeRabbit emits non-inline findings as collapsed sections
-     in review bodies — `⚠️ Outside diff range comments (N)` **and** `🧹 Nitpick comments (N)` —
-     which never become threads. Count them per PR with
+     in review bodies, each titled `<emoji> <Category> comments (N)` inside a `<summary>` tag —
+     `⚠️ Outside diff range comments (N)`, `🧹 Nitpick comments (N)`, `♻️ Duplicate comments (N)`,
+     and any future category — which never become threads. Match the shape, not a hard-coded title
+     list; exclude only `🔇 Additional comments (N)` (CodeRabbit's non-actionable/informational
+     section). Count them per PR with
      `gh api repos/devantler-tech/<repo>/pulls/<n>/reviews --paginate | jq -s
-     '[.[][]|select(.user.login=="coderabbitai[bot]" and ((.body|contains("Outside diff range"))
-     or (.body|contains("Nitpick comments"))))]|length'` (`--paginate` + external `jq -s` — the
+     '[.[][]|select(.user.login=="coderabbitai[bot]"
+     and (.body|test("<summary>(?!🔇)[^<]*comments \\([0-9]+\\)</summary>")))]|length'`
+     (`--paginate` + external `jq -s` — the
      endpoint returns only its first page by default) and report `body_findings=<n>` alongside
      `unresolved=<n>` threads; a PR is review-ready only when BOTH are 0, checks are green, and it
      is not CONFLICTING.

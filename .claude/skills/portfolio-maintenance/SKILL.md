@@ -65,13 +65,17 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   the page size silently cap the count**; a heavily-reviewed draft can exceed one page, and an
   undercount would falsely report a draft as drained (contract *No silent caps*). **(b) has a second
   surface the thread query cannot see:** CodeRabbit findings it does not post inline are emitted as
-  collapsed sections in the **review body** — `⚠️ Outside diff range comments (N)` (a `> [!CAUTION]`
-  block; can be Major — maintainer direction 2026-07-02; live cases ksail #5551/#5652) **and**
-  `🧹 Nitpick comments (N)` (maintainer direction 2026-07-03; live case .github#80) — never a
-  thread, no `isResolved` state. Per PR also check
+  collapsed sections in the **review body** — every such section is titled
+  `<emoji> <Category> comments (N)` inside a `<summary>` tag: `⚠️ Outside diff range comments (N)`
+  (a `> [!CAUTION]` block; can be Major — maintainer direction 2026-07-02; live cases ksail
+  #5551/#5652), `🧹 Nitpick comments (N)` (maintainer direction 2026-07-03; live case .github#80),
+  `♻️ Duplicate comments (N)`, and any future category — never a thread, no `isResolved` state.
+  Match the **shape**, not a hard-coded title list (a new category title must not silently escape
+  the count); the only excluded shape is `🔇 Additional comments (N)`, CodeRabbit's explicitly
+  non-actionable/informational section. Per PR also check
   `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate | jq -s
   '[.[][]|select(.user.login=="coderabbitai[bot]"
-  and ((.body|contains("Outside diff range")) or (.body|contains("Nitpick comments"))))]|length'`
+  and (.body|test("<summary>(?!🔇)[^<]*comments \\([0-9]+\\)</summary>")))]|length'`
   and report `body_findings=<n>` —
   **`--paginate` + external `jq -s`** because the reviews endpoint returns only its first page (30)
   by default, so an unpaginated count silently misses older review bodies on a long-lived PR (same
