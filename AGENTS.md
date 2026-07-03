@@ -543,17 +543,20 @@ lines). **Don't re-read what's already in context** (this contract, via the `CLA
   `test:`). Every repo squash-merges on the PR title → changelog/release; a bracket prefix corrupts
   it. Use **labels** + `claude/*` branch names for attribution/dedup, never a title prefix.
 - Open code/manifest PRs as **drafts** (`gh pr create --draft`).
-- **PR bodies are written for the maintainer as PROJECT MANAGER — high-level only, ZERO code detail**
-  (maintainer direction 2026-07-03). The body is his promotion-decision surface: he reads it to judge
-  *do we need this and does it solve a real problem* — **not** to validate correctness (CodeRabbit and
-  CI own that; he trusts the code). Shape: disclosure line → **Why** (the problem, in plain language,
-  and why it matters) → **What** (what the change does, outcome level) → issue link (`Fixes #N` /
-  `Part of #N`). **Keep** (PM-relevant): merge-order gates ("land X first or Y breaks"),
-  breaking-change and new-dependency flags (still required, in plain language), and operational notes
-  he must act on (e.g. "needs direct merge after promotion"). **Drop entirely:** file paths,
-  function/symbol names, code snippets, per-linter findings, test names/counts, validation
-  transcripts. That detail lives in commit messages, code comments, and PR *comments* (e.g.
-  CodeRabbit resolution records) — never the body. Applies to body **edits** too, not just creation.
+- **PR bodies are written for the maintainer as PROJECT MANAGER — high-level, SHORT, ZERO code
+  detail** (maintainer direction 2026-07-03; codified org-wide in `devantler-tech/.github`'s
+  `PULL_REQUEST_TEMPLATE.md` — follow it). The body is his promotion-decision surface: he reads it to
+  judge *do we need this and does it solve a real problem* — **not** to validate correctness
+  (CodeRabbit and CI own that; he trusts the code). Shape: disclosure line → **Why** (the problem, in
+  plain language, and why it matters) → **What** (what the change does, outcome level) → issue link
+  (`Fixes #N` / `Part of #N`). **Short means short: 1–3 sentences per section, no walls of text** — if
+  a body outgrows that, the explanation belongs on the issue, not the PR. **Keep** (PM-relevant, one
+  line each): merge-order gates ("land X first or Y breaks"), breaking-change and new-dependency flags
+  (still required, in plain language), and operational notes he must act on (e.g. "needs direct merge
+  after promotion"). **Drop entirely:** file paths, function/symbol names, code snippets, per-linter
+  findings, test names/counts, validation transcripts. That detail lives in commit messages, code
+  comments, and PR *comments* (e.g. CodeRabbit resolution records) — never the body. Applies to body
+  **edits** too, not just creation.
 - **Third-party upstream repos — get maintainer approval (ask tool) first, then check the AI policy.**
   **Never autonomously open an issue or PR on a repo outside `devantler-tech`** — prepare it locally and
   get the maintainer's explicit approval via the **ask tool** first (the hard gate in *Merge policy →
