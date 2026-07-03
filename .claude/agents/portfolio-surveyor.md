@@ -61,10 +61,12 @@ public and private — no per-repo loop needed to enumerate):
      list; exclude only `🔇 Additional comments (N)` (CodeRabbit's non-actionable/informational
      section). Count them per PR with
      `gh api repos/devantler-tech/<repo>/pulls/<n>/reviews --paginate | jq -s
-     '[.[][]|select(.user.login=="coderabbitai[bot]"
-     and (.body|test("<summary>(?!🔇)[^<]*comments \\([0-9]+\\)</summary>")))]|length'`
+     '[.[][]|select(.user.login=="coderabbitai[bot]")
+     | (.body|[scan("<summary>(?!🔇)[^<]*comments \\([0-9]+\\)</summary>")]|length)]|add // 0'`
      (`--paginate` + external `jq -s` — the
-     endpoint returns only its first page by default) and report `body_findings=<n>` alongside
+     endpoint returns only its first page by default; count matching **sections and sum**, never
+     `select`-per-review — one review can carry two finding sections and a per-review count would
+     report it as 1) and report `body_findings=<n>` alongside
      `unresolved=<n>` threads; a PR is review-ready only when BOTH are 0, checks are green, and it
      is not CONFLICTING.
    - **Maintainer comments on the agent's OWN PRs (incl. drafts).** For each PR authored by `devantler`

@@ -74,8 +74,10 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   the count); the only excluded shape is `🔇 Additional comments (N)`, CodeRabbit's explicitly
   non-actionable/informational section. Per PR also check
   `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate | jq -s
-  '[.[][]|select(.user.login=="coderabbitai[bot]"
-  and (.body|test("<summary>(?!🔇)[^<]*comments \\([0-9]+\\)</summary>")))]|length'`
+  '[.[][]|select(.user.login=="coderabbitai[bot]")
+  | (.body|[scan("<summary>(?!🔇)[^<]*comments \\([0-9]+\\)</summary>")]|length)]|add // 0'`
+  (count matching **sections and sum**, never `select`-per-review — one review can carry both an
+  Outside-diff-range and a Nitpick section, and a per-review count would report it as 1)
   and report `body_findings=<n>` —
   **`--paginate` + external `jq -s`** because the reviews endpoint returns only its first page (30)
   by default, so an unpaginated count silently misses older review bodies on a long-lived PR (same
