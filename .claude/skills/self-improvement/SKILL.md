@@ -14,7 +14,12 @@ once promoted+CLEAN+threads-resolved, drive your definition PR to merge yourself
 other own PR — bare `gh pr merge <n> --squash`, never `--auto` (auto-merge is bot-only), no
 definition carve-out; never weaken a guardrail.**
 
-## Every run — capture learnings (cheap, always)
+## Every run — capture learnings (the daily 1%, always)
+**Continuous learning is the 1% rule: marginal gains that compound (1.01³⁶⁵ ≈ 37×) — a system, not a
+goal.** Every run banks at least one concrete way to work better next time — the daily 1%. The win is
+*running the capture ritual* reliably, not chasing a target: capability (and any eventual breakthrough)
+is a byproduct of the process, not the aim. Even a clean run yields one ("what made this work; what's
+one notch better next time"); a run that logs *nothing* is the exception you justify, not the norm.
 At the end of a run, record concise, factual observations in **native memory** (`learnings.md`) — only
 things that would make you measurably better next time:
 - a step that **failed / was flaky / slow / wasted effort**, and why;
@@ -25,7 +30,8 @@ things that would make you measurably better next time:
 - a **recurring pattern** across products worth encoding once, centrally.
 
 Each entry: `{ "date", "area": contract|agent|skill|product:<name>|infra, "observation", "proposed_change", "evidence", "status": "open" }`.
-Recording is not proposing — do **not** open a PR every run.
+Recording is not proposing — the daily 1% is the learning you *bank*; **do not open a PR every run**
+(PRs batch on the distil cadence below).
 
 ## ~Weekly (or sooner for a clear high-value / security / reliability fix) — distil & propose
 1. Review `learnings[]` + recent run history. Group by area; rank by how much each hurts maintenance
