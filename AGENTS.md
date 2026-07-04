@@ -410,6 +410,18 @@ standing substitute** for moving the real backlog:
   enough to finish it. For a non-trivial design, reason it through first (an ADR / system-design pass for
   big calls); implement with tests under the normal draft-PR + validate discipline; `Fixes #N`. **Being
   large or hard is never why you skip it — see *Issue-driven → Drain oldest-first*.**
+- **Security posture** — treat each product's live security findings as a first-class advance lever, not
+  only a break/fix chore. **Ingest** them (the survey looks at live scanner state, not just GitHub) and
+  beware the trap that **a `0`/empty reading is usually a *broken* scanner, not a clean cluster** — a
+  broken scanner and a compliant one read identically, so verify the scanner is actually producing data.
+  **Drive the numbers to 100% and hold them** — for the platform: Kubescape posture/compliance, the
+  reachable-CVE count, and routed runtime detections; equivalent scanners elsewhere. Resolve findings by
+  the **fix-vs-except ladder**: fix at the manifest/code root cause first; runtime-enforce (Kyverno /
+  admission / network policy) what a static scan can't see, graduating a fixed control to `Enforce` so it
+  can't regress; reserve a **scoped, justified** exception (e.g. a `ClusterSecurityException`) for
+  genuinely irreducible controls, reviewed via PR and periodically pruned (a growing exceptions set is a
+  smell, not progress). Ratchet the CI gate up as gaps close, never down. The per-product how-to lives in
+  each product's card (for the platform, its *Security posture (Kubescape)* section).
 - **Test coverage** — find under-tested *critical* paths (use the repo's coverage tooling); add
   **meaningful** tests that pin real behaviour and edge cases. Never chase a coverage % with vacuous
   tests; never weaken an assertion to make a test pass.
