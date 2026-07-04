@@ -35,8 +35,11 @@ parallel sessions, and its API endpoint can go stale after a control-plane recre
 - **Coroot** — Incidents, Alerts/SLO burn, Traces, Logs, Risks (deployment & health-check risks), and
   **cost optimizations** (Node/cost view). Use its **read API** — the access recipe (project id, auth,
   the SPA-200-masks-404 gotcha, the empty-Hetzner-cost-rollup known limitation) is in native memory.
-- **Kubescape** — its config-scan / vulnerability / compliance / RBAC report objects, for security-
-  posture regressions vs the last run.
+- **Kubescape** — the three finding surfaces (posture / CVE / runtime), for security-posture regressions
+  vs the last run. **A `0`/empty reading is NOT automatically "clean" — verify the scanner is actually
+  producing data first** (a broken scanner reads identically to a compliant cluster). See the dedicated
+  **Security posture** section below for the object names, the broken-vs-clean checks, and the
+  fix-vs-except ladder.
 - **Kyverno** — policy **validation & enforcement**: `kubectl --context=admin@prod get cpol,pol`
   (policies present? mode Audit vs Enforce?) and `polr,cpolr` (PolicyReport / ClusterPolicyReport —
   failing rules and violating resources).
@@ -52,6 +55,47 @@ clusters more than once a day** portfolio-wide — contract *Cadence*). Operatio
 `platform/AGENTS.md` + the DR runbook. Turn a **confirmed, off-baseline** problem into the right
 artifact — a root-cause **draft PR** to the platform repo (manifest/Helm/policy fix) or a triaged issue
 — never a hand-edit of generated files and never a guardrail bypass.
+
+## Security posture (Kubescape) — drive to 100% and hold
+Kubescape runs **three finding surfaces**; **driving all three to 100% and holding them is a standing
+objective, not a floor** (epic + children: [devantler-tech/platform#2447](https://github.com/devantler-tech/platform/issues/2447)).
+The recurring trap, learned the hard way (2026-07-04, all three surfaces were silently dead): **an
+empty/zero reading almost always means the scanner is broken, not that the cluster is clean** — a broken
+scanner and a compliant cluster look identical, so **check liveness first, every time**:
+
+- **Posture** (config scan) — `configurationscansummaries` / `workloadconfigurationscansummaries`
+  (per-namespace scores + failed controls). **Broken if** scores are `0.00` across frameworks,
+  `controls: null` en masse, or objects are days stale — check the `kubescape` scanner pod logs for scan
+  aborts. Note: the CI gate (`ksail workload scan --framework nsa --compliance-threshold N`) is a
+  **separate** static scan in a healthy CLI context — **a green CI gate does NOT prove the in-cluster
+  scan works.**
+- **CVE** (kubevuln) — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests`. **Broken if**
+  manifests carry no grype `matches` / no `tool.name` and summaries are empty (both `.all` and
+  `.relevant`) — check kubevuln logs for `ScanCP … partial` (the relevancy path aborting on partial
+  ApplicationProfiles). Prioritise by relevancy × severity × fixability; emit VEX to suppress
+  non-reachable CVEs.
+- **Runtime** (node-agent) — `applicationprofiles`, `networkneighborhoods`, and the
+  `node_agent_alert_counter` metric. **Invisible if** the exporters are stdout-only
+  (`alertManagerExporterUrls: []`, `prometheusExporterEnabled: false`). Route **natively to Coroot**
+  (minimal-custom, all declarative): node-agent Prometheus exporter → `coroot.com/scrape-metrics`
+  annotation → a custom PromQL `alertingRules[]` in the Coroot CR → the existing Slack `notificationIntegrations`
+  webhook — **no new infra** (Coroot CE supports custom-PromQL alerts natively; it has no standard
+  Alertmanager, so don't add one).
+
+**Fix-vs-except ladder — the definition of done for a finding.** An exception is the audited last resort,
+never the first move:
+1. **Fix the manifest/root cause** — the real remediation (securityContext, RBAC scope, probes, labels).
+2. **Runtime-enforce** — if it's mutated/enforced at admission (Kyverno) or by the network layer
+   (Cilium), it's covered even where the static scan can't see it; **graduate a fixed control into Kyverno
+   `Enforce`** so it can't regress.
+3. **Except only when genuinely irreducible** (e.g. C-0002, the KubeVirt operator's `pods/exec` RBAC) — a
+   narrow, justified `ClusterSecurityException` in `k8s/bases/infrastructure/cluster-security-exceptions/`
+   with a written *why*, reviewed via PR, and periodically pruned. A growing exceptions dir is a smell,
+   not progress.
+
+A confirmed off-baseline finding on any surface — **including a scanner that has silently stopped
+producing data** — becomes a `security` issue under the epic (capture step), or a hotfix if it's active
+breakage. Ratchet the CI `--compliance-threshold` up as gaps close; never lower it.
 
 ## Roadmap & enhancement
 Platform's roadmap lives in **GitHub Issues** on `devantler-tech/platform` (`roadmap` epics +
