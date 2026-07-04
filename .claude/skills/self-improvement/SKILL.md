@@ -15,9 +15,10 @@ other own PR — bare `gh pr merge <n> --squash`, never `--auto` (auto-merge is 
 definition carve-out; never weaken a guardrail.**
 
 ## Every run — capture learnings (the daily 1%, always)
-**Continuous learning is the 1% rule: marginal gains that compound.** Every run banks at least one
-concrete way to work better next time — the daily 1% that accumulates into agentic capability and,
-eventually, breakthroughs (1.01³⁶⁵ ≈ 37×). Even a clean run yields one ("what made this work; what's
+**Continuous learning is the 1% rule: marginal gains that compound (1.01³⁶⁵ ≈ 37×) — a system, not a
+goal.** Every run banks at least one concrete way to work better next time — the daily 1%. The win is
+*running the capture ritual* reliably, not chasing a target: capability (and any eventual breakthrough)
+is a byproduct of the process, not the aim. Even a clean run yields one ("what made this work; what's
 one notch better next time"); a run that logs *nothing* is the exception you justify, not the norm.
 At the end of a run, record concise, factual observations in **native memory** (`learnings.md`) — only
 things that would make you measurably better next time:
