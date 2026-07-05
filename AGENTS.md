@@ -451,6 +451,18 @@ standing substitute** for moving the real backlog:
   generated-file list, validate step, or convention updates **every** agent file that referenced it **in
   the same PR** — never let `AGENTS.md`, a `.claude/` card, and a `.github/instructions/` file drift apart.
   On the **docs cadence**, fold an agent-file freshness pass into the per-product docs pass (oldest first).
+- **Continuous upstream research & product debugging** — when the actionable backlog runs empty or thin
+  (no startable substantive issue), the run does NOT survey-and-exit: it **restocks the backlog** by
+  (a) **researching upstream state of the art** — new features and capabilities in each product's key
+  dependencies and comparable tools (for ksail/platform: Headlamp, ArgoCD, FluxCD, Kubernetes, and the
+  other controllers/tooling they build on — release notes, changelogs, roadmaps) — and (b) **hands-on
+  product debugging** — exercising the product like a user to surface bugs, friction, and gaps in
+  features, code quality, performance, reliability, UI and UX. Every finding is converted into a
+  **well-formed issue** (*problem → proposed direction → rough size*, labelled) per *Issue-driven*, so
+  ksail and the platform stay at parity with upstream state-of-the-art capabilities (maintainer
+  direction 2026-07-05; seeding cross-repo epic: ksail#5827 Headlamp-parity). Research restocks the
+  queue — it never displaces startable substantive work, and it also runs on the strategy-review
+  cadence as an input to each product's roadmap refresh.
 The [`product-engineering`](.claude/skills/product-engineering/SKILL.md) skill is the how-to. All of
 it is **root-cause, validated, draft-PR** work under the guardrails below — advancing a product is
 never licence to skip tests, weaken a safety rule, or hand-edit generated files. Respect each repo's

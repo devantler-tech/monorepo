@@ -182,6 +182,30 @@ at once** — the highest-leverage advance work is often cross-cutting (contract
   form (`AGENTS.md`, `gh`-installable skills); reserve Claude-native primitives for Claude-specific power.
   This is what keeps a Claude → Copilot/ChatGPT switch painless.
 
+## 9. Continuous upstream research & product debugging (the empty-backlog motion)
+Sections 1-8 drain and shape a backlog that already exists. **When the actionable backlog runs empty or
+thin** (no startable substantive issue after the *Issue-driven* skip test) — and additionally as an
+input to every §1 strategy review — **restock it** instead of exiting (contract → *Enhancement work*;
+maintainer direction 2026-07-05):
+- **Upstream research.** For the product's key dependencies and comparable tools, read what shipped
+  since the last research pass — release notes, changelogs, roadmaps, headline features. For
+  ksail/platform that means **Headlamp, ArgoCD, FluxCD, Kubernetes**, and the other controllers and
+  tooling they build on (Cilium, Talos, Crossplane, Kubescape, …); for other products, their own
+  upstream set. The question per finding: *does this create a gap, an opportunity, or an obligation for
+  our product?* (Seeding cross-repo epic: ksail#5827 — Headlamp feature parity in the KSail web UI,
+  plugin absorption, and Headlamp retirement from the platform, with platform#2496 as the gated
+  platform half.)
+- **Product debugging.** Exercise the product hands-on like a user (CLI flows, web UI, docs
+  walk-throughs, a real workload on the local cluster where the once-a-day cluster budget allows) and
+  hunt friction: bugs, rough edges, missing affordances, slow paths, flaky behaviour, confusing UX.
+- **Output = well-formed issues, never ad-hoc PRs.** Each finding becomes an issue (*problem →
+  proposed direction → rough size*, labelled; `roadmap` for theme-sized findings) per the contract's
+  *Issue-driven* rule, joining the oldest-first queue. Research restocks the queue — it never displaces
+  startable substantive work.
+- **Cursor & cadence.** Record a per-product `last_research` cursor in native memory (pointer only).
+  Dedupe against existing issues before filing; a research pass that files nothing new still updates
+  the cursor and notes what was checked.
+
 ## Per-product notes (where "advance" means different things)
 - **ksail** (Go CLI): features/UX, coverage on command/reconcile paths, `-bench` on hot loops; weekly
   E2E + reliability and the Monthly Strategy are its heavy cadence (see its card/`AGENTS.md`).

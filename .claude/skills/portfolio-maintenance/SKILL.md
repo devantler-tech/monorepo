@@ -217,6 +217,14 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    per-product docs + the site (whose recurring slice — Site QA / Content Sync / Content Review — is the
    monorepo card).
 
+10. **Continuous upstream research & product debugging** — the backstop when rungs 6-9 come up empty:
+   research upstream state of the art (Headlamp, ArgoCD, FluxCD, Kubernetes, and each product's other
+   key dependencies) and exercise the product hands-on to surface bugs, friction, and feature/quality/
+   performance/reliability/UI/UX gaps — every finding filed as a well-formed issue that restocks the
+   queue rung 6 drains (procedure: [`product-engineering`](../product-engineering/SKILL.md) §9;
+   maintainer direction 2026-07-05, seeding epic ksail#5827). An empty backlog is a trigger for
+   research, never for a survey-and-exit run.
+
 **Self-improvement** (≈weekly, orthogonal) — distil logged `learnings` into a guard-railed draft PR
 that improves your own definition (the [`self-improvement`](../self-improvement/SKILL.md) skill).
 
