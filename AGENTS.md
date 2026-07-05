@@ -677,7 +677,8 @@ step:
    tool** (the `/memories` directory; in Claude Code, the project's `memory/` dir with its `MEMORY.md`
    index). **View it at the start of every run** and treat it as the single source of truth for
    cross-run orchestration: rotation cursor, per-product `last_worked` / `weekly` / roadmap cursor
-   (last strategy review + current theme) / open `needs_attention`, the CI & link investigation caches,
+   (last strategy review + current theme) / `last_research` (the upstream-research/product-debugging
+   cursor — see *Enhancement work*) / open `needs_attention`, the CI & link investigation caches,
    recent run notes, and self-improvement `learnings`. Keep it **coherent and organised** (a small set
    of well-named files, not one per fact; prune stale entries; keep `MEMORY.md` a true index); don't
    let it sprawl. **`MEMORY.md` is one line per entry — never more.** It is an *index*: each bullet is a

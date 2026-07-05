@@ -105,7 +105,8 @@ instruction.
 
 The returned digest (operate + advance signals, products-with-no-signal omitted) is your survey
 result. **Overlay your native-memory cadence cursors yourself** — each product's `last_worked`,
-`roadmap` (last strategy review + current theme), `weekly` timestamps, `needs_attention`, and the
+`roadmap` (last strategy review + current theme), `last_research`, `weekly` timestamps,
+`needs_attention`, and the
 CI/link caches — since the surveyor reads only live GitHub, not memory. ~Monthly, also do the
 **holistic review** (contract *Holistic review*): scan the suite for generic patterns to extract into
 the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, `plugins`).
@@ -288,7 +289,8 @@ For each selected product:
 
   Suggested files (markdown, organise as works best — not a rigid schema):
   - `portfolio-status.md` — `last_run`, `rotation_cursor`, and per product: `last_worked`, `weekly`
-    timestamps, roadmap cursor (last strategy review + current theme), `last_docs_pass` (the docs-pass
+    timestamps, roadmap cursor (last strategy review + current theme), `last_research` (the
+    upstream-research/product-debugging cursor — `product-engineering` §9), `last_docs_pass` (the docs-pass
     cadence cursor that drives the "oldest first" docs rotation — see *Cadence gates*), open
     `needs_attention`.
   - `caches.md` — CI-investigation cache (signature/PR/run-ids/dates), `unfixable_links` / `watch_links`
