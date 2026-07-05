@@ -276,7 +276,7 @@ For each selected product:
 ## 4. Always: update native memory + one consolidated report
 - **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
   back what changed so the next run picks up cleanly — `last_run`, `rotation_cursor`, each touched
-  product's `last_worked`/`weekly`/roadmap cursor/`needs_attention`, the CI & link caches (prune CI
+  product's `last_worked`/`weekly`/roadmap cursor/`last_research`/`needs_attention`, the CI & link caches (prune CI
   entries >7 days), recent run notes, and any new `learnings`. Keep memory **coherent and organised**:
   a small set of well-named files (e.g. `portfolio-status.md`, `caches.md`, `learnings.md`, plus
   `feedback_*.md`) with `MEMORY.md` as a true index; **edit in place and prune stale content** rather
