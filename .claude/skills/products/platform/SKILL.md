@@ -109,9 +109,12 @@ compliant — is a standing objective, not a floor.** This is the admission-time
 
 - **Enumerate every run** via **Policy Reporter** — the dashboard/read API that aggregates all reports
   (SSO UI at `policy-reporter.${domain}`; in-cluster API `policy-reporter.policy-reporter.svc:8080`) —
-  or `kubectl --context=admin@prod get polr,cpolr -A`. Count the `fail` (and `warn`) results and treat
-  a **newly introduced** failure as a regression to clear promptly, like a red CI check — not just the
-  long-standing backlog.
+  or `kubectl --context=admin@prod get polr,cpolr -A`. **The `fail` count is the zero-and-hold
+  target** — treat a **newly introduced** `fail` as a regression to clear promptly, like a red CI
+  check, not just the long-standing backlog. **Track `warn` results in a *separate* tally**: they are a
+  softer lead signal (a policy still in `Audit` that will graduate to `Enforce`, or a deprecation
+  notice), so triage and work them down — fix the ones that mask a real issue — but they do **not**
+  share `fail`'s hard zero-gate, and lumping them into one number just muddies the remediation queue.
 - **Fix-vs-except ladder — same as Kubescape** (an exception is the audited last resort, never first):
   1. **Fix the manifest/root cause** — correct the offending workload at its source so it satisfies the
      rule (add the missing securityContext / limits / label / PDB / probe / image pin), shipped as a
