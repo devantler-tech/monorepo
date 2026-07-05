@@ -105,7 +105,8 @@ instruction.
 
 The returned digest (operate + advance signals, products-with-no-signal omitted) is your survey
 result. **Overlay your native-memory cadence cursors yourself** — each product's `last_worked`,
-`roadmap` (last strategy review + current theme), `weekly` timestamps, `needs_attention`, and the
+`roadmap` (last strategy review + current theme), `last_research`, `weekly` timestamps,
+`needs_attention`, and the
 CI/link caches — since the surveyor reads only live GitHub, not memory. ~Monthly, also do the
 **holistic review** (contract *Holistic review*): scan the suite for generic patterns to extract into
 the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, `plugins`).
@@ -217,6 +218,14 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    per-product docs + the site (whose recurring slice — Site QA / Content Sync / Content Review — is the
    monorepo card).
 
+10. **Continuous upstream research & product debugging** — the backstop when rungs 6-9 come up empty:
+   research upstream state of the art (Headlamp, ArgoCD, FluxCD, Kubernetes, and each product's other
+   key dependencies) and exercise the product hands-on to surface bugs, friction, and feature/quality/
+   performance/reliability/UI/UX gaps — every finding filed as a well-formed issue that restocks the
+   queue rung 6 drains (procedure: [`product-engineering`](../product-engineering/SKILL.md) §9;
+   maintainer direction 2026-07-05, seeding epic ksail#5827). An empty backlog is a trigger for
+   research, never for a survey-and-exit run.
+
 **Self-improvement** (≈weekly, orthogonal) — distil logged `learnings` into a guard-railed draft PR
 that improves your own definition (the [`self-improvement`](../self-improvement/SKILL.md) skill).
 
@@ -267,7 +276,7 @@ For each selected product:
 ## 4. Always: update native memory + one consolidated report
 - **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
   back what changed so the next run picks up cleanly — `last_run`, `rotation_cursor`, each touched
-  product's `last_worked`/`weekly`/roadmap cursor/`needs_attention`, the CI & link caches (prune CI
+  product's `last_worked`/`weekly`/roadmap cursor/`last_research`/`needs_attention`, the CI & link caches (prune CI
   entries >7 days), recent run notes, and any new `learnings`. Keep memory **coherent and organised**:
   a small set of well-named files (e.g. `portfolio-status.md`, `caches.md`, `learnings.md`, plus
   `feedback_*.md`) with `MEMORY.md` as a true index; **edit in place and prune stale content** rather
@@ -280,7 +289,8 @@ For each selected product:
 
   Suggested files (markdown, organise as works best — not a rigid schema):
   - `portfolio-status.md` — `last_run`, `rotation_cursor`, and per product: `last_worked`, `weekly`
-    timestamps, roadmap cursor (last strategy review + current theme), `last_docs_pass` (the docs-pass
+    timestamps, roadmap cursor (last strategy review + current theme), `last_research` (the
+    upstream-research/product-debugging cursor — `product-engineering` §9), `last_docs_pass` (the docs-pass
     cadence cursor that drives the "oldest first" docs rotation — see *Cadence gates*), open
     `needs_attention`.
   - `caches.md` — CI-investigation cache (signature/PR/run-ids/dates), `unfixable_links` / `watch_links`
