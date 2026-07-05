@@ -94,6 +94,17 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
 - for **merge-queue repos**, reports each queued trusted/own PR's latest `merge_group` run conclusion
   (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still queued").
 
+**Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the
+product's `weekly`/live cursor in memory — NOT every hourly run), also spawn the read-only
+[`platform-security-surveyor`](../../agents/platform-security-surveyor.md) with the current baseline
+(last recorded posture score / CVE counts / routing state from memory). It runs the bounded
+`kubectl --context admin@prod` pass over the three Kubescape surfaces **liveness-first** — a broken
+scanner reads identically to a compliant cluster, so `0`/empty is treated as "verify the scanner"
+never "clean" — and returns a compact delta digest. Its `deltas_needing_action` feed the Operate
+ladder's security rung (§2 rung 5); GitHub-only runs in between stay blind to live findings by
+design, which is exactly why the cadence must not silently lapse — track it in memory like the other
+cadence gates.
+
 **Maintainer comments are instructions — handle them first.** Before selecting new work, read any
 `devantler`-authored comment the survey surfaced on your own open drafts/PRs/issues and **act on it**
 that run (implement / change approach / close / redirect), or respond + surface it in the report if it
@@ -188,28 +199,37 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    misconfig, version bump) may go straight to a small PR (the issue-first carve-out). A **non-trivial**
    bug you spot is **filed as an issue first** (it joins the oldest-first backlog), not turned straight
    into a PR — unless it's live breakage, which is rung 1.
-5. **Upkeep** — workflow health, dependency bundling, docs sync/trim, manifest cleanup.
+5. **Security posture ingestion (cadence-gated)** — when the run's Survey included the
+   [`platform-security-surveyor`](../../agents/platform-security-surveyor.md) pass (§1), act on its
+   `deltas_needing_action`: a **broken/invisible scanner** or an actively-exploited finding is
+   breakage-class (rung 1 — hotfix); every other **confirmed off-baseline** delta (posture regression,
+   new reachable CVE, unrouted runtime detection) is captured as a `security` issue under the
+   product's security epic (platform: #2447) so it joins the oldest-first queue. Resolution follows
+   the **fix-vs-except ladder** in the product card (fix root cause → runtime-enforce/graduate to
+   `Enforce` → scoped exception as audited last resort) — the security definition-of-done is
+   [`product-engineering`](../product-engineering/SKILL.md) §10.
+6. **Upkeep** — workflow health, dependency bundling, docs sync/trim, manifest cleanup.
 
 **Advance (move it forward) — the default once nothing above is pending, and the floor's backstop:
 when the operate ladder is clear you still advance at least one product (never exit empty-handed).**
 Advance work is **issue-driven** (contract *Issue-driven*): its heart is **resolving the oldest
 actionable open issue**, and any new non-trivial find is **filed as an issue first** to enter that same
 backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
-6. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
+7. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
    open issue that's actually startable; skip one only if it's blocked, too under-specified to begin, or
    it already has an open PR. A **bare assignee does *not* reserve** an issue (only an open PR does), so
    if nobody has opened one you may pick it up regardless of who's assigned. If it **already has a
    trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave **draft** PRs for
    the maintainer and keep **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
    validate + **draft PR**, `Fixes #N`.
-7. **Capture new finds as issues** — a coverage hole, perf hotspot, refactor target, docs gap, security
+8. **Capture new finds as issues** — a coverage hole, perf hotspot, refactor target, docs gap, security
    weakness, or enhancement you notice becomes a **well-formed issue** (*problem → proposal → acceptance
-   criteria*, labelled), not an ad-hoc PR; it restocks the backlog #6 drains. The how-to per kind
+   criteria*, labelled), not an ad-hoc PR; it restocks the backlog #7 drains. The how-to per kind
    (coverage, benchmarking, refactoring) is in [`product-engineering`](../product-engineering/SKILL.md) §4–6.
-8. **Strategy & roadmap** — if a product has no roadmap or its review is due (cadence), run a strategy
+9. **Strategy & roadmap** — if a product has no roadmap or its review is due (cadence), run a strategy
    review and create/refresh its `roadmap` issues; decompose an epic into actionable child issues; triage
-   existing issues into the roadmap. This is the bulk way to stock the backlog #6 drains.
-9. **Documentation & agent files** — keep docs in sync with shipped features/fixes (update affected docs
+   existing issues into the roadmap. This is the bulk way to stock the backlog #7 drains.
+10. **Documentation & agent files** — keep docs in sync with shipped features/fixes (update affected docs
    in the feature PR; a focused `docs:` PR backfills anything that merged without them) and, on the docs
    cadence, improve existing docs (accuracy, gaps, clarity, dead links). **This includes the agent /
    instruction files** — keep `AGENTS.md` (the single canonical file Copilot code review reads, since
@@ -218,11 +238,11 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    per-product docs + the site (whose recurring slice — Site QA / Content Sync / Content Review — is the
    monorepo card).
 
-10. **Continuous upstream research & product debugging** — the backstop when rungs 6-9 come up empty:
+11. **Continuous upstream research & product debugging** — the backstop when rungs 7-10 come up empty:
    research upstream state of the art (Headlamp, ArgoCD, FluxCD, Kubernetes, and each product's other
    key dependencies) and exercise the product hands-on to surface bugs, friction, and feature/quality/
    performance/reliability/UI/UX gaps — every finding filed as a well-formed issue that restocks the
-   queue rung 6 drains (procedure: [`product-engineering`](../product-engineering/SKILL.md) §9;
+   queue rung 7 drains (procedure: [`product-engineering`](../product-engineering/SKILL.md) §9;
    maintainer direction 2026-07-05, seeding epic ksail#5827). An empty backlog is a trigger for
    research, never for a survey-and-exit run.
 
