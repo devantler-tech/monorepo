@@ -59,6 +59,10 @@ artifact — a root-cause **draft PR** to the platform repo (manifest/Helm/polic
 ## Security posture (Kubescape) — drive to 100% and hold
 Kubescape runs **three finding surfaces**; **driving all three to 100% and holding them is a standing
 objective, not a floor** (epic + children: [devantler-tech/platform#2447](https://github.com/devantler-tech/platform/issues/2447)).
+On the live-health cadence the Survey step delegates this read to the read-only
+[`platform-security-surveyor`](../../../agents/platform-security-surveyor.md) agent (compact delta
+digest, liveness-first); the object names and checks below are the shared reference for that agent
+and for any interactive investigation.
 The recurring trap, learned the hard way (2026-07-04, all three surfaces were silently dead): **an
 empty/zero reading almost always means the scanner is broken, not that the cluster is clean** — a broken
 scanner and a compliant cluster look identical, so **check liveness first, every time**:

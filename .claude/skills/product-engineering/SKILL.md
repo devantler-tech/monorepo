@@ -206,6 +206,28 @@ maintainer direction 2026-07-05):
   Dedupe against existing issues before filing; a research pass that files nothing new still updates
   the cursor and notes what was checked.
 
+## 10. Security & compliance posture
+Treat live security findings as first-class advance work, with the same evidence discipline as
+coverage and performance (contract → *Enhancement work → Security posture*).
+- **Ingest, liveness-first.** Findings come from the product's live scanners (platform: the three
+  Kubescape surfaces via the read-only
+  [`platform-security-surveyor`](../../agents/platform-security-surveyor.md); other products: their
+  equivalent scanner/gate). **A `0`/empty reading is a broken scanner until proven otherwise** — a
+  broken scanner and a compliant system read identically, so verify the scanner produces data before
+  trusting any number. A scanner that silently stopped is itself a top-severity finding.
+- **Resolve by the fix-vs-except ladder** (the product card carries the per-product object names):
+  fix the manifest/code **root cause** first; **runtime-enforce** what static scans can't see and
+  graduate a fixed control to `Enforce` so it can't regress; reserve a **scoped, justified exception**
+  for genuinely irreducible controls, reviewed via PR and periodically pruned — a growing exceptions
+  set is a smell, not progress.
+- **Definition of done for a security PR:** the body states *finding → fix-or-except decision (with
+  the why) → residual posture delta* (score/count before → after), mirroring the perf
+  before/after-numbers rule. Ratchet the CI gate (e.g. `--compliance-threshold`) **up** as gaps close;
+  never down, and never trade a real fix for a threshold tweak.
+- **Standing objective, not a floor:** drive each product's posture/CVE/runtime surfaces to **100%
+  and hold them** — a regression from 100% is operate-class work (capture as a `security` issue, or
+  hotfix if active breakage), not a new nice-to-have.
+
 ## Per-product notes (where "advance" means different things)
 - **ksail** (Go CLI): features/UX, coverage on command/reconcile paths, `-bench` on hot loops; weekly
   E2E + reliability and the Monthly Strategy are its heavy cadence (see its card/`AGENTS.md`).
