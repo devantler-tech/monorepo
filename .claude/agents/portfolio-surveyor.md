@@ -76,7 +76,7 @@ public and private — no per-repo loop needed to enumerate):
      ✅/❌/❓ — orthogonal to CI, threads, and body-findings, so a PR can be green on all three and
      still fail here. Parse the LATEST `coderabbitai[bot]` summary comment
      (`gh api repos/devantler-tech/<repo>/issues/<n>/comments --paginate` → filter author → grep
-     `## Pre-merge checks failed` / `### ❌ Failed checks (N`) and report `premerge=<green|failed:N>`
+     `## Pre-merge checks failed` / `### ❌ Failed checks (N`) and report `premerge=<green|failed:<names>>`
      with the failed check NAMES (e.g. `Linked Issues`, `Out of Scope Changes`). A `premerge=failed`
      draft is **NEEDS-FIX** even when checks/threads/body_findings are all clean.
    - **Maintainer comments on the agent's OWN PRs (incl. drafts) — disclosure-gated.** For each PR

@@ -247,8 +247,11 @@ posts a **`## Pre-merge checks`** section in its summary comment listing Title /
 **Linked Issues** / **Out of Scope Changes** / Docstring-Coverage checks, each ✅ Passed / ❌ Error /
 ❓ Inconclusive — a draft can have **green CI, 0 threads, 0 body-findings, and even a CR APPROVED
 review** yet still carry a **failed pre-merge check** and be un-promotable. Parse it every run
-(`gh api repos/<owner>/<repo>/issues/<n>/comments --paginate`, filter `coderabbitai[bot]`, grep
-`## Pre-merge checks` / `### ❌ Failed checks (N`) and resolve each failure at the root cause:
+(`gh api repos/<owner>/<repo>/issues/<n>/comments --paginate`, filter `coderabbitai[bot]`, **sort by
+`created_at` and inspect only the NEWEST summary comment** — `--paginate` can also surface stale
+summaries from earlier review cycles, so grepping without first selecting the latest risks reading an
+outdated result — then grep `## Pre-merge checks` / `### ❌ Failed checks (N`) in it) and resolve each
+failure at the root cause:
 a **Linked Issues** fail = the PR doesn't satisfy every AC of its linked issue → either implement the
 missing AC, or (when it is genuinely separate scope) **file a well-formed deferred follow-up issue and
 reference it in the PR body** (CR's own resolution allows "note a linked follow-up if deferred"); an
