@@ -75,10 +75,13 @@ public and private — no per-repo loop needed to enumerate):
      (Title / Description / **Linked Issues** / **Out of Scope Changes** / Docstring-Coverage), each
      ✅/❌/❓ — orthogonal to CI, threads, and body-findings, so a PR can be green on all three and
      still fail here. Parse the LATEST `coderabbitai[bot]` summary comment
-     (`gh api repos/devantler-tech/<repo>/issues/<n>/comments --paginate` → filter author → grep
-     `## Pre-merge checks failed` / `### ❌ Failed checks (N`) and report `premerge=<green|failed:<names>>`
-     with the failed check NAMES (e.g. `Linked Issues`, `Out of Scope Changes`). A `premerge=failed`
-     draft is **NEEDS-FIX** even when checks/threads/body_findings are all clean.
+     (`gh api repos/devantler-tech/<repo>/issues/<n>/comments --paginate` → filter author → **sort by
+     `created_at` desc and keep ONLY the newest `coderabbitai[bot]` summary** [`--paginate` surfaces
+     older summaries from prior review cycles, so grepping unsorted misreads stale `premerge` data] →
+     grep the upstream section shape `## Pre-merge checks` + nested `### ❌ Failed checks (N`) and report
+     `premerge=<green|failed:<names>>` with the failed check NAMES (e.g. `Linked Issues`, `Out of Scope
+     Changes`). A `premerge=failed` draft is **NEEDS-FIX** even when checks/threads/body_findings are all
+     clean.
    - **Maintainer comments on the agent's OWN PRs (incl. drafts) — disclosure-gated.** For each PR
      authored by `devantler` — **including drafts** (the maintainer steers via draft-PR comments) — also
      pull `comments` and the review-thread replies:

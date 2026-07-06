@@ -91,8 +91,10 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   carries a `## Pre-merge checks` section (Title / Description / **Linked Issues** / **Out of Scope
   Changes** / Docstring-Coverage), each ✅/❌/❓, orthogonal to (a)/(b)/(c) — a PR green on all three
   can still fail here. Parse the latest `coderabbitai[bot]` summary comment
-  (`gh api repos/<owner>/<repo>/issues/<n>/comments --paginate` → filter author → grep
-  `## Pre-merge checks failed` / `### ❌ Failed checks (N`) and report `premerge=<green|failed:names>`.
+  (`gh api repos/<owner>/<repo>/issues/<n>/comments --paginate` → filter author → **sort by `created_at`
+  desc and keep ONLY the newest summary** [`--paginate` surfaces older summaries from prior cycles] →
+  grep the section shape `## Pre-merge checks` + nested `### ❌ Failed checks (N`) and report
+  `premerge=<green|failed:names>`.
   Resolve a **Linked Issues** fail by implementing the missing AC **or** filing + referencing a
   well-formed deferred follow-up issue (CR's own resolution allows a deferred link); resolve an **Out
   of Scope Changes** inconclusive by replying to `@coderabbitai` clarifying which hunks actually
