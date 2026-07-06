@@ -41,7 +41,7 @@ parallel sessions, and its API endpoint can go stale after a control-plane recre
   **Security posture** section below for the object names, the broken-vs-clean checks, and the
   fix-vs-except ladder.
 - **Kyverno + Policy Reporter** — policy **validation & enforcement**: `kubectl --context=admin@prod
-  get cpol,pol` (policies present? mode Audit vs Enforce?) and `polr,cpolr` (PolicyReport /
+  get cpol,pol -A` (policies present? mode Audit vs Enforce?) and `polr,cpolr -A` (PolicyReport /
   ClusterPolicyReport — failing rules and violating resources). **Policy Reporter** aggregates every
   report into a dashboard + read API (SSO UI at `policy-reporter.${domain}`; in-cluster API
   `policy-reporter.policy-reporter.svc:8080`) for a whole-cluster view of failing results. Driving
