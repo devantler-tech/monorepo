@@ -88,9 +88,14 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    exists, drive *that* to merge instead of duplicating (leave draft/external PRs per the trust gate). For
    a big design, write/extend an ADR or system-design note first and link it.
 2. Isolate a worktree, implement at the **root cause**, and **write tests** that pin the new behaviour
-   and its edge cases (tests are part of the change, not optional). **Update the docs the change
-   touches in the same PR** (help/generated reference, README, `AGENTS.md`, the relevant site page) —
-   docs are part of the change too; re-run, never hand-edit, any doc generator.
+   and its edge cases (tests are part of the change, not optional). **Build a new non-trivial feature
+   behind a flag, default-off, and test both states** (see the contract's *Feature-flag-first
+   delivery*: OpenFeature where an SDK fits; flagd `FeatureFlag` CRs + Flagger for the GitOps platform;
+   cobra `Hidden`/`--experimental` for the CLI; `astro:env` for the site; opt-in default-off inputs for
+   GHA — each repo's `## Maintenance` names its mechanism); the flag flips on only after validation and
+   short-lived release flags are removed after rollout. Trivial/mechanical changes are exempt. **Update
+   the docs the change touches in the same PR** (help/generated reference, README, `AGENTS.md`, the
+   relevant site page) — docs are part of the change too; re-run, never hand-edit, any doc generator.
 3. **Validate** (the card's build + test command) — never open a PR that breaks build/validation.
 4. Open a **draft PR**: Conventional-Commit title (`feat:`/`fix:`/`refactor:`/`perf:`/`test:`/`docs:`),
    AI-disclosure line, labels, and **`Fixes #N`** so it closes the issue on merge. Body = what & why,
