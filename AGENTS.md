@@ -470,6 +470,7 @@ conventions; you set direction, but large structural change gets an ADR/issue an
 rollout, not a big-bang rewrite.
 
 ### Feature-flag-first delivery
+
 **Build every new non-trivial feature behind a feature flag, default-off, tested in BOTH states, and
 flip it on only after validation** (maintainer direction 2026-07-06). Flags **decouple deploy from
 release**: the code lands on `main` (and ships in a release) latent, is validated safely — including
