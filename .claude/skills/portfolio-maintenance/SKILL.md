@@ -54,11 +54,12 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   (exact-login), quoting a one-line gist as a signal (the read-only surveyor keeps no cross-run state,
   so it can't compute "new since last run" — **you** dedupe against native memory of what you've
   already acted on);
-- surfaces **the full hygiene triad for EVERY open own/trusted PR — (a) failing checks, (b)
+- surfaces **the full hygiene tetrad for EVERY open own/trusted PR — (a) failing checks, (b)
   unresolved bot-reviewer thread count (CodeRabbit `coderabbitai`,
   `copilot-pull-request-reviewer[bot]`) *plus review-body finding count*, (c)
   `mergeable`/`mergeStateStatus` (CONFLICTING/DIRTY =
-  needs a rebase/update-branch)** — so a run can **drain all three**, not just threads. Query threads
+  needs a rebase/update-branch), (d) failed CodeRabbit *pre-merge checks* (see below)** — so a run can
+  **drain all four**, not just threads. Query threads
   per PR via the GraphQL
   `reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}` and report
   `unresolved=<n>`. **Paginate `reviewThreads` (follow `pageInfo.hasNextPage`/`endCursor`) — never let
@@ -84,7 +85,19 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   *No silent caps* rule as the thread query; `gh api --slurp` is rejected alongside `--jq`, so slurp
   the concatenated pages with `jq -s` and flatten via `.[][]`); the acting
   run verifies each against current code, fixes-or-refutes, and **replies on the PR as the
-  resolution record** (no thread exists to resolve). Across hourly runs
+  resolution record** (no thread exists to resolve). **(d) CodeRabbit pre-merge checks are a FOURTH,
+  separate surface the maintainer gates promotion on** (he will NOT promote a draft whose pre-merge
+  checks aren't green — maintainer direction 2026-07-06, platform#2507): CodeRabbit's summary comment
+  carries a `## Pre-merge checks` section (Title / Description / **Linked Issues** / **Out of Scope
+  Changes** / Docstring-Coverage), each ✅/❌/❓, orthogonal to (a)/(b)/(c) — a PR green on all three
+  can still fail here. Parse the latest `coderabbitai[bot]` summary comment
+  (`gh api repos/<owner>/<repo>/issues/<n>/comments --paginate` → filter author → grep
+  `## Pre-merge checks failed` / `### ❌ Failed checks (N`) and report `premerge=<green|failed:names>`.
+  Resolve a **Linked Issues** fail by implementing the missing AC **or** filing + referencing a
+  well-formed deferred follow-up issue (CR's own resolution allows a deferred link); resolve an **Out
+  of Scope Changes** inconclusive by replying to `@coderabbitai` clarifying which hunks actually
+  changed (its walkthrough often mis-reads pre-existing diff *context* as introduced change); then
+  re-trigger `@coderabbitai review` (+ disclosure line) so the check re-evaluates. Across hourly runs
   older PRs accumulate red checks, threads, and conflicts the live watcher (alive only in the
   *spawning* session) never sees; the survey must catch them (contract *Autonomy → Watch the PRs you
   spawn*). **Externally-gated / parked PRs are IN the sweep** — a merge gate excuses the merge, never
@@ -174,11 +187,13 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    **evicted by a failed `merge_group` run** — pull that run (`gh run list --event merge_group` → `pr-<n>`
    → `--log-failed`) and diagnose before re-`--auto`-ing; if it's a known systemic flake, fix the root
    cause first rather than looping the PR through the queue. **Keep EVERY open own PR hygienic while
-   it waits — the full triad, on EVERY run, sweeping ALL open own/trusted PRs, not just the one you
-   just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**, and
+   it waits — the full tetrad, on EVERY run, sweeping ALL open own/trusted PRs, not just the one you
+   just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**,
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
-   force-push). **A merge-gated or parked PR is NOT exempt** (maintainer direction 2026-07-01): the
-   gate excuses the *merge*, never red CI / open threads / conflicts — those rot on the maintainer's
+   force-push), and **green the CodeRabbit pre-merge checks** (the maintainer won't promote a draft
+   whose pre-merge checks aren't green — direction 2026-07-06). **A merge-gated or parked PR is NOT
+   exempt** (maintainer direction 2026-07-01): the
+   gate excuses the *merge*, never red CI / open threads / conflicts / failed pre-merge checks — those rot on the maintainer's
    dashboard. All of this is allowed *before* promotion; only the **promotion** (draft → ready) is the
    maintainer's — you never self-promote, and the merge waits for it. **`coderabbitai[bot]`-authored
    PRs are in this sweep** (fix their CI or close with reasoning — never leave them red for days).
