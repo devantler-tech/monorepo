@@ -1,6 +1,6 @@
 ---
 name: maintain-platform
-description: Repo + live-platform health/maintenance menu for devantler-tech/platform (GitOps — Kustomize overlays + Flux CD, Cilium/Talos/KSail/SOPS). Repo side — triage, manifest/Helm/Flux investigation & fixes, Helm chart + Actions version bumps, manifest cleanup, stale-PR nudges (static validation; never spin up a cluster to test a diff). Live side — read-only health investigation of the running prod cluster + its observability stack (Flux Kustomizations/HelmReleases, Coroot, Kubescape, Kyverno, Kubernetes events). Use when the daily maintainer selects Platform.
+description: Repo + live-platform health/maintenance menu for devantler-tech/platform (GitOps — Kustomize overlays + Flux CD, Cilium/Talos/KSail/SOPS). Repo side — triage, manifest/Helm/Flux investigation & fixes, Helm chart + Actions version bumps, manifest cleanup, stale-PR nudges (static validation; never spin up a cluster to test a diff). Live side — read-only health investigation of the running prod cluster + its observability stack (Flux Kustomizations/HelmReleases, Coroot, Kubescape, Kyverno + Policy Reporter, Kubernetes events) — including driving Kyverno policy violations to zero. Use when the daily maintainer selects Platform.
 ---
 
 # Maintain: Platform
@@ -40,9 +40,13 @@ parallel sessions, and its API endpoint can go stale after a control-plane recre
   producing data first** (a broken scanner reads identically to a compliant cluster). See the dedicated
   **Security posture** section below for the object names, the broken-vs-clean checks, and the
   fix-vs-except ladder.
-- **Kyverno** — policy **validation & enforcement**: `kubectl --context=admin@prod get cpol,pol`
-  (policies present? mode Audit vs Enforce?) and `polr,cpolr` (PolicyReport / ClusterPolicyReport —
-  failing rules and violating resources).
+- **Kyverno + Policy Reporter** — policy **validation & enforcement**: `kubectl --context=admin@prod
+  get cpol,pol -A` (policies present? mode Audit vs Enforce?) and `polr,cpolr -A` (PolicyReport /
+  ClusterPolicyReport — failing rules and violating resources). **Policy Reporter** aggregates every
+  report into a dashboard + read API (SSO UI at `policy-reporter.${domain}`; in-cluster API
+  `policy-reporter.policy-reporter.svc:8080`) for a whole-cluster view of failing results. Driving
+  those failures to **zero and holding it** is a standing objective — see the dedicated **Policy
+  compliance** section below.
 - **Kubernetes events & warnings** — `kubectl --context=admin@prod get events -A
   --field-selector type=Warning`, plus unhealthy / CrashLooping / Pending pods and abnormal restart
   counts.
@@ -100,6 +104,38 @@ never the first move:
 A confirmed off-baseline finding on any surface — **including a scanner that has silently stopped
 producing data** — becomes a `security` issue under the epic (capture step), or a hotfix if it's active
 breakage. Ratchet the CI `--compliance-threshold` up as gaps close; never lower it.
+
+## Policy compliance (Kyverno) — drive violations to zero and hold
+Kyverno admission policies emit `PolicyReport` / `ClusterPolicyReport` results for every workload;
+**driving the failing results to zero and holding them there — so everything in the cluster runs
+compliant — is a standing objective, not a floor.** This is the admission-time twin of the Kubescape
+*Security posture* program above (policy vs posture scan); apply the same discipline.
+
+- **Enumerate every run** via **Policy Reporter** — the dashboard/read API that aggregates all reports
+  (SSO UI at `policy-reporter.${domain}`; in-cluster API `policy-reporter.policy-reporter.svc:8080`) —
+  or `kubectl --context=admin@prod get polr,cpolr -A`. **The `fail` count is the zero-and-hold
+  target** — treat a **newly introduced** `fail` as a regression to clear promptly, like a red CI
+  check, not just the long-standing backlog. **Track `warn` results in a *separate* tally**: they are a
+  softer lead signal (a policy still in `Audit` that will graduate to `Enforce`, or a deprecation
+  notice), so triage and work them down — fix the ones that mask a real issue — but they do **not**
+  share `fail`'s hard zero-gate, and lumping them into one number just muddies the remediation queue.
+- **Fix-vs-except ladder — same as Kubescape** (an exception is the audited last resort, never first):
+  1. **Fix the manifest/root cause** — correct the offending workload at its source so it satisfies the
+     rule (add the missing securityContext / limits / label / PDB / probe / image pin), shipped as a
+     draft PR. **Never** silence a real violation.
+  2. **Runtime-enforce & graduate** — once a rule's findings are at zero, **graduate its policy from
+     `Audit` to `Enforce`** so the violation is blocked at admission and cannot regress (a weak
+     Audit-only policy that could Enforce is itself a roadmap lever).
+  3. **Except only when genuinely by-design** — add a **scoped, reasoned `exclude`** to the relevant
+     Kyverno `ClusterPolicy` in `k8s/bases/infrastructure/cluster-policies/`, with a written *why*,
+     reviewed via PR. The repo exempts via **per-policy `exclude` blocks — `PolicyException` CRs are
+     not enabled**. An `exclude` that hides a fixable violation is a suppression, not an exception; a
+     growing exclude list is a smell, not progress.
+
+Record the residual (genuinely-excepted) baseline in native memory so a later run doesn't re-chase a
+documented by-design exemption — mirroring the Kubescape known-non-issues baseline. A confirmed
+violation becomes a `security`/`bug` draft PR (fix) or a triaged issue (larger cleanup); active
+admission breakage (an `Enforce` policy rejecting a legitimate workload) is a hotfix.
 
 ## Roadmap & enhancement
 Platform's roadmap lives in **GitHub Issues** on `devantler-tech/platform` (`roadmap` epics +
