@@ -1,13 +1,32 @@
 import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
 import mermaid from "astro-mermaid";
-import { defineConfig } from "astro/config";
+import { defineConfig, envField } from "astro/config";
 import starlightBlog from "starlight-blog";
 import starlightGithubAlerts from "starlight-github-alerts";
 import starlightLinksValidator from "starlight-links-validator";
 
 export default defineConfig({
   site: "https://devantler.tech",
+  // Build-time feature flags (feature-flag-first delivery, monorepo#2059).
+  // The site is a pure static build, so flags are baked at build time: flipping
+  // one means a rebuild + redeploy, there is no runtime/per-user evaluation. Use
+  // `astro:env` with a Zod-validated schema — type-safe over raw import.meta.env.
+  // Convention + lifecycle (remove the gate once shipped) live in docs/README.md.
+  env: {
+    schema: {
+      // Example gated section: an unreleased-preview banner on the home page.
+      // Default-off, so production builds omit it; a preview build enables it
+      // with `FEATURE_PREVIEW_BANNER=true npm run build`. Server context = the
+      // flag is read while the .astro component renders at build time (SSG), so
+      // the banner's HTML is simply not emitted when off — no client JS needed.
+      FEATURE_PREVIEW_BANNER: envField.boolean({
+        context: "server",
+        access: "public",
+        default: false,
+      }),
+    },
+  },
   integrations: [
     mermaid(),
     starlight({
