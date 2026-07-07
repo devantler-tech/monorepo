@@ -51,10 +51,10 @@ public and private — no per-repo loop needed to enumerate):
      **Never label a `devantler` PR `MERGE-READY` or "own"**; the orchestrator applies its creation-record
      test and decides. (Bot-trusted authors — `ksail-bot`, `dependabot[bot]`, `github-actions[bot]`,
      `renovate[bot]` — carry no such ambiguity: classify them `MERGE-READY` vs `NEEDS-FIX` as usual.)
-   - **Hygiene triad per open own/trusted PR — including drafts and gated/parked PRs.** For every
+   - **Hygiene tetrad per open own/trusted PR — including drafts and gated/parked PRs.** For every
      open `devantler`/trusted-bot PR (drafts included), report (a) failing checks, (b) unresolved
      review threads **plus CodeRabbit review-BODY finding count**, (c) `mergeStateStatus`
-     conflicts. For (b)'s body surface: CodeRabbit emits non-inline findings as collapsed sections
+     conflicts, (d) **failed CodeRabbit pre-merge checks** (see below). For (b)'s body surface: CodeRabbit emits non-inline findings as collapsed sections
      in review bodies, each titled `<emoji> <Category> comments (N)` inside a `<summary>` tag —
      `⚠️ Outside diff range comments (N)`, `🧹 Nitpick comments (N)`, `♻️ Duplicate comments (N)`,
      and any future category — which never become threads. Match the shape, not a hard-coded title
@@ -67,8 +67,21 @@ public and private — no per-repo loop needed to enumerate):
      endpoint returns only its first page by default; count matching **sections and sum**, never
      `select`-per-review — one review can carry two finding sections and a per-review count would
      report it as 1) and report `body_findings=<n>` alongside
-     `unresolved=<n>` threads; a PR is review-ready only when BOTH are 0, checks are green, and it
-     is not CONFLICTING.
+     `unresolved=<n>` threads; a PR is review-ready only when BOTH are 0, checks are green, it
+     is not CONFLICTING, and its pre-merge checks are green (below).
+   - **(d) CodeRabbit pre-merge checks per own draft — a SEPARATE surface the maintainer gates
+     promotion on** (he will NOT promote a draft whose pre-merge checks aren't green — maintainer
+     direction 2026-07-06). CodeRabbit's summary comment carries a `## Pre-merge checks` section
+     (Title / Description / **Linked Issues** / **Out of Scope Changes** / Docstring-Coverage), each
+     ✅/❌/❓ — orthogonal to CI, threads, and body-findings, so a PR can be green on all three and
+     still fail here. Parse the LATEST `coderabbitai[bot]` summary comment
+     (`gh api repos/devantler-tech/<repo>/issues/<n>/comments --paginate` → filter author → **sort by
+     `created_at` desc and keep ONLY the newest `coderabbitai[bot]` summary** [`--paginate` surfaces
+     older summaries from prior review cycles, so grepping unsorted misreads stale `premerge` data] →
+     grep the upstream section shape `## Pre-merge checks` + nested `### ❌ Failed checks (N`) and report
+     `premerge=<green|failed:<names>>` with the failed check NAMES (e.g. `Linked Issues`, `Out of Scope
+     Changes`). A `premerge=failed` draft is **NEEDS-FIX** even when checks/threads/body_findings are all
+     clean.
    - **Maintainer comments on the agent's OWN PRs (incl. drafts) — disclosure-gated.** For each PR
      authored by `devantler` — **including drafts** (the maintainer steers via draft-PR comments) — also
      pull `comments` and the review-thread replies:
@@ -124,7 +137,7 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no own/trus
 - MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator acts on this FIRST (instruction)
 - <repo>: CI red on main — <workflow> (<run url>)
 - <repo> #<n> "<title>" — <bot-author>, trusted non-draft, mergeStateStatus=<…> → MERGE-READY | NEEDS-FIX: <check/threads>
-- <repo> #<n> (own/trusted, draft or not) — triad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
+- <repo> #<n> (own/trusted, draft or not) — tetrad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
 - <repo> #<n> "<title>" — `devantler` non-draft, mergeStateStatus=CLEAN, checks green → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no> (orchestrator applies creation-record test; NOT asserted mine)
 - CROSS-ORG <owner>/<repo> #<n> "<title>" — `devantler`, failing CI: <check> → fix CI & drive green (merge is upstream's)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
