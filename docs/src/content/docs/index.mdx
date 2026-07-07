@@ -34,11 +34,14 @@ hero:
 
 import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 import { getCollection } from "astro:content";
+import PreviewBanner from "../../components/PreviewBanner.astro";
 
 export const latestPosts = (await getCollection("docs"))
   .filter((entry) => entry.id.startsWith("blog/"))
   .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf())
   .slice(0, 4);
+
+<PreviewBanner />
 
 ## What I Do
 
