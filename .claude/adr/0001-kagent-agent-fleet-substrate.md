@@ -33,6 +33,7 @@ rather than a blank page.
 ## Findings (verified 2026-07-07)
 
 ### F1 — Architecture and runtime
+
 kagent is a CRD + controller system with four components: a **Controller** (Go operator that reconciles
 the CRDs into runtime workloads), an **Engine/App-Server** (runs the agent conversation loop), a **UI**,
 and a **CLI**. The core CRDs are **`Agent`** (system prompt + tools + sub-agents + a model reference),
@@ -54,6 +55,7 @@ Two execution models exist:
   small pool, which is exactly the shape of mechanical portfolio work.
 
 ### F2 — Model tiers (cost is the point)
+
 `ModelConfig` supports **OpenAI, Azure OpenAI, Anthropic, Google Vertex AI, and Ollama**. Crucially for
 the cost thesis:
 - **In-cluster Ollama** is first-class — a `ModelConfig` points at `http://ollama.<ns>.svc.cluster.local:11434`
@@ -67,6 +69,7 @@ The tiering strategy writes itself: **self-hosted Ollama** for the highest-volum
 judgement — each selected per-`Agent` via a `ModelConfig` reference.
 
 ### F3 — No service-mesh dependency (Cilium is fine)
+
 kagent's documented install prerequisites are only **a cluster, Helm, kubectl, and a model API key** —
 **no Istio, no ambient mesh**. The `istio-agent` that ships is a *sample agent for operating Istio*, not
 a runtime dependency; A2A/MCP routing is handled by kagent's own controller/engine plus the
@@ -75,6 +78,7 @@ platform's **Cilium** cluster with no Istio. *(This is inferred from the mesh-fr
 direct "runs on Cilium" quote — F-open-1 below keeps it honest.)*
 
 ### F4 — Declarative install (GitOps-compatible)
+
 kagent ships as **OCI Helm charts**: `oci://ghcr.io/kagent-dev/kagent/helm/kagent-crds` and
 `.../helm/kagent`. That makes a **Flux `OCIRepository` + `HelmRelease`** the natural install path (CRDs
 chart first with `CreateReplace`, then the main chart) — the same two-chart ordering the platform
@@ -83,6 +87,7 @@ imperative `helm`/`kagent install` path), so the platform owns that wiring. Prod
 an **external PostgreSQL** rather than the in-pod default.
 
 ### F5 — MCP + A2A fit the survey→select→act→report shape
+
 Tools are attached to an `Agent` declaratively by registering an MCP server as a **`ToolServer`** and
 naming its tools in the `Agent` spec — so the engineer's existing MCP tooling (the `gh` tool, the
 flux/k8s tooling) wires in as `ToolServer`s with no bespoke glue. **A2A (agent-to-agent)** is
@@ -91,12 +96,14 @@ directly onto the run loop — a survey agent, per-product act agents, a report 
 decomposition rather than one monolith.
 
 ### F6 — Observability
+
 **OpenTelemetry tracing** is a headline, first-class feature (with e.g. a Dash0 integration), so agent
 runs export traces to standard backends. **Native Prometheus `/metrics` / a bundled ServiceMonitor for
 kagent's own components is *not* confirmed** (kagent ships Prometheus/Grafana *tools* for agents to
 query, which is a different thing) — F-open-4 below.
 
 ### F7 — Maturity
+
 CNCF **Sandbox** (the earliest tier), Apache-2.0, contributed by **Solo.io** (~April 2025), engine on
 **Google ADK**. Live GitHub (2026-07-07): **~3.2k stars, 116 open issues**, pushed same-day — very
 active, **multiple releases per week** (latest `v0.10.0-beta4` 07-06; stable line `v0.9.11` 07-01).
@@ -106,6 +113,7 @@ are the dominant adoption risk.
 ## Decision
 
 ### D1 — Preliminary recommendation: **conditional GO to Phase-0b**, then re-decide Phase 1
+
 The desk evidence clears kagent's two hardest *disqualifiers*: it does **not** require Istio (so it fits
 the Cilium platform, F3) and it **natively supports cheap model tiers** including in-cluster Ollama and
 Haiku (so the cost thesis is viable, F2). Nothing found is a blocking architectural mismatch. Therefore
@@ -115,6 +123,7 @@ above all a real **cost/quality benchmark** (the entire premise is capability-pe
 **RBAC/webhook** inspection.
 
 ### D2 — If GO: the intended shape (design seams for Phase 1)
+
 - **Runtime:** adopt the **Agent Substrate** (WorkerPool + gVisor actors), not plain Deployments — it is
   the only model that makes "many cheap agents" dense enough to be cost-effective, and its gVisor
   sandbox is a *second* isolation layer under the safety model (D3).
@@ -129,6 +138,7 @@ above all a real **cost/quality benchmark** (the entire premise is capability-pe
   version** and treat kagent bumps as reviewed, tested changes — never a floating tag.
 
 ### D3 — The safety model is enforced *outside* the model, and kagent does not weaken it
+
 The contract's guardrails (trust gate, never-run-untrusted-code, never-merge-external,
 never-push-to-`main`, untrusted-input, the draft-PR checkpoint) are **not** properties of the LLM — they
 are enforced by (a) **which MCP tools an `Agent` is given** (an act-agent gets a `gh` tool that can only
@@ -140,12 +150,14 @@ least-privilege `ToolServer` and confirming an agent cannot exceed it. No guardr
 adopting kagent; this ADR does not propose loosening any safety rule.
 
 ### D4 — Home of this decision: `.claude/adr/`
+
 This ADR establishes `.claude/adr/` as the home for **portfolio-level Daily-AI-Engineer architecture
 decisions** (decisions about the *brain* — the `.claude/` primitives and how the engineer runs), mirroring
 the per-product ADR convention in `libraries/agent-plugins/docs/adr/`. Product-specific decisions stay in
 their product's ADR directory; this location is for cross-portfolio engineer-infrastructure calls.
 
 ## Open questions for Phase-0b (the hands-on spike must close these)
+
 1. **F-open-1 — Cilium install, live:** install the kagent OCI charts via Flux on a `talos-local`/kind
    Cilium cluster and confirm the controller + engine + UI come up healthy with no Istio; run ≥1 trivial
    agent end-to-end (prompt → tool call → result). *(#2075 AC-1, AC-3.)*
@@ -164,6 +176,7 @@ their product's ADR directory; this location is for cross-portfolio engineer-inf
    could not authoritatively confirm).
 
 ## Consequences
+
 - **Positive:** a viable, Kubernetes-native, GitOps-reconciled path to a *cheap* agent fleet that reuses
   the platform (Flux, Cilium, OTel) and the engineer's existing MCP tools; the safety model becomes *more*
   auditable (capability-as-CR); no dependency on Istio.
@@ -172,6 +185,7 @@ their product's ADR directory; this location is for cross-portfolio engineer-inf
   the cost win is *asserted, not yet measured*. These are why Phase 1 stays gated on Phase-0b.
 
 ## Alternatives considered (briefly)
+
 - **Do nothing (single orchestrator):** cheapest to maintain, but leaves the parallel-cheap-work
   opportunity on the table — the thing the epic exists to test.
 - **Roll our own controller/runtime:** maximal control, but re-implements exactly what kagent (CNCF +
@@ -180,6 +194,7 @@ their product's ADR directory; this location is for cross-portfolio engineer-inf
   platform leverage and the declarative-capability safety story that make kagent attractive here.
 
 ## References
+
 - kagent architecture — https://kagent.dev/docs/kagent/concepts/architecture
 - kagent install — https://kagent.dev/docs/kagent/introduction/installation
 - Agent Substrate — https://kagent.dev/docs/kagent/examples/agent-substrate
