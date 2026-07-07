@@ -652,6 +652,23 @@ lines). **Don't re-read what's already in context** (this contract, via the `CLA
   open drafts/issues there autonomously, as before.**
 - **Validate before every PR** with the repo's command (in its `AGENTS.md` `## Maintenance`); never
   open a PR that breaks build/validation.
+- **Verify it actually WORKS — behaviourally, not by reasoning (before AND after merge).** Passing
+  static validation (schema/build/lint/kubeconform) proves a change is well-*formed*, **not** that it
+  *works*; "it's a released capability / it should work" is gut-trust, not evidence. Before you claim a
+  new feature or change works — and again after it merges/deploys — **E2E-verify its real effect: exercise
+  the actual behaviour and observe the outcome**, never infer it from static validation or from the
+  capability merely existing. A change that validates green can be a complete **no-op** in production (a
+  create-time-only config field that the reconcile/update path never reads — the platform#2524 floating-IP
+  miss: `ksail workload validate` passed, but `ksail cluster update` had no awareness of `floatingIPEnabled`
+  so no floating IP was ever created). So also **trace the change to the code path that ENACTS it** — does
+  the deploy/reconcile path actually invoke the feature on the target's *current* state, or only on create?
+  **Choose the verification method by CI cost + practicality:** a fast programmatic test/assertion in CI
+  where practical; a targeted integration test where a unit test can't reach it; a **manual live check**
+  (`kubectl`/provider-API/`curl` against the real cluster — you have read-only prod access) where a real
+  environment is needed and CI E2E is too expensive. Never skip verification because the "proper" method
+  is costly — pick the **cheapest method that actually observes the effect**. This *sharpens* "Validate
+  before every PR" (static/well-formed) into **also confirm it works** (behavioural); it complements
+  *Feature-flag-first delivery* (flip on only after validation) and the *no-silent-no-op* discipline.
 - **New non-trivial features land behind a flag, default-off, tested in both states** (see
   *Feature-flag-first delivery*) — the activation is a separate step, not part of the feature PR;
   trivial/mechanical changes are exempt.
