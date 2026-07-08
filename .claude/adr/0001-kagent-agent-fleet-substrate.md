@@ -95,12 +95,18 @@ first-class: an orchestrator `Agent` delegates subtasks to specialist agents via
 directly onto the run loop — a survey agent, per-product act agents, a report agent — as an A2A
 decomposition rather than one monolith.
 
-### F6 — Observability
+### F6 — Observability (desk-verified 2026-07-08 — closes F-open-4)
 
 **OpenTelemetry tracing** is a headline, first-class feature (with e.g. a Dash0 integration), so agent
-runs export traces to standard backends. **Native Prometheus `/metrics` / a bundled ServiceMonitor for
-kagent's own components is *not* confirmed** (kagent ships Prometheus/Grafana *tools* for agents to
-query, which is a different thing) — F-open-4 below.
+runs export traces to standard backends. **Native Prometheus support IS present, opt-in, and disabled
+by default**: a local `helm template` of the `kagent` chart (v0.9.11, default values) confirms a
+`ServiceMonitor` template exists for the `kagent-tools` component (`tools.metrics.servicemonitor.enabled`,
+default `false`) and for the bundled `oauth2-proxy` subchart; no `ServiceMonitor` renders with default
+values (confirmed: `kind: ServiceMonitor` count = 0 in the default template output). This needs the
+Prometheus Operator's `ServiceMonitor` CRD present on the target cluster to consume — worth checking
+against the platform's current observability stack (the Coroot migration removed the prior
+Prometheus/Alertmanager substrate; a minimal Alertmanager is being reintroduced per platform#2445) before
+Phase 1 relies on it.
 
 ### F7 — Maturity
 
@@ -109,6 +115,51 @@ CNCF **Sandbox** (the earliest tier), Apache-2.0, contributed by **Solo.io** (~A
 active, **multiple releases per week** (latest `v0.10.0-beta4` 07-06; stable line `v0.9.11` 07-01).
 **Pre-1.0, CRDs at `v1alpha2`.** Capable and well-backed, but the alpha API and weekly-breaking cadence
 are the dominant adoption risk.
+
+### F8 — Operator RBAC & webhooks (desk-verified 2026-07-08 — closes F-open-3 and F-open-5)
+
+A local `helm pull --untar` + `helm template` of both OCI charts (`kagent-crds` and `kagent`, both
+pinned `v0.9.11`, default values, no live cluster needed) gives an authoritative, reproducible answer:
+
+- **Zero admission webhooks.** No `MutatingWebhookConfiguration`/`ValidatingWebhookConfiguration` renders
+  from either chart, with or without the Agent Substrate enabled. The open worry in F-open-3 ("an
+  operator-managed CRB fighting a webhook") does not materialize for v0.9.11.
+- **Exact CRD set (closes F-open-5): no `Team`/multi-agent CRD exists.** The `kagent-crds` chart
+  (v0.9.11) installs exactly: `agents`, `agentharnesses`, `memories`, `modelconfigs`,
+  `modelproviderconfigs`, `remotemcpservers`, `toolservers` (all `kagent.dev/v1alpha2`) +
+  `mcpservers.kagent.dev` (from the bundled `kmcp-crds` subchart) + `actortemplates.ate.dev` /
+  `workerpools.ate.dev` (from the bundled `substrate-crds` subchart — confirming F1's WorkerPool/Actor
+  claim at the CRD level). Multi-agent orchestration is expressed via `Agent`'s sub-agent references +
+  A2A, not a dedicated `Team` kind.
+- **A real default-privilege gap, with a documented first-class fix.** The default (non-Substrate)
+  install's built-in `kagent-tools` component — the general-purpose "run kubectl/helm/etc." tool every
+  `Agent` can be wired to via its `ToolServer` — binds a `ClusterRoleBinding` to a `ClusterRole` granting
+  `apiGroups:["*"], resources:["*"], verbs:["*"]` **plus** `nonResourceURLs:["*"], verbs:["*"]`: broader
+  than the built-in Kubernetes `cluster-admin` role. This is exactly the shape D3 warns against and is
+  **not** acceptable under this engineer's trust gate as a default. The chart itself documents the fix —
+  it is a first-class, reviewable toggle, not a workaround: `rbac.readOnly: true` swaps the ClusterRole
+  to `get/list/watch` only (Secrets excluded unless `rbac.allowSecrets: true`), paired with the tool's own
+  `--read-only` CLI flag to disable write operations at the application layer too (the two are
+  independent — setting only one is not sufficient), and `rbac.namespaces: [...]` scopes the grant to
+  named namespaces (`Role`/`RoleBinding`) instead of cluster-wide. **Any Phase-1 adoption must set
+  `rbac.readOnly: true` (+ `--read-only`) and a namespace allow-list for `kagent-tools` — never the
+  chart's cluster-admin default.**
+- **The controller's own two ClusterRoles (`getter-role`, `writer-role`) are broad but bounded to what a
+  reconciler for these CRDs plausibly needs** (`kagent.dev` CRs full CRUD + core/`apps`/`batch`/
+  `gateway.networking.k8s.io` `"*"` resources create/update/patch/delete cluster-wide) — broader than
+  ideal for a namespace-scoped fleet, but a different risk class than the tools ClusterRole's blanket
+  cluster-admin; worth tightening in Phase-1 design but not a blocker.
+- **The Agent Substrate runtime (D2's recommended Phase-1 shape) is ALREADY least-privilege by design** —
+  a second, independent confirmation via `helm template --set substrate.enabled=true --set
+  controller.substrate.enabled=true`. Its `atelet` (per-actor) and `ate-api-server` ClusterRoles grant
+  only `get/watch/list` on `pods` and `actortemplates`; the `ate-api-server` chart source carries an
+  explicit code comment that cluster-wide Secret reads are **deliberately not granted** — "Each
+  demo/tenant is responsible for granting ate-api-server read access only to the specific Secrets
+  referenced by its ActorTemplates (e.g. via a namespace-scoped Role + RoleBinding using
+  `resourceNames`)". The one broader grant is `ate-controller`'s cluster-wide `get/list/watch` on
+  `configmaps`+`secrets` (read-only, not write). **This reinforces D2's recommendation**: adopting the
+  Substrate runtime is not just a cost/density win, it is the RBAC-safer path — the default plain-tools
+  install is the one that needs explicit hardening.
 
 ## Decision
 
@@ -145,9 +196,16 @@ are enforced by (a) **which MCP tools an `Agent` is given** (an act-agent gets a
 open *draft* PRs and never merges external/pushes to `main`), (b) **credential/RBAC scoping** of the
 token each agent holds, and (c) **sandbox isolation** (Substrate's gVisor actors). kagent's declarative
 `ToolServer`-per-`Agent` model makes this *easier* to enforce than a single broad process, because each
-agent's capability surface is an explicit, reviewable CR. Phase-0b must **prove** this by wiring a
-least-privilege `ToolServer` and confirming an agent cannot exceed it. No guardrail is relaxed by
-adopting kagent; this ADR does not propose loosening any safety rule.
+agent's capability surface is an explicit, reviewable CR — **provided the install is configured for it**.
+F8's desk verification found the concrete counter-example this claim must be honest about: the chart's
+**default** `kagent-tools` RBAC is an unrestricted cluster-admin-equivalent, not least-privilege —
+adopting kagent out of the box would *not* preserve this contract's guardrails. The Substrate runtime
+(D2's chosen shape) is least-privilege by design, and the plain-tools path has a documented
+`rbac.readOnly` + `--read-only` + `rbac.namespaces` toggle to match it. Phase-0b's live half must still
+**prove this in practice** (deploy with the hardened RBAC values and confirm the resulting `ToolServer`
+genuinely cannot exceed its granted scope) — F8 closes the *design-exists* question, not the
+*enforced-in-our-deploy* question. No guardrail is relaxed by adopting kagent; this ADR does not propose
+loosening any safety rule, and Phase 1 must not adopt the default cluster-admin RBAC.
 
 ### D4 — Home of this decision: `.claude/adr/`
 
@@ -158,22 +216,30 @@ their product's ADR directory; this location is for cross-portfolio engineer-inf
 
 ## Open questions for Phase-0b (the hands-on spike must close these)
 
-1. **F-open-1 — Cilium install, live:** install the kagent OCI charts via Flux on a `talos-local`/kind
-   Cilium cluster and confirm the controller + engine + UI come up healthy with no Istio; run ≥1 trivial
-   agent end-to-end (prompt → tool call → result). *(#2075 AC-1, AC-3.)*
-2. **F-open-2 — cost/quality benchmark:** ≥2 cheap tiers (in-cluster Ollama × ≥1 model, Haiku) × ≥2
-   representative tasks (CI-log triage, a dep-bump PR, a docs sync) with rough $/task and a quality
-   judgement. *This is the load-bearing evidence for the whole epic.* *(#2075 AC-2.)*
-3. **F-open-3 — operator RBAC & webhooks:** `helm template` the charts and enumerate the ClusterRoles /
-   ClusterRoleBindings / admission webhooks the operator creates; note anything Flux must exclude from
-   reconciliation (e.g. an operator-managed CRB fighting a webhook). No documented gotcha was found
-   either way — this must be inspected, not assumed.
-4. **F-open-4 — native metrics:** confirm whether kagent's own components expose Prometheus `/metrics` /
-   a ServiceMonitor, or whether observability is OTel-tracing-only, and whether that lands in the
-   platform's existing stack.
-5. **F-open-5 — exact CRD list:** `kubectl get crds` on a live install to confirm the current
-   `v1alpha2` CRD set (in particular whether a `Team`/multi-agent CRD exists, which the desk research
-   could not authoritatively confirm).
+1. **F-open-1 — Cilium install, live — OPEN (needs a live cluster).** install the kagent OCI charts via
+   Flux on a `talos-local`/kind Cilium cluster and confirm the controller + engine + UI come up healthy
+   with no Istio; run ≥1 trivial agent end-to-end (prompt → tool call → result). *(#2075 AC-1, AC-3.)*
+   Desk research (F8) adds corroborating evidence — no Istio CRDs/sidecar-injection/webhooks appear
+   anywhere in either chart's rendered manifests — but a live boot is the only way to fully close this.
+2. **F-open-2 — cost/quality benchmark — OPEN (needs a live cluster + real model-API spend).** ≥2 cheap
+   tiers (in-cluster Ollama × ≥1 model, Haiku) × ≥2 representative tasks (CI-log triage, a dep-bump PR, a
+   docs sync) with rough $/task and a quality judgement. *This is the load-bearing evidence for the whole
+   epic.* *(#2075 AC-2.)*
+3. ~~**F-open-3 — operator RBAC & webhooks.**~~ **RESOLVED (desk-verified 2026-07-08, no live cluster
+   needed) — see F8.** Zero admission webhooks in either chart; the default `kagent-tools` RBAC is an
+   unrestricted cluster-admin-equivalent (a real gap, mitigated by `rbac.readOnly`+`--read-only`+
+   `rbac.namespaces`); the Substrate runtime's own RBAC is least-privilege by design.
+4. ~~**F-open-4 — native metrics.**~~ **RESOLVED (desk-verified 2026-07-08) — see F6.** Native Prometheus
+   `ServiceMonitor` support exists for `kagent-tools` (+ the bundled `oauth2-proxy`), opt-in and
+   disabled by default; needs the Prometheus Operator CRD on the target cluster.
+5. ~~**F-open-5 — exact CRD list.**~~ **RESOLVED (desk-verified 2026-07-08, `helm pull`+`helm template`,
+   no live cluster needed) — see F8.** No `Team`/multi-agent CRD; exact `v1alpha2` set enumerated.
+
+**3 of 5 open questions are closed by reproducible local `helm template` inspection — no live cluster or
+model spend required.** The remaining two (F-open-1 live boot, F-open-2 cost/quality benchmark) are
+genuinely hands-on and stay gated on a live-cluster spike (tracked in
+[#2076](https://github.com/devantler-tech/monorepo/issues/2076), respecting the ≤1-real-cluster-spin-up/
+day guardrail); the ADR's status stays **Proposed** until those close and Phase 1 is re-decided.
 
 ## Consequences
 
