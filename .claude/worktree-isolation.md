@@ -177,6 +177,18 @@ leftovers with **zero** live worktrees) were: `dotfiles`, `github/devantler-tech
   so `git worktree add` resolves to an isolated tree. `templates/gitops-tenant-template` was done first
   (2026-06-17); the rest, including `platform` (6 live worktrees) and `templates/go-template` (1),
   followed on 2026-06-25 via the live-worktree repair above.
+- ⚠️ **The fix DOES NOT survive a submodule re-init — regresses silently (found 2026-07-09, run 656th).**
+  A stray `core.worktree` had reappeared in the shared config on **9** submodules: `github/devantler-tech/
+  github-actions/actions`, `platform` (15 live worktrees this time — repaired in place, zero disruption),
+  `templates/gitops-tenant-template`, `templates/go-template` (1 live worktree), `libraries/agent-skills`,
+  `libraries/provider-upjet-unifi` (1 live worktree), `applications/fleet-gitops`,
+  `applications/wedding-app`, `github/devantler-tech/maintenance`. Root cause: `git submodule update
+  --init` (or a deinit/reinit cycle) recreates the gitdir's `config` from git's default template, which
+  always writes `core.worktree` into the shared file — the per-machine fix from 2026-06-25 doesn't persist
+  through that. All 9 re-fixed + probe-verified 2026-07-09 via the same additive-first / live-worktree
+  procedure above (`homebrew-tap` was checked and found genuinely clean — never had the stray value).
+  **Actionable takeaway: don't trust this table as current — re-run the diagnostic snippet above before
+  relying on any submodule's isolation, especially right after a fresh `git submodule update --init`.**
 - ✅ **Orphaned gitdirs pruned (2026-06-25)** — de-registered leftovers removed per *Orphaned gitdirs*
   (with backups): `dotfiles`, `github/devantler-tech/.github-private`, `homebrew-formulas`,
   `libraries/plugins`, `libraries/skills` (plus their stale working trees and `.git/config` sections).
