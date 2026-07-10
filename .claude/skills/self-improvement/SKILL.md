@@ -46,7 +46,7 @@ Recording is not proposing — the daily 1% is the learning you *bank*; **do not
    - hub definition (the contract in `AGENTS.md`, `.claude/agents/*`, `.claude/skills/*`, the loader)
      → PR to the **monorepo**;
    - a product's task menu → PR to that **submodule's** `AGENTS.md ## Maintenance`.
-   Title `chore(ai-assistant): …` (or `docs: …`); body = the observed **evidence**, the change, and
+   Title `chore(ai-engineer): …` (or `docs: …`); body = the observed **evidence**, the change, and
    the expected improvement. Keep it minimal and reversible; one concern per PR.
 4. Mark the addressed `learnings[]` entries `status: "proposed"` with the PR link; prune entries
    whose PR has merged.
