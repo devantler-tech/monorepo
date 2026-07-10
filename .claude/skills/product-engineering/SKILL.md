@@ -1,6 +1,6 @@
 ---
 name: product-engineering
-description: The ADVANCE playbook for the Daily AI Assistant (the products' primary engineer) — how to move a devantler-tech product forward once it's healthy: product strategy & roadmaps, issue triage & decomposition, planning & implementing issues, test coverage, benchmarking & performance, and refactoring & code quality. Use after the operate ladder is satisfied and you're picking proactive enhancement work.
+description: The ADVANCE playbook for the Daily AI Engineer (the products' primary engineer) — how to move a devantler-tech product forward once it's healthy: product strategy & roadmaps, issue triage & decomposition, planning & implementing issues, test coverage, benchmarking & performance, and refactoring & code quality. Use after the operate ladder is satisfied and you're picking proactive enhancement work.
 ---
 
 # Product engineering — moving products forward

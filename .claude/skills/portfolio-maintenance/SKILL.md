@@ -1,6 +1,6 @@
 ---
 name: portfolio-maintenance
-description: The run procedure for the Daily AI Assistant (the products' primary engineer) — pre-flight, survey the whole devantler-tech portfolio, select the highest-value work (operate first, then advance), act via per-run worktrees and draft PRs (driving trusted-author PRs to merge), and report. Use when maintaining or advancing the monorepo's products on a schedule or on request.
+description: The run procedure for the Daily AI Engineer (the products' primary engineer) — pre-flight, survey the whole devantler-tech portfolio, select the highest-value work (operate first, then advance), act via per-run worktrees and draft PRs (driving trusted-author PRs to merge), and report. Use when maintaining or advancing the monorepo's products on a schedule or on request.
 ---
 
 # Portfolio engineering — the run loop
