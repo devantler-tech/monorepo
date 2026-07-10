@@ -52,4 +52,4 @@ Then register the tenant on the platform by following [`platform/docs/TENANTS.md
 
 - 📦 [Template on GitHub](https://github.com/devantler-tech/gitops-tenant-template)
 - 🛰️ [The devantler-tech platform](https://github.com/devantler-tech/platform)
-- 🔄 [Reusable workflows used by this template](https://github.com/devantler-tech/reusable-workflows)
+- 🔄 [Reusable workflows used by this template](https://github.com/devantler-tech/actions/tree/main/.github/workflows)

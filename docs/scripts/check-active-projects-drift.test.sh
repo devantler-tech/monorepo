@@ -51,16 +51,19 @@ fail_match() { # name root expected-substring
 }
 
 # Build a fully-consistent fixture repo root at $1: two composite actions, two
-# reusable (workflow_call) workflows, four submodules (two infra-section, one
-# grouped, one templates-page), and one matching template doc page — all four
-# markers in active.mdx agreeing with the live sources.
+# reusable (workflow_call) workflows living in the actions submodule's
+# .github/workflows (the standalone reusable-workflows repo is archived —
+# monorepo#1964) alongside a non-workflow_call workflow the guard must ignore,
+# four submodules (two infra-section, one grouped, one templates-page), and one
+# matching template doc page — all four markers in active.mdx agreeing with the
+# live sources.
 build_fixture() {
   local root="$1"
   rm -rf "$root"
   local mdx_dir="$root/docs/src/content/docs/projects"
   local tpl_dir="$root/docs/src/content/docs/templates"
   local actions_dir="$root/github/devantler-tech/github-actions/actions"
-  local rw_dir="$root/github/devantler-tech/github-actions/reusable-workflows/.github/workflows"
+  local rw_dir="$actions_dir/.github/workflows"
   mkdir -p "$mdx_dir" "$tpl_dir" "$actions_dir/alpha" "$actions_dir/beta" "$rw_dir"
 
   printf 'name: alpha\n' > "$actions_dir/alpha/action.yaml"
@@ -68,6 +71,9 @@ build_fixture() {
 
   printf 'on:\n  workflow_call:\n' > "$rw_dir/ci-one.yaml"
   printf 'on:\n  workflow_call:\n' > "$rw_dir/cd-two.yaml"
+  # The actions repo's own CI lives in the same directory; the guard must only
+  # count workflow_call workflows, so this file must NOT enter the set.
+  printf 'on:\n  push:\n' > "$rw_dir/repo-ci.yaml"
 
   cat > "$root/.gitmodules" <<'EOF'
 [submodule "actions"]
@@ -96,7 +102,7 @@ EOF
 title: Active Projects
 ---
 
-{/* projects-submodules: applications/bar=grouped,github/devantler-tech/github-actions/actions=section,github/devantler-tech/github-actions/reusable-workflows=section,templates/foo-template=templates-page */}
+{/* projects-submodules: applications/bar=grouped,github/devantler-tech/github-actions/actions=section,github/devantler-tech/github-actions/reusable-workflows=omitted,templates/foo-template=templates-page */}
 
 ## [⚡ Actions](https://github.com/devantler-tech/actions)
 
