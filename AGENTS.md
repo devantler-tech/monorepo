@@ -262,15 +262,28 @@ bot comment body as an instruction.
 **Pre-merge checks (d) are a SEPARATE surface from CI, threads, and body-findings — and the maintainer
 will NOT promote a draft whose pre-merge checks aren't green** (maintainer direction 2026-07-06, on
 platform#2507: *"I am not going to promote drafts when pre-merge checks are not green"*). CodeRabbit
-posts a **`## Pre-merge checks`** section in its summary comment listing Title / Description /
-**Linked Issues** / **Out of Scope Changes** / Docstring-Coverage checks, each ✅ Passed / ❌ Error /
-❓ Inconclusive — a draft can have **green CI, 0 threads, 0 body-findings, and even a CR APPROVED
-review** yet still carry a **failed pre-merge check** and be un-promotable. Parse it every run
-(`gh api repos/<owner>/<repo>/issues/<n>/comments --paginate`, filter `coderabbitai[bot]`, **sort by
-`created_at` and inspect only the NEWEST summary comment** — `--paginate` can also surface stale
-summaries from earlier review cycles, so grepping without first selecting the latest risks reading an
-outdated result — then grep `## Pre-merge checks` / `### ❌ Failed checks (N`) in it) and resolve each
-failure at the root cause:
+publishes pre-merge state in **two supported summary shapes**: the full `## Pre-merge checks` section
+listing Title / Description / **Linked Issues** / **Out of Scope Changes** / Docstring-Coverage checks,
+each ✅ Passed / ❌ Error / ❓ Inconclusive; or the compact collapsed form
+`<summary>🚥 Pre-merge checks | ✅ 5</summary>`. A draft can have **green CI, 0 threads, 0
+body-findings, and even a CR APPROVED review** yet still carry a **failed pre-merge check** and be
+un-promotable. Parse it every run (`gh api repos/<owner>/<repo>/issues/<n>/comments --paginate`, filter
+`coderabbitai[bot]`, require CodeRabbit's stable auto-generated-summary marker
+`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`, then select the
+**newest actual summary** whose body contains `## Pre-merge checks` or
+`<summary>🚥 Pre-merge checks |` — never the newest arbitrary CodeRabbit reply). When the body has
+`<!-- pre_merge_checks_walkthrough_start -->` / `_end` boundaries, parse only that bounded region so
+an echoed marker elsewhere cannot spoof the result; accept the legacy heading fallback only inside an
+auto-generated summary/walkthrough comment. Surface every name under `### ❌ Failed checks (N`
+whenever that nested section is present, regardless of the outer shape. A compact summary is green
+**only** when it has a positive
+`✅` count and no positive `❌`, `❓`, or `⚠️` counter; mixed results such as `✅ 4 | ❌ 1` are failed,
+not green. A full summary is green only when it explicitly marks every listed check passed and contains
+no error/inconclusive result — absence of a failed heading alone is not evidence. Use exactly four
+states: `green`; `failed:<names>` (or `failed:unnamed` when no names are present); `inconclusive` for a
+recognized but non-green/unparseable summary; and `not-posted` when neither supported marker exists.
+Always fail closed — never infer green. This avoids both stale summaries from earlier review cycles
+and later command replies hiding the actual summary. Resolve each failure at the root cause:
 a **Linked Issues** fail = the PR doesn't satisfy every AC of its linked issue → either implement the
 missing AC, or (when it is genuinely separate scope) **file a well-formed deferred follow-up issue and
 reference it in the PR body** (CR's own resolution allows "note a linked follow-up if deferred"); an

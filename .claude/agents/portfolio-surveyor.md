@@ -76,17 +76,28 @@ public and private — no per-repo loop needed to enumerate):
      is not CONFLICTING, and its pre-merge checks are green (below).
    - **(d) CodeRabbit pre-merge checks per own draft — a SEPARATE surface the maintainer gates
      promotion on** (he will NOT promote a draft whose pre-merge checks aren't green — maintainer
-     direction 2026-07-06). CodeRabbit's summary comment carries a `## Pre-merge checks` section
-     (Title / Description / **Linked Issues** / **Out of Scope Changes** / Docstring-Coverage), each
-     ✅/❌/❓ — orthogonal to CI, threads, and body-findings, so a PR can be green on all three and
-     still fail here. Parse the LATEST `coderabbitai[bot]` summary comment
-     (`gh api repos/devantler-tech/<repo>/issues/<n>/comments --paginate` → filter author → **sort by
-     `created_at` desc and keep ONLY the newest `coderabbitai[bot]` summary** [`--paginate` surfaces
-     older summaries from prior review cycles, so grepping unsorted misreads stale `premerge` data] →
-     grep the upstream section shape `## Pre-merge checks` + nested `### ❌ Failed checks (N`) and report
-     `premerge=<green|failed:<names>>` with the failed check NAMES (e.g. `Linked Issues`, `Out of Scope
-     Changes`). A `premerge=failed` draft is **NEEDS-FIX** even when checks/threads/body_findings are all
-     clean.
+     direction 2026-07-06). CodeRabbit publishes pre-merge state in either a full
+     `## Pre-merge checks` section (Title / Description / **Linked Issues** / **Out of Scope Changes** /
+     Docstring-Coverage, each ✅/❌/❓) or a compact collapsed summary such as
+     `<summary>🚥 Pre-merge checks | ✅ 5</summary>`. Both are orthogonal to CI, threads, and
+     body-findings, so a PR can be green on all three and still fail here. Fetch comments with
+     pagination, filter to `coderabbitai[bot]`, require CodeRabbit's stable auto-generated-summary
+     marker `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`, sort by
+     `created_at`, and keep the **newest actual summary whose body contains either
+     supported marker** (`## Pre-merge checks` or `<summary>🚥 Pre-merge checks |`) — not the newest
+     arbitrary CodeRabbit reply, which may be a command response with no summary. When
+     `<!-- pre_merge_checks_walkthrough_start -->` / `_end` boundaries exist, parse only that bounded
+     region so echoed marker text elsewhere cannot spoof the result; accept the legacy heading fallback
+     only in an auto-generated summary/walkthrough comment. Report every failed check NAME under
+     `### ❌ Failed checks (N` whenever present (e.g. `Linked Issues`, `Out of Scope Changes`),
+     regardless of the outer shape. A compact summary is green **only** when it has a positive `✅`
+     count and no positive `❌`, `❓`, or `⚠️` counter; mixed results such as `✅ 4 | ❌ 1` are failed.
+     A full summary is green only when every listed check is explicitly passed and no
+     error/inconclusive result appears — absence of a failed heading alone is insufficient. Report
+     exactly `premerge=<green|failed:<names>|failed:unnamed|inconclusive|not-posted>`:
+     `inconclusive` means a recognized but non-green/unparseable summary; `not-posted` means no
+     supported marker. Always fail closed. Any non-green value makes the draft **NEEDS-FIX** even when
+     checks/threads/body_findings are clean.
    - **Maintainer comments on the agent's OWN PRs (incl. drafts) — disclosure-gated.** For each PR
      authored by `devantler` — **including drafts** (the maintainer steers via draft-PR comments) — also
      pull `comments` and the review-thread replies:
@@ -137,7 +148,7 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no own/trus
 - MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator acts on this FIRST (instruction)
 - <repo>: CI red on main — <workflow> (<run url>)
 - <repo> #<n> "<title>" — <bot-author>, trusted non-draft, mergeStateStatus=<…> → MERGE-READY | NEEDS-FIX: <check/threads>
-- <repo> #<n> (own/trusted, draft or not) — tetrad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
+- <repo> #<n> (own/trusted, draft or not) — tetrad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
 - <repo> #<n> "<title>" — `devantler` non-draft, mergeStateStatus=CLEAN, checks green → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no> (orchestrator applies creation-record test; NOT asserted mine)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
