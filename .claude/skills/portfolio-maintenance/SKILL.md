@@ -86,14 +86,25 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   run verifies each against current code, fixes-or-refutes, and **replies on the PR as the
   resolution record** (no thread exists to resolve). **(d) CodeRabbit pre-merge checks are a FOURTH,
   separate surface the maintainer gates promotion on** (he will NOT promote a draft whose pre-merge
-  checks aren't green — maintainer direction 2026-07-06, platform#2507): CodeRabbit's summary comment
-  carries a `## Pre-merge checks` section (Title / Description / **Linked Issues** / **Out of Scope
-  Changes** / Docstring-Coverage), each ✅/❌/❓, orthogonal to (a)/(b)/(c) — a PR green on all three
-  can still fail here. Parse the latest `coderabbitai[bot]` summary comment
-  (`gh api repos/<owner>/<repo>/issues/<n>/comments --paginate` → filter author → **sort by `created_at`
-  desc and keep ONLY the newest summary** [`--paginate` surfaces older summaries from prior cycles] →
-  grep the section shape `## Pre-merge checks` + nested `### ❌ Failed checks (N`) and report
-  `premerge=<green|failed:names>`.
+  checks aren't green — maintainer direction 2026-07-06, platform#2507): CodeRabbit publishes either
+  a full `## Pre-merge checks` section (Title / Description / **Linked Issues** / **Out of Scope
+  Changes** / Docstring-Coverage, each ✅/❌/❓) or a compact collapsed summary such as
+  `<summary>🚥 Pre-merge checks | ✅ 5</summary>`, orthogonal to (a)/(b)/(c) — a PR green on all three
+  can still fail here. Fetch comments with pagination, filter to `coderabbitai[bot]`, require
+  CodeRabbit's stable auto-generated-summary marker
+  `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`, then sort by `created_at`
+  and keep the **newest actual summary containing either supported marker** (`## Pre-merge checks` or
+  `<summary>🚥 Pre-merge checks |`), not the newest arbitrary bot reply. When
+  `<!-- pre_merge_checks_walkthrough_start -->` / `_end` boundaries exist, parse only that region so
+  echoed marker text elsewhere cannot spoof the result; accept the legacy heading fallback only in an
+  auto-generated summary/walkthrough comment. Surface names under `### ❌ Failed checks (N` whenever
+  present, regardless of the outer shape. A compact summary is green
+  **only** with a positive `✅` count and no positive `❌`, `❓`, or `⚠️` counter; mixed results such as
+  `✅ 4 | ❌ 1` are failed. A full summary is green only when every listed check is explicitly passed
+  and no error/inconclusive result appears; the absence of a failed heading is insufficient. Report
+  exactly `premerge=<green|failed:names|failed:unnamed|inconclusive|not-posted>`: `inconclusive` means a
+  recognized but non-green/unparseable summary, while `not-posted` means no supported marker. Always
+  fail closed.
   Resolve a **Linked Issues** fail by implementing the missing AC **or** filing + referencing a
   well-formed deferred follow-up issue (CR's own resolution allows a deferred link); resolve an **Out
   of Scope Changes** inconclusive by replying to `@coderabbitai` clarifying which hunks actually
