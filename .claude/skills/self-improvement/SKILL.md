@@ -1,6 +1,6 @@
 ---
 name: self-improvement
-description: How the Daily AI Assistant improves its OWN definition (the shared contract, the daily-maintainer agent, the portfolio-maintenance + product-engineering + products skills, and each submodule's AGENTS.md ## Maintenance) over time — capturing operational learnings each run and distilling them into evidence-based, guard-railed draft PRs. Use at the end of every run (to log learnings) and on the weekly distil pass.
+description: How the Daily AI Engineer improves its OWN definition (the shared contract, the daily-maintainer agent, the portfolio-maintenance + product-engineering + products skills, and each submodule's AGENTS.md ## Maintenance) over time — capturing operational learnings each run and distilling them into evidence-based, guard-railed draft PRs. Use at the end of every run (to log learnings) and on the weekly distil pass.
 ---
 
 # Self-improvement loop
