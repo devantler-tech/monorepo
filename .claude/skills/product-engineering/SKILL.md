@@ -21,10 +21,10 @@ plus the numbers/failures you need (e.g. `<cmd> 2>&1 | tee /tmp/out.log | tail -
 read-heavy investigation to a subagent (the built-in `Explore` type) that returns just the conclusion.
 Same work, fewer tokens.
 
-> **Upstream caveat.** Everything below assumes **`devantler-tech`** work (autonomous as ever). For a
-> **non-`devantler-tech`** (upstream/third-party) repo, *creating* an issue or PR first needs the
-> maintainer's approval via the **ask tool** (contract → *Merge policy → Ask the maintainer before
-> creating ANY upstream issue or PR*); *fixing* an existing `devantler` upstream PR stays autonomous.
+> **External-repository caveat.** Everything below assumes **`devantler-tech`** work. Do not inspect or
+> modify any external repo until the maintainer confirms in the current conversation that the named
+> repo is unrelated to professional work. This applies to existing `devantler` PRs too. After that
+> boundary is cleared, creating an upstream issue or PR still needs ask-tool approval.
 
 > **Lean on the specialist skills** for heavy thinking, **if they're available in your environment**
 > (these ship with the Claude Code `engineering` plugin — they are *not* defined in this repo; if a
@@ -193,7 +193,9 @@ thin** (no startable substantive issue after the *Issue-driven* skip test) — a
 input to every §1 strategy review — **restock it** instead of exiting (contract → *Enhancement work*;
 maintainer direction 2026-07-05):
 - **Upstream research.** For the product's key dependencies and comparable tools, read what shipped
-  since the last research pass — release notes, changelogs, roadmaps, headline features. For
+  since the last research pass — release notes, changelogs, roadmaps, headline features. In unattended
+  runs, use public non-repository documentation only; do not open an external repository page or API.
+  A current interactive confirmation may clear the professional-work boundary for one named repo. For
   ksail/platform that means **Headlamp, ArgoCD, FluxCD, Kubernetes**, and the other controllers and
   tooling they build on (Cilium, Talos, Crossplane, Kubescape, …); for other products, their own
   upstream set. The question per finding: *does this create a gap, an opportunity, or an obligation for
