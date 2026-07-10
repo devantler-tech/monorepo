@@ -25,7 +25,7 @@ keeping them healthy *and* moving them forward.
 | GitOps-tenant template | `devantler-tech/gitops-tenant-template` | `templates/gitops-tenant-template` | [AGENTS.md](https://github.com/devantler-tech/gitops-tenant-template/blob/main/AGENTS.md) |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | [AGENTS.md](https://github.com/devantler-tech/platform-template/blob/main/AGENTS.md) |
 | GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | [AGENTS.md](https://github.com/devantler-tech/actions/blob/main/AGENTS.md) |
-| Reusable Workflows | `devantler-tech/reusable-workflows` (**archived 2026-07-10** — merged into `devantler-tech/actions`, whose `.github/workflows` now hosts them) | `github/devantler-tech/github-actions/reusable-workflows` (legacy pin) | [AGENTS.md](https://github.com/devantler-tech/actions/blob/main/AGENTS.md) |
+| Reusable Workflows | `devantler-tech/reusable-workflows` (**archived 2026-07-10** — merged into `devantler-tech/actions`, whose `.github/workflows` now hosts them) | — (legacy submodule pin removed 2026-07-11) | [AGENTS.md](https://github.com/devantler-tech/actions/blob/main/AGENTS.md) |
 | Homebrew tap | `devantler-tech/homebrew-tap` (repo renamed from `homebrew-formulas`) | `homebrew-tap` | [AGENTS.md](https://github.com/devantler-tech/homebrew-tap/blob/main/AGENTS.md) |
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | [AGENTS.md](https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md) |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | [AGENTS.md](https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md) |
