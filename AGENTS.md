@@ -25,7 +25,7 @@ keeping them healthy *and* moving them forward.
 | GitOps-tenant template | `devantler-tech/gitops-tenant-template` | `templates/gitops-tenant-template` | [AGENTS.md](https://github.com/devantler-tech/gitops-tenant-template/blob/main/AGENTS.md) |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | [AGENTS.md](https://github.com/devantler-tech/platform-template/blob/main/AGENTS.md) |
 | GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | [AGENTS.md](https://github.com/devantler-tech/actions/blob/main/AGENTS.md) |
-| Reusable Workflows | `devantler-tech/reusable-workflows` | `github/devantler-tech/github-actions/reusable-workflows` | [AGENTS.md](https://github.com/devantler-tech/reusable-workflows/blob/main/AGENTS.md) |
+| Reusable Workflows | `devantler-tech/reusable-workflows` (**archived 2026-07-10** — merged into `devantler-tech/actions`, whose `.github/workflows` now hosts them) | `github/devantler-tech/github-actions/reusable-workflows` (legacy pin) | [AGENTS.md](https://github.com/devantler-tech/actions/blob/main/AGENTS.md) |
 | Homebrew tap | `devantler-tech/homebrew-tap` (repo renamed from `homebrew-formulas`) | `homebrew-tap` | [AGENTS.md](https://github.com/devantler-tech/homebrew-tap/blob/main/AGENTS.md) |
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | [AGENTS.md](https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md) |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | [AGENTS.md](https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md) |
@@ -37,8 +37,8 @@ keeping them healthy *and* moving them forward.
 > Submodule `AGENTS.md` links use full GitHub URLs because those files live in the submodule repos, not this repo's tree (a relative link would 404 on GitHub).
 
 **Shared libraries** (leverage points across the whole suite — see *Holistic review* and the
-`product-engineering` skill): the CI building blocks `devantler-tech/actions` +
-`devantler-tech/reusable-workflows`, and the agent extensions `devantler-tech/agent-skills` (generic,
+`product-engineering` skill): the CI building block `devantler-tech/actions` (which
+absorbed the archived `reusable-workflows` repo), and the agent extensions `devantler-tech/agent-skills` (generic,
 cross-tool agent skills) + `devantler-tech/agent-plugins` (a tool-neutral marketplace bundling those skills
 for VS Code / Copilot CLI / Claude Code; rescope in progress —
 [plugins#7](https://github.com/devantler-tech/agent-plugins/issues/7)). A generic pattern proven in one
@@ -743,7 +743,7 @@ work misses:
 - **Emergent generic patterns.** When the same approach (a CI step, a release config, a workflow, a
   lint/test setup, an agent skill, a docs convention) has independently appeared in 2+ products, it has
   become *generic* — extract it into the right **shared library** so every product inherits it instead
-  of drifting: CI → `devantler-tech/actions` / `reusable-workflows`; agent skills →
+  of drifting: CI → `devantler-tech/actions` (composite actions + reusable workflows); agent skills →
   `devantler-tech/agent-skills`; (plugins → `devantler-tech/agent-plugins` once created). Then propagate consumers
   to the shared version.
 - **Consistency & drift.** Versions, pinned actions, toolchains, conventions, and `AGENTS.md

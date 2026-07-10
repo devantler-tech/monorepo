@@ -4,9 +4,12 @@
 #
 # Guards the hand-maintained Actions / Reusable Workflows lists on the Active
 # Projects page (docs/src/content/docs/projects/active.mdx) against silent
-# drift from their source-of-truth sibling repos. Both repos are submodules of
-# this monorepo, so the check is entirely network-free: it reads only the
-# already-checked-out submodules, never the GitHub API.
+# drift from their source-of-truth repo. Both lists are sourced from the
+# devantler-tech/actions submodule (the standalone reusable-workflows repo was
+# merged into it and archived 2026-07-10 — monorepo#1964): composite actions
+# live in its top-level directories, reusable workflows in its
+# .github/workflows. The check is entirely network-free: it reads only the
+# already-checked-out submodule, never the GitHub API.
 #
 #   - Actions list       — one bullet per composite action, so it maps 1:1 to
 #                          the `*/action.yaml` directories. A bullet *count*
@@ -83,7 +86,7 @@ repo_root="${GITHUB_WORKSPACE:-$(cd "$script_dir/../.." && pwd)}"
 
 mdx="$repo_root/docs/src/content/docs/projects/active.mdx"
 actions_dir="$repo_root/github/devantler-tech/github-actions/actions"
-rw_workflows_dir="$repo_root/github/devantler-tech/github-actions/reusable-workflows/.github/workflows"
+rw_workflows_dir="$repo_root/github/devantler-tech/github-actions/actions/.github/workflows"
 gitmodules="$repo_root/.gitmodules"
 templates_dir="$repo_root/docs/src/content/docs/templates"
 
@@ -99,7 +102,7 @@ die_missing() {
 
 [ -f "$mdx" ] || die_missing "active.mdx" "$mdx"
 [ -d "$actions_dir" ] || die_missing "actions submodule" "$actions_dir"
-[ -d "$rw_workflows_dir" ] || die_missing "reusable-workflows submodule" "$rw_workflows_dir"
+[ -d "$rw_workflows_dir" ] || die_missing "actions submodule workflows directory" "$rw_workflows_dir"
 [ -f "$gitmodules" ] || die_missing ".gitmodules" "$gitmodules"
 [ -d "$templates_dir" ] || die_missing "templates docs directory" "$templates_dir"
 
@@ -177,8 +180,8 @@ marker in the '## 🔄 Reusable Workflows' section of docs/src/content/docs/proj
   fail=1
 elif [ "$rw_count" -ne "$rw_expected" ]; then
   echo "::error file=docs/src/content/docs/projects/active.mdx::Reusable Workflows drift: \
-${rw_count} reusable (workflow_call) workflow(s) in the reusable-workflows submodule but the marker \
-declares ${rw_expected}. A workflow was added or removed in devantler-tech/reusable-workflows — review \
+${rw_count} reusable (workflow_call) workflow(s) in the actions submodule but the marker \
+declares ${rw_expected}. A workflow was added or removed in devantler-tech/actions — review \
 the category bullets under '## 🔄 Reusable Workflows' in docs/src/content/docs/projects/active.mdx and \
 update the 'reusable-workflows-count' marker to ${rw_count}." >&2
   fail=1
@@ -187,7 +190,7 @@ elif [ "$rw_declared" != "$rw_live" ]; then
   only_marker=$(comm -13 <(printf '%s\n' "$rw_live") <(printf '%s\n' "$rw_declared") | paste -sd, -)
   echo "::error file=docs/src/content/docs/projects/active.mdx::Reusable Workflows drift: the \
 'reusable-workflows-names' marker does not match the workflow_call workflows in \
-devantler-tech/reusable-workflows. Missing from marker: [${only_live:-none}]. \
+devantler-tech/actions. Missing from marker: [${only_live:-none}]. \
 Stale in marker (no longer a workflow_call workflow): [${only_marker:-none}]. A workflow was added, \
 removed, or renamed — review the category bullets under '## 🔄 Reusable Workflows' AND update the \
 'reusable-workflows-names' marker in docs/src/content/docs/projects/active.mdx." >&2
