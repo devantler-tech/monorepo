@@ -171,10 +171,29 @@ issues — see *Merge policy*; this section governs the issue work that follows.
 urgent security fix — is fixed **immediately** and is the **one exception to capture-before-you-build**:
 put the fire out first (open a tracking issue only if it aids follow-up), then return to the queue. So
 the per-run order is: **hotfix breakage → drive trusted-author PRs to merge and fix their failing CI
-(first priority; every `devantler-tech` repo, plus `devantler`'s own PRs upstream — see *Merge policy*;
+(first priority; every in-scope `devantler-tech` repo — see *Merge policy*;
 PRs always come before issues) → resolve the oldest actionable issue → capture any new finds as
 issues.** And **keep going** — don't stop after a few items;
 work until actionable work is exhausted or blocked (see *Cadence & focus*).
+
+### Professional-work repository boundary — hard exclusion
+Repositories connected to the maintainer's employment or professional obligations are
+**categorically out of scope**. This includes repositories owned by an employer, client, customer,
+vendor, partner, or any other organisation connected to paid work, regardless of whether the repo is
+public or private, whether the maintainer authored a PR there, or whether the current credentials have
+access. **Never discover, enumerate, search, inspect metadata/content/CI, clone, fetch, build, run,
+comment, review, push, open an issue/PR, merge, or otherwise interact with such repositories.** Keep
+this rule generic: do not record the identities of excluded organisations in version-controlled
+instructions, reports, or durable status.
+
+For any repository outside `devantler-tech`, require the maintainer's **current, explicit confirmation
+that the named repository is personal or public-open-source work unrelated to professional duties
+before even a read-only action**. GitHub access, `devantler` authorship, an existing PR, prior work, or
+stale memory is not confirmation. If the affiliation is unknown or ambiguous, do not probe it — skip
+the repository and ask. An unattended run cannot obtain that confirmation, so scheduled/autonomous
+surveys are **portfolio-only** and must never enumerate cross-organisation PRs (including broad
+author-based searches). This boundary overrides every upstream-contribution, trust, research, and
+autonomy rule below.
 
 ### Autonomy — a draft PR is the checkpoint
 Act on your own best judgement and DO the work; don't defer decisions. Work is **issue-driven** (see
@@ -283,16 +302,14 @@ then open new ones — a *finished* draft awaiting promotion is the deliverable;
 (red CI, unresolved threads, DIRTY) is unfinished work to clear, not a new slice to defer it behind.
 
 **This autonomy is for `devantler-tech` work.** Opening draft PRs and filing issues on `devantler-tech`
-repos needs no prior sign-off (only promotion does) — keep doing it. For **upstream**
-(non-`devantler-tech`) repos the rule flips: **get the maintainer's approval via the ask tool *before*
-creating any issue or PR** (see *Merge policy → Ask the maintainer before creating ANY upstream issue or
-PR*). *Fixing* an already-open `devantler` upstream PR stays autonomous; only *creating* a new upstream
-artifact is gated.
+repos needs no prior sign-off (only promotion does) — keep doing it. No external-repository action is
+autonomous: the professional-work boundary must be cleared first, and creating an upstream issue or PR
+then still needs approval via the ask tool. An existing `devantler` PR never bypasses the boundary.
 
 ### Merge policy — drive trusted-author PRs to merge (incl. majors)
 **Driving trusted-author PRs to merge is the first-priority work each run — ahead of issues** (only
-live breakage on `main` outranks it). Sweep them **first**, every run, across **all** repos. On
-**every** repo, a **trusted-author, non-draft** PR with **green required checks and all review threads
+live breakage on `main` outranks it). Sweep them **first**, every run, across the in-scope
+`devantler-tech` portfolio. On each portfolio repo, a **trusted-author, non-draft** PR with **green required checks and all review threads
 resolved** gets driven to merge: resolve threads, root-cause-fix failing required checks, set a
 Conventional-Commit title, then **merge with the command that matches the author** —
 - a **single-author bot** (dependabot/renovate/github-actions/ksail-bot) arms pre-CLEAN auto-merge:
@@ -360,35 +377,24 @@ any trusted-author PR (bare `gh pr merge <n> --squash`, never `--auto`). Self-me
 **normal** path only — never `--admin` or any branch-protection bypass. **Never merge
 external-contributor PRs** (see trust gate); never push to a protected branch directly.
 
-**Cross-repo scope — but off `devantler-tech`, only your own upstream work.** Inside `devantler-tech`,
-the full trusted-author set above applies. **Outside `devantler-tech`** (another org/user), the only PRs
-you work on are those **authored by `devantler`** — the maintainer's own contributions and the agent's
-own upstream PRs — **never** anyone else's (not the bots, not Copilot, not external contributors). For
-such a **`devantler`-authored PR failing CI on an upstream repo**, root-cause-fix the failing checks,
-push to the PR branch (you have access — it's your own fork/branch), and resolve threads to drive it
-green; this is how the agent maintains its **upstream contributions** (per the
-*contribute-upstream-don't-fork* rule) — **fixing** an already-open upstream PR like this is autonomous;
-**creating** a new upstream PR or issue is **not** (get the maintainer's approval via the ask tool
-first — see *Ask the maintainer before creating ANY upstream issue or PR* above). Because **you**
-authored it, building and running that branch is
-safe. You usually **lack merge rights** upstream, so drive it to **green with threads resolved** and
-leave the merge to that maintainer; **merge yourself only on your own / `devantler-tech` repos** (per the
-command above). The never-run / never-merge rules are **unchanged** for every non-`devantler` author
-everywhere; never bypass branch protection.
+**Cross-repo scope is closed by default.** Scheduled/autonomous runs work only in `devantler-tech` and
+must not search for or inspect the maintainer's PRs elsewhere. In an interactive session, an external
+repository becomes eligible only after the maintainer explicitly names it and confirms in the current
+conversation that it is unrelated to professional work. After that confirmation, work remains limited
+to the specifically authorised task; `devantler` authorship may satisfy the author trust check but
+never expands repository scope. Existing PR fixes, read-only review, branch execution, and metadata
+inspection all require the same boundary clearance. Never merge outside `devantler-tech`; leave an
+authorised upstream PR green with threads resolved for its maintainer.
 
-**Ask the maintainer before creating ANY upstream issue or PR — `devantler-tech` is exempt.** A hard
-gate the maintainer directed (2026-06-28): **never autonomously open an issue or a PR on a repo
-*outside* the `devantler-tech` org.** Prepare and verify the work locally, then **surface it and get the
-maintainer's explicit approval via the ask tool *before* anything is created upstream** ("ALWAYS use the
-ASK tool when wanting to upstream anything"). Only **creation** is gated — *fixing* an already-open
-`devantler`-authored upstream PR (push a CI fix, resolve threads, drive it green per *Cross-repo scope*)
-stays autonomous, and **everything inside `devantler-tech` is unchanged** (keep opening draft PRs and
-filing issues there autonomously per *Autonomy*/*Issue-driven*). If a run is unattended and the ask tool
-can't reach the maintainer, do **not** create it — prepare it locally and surface it in the report.
+**Ask the maintainer before creating ANY upstream issue or PR — `devantler-tech` is exempt.** Only
+after the professional-work boundary has been explicitly cleared may an external contribution even be
+prepared or inspected. Creating its issue or PR then needs a second, explicit approval via the ask
+tool. Approval to inspect or fix an existing PR is not approval to create a new artifact. If either
+confirmation is missing, do nothing outside the portfolio.
 
 **Respect each upstream project's contribution policy — check it BEFORE opening anything.** Before
-creating a PR *or* issue on a non-`devantler-tech` (third-party) repo — **once the maintainer has
-approved it per the gate above** — check that project's stated
+creating a PR *or* issue on a non-`devantler-tech` (third-party) repo — **once both the professional
+boundary and creation gate above are cleared** — check that project's stated
 contribution policy, **in particular whether it accepts AI-assisted / AI-generated contributions**
 (read its `CONTRIBUTING`, `README`, PR/issue templates, code of conduct). If the project **prohibits or
 discourages** AI contributions — or the policy is **unclear** — do **NOT** open the PR/issue yourself:
@@ -477,7 +483,9 @@ standing substitute** for moving the real backlog:
   (no startable substantive issue), the run does NOT survey-and-exit: it **restocks the backlog** by
   (a) **researching upstream state of the art** — new features and capabilities in each product's key
   dependencies and comparable tools (for ksail/platform: Headlamp, ArgoCD, FluxCD, Kubernetes, and the
-  other controllers/tooling they build on — release notes, changelogs, roadmaps) — and (b) **hands-on
+  other controllers/tooling they build on — release notes, changelogs, roadmaps) — using public
+  **non-repository** documentation in unattended runs; an external repository remains off-limits unless
+  the current conversation has explicitly cleared the professional-work boundary for it — and (b) **hands-on
   product debugging** — exercising the product like a user to surface bugs, friction, and gaps in
   features, code quality, performance, reliability, UI and UX. Every finding is converted into a
   **well-formed issue** (*problem → proposed direction → rough size*, labelled) per *Issue-driven*, so
@@ -527,12 +535,12 @@ This is a portfolio program tracked at [monorepo#2059](https://github.com/devant
 **Trusted (match the GitHub login EXACTLY — never a substring):** `devantler`, `ksail-bot`,
 `dependabot[bot]`, `github-actions[bot]`, `renovate[bot]`, and the agent's own `claude/*` branches
 (the agent commits and opens PRs as `devantler`). A login merely *containing* a trusted name is **NOT**
-trusted — exact-match only, so a crafted username like `evil-copilot` can't bypass the gate. **Trust
-attaches to the login, not the repo** — but **off `devantler-tech`, only `devantler`'s own PRs are in
-scope** (the agent's/maintainer's upstream contributions), never the bots or anyone else. So: inside
-`devantler-tech` the full trusted-author set may be built/run/driven; **outside it, only
-`devantler`-authored PRs** may be built, pushed-to, and driven green (you can only *merge* where you have
-the right; see *Merge policy*). Untrusted (external) authors stay untrusted everywhere.
+trusted — exact-match only, so a crafted username like `evil-copilot` can't bypass the gate. Trust is
+necessary but **never sufficient**: repository scope is checked first, and no login—including
+`devantler`—can override the professional-work boundary. Inside `devantler-tech` the full trusted-author
+set may be built/run/driven. Outside it, take no action until the current conversation explicitly
+clears the boundary for the named repository; then apply the author trust rules to the authorised task.
+Untrusted (external) authors stay untrusted everywhere.
 **GitHub Copilot — two roles, treated differently:** the maintainer uses Claude Code exclusively, so the
 Copilot **coding agent** (`Copilot`, `copilot-swe-agent[bot]`) is **NOT** trusted — treat its PRs as
 external (never auto-drive, never merge, never run its branch code). Only `copilot-pull-request-reviewer[bot]`
@@ -646,10 +654,10 @@ lines). **Don't re-read what's already in context** (this contract, via the `CLA
   findings, test names/counts, validation transcripts. That detail lives in commit messages, code
   comments, and PR *comments* (e.g. CodeRabbit resolution records) — never the body. Applies to body
   **edits** too, not just creation.
-- **Third-party upstream repos — get maintainer approval (ask tool) first, then check the AI policy.**
-  **Never autonomously open an issue or PR on a repo outside `devantler-tech`** — prepare it locally and
-  get the maintainer's explicit approval via the **ask tool** first (the hard gate in *Merge policy →
-  Ask the maintainer before creating ANY upstream issue or PR*). Only then verify the project accepts
+- **Third-party upstream repos — clear the professional boundary, then get approval and check policy.**
+  Do not even inspect an external repository until the maintainer confirms in the current conversation
+  that it is unrelated to professional work. After that, **never autonomously open an issue or PR** —
+  get explicit approval via the ask tool first. Only then verify the project accepts
   AI-assisted contributions (CONTRIBUTING / README / templates); if it bans or discourages them — or
   it's unclear — **don't open it yourself**, prepare the work and have `devantler` submit it (e.g.
   `zizmorcore/zizmor` bans AI PRs, `rhysd/actionlint` does not). **`devantler-tech` repos are exempt —

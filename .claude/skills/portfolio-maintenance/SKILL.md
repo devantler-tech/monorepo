@@ -43,9 +43,8 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   pulled for the few **trusted-author non-draft** PRs, not for every PR in every repo);
 - checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure
   --limit 3` each;
-- also enumerates **`devantler`'s own PRs across *all* orgs** (`gh search prs --author devantler
-  --state open`), not just devantler-tech, so cross-org **upstream-contribution** PRs with failing CI
-  surface for a fix too (trust is author-keyed — contract *Merge policy*/*Trust gate*);
+- enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
+  broad author-based search, because scheduled discovery must not expose professional-work repos;
 - flags untriaged issues/PRs, stale PRs (>14d), Dependabot/Renovate PRs, `roadmap`-ready issues, and
   products with **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs as
   static-review-only;
@@ -150,9 +149,8 @@ Pick the **highest-value work across the whole portfolio**, then **go deep where
 rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and
 sprawl, not value). **PRs come first:** driving **trusted-author PRs** to merge — and fixing their
 failing CI — is the **first-priority work every run, ahead of issues** (only live breakage outranks it).
-Scope: every **`devantler-tech`** repo's trusted-author PRs, **plus `devantler`'s own PRs upstream**
-(other orgs/users — the maintainer's/agent's own contributions only, never another author's; see
-contract *Merge policy*/*Trust gate*). Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
+Scope: every **`devantler-tech`** repo's trusted-author PRs; scheduled runs do not enumerate or act on
+external repositories. Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
 are the work queue**, you resolve the **oldest actionable** one first, and new non-trivial finds are
 **filed as issues before** they're built (trivial obvious fixes excepted). **Every run must clear the
 floor — at least one concrete artifact** (ideally a merged/drafted PR or a draft resolving the oldest
@@ -170,18 +168,12 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.
 2. **Drive trusted-author PRs to merge — the first-priority sweep, ahead of issues, every run.** Across
-   **all** repos, drive every **trusted-author** PR to merge per the contract (resolve threads, fix
+   all `devantler-tech` repos, drive every **trusted-author** PR to merge per the contract (resolve threads, fix
    required checks, then merge with the **command that matches the author**: bots arm `--auto`, your own/
    `devantler` PRs merge directly with bare `gh pr merge <n> --squash` once CLEAN; incl. majors and
-   incl. your own definition PRs once maintainer-promoted). **Off `devantler-tech`, only your own
-   upstream work:** you may also **fix failing CI on a `devantler`-authored PR in another org/user's
-   repo** (the maintainer's/agent's own upstream contributions — never the bots or anyone else) —
-   build/push to its branch (it's your own) and drive it green; *merge* only where you have the right
-   (upstream, leave the merge to that maintainer). **Creating** a new upstream PR or issue — vs. *fixing*
-   an existing one — is **gated**: get the maintainer's approval via the **ask tool** first (contract →
-   *Merge policy → Ask the maintainer before creating ANY upstream issue or PR*); `devantler-tech`
-   creation stays autonomous. Never run or merge a **non-`devantler`** PR off
-   `devantler-tech`, and never run/merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony** — a single
+   incl. your own definition PRs once maintainer-promoted). External repos are outside scheduled scope;
+   an interactive task must first clear the professional-work boundary for the specifically named repo.
+   Never run or merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony** — a single
    fresh `gh pr view <n>` showing `isDraft:false`, a trusted author, and `CLEAN` is enough; a refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
    variant-evidence retries. **On merge-queue repos, root-cause a stall/kick-out before re-queuing**
@@ -257,11 +249,12 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
 
 11. **Continuous upstream research & product debugging** — the backstop when rungs 7-10 come up empty:
    research upstream state of the art (Headlamp, ArgoCD, FluxCD, Kubernetes, and each product's other
-   key dependencies) and exercise the product hands-on to surface bugs, friction, and feature/quality/
-   performance/reliability/UI/UX gaps — every finding filed as a well-formed issue that restocks the
-   queue rung 7 drains (procedure: [`product-engineering`](../product-engineering/SKILL.md) §9;
-   maintainer direction 2026-07-05, seeding epic ksail#5827). An empty backlog is a trigger for
-   research, never for a survey-and-exit run.
+   key dependencies) through public non-repository documentation in unattended runs, and exercise the
+   product hands-on to surface bugs, friction, and feature/quality/performance/reliability/UI/UX gaps —
+   every finding filed as a well-formed issue that restocks the queue rung 7 drains (procedure:
+   [`product-engineering`](../product-engineering/SKILL.md) §9; maintainer direction 2026-07-05,
+   seeding epic ksail#5827). External repository pages/APIs remain outside scheduled scope. An empty
+   backlog is a trigger for research, never for a survey-and-exit run.
 
 **Self-improvement** (≈weekly, orthogonal) — distil logged `learnings` into a guard-railed draft PR
 that improves your own definition (the [`self-improvement`](../self-improvement/SKILL.md) skill).
@@ -304,9 +297,9 @@ For each selected product:
    subsystem before changing it), delegate to a subagent (the built-in **`Explore`** type) that
    returns just the conclusion — keep the edits and `gh pr create` in your own loop. Open a **draft**
    PR (Conventional-Commit title, AI-disclosure line, labels; `Fixes #N` when it closes an issue).
-   Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff. **On a non-`devantler-tech`
-   (upstream) repo, creating that PR or issue first needs the maintainer's approval via the ask tool**
-   (§2 / contract *Merge policy*); `devantler-tech` creation is unchanged.
+   Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff. External-repository work
+   is forbidden unless the current interactive conversation first clears the professional-work
+   boundary for that named repo; creating an upstream artifact then still needs ask-tool approval.
 4. **Clean up:** `git -C <path> worktree remove .claude/worktrees/maint-<runid>` (and prune). Leave
    no worktree or dirty state behind.
 
