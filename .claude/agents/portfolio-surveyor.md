@@ -32,10 +32,10 @@ public and private — no per-repo loop needed to enumerate):
 2. **Open issues (org-wide, one call):**
    `gh search issues --owner devantler-tech --state open --limit 300 --json number,repository,title,labels,updatedAt,url`
    (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
-3. **Deepen only the merge candidates.** For the *few* **trusted-author, non-draft** PRs only
-   (`devantler`, `ksail-bot`, `dependabot[bot]`, `github-actions[bot]`, `renovate[bot]` — **exact
-   login match, never a substring**; `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the
-   heavy fields one PR at a time:
+3. **Deepen only the own/trusted pentad candidates.** For the *few* open **own/trusted PRs — drafts
+   and non-drafts —** (`devantler`, `ksail-bot`, `dependabot[bot]`, `github-actions[bot]`,
+   `renovate[bot]`, `coderabbitai[bot]` — **exact login match, never a substring**;
+   `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the heavy fields one PR at a time:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,reviewThreads,headRefName,headRefOid,author,body`
    — do **not** pull `statusCheckRollup` for every PR in every repo. Classify each as **MERGE-READY**
    only when the current-head pentad is clear (CLEAN + required checks/pre-merge green + zero
