@@ -227,13 +227,16 @@ coverage and performance (contract → *Enhancement work → Security posture*).
   graduate a fixed control to `Enforce` so it can't regress; reserve a **scoped, justified exception**
   for genuinely irreducible controls, reviewed via PR and periodically pruned — a growing exceptions
   set is a smell, not progress.
-- **Definition of done for a security PR:** the body states *finding → fix-or-except decision (with
-  the why) → residual posture delta* (score/count before → after), mirroring the perf
-  before/after-numbers rule. Ratchet the CI gate (e.g. `--compliance-threshold`) **up** as gaps close;
+- **Definition of done for a security PR:** the public body states the **sanitized**
+  *vulnerability/control class → fix-or-except decision (with the why) → aggregate residual posture
+  delta* (score/count before → after), without credential identity/scope, private topology,
+  reachability, or exploit-detail inventories. Keep the full object-level evidence in the
+  runtime-managed, out-of-repository private operator notes. Ratchet the CI gate (e.g.
+  `--compliance-threshold`) **up** as gaps close;
   never down, and never trade a real fix for a threshold tweak.
 - **Standing objective, not a floor:** drive each product's posture/CVE/runtime surfaces to **100%
-  and hold them** — a regression from 100% is operate-class work (capture as a `security` issue, or
-  hotfix if active breakage), not a new nice-to-have.
+  and hold them** — a regression from 100% is operate-class work (capture as a sanitized `security`
+  issue with full evidence kept private, or hotfix if active breakage), not a new nice-to-have.
 
 ## Per-product notes (where "advance" means different things)
 - **ksail** (Go CLI): features/UX, coverage on command/reconcile paths, `-bench` on hot loops; weekly

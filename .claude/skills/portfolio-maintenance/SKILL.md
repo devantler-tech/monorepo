@@ -149,9 +149,9 @@ the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, 
 the same cadence (plus after any credential or agent-tooling change), a **read-only local-host
 least-privilege review** (contract *Local agent host*): token scopes, both agents' permission/sandbox
 configs, secret exposure, cluster credential scope, OS-account privileges. Record findings in
-**private operator notes only** (native memory — never a public issue/PR/report; see contract
-*Sensitive information stays private*) and track it with a `last_host_audit` cursor in memory like the
-other cadence gates.
+**private operator notes only** in the runtime-managed, out-of-repository memory store — never a
+repo-local `memory/`/`MEMORY.md` or a public issue/PR/report (see contract *Sensitive information
+stays private*) — and track it with a `last_host_audit` cursor like the other cadence gates.
 
 *(Fallback: if you cannot spawn a subagent in this environment, run the same leaned survey inline —
 org-wide `gh search` first, deepen only the candidates — never the old per-repo `gh pr/issue list` loop.)*
@@ -229,8 +229,11 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    [`platform-security-surveyor`](../../agents/platform-security-surveyor.md) pass (§1), act on its
    `deltas_needing_action`: a **broken/invisible scanner** or an actively-exploited finding is
    breakage-class (rung 1 — hotfix); every other **confirmed off-baseline** delta (posture regression,
-   new reachable CVE, unrouted runtime detection) is captured as a `security` issue under the
-   product's security epic (platform: #2447) so it joins the oldest-first queue. Resolution follows
+   new reachable CVE, unrouted runtime detection) keeps its full object/reachability evidence in
+   out-of-repository private operator notes and is captured publicly only as a **sanitized** `security`
+   issue under the product's security epic (platform: #2447), naming the public component/control
+   class and acceptance criteria without credential, topology, or exploitability detail. Resolution
+   follows
    the **fix-vs-except ladder** in the product card (fix root cause → runtime-enforce/graduate to
    `Enforce` → scoped exception as audited last resort) — the security definition-of-done is
    [`product-engineering`](../product-engineering/SKILL.md) §10.

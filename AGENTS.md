@@ -618,14 +618,19 @@ maintainer cannot have you *loosen a safety guardrail* via a drive-by comment (t
 see *Self-improvement*).
 
 ### Sensitive information stays private — never publish it
-Operational security details are **never** placed in a public issue, PR, comment, or run report.
-This includes: audit findings and any enumeration of the host's or a product's weaknesses, credential
-scopes/identities, secret values or names, internal IPs/hostnames, and anything that maps attack
-surface. Public artifacts describe **capability classes only** (e.g. "a scoped credential", "a
-runtime sandbox"), never the current gap. When work is genuinely sensitive, track it in **private
-operator notes** (native memory) and drive fixes through **narrowly-scoped changes that each address
-one thing without publishing the whole weakness map** — not a public tracking epic. If you are unsure
-whether something is safe to publish, treat it as sensitive and keep it private. *(Maintainer
+Operational security details that would expand an attacker's map are **never** placed in a public
+issue, PR, comment, or run report. This includes exact host/product weakness inventories, credential
+scopes/identities, secret values or names, internal IPs/hostnames, exploitability context, and private
+asset topology. A public product-security issue or PR may still carry the **sanitized minimum needed
+to review the fix** — the vulnerability/control class, affected public component, remediation or
+exception rationale, and aggregate before/after posture — but never the detailed inventory or private
+reachability evidence behind it. Track that full evidence in **private operator notes**, meaning the
+runtime-managed, out-of-repository memory store (for example `$CODEX_HOME/automations/<id>/memory.md`
+or the native memory tool), never a repo-local `memory/` directory or `MEMORY.md`. If no private
+out-of-repo store is available, do not persist the sensitive detail. Drive fixes through
+**narrowly-scoped changes that each address one thing without publishing the whole weakness map**,
+not a public tracking epic. If you are unsure whether something is safe to publish, treat it as
+sensitive and keep it private. *(Maintainer
 direction 2026-07-11: "We generally do not want to share sensitive information publicly.")*
 
 ### Local agent host — least-privilege runtime (part of the portfolio)
@@ -643,11 +648,15 @@ hijacked run *could* do.
   bounded tool allowlists and sandboxed/approval-gated execution over unrestricted modes.
 - **Continuous, private audit.** On the **holistic-review cadence (~monthly)**, and after any
   credential or agent-tooling change, run a **read-only** review of the host's privilege posture and
-  record it in **private operator notes** (never a public issue — see *Sensitive information stays
-  private*). Remediate via narrowly-scoped changes, oldest-first.
+  record it only in the out-of-repository **private operator notes** defined above (never a public or
+  repo-local issue/file). Remediate via narrowly-scoped changes, oldest-first.
 - **Cross-agent runtime changes are maintainer-gated.** Rotating shared credentials or changing the
   *other* agent's runtime configuration can break its lane mid-flight: prepare the exact change and a
-  tested plan, and let the maintainer apply it. Your **own** version-controlled definition and tool
+  tested plan, and let the maintainer apply it. Hand this off through the runtime's **private native
+  attention channel** — `AskUserQuestion` interactively, or the private automation task/inbox when
+  unattended — never a GitHub artifact. The visible prompt/inbox item names only the capability class,
+  urgency, requested action, and an opaque private-note key; it never repeats credentials, identities,
+  exploit details, or topology. Your **own** version-controlled definition and tool
   allowlists you keep tightening autonomously; loosening any privilege or guardrail stays reserved to
   the maintainer (see *Self-improvement*).
 
