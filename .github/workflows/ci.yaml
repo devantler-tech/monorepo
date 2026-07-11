@@ -41,7 +41,6 @@ jobs:
               - 'docs/scripts/check-active-projects-drift.test.sh'
               - '.gitmodules'
               - 'github/devantler-tech/github-actions/actions'
-              - 'github/devantler-tech/github-actions/reusable-workflows'
 
   build-docs:
     needs: changes
@@ -106,17 +105,15 @@ jobs:
       # submodule checkout needed, so it fails fast if a refactor broke a check.
       - name: Self-test the drift checker
         run: bash docs/scripts/check-active-projects-drift.test.sh
-      # The source-of-truth repos are public submodules; check out only those
-      # two at their pinned commits (no GitHub API, no other submodules). The
-      # .gitmodules URLs are SSH (git@github.com:), which the runner has no key
-      # for, so point them at public HTTPS first to clone anonymously.
-      - name: Check out source submodules
+      # The source-of-truth repo is a public submodule; check it out alone at
+      # its pinned commit (no GitHub API, no other submodules). The .gitmodules
+      # URL is SSH (git@github.com:), which the runner has no key for, so point
+      # it at public HTTPS first to clone anonymously.
+      - name: Check out source submodule
         run: |
           git submodule set-url github/devantler-tech/github-actions/actions https://github.com/devantler-tech/actions.git
-          git submodule set-url github/devantler-tech/github-actions/reusable-workflows https://github.com/devantler-tech/reusable-workflows.git
           git submodule update --init --depth 1 \
-            github/devantler-tech/github-actions/actions \
-            github/devantler-tech/github-actions/reusable-workflows
+            github/devantler-tech/github-actions/actions
       - name: Check Active Projects lists for drift
         run: bash docs/scripts/check-active-projects-drift.sh
 

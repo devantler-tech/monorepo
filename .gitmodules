@@ -26,10 +26,6 @@
 	path = homebrew-tap
 	url = git@github.com:devantler-tech/homebrew-tap.git
 	branch = main
-[submodule "github/devantler-tech/github-actions/reusable-workflows"]
-	path = github/devantler-tech/github-actions/reusable-workflows
-	url = git@github.com:devantler-tech/reusable-workflows.git
-	branch = main
 [submodule "templates/go-template"]
 	path = templates/go-template
 	url = git@github.com:devantler-tech/go-template.git
