@@ -149,7 +149,8 @@ design, which is exactly why the cadence must not silently lapse — track it in
 cadence gates.
 
 **Maintainer comments on verified routine-owned work are instructions — handle them first.** Before
-selecting new work, apply your creation record to every surfaced `CANDIDATE-MAINTAINER-COMMENT`.
+selecting new work, apply your creation record to every surfaced `CANDIDATE-MAINTAINER-COMMENT` and
+`CANDIDATE-MAINTAINER-ISSUE-COMMENT`.
 Discard the signal for maintainer-interactive/HANDS-OFF PRs; never infer ownership from branch shape,
 disclosure, or author alone. For a verified own draft/PR/issue, read the `devantler` comment and **act on it**
 that run (implement / change approach / close / redirect), or respond + surface it in the report if it
