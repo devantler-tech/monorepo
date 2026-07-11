@@ -357,7 +357,13 @@ cadence, sibling description, no retired-system references). Fix or enhance it d
 machine-local entry when needed — record the exact before/after in native memory and the run report,
 propagate anything substantive into the version-controlled definition instead of growing the loader,
 only ever tighten (never weaken) its backstop non-negotiables, and leave the *other* instance's
-routine prompt alone (surface cross-instance drift in the report). **~Weekly** (or sooner for a clear high-value / security /
+routine prompt alone (surface cross-instance drift in the report). The same stewardship covers the
+**runtime's permission/guard layer** (Claude Code permission rules/classifiers; the sibling runtime's
+approval guards — contract → *Self-improvement → Runtime guard/permission stewardship*): keep it
+least-privilege-but-sufficient on run evidence — tighten over-broad grants directly (before/after
+recorded; sensitive specifics stay in the PRIVATE host-audit notes), surface a needed widening to the
+maintainer as a one-click / `AskUserQuestion` (never self-widen), and fold the full review into the
+~monthly host least-privilege audit. **~Weekly** (or sooner for a clear high-value / security /
 reliability fix), distil them into ONE guard-railed **draft PR** that improves your own definition —
 the contract, this agent/skill set, or a submodule's `## Maintenance` — per the
 [`self-improvement`](../self-improvement/SKILL.md) skill. Evidence from your OWN runs only (never
