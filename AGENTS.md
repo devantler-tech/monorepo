@@ -344,10 +344,13 @@ then still needs approval via the ask tool. An existing `devantler` PR never byp
 ### Merge policy — drive trusted-author PRs to merge (incl. majors)
 **Driving trusted-author PRs to merge is the first-priority work each run — ahead of issues** (only
 live breakage on `main` outranks it). Sweep them **first**, every run, across the in-scope
-`devantler-tech` portfolio. On each portfolio repo, a **trusted-author, non-draft** PR with **green required checks and all review threads
-resolved** gets driven to merge: resolve threads, root-cause-fix failing required checks, set a
+`devantler-tech` portfolio. On each portfolio repo, a **trusted-author, non-draft** PR with the full
+current-head hygiene pentad clear — green required checks, zero unresolved threads/body findings, no
+conflict, green CodeRabbit pre-merge checks, and a current-head green review — gets driven to merge:
+resolve findings, root-cause-fix failing required checks, set a
 Conventional-Commit title, then **merge with the command that matches the author** —
-- a **single-author bot** (dependabot/renovate/github-actions/ksail-bot) arms pre-CLEAN auto-merge:
+- a **single-author bot** (dependabot/renovate/github-actions/ksail-bot) may arm pre-CLEAN auto-merge
+  only after the review/pre-merge/current-head parts of that pentad are clear:
   `gh pr merge <n> --auto --squash`;
 - a **human-trusted author** (`devantler`, i.e. **every agent-own PR**) **cannot use `--auto`**
   (auto-merge is bot-only) and merges **directly** with bare `gh pr merge <n> --squash` once
@@ -391,9 +394,12 @@ Letting bot PRs sit red is a failure mode — they are part of the first-priorit
 **before** issue/advance work.
 
 This **includes dependency major-version bumps** once CI is green. The merge itself is
-**low-ceremony**: a **single fresh** `gh pr view <n> --json number,isDraft,author,mergeStateStatus,statusCheckRollup`
-showing `isDraft:false`, a trusted author, owner `devantler-tech`, and `mergeStateStatus:CLEAN` is
-**sufficient evidence** — then run the merge. `CLEAN` is authoritative: don't re-derive required
+**low-ceremony**: use the current survey pentad plus a **fresh**
+`gh pr view <n> --json number,isDraft,author,headRefOid,mergeStateStatus,statusCheckRollup` immediately
+before merging. It must show `isDraft:false`, a trusted author, owner `devantler-tech`, and
+`mergeStateStatus:CLEAN`; the pentad must show zero review findings, green pre-merge checks, and a
+CodeRabbit/Codex green review whose commit SHA equals that same `headRefOid`. That is **sufficient
+evidence** — then run the merge. `CLEAN` is authoritative for required checks: don't re-derive required
 checks from the rollup, don't re-fetch branch protection on every merge (it's confirmed **once per
 repo per session**), and don't bundle the evidence and the merge into one chained command. Driving a
 promoted, CLEAN, trusted-author PR to merge is the **expected, mandated** behaviour, not a risk to
@@ -407,8 +413,9 @@ one act reserved for the maintainer is the **promotion** (draft → "ready for r
 **never self-promotes**. It does, though, **keep its own drafts review-ready while they wait** —
 root-cause-fixing failing CI and resolving review threads (e.g. from `copilot-pull-request-reviewer[bot]`)
 is explicitly ALLOWED *before* promotion and needs no sign-off, so a draft handed over is already green
-with threads resolved (never sit on a red/unresolved draft). Once **promoted**, drive it to merge like
-any trusted-author PR (bare `gh pr merge <n> --squash`, never `--auto`). Self-merge means the
+with the hygiene pentad clear (never sit on a red/unresolved/stale-review draft). Once **promoted**,
+drive it to merge like any trusted-author PR after a fresh current-head pentad check (bare
+`gh pr merge <n> --squash`, never `--auto`). Self-merge means the
 **normal** path only — never `--admin` or any branch-protection bypass. **Never merge
 external-contributor PRs** (see trust gate); never push to a protected branch directly.
 

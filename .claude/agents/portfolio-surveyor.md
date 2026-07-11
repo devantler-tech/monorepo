@@ -38,8 +38,8 @@ public and private — no per-repo loop needed to enumerate):
    heavy fields one PR at a time:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,reviewThreads,headRefName,headRefOid,author,body`
    — do **not** pull `statusCheckRollup` for every PR in every repo. Classify each as **MERGE-READY**
-   (CLEAN + threads resolved + required checks green) vs **NEEDS-FIX** (name the failing check or the
-   unresolved threads).
+   only when the current-head pentad is clear (CLEAN + required checks/pre-merge green + zero
+   threads/body findings + a current-head green review); otherwise **NEEDS-FIX** and name the gate.
    - **`devantler`-authored PRs: classify the CI state, NOT the ownership — report them as
      `OWNERSHIP-UNVERIFIED`, never "MERGE-READY own".** You cannot tell the routine's *own* PRs from the
      **maintainer's interactive** ones (an active feature campaign, `repo-assist`, a hand-driven session):

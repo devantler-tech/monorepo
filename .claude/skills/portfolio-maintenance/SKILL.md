@@ -190,13 +190,16 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.
 2. **Drive trusted-author PRs to merge — the first-priority sweep, ahead of issues, every run.** Across
-   all `devantler-tech` repos, drive every **trusted-author** PR to merge per the contract (resolve threads, fix
-   required checks, then merge with the **command that matches the author**: bots arm `--auto`, your own/
-   `devantler` PRs merge directly with bare `gh pr merge <n> --squash` once CLEAN; incl. majors and
+   all `devantler-tech` repos, drive every **trusted-author** PR to merge per the contract (clear the
+   current-head pentad, then merge with the **command that matches the author**: bots may arm `--auto`
+   once review/pre-merge surfaces are current and green, while your own/`devantler` PRs merge directly
+   with bare `gh pr merge <n> --squash` once CLEAN; incl. majors and
    incl. your own definition PRs once maintainer-promoted). External repos are outside scheduled scope;
    an interactive task must first clear the professional-work boundary for the specifically named repo.
-   Never run or merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony** — a single
-   fresh `gh pr view <n>` showing `isDraft:false`, a trusted author, and `CLEAN` is enough; a refused
+   Never run or merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony**:
+   combine the already-collected current-head pentad with one fresh `gh pr view <n>` showing the same
+   `headRefOid`, `isDraft:false`, trusted author, and `CLEAN`; merge only when the pentad also has zero
+   findings, green pre-merge checks, and a green review at that head. A refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
    variant-evidence retries. **On merge-queue repos, root-cause a stall/kick-out before re-queuing**
    (contract *Merge policy → Merge-queue repos*): a PR that "was queued" but didn't merge has usually been
