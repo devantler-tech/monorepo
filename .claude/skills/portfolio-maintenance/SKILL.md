@@ -61,14 +61,16 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   green-review state** — so a run can
   **drain all five**, not just threads. **(e) green review:** the maintainer promotes nothing without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
-  `green_review=<cr@<sha>|cr-stale@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
+  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
   Fetch `headRefOid` while deepening every own/trusted PR. A CodeRabbit `APPROVED` review counts only
-  when its REST `commit_id` equals that head; report an older approval as stale. For Codex, sweep
+  when its REST `commit_id` equals that head; report an older approval as stale, and a current-head
+  CodeRabbit review carrying findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual
   `chatgpt-codex-connector` review output, extract `**Reviewed commit:** <sha>`, and accept its
   clean-pass marker only at the current head.
-  Report a current-head non-green Codex output as `codex-findings@<sha>` with a link/count and
-  **NEEDS-FIX** before considering another review request; reserve `none` for no actual review output. Query threads
+  Report a current-head non-green output from either reviewer as `*-findings@<sha>` with a link/count
+  and **NEEDS-FIX** before considering another review request; reserve `none` for no actual review
+  output. Query threads
   per PR via the GraphQL
   `reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}` and report
   `unresolved=<n>`. **Paginate `reviewThreads` (follow `pageInfo.hasNextPage`/`endCursor`) — never let
@@ -217,18 +219,13 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
    force-push), **green the CodeRabbit pre-merge checks** (the maintainer won't promote a draft
    whose pre-merge checks aren't green — direction 2026-07-06), and **secure ≥1 green review at the
-   current head** (direction 2026-07-11: CodeRabbit `APPROVED` or a green Codex review). **Auto-review
-   is DISABLED on both reviewers (maintainer direction 2026-07-12) — every review only happens because
-   YOU request it, and a draft must earn its green review while still a draft or it will not be
-   promoted.** Request from **ONE tool at a time, chosen by live rate-limit state** (`@coderabbitai
-   review` or `@codex review`, disclosure line above the mention; track the currently-served lane +
-   evidence in native memory; fall back to the other tool only after a demonstrable stall/failure —
-   never fire both on the same PR simultaneously). **Incremental reviews:** every push — review-fix,
-   missed change, conflict resolution — stales the green; re-request and get a fresh green at the new
-   head before the draft counts as review-ready. When a draft reaches the full pentad, **ping the
-   maintainer on Slack that it is ready to promote** (batch the run's ready PRs into one message —
-   contract *Issue-driven → attention channels*). Codex findings are handled like any bot
-   reviewer's, and `@codex fix`/`address` is never used. **A merge-gated or parked PR is NOT
+   current head** — auto-review is disabled on both reviewers, so requesting (and re-requesting after
+   every push) is your duty; the full request discipline (one tool at a time by live rate-limit
+   state, evidence-based fallback, incremental re-reviews, green-while-draft as the promotion
+   precondition) is the contract's **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
+   DISABLED*) — follow it, don't re-derive it here. When a draft reaches the full pentad, **ping the
+   maintainer on Slack that it is ready to promote**, batching the run's ready PRs into one message
+   (contract *Issue-driven → attention channels*). **A merge-gated or parked PR is NOT
    exempt** (maintainer direction 2026-07-01): the
    gate excuses the *merge*, never red CI / open threads / conflicts / failed pre-merge checks — those rot on the maintainer's
    dashboard. All of this is allowed *before* promotion; only the **promotion** (draft → ready) is the

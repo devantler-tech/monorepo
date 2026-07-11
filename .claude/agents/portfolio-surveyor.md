@@ -77,9 +77,14 @@ public and private — no per-repo loop needed to enumerate):
      is not CONFLICTING, its pre-merge checks are green (below), and it carries ≥1 green review (below).
    - **(e) Green-review state per open own PR — the maintainer promotes NOTHING without ≥1 green
      review on top of green CI** (maintainer direction 2026-07-11). Report
-     `green_review=<cr@<sha>|cr-stale@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
+     `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
      Fetch `headRefOid` while deepening the PR. A CodeRabbit approval is green only when its REST
-     review `commit_id` equals that head; report an older approval as `cr-stale@<sha>`. For Codex,
+     review `commit_id` equals that head; report an older approval as `cr-stale@<sha>`. A
+     **current-head CodeRabbit review that carries findings** (a `COMMENTED`/`CHANGES_REQUESTED`
+     review with unresolved threads or actionable comments) is `cr-findings@<sha>` — report its
+     review URL and unresolved-thread/finding count and classify the PR **NEEDS-FIX**, exactly like
+     the Codex case below; never hide it as `none` or signal another request while findings sit
+     unaddressed. For Codex,
      sweep paginated `issues/<n>/comments` **and** `pulls/<n>/reviews`/review threads for the latest
      actual `chatgpt-codex-connector` review output (not an arbitrary command/setup reply), extract
      `**Reviewed commit:** <sha>`, and report
@@ -89,7 +94,7 @@ public and private — no per-repo loop needed to enumerate):
      findings instead of the clean-pass marker, report `codex-findings@<sha>` plus its comment/review
      URL or unresolved connector-thread count and classify the PR **NEEDS-FIX**; never hide that surface as `none` or immediately
      request another review. `none` means no actual green/finding review output exists. **NEITHER
-     reviewer auto-reviews anything any more (maintainer disabled auto-review on both CodeRabbit and
+     reviewer auto-reviews anything anymore (maintainer disabled auto-review on both CodeRabbit and
      Copilot code review, 2026-07-12)** — every review exists only because the orchestrator requested
      it, so a `none`/`*-stale` on any own PR signals the orchestrator to (re-)request one (its
      one-tool-at-a-time, rate-limit-aware discipline — the surveyor only reports the state).
