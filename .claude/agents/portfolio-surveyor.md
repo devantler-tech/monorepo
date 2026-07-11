@@ -68,19 +68,22 @@ public and private — no per-repo loop needed to enumerate):
      review threads — including `coderabbitai`, `copilot-pull-request-reviewer[bot]`, and
      `chatgpt-codex-connector[bot]` — **plus CodeRabbit review-BODY finding count**, (c) `mergeStateStatus`
      conflicts, (d) **failed CodeRabbit pre-merge checks** (see below), (e) **green-review state**
-     (see below). For (b)'s body surface: CodeRabbit emits non-inline findings as collapsed sections
+     (see below). Count all unresolved review threads across all pages, regardless of author. Query
+     `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}` and
+     paginate until `hasNextPage` is false. For (b)'s body surface: CodeRabbit emits non-inline
+     findings as collapsed sections
      in review bodies, each titled `<emoji> <Category> comments (N)` inside a `<summary>` tag —
      `⚠️ Outside diff range comments (N)`, `🧹 Nitpick comments (N)`, `♻️ Duplicate comments (N)`,
      and any future category — which never become threads. Match the shape, not a hard-coded title
      list; exclude only `🔇 Additional comments (N)` (CodeRabbit's non-actionable/informational
      section). Count them per PR with
      `gh api repos/devantler-tech/<repo>/pulls/<n>/reviews --paginate | jq -s
-     '[.[][]|select(.user.login=="coderabbitai[bot]")
-     | (.body|[scan("<summary>(?!🔇)[^<]*comments \\([0-9]+\\)</summary>")]|length)]|add // 0'`
-     (`--paginate` + external `jq -s` — the
-     endpoint returns only its first page by default; count matching **sections and sum**, never
-     `select`-per-review — one review can carry two finding sections and a per-review count would
-     report it as 1) and report `body_findings=<n>` alongside
+     '[.[][] | select(.user.login=="coderabbitai[bot]")
+     | (.body | [scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
+     | select((.[0] | startswith("🔇")) | not) | .[1] | tonumber] | add // 0)] | add // 0'`
+     (`--paginate` + external `jq -s` — the endpoint returns only its first page by default; extract
+     each matching section's numeric `(N)`, exclude `🔇`, and sum across every review so
+     `comments (0)` contributes zero) and report `body_findings=<n>` alongside
      `unresolved=<n>` threads; a PR is review-ready only when BOTH are 0, checks are green, it
      is not CONFLICTING, its pre-merge checks are green (below), and it carries ≥1 green review (below).
    - **(e) Green-review state per open own/trusted PR — no own/trusted PR is promotion- or

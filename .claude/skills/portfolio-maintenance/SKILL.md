@@ -61,7 +61,7 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   so it can't compute "new since last run" — **you** dedupe against native memory of what you've
   already acted on);
 - surfaces **the full hygiene pentad for EVERY open own/trusted PR — (a) failing checks, (b)
-  unresolved bot-reviewer thread count (CodeRabbit `coderabbitai`,
+  every unresolved review thread regardless of author (including CodeRabbit `coderabbitai`,
   `copilot-pull-request-reviewer[bot]`, and `chatgpt-codex-connector[bot]`) *plus review-body finding
   count*, (c)
   `mergeable`/`mergeStateStatus` (CONFLICTING/DIRTY =
@@ -76,10 +76,12 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   `chatgpt-codex-connector` review output, extract `**Reviewed commit:** <sha>`, and accept its
   clean-pass marker only at the current head.
   Report a current-head non-green Codex output as `codex-findings@<sha>` with a link/count and
-  **NEEDS-FIX** before considering another review request; reserve `none` for no actual review output. Query threads
-  per PR via the GraphQL
-  `reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}` and report
-  `unresolved=<n>`. **Paginate `reviewThreads` (follow `pageInfo.hasNextPage`/`endCursor`) — never let
+  **NEEDS-FIX** before considering another review request; reserve `none` for no actual review output.
+  Count all unresolved review threads across all pages, regardless of author.
+  Query threads per PR via GraphQL
+  `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}` and
+  report `unresolved=<n>`. **Paginate `reviewThreads` (follow
+  `pageInfo.hasNextPage`/`endCursor`) — never let
   the page size silently cap the count**; a heavily-reviewed draft can exceed one page, and an
   undercount would falsely report a draft as drained (contract *No silent caps*). **(b) has a second
   surface the thread query cannot see:** CodeRabbit findings it does not post inline are emitted as
@@ -92,10 +94,11 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   the count); the only excluded shape is `🔇 Additional comments (N)`, CodeRabbit's explicitly
   non-actionable/informational section. Per PR also check
   `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate | jq -s
-  '[.[][]|select(.user.login=="coderabbitai[bot]")
-  | (.body|[scan("<summary>(?!🔇)[^<]*comments \\([0-9]+\\)</summary>")]|length)]|add // 0'`
-  (count matching **sections and sum**, never `select`-per-review — one review can carry both an
-  Outside-diff-range and a Nitpick section, and a per-review count would report it as 1)
+  '[.[][] | select(.user.login=="coderabbitai[bot]")
+  | (.body | [scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
+  | select((.[0] | startswith("🔇")) | not) | .[1] | tonumber] | add // 0)] | add // 0'`
+  (extract each matching section's numeric `(N)`, exclude `🔇`, and sum every count across reviews;
+  `comments (0)` contributes zero)
   and report `body_findings=<n>` —
   **`--paginate` + external `jq -s`** because the reviews endpoint returns only its first page (30)
   by default, so an unpaginated count silently misses older review bodies on a long-lived PR (same
