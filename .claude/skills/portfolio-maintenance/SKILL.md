@@ -145,7 +145,13 @@ result. **Overlay your native-memory cadence cursors yourself** — each product
 `needs_attention`, and the
 CI/link caches — since the surveyor reads only live GitHub, not memory. ~Monthly, also do the
 **holistic review** (contract *Holistic review*): scan the suite for generic patterns to extract into
-the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, `plugins`).
+the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, `plugins`) — and, on
+the same cadence (plus after any credential or agent-tooling change), a **read-only local-host
+least-privilege review** (contract *Local agent host*): token scopes, both agents' permission/sandbox
+configs, secret exposure, cluster credential scope, OS-account privileges. Record findings in
+**private operator notes only** (native memory — never a public issue/PR/report; see contract
+*Sensitive information stays private*) and track it with a `last_host_audit` cursor in memory like the
+other cadence gates.
 
 *(Fallback: if you cannot spawn a subagent in this environment, run the same leaned survey inline —
 org-wide `gh search` first, deepen only the candidates — never the old per-repo `gh pr/issue list` loop.)*
