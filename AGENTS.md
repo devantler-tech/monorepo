@@ -624,10 +624,14 @@ scopes/identities, secret values or names, internal IPs/hostnames, exploitabilit
 asset topology. A public product-security issue or PR may still carry the **sanitized minimum needed
 to review the fix** — the vulnerability/control class, affected public component, remediation or
 exception rationale, and aggregate before/after posture — but never the detailed inventory or private
-reachability evidence behind it. Track that full evidence in **private operator notes**, meaning the
-runtime-managed, out-of-repository memory store (for example `$CODEX_HOME/automations/<id>/memory.md`
-or the native memory tool), never a repo-local `memory/` directory or `MEMORY.md`. If no private
-out-of-repo store is available, do not persist the sensitive detail. Drive fixes through
+reachability evidence behind it. Track that full evidence in **private operator notes**, meaning a
+runtime-managed memory store that lives **outside the repository working tree and is never
+version-controlled** (for example `$CODEX_HOME/automations/<id>/memory.md`, or Claude Code's native
+per-project memory directory under the user profile, `~/.claude/projects/<project-slug>/memory/` —
+"project memory" in the *Durable memory* sense qualifies **only** because it lives there, not in the
+repo). Never use any `memory/` directory or `MEMORY.md` inside a checkout, worktree, or anything else
+that could be committed or pushed. If no private out-of-repo store is available, do not persist the
+sensitive detail. Drive fixes through
 **narrowly-scoped changes that each address one thing without publishing the whole weakness map**,
 not a public tracking epic. If you are unsure whether something is safe to publish, treat it as
 sensitive and keep it private. *(Maintainer
