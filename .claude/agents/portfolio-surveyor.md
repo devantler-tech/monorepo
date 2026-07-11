@@ -58,7 +58,8 @@ public and private — no per-repo loop needed to enumerate):
      `renovate[bot]` — carry no such ambiguity: classify them `MERGE-READY` vs `NEEDS-FIX` as usual.)
    - **Hygiene pentad per open own/trusted PR — including drafts and gated/parked PRs.** For every
      open `devantler`/trusted-bot PR (drafts included), report (a) failing checks, (b) unresolved
-     review threads **plus CodeRabbit review-BODY finding count**, (c) `mergeStateStatus`
+     review threads — including `coderabbitai`, `copilot-pull-request-reviewer[bot]`, and
+     `chatgpt-codex-connector[bot]` — **plus CodeRabbit review-BODY finding count**, (c) `mergeStateStatus`
      conflicts, (d) **failed CodeRabbit pre-merge checks** (see below), (e) **green-review state**
      (see below). For (b)'s body surface: CodeRabbit emits non-inline findings as collapsed sections
      in review bodies, each titled `<emoji> <Category> comments (N)` inside a `<summary>` tag —
@@ -75,8 +76,9 @@ public and private — no per-repo loop needed to enumerate):
      report it as 1) and report `body_findings=<n>` alongside
      `unresolved=<n>` threads; a PR is review-ready only when BOTH are 0, checks are green, it
      is not CONFLICTING, its pre-merge checks are green (below), and it carries ≥1 green review (below).
-   - **(e) Green-review state per open own PR — the maintainer promotes NOTHING without ≥1 green
-     review on top of green CI** (maintainer direction 2026-07-11). Report
+   - **(e) Green-review state per open own/trusted PR — no own/trusted PR is promotion- or
+     merge-ready without ≥1 green review on top of green CI** (maintainer direction 2026-07-11).
+     This includes drafts and promoted PRs from humans and trusted bots. Report
      `green_review=<cr@<sha>|cr-stale@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
      Fetch `headRefOid` while deepening the PR. A CodeRabbit approval is green only when its REST
      review `commit_id` equals that head; report an older approval as `cr-stale@<sha>`. For Codex,
@@ -91,9 +93,9 @@ public and private — no per-repo loop needed to enumerate):
      request another review. `none` means no actual green/finding review output exists. Codex does NOT
      auto-review drafts (only open-for-review / draft→ready / an `@codex review` comment trigger it),
      so only a true `none` on a draft signals the orchestrator to fire `@codex review`.
-   - **(d) CodeRabbit pre-merge checks per own draft — a SEPARATE surface the maintainer gates
-     promotion on** (he will NOT promote a draft whose pre-merge checks aren't green — maintainer
-     direction 2026-07-06). CodeRabbit publishes pre-merge state in either a full
+   - **(d) CodeRabbit pre-merge checks per open own/trusted PR — a SEPARATE surface the maintainer
+     gates promotion and merge on** (he will NOT promote a draft whose pre-merge checks aren't green —
+     maintainer direction 2026-07-06). CodeRabbit publishes pre-merge state in either a full
      `## Pre-merge checks` section (Title / Description / **Linked Issues** / **Out of Scope Changes** /
      Docstring-Coverage, each ✅/❌/❓) or a compact collapsed summary such as
      `<summary>🚥 Pre-merge checks | ✅ 5</summary>`. Both are orthogonal to CI, threads, and

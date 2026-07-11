@@ -38,9 +38,10 @@ card.
 the whole portfolio survey and return **one compact digest** — so the ~40 calls of raw `gh` JSON
 accumulate in *its* throwaway context, not yours; you receive only the digest. The surveyor:
 - enumerates org-wide in two calls (`gh search prs/issues --owner devantler-tech --state open …`)
-  instead of looping `gh pr/issue list` per repo, then **deepens only the merge candidates** with a
-  targeted `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup` (heavy fields
-  pulled for the few **trusted-author non-draft** PRs, not for every PR in every repo);
+  instead of looping `gh pr/issue list` per repo, then **deepens every open own/trusted PR — drafts
+  and promoted PRs, humans and trusted bots —** with a targeted
+  `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid` (heavy fields
+  pulled for those few own/trusted PRs, not for every PR in every repo);
 - checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure
   --limit 3` each;
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
@@ -55,7 +56,8 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   already acted on);
 - surfaces **the full hygiene pentad for EVERY open own/trusted PR — (a) failing checks, (b)
   unresolved bot-reviewer thread count (CodeRabbit `coderabbitai`,
-  `copilot-pull-request-reviewer[bot]`) *plus review-body finding count*, (c)
+  `copilot-pull-request-reviewer[bot]`, and `chatgpt-codex-connector[bot]`) *plus review-body finding
+  count*, (c)
   `mergeable`/`mergeStateStatus` (CONFLICTING/DIRTY =
   needs a rebase/update-branch), (d) failed CodeRabbit *pre-merge checks* (see below), (e) the
   green-review state** — so a run can
@@ -205,8 +207,9 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    (contract *Merge policy → Merge-queue repos*): a PR that "was queued" but didn't merge has usually been
    **evicted by a failed `merge_group` run** — pull that run (`gh run list --event merge_group` → `pr-<n>`
    → `--log-failed`) and diagnose before re-`--auto`-ing; if it's a known systemic flake, fix the root
-   cause first rather than looping the PR through the queue. **Keep EVERY open own PR hygienic while
-   it waits — the full pentad, on EVERY run, sweeping ALL open own/trusted PRs, not just the one you
+   cause first rather than looping the PR through the queue. **Keep EVERY open own/trusted PR
+   hygienic while it waits — the full pentad, on EVERY run, sweeping ALL open own/trusted PRs, not
+   just the one you
    just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**,
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
    force-push), **green the CodeRabbit pre-merge checks** (the maintainer won't promote a draft
