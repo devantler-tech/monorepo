@@ -88,9 +88,11 @@ public and private — no per-repo loop needed to enumerate):
      result for an older head as `codex-stale@<sha>`. If the latest current-head Codex review posts
      findings instead of the clean-pass marker, report `codex-findings@<sha>` plus its comment/review
      URL or unresolved connector-thread count and classify the PR **NEEDS-FIX**; never hide that surface as `none` or immediately
-     request another review. `none` means no actual green/finding review output exists. Codex does NOT
-     auto-review drafts (only open-for-review / draft→ready / an `@codex review` comment trigger it),
-     so only a true `none` on a draft signals the orchestrator to fire `@codex review`.
+     request another review. `none` means no actual green/finding review output exists. **NEITHER
+     reviewer auto-reviews anything any more (maintainer disabled auto-review on both CodeRabbit and
+     Copilot code review, 2026-07-12)** — every review exists only because the orchestrator requested
+     it, so a `none`/`*-stale` on any own PR signals the orchestrator to (re-)request one (its
+     one-tool-at-a-time, rate-limit-aware discipline — the surveyor only reports the state).
    - **(d) CodeRabbit pre-merge checks per own draft — a SEPARATE surface the maintainer gates
      promotion on** (he will NOT promote a draft whose pre-merge checks aren't green — maintainer
      direction 2026-07-06). CodeRabbit publishes pre-merge state in either a full

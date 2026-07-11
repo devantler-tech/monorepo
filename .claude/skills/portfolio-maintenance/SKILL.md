@@ -217,10 +217,18 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
    force-push), **green the CodeRabbit pre-merge checks** (the maintainer won't promote a draft
    whose pre-merge checks aren't green — direction 2026-07-06), and **secure ≥1 green review at the
-   current head** (direction 2026-07-11: CodeRabbit `APPROVED` or a green Codex review; drafts are NOT
-   auto-reviewed by Codex, so comment `@codex review` on any draft lacking one — especially when
-   CodeRabbit is rate-limited — and re-secure after pushes; Codex findings are handled like any bot
-   reviewer's, and `@codex fix`/`address` is never used). **A merge-gated or parked PR is NOT
+   current head** (direction 2026-07-11: CodeRabbit `APPROVED` or a green Codex review). **Auto-review
+   is DISABLED on both reviewers (maintainer direction 2026-07-12) — every review only happens because
+   YOU request it, and a draft must earn its green review while still a draft or it will not be
+   promoted.** Request from **ONE tool at a time, chosen by live rate-limit state** (`@coderabbitai
+   review` or `@codex review`, disclosure line above the mention; track the currently-served lane +
+   evidence in native memory; fall back to the other tool only after a demonstrable stall/failure —
+   never fire both on the same PR simultaneously). **Incremental reviews:** every push — review-fix,
+   missed change, conflict resolution — stales the green; re-request and get a fresh green at the new
+   head before the draft counts as review-ready. When a draft reaches the full pentad, **ping the
+   maintainer on Slack that it is ready to promote** (batch the run's ready PRs into one message —
+   contract *Issue-driven → attention channels*). Codex findings are handled like any bot
+   reviewer's, and `@codex fix`/`address` is never used. **A merge-gated or parked PR is NOT
    exempt** (maintainer direction 2026-07-01): the
    gate excuses the *merge*, never red CI / open threads / conflicts / failed pre-merge checks — those rot on the maintainer's
    dashboard. All of this is allowed *before* promotion; only the **promotion** (draft → ready) is the
