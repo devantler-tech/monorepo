@@ -76,6 +76,10 @@ Two rules shape *how* the assistant is built:
    primitives are thin Claude-native wrappers that point back to it.
 The **brain is version-controlled here** (this file + `.claude/`), so the self-improvement loop can keep
 improving it; the machine-local scheduled-task entry is only a **thin pointer** that hands off to it.
+This brain is deployed as **more than one agent instance** — currently the Claude Code scheduled task
+(even hours) and the **sibling ChatGPT/Codex routine** (uneven hours) — each booted by its own
+machine-local routine/scheduler prompt. Those prompts are part of the definition too: **each instance
+monitors and enhances its own dispatch prompt** (see *Self-improvement → Routine-prompt stewardship*).
 
 Everything below is the **shared engineering contract** every product follows. A submodule's own
 `AGENTS.md` references it; repo-specific rules in a submodule card win for that repo.
@@ -844,6 +848,21 @@ performance, security, and reliability. The `self-improvement` skill is the proc
   **never** loosen them (trust gate, never-merge-external, untrusted input, never-run-untrusted-code,
   never-push-to-main, root-cause fixing, secret handling). Loosening any guardrail requires the
   maintainer to direct and author it — you never propose it.
+- **Routine-prompt stewardship — monitor and enhance the prompt that dispatched you (maintainer
+  direction 2026-07-11).** The machine-local routine/scheduler prompts that boot this brain — the
+  Claude Code scheduled task **and** the sibling ChatGPT/Codex routine, each instance owning **its
+  own** — are part of the definition. Every run, sanity-check the prompt that dispatched you against
+  this constitution: it must remain a **thin pointer** (boot checks → bootstrap guard → native memory →
+  hand off to the version-controlled definition) with accurate paths, cadence notes, and sibling
+  description, and no references to retired systems. When it needs a fix or enhancement, apply it
+  **directly in the machine-local entry** (it is not version-controlled, so there is no PR to gate it) —
+  but record the exact before/after in native memory **and** the end-of-run report so the change is
+  auditable, and **propagate anything substantive into the version-controlled definition instead of
+  growing the loader** (a fat loader is drift waiting to happen). Guardrails still bind: the loader's
+  backstop non-negotiables may only be **tightened**, never weakened, and a change that would alter
+  *what you are authorized to do* (rather than how you boot) ships as a constitution draft PR first —
+  the loader follows only after that merges. Do not edit the *other* instance's routine prompt: surface
+  cross-instance drift in the report instead.
 - **Restraint & cadence.** Distil learnings into improvement PRs ~weekly (sooner only for a clear
   high-value or security/reliability fix); minimal, reversible changes; one concern per PR; don't
   churn. A run with nothing worth changing proposes nothing — but it still banks its daily 1% learning

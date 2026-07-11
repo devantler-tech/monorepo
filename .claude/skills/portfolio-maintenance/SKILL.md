@@ -349,7 +349,15 @@ For each selected product:
 ## 5. Reflect & improve (self-learning)
 At the end of every run, record operational **`learnings`** in native memory (`learnings.md`) — steps
 that failed / were flaky / slow / wasted effort, coverage gaps, stale or ambiguous instructions,
-security/reliability weaknesses in your own workflow. **~Weekly** (or sooner for a clear high-value / security /
+security/reliability weaknesses in your own workflow. **Also sanity-check the machine-local
+routine/scheduler prompt that dispatched this run** (contract → *Self-improvement → Routine-prompt
+stewardship*, maintainer direction 2026-07-11): it must still be a thin, accurate pointer into this
+version-controlled definition (boot checks, bootstrap guard, memory `view`, hand-off; correct paths,
+cadence, sibling description, no retired-system references). Fix or enhance it directly in the
+machine-local entry when needed — record the exact before/after in native memory and the run report,
+propagate anything substantive into the version-controlled definition instead of growing the loader,
+only ever tighten (never weaken) its backstop non-negotiables, and leave the *other* instance's
+routine prompt alone (surface cross-instance drift in the report). **~Weekly** (or sooner for a clear high-value / security /
 reliability fix), distil them into ONE guard-railed **draft PR** that improves your own definition —
 the contract, this agent/skill set, or a submodule's `## Maintenance` — per the
 [`self-improvement`](../self-improvement/SKILL.md) skill. Evidence from your OWN runs only (never
