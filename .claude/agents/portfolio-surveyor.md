@@ -36,7 +36,7 @@ public and private — no per-repo loop needed to enumerate):
    (`devantler`, `ksail-bot`, `dependabot[bot]`, `github-actions[bot]`, `renovate[bot]` — **exact
    login match, never a substring**; `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the
    heavy fields one PR at a time:
-   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,reviewThreads,headRefName,author`
+   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,reviewThreads,headRefName,headRefOid,author,body`
    — do **not** pull `statusCheckRollup` for every PR in every repo. Classify each as **MERGE-READY**
    (CLEAN + threads resolved + required checks green) vs **NEEDS-FIX** (name the failing check or the
    unresolved threads).
@@ -77,14 +77,20 @@ public and private — no per-repo loop needed to enumerate):
      is not CONFLICTING, its pre-merge checks are green (below), and it carries ≥1 green review (below).
    - **(e) Green-review state per open own PR — the maintainer promotes NOTHING without ≥1 green
      review on top of green CI** (maintainer direction 2026-07-11). Report
-     `green_review=<cr-approved|codex@<sha>|codex-stale@<sha>|none>`: `cr-approved` = any CodeRabbit
-     `APPROVED` review on `pulls/<n>/reviews`; `codex@<sha>` = a `chatgpt-codex-connector[bot]`
-     **issue comment** (Codex posts NO review object — sweep `issues/<n>/comments`, paginated)
-     whose body starts `Codex Review: Didn't find any major issues` and names
-     `**Reviewed commit:** <sha>` — report `codex-stale@<sha>` when that sha is not the current PR
-     head (a stale green does not satisfy the gate); `none` otherwise. Codex does NOT auto-review
-     drafts (only open-for-review / draft→ready / an `@codex review` comment trigger it), so
-     `none` on a draft is a signal for the orchestrator to fire `@codex review`, not an anomaly.
+     `green_review=<cr@<sha>|cr-stale@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
+     Fetch `headRefOid` while deepening the PR. A CodeRabbit approval is green only when its REST
+     review `commit_id` equals that head; report an older approval as `cr-stale@<sha>`. For Codex,
+     sweep paginated `issues/<n>/comments` **and** `pulls/<n>/reviews`/review threads for the latest
+     actual `chatgpt-codex-connector` review output (not an arbitrary command/setup reply), extract
+     `**Reviewed commit:** <sha>`, and report
+     `codex@<sha>` only when its clean-pass body contains
+     `Codex Review: Didn't find any major issues` and that sha equals `headRefOid`. Report a clean
+     result for an older head as `codex-stale@<sha>`. If the latest current-head Codex review posts
+     findings instead of the clean-pass marker, report `codex-findings@<sha>` plus its comment/review
+     URL or unresolved connector-thread count and classify the PR **NEEDS-FIX**; never hide that surface as `none` or immediately
+     request another review. `none` means no actual green/finding review output exists. Codex does NOT
+     auto-review drafts (only open-for-review / draft→ready / an `@codex review` comment trigger it),
+     so only a true `none` on a draft signals the orchestrator to fire `@codex review`.
    - **(d) CodeRabbit pre-merge checks per own draft — a SEPARATE surface the maintainer gates
      promotion on** (he will NOT promote a draft whose pre-merge checks aren't green — maintainer
      direction 2026-07-06). CodeRabbit publishes pre-merge state in either a full
@@ -159,7 +165,7 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no own/trus
 - MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator acts on this FIRST (instruction)
 - <repo>: CI red on main — <workflow> (<run url>)
 - <repo> #<n> "<title>" — <bot-author>, trusted non-draft, mergeStateStatus=<…> → MERGE-READY | NEEDS-FIX: <check/threads>
-- <repo> #<n> (own/trusted, draft or not) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, green_review=<cr-approved|codex@<sha>|codex-stale@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
+- <repo> #<n> (own/trusted, draft or not) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, green_review=<cr@<sha>|cr-stale@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
 - <repo> #<n> "<title>" — `devantler` non-draft, mergeStateStatus=CLEAN, checks green → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no> (orchestrator applies creation-record test; NOT asserted mine)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)

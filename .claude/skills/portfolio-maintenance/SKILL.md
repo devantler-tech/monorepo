@@ -61,10 +61,14 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   green-review state** — so a run can
   **drain all five**, not just threads. **(e) green review:** the maintainer promotes nothing without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
-  `green_review=<cr-approved|codex@<sha>|none>`: `cr-approved` = a CodeRabbit `APPROVED` review;
-  `codex@<sha>` = a `chatgpt-codex-connector[bot]` **issue comment** (NOT a review object — sweep
-  `issues/<n>/comments`) starting `Codex Review: Didn't find any major issues` with
-  `**Reviewed commit:** <sha>` — flag it STALE when that sha is not the PR head; `none` otherwise. Query threads
+  `green_review=<cr@<sha>|cr-stale@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
+  Fetch `headRefOid` while deepening every own/trusted PR. A CodeRabbit `APPROVED` review counts only
+  when its REST `commit_id` equals that head; report an older approval as stale. For Codex, sweep
+  paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual
+  `chatgpt-codex-connector` review output, extract `**Reviewed commit:** <sha>`, and accept its
+  clean-pass marker only at the current head.
+  Report a current-head non-green Codex output as `codex-findings@<sha>` with a link/count and
+  **NEEDS-FIX** before considering another review request; reserve `none` for no actual review output. Query threads
   per PR via the GraphQL
   `reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}` and report
   `unresolved=<n>`. **Paginate `reviewThreads` (follow `pageInfo.hasNextPage`/`endCursor`) — never let
@@ -179,7 +183,7 @@ items** (end only when work is exhausted or blocked). A survey-and-exit run that
 promotion is **not** a reason to stop — advance a *different* product. **Stop starting, start finishing**
 (contract *Cadence & focus*): before opening any **new** draft, first drive **every own in-flight PR** to
 merged (if promoted) or review-ready (draft: green CI + threads resolved + not DIRTY + ≥1 green
-review) — a *finished*
+review at the current head) — a *finished*
 draft awaiting promotion is fine, a *half-finished* one (red CI, open threads, conflicting) is unfinished
 work to clear first. Work the ladder top-down — **hotfix/operate first, then advance**:
 
