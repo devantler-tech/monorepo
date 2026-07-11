@@ -38,10 +38,12 @@ card.
 the whole portfolio survey and return **one compact digest** — so the ~40 calls of raw `gh` JSON
 accumulate in *its* throwaway context, not yours; you receive only the digest. The surveyor:
 - enumerates org-wide in two calls (`gh search prs/issues --owner devantler-tech --state open …`)
-  instead of looping `gh pr/issue list` per repo, then **deepens every open own/trusted PR — drafts
-  and promoted PRs, humans and trusted bots —** with a targeted
+  instead of looping `gh pr/issue list` per repo, then **deepens every open `devantler`
+  candidate/trusted-bot PR — drafts and promoted PRs —** with a targeted
   `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid` (heavy fields
-  pulled for those few own/trusted PRs, not for every PR in every repo);
+  pulled for those few candidates, not for every PR in every repo); the read-only surveyor always
+  reports `devantler` PRs as ownership-unverified, and the orchestrator's creation record decides
+  which are actually its own before any action;
 - checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure
   --limit 3` each;
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
@@ -49,8 +51,9 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
 - flags untriaged issues/PRs, stale PRs (>14d), Dependabot/Renovate PRs, `roadmap`-ready issues, and
   products with **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs as
   static-review-only;
-- surfaces **`devantler`'s comments on your own open PRs (incl. drafts) and issues** — the surveyor
-  lists each own draft/PR's `comments` + review threads and flags any authored by `devantler`
+- surfaces **`devantler`'s comments on candidate open PRs (incl. drafts) and issues** — the surveyor
+  lists each `devantler`-candidate draft/PR's `comments` + review threads and flags any authored
+  by `devantler`
   (exact-login), quoting a one-line gist as a signal (the read-only surveyor keeps no cross-run state,
   so it can't compute "new since last run" — **you** dedupe against native memory of what you've
   already acted on);
