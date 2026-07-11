@@ -53,12 +53,18 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   (exact-login), quoting a one-line gist as a signal (the read-only surveyor keeps no cross-run state,
   so it can't compute "new since last run" — **you** dedupe against native memory of what you've
   already acted on);
-- surfaces **the full hygiene tetrad for EVERY open own/trusted PR — (a) failing checks, (b)
+- surfaces **the full hygiene pentad for EVERY open own/trusted PR — (a) failing checks, (b)
   unresolved bot-reviewer thread count (CodeRabbit `coderabbitai`,
   `copilot-pull-request-reviewer[bot]`) *plus review-body finding count*, (c)
   `mergeable`/`mergeStateStatus` (CONFLICTING/DIRTY =
-  needs a rebase/update-branch), (d) failed CodeRabbit *pre-merge checks* (see below)** — so a run can
-  **drain all four**, not just threads. Query threads
+  needs a rebase/update-branch), (d) failed CodeRabbit *pre-merge checks* (see below), (e) the
+  green-review state** — so a run can
+  **drain all five**, not just threads. **(e) green review:** the maintainer promotes nothing without
+  ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
+  `green_review=<cr-approved|codex@<sha>|none>`: `cr-approved` = a CodeRabbit `APPROVED` review;
+  `codex@<sha>` = a `chatgpt-codex-connector[bot]` **issue comment** (NOT a review object — sweep
+  `issues/<n>/comments`) starting `Codex Review: Didn't find any major issues` with
+  `**Reviewed commit:** <sha>` — flag it STALE when that sha is not the PR head; `none` otherwise. Query threads
   per PR via the GraphQL
   `reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}` and report
   `unresolved=<n>`. **Paginate `reviewThreads` (follow `pageInfo.hasNextPage`/`endCursor`) — never let
@@ -172,7 +178,8 @@ items** (end only when work is exhausted or blocked). A survey-and-exit run that
 **failure, not a valid outcome** (contract *Mandate*). An existing backlog of your own drafts awaiting
 promotion is **not** a reason to stop — advance a *different* product. **Stop starting, start finishing**
 (contract *Cadence & focus*): before opening any **new** draft, first drive **every own in-flight PR** to
-merged (if promoted) or review-ready (draft: green CI + threads resolved + not DIRTY) — a *finished*
+merged (if promoted) or review-ready (draft: green CI + threads resolved + not DIRTY + ≥1 green
+review) — a *finished*
 draft awaiting promotion is fine, a *half-finished* one (red CI, open threads, conflicting) is unfinished
 work to clear first. Work the ladder top-down — **hotfix/operate first, then advance**:
 
@@ -192,11 +199,15 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    **evicted by a failed `merge_group` run** — pull that run (`gh run list --event merge_group` → `pr-<n>`
    → `--log-failed`) and diagnose before re-`--auto`-ing; if it's a known systemic flake, fix the root
    cause first rather than looping the PR through the queue. **Keep EVERY open own PR hygienic while
-   it waits — the full tetrad, on EVERY run, sweeping ALL open own/trusted PRs, not just the one you
+   it waits — the full pentad, on EVERY run, sweeping ALL open own/trusted PRs, not just the one you
    just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**,
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
-   force-push), and **green the CodeRabbit pre-merge checks** (the maintainer won't promote a draft
-   whose pre-merge checks aren't green — direction 2026-07-06). **A merge-gated or parked PR is NOT
+   force-push), **green the CodeRabbit pre-merge checks** (the maintainer won't promote a draft
+   whose pre-merge checks aren't green — direction 2026-07-06), and **secure ≥1 green review at the
+   current head** (direction 2026-07-11: CodeRabbit `APPROVED` or a green Codex review; drafts are NOT
+   auto-reviewed by Codex, so comment `@codex review` on any draft lacking one — especially when
+   CodeRabbit is rate-limited — and re-secure after pushes; Codex findings are handled like any bot
+   reviewer's, and `@codex fix`/`address` is never used). **A merge-gated or parked PR is NOT
    exempt** (maintainer direction 2026-07-01): the
    gate excuses the *merge*, never red CI / open threads / conflicts / failed pre-merge checks — those rot on the maintainer's
    dashboard. All of this is allowed *before* promotion; only the **promotion** (draft → ready) is the

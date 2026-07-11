@@ -56,10 +56,11 @@ public and private — no per-repo loop needed to enumerate):
      **Never label a `devantler` PR `MERGE-READY` or "own"**; the orchestrator applies its creation-record
      test and decides. (Bot-trusted authors — `ksail-bot`, `dependabot[bot]`, `github-actions[bot]`,
      `renovate[bot]` — carry no such ambiguity: classify them `MERGE-READY` vs `NEEDS-FIX` as usual.)
-   - **Hygiene tetrad per open own/trusted PR — including drafts and gated/parked PRs.** For every
+   - **Hygiene pentad per open own/trusted PR — including drafts and gated/parked PRs.** For every
      open `devantler`/trusted-bot PR (drafts included), report (a) failing checks, (b) unresolved
      review threads **plus CodeRabbit review-BODY finding count**, (c) `mergeStateStatus`
-     conflicts, (d) **failed CodeRabbit pre-merge checks** (see below). For (b)'s body surface: CodeRabbit emits non-inline findings as collapsed sections
+     conflicts, (d) **failed CodeRabbit pre-merge checks** (see below), (e) **green-review state**
+     (see below). For (b)'s body surface: CodeRabbit emits non-inline findings as collapsed sections
      in review bodies, each titled `<emoji> <Category> comments (N)` inside a `<summary>` tag —
      `⚠️ Outside diff range comments (N)`, `🧹 Nitpick comments (N)`, `♻️ Duplicate comments (N)`,
      and any future category — which never become threads. Match the shape, not a hard-coded title
@@ -73,7 +74,17 @@ public and private — no per-repo loop needed to enumerate):
      `select`-per-review — one review can carry two finding sections and a per-review count would
      report it as 1) and report `body_findings=<n>` alongside
      `unresolved=<n>` threads; a PR is review-ready only when BOTH are 0, checks are green, it
-     is not CONFLICTING, and its pre-merge checks are green (below).
+     is not CONFLICTING, its pre-merge checks are green (below), and it carries ≥1 green review (below).
+   - **(e) Green-review state per open own PR — the maintainer promotes NOTHING without ≥1 green
+     review on top of green CI** (maintainer direction 2026-07-11). Report
+     `green_review=<cr-approved|codex@<sha>|codex-stale@<sha>|none>`: `cr-approved` = any CodeRabbit
+     `APPROVED` review on `pulls/<n>/reviews`; `codex@<sha>` = a `chatgpt-codex-connector[bot]`
+     **issue comment** (Codex posts NO review object — sweep `issues/<n>/comments`, paginated)
+     whose body starts `Codex Review: Didn't find any major issues` and names
+     `**Reviewed commit:** <sha>` — report `codex-stale@<sha>` when that sha is not the current PR
+     head (a stale green does not satisfy the gate); `none` otherwise. Codex does NOT auto-review
+     drafts (only open-for-review / draft→ready / an `@codex review` comment trigger it), so
+     `none` on a draft is a signal for the orchestrator to fire `@codex review`, not an anomaly.
    - **(d) CodeRabbit pre-merge checks per own draft — a SEPARATE surface the maintainer gates
      promotion on** (he will NOT promote a draft whose pre-merge checks aren't green — maintainer
      direction 2026-07-06). CodeRabbit publishes pre-merge state in either a full
@@ -148,7 +159,7 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no own/trus
 - MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator acts on this FIRST (instruction)
 - <repo>: CI red on main — <workflow> (<run url>)
 - <repo> #<n> "<title>" — <bot-author>, trusted non-draft, mergeStateStatus=<…> → MERGE-READY | NEEDS-FIX: <check/threads>
-- <repo> #<n> (own/trusted, draft or not) — tetrad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
+- <repo> #<n> (own/trusted, draft or not) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, green_review=<cr-approved|codex@<sha>|codex-stale@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
 - <repo> #<n> "<title>" — `devantler` non-draft, mergeStateStatus=CLEAN, checks green → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no> (orchestrator applies creation-record test; NOT asserted mine)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
