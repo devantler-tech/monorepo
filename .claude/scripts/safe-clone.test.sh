@@ -158,6 +158,38 @@ report "env guard fails on http extraHeader" "$([[ $rc -ne 0 ]] && echo yes || e
 report "extraHeader output does not leak the secret" \
   "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
 
+# 13b. Credentialed proxy values fail closed before config diagnostics.
+px_global="$tmp/gitconfig-proxy"
+git config --file "$px_global" http.proxy "https://user:${secret}@proxy.example.com:8080"
+out="$(GIT_CONFIG_GLOBAL="$px_global" "$helper" --check "$clean" 2>&1)" && rc=0 || rc=$?
+report "env guard fails on credentialed http.proxy" "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+report "proxy output does not leak the secret" \
+  "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
+
+# 13c. Multi-valued pushurl keys sanitize every value without aborting.
+multi_push="$tmp/multi-pushurl"
+mk_fixture "$multi_push" "https://github.com/example/repo.git"
+git -C "$multi_push" config --add remote.origin.pushurl "https://x:${secret}@github.com/example/a.git"
+git -C "$multi_push" config --add remote.origin.pushurl "https://github.com/example/b.git"
+out="$("$helper" --sanitize "$multi_push" 2>&1)" && rc=0 || rc=$?
+report "multi-valued pushurl sanitize exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)"
+report "multi-valued pushurl keeps both values credential-free" \
+  "$([[ "$(git -C "$multi_push" config --get-all remote.origin.pushurl | tr '\n' ' ')" == "https://github.com/example/a.git https://github.com/example/b.git " ]] && echo yes || echo no)"
+report "multi-valued pushurl output does not leak the secret" \
+  "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
+
+# 13d. Clone options outside the safe allowlist are rejected up front.
+out="$("$helper" example/repo "$tmp/never3" -c "url.https://x:${secret}@github.com/.insteadOf=https://github.com/" 2>&1)" && rc=0 || rc=$?
+report "-c clone option is rejected" \
+  "$([[ $rc -ne 0 && ! -e "$tmp/never3" ]] && echo yes || echo no)"
+report "rejected -c option does not leak the secret" \
+  "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
+out="$("$helper" example/repo "$tmp/never4" --origin upstream 2>&1)" && rc=0 || rc=$?
+report "--origin clone option is rejected" "$([[ $rc -ne 0 && ! -e "$tmp/never4" ]] && echo yes || echo no)"
+out="$("$helper" example/repo "$tmp/never5" --separate-git-dir "$tmp/gitdir" 2>&1)" && rc=0 || rc=$?
+report "--separate-git-dir clone option is rejected" \
+  "$([[ $rc -ne 0 && ! -e "$tmp/never5" && ! -e "$tmp/gitdir" ]] && echo yes || echo no)"
+
 # 14. A rejected slug value is never echoed (it may itself be a secret URL).
 out="$("$helper" "https://x:${secret}@github.com/o/r.git" "$tmp/never2" 2>&1)" && rc=0 || rc=$?
 report "invalid slug is rejected without echoing it" \

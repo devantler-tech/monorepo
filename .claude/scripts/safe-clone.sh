@@ -9,9 +9,9 @@
 #
 # Modes:
 #   safe-clone.sh <owner>/<repo> <dest-dir> [git-clone-options...]
-#       Clone with a scrubbed environment, force the canonical
+#       Clone (options restricted to a safe allowlist), force the canonical
 #       credential-free origin URL, wire the gh credential helper, then run
-#       the fail-closed guard. An unsafe result is DELETED before returning.
+#       the fail-closed guards. An unsafe result is DELETED before returning.
 #   safe-clone.sh --check <dir>
 #       Verify an existing clone: exit 1 with a redacted message if any
 #       HTTP(S) remote URL carries userinfo, or if the effective git config
@@ -65,8 +65,9 @@ env_guard() {
   if "${cmd[@]}" config --list 2>/dev/null | grep -Eiq \
     -e '^url\.https?://[^/@]*@[^=]*\.(insteadof|pushinsteadof)=' \
     -e '^url\.[^=]*\.(insteadof|pushinsteadof)=https?://[^/@]*@' \
-    -e '^http\.[^=]*extraheader='; then
-    echo "safe-clone: UNSAFE — the effective git config carries a credential-bearing URL rewrite (insteadOf/pushInsteadOf) or an http extraHeader (details redacted); remove it from host config, use the credential helper instead, and rotate the credential" >&2
+    -e '^http\.[^=]*extraheader=' \
+    -e '^(http\.([^=]*\.)?proxy|remote\.[^=]*\.proxy|core\.gitproxy)=[a-z][a-z0-9+.-]*://[^/@]*@'; then
+    echo "safe-clone: UNSAFE — the effective git config carries a credential-bearing URL rewrite (insteadOf/pushInsteadOf), an http extraHeader, or a credentialed proxy (details redacted); remove it from host config, use the credential helper instead, and rotate the credential" >&2
     return 1
   fi
   return 0
@@ -87,20 +88,43 @@ guard() {
 }
 
 # sanitize <dir> — rewrite every credential-bearing http(s) remote URL to its
-# userinfo-free form in place.
+# userinfo-free form in place. Keys are rewritten wholesale (unset-all, then
+# re-add each stripped value) because pushurl is multi-valued and a plain
+# `git config <key> <value>` aborts on multiple values.
 sanitize() {
   local dir="$1" key value stripped
+  local -a keys=() values=()
   while IFS=$'\t' read -r key value; do
     [[ -n "${value:-}" ]] || continue
     if has_userinfo "$value"; then
-      # https://user:secret@host/path -> https://host/path (pure bash — the
-      # secret never passes through another process's argv). Setting the full
-      # config key covers url and pushurl alike.
-      stripped="${value%%://*}://${value#*@}"
-      git -C "$dir" config "$key" "$stripped"
-      echo "safe-clone: sanitized ${key} (userinfo stripped)" >&2
+      keys+=("$key")
     fi
   done < <(list_remote_urls "$dir")
+
+  [[ ${#keys[@]} -gt 0 ]] || return 0
+
+  local uniq_keys
+  uniq_keys="$(printf '%s\n' "${keys[@]:-}" | sort -u)"
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    values=()
+    while IFS= read -r value; do
+      if has_userinfo "$value"; then
+        # https://user:secret@host/path -> https://host/path (pure bash — the
+        # secret never passes through another process's argv).
+        stripped="${value%%://*}://${value#*@}"
+        values+=("$stripped")
+      else
+        values+=("$value")
+      fi
+    done < <(git -C "$dir" config --get-all "$key")
+
+    git -C "$dir" config --unset-all "$key"
+    for value in "${values[@]}"; do
+      git -C "$dir" config --add "$key" "$value"
+    done
+    echo "safe-clone: sanitized ${key} (userinfo stripped)" >&2
+  done <<<"$uniq_keys"
 }
 
 case "${1:-}" in
@@ -134,16 +158,39 @@ case "${1:-}" in
     [[ "$slug" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "invalid repo slug (want owner/repo; value redacted)"
     [[ -e "$dest" ]] && fail "destination already exists: $dest"
 
+    # Pass-through options are ALLOWLISTED: open-ended forwarding lets a
+    # caller break the safety invariants (`-c` writes repo config the
+    # pre-clone check never saw, `--origin` renames origin so the canonical
+    # set-url fails, `--separate-git-dir` moves the git dir outside the
+    # delete-on-failure path). Only shape/history options are permitted.
+    expect_value=""
+    for opt in "$@"; do
+      if [[ -n "$expect_value" ]]; then
+        expect_value=""
+        continue
+      fi
+      case "$opt" in
+        --depth=*|--branch=*|--filter=*|--shallow-since=*|--shallow-exclude=*) ;;
+        --depth|--branch|-b|--filter|--shallow-since|--shallow-exclude) expect_value=1 ;;
+        --single-branch|--no-single-branch|--sparse|--no-tags|--quiet) ;;
+        *)
+          fail "clone option not in the safe allowlist (value redacted); allowed: --depth --branch --single-branch --filter --sparse --no-tags --shallow-since --shallow-exclude --quiet"
+          ;;
+      esac
+    done
+    [[ -z "$expect_value" ]] || fail "clone option expects a value but none was given"
+
     # Refuse to clone at all in a credential-leaking environment — nothing
     # is created, so there is nothing to quarantine.
     env_guard || fail "environment guard failed — fix host git config before cloning"
 
     url="https://github.com/${slug}.git"
 
-    # Scrub inherited token env vars so no tool on this path can embed one
-    # into the persisted remote; auth flows through the credential helper.
-    env -u GITHUB_TOKEN -u GH_TOKEN \
-      git -c credential.helper='!gh auth git-credential' \
+    # No env scrubbing here: plain `git clone` never reads GITHUB_TOKEN /
+    # GH_TOKEN, and the `gh auth git-credential` helper NEEDS them on hosts
+    # where gh is authenticated only via environment token. The guard below
+    # verifies nothing token-shaped was persisted regardless.
+    git -c credential.helper='!gh auth git-credential' \
       clone --quiet "$@" "$url" "$dest" ||
       fail "clone failed for ${slug}"
 
