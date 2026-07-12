@@ -160,12 +160,17 @@ issues — see *Merge policy*; this section governs the issue work that follows.
    (2) the **ask tool** — the native **`AskUserQuestion`** clickable prompt (present an enumerable decision
    as **one-click options**, not free text; interactive sessions only); and (3) the **devantler-tech
    Slack** (maintainer direction 2026-07-11: *"you can always reach me on the devantler-tech slack"*) —
-   works from **unattended runs too**, via each agent's Slack tooling. Slack carries two **standing ping
-   duties** (maintainer direction 2026-07-12): message him (a) whenever something needs *his* action (a
-   one-click, a decision, an urgent unwedge only he can do), and (b) **when a draft PR has earned its
-   green review and full pentad and is ready for promotion**. Batch the ready-to-promote pings into one
-   message per run rather than one-per-PR; lead every Slack message with the 🤖 disclosure line; it is a
-   contact channel, never a mirror for routine run reports. The **end-of-run report** (he rarely reads
+   works from **unattended runs too**, via each agent's Slack tooling. **Slack is a LAST-RESORT
+   channel, only for when the agent cannot proceed on its own** (maintainer direction 2026-07-12,
+   superseding the same-day "standing ping duties": *"You should only contact me when you cannot
+   proceed on your own, and I am not interested in status messages"*): a genuinely blocking decision,
+   or an urgent unwedge only he can perform. **Never send status messages** — no ready-to-promote
+   pings, no run summaries, no progress notes: drafts awaiting promotion are visible on GitHub and he
+   reviews them at his own pace. **Identity:** each agent's Slack connector authenticates as the
+   maintainer's OWN account, so a message reads as him writing to himself — always write in the
+   agent's own voice and lead with the agent's 🤖 disclosure line naming which instance sent it, never
+   phrasing anything as if he authored it (a dedicated agent Slack identity is a maintainer-side Slack
+   app; until one exists this disclosure is the only sender marker). The **end-of-run report** (he rarely reads
    it) and a **GitHub `@devantler` mention** (it does not notify him) are **NOT** attention channels.
    Never leave a silent "awaiting maintainer" note and move on to easier work. **"Repo Assist"/`automation` roadmap issues are
    KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
@@ -901,8 +906,8 @@ step:
    maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids
    (see *Issue-driven → Drain oldest-first*). When something feels like it needs his call, **investigate,
    decide, and ship a draft PR** (he redirects there); if you genuinely cannot proceed without him,
-   **actively** raise it via the **ask tool** (`AskUserQuestion`), a **devantler-tech Slack ping** (the
-   third attention channel — works from unattended runs), or **ship the decision as a draft PR** —
+   **actively** raise it via the **ask tool** (`AskUserQuestion`), a **devantler-tech Slack ping**
+   (last-resort, genuinely-blocked-only — see *Issue-driven*), or **ship the decision as a draft PR** —
    don't file-and-wait. The end-of-run report (he rarely reads it) and an `@devantler` mention (no
    notification) are NOT attention channels. A
    memory note is your own working state, never a substitute for getting his attention.
@@ -910,7 +915,8 @@ step:
    tool's equivalent store; nothing here is Claude-only except the tool name.
 2. **The end-of-run report** is a per-run record (products surveyed, what changed with PR links). It is
    **not** an attention channel — he rarely reads it — so anything that needs his action goes via a draft
-   PR, `AskUserQuestion`, or a devantler-tech Slack ping, never parked in the report. Live truth for PRs/CI/issues is GitHub itself;
+   PR or `AskUserQuestion` (or, when genuinely blocked in an unattended run, a last-resort Slack ping),
+   never parked in the report. Live truth for PRs/CI/issues is GitHub itself;
    per-product status is derivable from `gh pr list` / `gh run list`, so it is never duplicated into a file.
 
 ### Self-improvement (continuous, evidence-driven)

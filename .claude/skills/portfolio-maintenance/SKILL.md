@@ -237,9 +237,10 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    every push) is your duty; the full request discipline (one tool at a time by live rate-limit
    state, evidence-based fallback, incremental re-reviews, green-while-draft as the promotion
    precondition) is the contract's **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
-   DISABLED*) — follow it, don't re-derive it here. When a draft reaches the full pentad, **ping the
-   maintainer on Slack that it is ready to promote**, batching the run's ready PRs into one message
-   (contract *Issue-driven → attention channels*). **A merge-gated or parked PR is NOT
+   DISABLED*) — follow it, don't re-derive it here. When a draft reaches the full pentad it simply
+   **waits on GitHub as a finished draft** — do **not** ping the maintainer about it (ready-to-promote
+   Slack pings are status messages, revoked by maintainer direction 2026-07-12; Slack is last-resort,
+   genuinely-blocked-only — contract *Issue-driven → attention channels*). **A merge-gated or parked PR is NOT
    exempt** (maintainer direction 2026-07-01): the
    gate excuses the *merge*, never red CI / open threads / conflicts / failed pre-merge checks — those rot on the maintainer's
    dashboard. All of this is allowed *before* promotion; only the **promotion** (draft → ready) is the
