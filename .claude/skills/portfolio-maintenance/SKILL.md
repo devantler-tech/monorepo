@@ -408,7 +408,7 @@ routine prompt alone (surface cross-instance drift in the report). The same stew
 approval guards — contract → *Self-improvement → Runtime guard/permission stewardship*): keep it
 least-privilege-but-sufficient on run evidence — tighten over-broad grants directly (before/after
 recorded; sensitive specifics stay in the PRIVATE host-audit notes), surface a needed widening to the
-maintainer as a one-click / `AskUserQuestion` (never self-widen), and fold the full review into the
+maintainer as a one-click / `AskUserQuestion` / Slack ping (never self-widen), and fold the full review into the
 ~monthly host least-privilege audit. **~Weekly** (or sooner for a clear high-value / security /
 reliability fix), distil them into ONE guard-railed **draft PR** that improves your own definition —
 the contract, this agent/skill set, or a submodule's `## Maintenance` — per the
