@@ -746,7 +746,10 @@ a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
 **Temporary clones go through the safe-clone primitive — credentials never live in remote URLs.**
 Every autonomous temporary clone uses [`safe-clone.sh`](.claude/scripts/safe-clone.sh)
-(`.claude/scripts/safe-clone.sh <owner>/<repo> <dest>`): it clones with a scrubbed environment,
+(`.claude/scripts/safe-clone.sh <owner>/<repo> <dest>`): it guards the effective git config against
+credential-bearing rewrites (`insteadOf`/`pushInsteadOf`), auth `extraHeader`s, and credentialed
+proxies before cloning (the environment is deliberately NOT scrubbed — `gh auth git-credential`
+needs `GITHUB_TOKEN`/`GH_TOKEN`),
 forces the canonical credential-free `origin` URL, routes auth through `gh auth git-credential`,
 and fail-closed-verifies that no HTTP(S) remote carries URL userinfo and no effective-config
 `insteadOf` rewrite embeds a credential — deleting (clone mode) or flagging (`--check`) anything

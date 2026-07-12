@@ -204,6 +204,27 @@ mkdir -p "$tmp/exists"
 out="$("$helper" example/repo "$tmp/exists" 2>&1)" && rc=0 || rc=$?
 report "existing destination is rejected" "$([[ $rc -ne 0 ]] && echo yes || echo no)"
 
+# 16. Userinfo containing a raw @ (email-address username) is stripped to the
+# LAST @ — no credential remnant may survive in the "sanitized" URL.
+at_user="$tmp/at-user"
+mk_fixture "$at_user" "https://user@example.com:${secret}@github.com/example/repo.git"
+out="$("$helper" --sanitize "$at_user" 2>&1)" && rc=0 || rc=$?
+at_url="$(git -C "$at_user" config remote.origin.url)"
+report "sanitize strips userinfo containing a raw @ to the last @" \
+  "$([[ $rc -eq 0 && "$at_url" == "https://github.com/example/repo.git" ]] && echo yes || echo no)" \
+  "sanitized URL still carries a credential remnant"
+report "at-userinfo sanitize output does not leak the secret" \
+  "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
+
+# 17. env_guard fails CLOSED when the config itself is unreadable — a corrupt
+# config must not read as "no rewrites found".
+corrupt="$tmp/corrupt"
+mk_fixture "$corrupt" "https://github.com/example/repo.git"
+printf '[section\n' >>"$corrupt/.git/config"
+out="$("$helper" --check "$corrupt" 2>&1)" && rc=0 || rc=$?
+report "check fails closed on an unreadable git config" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+
 if [[ $fail -ne 0 ]]; then
   echo "safe-clone self-test: FAILURES above" >&2
   exit 1

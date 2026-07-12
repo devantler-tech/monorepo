@@ -62,11 +62,20 @@ env_guard() {
   #   2. a credential in an insteadOf/pushInsteadOf rewrite VALUE,
   #   3. any http.*.extraHeader (its practical use is auth headers, and
   #      `git config --list` would print it) — fail closed on presence.
-  if "${cmd[@]}" config --list 2>/dev/null | grep -Eiq \
+  # Capture the listing first: with a bare pipe, a failed config read leaves
+  # grep matching empty input, so the UNSAFE branch is silently skipped — an
+  # unreadable config must fail closed, not open.
+  local config_listing
+  if ! config_listing="$("${cmd[@]}" config --list 2>/dev/null)"; then
+    echo "safe-clone: UNSAFE — could not read the effective git config to verify it is credential-free; fix the config read error and retry" >&2
+    return 1
+  fi
+  if grep -Eiq \
     -e '^url\.https?://[^/@]*@[^=]*\.(insteadof|pushinsteadof)=' \
     -e '^url\.[^=]*\.(insteadof|pushinsteadof)=https?://[^/@]*@' \
     -e '^http\.[^=]*extraheader=' \
-    -e '^(http\.([^=]*\.)?proxy|remote\.[^=]*\.proxy|core\.gitproxy)=[a-z][a-z0-9+.-]*://[^/@]*@'; then
+    -e '^(http\.([^=]*\.)?proxy|remote\.[^=]*\.proxy|core\.gitproxy)=[a-z][a-z0-9+.-]*://[^/@]*@' \
+    <<<"$config_listing"; then
     echo "safe-clone: UNSAFE — the effective git config carries a credential-bearing URL rewrite (insteadOf/pushInsteadOf), an http extraHeader, or a credentialed proxy (details redacted); remove it from host config, use the credential helper instead, and rotate the credential" >&2
     return 1
   fi
@@ -111,8 +120,11 @@ sanitize() {
     while IFS= read -r value; do
       if has_userinfo "$value"; then
         # https://user:secret@host/path -> https://host/path (pure bash — the
-        # secret never passes through another process's argv).
-        stripped="${value%%://*}://${value#*@}"
+        # secret never passes through another process's argv). Split at the
+        # LAST @: RFC 3986 forbids an unescaped @ in the host, so any earlier
+        # @ belongs to the userinfo (e.g. an email-address username) and must
+        # be stripped with it.
+        stripped="${value%%://*}://${value##*@}"
         values+=("$stripped")
       else
         values+=("$value")
