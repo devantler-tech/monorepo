@@ -69,15 +69,16 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   green-review state** — so a run can
   **drain all five**, not just threads. **(e) green review:** the maintainer promotes nothing without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
-  `green_review=<cr@<sha>|cr-stale@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
+  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
   Fetch `headRefOid` while deepening every own/trusted PR. A CodeRabbit `APPROVED` review counts only
-  when its REST `commit_id` equals that head; report an older approval as stale. For Codex, sweep
+  when its REST `commit_id` equals that head; report an older approval as stale, and a current-head
+  CodeRabbit review carrying findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual
   `chatgpt-codex-connector` review output, extract `**Reviewed commit:** <sha>`, and accept its
   clean-pass marker only at the current head.
-  Report a current-head non-green Codex output as `codex-findings@<sha>` with a link/count and
-  **NEEDS-FIX** before considering another review request; reserve `none` for no actual review output.
-  Count all unresolved review threads across all pages, regardless of author.
+  Report a current-head non-green output from either reviewer as `*-findings@<sha>` with a link/count
+  and **NEEDS-FIX** before considering another review request; reserve `none` for no actual review
+  output. Count all unresolved review threads across all pages, regardless of author.
   Query threads per PR via GraphQL
   `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}` and
   report `unresolved=<n>`. **Paginate `reviewThreads` (follow
@@ -232,10 +233,13 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
    force-push), **green the CodeRabbit pre-merge checks** (the maintainer won't promote a draft
    whose pre-merge checks aren't green — direction 2026-07-06), and **secure ≥1 green review at the
-   current head** (direction 2026-07-11: CodeRabbit `APPROVED` or a green Codex review; drafts are NOT
-   auto-reviewed by Codex, so comment `@codex review` on any draft lacking one — especially when
-   CodeRabbit is rate-limited — and re-secure after pushes; Codex findings are handled like any bot
-   reviewer's, and `@codex fix`/`address` is never used). **A merge-gated or parked PR is NOT
+   current head** — auto-review is disabled on both reviewers, so requesting (and re-requesting after
+   every push) is your duty; the full request discipline (one tool at a time by live rate-limit
+   state, evidence-based fallback, incremental re-reviews, green-while-draft as the promotion
+   precondition) is the contract's **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
+   DISABLED*) — follow it, don't re-derive it here. When a draft reaches the full pentad, **ping the
+   maintainer on Slack that it is ready to promote**, batching the run's ready PRs into one message
+   (contract *Issue-driven → attention channels*). **A merge-gated or parked PR is NOT
    exempt** (maintainer direction 2026-07-01): the
    gate excuses the *merge*, never red CI / open threads / conflicts / failed pre-merge checks — those rot on the maintainer's
    dashboard. All of this is allowed *before* promotion; only the **promotion** (draft → ready) is the
@@ -404,7 +408,7 @@ routine prompt alone (surface cross-instance drift in the report). The same stew
 approval guards — contract → *Self-improvement → Runtime guard/permission stewardship*): keep it
 least-privilege-but-sufficient on run evidence — tighten over-broad grants directly (before/after
 recorded; sensitive specifics stay in the PRIVATE host-audit notes), surface a needed widening to the
-maintainer as a one-click / `AskUserQuestion` (never self-widen), and fold the full review into the
+maintainer as a one-click / `AskUserQuestion` / Slack ping (never self-widen), and fold the full review into the
 ~monthly host least-privilege audit. **~Weekly** (or sooner for a clear high-value / security /
 reliability fix), distil them into ONE guard-railed **draft PR** that improves your own definition —
 the contract, this agent/skill set, or a submodule's `## Maintenance` — per the

@@ -79,7 +79,8 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    **A "maintainer decision" is NOT a skip reason:** the maintainer doesn't want to make issue-level
    calls, so **investigate deeply, decide yourself, and ship a draft PR** — that draft is where he
    redirects anything he disapproves of. If you genuinely need him, get his attention *actively* — the
-   **ask tool** = the native **`AskUserQuestion`** clickable prompt (one-click options, not plain text) or
+   **ask tool** = the native **`AskUserQuestion`** clickable prompt (one-click options, not plain text), a
+   **devantler-tech Slack ping** (the third attention channel — works from unattended runs), or
    **ship the decision as a draft PR** (he steers there) — never a passive "awaiting-maintainer" note, never
    the end-of-run report (he rarely reads it), never an **`@devantler` mention** (no notification). Re-verify
    any "gated" against live state before trusting it (memory goes stale) and name the
