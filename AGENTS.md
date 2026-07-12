@@ -235,7 +235,8 @@ checks*, (e) a missing or stale **green review**.** Each run drives every swept 
 to: **green CI**
 (root-cause-fix the failing check), **0 unresolved threads** (fix the valid point, push, reply, resolve
 via the GraphQL `resolveReviewThread` mutation — CodeRabbit `coderabbitai`,
-`copilot-pull-request-reviewer[bot]`), **no conflicts with its base** (update-branch, or a local
+`copilot-pull-request-reviewer[bot]`, and `chatgpt-codex-connector[bot]`), **no conflicts with its
+base** (update-branch, or a local
 merge of the base when GitHub can't auto-update), **green CodeRabbit pre-merge checks** (see the
 *pre-merge checks* paragraph below), and **≥1 green review at the current head** (see the
 *green-review gate* paragraph below). A watcher only covers a PR while its *spawning*
