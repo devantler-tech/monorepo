@@ -113,7 +113,57 @@ git config --file "$benign_global" \
 out="$(GIT_CONFIG_GLOBAL="$benign_global" "$helper" --check "$clean" 2>&1)" && rc=0 || rc=$?
 report "credential-free insteadOf rewrite passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)"
 
-# 9. Argument guards fail closed.
+# 9. pushurl is covered like url: detection, sanitize, no leak.
+pushu="$tmp/pushurl"
+mk_fixture "$pushu" "https://github.com/example/repo.git"
+git -C "$pushu" config remote.origin.pushurl "https://x:${secret}@github.com/example/repo.git"
+out="$("$helper" --check "$pushu" 2>&1)" && rc=0 || rc=$?
+report "check detects userinfo pushurl" "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+out="$("$helper" --sanitize "$pushu" 2>&1)" && rc=0 || rc=$?
+report "sanitize strips pushurl userinfo" \
+  "$([[ $rc -eq 0 && "$(git -C "$pushu" config remote.origin.pushurl)" == "https://github.com/example/repo.git" ]] && echo yes || echo no)"
+report "pushurl handling does not leak the secret" \
+  "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
+
+# 10. Uppercase scheme cannot bypass the userinfo check.
+upper="$tmp/upper"
+mk_fixture "$upper" "HTTPS://x:${secret}@github.com/example/repo.git"
+out="$("$helper" --check "$upper" 2>&1)" && rc=0 || rc=$?
+report "check detects uppercase-scheme userinfo remote" "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+
+# 11. pushInsteadOf rewrites are guarded like insteadOf (key side).
+pio_global="$tmp/gitconfig-pushinsteadof"
+git config --file "$pio_global" \
+  "url.https://x:${secret}@github.com/.pushInsteadOf" "https://github.com/"
+out="$(GIT_CONFIG_GLOBAL="$pio_global" "$helper" --check "$clean" 2>&1)" && rc=0 || rc=$?
+report "env guard fails on credential-bearing pushInsteadOf" "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+report "pushInsteadOf output does not leak the secret" \
+  "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
+
+# 12. A credential in a rewrite VALUE (clean key) is caught too.
+vio_global="$tmp/gitconfig-value-rewrite"
+git config --file "$vio_global" \
+  "url.https://github.com/.insteadOf" "https://x:${secret}@github.com/"
+out="$(GIT_CONFIG_GLOBAL="$vio_global" "$helper" --check "$clean" 2>&1)" && rc=0 || rc=$?
+report "env guard fails on credential in rewrite value" "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+report "value-rewrite output does not leak the secret" \
+  "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
+
+# 13. http extraHeader (auth-header carrier) fails closed before config diagnostics.
+xh_global="$tmp/gitconfig-extraheader"
+git config --file "$xh_global" \
+  "http.https://github.com/.extraHeader" "AUTHORIZATION: bearer ${secret}"
+out="$(GIT_CONFIG_GLOBAL="$xh_global" "$helper" --check "$clean" 2>&1)" && rc=0 || rc=$?
+report "env guard fails on http extraHeader" "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+report "extraHeader output does not leak the secret" \
+  "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
+
+# 14. A rejected slug value is never echoed (it may itself be a secret URL).
+out="$("$helper" "https://x:${secret}@github.com/o/r.git" "$tmp/never2" 2>&1)" && rc=0 || rc=$?
+report "invalid slug is rejected without echoing it" \
+  "$([[ $rc -ne 0 ]] && ! grep -q "$secret" <<<"$out" && echo yes || echo no)"
+
+# 15. Argument guards fail closed.
 out="$("$helper" not-a-slug "$tmp/never" 2>&1)" && rc=0 || rc=$?
 report "invalid slug is rejected" "$([[ $rc -ne 0 ]] && echo yes || echo no)"
 out="$("$helper" --check "$tmp/missing" 2>&1)" && rc=0 || rc=$?

@@ -31,16 +31,18 @@ fail() {
   exit 1
 }
 
-# list_remote_urls <dir> — emit "remote.<name>.url<TAB><value>" lines to
-# stdout for iteration. Callers must never print the value field.
+# list_remote_urls <dir> — emit "remote.<name>.url|pushurl<TAB><value>" lines
+# to stdout for iteration (pushurl leaks through `git remote -v` exactly like
+# url). Callers must never print the value field.
 list_remote_urls() {
-  git -C "$1" config --get-regexp '^remote\..*\.url$' | sed 's/ /\t/' || true
+  git -C "$1" config --get-regexp '^remote\..*\.(url|pushurl)$' | sed 's/ /\t/' || true
 }
 
 # has_userinfo <url> — 0 when an http(s) URL carries userinfo (anything
-# before an @ in the authority part).
+# before an @ in the authority part). Scheme match is case-insensitive —
+# git accepts HTTPS:// remotes and they display the same way.
 has_userinfo() {
-  [[ "$1" =~ ^https?://[^/@]*@ ]]
+  [[ "$1" =~ ^[Hh][Tt][Tt][Pp][Ss]?://[^/@]*@ ]]
 }
 
 # env_guard [dir] — fail closed when the EFFECTIVE git config (system,
@@ -54,9 +56,17 @@ env_guard() {
   local dir="${1:-}"
   local -a cmd=(git)
   [[ -n "$dir" ]] && cmd=(git -C "$dir")
-  if "${cmd[@]}" config --list --name-only 2>/dev/null |
-    grep -Eiq '^url\.https?://[^/@]*@.*\.insteadof$'; then
-    echo "safe-clone: UNSAFE — a git insteadOf URL rewrite in the effective config embeds credentials (key redacted); remove it from host config, use the credential helper instead, and rotate the credential" >&2
+  # One pass over key=value lines catches the classes that leak through the
+  # guarded diagnostics even when stored remote URLs are clean:
+  #   1. a credential in an insteadOf/pushInsteadOf rewrite KEY,
+  #   2. a credential in an insteadOf/pushInsteadOf rewrite VALUE,
+  #   3. any http.*.extraHeader (its practical use is auth headers, and
+  #      `git config --list` would print it) — fail closed on presence.
+  if "${cmd[@]}" config --list 2>/dev/null | grep -Eiq \
+    -e '^url\.https?://[^/@]*@[^=]*\.(insteadof|pushinsteadof)=' \
+    -e '^url\.[^=]*\.(insteadof|pushinsteadof)=https?://[^/@]*@' \
+    -e '^http\.[^=]*extraheader='; then
+    echo "safe-clone: UNSAFE — the effective git config carries a credential-bearing URL rewrite (insteadOf/pushInsteadOf) or an http extraHeader (details redacted); remove it from host config, use the credential helper instead, and rotate the credential" >&2
     return 1
   fi
   return 0
@@ -79,17 +89,16 @@ guard() {
 # sanitize <dir> — rewrite every credential-bearing http(s) remote URL to its
 # userinfo-free form in place.
 sanitize() {
-  local dir="$1" key value name stripped
+  local dir="$1" key value stripped
   while IFS=$'\t' read -r key value; do
     [[ -n "${value:-}" ]] || continue
     if has_userinfo "$value"; then
-      name="${key#remote.}"
-      name="${name%.url}"
       # https://user:secret@host/path -> https://host/path (pure bash — the
-      # secret never passes through another process's argv).
+      # secret never passes through another process's argv). Setting the full
+      # config key covers url and pushurl alike.
       stripped="${value%%://*}://${value#*@}"
-      git -C "$dir" remote set-url "$name" "$stripped"
-      echo "safe-clone: sanitized remote ${name} (userinfo stripped)" >&2
+      git -C "$dir" config "$key" "$stripped"
+      echo "safe-clone: sanitized ${key} (userinfo stripped)" >&2
     fi
   done < <(list_remote_urls "$dir")
 }
@@ -120,7 +129,9 @@ case "${1:-}" in
     slug="$1"
     dest="$2"
     shift 2
-    [[ "$slug" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "invalid repo slug (want owner/repo): $slug"
+    # Never echo the rejected value — a caller may mistakenly pass the very
+    # credential-bearing URL this helper exists to replace.
+    [[ "$slug" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "invalid repo slug (want owner/repo; value redacted)"
     [[ -e "$dest" ]] && fail "destination already exists: $dest"
 
     # Refuse to clone at all in a credential-leaking environment — nothing
@@ -141,9 +152,12 @@ case "${1:-}" in
     git -C "$dest" remote set-url origin "$url"
     git -C "$dest" config credential.helper '!gh auth git-credential'
 
-    if ! guard "$dest"; then
+    # Re-run BOTH guards against the finished clone: pass-through git-clone
+    # options (e.g. `-c url.<...>.insteadOf=...`) can write config into the
+    # new repository that the pre-clone environment check never saw.
+    if ! guard "$dest" || ! env_guard "$dest"; then
       rm -rf "$dest"
-      fail "clone of ${slug} had a credential-bearing remote; clone removed — rotate the credential before retrying"
+      fail "clone of ${slug} failed the credential guard; clone removed — rotate the credential before retrying"
     fi
 
     echo "safe-clone: ${slug} -> ${dest} (remotes credential-free)"
