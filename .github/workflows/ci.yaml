@@ -19,6 +19,7 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
+      safe-clone: ${{ steps.filter.outputs.safe-clone }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -41,6 +42,9 @@ jobs:
               - 'docs/scripts/check-active-projects-drift.test.sh'
               - '.gitmodules'
               - 'github/devantler-tech/github-actions/actions'
+            safe-clone:
+              - '.claude/scripts/safe-clone.sh'
+              - '.claude/scripts/safe-clone.test.sh'
 
   build-docs:
     needs: changes
@@ -117,6 +121,22 @@ jobs:
       - name: Check Active Projects lists for drift
         run: bash docs/scripts/check-active-projects-drift.sh
 
+  test-safe-clone:
+    needs: changes
+    if: needs.changes.outputs.safe-clone == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # Self-contained local fixtures (hermetic git config, synthetic secret
+      # marker) — no network, no real credentials involved.
+      - name: Self-test the safe-clone guard
+        run: bash .claude/scripts/safe-clone.test.sh
+
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
@@ -125,6 +145,7 @@ jobs:
       - build-docs
       - audit-docs
       - drift-check-active-projects
+      - test-safe-clone
     permissions: {}
     steps:
       - name: Check job results
@@ -134,3 +155,4 @@ jobs:
             ${{ needs.build-docs.result }}
             ${{ needs.audit-docs.result }}
             ${{ needs.drift-check-active-projects.result }}
+            ${{ needs.test-safe-clone.result }}
