@@ -45,6 +45,28 @@ for VS Code / Copilot CLI / Claude Code; rescope in progress —
 product belongs in a shared library so *every* product inherits it — keep them **industry-standard and
 tool-neutral** (the portability principle).
 
+## Stack map
+
+The buildable catalogue for **conversational (vibe-coding) sessions**: the `needs-stack-mapping`
+and `allowed-stack-guardrail` skills (bundled by `devantler-tech/agent-plugins`' vibe-coding
+plugin) read this section to decide what may be built here and where out-of-stack wishes are
+filed. Each row names a building block in plain language, what it is **good for** (the matching
+surface, in the user's vocabulary), and the repo that owns suggested issues for it. Needs matching
+no row are filed on the **default intake repo** below.
+
+| Building block | Good for | Owning repo |
+|---|---|---|
+| devantler.tech website | Public web pages on devantler.tech — docs, guides, announcements, portfolio content | `devantler-tech/monorepo` |
+| Wedding app | The wedding website — guest pages, RSVPs, schedules, photos and practical info | `devantler-tech/wedding-app` |
+| AS Coaching site | The coaching business site — pages, offerings, prices, booking information | `devantler-tech/ascoachingogvaner` |
+| App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
+| KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
+| Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/actions` |
+| AI assistant abilities | Teaching the AI assistants new skills, behaviours and bundles | `devantler-tech/agent-skills` |
+| Mac install packages | Making the suite's tools installable on a Mac via Homebrew | `devantler-tech/homebrew-tap` |
+
+**Default intake repo:** `devantler-tech/monorepo`
+
 ## The autonomous Daily AI Engineer
 
 A scheduled local Claude Code agent is the **primary engineer** for all of these products — not just a
