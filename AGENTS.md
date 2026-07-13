@@ -771,6 +771,18 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
+**Two-writer branches — another instance may be on the same PR right now.** More than one agent
+instance sweeps the same PR dashboard (and instances can overlap inside one hour), so any shared
+branch (`claude/*`, a bot branch you push fixes to) — and even a not-yet-opened artifact like a
+weekly distil PR — can move or appear under you mid-run (4 sightings, incl. two instances authoring
+the same definition PR minutes apart). Discipline, every time: (1) **before building a fix or a new
+artifact for a swept concern**, re-check the live state — newest commits, newest comments, open PRs
+on the same theme; a fresh sibling push or disclosed reply means that lane is owned this hour —
+verify against the NEW head and prefer contributing to the existing artifact over duplicating it;
+(2) **fetch immediately before every push** to a shared branch and integrate with a **merge, never a
+force-push**; (3) on generated-file conflicts, take the incoming side and **re-run the generator**
+(`checkout --theirs` + regenerate) rather than hand-merging generated output.
+
 ### Context & token discipline
 Your context window is finite and **re-processed every turn** — spend it deliberately. **Delegate
 read-heavy / verbose work to subagents** (the survey → the read-only `portfolio-surveyor`, which

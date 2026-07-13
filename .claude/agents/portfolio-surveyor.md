@@ -122,7 +122,8 @@ public and private — no per-repo loop needed to enumerate):
      body-findings, so a PR can be green on all three and still fail here. Fetch comments with
      pagination, filter to `coderabbitai[bot]`, require CodeRabbit's stable auto-generated-summary
      marker `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`, sort by
-     `created_at`, and keep the **newest actual summary whose body contains either
+     `updated_at` (CodeRabbit **edits the summary comment in place** on re-review — `created_at`
+     order returns a stale verdict), and keep the **newest actual summary whose body contains either
      supported marker** (`## Pre-merge checks` or `<summary>🚥 Pre-merge checks |`) — not the newest
      arbitrary CodeRabbit reply, which may be a command response with no summary. When
      `<!-- pre_merge_checks_walkthrough_start -->` / `_end` boundaries exist, parse only that bounded
