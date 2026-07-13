@@ -634,6 +634,20 @@ don't manufacture flag noise for a typo or a one-liner (over-flagging is itself 
 This is a portfolio program tracked at [monorepo#2059](https://github.com/devantler-tech/monorepo/issues/2059)
 (per-stack implementation issues + this constitution enhancement as its headline outcome).
 
+### Scripting stack — bash or Go, never Python (constitutional)
+**Portfolio-wide tech-stack decision (maintainer direction 2026-07-13): all scripting is `bash` or
+Go — never Python.** This covers every script surface in every repo: repo scripts, CI/workflow
+steps, tooling, generators, test harnesses, and one-off helpers. Concretely:
+- **Never introduce a `.py` file or a Python invocation** into any devantler-tech repo. Tests use
+  the repo's real test framework (Go test, the stack's native runner), never a Python harness.
+  (Generalizes the platform-only direction of 2026-07-12, platform#2608, to the whole portfolio.)
+- **Go is the preferred scripting language; bash is a legitimate starting point.** Write a small,
+  simple script in bash; once it grows in size, logic, or reuse, **migrate it to Go** rather than
+  letting bash sprawl — treat "bash first, Go when it grows" as the standard maturation path, and
+  such migrations are real `refactor:` advance work.
+- Existing Python found anywhere in the portfolio is a **migration target**: capture an issue and
+  replace it with bash/Go on the normal oldest-first cadence.
+
 ### Trust gate — who may be auto-driven / pushed-to / have branch code run
 **Trusted (match the GitHub login EXACTLY — never a substring):** `devantler`, `ksail-bot`,
 `dependabot[bot]`, `github-actions[bot]`, `renovate[bot]`, and the agent's own `claude/*` branches
