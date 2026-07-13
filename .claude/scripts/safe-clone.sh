@@ -96,6 +96,24 @@ guard() {
   return 0
 }
 
+# path_identity <path> — emit a stable device:inode pair without printing the
+# path. BSD/macOS and GNU stat use different format flags, so try both and
+# accept only the numeric shape expected from either implementation.
+path_identity() {
+  local identity
+  identity="$(stat -f '%d:%i' "$1" 2>/dev/null)" || true
+  if [[ "$identity" =~ ^[0-9]+:[0-9]+$ ]]; then
+    printf '%s\n' "$identity"
+    return 0
+  fi
+  identity="$(stat -c '%d:%i' "$1" 2>/dev/null)" || true
+  if [[ "$identity" =~ ^[0-9]+:[0-9]+$ ]]; then
+    printf '%s\n' "$identity"
+    return 0
+  fi
+  return 1
+}
+
 # sanitize <dir> — rewrite every credential-bearing http(s) remote URL to its
 # userinfo-free form in place. Keys are rewritten wholesale (unset-all, then
 # re-add each stripped value) because pushurl is multi-valued and a plain
@@ -198,13 +216,74 @@ case "${1:-}" in
 
     url="https://github.com/${slug}.git"
 
+    # Claim the destination atomically and record its identity. If identity
+    # capture itself fails, rmdir is deliberately used instead of recursive
+    # removal: it can clean our still-empty claim without risking user data.
+    mkdir "$dest" || fail "could not claim destination for ${slug}"
+    if ! clone_dest_identity="$(path_identity "$dest")"; then
+      rmdir "$dest" >/dev/null 2>&1 || true
+      fail "could not verify ownership of the claimed destination for ${slug}"
+    fi
+
+    # The claimed destination belongs to this invocation until the clone,
+    # canonical remote rewrite, credential-helper setup, and both guards have
+    # all succeeded. Clean it on ordinary failures and catchable interruptions
+    # so a partial pack / refs/heads/.invalid checkout cannot survive as if it
+    # were a valid isolated worktree.
+    clone_committed=0
+    cleanup_partial_clone() {
+      local rc=$? cleanup_failed=0 quarantine_root="" quarantine_path=""
+      local quarantined_identity="" dest_parent=""
+      trap - EXIT HUP INT TERM
+      if [[ $clone_committed -eq 0 && -e "$dest" ]]; then
+        # Never check an identity and then recursively delete that same path:
+        # another process could replace it between those two lookups. Move the
+        # current path atomically into a private, same-parent quarantine first,
+        # then verify the moved directory. A raced replacement remains in
+        # quarantine and is never passed to rm or moved onto another path.
+        dest_parent="$(dirname -- "$dest")"
+        if quarantine_root="$(mktemp -d "${dest_parent}/.safe-clone-cleanup.XXXXXX" 2>/dev/null)"; then
+          quarantine_path="${quarantine_root}/clone"
+          if mv -- "$dest" "$quarantine_path" >/dev/null 2>&1; then
+            quarantined_identity="$(path_identity "$quarantine_path")" || true
+            if [[ -n "$quarantined_identity" && "$quarantined_identity" == "$clone_dest_identity" ]]; then
+              if ! rm -rf -- "$quarantine_root" >/dev/null 2>&1; then
+                cleanup_failed=1
+              fi
+            else
+              echo "safe-clone: partial destination ownership changed; refusing to delete it" >&2
+              # The replacement remains preserved under the private
+              # quarantine root. Never try to restore it: portable mv treats
+              # a concurrently recreated destination as a directory and can
+              # silently nest the quarantined data inside it.
+              cleanup_failed=1
+            fi
+          else
+            rmdir "$quarantine_root" >/dev/null 2>&1 || true
+            cleanup_failed=1
+          fi
+        else
+          cleanup_failed=1
+        fi
+      fi
+      if [[ $cleanup_failed -ne 0 ]]; then
+        echo "safe-clone: partial destination cleanup failed (details redacted)" >&2
+      fi
+      exit "$rc"
+    }
+    trap cleanup_partial_clone EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
     # No env scrubbing here: plain `git clone` never reads GITHUB_TOKEN /
     # GH_TOKEN, and the `gh auth git-credential` helper NEEDS them on hosts
     # where gh is authenticated only via environment token. The guard below
     # verifies nothing token-shaped was persisted regardless.
-    git -c credential.helper='!gh auth git-credential' \
-      clone --quiet "$@" "$url" "$dest" ||
+    if ! git -c credential.helper='!gh auth git-credential' \
+      clone --quiet "$@" "$url" "$dest" >/dev/null 2>&1; then
       fail "clone failed for ${slug}"
+    fi
 
     # Belt-and-braces: force the canonical credential-free URL and wire the
     # helper for future authenticated fetch/push from this clone.
@@ -215,10 +294,11 @@ case "${1:-}" in
     # options (e.g. `-c url.<...>.insteadOf=...`) can write config into the
     # new repository that the pre-clone environment check never saw.
     if ! guard "$dest" || ! env_guard "$dest"; then
-      rm -rf "$dest"
-      fail "clone of ${slug} failed the credential guard; clone removed — rotate the credential before retrying"
+      fail "clone of ${slug} failed the credential guard; clone refused — rotate the credential before retrying"
     fi
 
+    clone_committed=1
+    trap - EXIT HUP INT TERM
     echo "safe-clone: ${slug} -> ${dest} (remotes credential-free)"
     ;;
 esac

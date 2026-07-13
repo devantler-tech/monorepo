@@ -229,6 +229,170 @@ report "check fails closed on an unreadable git config" \
 report "corrupt-config failure output does not leak config contents" \
   "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
 
+# 18. A clone failure that has already created a partial destination must not
+# leave that unusable checkout behind. Use a fake git binary so the fixture is
+# local, deterministic, and exercises the helper's failure path without a
+# network request.
+fake_bin="$tmp/fake-bin"
+mkdir -p "$fake_bin"
+# The quoted fixture lines must expand only when the generated fake git runs.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -Eeuo pipefail' \
+  'if [[ "$1" == "config" && "$2" == "--list" ]]; then' \
+  '  exit 0' \
+  'fi' \
+  'if [[ "$1" == "-c" ]]; then' \
+  '  dest="${!#}"' \
+  '  if [[ "${FAKE_GIT_MODE:-failure}" == "success" ]]; then' \
+  '    "${REAL_GIT:?}" init --quiet "$dest"' \
+  '    "${REAL_GIT:?}" -C "$dest" remote add origin https://github.com/example/repo.git' \
+  '    if [[ -n "${FAKE_GIT_REMOTE_URL:-}" ]]; then' \
+  '      "${REAL_GIT:?}" -C "$dest" remote add upstream "$FAKE_GIT_REMOTE_URL"' \
+  '    fi' \
+  '    exit 0' \
+  '  fi' \
+  '  mkdir -p "$dest/.git/objects/pack"' \
+  '  printf "ref: refs/heads/.invalid\\n" >"$dest/.git/HEAD"' \
+  '  printf partial >"$dest/.git/objects/pack/tmp_pack_fixture"' \
+  '  if [[ -n "${FAKE_GIT_SECRET:-}" ]]; then' \
+  '    printf "clone diagnostic: %s\\n" "$FAKE_GIT_SECRET" >&2' \
+  '  fi' \
+  '  if [[ "${FAKE_GIT_MODE:-failure}" == "replace" ]]; then' \
+  '    mv "$dest" "${dest}.owned"' \
+  '    mkdir -p "$dest"' \
+  '    printf unrelated >"$dest/sentinel"' \
+  '    exit 42' \
+  '  fi' \
+  '  if [[ "${FAKE_GIT_MODE:-failure}" == "interrupt" ]]; then' \
+  '    kill -s "${FAKE_SIGNAL:-TERM}" "$PPID"' \
+  '    sleep 0.1' \
+  '    exit 143' \
+  '  fi' \
+  '  exit 42' \
+  'fi' \
+  'exec "${REAL_GIT:?}" "$@"' >"$fake_bin/git"
+chmod +x "$fake_bin/git"
+real_git="$(command -v git)"
+
+successful="$tmp/successful-clone"
+out="$(FAKE_GIT_MODE=success REAL_GIT="$real_git" PATH="$fake_bin:$PATH" "$helper" example/repo "$successful" 2>&1)" && rc=0 || rc=$?
+report "successful clone mode exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)"
+report "successful clone mode keeps a valid checkout" \
+  "$([[ -d "$successful/.git" ]] && "$helper" --check "$successful" >/dev/null 2>&1 && echo yes || echo no)"
+
+guard_failed="$tmp/post-clone-guard-failure"
+unsafe_remote="https://x-access-token:${secret}@github.com/example/repo.git"
+out="$(FAKE_GIT_MODE=success FAKE_GIT_REMOTE_URL="$unsafe_remote" REAL_GIT="$real_git" \
+  PATH="$fake_bin:$PATH" "$helper" example/repo "$guard_failed" 2>&1)" && rc=0 || rc=$?
+report "post-clone credential guard fails clone mode" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+guard_quarantine=
+for candidate in "$tmp"/.safe-clone-cleanup.*; do
+  if [[ -d "$candidate" ]]; then
+    guard_quarantine="$candidate"
+    break
+  fi
+done
+report "post-clone credential guard removes its destination and quarantine" \
+  "$([[ ! -e "$guard_failed" && -z "$guard_quarantine" ]] && echo yes || echo no)"
+report "post-clone credential guard output remains redacted" \
+  "$(! grep -Eq "https?://|${secret}" <<<"$out" && echo yes || echo no)"
+
+partial="$tmp/partial-clone"
+out="$(FAKE_GIT_SECRET="$secret" REAL_GIT="$real_git" PATH="$fake_bin:$PATH" "$helper" example/repo "$partial" 2>&1)" && rc=0 || rc=$?
+report "failed clone exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+report "failed clone removes its partial destination" \
+  "$([[ ! -e "$partial" ]] && echo yes || echo no)"
+report "failed clone output remains redacted" \
+  "$(! grep -Eq "https?://|${secret}" <<<"$out" && echo yes || echo no)"
+
+replacement="$tmp/replaced-clone"
+out="$(FAKE_GIT_MODE=replace PATH="$fake_bin:$PATH" "$helper" example/repo "$replacement" 2>&1)" && rc=0 || rc=$?
+replacement_quarantine="$(find "$tmp" -path '*/.safe-clone-cleanup.*/clone/sentinel' -type f -print -quit)"
+report "failed clone quarantines a replaced destination without deleting or restoring it" \
+  "$([[ $rc -ne 0 && ! -e "$replacement" && -n "$replacement_quarantine" ]] && echo yes || echo no)"
+
+# Replace the destination after cleanup's identity read, then return the old
+# identity. This deterministically catches a check-then-rm implementation:
+# only moving the path aside and verifying it after that atomic rename can
+# prove a replacement will not be recursively deleted.
+fake_stat_bin="$tmp/fake-stat-bin"
+mkdir -p "$fake_stat_bin"
+stat_state="$tmp/stat-state"
+printf '0\n' >"$stat_state"
+# The quoted fixture variables must expand only in the generated fake stat.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -Eeuo pipefail' \
+  'value="$("${REAL_STAT:?}" "$@" 2>/dev/null)" || exit $?' \
+  'if [[ "$value" =~ ^[0-9]+:[0-9]+$ ]]; then' \
+  '  count="$(<"${FAKE_STAT_STATE:?}")"' \
+  '  if [[ "$count" == "0" ]]; then' \
+  '    printf "1\\n" >"$FAKE_STAT_STATE"' \
+  '  else' \
+  '    if [[ -e "${FAKE_STAT_DEST:?}" ]]; then' \
+  '      mv "$FAKE_STAT_DEST" "${FAKE_STAT_DEST}.owned-late"' \
+  '    fi' \
+  '    mkdir -p "$FAKE_STAT_DEST"' \
+  '    printf unrelated >"$FAKE_STAT_DEST/sentinel"' \
+  '  fi' \
+  'fi' \
+  'printf "%s\\n" "$value"' >"$fake_stat_bin/stat"
+chmod +x "$fake_stat_bin/stat"
+late_replacement="$tmp/late-replaced-clone"
+out="$(REAL_STAT="$(command -v stat)" FAKE_STAT_STATE="$stat_state" \
+  FAKE_STAT_DEST="$late_replacement" PATH="$fake_stat_bin:$fake_bin:$PATH" \
+  "$helper" example/repo "$late_replacement" 2>&1)" && rc=0 || rc=$?
+report "cleanup cannot delete a destination replaced after its identity read" \
+  "$([[ $rc -ne 0 && -f "$late_replacement/sentinel" ]] && echo yes || echo no)"
+
+# Identity capture itself can fail on a constrained host. The newly-created,
+# still-empty claim must be removed before failing so retrying is possible.
+fake_stat_failure_bin="$tmp/fake-stat-failure-bin"
+mkdir -p "$fake_stat_failure_bin"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"$fake_stat_failure_bin/stat"
+chmod +x "$fake_stat_failure_bin/stat"
+identity_failure="$tmp/identity-failure"
+out="$(PATH="$fake_stat_failure_bin:$fake_bin:$PATH" \
+  "$helper" example/repo "$identity_failure" 2>&1)" && rc=0 || rc=$?
+report "identity-capture failure removes the empty destination claim" \
+  "$([[ $rc -ne 0 && ! -e "$identity_failure" ]] && echo yes || echo no)"
+
+fake_rm_bin="$tmp/fake-rm-bin"
+mkdir -p "$fake_rm_bin"
+# The quoted fixture variable must expand only in the generated fake rm.
+# shellcheck disable=SC2016
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "cleanup diagnostic: %s\\n" "${FAKE_RM_SECRET:-}" >&2' \
+  'exit 77' >"$fake_rm_bin/rm"
+chmod +x "$fake_rm_bin/rm"
+cleanup_failure="$tmp/cleanup-failure"
+out="$(FAKE_RM_SECRET="$secret" PATH="$fake_rm_bin:$fake_bin:$PATH" "$helper" example/repo "$cleanup_failure" 2>&1)" && rc=0 || rc=$?
+report "cleanup failure preserves the clone failure status" \
+  "$([[ $rc -eq 1 ]] && echo yes || echo no)" "got exit $rc instead of 1"
+report "cleanup failure output remains redacted" \
+  "$(! grep -Eq "https?://|${secret}" <<<"$out" && echo yes || echo no)"
+report "clone failure does not claim cleanup succeeded before the EXIT trap" \
+  "$(! grep -q "partial destination removed" <<<"$out" && echo yes || echo no)"
+"$(command -v rm)" -rf "$cleanup_failure"
+
+for signal_spec in HUP:129 INT:130 TERM:143; do
+  signal="${signal_spec%%:*}"
+  expected="${signal_spec##*:}"
+  interrupted="$tmp/interrupted-clone-${signal}"
+  out="$(FAKE_GIT_MODE=interrupt FAKE_SIGNAL="$signal" FAKE_GIT_SECRET="$secret" PATH="$fake_bin:$PATH" "$helper" example/repo "$interrupted" 2>&1)" && rc=0 || rc=$?
+  report "$signal interruption preserves exit status $expected" \
+    "$([[ $rc -eq $expected ]] && echo yes || echo no)" "got exit $rc"
+  report "$signal interruption removes its partial destination" \
+    "$([[ ! -e "$interrupted" ]] && echo yes || echo no)"
+  report "$signal interruption output remains redacted" \
+    "$(! grep -Eq "https?://|${secret}" <<<"$out" && echo yes || echo no)"
+done
+
 if [[ $fail -ne 0 ]]; then
   echo "safe-clone self-test: FAILURES above" >&2
   exit 1
