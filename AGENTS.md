@@ -57,12 +57,18 @@ no row are filed on the **default intake repo** below.
 | Building block | Good for | Owning repo |
 |---|---|---|
 | devantler.tech website | Public web pages on devantler.tech — docs, guides, announcements, portfolio content | `devantler-tech/monorepo` |
-| Wedding app | The wedding website — guest pages, RSVPs, schedules, photos and practical info | `devantler-tech/wedding-app` |
-| AS Coaching site | The coaching business site — pages, offerings, prices, booking information | `devantler-tech/ascoachingogvaner` |
+| Wedding app | THIS suite's existing deployed wedding website only — its guest pages, RSVPs, schedules, photos and practical info (not new wedding sites in general) | `devantler-tech/wedding-app` |
+| AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |
 | App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
 | KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
 | Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/actions` |
-| AI assistant abilities | Teaching the AI assistants new skills, behaviours and bundles | `devantler-tech/agent-skills` |
+| AI assistant skills | Teaching the AI assistants new individual skills and behaviours | `devantler-tech/agent-skills` |
+| AI assistant plugin bundles | Bundling skills into installable plugins / marketplace entries for VS Code, Copilot CLI, Claude Code | `devantler-tech/agent-plugins` |
+| Go project template | The starter template new Go repositories are created from | `devantler-tech/go-template` |
+| .NET project template | The starter template new .NET repositories are created from | `devantler-tech/dotnet-template` |
+| GitOps tenant template | The starter template new platform-tenant (GitOps) repositories are created from | `devantler-tech/gitops-tenant-template` |
+| Platform template | The starter template new platform repositories are created from | `devantler-tech/platform-template` |
+| UniFi network provider | Managing UniFi network gear declaratively via the Crossplane provider | `devantler-tech/provider-upjet-unifi` |
 | Mac install packages | Making the suite's tools installable on a Mac via Homebrew | `devantler-tech/homebrew-tap` |
 
 **Default intake repo:** `devantler-tech/monorepo`
