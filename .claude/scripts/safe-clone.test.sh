@@ -288,7 +288,13 @@ out="$(FAKE_GIT_MODE=success FAKE_GIT_REMOTE_URL="$unsafe_remote" REAL_GIT="$rea
   PATH="$fake_bin:$PATH" "$helper" example/repo "$guard_failed" 2>&1)" && rc=0 || rc=$?
 report "post-clone credential guard fails clone mode" \
   "$([[ $rc -ne 0 ]] && echo yes || echo no)"
-guard_quarantine="$(find "$tmp" -maxdepth 1 -type d -name '.safe-clone-cleanup.*' -print)"
+guard_quarantine=
+for candidate in "$tmp"/.safe-clone-cleanup.*; do
+  if [[ -d "$candidate" ]]; then
+    guard_quarantine="$candidate"
+    break
+  fi
+done
 report "post-clone credential guard removes its destination and quarantine" \
   "$([[ ! -e "$guard_failed" && -z "$guard_quarantine" ]] && echo yes || echo no)"
 report "post-clone credential guard output remains redacted" \
