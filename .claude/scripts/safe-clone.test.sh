@@ -217,13 +217,17 @@ report "at-userinfo sanitize output does not leak the secret" \
   "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
 
 # 17. env_guard fails CLOSED when the config itself is unreadable — a corrupt
-# config must not read as "no rewrites found".
+# config must not read as "no rewrites found". The secret sits in the VALID
+# prefix before the corrupt line: `git config --list` can emit partial stdout
+# before failing, so the failure path must not echo config contents either.
 corrupt="$tmp/corrupt"
 mk_fixture "$corrupt" "https://github.com/example/repo.git"
-printf '[section\n' >>"$corrupt/.git/config"
+printf '[safeclone]\n\tfixturesecret = %s\n[section\n' "$secret" >>"$corrupt/.git/config"
 out="$("$helper" --check "$corrupt" 2>&1)" && rc=0 || rc=$?
 report "check fails closed on an unreadable git config" \
   "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+report "corrupt-config failure output does not leak config contents" \
+  "$(grep -q "$secret" <<<"$out" && echo no || echo yes)"
 
 if [[ $fail -ne 0 ]]; then
   echo "safe-clone self-test: FAILURES above" >&2
