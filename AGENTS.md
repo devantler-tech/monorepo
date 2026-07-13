@@ -737,7 +737,11 @@ hijacked run *could* do.
   secrets, cluster `Secret`s, node/machine config, and secret stores — and rotating only the copy
   that surfaced the incident leaves the others live (or, for a revocation, leaves consumers broken:
   a revoked registry credential froze prod GitOps delivery AND the platform merge queue for hours).
-  Before revoking, enumerate every copy up front and sequence the swap; after rotating, verify each
+  For a **planned rotation** (the credential is not known-compromised), enumerate every copy up front
+  and sequence the swap so no consumer breaks. For a **known-leaked or compromised credential,
+  containment outranks continuity: revoke immediately** — never leave an attacker's credential live
+  while inventorying copies — then sweep the copies and repair consumers as fast as possible,
+  treating the breakage as accepted incident cost. In both cases, after rotating, verify each
   copy's consumer actually works. This parallels the image-verification three-layer rule: pull
   credentials have layers too.
 - **Cross-agent runtime changes are maintainer-gated.** Rotating shared credentials or changing the

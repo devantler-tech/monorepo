@@ -79,10 +79,13 @@ public and private — no per-repo loop needed to enumerate):
      section). **Count ONLY the newest CodeRabbit review** — CodeRabbit re-reviews on every push, so
      summing across all reviews re-counts findings that later reviews or pushes already cleared (a
      recurring false-NEEDS-FIX source). Fetch
-     `gh api repos/devantler-tech/<repo>/pulls/<n>/reviews --paginate`, select
-     `user.login=="coderabbitai[bot]"` reviews whose body contains a matching section shape, take the
+     `gh api repos/devantler-tech/<repo>/pulls/<n>/reviews --paginate`, select ALL
+     `user.login=="coderabbitai[bot]"` actual review submissions (not command replies), take the
      one with the greatest `submitted_at` (CodeRabbit also edits bodies in place — prefer `updated_at`
-     when present), extract each matching section's numeric `(N)` excluding `🔇`, and report
+     when present) **whether or not its body contains a finding section** — a newest review with no
+     finding sections means the findings are cleared and `body_findings=0`; never fall back to an
+     older review that still had sections (that re-reports what the newest review already cleared).
+     From that single newest review, extract each matching section's numeric `(N)` excluding `🔇`, and report
      `body_findings=<n>@<sha>` where `<sha>` is that review's `commit_id`. When `<sha>` differs from
      the current `headRefOid`, the count is historical — report it as `body_findings=<n>-stale@<sha>`
      so the orchestrator re-verifies against the head instead of treating it as open, and when the PR
@@ -168,7 +171,11 @@ public and private — no per-repo loop needed to enumerate):
      bounded discovery call:
      `gh search issues --owner devantler-tech --archived=false --state open --commenter devantler --limit 300 --json number,repository,title,url`.
      For each returned issue, fetch `gh issue view <n> --repo devantler-tech/<repo> --json comments`,
-     exclude disclosed Daily AI comments, and emit an undisclosed exact-login comment only as
+     exclude disclosed Daily AI comments, and **apply the same sibling-output shape check as the PR
+     sweep above**: an undisclosed exact-login comment that self-identifies as automation output
+     (names an agent instance or run/tick, or carries a sibling agent's output template) is reported
+     as `CANDIDATE-SIBLING-ISSUE-COMMENT (missing disclosure)`, not promoted to a maintainer signal.
+     Emit the remaining undisclosed exact-login comments as
      `CANDIDATE-MAINTAINER-ISSUE-COMMENT` with a one-line gist. The orchestrator's creation record
      decides whether the issue is routine-owned before the comment becomes an instruction.
 4. **CI red on `main` (bounded, per-repo).** For each repo, one bounded call:

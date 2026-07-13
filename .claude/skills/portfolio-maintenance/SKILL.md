@@ -114,8 +114,10 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   `<summary>🚥 Pre-merge checks | ✅ 5</summary>`, orthogonal to (a)/(b)/(c) — a PR green on all three
   can still fail here. Fetch comments with pagination, filter to `coderabbitai[bot]`, require
   CodeRabbit's stable auto-generated-summary marker
-  `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`, then sort by `created_at`
-  and keep the **newest actual summary containing either supported marker** (`## Pre-merge checks` or
+  `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`, then sort by `updated_at`
+  (CodeRabbit **edits the summary comment in place** on re-review — `created_at` order returns a
+  stale verdict) and keep the **newest actual summary containing either supported marker**
+  (`## Pre-merge checks` or
   `<summary>🚥 Pre-merge checks |`), not the newest arbitrary bot reply. When
   `<!-- pre_merge_checks_walkthrough_start -->` / `_end` boundaries exist, parse only that region so
   echoed marker text elsewhere cannot spoof the result; accept the legacy heading fallback only in an
