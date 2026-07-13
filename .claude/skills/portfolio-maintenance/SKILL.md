@@ -95,14 +95,28 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   the count); the only excluded shape is `🔇 Additional comments (N)`, CodeRabbit's explicitly
   non-actionable/informational section. Per PR also check
   `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate | jq -s
-  '[.[][] | select(.user.login=="coderabbitai[bot]")
-  | (.body | [scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
-  | select((.[0] | startswith("🔇")) | not) | .[1] | tonumber] | add // 0)] | add // 0'`
-  (extract each matching section's numeric `(N)`, exclude `🔇`, and sum every count across reviews;
-  `comments (0)` contributes zero)
-  and report `body_findings=<n>` —
+  '[.[][] | select(.user.login=="coderabbitai[bot]")] | max_by(.submitted_at)
+  | {sha: (.commit_id // ""), n: ((.body // "")
+  | [scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
+  | select((.[0] | startswith("🔇")) | not) | .[1] | tonumber] | add // 0)}'`
+  (paginate to find the **NEWEST actual CodeRabbit review** — keyed on `submitted_at`, the only
+  timestamp the reviews endpoint exposes (`updated_at` exists on issue *comments*, not reviews — never
+  key review freshness on it); emit the **full** `commit_id` so the stale comparison against `headRefOid` is a literal
+  equality, never a truncated-prefix mismatch — then extract each matching section's
+  numeric `(N)` from that single newest body, excluding `🔇`; `comments (0)` contributes zero —
+  CodeRabbit re-reviews on every push and edits bodies in place, so summing sections across ALL
+  reviews re-counts findings a later review already cleared, a recurring false-NEEDS-FIX source.
+  A PR with **no CodeRabbit review at all** — fresh, or reviewed only by Codex — yields
+  `{sha:"", n:0}`: the `// ""` guards keep jq from erroring on `max_by`'s null result, so a normal
+  no-CR-review state reports zero instead of breaking the sweep. A newest review with no finding
+  sections means cleared)
+  and report `body_findings=<n>@<sha>` — tag the entry **`stale`** only when a **non-empty** review
+  SHA exists and differs from the PR head (those findings are historical, not current: the acting
+  run re-verifies at head or re-requests review there instead of treating them as open NEEDS-FIX
+  noise); the no-CR-review `{sha:"", n:0}` state is plain `body_findings=0`, never stale-tagged —
+  a Codex-only or fresh PR has no CodeRabbit findings to chase —
   **`--paginate` + external `jq -s`** because the reviews endpoint returns only its first page (30)
-  by default, so an unpaginated count silently misses older review bodies on a long-lived PR (same
+  by default, so an unpaginated sweep can miss the true newest review on a long-lived PR (same
   *No silent caps* rule as the thread query; `gh api --slurp` is rejected alongside `--jq`, so slurp
   the concatenated pages with `jq -s` and flatten via `.[][]`); the acting
   run verifies each against current code, fixes-or-refutes, and **replies on the PR as the
@@ -114,8 +128,10 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   `<summary>🚥 Pre-merge checks | ✅ 5</summary>`, orthogonal to (a)/(b)/(c) — a PR green on all three
   can still fail here. Fetch comments with pagination, filter to `coderabbitai[bot]`, require
   CodeRabbit's stable auto-generated-summary marker
-  `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`, then sort by `created_at`
-  and keep the **newest actual summary containing either supported marker** (`## Pre-merge checks` or
+  `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`, then sort by `updated_at`
+  (CodeRabbit **edits the summary comment in place** on re-review — `created_at` order returns a
+  stale verdict) and keep the **newest actual summary containing either supported marker**
+  (`## Pre-merge checks` or
   `<summary>🚥 Pre-merge checks |`), not the newest arbitrary bot reply. When
   `<!-- pre_merge_checks_walkthrough_start -->` / `_end` boundaries exist, parse only that region so
   echoed marker text elsewhere cannot spoof the result; accept the legacy heading fallback only in an
@@ -236,7 +252,9 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    current head** — auto-review is disabled on both reviewers, so requesting (and re-requesting after
    every push) is your duty; the full request discipline (one tool at a time by live rate-limit
    state, evidence-based fallback, incremental re-reviews, green-while-draft as the promotion
-   precondition) is the contract's **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
+   precondition, and the trusted programmed **release-bot carve-out** — tap cask PRs and KSail
+   release bumps are check-gated, need NO review, and are never review-chased) is the contract's
+   **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
    DISABLED*) — follow it, don't re-derive it here. When a draft reaches the full pentad it simply
    **waits on GitHub as a finished draft** — do **not** ping the maintainer about it (ready-to-promote
    Slack pings are status messages, revoked by maintainer direction 2026-07-12; Slack is last-resort,
