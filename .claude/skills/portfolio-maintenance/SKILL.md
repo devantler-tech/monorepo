@@ -95,11 +95,14 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   the count); the only excluded shape is `🔇 Additional comments (N)`, CodeRabbit's explicitly
   non-actionable/informational section. Per PR also check
   `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate | jq -s
-  '[.[][] | select(.user.login=="coderabbitai[bot]")] | max_by(.submitted_at)
-  | {sha: ((.commit_id // "")[0:8]), n: ((.body // "")
+  '[.[][] | select(.user.login=="coderabbitai[bot]")] | max_by(.updated_at // .submitted_at)
+  | {sha: (.commit_id // ""), n: ((.body // "")
   | [scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
   | select((.[0] | startswith("🔇")) | not) | .[1] | tonumber] | add // 0)}'`
-  (paginate to find the **NEWEST actual CodeRabbit review**, then extract each matching section's
+  (paginate to find the **NEWEST actual CodeRabbit review** — keyed on `updated_at // submitted_at`
+  because CodeRabbit edits review bodies in place, so an older-submitted review can carry the current
+  content; emit the **full** `commit_id` so the stale comparison against `headRefOid` is a literal
+  equality, never a truncated-prefix mismatch — then extract each matching section's
   numeric `(N)` from that single newest body, excluding `🔇`; `comments (0)` contributes zero —
   CodeRabbit re-reviews on every push and edits bodies in place, so summing sections across ALL
   reviews re-counts findings a later review already cleared, a recurring false-NEEDS-FIX source.

@@ -450,7 +450,9 @@ promoted PR whose only blocker is a CHANGES_REQUESTED review at an old head (cur
 review from either lane, zero findings/threads, green checks) will never clear by re-firing that
 reviewer. Recognise the class on first sight, stop spending review requests on it, and surface the
 stale-review dismissal to the maintainer as a one-click immediately (dismissing a review on a
-promoted PR is reserved to him).
+promoted PR is reserved to him). The survey digest carries the signal directly — each swept PR
+reports `rd=<reviewDecision>` with the CHANGES_REQUESTED review's SHA and classifies the
+otherwise-clear case `STALE-CR-DISMISSAL` — so a run acts on the digest without re-deriving it.
 
 The agent's **own** PRs are trusted-author PRs (authored as `devantler` from `claude/*` branches — see
 trust gate), so the **same path applies to them, including its own definition PRs — no carve-out**. The

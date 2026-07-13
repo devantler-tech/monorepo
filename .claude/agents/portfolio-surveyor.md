@@ -212,8 +212,8 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no own/trus
 - CANDIDATE-SIBLING-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - <repo>: CI red on main — <workflow> (<run url>)
-- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
-- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX
+- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…> (orchestrator applies creation-record test before action; NOT asserted mine)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
@@ -232,6 +232,11 @@ Digest rules:
   and tag it `OWNERSHIP-UNVERIFIED`, never `MERGE-READY`/"own". (Bot-trusted authors have no ambiguity.)
 - **Trust labels are advisory flags, not actions:** mark external/Copilot PRs so the orchestrator
   reviews them statically; never imply they are mergeable.
+- **`rd` is the PR's `reviewDecision`** (already fetched in the deepening `gh pr view`). When it is
+  `CHANGES_REQUESTED`, report the SHA of the newest CHANGES_REQUESTED review; when that SHA is not
+  the current head AND the pentad is otherwise clear with a current-head green review, classify the
+  PR **STALE-CR-DISMISSAL** instead of NEEDS-FIX — the orchestrator surfaces the stale-review
+  dismissal one-click rather than spending more review requests (contract → *Merge policy*).
 - **No cross-org output:** never discover or report repositories outside the portfolio, regardless of
   author or apparent trust.
 - If a query fails (auth, rate limit), note it in one line under the relevant repo rather than
