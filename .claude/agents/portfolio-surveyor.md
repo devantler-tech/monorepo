@@ -209,6 +209,8 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no own/trus
 ### Operate
 - CANDIDATE-MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator applies creation record; instruction only when routine-owned
 - CANDIDATE-MAINTAINER-ISSUE-COMMENT <repo> #<n> — `devantler`: "<one-line gist>" → orchestrator applies creation record; instruction only when routine-owned
+- CANDIDATE-SIBLING-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
+- CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - <repo>: CI red on main — <workflow> (<run url>)
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX

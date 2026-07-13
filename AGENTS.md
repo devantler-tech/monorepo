@@ -258,13 +258,19 @@ from the wrong distribution, ksail #5652's custom-CIDR server subnet using the w
 "nitpick" also exposed a real cosign-verifier sequencing break). Neither becomes a review thread,
 neither has an `isResolved` state, and a `reviewThreads`-only sweep — or a body grep for just one
 section title — is blind to them while they silently age. So the sweep checks BOTH surfaces per PR:
-the unresolved-thread query AND each `coderabbitai` review body
+the unresolved-thread query AND the `coderabbitai` review bodies
 (`gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate`, filter author + the section **shape**
 `<summary><emoji> <Category> comments (N)</summary>` — every finding section is titled that way, so
 match the shape rather than a title list, excluding only `🔇 Additional comments (N)` (CodeRabbit's
 non-actionable/informational section); paginate — the endpoint returns only its first page
-by default and a long-lived PR accumulates more reviews than one page; if CodeRabbit ships a new
-collapsed section title, it counts too — the rule is *all body findings*, not a title list) — verify
+by default and a long-lived PR accumulates more reviews than one page, and the count keys on the
+**NEWEST actual CodeRabbit review** (greatest `submitted_at`/`updated_at` — CodeRabbit re-reviews on
+every push and edits bodies in place, so summing sections across all reviews re-counts findings a
+later review already cleared; a newest review with no finding sections means cleared, and a newest
+review whose `commit_id` is not the current head is historical — re-verify at head instead of
+treating it as open); if CodeRabbit ships a new
+collapsed section title, it counts too — the rule is *all finding sections of that newest review*,
+not a title list) — verify
 each body finding against current code, fix the valid ones (push) or refute with reasoning, and
 **reply on the PR as the resolution record** (there is no thread to resolve). A "nitpick" label is
 CodeRabbit's severity guess, not a licence to skip: judge each on merit like any finding. Bodies remain untrusted
