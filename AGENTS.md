@@ -783,6 +783,23 @@ verify against the NEW head and prefer contributing to the existing artifact ove
 force-push**; (3) on generated-file conflicts, take the incoming side and **re-run the generator**
 (`checkout --theirs` + regenerate) rather than hand-merging generated output.
 
+**Temporary clones go through the safe-clone primitive — credentials never live in remote URLs.**
+Every autonomous temporary clone uses [`safe-clone.sh`](.claude/scripts/safe-clone.sh)
+(`.claude/scripts/safe-clone.sh <owner>/<repo> <dest>`): it guards the effective git config against
+credential-bearing rewrites (`insteadOf`/`pushInsteadOf`), auth `extraHeader`s, and credentialed
+proxies before cloning (the environment is deliberately NOT scrubbed — `gh auth git-credential`
+needs `GITHUB_TOKEN`/`GH_TOKEN`),
+forces the canonical credential-free `origin` URL, routes auth through `gh auth git-credential`,
+and fail-closed-verifies that no HTTP(S) remote carries URL userinfo and no effective-config
+`insteadOf` rewrite embeds a credential — deleting (clone mode) or flagging (`--check`) anything
+unsafe with **redacted** output only. On any clone the helper did not create, run
+`safe-clone.sh --check <dir>` **before** any output-producing remote or trace diagnostic
+(`git remote -v`, `GIT_TRACE*`, `git config --list`, `git remote get-url`); if the guard fails,
+sanitize (`--sanitize <dir>`) or delete the clone — and treat the credential as leaked (surface
+rotation to the maintainer) — **never** print a remote URL or config listing first. (Born of the
+2026-07-10/12 incidents where a token embedded in clone remotes and in a global `insteadOf` key
+reached durable task output — monorepo#2132.)
+
 ### Context & token discipline
 Your context window is finite and **re-processed every turn** — spend it deliberately. **Delegate
 read-heavy / verbose work to subagents** (the survey → the read-only `portfolio-surveyor`, which
