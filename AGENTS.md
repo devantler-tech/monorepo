@@ -399,7 +399,10 @@ resolve findings, root-cause-fix failing required checks, set a
 Conventional-Commit title, then **merge with the command that matches the author** —
 - a **single-author bot** (dependabot/renovate/github-actions/ksail-bot) may arm pre-CLEAN auto-merge
   only after the review/pre-merge/current-head parts of that pentad are clear:
-  `gh pr merge <n> --auto --squash`;
+  `gh pr merge <n> --auto --squash`; for **trusted programmed release-bot PRs** (tap cask PRs, KSail
+  release bumps — the carve-out above) the review and pre-merge parts are intentionally absent and
+  are NOT required — their required checks, zero threads, and no-conflict state alone gate the
+  auto-merge;
 - a **human-trusted author** (`devantler`, i.e. **every agent-own PR**) **cannot use `--auto`**
   (auto-merge is bot-only) and merges **directly** with bare `gh pr merge <n> --squash` once
   `mergeStateStatus` is CLEAN.

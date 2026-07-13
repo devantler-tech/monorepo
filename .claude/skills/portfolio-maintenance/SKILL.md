@@ -110,9 +110,11 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   `{sha:"", n:0}`: the `// ""` guards keep jq from erroring on `max_by`'s null result, so a normal
   no-CR-review state reports zero instead of breaking the sweep. A newest review with no finding
   sections means cleared)
-  and report `body_findings=<n>@<sha>` — tag the entry **`stale`** when the reported SHA differs
-  from the PR head (those findings are historical, not current: the acting run re-verifies at head
-  or re-requests review there instead of treating them as open NEEDS-FIX noise) —
+  and report `body_findings=<n>@<sha>` — tag the entry **`stale`** only when a **non-empty** review
+  SHA exists and differs from the PR head (those findings are historical, not current: the acting
+  run re-verifies at head or re-requests review there instead of treating them as open NEEDS-FIX
+  noise); the no-CR-review `{sha:"", n:0}` state is plain `body_findings=0`, never stale-tagged —
+  a Codex-only or fresh PR has no CodeRabbit findings to chase —
   **`--paginate` + external `jq -s`** because the reviews endpoint returns only its first page (30)
   by default, so an unpaginated sweep can miss the true newest review on a long-lived PR (same
   *No silent caps* rule as the thread query; `gh api --slurp` is rejected alongside `--jq`, so slurp

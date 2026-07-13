@@ -244,17 +244,18 @@ Digest rules:
 - **Trust labels are advisory flags, not actions:** mark external/Copilot PRs so the orchestrator
   reviews them statically; never imply they are mergeable.
 - **`rd` is the PR's `reviewDecision`** (already fetched in the deepening `gh pr view`). When it is
-  `CHANGES_REQUESTED`, report the **author and SHA** of the newest CHANGES_REQUESTED review
-  (`rd=CHANGES_REQUESTED:<author>@<sha>`) — `reviewDecision` alone names neither, so take them from
-  the paginated `pulls/<n>/reviews` sweep the body-findings step (b) already fetched: the newest
-  review with `state=="CHANGES_REQUESTED"` supplies `user.login` + `commit_id` (no extra API call).
-  Classify the PR **STALE-CR-DISMISSAL** instead of
-  NEEDS-FIX **only when that review is `coderabbitai[bot]`-authored**, its SHA is not the current
-  head, AND the pentad is otherwise clear with a current-head green review — the orchestrator then
-  surfaces the stale-review dismissal one-click rather than spending more review requests (contract →
-  *Merge policy*). A CHANGES_REQUESTED from any **human** reviewer (e.g. `devantler`) is NEVER
-  stale-dismissable regardless of SHA — report it NEEDS-FIX with the author named, so the
-  orchestrator addresses the feedback itself.
+  `CHANGES_REQUESTED`, sweep **every** review with `state=="CHANGES_REQUESTED"` from the paginated
+  `pulls/<n>/reviews` the body-findings step (b) already fetched (`reviewDecision` alone names no
+  author or SHA, and each CHANGES_REQUESTED review blocks merge independently — only-newest would
+  hide an older human block behind a newer CodeRabbit one). Report the newest as
+  `rd=CHANGES_REQUESTED:<author>@<sha>` and name any additional CHANGES_REQUESTED authors.
+  Classify the PR **STALE-CR-DISMISSAL** instead of NEEDS-FIX **only when EVERY CHANGES_REQUESTED
+  review is `coderabbitai[bot]`-authored**, none is at the current head, AND the pentad is otherwise
+  clear with a current-head green review — the orchestrator then surfaces the stale-review dismissal
+  one-click rather than spending more review requests (contract → *Merge policy*). A
+  CHANGES_REQUESTED from any **human** reviewer (e.g. `devantler`) — newest or not — is NEVER
+  stale-dismissable: report it NEEDS-FIX with the author named, so the orchestrator addresses the
+  feedback itself.
 - **No cross-org output:** never discover or report repositories outside the portfolio, regardless of
   author or apparent trust.
 - If a query fails (auth, rate limit), note it in one line under the relevant repo rather than
