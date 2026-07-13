@@ -96,15 +96,20 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   non-actionable/informational section. Per PR also check
   `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate | jq -s
   '[.[][] | select(.user.login=="coderabbitai[bot]")] | max_by(.submitted_at)
-  | (.body | [scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
-  | select((.[0] | startswith("🔇")) | not) | .[1] | tonumber] | add // 0)'`
+  | {sha: ((.commit_id // "")[0:8]), n: ((.body // "")
+  | [scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
+  | select((.[0] | startswith("🔇")) | not) | .[1] | tonumber] | add // 0)}'`
   (paginate to find the **NEWEST actual CodeRabbit review**, then extract each matching section's
   numeric `(N)` from that single newest body, excluding `🔇`; `comments (0)` contributes zero —
   CodeRabbit re-reviews on every push and edits bodies in place, so summing sections across ALL
-  reviews re-counts findings a later review already cleared, a recurring false-NEEDS-FIX source;
-  a newest review with no finding sections means cleared, and one whose `commit_id` isn't the
-  current head is historical — re-verify at head instead of treating it as open)
-  and report `body_findings=<n>` —
+  reviews re-counts findings a later review already cleared, a recurring false-NEEDS-FIX source.
+  A PR with **no CodeRabbit review at all** — fresh, or reviewed only by Codex — yields
+  `{sha:"", n:0}`: the `// ""` guards keep jq from erroring on `max_by`'s null result, so a normal
+  no-CR-review state reports zero instead of breaking the sweep. A newest review with no finding
+  sections means cleared)
+  and report `body_findings=<n>@<sha>` — tag the entry **`stale`** when the reported SHA differs
+  from the PR head (those findings are historical, not current: the acting run re-verifies at head
+  or re-requests review there instead of treating them as open NEEDS-FIX noise) —
   **`--paginate` + external `jq -s`** because the reviews endpoint returns only its first page (30)
   by default, so an unpaginated sweep can miss the true newest review on a long-lived PR (same
   *No silent caps* rule as the thread query; `gh api --slurp` is rejected alongside `--jq`, so slurp
