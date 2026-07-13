@@ -68,7 +68,8 @@ no row are filed on the **default intake repo** below.
 | .NET project template | The starter template new .NET repositories are created from | `devantler-tech/dotnet-template` |
 | GitOps tenant template | The starter template new platform-tenant (GitOps) repositories are created from | `devantler-tech/gitops-tenant-template` |
 | Platform template | The starter template new platform repositories are created from | `devantler-tech/platform-template` |
-| UniFi network provider | Managing UniFi network gear declaratively via the Crossplane provider | `devantler-tech/provider-upjet-unifi` |
+| UniFi home network | Changing THIS suite's deployed UniFi network — SSIDs, VLANs, firewall rules, device and VPN config | `devantler-tech/unifi` |
+| UniFi Crossplane provider | Developing the Crossplane provider library itself (new resource support, codegen, provider bugs) | `devantler-tech/provider-upjet-unifi` |
 | Mac install packages | Making the suite's tools installable on a Mac via Homebrew | `devantler-tech/homebrew-tap` |
 
 **Default intake repo:** `devantler-tech/monorepo`
