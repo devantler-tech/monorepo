@@ -45,6 +45,35 @@ for VS Code / Copilot CLI / Claude Code; rescope in progress —
 product belongs in a shared library so *every* product inherits it — keep them **industry-standard and
 tool-neutral** (the portability principle).
 
+## Stack map
+
+The buildable catalogue for **conversational (vibe-coding) sessions**: the `needs-stack-mapping`
+and `allowed-stack-guardrail` skills (bundled by `devantler-tech/agent-plugins`' vibe-coding
+plugin) read this section to decide what may be built here and where out-of-stack wishes are
+filed. Each row names a building block in plain language, what it is **good for** (the matching
+surface, in the user's vocabulary), and the repo that owns suggested issues for it. Needs matching
+no row are filed on the **default intake repo** below.
+
+| Building block | Good for | Owning repo |
+|---|---|---|
+| devantler.tech website | Public web pages on devantler.tech — docs, guides, announcements, portfolio content | `devantler-tech/monorepo` |
+| Wedding app | THIS suite's existing deployed wedding website only — its guest pages, RSVPs, schedules, photos and practical info (not new wedding sites in general) | `devantler-tech/wedding-app` |
+| AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |
+| App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
+| KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
+| Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/actions` |
+| AI assistant skills | Teaching the AI assistants new individual skills and behaviours | `devantler-tech/agent-skills` |
+| AI assistant plugin bundles | Bundling skills into installable plugins / marketplace entries for VS Code, Copilot CLI, Claude Code | `devantler-tech/agent-plugins` |
+| Go project template | The starter template new Go repositories are created from | `devantler-tech/go-template` |
+| .NET project template | The starter template new .NET repositories are created from | `devantler-tech/dotnet-template` |
+| GitOps tenant template | The starter template new platform-tenant (GitOps) repositories are created from | `devantler-tech/gitops-tenant-template` |
+| Platform template | The starter template new platform repositories are created from | `devantler-tech/platform-template` |
+| UniFi home network | Changing THIS suite's deployed UniFi network — SSIDs, VLANs, firewall rules, device and VPN config | `devantler-tech/unifi` |
+| UniFi Crossplane provider | Developing the Crossplane provider library itself (new resource support, codegen, provider bugs) | `devantler-tech/provider-upjet-unifi` |
+| Mac install packages | Making the suite's tools installable on a Mac via Homebrew | `devantler-tech/homebrew-tap` |
+
+**Default intake repo:** `devantler-tech/monorepo`
+
 ## The autonomous Daily AI Engineer
 
 A scheduled local Claude Code agent is the **primary engineer** for all of these products — not just a
