@@ -329,6 +329,13 @@ against the PR head** — a green from either reviewer on a stale commit is not 
 after pushes. A current-head Codex result with findings is a **NEEDS-FIX** review surface that the
 survey must report with its link/count; it is never collapsed to "no review" followed by another
 review request.
+**Carve-out — trusted programmed release-bot PRs need NO review** (maintainer direction 2026-07-13,
+ksail#6095): PRs produced by the suite's own programmed release paths — GoReleaser's Homebrew-tap
+cask PRs and KSail release version bumps — are gated by their required checks and auto-merge on
+their own; do **not** request a CodeRabbit/Codex review or chase a pre-merge evaluator result on
+them, and never count their `green_review=none` as a hygiene gap. The green-review gate governs
+**own/human-authored** PRs (and any bot PR that leaves its programmed path, e.g. one you push
+adaptation commits to — your commit makes it review-bearing again).
 **AUTO-REVIEW IS DISABLED — requesting reviews is the agent's job** (maintainer direction
 2026-07-12: he disabled automatic review on BOTH Copilot code review and CodeRabbit; no reviewer
 fires on its own on any event, including opening or promoting a PR). That makes the green-review
@@ -444,15 +451,18 @@ promoted, CLEAN, trusted-author PR to merge is the **expected, mandated** behavi
 re-weigh each time. In the rare case a merge is still refused, **don't burn the run** re-emitting
 variant evidence or retrying — leave the PR green with threads resolved and surface it to the
 maintainer as a one-click; that is the uncommon fallback, not the default.
-**Stale CHANGES_REQUESTED is a dismissal one-click, not a re-review loop.** CodeRabbit posts
-re-review results as COMMENTED and structurally never re-APPROVEs after a CHANGES_REQUESTED — so a
-promoted PR whose only blocker is a CHANGES_REQUESTED review at an old head (current-head green
-review from either lane, zero findings/threads, green checks) will never clear by re-firing that
-reviewer. Recognise the class on first sight, stop spending review requests on it, and surface the
-stale-review dismissal to the maintainer as a one-click immediately (dismissing a review on a
-promoted PR is reserved to him). The survey digest carries the signal directly — each swept PR
-reports `rd=<reviewDecision>` with the CHANGES_REQUESTED review's SHA and classifies the
-otherwise-clear case `STALE-CR-DISMISSAL` — so a run acts on the digest without re-deriving it.
+**Stale CodeRabbit CHANGES_REQUESTED is a dismissal one-click, not a re-review loop.** CodeRabbit
+posts re-review results as COMMENTED and structurally never re-APPROVEs after a CHANGES_REQUESTED —
+so a promoted PR whose only blocker is a **`coderabbitai[bot]`-authored** CHANGES_REQUESTED review at
+an old head (current-head green review from either lane, zero findings/threads, green checks) will
+never clear by re-firing that reviewer. Recognise the class on first sight, stop spending review
+requests on it, and surface the stale-review dismissal to the maintainer as a one-click immediately
+(dismissing a review on a promoted PR is reserved to him). The class is **CodeRabbit-only**: a
+CHANGES_REQUESTED from any **human** reviewer (e.g. `devantler`) is a control signal to act on, never
+a stale artifact to dismiss — address it, whatever its SHA. The survey digest carries the signal
+directly — each swept PR reports `rd=<reviewDecision>` with the CHANGES_REQUESTED review's author and
+SHA and classifies the otherwise-clear **CodeRabbit-authored** case `STALE-CR-DISMISSAL` — so a run
+acts on the digest without re-deriving it.
 
 The agent's **own** PRs are trusted-author PRs (authored as `devantler` from `claude/*` branches — see
 trust gate), so the **same path applies to them, including its own definition PRs — no carve-out**. The
@@ -743,8 +753,9 @@ hijacked run *could* do.
 - **A credential rotation is a cross-system sweep, never a host-only fix.** The same secret
   routinely lives in several places at once — host CLI keyrings/config, org/repo/environment CI
   secrets, cluster `Secret`s, node/machine config, and secret stores — and rotating only the copy
-  that surfaced the incident leaves the others live (or, for a revocation, leaves consumers broken:
-  a revoked registry credential froze prod GitOps delivery AND the platform merge queue for hours).
+  that surfaced the incident leaves the others live (or, for a revocation, leaves every consumer of
+  an un-swept copy broken until it is repaired — incident specifics belong in the private operator
+  notes, not here).
   For a **planned rotation** (the credential is not known-compromised), enumerate every copy up front
   and sequence the swap so no consumer breaks. For a **known-leaked or compromised credential,
   containment outranks continuity: revoke immediately** — never leave an attacker's credential live

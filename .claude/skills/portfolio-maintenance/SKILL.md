@@ -95,13 +95,13 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   the count); the only excluded shape is `🔇 Additional comments (N)`, CodeRabbit's explicitly
   non-actionable/informational section. Per PR also check
   `gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate | jq -s
-  '[.[][] | select(.user.login=="coderabbitai[bot]")] | max_by(.updated_at // .submitted_at)
+  '[.[][] | select(.user.login=="coderabbitai[bot]")] | max_by(.submitted_at)
   | {sha: (.commit_id // ""), n: ((.body // "")
   | [scan("<summary>([^<]*comments \\(([0-9]+)\\))</summary>")
   | select((.[0] | startswith("🔇")) | not) | .[1] | tonumber] | add // 0)}'`
-  (paginate to find the **NEWEST actual CodeRabbit review** — keyed on `updated_at // submitted_at`
-  because CodeRabbit edits review bodies in place, so an older-submitted review can carry the current
-  content; emit the **full** `commit_id` so the stale comparison against `headRefOid` is a literal
+  (paginate to find the **NEWEST actual CodeRabbit review** — keyed on `submitted_at`, the only
+  timestamp the reviews endpoint exposes (`updated_at` exists on issue *comments*, not reviews — never
+  key review freshness on it); emit the **full** `commit_id` so the stale comparison against `headRefOid` is a literal
   equality, never a truncated-prefix mismatch — then extract each matching section's
   numeric `(N)` from that single newest body, excluding `🔇`; `comments (0)` contributes zero —
   CodeRabbit re-reviews on every push and edits bodies in place, so summing sections across ALL
@@ -250,7 +250,9 @@ work to clear first. Work the ladder top-down — **hotfix/operate first, then a
    current head** — auto-review is disabled on both reviewers, so requesting (and re-requesting after
    every push) is your duty; the full request discipline (one tool at a time by live rate-limit
    state, evidence-based fallback, incremental re-reviews, green-while-draft as the promotion
-   precondition) is the contract's **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
+   precondition, and the trusted programmed **release-bot carve-out** — tap cask PRs and KSail
+   release bumps are check-gated, need NO review, and are never review-chased) is the contract's
+   **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
    DISABLED*) — follow it, don't re-derive it here. When a draft reaches the full pentad it simply
    **waits on GitHub as a finished draft** — do **not** ping the maintainer about it (ready-to-promote
    Slack pings are status messages, revoked by maintainer direction 2026-07-12; Slack is last-resort,
