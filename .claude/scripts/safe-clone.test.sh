@@ -248,6 +248,9 @@ printf '%s\n' \
   '  if [[ "${FAKE_GIT_MODE:-failure}" == "success" ]]; then' \
   '    "${REAL_GIT:?}" init --quiet "$dest"' \
   '    "${REAL_GIT:?}" -C "$dest" remote add origin https://github.com/example/repo.git' \
+  '    if [[ -n "${FAKE_GIT_REMOTE_URL:-}" ]]; then' \
+  '      "${REAL_GIT:?}" -C "$dest" remote add upstream "$FAKE_GIT_REMOTE_URL"' \
+  '    fi' \
   '    exit 0' \
   '  fi' \
   '  mkdir -p "$dest/.git/objects/pack"' \
@@ -278,6 +281,17 @@ out="$(FAKE_GIT_MODE=success REAL_GIT="$real_git" PATH="$fake_bin:$PATH" "$helpe
 report "successful clone mode exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)"
 report "successful clone mode keeps a valid checkout" \
   "$([[ -d "$successful/.git" ]] && "$helper" --check "$successful" >/dev/null 2>&1 && echo yes || echo no)"
+
+guard_failed="$tmp/post-clone-guard-failure"
+unsafe_remote="https://x-access-token:${secret}@github.com/example/repo.git"
+out="$(FAKE_GIT_MODE=success FAKE_GIT_REMOTE_URL="$unsafe_remote" REAL_GIT="$real_git" \
+  PATH="$fake_bin:$PATH" "$helper" example/repo "$guard_failed" 2>&1)" && rc=0 || rc=$?
+report "post-clone credential guard fails clone mode" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)"
+report "post-clone credential guard removes its destination" \
+  "$([[ ! -e "$guard_failed" ]] && echo yes || echo no)"
+report "post-clone credential guard output remains redacted" \
+  "$(! grep -Eq "https?://|${secret}" <<<"$out" && echo yes || echo no)"
 
 partial="$tmp/partial-clone"
 out="$(FAKE_GIT_SECRET="$secret" REAL_GIT="$real_git" PATH="$fake_bin:$PATH" "$helper" example/repo "$partial" 2>&1)" && rc=0 || rc=$?

@@ -124,7 +124,11 @@ jobs:
   test-safe-clone:
     needs: changes
     if: needs.changes.outputs.safe-clone == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:
