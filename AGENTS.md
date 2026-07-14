@@ -839,9 +839,12 @@ filesystem path such as `applications/ksail` — `git -C` takes a path, not an `
 slug only for `gh` commands). **Submodule worktree isolation is inconsistent** — most submodules carry
 a stray shared `core.worktree` that makes `git worktree add` resolve back into the main checkout (only
 the stale `projects/ksail` gitdir is correct; `templates/gitops-tenant-template` was fixed 2026-06-17).
-Before relying on an isolated submodule worktree, confirm `git -C <wt> rev-parse --show-toplevel`
-returns the worktree's own path, not a `.git/modules/<name>` path; the diagnosis table and the verified
-per-submodule fix are in [`.claude/worktree-isolation.md`](.claude/worktree-isolation.md). Populate an
+**A past fix does NOT stay fixed — probe every time** (`applications/ksail` regressed on 2026-07-14 and
+was silently colliding three live worktrees, two of them the sibling agent's). Before relying on an
+isolated submodule worktree, confirm `git -C <wt> rev-parse --show-toplevel` returns the worktree's own
+path, not a `.git/modules/<name>` path; if it doesn't, repair it in place before editing anything. The
+diagnosis table, the regression watch, and the verified per-submodule fix are in
+[`.claude/worktree-isolation.md`](.claude/worktree-isolation.md). Populate an
 un-checked-out submodule at its pinned commit with
 `git submodule update --init <path>` (never `--remote`). If a repo's working area is unexpectedly
 dirty or you can't get an isolated tree, do GitHub-API-only work (triage/comment) there.

@@ -45,7 +45,7 @@ below). Current state:
 | Submodule | shared `core.worktree` | `extensions.worktreeConfig` | State |
 |---|---|---|---|
 | `applications/ascoachingogvaner` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
-| `applications/ksail` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `applications/ksail` | ~~set~~ → unset | true | ⚠️ **REGRESSED 2026-07-14** — re-fixed & verified (see *Regression watch*) |
 | `applications/unifi` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
 | `github/devantler-tech/.github-public` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
 | `github/devantler-tech/github-actions/actions` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
@@ -121,6 +121,32 @@ A fixed submodule prints the probe's **own** path; a broken one prints a path un
 `show-toplevel` resolved to `…/.git/modules/templates/gitops-tenant-template`; after the fix it resolves
 to `…/templates/gitops-tenant-template/.probe-iso` (its own tree), and the main checkout still resolves
 correctly. This submodule is left fixed.
+
+## Regression watch — the fix is NOT permanent (PROBE EVERY TIME)
+
+**The 2026-06-25 sweep does not stay fixed.** On **2026-07-14** `applications/ksail` was found **broken
+again**: the stray `core.worktree = ../../../../applications/ksail` was back in the shared
+`.git/modules/applications/ksail/config` (with `extensions.worktreeConfig` still `true` — so the flag
+survived, but the stray value returned and was being inherited again). Some routine submodule operation
+rewrites that key back into the shared config; a green row in the table above is therefore a record of
+*a* fix, **not** a guarantee of current state.
+
+What made it dangerous is that it fails **silently**: a `git worktree add` still succeeds, and the
+worktree looks real. Three live linked worktrees — including **two belonging to the parallel sibling
+agent** — were all resolving into the *shared main checkout*, i.e. actively colliding, with nothing
+surfacing it. That is precisely the condition that makes one session's commit land on another's branch.
+
+**So: never trust the table — probe.** Before you edit anything in a freshly-added submodule worktree,
+assert it resolves to its own path:
+
+```sh
+WT=<path to the worktree you just added>
+[ "$(git -C "$WT" rev-parse --show-toplevel)" = "$WT" ] || echo "NOT ISOLATED — do not edit; run the fix below"
+```
+
+A broken one prints a path under `.git/modules/<name>` instead of `$WT`. If it is broken, apply the
+*Live linked worktrees* procedure below (it repairs the existing worktrees in place, including any the
+sibling agent is holding), re-probe, and only then start work. Record the regression in the table.
 
 ### Live linked worktrees — repair in place (don't skip)
 
