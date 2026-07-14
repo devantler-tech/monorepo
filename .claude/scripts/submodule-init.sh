@@ -30,17 +30,28 @@ warn() { printf 'submodule-init: %s\n' "$1" >&2; }
 super_root=$(git rev-parse --show-toplevel) || die 'not inside a git repository'
 cd "$super_root"
 
-# The gitdir git is ACTUALLY using for this submodule, and the tree it is checked out in.
+# The gitdir git is ACTUALLY using for this submodule.
 module_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null; }
-module_tree() { git -C "$1" rev-parse --show-toplevel 2>/dev/null; }
 
-# A submodule is only its own repository if git, run inside it, reports IT as the toplevel. If the
-# submodule is deinitialised (empty dir) git walks UP to the superproject and every check below would
-# silently pass against the wrong repo — a fail-open. Refuse instead.
-assert_is_submodule_root() {
+# The tree this submodule is checked out in is simply its own absolute path. Do NOT derive it from
+# `rev-parse --show-toplevel`: that is computed FROM `core.worktree`, so in the broken case it returns
+# the checkout the stray value points at — and repair would then pin the collision back in.
+module_tree() { (cd "$1" 2>/dev/null && pwd -P); }
+
+# An UNINITIALISED submodule is an empty directory. Distinguish that (legitimately skip) from a
+# populated one (must be checked) — see `probe`, where conflating the two was a fail-open.
+is_populated() {
+  local path=$1
+  [ -d "$path" ] && [ -n "$(ls -A "$path" 2>/dev/null)" ]
+}
+
+# Does git, run inside the submodule, agree that the submodule IS this directory? If a stray
+# `core.worktree` points at another valid checkout — the exact collision this script exists to catch —
+# git reports THAT checkout instead. Returning "not a submodule" there would silently drop it from
+# `--check`; it must be reported as BROKEN.
+resolves_to_itself() {
   local path=$1 abs top
-  [ -d "$path" ] || return 1
-  abs=$(cd "$path" && pwd -P)
+  abs=$(module_tree "$path") || return 1
   top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 1
   top=$(cd "$top" 2>/dev/null && pwd -P) || return 1
   [ "$top" = "$abs" ]
@@ -76,8 +87,17 @@ repair() {
 probe() {
   local path=$1
 
-  if ! assert_is_submodule_root "$path"; then
-    warn "$path — NOT a populated submodule root (deinitialised, or git resolves it to the parent repo); refusing to probe"
+  if ! is_populated "$path"; then
+    warn "$path — not checked out here; nothing to probe"
+    return 1
+  fi
+
+  # THE collision, detected directly: the submodule is populated, but git resolves it to a DIFFERENT
+  # checkout because a stray `core.worktree` points there. Report it — treating this as "not a
+  # submodule" and skipping it (as an earlier version did) silently dropped the one case this whole
+  # script exists to catch, and `--check` then exited 0 on a colliding tree.
+  if ! resolves_to_itself "$path"; then
+    warn "$path — ISOLATION BROKEN: git resolves it to '$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)', not '$(module_tree "$path")'. Another checkout is sharing this working tree — do not edit it."
     return 1
   fi
 
@@ -115,9 +135,12 @@ probe() {
 
 all_paths() { git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}'; }
 # "Initialised" means git actually treats it as its own repository here — again, asked, not assumed.
+# Select every submodule that is CHECKED OUT here. Deliberately NOT "every submodule git resolves
+# correctly": a colliding submodule resolves elsewhere, and filtering on that would drop it from the
+# sweep — the fail-open this script must never have.
 initialised_paths() {
   local p
-  while read -r p; do assert_is_submodule_root "$p" && printf '%s\n' "$p"; done < <(all_paths)
+  while read -r p; do is_populated "$p" && printf '%s\n' "$p"; done < <(all_paths)
 }
 
 init_repair_probe() {
