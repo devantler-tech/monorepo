@@ -28,10 +28,11 @@ card.
    `git fetch origin main && git merge --ff-only origin/main` (it never checks out submodule contents;
    `--ff-only` refuses anything that isn't a clean fast-forward).
    When `gh auth status` reports an invalid credential, retry once as
-   `env -u GITHUB_TOKEN gh auth status` to separate an injected-token failure from the saved login.
-   In a runtime that sandboxes macOS keychain access, if the sandboxed `env -u GITHUB_TOKEN gh auth status`
-   also fails, classify the saved login as indeterminate and repeat that exact check once through the
-   approved host-level execution path. A sandbox-only failure is not evidence that the saved login is invalid.
+   `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status` to clear both environment-token sources and test the
+   saved login. In a runtime that sandboxes macOS keychain access, if that sandboxed saved-login check also
+   fails, classify the saved login as indeterminate.
+   Repeat the exact command once through the approved host-level execution path.
+   A sandbox-only failure is not evidence that the saved login is invalid.
    Continue when the host-level check authenticates `devantler`.
    Only an explicit credential rejection from that host-level check proves the saved login invalid.
    If the host-level check cannot run or fails

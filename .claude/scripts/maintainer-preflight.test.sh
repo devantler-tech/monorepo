@@ -14,8 +14,8 @@ fail() {
 grep -Fq 'sandboxed' "${run_loop}" ||
   fail "missing the sandboxed saved-login failure case"
 
-grep -Fq 'env -u GITHUB_TOKEN gh auth status' "${run_loop}" ||
-  fail "missing the injected-token fallback command"
+grep -Fq 'env -u GH_TOKEN -u GITHUB_TOKEN gh auth status' "${run_loop}" ||
+  fail "saved-login probe does not clear both injected-token variables"
 
 grep -Fq 'approved host-level execution path' "${run_loop}" ||
   fail "missing the required host-level keychain retry"
