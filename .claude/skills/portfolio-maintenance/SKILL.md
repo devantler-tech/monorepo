@@ -22,18 +22,22 @@ card.
    Only if it is somehow *not* already in your context should you read it once.
 2. **Working checkout:** `cd /Users/homelab-mac-mini/git-personal/monorepo` (this deployment's primary
    checkout — the scheduled task runs on a fixed machine; adjust the path if relocated); confirm
-   (`test -d docs && test -f .gitmodules`); `gh auth status` shows `devantler`. **Sync the definition:**
+   (`test -d docs && test -f .gitmodules`); `gh auth status --active --hostname github.com` shows
+   `devantler`. **Sync the definition:**
    this checkout carries permanent submodule-pointer drift, so don't gate on a fully clean tree — if
    `main` is behind `origin/main` and the only dirt is submodule pointers, fast-forward with
    `git fetch origin main && git merge --ff-only origin/main` (it never checks out submodule contents;
    `--ff-only` refuses anything that isn't a clean fast-forward).
-   When `gh auth status` reports an invalid credential, retry once as
-   `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status` to clear both environment-token sources and test the
-   saved login. In a runtime that sandboxes macOS keychain access, if that sandboxed saved-login check also
-   fails, classify the saved login as indeterminate.
+   When `gh auth status --active --hostname github.com` reports an invalid credential, retry once as
+   `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --active --hostname github.com` to clear both
+   environment-token sources and test the active saved login for the host this portfolio uses. In a runtime
+   that sandboxes macOS keychain access, if that sandboxed saved-login check also fails:
+   classify the saved login as indeterminate.
    Repeat the exact command once through the approved host-level execution path.
    A sandbox-only failure is not evidence that the saved login is invalid.
    Continue when the host-level check authenticates `devantler`.
+   If the saved login is selected, prefix every subsequent `gh` command with `env -u GH_TOKEN -u GITHUB_TOKEN`.
+   This prevents a rejected injected token from overriding the verified login again.
    Only an explicit credential rejection from that host-level check proves the saved login invalid.
    If the host-level check cannot run or fails
    for a transport reason, hard-block as `authentication verification unavailable` instead of instructing
