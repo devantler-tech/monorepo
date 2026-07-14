@@ -346,19 +346,25 @@ A second run the same day → more selective, dedupe vs the earlier run.
 
 ## 3. Act (per selected product, via a per-run worktree)
 For each selected product:
-1. **Isolate:** `cd /Users/homelab-mac-mini/git-personal/monorepo`;
-   `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>` (populate an
-   empty submodule first with `git submodule update --init <path>`). Work **in that worktree**.
-   **`git submodule update --init` re-sets the shared `core.worktree`** (observed 8× across runs:
-   ksail ×4, go-template, homebrew-tap, `.github-public`, agent-plugins), which makes the worktree
-   resolve back into `.git/modules/<name>` — so after **every** init-then-worktree-add on a
-   submodule, **probe and repair proactively** rather than discovering the collision mid-edit:
-   `git -C <wt> rev-parse --show-toplevel` must print the worktree's own path; if it prints a
-   `.git/modules/<name>` path, apply the 3-step repair from
-   [`worktree-isolation.md`](../../worktree-isolation.md) (enable `extensions.worktreeConfig`; pin
-   the main checkout's and each live worktree's own `core.worktree` in their `config.worktree`;
-   then unset the shared value — **guard every pin against empty vars and stop the sequence on a
-   failed `worktree add`**, per the 445th-run corruption lesson), and re-probe before editing.
+1. **Isolate:** `cd /Users/homelab-mac-mini/git-personal/monorepo`. Populate an empty submodule with
+   the fail-closed wrapper — **never a bare `git submodule update --init`**, which is precisely what
+   re-introduces the shared `core.worktree` (reproduced 2026-07-14: absent before the command, present
+   after; observed 8× across runs — ksail ×4, go-template, homebrew-tap, `.github-public`,
+   agent-plugins):
+
+   ```sh
+   .claude/scripts/submodule-init.sh <path>   # init at the pinned commit + repair + probe (fail-closed)
+   ```
+
+   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>` and work
+   **in that worktree**. A stray `core.worktree` makes the worktree resolve back into
+   `.git/modules/<name>`, silently collapsing every parallel session into one physical tree — so on any
+   submodule you did **not** initialise through the wrapper (a tree someone else populated), **probe
+   before you trust it**: `git -C <wt> rev-parse --show-toplevel` must print the worktree's own path,
+   not a `.git/modules/<name>` path. `.claude/scripts/submodule-init.sh --check` probes every
+   initialised submodule read-only and exits non-zero on a break; repair in place before editing
+   anything. Background, diagnosis, and the regression watch:
+   [`worktree-isolation.md`](../../worktree-isolation.md).
    If the tree is unexpectedly dirty / not isolable, do GitHub-API-only work and skip diff work.
 2. **Load the product card** (`products/<name>`) + that submodule's `AGENTS.md` `## Maintenance`.
    Follow them; they carry validate commands, protected/generated files, label set, task menu, and the

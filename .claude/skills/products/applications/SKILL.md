@@ -10,8 +10,10 @@ Each app's canonical maintenance task menu lives **in its own (private) repo** �
 - `applications/wedding-app/AGENTS.md` — <https://github.com/devantler-tech/wedding-app/blob/main/AGENTS.md>
 - `applications/ascoachingogvaner/AGENTS.md` — <https://github.com/devantler-tech/ascoachingogvaner/blob/main/AGENTS.md>
 
-These submodules are usually not checked out — populate at the pinned commit with
-`git submodule update --init applications/<name>` (never `--remote`), or do GitHub-API-only work.
+These submodules are usually not checked out — populate at the pinned commit with the fail-closed
+wrapper `.claude/scripts/submodule-init.sh applications/<name>` (**never** a bare
+`git submodule update --init`, which re-introduces the shared `core.worktree` and collapses every
+parallel session into one tree; never `--remote`), or do GitHub-API-only work.
 **Private** repos — extra discretion. Shared cross-repo rules are in the monorepo
 [`AGENTS.md`](../../../../AGENTS.md). This card is a pointer by design.
 
