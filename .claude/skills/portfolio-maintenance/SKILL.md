@@ -27,6 +27,14 @@ card.
    `main` is behind `origin/main` and the only dirt is submodule pointers, fast-forward with
    `git fetch origin main && git merge --ff-only origin/main` (it never checks out submodule contents;
    `--ff-only` refuses anything that isn't a clean fast-forward).
+   When `gh auth status` reports an invalid credential, retry once as
+   `env -u GITHUB_TOKEN gh auth status` to separate an injected-token failure from the saved login.
+   In a runtime that sandboxes macOS keychain access, if the sandboxed `env -u GITHUB_TOKEN gh auth status`
+   also fails, repeat that exact check once through the approved host-level execution path before
+   declaring the saved login broken. A sandbox-only failure is not evidence that the saved login is invalid.
+   Continue when the host-level check authenticates
+   `devantler`; hard-block only when that live check also fails. Keep this identity gate separate from
+   `git fetch`, because repository reachability cannot prove GitHub API identity (and vice versa).
 3. **Load durable memory:** **`view` your native memory** (Claude: the memory tool / the project
    `memory/` dir + `MEMORY.md`) — the single source of truth for cross-run orchestration (rotation
    cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent
