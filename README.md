@@ -18,12 +18,13 @@ every later `git worktree add` inherits — so worktrees silently resolve back i
 parallel sessions collide. The wrapper repairs that and verifies isolation before returning; run
 `.claude/scripts/submodule-init.sh --check` at any time to re-verify (read-only).
 
-You can also clone the monorepo with the `--recurse-submodules` flag, but still run the wrapper
-afterwards so isolation is repaired and verified:
+You can also clone the monorepo with the `--recurse-submodules` flag. That initializes the submodules
+the same way, so it breaks isolation the same way — run the wrapper afterwards to repair it (`--check`
+is read-only and would only report the problem, not fix it):
 
 ```bash
 git clone --recurse-submodules git@github.com:devantler-tech/monorepo.git
-cd monorepo && .claude/scripts/submodule-init.sh --check
+cd monorepo && .claude/scripts/submodule-init.sh --all
 ```
 
 Make sure that all submodules are checked out on the correct branch the first time you clone the monorepo. Otherwise, you might risk loosing changes as the submodule will be in a detached head state.

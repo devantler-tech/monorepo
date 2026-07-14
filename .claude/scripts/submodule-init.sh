@@ -23,16 +23,16 @@ die() {
 
 warn() { printf 'submodule-init: %s\n' "$1" >&2; }
 
-# Resolve paths from git rather than assuming `<root>/.git/...`. When this runs from a linked
-# superproject worktree — which is the documented execution model for agent runs — `.git` is a gitdir
-# FILE and `.git/modules` does not exist relative to the worktree, so a hard-coded path would break
-# exactly where it matters most.
-super_common=$(git rev-parse --path-format=absolute --git-common-dir) ||
-  die 'not inside a git repository'
-super_main=$(dirname "$super_common") # the superproject's MAIN checkout, from any worktree
+# NEVER compute a submodule's gitdir — ask git. Run from a linked superproject worktree (the documented
+# execution model for agent runs), git puts each submodule's gitdir under
+# `.git/worktrees/<super-wt>/modules/<path>`, NOT under `.git/modules/<path>` — and that is where the
+# stray `core.worktree` lands too. Any assumed path is wrong exactly where this script matters most.
+super_root=$(git rev-parse --show-toplevel) || die 'not inside a git repository'
+cd "$super_root"
 
-# The shared gitdir of a submodule, valid from any superproject worktree.
-module_dir() { printf '%s/modules/%s\n' "$super_common" "$1"; }
+# The gitdir git is ACTUALLY using for this submodule, and the tree it is checked out in.
+module_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null; }
+module_tree() { git -C "$1" rev-parse --show-toplevel 2>/dev/null; }
 
 # A submodule is only its own repository if git, run inside it, reports IT as the toplevel. If the
 # submodule is deinitialised (empty dir) git walks UP to the superproject and every check below would
@@ -49,13 +49,15 @@ assert_is_submodule_root() {
 # Move the stray shared core.worktree into each worktree's own per-worktree config. Idempotent.
 repair() {
   local path=$1
-  local mdir
+  local mdir tree
   mdir=$(module_dir "$path")
-  [ -d "$mdir" ] || die "no gitdir for '$path' (is it a submodule?)"
+  tree=$(module_tree "$path")
+  { [ -n "$mdir" ] && [ -d "$mdir" ] && [ -n "$tree" ]; } ||
+    die "git does not report a gitdir for '$path' (not an initialised submodule?)"
 
   git config -f "$mdir/config" extensions.worktreeConfig true
-  # The submodule's MAIN checkout always lives under the superproject's MAIN checkout.
-  git config -f "$mdir/config.worktree" core.worktree "$super_main/$path"
+  # Pin the tree this gitdir is actually checked out in — not a path we guessed.
+  git config -f "$mdir/config.worktree" core.worktree "$tree"
   git config -f "$mdir/config" --unset-all core.worktree 2>/dev/null || true
 
   # Existing linked worktrees inherited the stray value — pin each to the path it actually lives at.
@@ -95,7 +97,10 @@ probe() {
   [ -n "$got" ] && got=$(cd "$got" 2>/dev/null && pwd -P)
   want=$(cd "$probe_dir" && pwd -P)
 
-  if [ "$got" != "$want" ]; then
+  if [ -z "$got" ]; then
+    warn "$path — ISOLATION BROKEN: git cannot resolve a worktree created there (dangling core.worktree). Do not edit it."
+    rc=1
+  elif [ "$got" != "$want" ]; then
     warn "$path — ISOLATION BROKEN: a worktree there resolves to '$got', not its own path ('$want'). Do not edit it — parallel sessions would collide."
     rc=1
   fi
@@ -108,10 +113,11 @@ probe() {
   return "$rc"
 }
 
-all_paths() { git config -f "$super_main/.gitmodules" --get-regexp '^submodule\..*\.path$' | awk '{print $2}'; }
+all_paths() { git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}'; }
+# "Initialised" means git actually treats it as its own repository here — again, asked, not assumed.
 initialised_paths() {
   local p
-  while read -r p; do [ -d "$(module_dir "$p")" ] && printf '%s\n' "$p"; done < <(all_paths)
+  while read -r p; do assert_is_submodule_root "$p" && printf '%s\n' "$p"; done < <(all_paths)
 }
 
 init_repair_probe() {
