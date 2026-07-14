@@ -28,17 +28,24 @@ card.
    `main` is behind `origin/main` and the only dirt is submodule pointers, fast-forward with
    `git fetch origin main && git merge --ff-only origin/main` (it never checks out submodule contents;
    `--ff-only` refuses anything that isn't a clean fast-forward).
-   When `gh auth status --active --hostname github.com` reports an invalid credential, retry once as
+   When `gh auth status --active --hostname github.com` reports an invalid credential or authenticates
+   an active account other than `devantler`, retry once as
    `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --active --hostname github.com` to clear both
-   environment-token sources and test the active saved login for the host this portfolio uses. In a runtime
-   that sandboxes macOS keychain access, if that sandboxed saved-login check also fails:
+   environment-token sources and test the active saved login for the host this portfolio uses. Accept either
+   probe only when it authenticates `devantler`. In a runtime that sandboxes macOS keychain access, if that
+   sandboxed saved-login check also fails to authenticate `devantler`:
    classify the saved login as indeterminate.
    Repeat the exact command once through the approved host-level execution path.
    A sandbox-only failure is not evidence that the saved login is invalid.
    Continue when the host-level check authenticates `devantler`.
    If the saved login is selected, prefix every subsequent `gh` command with `env -u GH_TOKEN -u GITHUB_TOKEN`.
    This prevents a rejected injected token from overriding the verified login again.
+   If only the host-level saved-login check succeeds, run every subsequent `gh` command through that
+   approved host-level execution path.
+   Clearing the injected tokens does not make a sandboxed macOS Keychain readable.
    Only an explicit credential rejection from that host-level check proves the saved login invalid.
+   If the host-level check instead authenticates a different account, hard-block as `wrong GitHub identity`
+   without describing the credential as invalid.
    If the host-level check cannot run or fails
    for a transport reason, hard-block as `authentication verification unavailable` instead of instructing
    the maintainer to replace a credential that was never tested. Keep the injected-token result, saved-login
