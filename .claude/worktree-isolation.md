@@ -114,8 +114,10 @@ rtk proxy git -C "$P" worktree remove --force .probe-iso      # clean up
 rtk proxy git -C "$P" worktree prune
 ```
 
-A fixed submodule prints the probe's **own** path; a broken one prints a path under
-`.git/modules/<name>`.
+A fixed submodule prints the probe's **own** path; a broken one prints **anything else** — either a
+path under `.git/modules/<name>` or the shared main checkout itself (whatever the stray
+`core.worktree` points at). Test for exact equality with the worktree's own absolute path; do not
+match on a symptom string.
 
 **Verified 2026-06-17 on `templates/gitops-tenant-template`:** before the fix a probe worktree's
 `show-toplevel` resolved to `…/.git/modules/templates/gitops-tenant-template`; after the fix it resolves
@@ -140,30 +142,45 @@ surfacing it. That is precisely the condition that makes one session's commit la
 assert it resolves to its own path:
 
 ```sh
-WT=<path to the worktree you just added>
-[ "$(git -C "$WT" rev-parse --show-toplevel)" = "$WT" ] || echo "NOT ISOLATED — do not edit; run the fix below"
+# Canonicalise first: `rev-parse --show-toplevel` prints an ABSOLUTE path, so comparing it against a
+# relative $WT (the form you normally pass to `git worktree add`) would flag a healthy worktree broken.
+WT=$(cd "<path to the worktree you just added>" && pwd -P)
+TOP=$(git -C "$WT" rev-parse --show-toplevel)
+if [ "$TOP" != "$WT" ]; then
+  echo "NOT ISOLATED: resolves to $TOP, not $WT — do not edit; repair first" >&2
+  exit 1   # fail CLOSED: never fall through into a colliding worktree
+fi
 ```
 
-A broken one prints a path under `.git/modules/<name>` instead of `$WT`. If it is broken, apply the
-*Live linked worktrees* procedure below (it repairs the existing worktrees in place, including any the
-sibling agent is holding), re-probe, and only then start work. Record the regression in the table.
+**Any** resolved path other than `$WT` is broken — the exact-equality test is the criterion, not a
+particular symptom string. Two shapes both occur: it may print a path under `.git/modules/<name>`, **or
+it may print the shared main checkout itself** (e.g. `…/applications/ksail`) — that is what the stray
+`core.worktree` actually pointed at in the 2026-07-14 regression, so matching only on `.git/modules`
+would have *missed* the live collision. If it is broken, apply the *Live linked worktrees* procedure
+below (it repairs the existing worktrees in place, including any the sibling agent is holding),
+re-probe, and only then start work. Record the regression in the table.
 
 ### Live linked worktrees — repair in place (don't skip)
 
 A submodule that is broken **and** in active use (random-slug `.claude/worktrees/<adj>-<name>-<hex>`
 entries in `git worktree list`) can be repaired **without** waiting for the sessions to go quiet — the
 earlier "skip live ones until quiet" guidance is **superseded**. Such live worktrees have **no own
-`core.worktree`**, so they inherit the stray shared value and resolve into `.git/modules/<name>` (an
-active collision). Pin each one's own path **before** removing the shared value, so no worktree is ever
-left without a resolvable `core.worktree`:
+`core.worktree`**, so they inherit the stray shared value and resolve to whatever it points at — the
+shared **main checkout** or a `.git/modules/<name>` path (either way, an active collision). Pin each
+one's own path **before** removing the shared value, so no worktree is ever left without a resolvable
+`core.worktree`:
 
 ```sh
-M=.git/modules/<name>; ABS=<abs path to submodule main checkout>
+M=<abs path to .git/modules/<name>>; ABS=<abs path to submodule main checkout>
 git config -f "$M/config" extensions.worktreeConfig true
 git config -f "$M/config.worktree" core.worktree "$ABS"               # pin the MAIN worktree
-for d in "$ABS"/.claude/worktrees/*/; do                              # pin EACH live worktree
-  d=${d%/}; G=$(git -C "$d" rev-parse --absolute-git-dir)
-  git config -f "$G/config.worktree" core.worktree "$d"
+# Pin EACH live linked worktree. Enumerate them from the gitdir — NOT by globbing
+# $ABS/.claude/worktrees/*, which misses worktrees living anywhere else (the 2026-07-14 sweep found a
+# sibling-agent worktree under /private/tmp that such a glob would have skipped, leaving it broken).
+for wtdir in "$M"/worktrees/*/; do
+  wtpath=$(dirname "$(cat "$wtdir/gitdir")")                          # .../<worktree>/.git -> <worktree>
+  [ -d "$wtpath" ] || continue
+  git config -f "$wtdir/config.worktree" core.worktree "$wtpath"
 done
 git config -f "$M/config" --unset core.worktree                       # now safe to drop the shared value
 ```
