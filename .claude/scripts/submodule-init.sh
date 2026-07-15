@@ -62,6 +62,39 @@ resolves_to_itself() {
   [ "$top" = "$abs" ]
 }
 
+# Verify every EXISTING linked worktree of this submodule resolves to its OWN physical path. The main
+# checkout and a freshly-created probe worktree passing does NOT prove a live session's worktree isn't
+# colliding: an interrupted repair or a worktree created against a stray shared `core.worktree` can
+# leave one `$gitdir/worktrees/*` entry pinned at the shared checkout, and that session keeps colliding
+# while a fresh probe stays clean. `--check` is the trust gate for exactly this parallel-session case,
+# so it must enumerate the live worktrees too. Read-only: it only rev-parses other sessions' trees.
+check_existing_worktrees() {
+  local path=$1 rc=0 mdir wtadmin wt got want
+  # Iterate the LINKED-worktree admin dirs under the submodule gitdir directly, rather than
+  # `git worktree list`: the submodule's MAIN checkout legitimately resolves to itself, and so does a
+  # colliding linked worktree whose stray `core.worktree` points at the shared checkout — so
+  # show-toplevel alone cannot tell them apart. Only linked worktrees live under `$mdir/worktrees/*`;
+  # the main checkout is never listed there, so it is excluded without a fragile self-comparison.
+  mdir=$(module_dir "$path") || return 0
+  [ -d "$mdir/worktrees" ] || return 0
+  for wtadmin in "$mdir"/worktrees/*/; do
+    [ -f "$wtadmin/gitdir" ] || continue
+    # The `gitdir` admin file points at the worktree's own `.git` file; its parent is the worktree.
+    wt=$(dirname "$(cat "$wtadmin/gitdir" 2>/dev/null)")
+    case "$wt" in *"/probe-iso-"*) continue ;; esac
+    # A pruned/missing worktree dir cannot host a live colliding session — skip it.
+    [ -d "$wt" ] || continue
+    got=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) || got=''
+    [ -n "$got" ] && got=$(cd "$got" 2>/dev/null && pwd -P)
+    want=$(cd "$wt" && pwd -P)
+    if [ "$got" != "$want" ]; then
+      warn "$path — ISOLATION BROKEN: existing linked worktree '$wt' resolves to '${got:-<unresolvable>}', not its own path. A parallel session there is colliding — do not edit it."
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
 # Move the stray shared core.worktree into each worktree's own per-worktree config. Idempotent.
 repair() {
   local path=$1
@@ -133,6 +166,9 @@ probe() {
   git -C "$path" worktree remove --force "$name" >/dev/null 2>&1 || true
   git -C "$path" worktree prune >/dev/null 2>&1 || true
   rm -rf "$probe_dir"
+
+  # A fresh probe passing does not clear existing live worktrees — enumerate and verify those too.
+  check_existing_worktrees "$path" || rc=1
 
   [ "$rc" -eq 0 ] && printf 'submodule-init: %s — isolated ✓\n' "$path"
   return "$rc"
