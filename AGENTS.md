@@ -885,18 +885,28 @@ the maintainer's parallel sessions. For each repo touched:
 `git -C <repo_path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>`, work there,
 open the PR, then `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local
 filesystem path such as `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the
-slug only for `gh` commands). **Submodule worktree isolation is inconsistent** — most submodules carry
-a stray shared `core.worktree` that makes `git worktree add` resolve back into the main checkout (only
-the stale `projects/ksail` gitdir is correct; `templates/gitops-tenant-template` was fixed 2026-06-17).
-**A past fix does NOT stay fixed — probe every time** (`applications/ksail` regressed on 2026-07-14 and
-was silently colliding three live worktrees, two of them the sibling agent's). Before relying on an
-isolated submodule worktree, confirm `git -C <wt> rev-parse --show-toplevel` returns the worktree's own
-path, not a `.git/modules/<name>` path; if it doesn't, repair it in place before editing anything. The
-diagnosis table, the regression watch, and the verified per-submodule fix are in
-[`.claude/worktree-isolation.md`](.claude/worktree-isolation.md). Populate an
-un-checked-out submodule at its pinned commit with
-`git submodule update --init <path>` (never `--remote`). If a repo's working area is unexpectedly
-dirty or you can't get an isolated tree, do GitHub-API-only work (triage/comment) there.
+slug only for `gh` commands). **Submodule worktree isolation breaks whenever a submodule is
+initialised** — a stray shared `core.worktree` makes `git worktree add` resolve back into the main
+checkout, silently collapsing every parallel session into one physical tree.
+
+**`git submodule update --init <path>` is what (re-)introduces it** — reproduced 2026-07-14 on a
+submodule that was verified fixed: the key was absent before the command and present after. This is why
+"the fix does not stay fixed" (`applications/ksail` regressed 2026-07-14, silently colliding three live
+worktrees — two of them the sibling agent's; `templates/gitops-tenant-template` regressed the same day).
+The init command is *required* to populate a submodule, so **initialising and repairing are one
+operation, never two**:
+
+```sh
+.claude/scripts/submodule-init.sh <path>     # init at the pinned commit + repair + probe (fail-closed)
+```
+
+Use it instead of a bare `git submodule update --init <path>` (never `--remote`). If you do run a bare
+init — or inherit a tree someone else initialised — **probe before you trust it**: confirm
+`git -C <wt> rev-parse --show-toplevel` returns the worktree's **own** path, not a `.git/modules/<name>`
+path, and repair it in place before editing anything. The diagnosis, the regression watch, and the
+verified per-submodule fix are in
+[`.claude/worktree-isolation.md`](.claude/worktree-isolation.md). If a repo's working area is
+unexpectedly dirty or you can't get an isolated tree, do GitHub-API-only work (triage/comment) there.
 
 ### Git safety
 Never `git reset --hard`, `git stash`, force-push, or discard changes you did not author. Never

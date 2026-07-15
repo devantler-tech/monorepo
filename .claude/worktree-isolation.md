@@ -56,7 +56,7 @@ below). Current state:
 | `templates/platform-template` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
 | `platform` | ~~set~~ → unset | true | ✅ fixed 2026-06-25 — **6 live worktrees repaired in place** |
 | `templates/go-template` | ~~set~~ → unset | true | ✅ fixed 2026-06-25 — **1 live worktree repaired in place** |
-| `templates/gitops-tenant-template` | unset | true | ✅ fixed & verified 2026-06-17 |
+| `templates/gitops-tenant-template` | ~~set~~ → unset | true | ⚠️ **REGRESSED 2026-07-14** — re-fixed & verified (see *Regression watch*) |
 | `projects/ksail` | unset | true | ✅ already isolated — **active, do not delete** (see below) |
 
 > **`projects/ksail` is ACTIVE — never treat it as orphaned.** An earlier revision of this doc called it
@@ -129,9 +129,32 @@ correctly. This submodule is left fixed.
 **The 2026-06-25 sweep does not stay fixed.** On **2026-07-14** `applications/ksail` was found **broken
 again**: the stray `core.worktree = ../../../../applications/ksail` was back in the shared
 `.git/modules/applications/ksail/config` (with `extensions.worktreeConfig` still `true` — so the flag
-survived, but the stray value returned and was being inherited again). Some routine submodule operation
-rewrites that key back into the shared config; a green row in the table above is therefore a record of
-*a* fix, **not** a guarantee of current state.
+survived, but the stray value returned and was being inherited again). `templates/gitops-tenant-template`
+was found broken again the **same day**. A green row in the table above is therefore a record of *a* fix,
+**not** a guarantee of current state.
+
+### The culprit: `git submodule update --init` (reproduced 2026-07-14)
+
+The "routine submodule operation" that rewrites the key is **`git submodule update --init <path>`** —
+the very command the contract tells agents to use to populate a submodule. Reproduced on a submodule
+that had just been verified fixed:
+
+```
+$ git config -f .git/modules/templates/dotnet-template/config --get core.worktree
+(unset)
+$ git submodule update --init templates/dotnet-template
+$ git config -f .git/modules/templates/dotnet-template/config --get core.worktree
+../../../../templates/dotnet-template          # ← back, and inherited by every future worktree
+```
+
+So the loop is: agent initialises a submodule → isolation silently breaks → the next `git worktree add`
+in that submodule resolves into the shared main checkout → parallel sessions collide. **Initialising and
+repairing must therefore be one operation**, which is what
+[`.claude/scripts/submodule-init.sh`](scripts/submodule-init.sh) does (init → repair → fail-closed
+probe). `submodule-init.sh --check` probes every initialised submodule and exits non-zero if any is
+not isolated. The probe is non-destructive — it never modifies submodule content, tracked files, or
+other sessions' worktrees — but not strictly read-only: it adds and removes a throwaway probe
+worktree to catch a dangling `core.worktree` a config read alone would miss.
 
 What made it dangerous is that it fails **silently**: a `git worktree add` still succeeds, and the
 worktree looks real. Three live linked worktrees — including **two belonging to the parallel sibling

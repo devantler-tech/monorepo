@@ -9,13 +9,24 @@ This repository is a monorepo that contains all my active projects as submodules
 When you clone the monorepo for the first time, you need to initialize the submodules:
 
 ```bash
-git submodule update --init --recursive
+.claude/scripts/submodule-init.sh --all
 ```
 
-Alternatively, you can clone the monorepo with the `--recurse-submodules` flag:
+This initializes every submodule at its pinned commit and keeps per-worktree isolation intact. A bare
+`git submodule update --init` writes a `core.worktree` key into each submodule's shared config, which
+every later `git worktree add` inherits — so worktrees silently resolve back into the main checkout and
+parallel sessions collide. The wrapper repairs that and verifies isolation before returning; run
+`.claude/scripts/submodule-init.sh --check` at any time to re-verify (a non-destructive probe: it
+never touches submodule content or other sessions' worktrees, but does add and remove its own
+throwaway probe worktree).
+
+You can also clone the monorepo with the `--recurse-submodules` flag. That initializes the submodules
+the same way, so it breaks isolation the same way — run the wrapper afterwards to repair it (`--check`
+is a non-destructive probe and would only report the problem, not fix it):
 
 ```bash
 git clone --recurse-submodules git@github.com:devantler-tech/monorepo.git
+cd monorepo && .claude/scripts/submodule-init.sh --all
 ```
 
 Make sure that all submodules are checked out on the correct branch the first time you clone the monorepo. Otherwise, you might risk loosing changes as the submodule will be in a detached head state.
