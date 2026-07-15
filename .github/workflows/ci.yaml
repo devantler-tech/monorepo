@@ -156,6 +156,7 @@ jobs:
         run: bash .claude/scripts/safe-clone.test.sh
 
   test-maintainer-preflight:
+    name: Test maintainer preflight contract
     needs: changes
     if: needs.changes.outputs.maintainer-preflight == 'true'
     runs-on: ubuntu-latest
@@ -170,6 +171,7 @@ jobs:
         run: bash .claude/scripts/maintainer-preflight.test.sh
 
   test-product-value-contract:
+    name: Test product value contract
     needs: changes
     if: needs.changes.outputs.product-value == 'true'
     runs-on: ubuntu-latest
