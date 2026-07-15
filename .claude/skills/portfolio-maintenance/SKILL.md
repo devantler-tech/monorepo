@@ -22,11 +22,35 @@ card.
    Only if it is somehow *not* already in your context should you read it once.
 2. **Working checkout:** `cd /Users/homelab-mac-mini/git-personal/monorepo` (this deployment's primary
    checkout — the scheduled task runs on a fixed machine; adjust the path if relocated); confirm
-   (`test -d docs && test -f .gitmodules`); `gh auth status` shows `devantler`. **Sync the definition:**
+   (`test -d docs && test -f .gitmodules`); `gh auth status --active --hostname github.com` shows
+   `devantler`. **Sync the definition:**
    this checkout carries permanent submodule-pointer drift, so don't gate on a fully clean tree — if
    `main` is behind `origin/main` and the only dirt is submodule pointers, fast-forward with
    `git fetch origin main && git merge --ff-only origin/main` (it never checks out submodule contents;
    `--ff-only` refuses anything that isn't a clean fast-forward).
+   When `gh auth status --active --hostname github.com` reports an invalid credential or authenticates
+   an active account other than `devantler`, retry once as
+   `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --active --hostname github.com` to clear both
+   environment-token sources and test the active saved login for the host this portfolio uses. Accept either
+   probe only when it authenticates `devantler`. In a runtime that sandboxes macOS keychain access, if that
+   sandboxed saved-login check also fails to authenticate `devantler`:
+   classify the saved login as indeterminate.
+   Repeat the exact command once through the approved host-level execution path.
+   A sandbox-only failure is not evidence that the saved login is invalid.
+   Continue when the host-level check authenticates `devantler`.
+   If the saved login is selected, prefix every subsequent `gh` command with `env -u GH_TOKEN -u GITHUB_TOKEN`.
+   This prevents a rejected injected token from overriding the verified login again.
+   If only the host-level saved-login check succeeds, run every subsequent `gh` command through that
+   approved host-level execution path.
+   Clearing the injected tokens does not make a sandboxed macOS Keychain readable.
+   Only an explicit credential rejection from that host-level check proves the saved login invalid.
+   If the host-level check instead authenticates a different account, hard-block as `wrong GitHub identity`
+   without describing the credential as invalid.
+   If the host-level check cannot run or fails
+   for a transport reason, hard-block as `authentication verification unavailable` instead of instructing
+   the maintainer to replace a credential that was never tested. Keep the injected-token result, saved-login
+   result, and `git fetch` result as separate gates, because repository reachability cannot prove GitHub API
+   identity (and vice versa); record only these gate classifications in durable memory, never credential output.
 3. **Load durable memory:** **`view` your native memory** (Claude: the memory tool / the project
    `memory/` dir + `MEMORY.md`) — the single source of truth for cross-run orchestration (rotation
    cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent

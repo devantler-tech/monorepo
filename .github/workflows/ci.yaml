@@ -20,6 +20,7 @@ jobs:
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
+      maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       product-value: ${{ steps.filter.outputs.product-value }}
     steps:
       - name: Checkout
@@ -46,6 +47,9 @@ jobs:
             safe-clone:
               - '.claude/scripts/safe-clone.sh'
               - '.claude/scripts/safe-clone.test.sh'
+            maintainer-preflight:
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/scripts/maintainer-preflight.test.sh'
             product-value:
               - 'AGENTS.md'
               - '.claude/agents/daily-maintainer.md'
@@ -151,7 +155,23 @@ jobs:
       - name: Self-test the safe-clone guard
         run: bash .claude/scripts/safe-clone.test.sh
 
+  test-maintainer-preflight:
+    name: Test maintainer preflight contract
+    needs: changes
+    if: needs.changes.outputs.maintainer-preflight == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify the maintainer preflight contract
+        run: bash .claude/scripts/maintainer-preflight.test.sh
+
   test-product-value-contract:
+    name: Test product value contract
     needs: changes
     if: needs.changes.outputs.product-value == 'true'
     runs-on: ubuntu-latest
@@ -175,6 +195,7 @@ jobs:
       - audit-docs
       - drift-check-active-projects
       - test-safe-clone
+      - test-maintainer-preflight
       - test-product-value-contract
     permissions: {}
     steps:
@@ -187,4 +208,5 @@ jobs:
             ${{ needs.audit-docs.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.test-safe-clone.result }}
+            ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-product-value-contract.result }}
