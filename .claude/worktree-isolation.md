@@ -151,8 +151,10 @@ So the loop is: agent initialises a submodule → isolation silently breaks → 
 in that submodule resolves into the shared main checkout → parallel sessions collide. **Initialising and
 repairing must therefore be one operation**, which is what
 [`.claude/scripts/submodule-init.sh`](scripts/submodule-init.sh) does (init → repair → fail-closed
-probe). `submodule-init.sh --check` probes every initialised submodule read-only and exits non-zero if
-any is not isolated.
+probe). `submodule-init.sh --check` probes every initialised submodule and exits non-zero if any is
+not isolated. The probe is non-destructive — it never modifies submodule content, tracked files, or
+other sessions' worktrees — but not strictly read-only: it adds and removes a throwaway probe
+worktree to catch a dangling `core.worktree` a config read alone would miss.
 
 What made it dangerous is that it fails **silently**: a `git worktree add` still succeeds, and the
 worktree looks real. Three live linked worktrees — including **two belonging to the parallel sibling

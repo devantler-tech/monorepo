@@ -362,8 +362,9 @@ For each selected product:
    submodule you did **not** initialise through the wrapper (a tree someone else populated), **probe
    before you trust it**: `git -C <wt> rev-parse --show-toplevel` must print the worktree's own path,
    not a `.git/modules/<name>` path. `.claude/scripts/submodule-init.sh --check` probes every
-   initialised submodule read-only and exits non-zero on a break; repair in place before editing
-   anything. Background, diagnosis, and the regression watch:
+   initialised submodule (a non-destructive probe — it never touches content or other sessions'
+   trees, but adds/removes its own throwaway worktree) and exits non-zero on a break; repair in place
+   before editing anything. Background, diagnosis, and the regression watch:
    [`worktree-isolation.md`](../../worktree-isolation.md).
    If the tree is unexpectedly dirty / not isolable, do GitHub-API-only work and skip diff work.
 2. **Load the product card** (`products/<name>`) + that submodule's `AGENTS.md` `## Maintenance`.

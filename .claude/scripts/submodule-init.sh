@@ -13,7 +13,12 @@
 # Usage:
 #   .claude/scripts/submodule-init.sh <submodule-path> [<submodule-path>...]
 #   .claude/scripts/submodule-init.sh --all      # init + repair + probe every submodule (first clone)
-#   .claude/scripts/submodule-init.sh --check    # read-only: probe every initialised submodule
+#   .claude/scripts/submodule-init.sh --check    # non-destructive probe of every initialised submodule
+#
+# `--check` never modifies submodule content, tracked files, or other sessions' worktrees, but it is
+# NOT strictly read-only: to prove isolation empirically it adds and then removes a throwaway,
+# uniquely-named probe worktree (and prunes its own admin entry). That empirical add/remove is the
+# whole point — it catches a dangling `core.worktree` a config read alone would miss.
 set -euo pipefail
 
 die() {
@@ -145,6 +150,17 @@ initialised_paths() {
 
 init_repair_probe() {
   local path=${1%/}
+  # If the submodule is ALREADY populated, a stray shared `core.worktree` may point at ANOTHER
+  # checkout — the exact collision this script exists to catch. `git submodule update` honours that
+  # value, so running it first would operate through the wrong worktree: aborting on another
+  # session's local changes, or checking the pinned commit out into THEIR tree. Repair the stale
+  # config FIRST so the update always acts on this tree; the post-update repair then relocates the
+  # `core.worktree` the update itself re-adds. A fresh (unpopulated) submodule has no gitdir to
+  # repair yet — skip straight to the update, which populates it, and let the post-update repair
+  # handle the freshly-written key.
+  if is_populated "$path"; then
+    repair "$path"
+  fi
   git submodule update --init "$path"
   repair "$path"
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
@@ -153,7 +169,9 @@ init_repair_probe() {
 [ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check'
 
 case "$1" in
-  # READ-ONLY. It must NOT repair first: a check that fixes what it is checking can never fail.
+  # NON-DESTRUCTIVE probe (see the header note): never touches content or other sessions' trees, but
+  # not strictly read-only — `probe` adds/removes its own throwaway worktree. It must NOT repair
+  # first: a check that fixes what it is checking can never fail.
   --check)
     broken=0
     while read -r path; do probe "$path" || broken=1; done < <(initialised_paths)
