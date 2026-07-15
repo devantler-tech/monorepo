@@ -248,6 +248,13 @@ review at the current head) — a *finished*
 draft awaiting promotion is fine, a *half-finished* one (red CI, open threads, conflicting) is unfinished
 work to clear first. Work the ladder top-down — **hotfix/operate first, then advance**:
 
+**Value check before build.** When an issue reaches the front of the advance queue, revalidate its
+current evidence, affected audience/problem, hypothesis, and success signal using
+`product-engineering`'s **Value & evidence loop**. This never lets a newer shiny idea jump an older
+actionable issue: if the premise still holds, do the work; if current evidence invalidates it, reframe
+or close it with the reason; if the value is plausible but unmeasured, make measurement the first child
+slice. Record the product's `last_value_review` cursor, not live metrics, in native memory.
+
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.
 2. **Drive trusted-author PRs to merge — the first-priority sweep, ahead of issues, every run.** Across
@@ -330,10 +337,11 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    if nobody has opened one you may pick it up regardless of who's assigned. If it **already has a
    trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave **draft** PRs for
    the maintainer and keep **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
-   validate + **draft PR**, `Fixes #N`.
+   validate + **draft PR**; use `Fixes #delivery` and, when later measurement keeps the experiment
+   open, `Part of #experiment`.
 8. **Capture new finds as issues** — a coverage hole, perf hotspot, refactor target, docs gap, security
-   weakness, or enhancement you notice becomes a **well-formed issue** (*problem → proposal → acceptance
-   criteria*, labelled), not an ad-hoc PR; it restocks the backlog #7 drains. The how-to per kind
+   weakness, or enhancement you notice becomes a **well-formed issue** using the contract's evidence-led
+   shape (or its defect variant), not an ad-hoc PR; it restocks the backlog #7 drains. The how-to per kind
    (coverage, benchmarking, refactoring) is in [`product-engineering`](../product-engineering/SKILL.md) §4–6.
 9. **Strategy & roadmap** — if a product has no roadmap or its review is due (cadence), run a strategy
    review and create/refresh its `roadmap` issues; decompose an epic into actionable child issues; triage
@@ -359,13 +367,24 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
 **Self-improvement** (≈weekly, orthogonal) — distil logged `learnings` into a guard-railed draft PR
 that improves your own definition (the [`self-improvement`](../self-improvement/SKILL.md) skill).
 
+**Blog Stewardship (low-priority, bounded, orthogonal cadence)** — for the monorepo/site only, a due
+blog action must not wait for the issue queue to become empty. After operate work and one
+oldest-substantive slice in the run, perform at most one due blog evidence review, worthwhile
+publication, or material refresh before selecting the next issue, then resume the normal ladder. Use
+the monorepo card's editorial, single-flight, experiment-lifecycle, and cursor rules: maintain an open
+blog experiment/PR through review, deployment, and measurement before starting another. A review that
+finds no worthwhile story is useful but does not move the publication clock; marketing, positioning,
+discovery, and adoption are product work, while filler and traffic-only vanity are not.
+
 **Fairness & ordering:** issue **age is the primary sort** for what to resolve (oldest actionable
 first — contract *Issue-driven*); when issue value/age is comparable, prefer the product with the
 oldest `last_worked` (and oldest strategy review). Aim over time to advance every product, not just the
 noisy ones.
-**Cadence gates:** per-product strategy review and docs pass weekly-to-monthly (oldest first); KSail
-Monthly Strategy at month start; heavy tasks (E2E, live-cluster reliability, content review) ~weekly
-per the per-product `weekly` timestamps; never spin up real clusters more than once/day portfolio-wide.
+**Cadence gates:** per-product strategy review and docs pass weekly-to-monthly (oldest first); review
+blog evidence/topics about monthly and target one worthwhile publication or material refresh every
+4–8 weeks without displacing operate/oldest-substantive work; KSail Monthly Strategy at month start;
+heavy tasks (E2E, live-cluster reliability, content review) ~weekly per the per-product `weekly`
+timestamps; never spin up real clusters more than once/day portfolio-wide.
 A second run the same day → more selective, dedupe vs the earlier run.
 
 ## 3. Act (per selected product, via a per-run worktree)
@@ -421,10 +440,11 @@ For each selected product:
   - `portfolio-status.md` — `last_run`, `rotation_cursor`, and per product: `last_worked`, `weekly`
     timestamps, roadmap cursor (last strategy review + current theme), `last_research` (the
     upstream-research/product-debugging cursor — `product-engineering` §9), `last_docs_pass` (the docs-pass
-    cadence cursor that drives the "oldest first" docs rotation — see *Cadence gates*), open
-    `needs_attention`.
+    cadence cursor that drives the "oldest first" docs rotation — see *Cadence gates*),
+    `last_value_review`, and open `needs_attention`; for the site also keep `last_blog_stewardship`,
+    `last_blog_review`, `last_blog_publish`, `last_blog_refresh`, and `last_metrics_review`.
   - `caches.md` — CI-investigation cache (signature/PR/run-ids/dates), `unfixable_links` / `watch_links`
-    / `resolved_links`, site QA / content-review cursors.
+    / `resolved_links`, site QA / content-review cursors (never raw analytics or user-level data).
   - `learnings.md` — self-improvement learnings (`date` / `area` / `observation` / `proposed_change` /
     `evidence` / `status`); one concern each, prune when its PR merges.
   - `feedback_*.md` — durable maintainer feedback (keep).

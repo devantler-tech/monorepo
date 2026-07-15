@@ -21,6 +21,7 @@ jobs:
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
+      product-value: ${{ steps.filter.outputs.product-value }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -49,6 +50,15 @@ jobs:
             maintainer-preflight:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/maintainer-preflight.test.sh'
+            product-value:
+              - 'AGENTS.md'
+              - '.claude/agents/daily-maintainer.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/product-engineering/SKILL.md'
+              - '.claude/skills/products/monorepo/SKILL.md'
+              - '.claude/scripts/product-value-contract.test.sh'
+              - 'docs/README.md'
+              - '.github/workflows/ci.yaml'
 
   build-docs:
     needs: changes
@@ -159,24 +169,42 @@ jobs:
       - name: Verify the maintainer preflight contract
         run: bash .claude/scripts/maintainer-preflight.test.sh
 
+  test-product-value-contract:
+    needs: changes
+    if: needs.changes.outputs.product-value == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify the product value contract
+        run: bash .claude/scripts/product-value-contract.test.sh
+
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
     if: always()
     needs:
+      - changes
       - build-docs
       - audit-docs
       - drift-check-active-projects
       - test-safe-clone
       - test-maintainer-preflight
+      - test-product-value-contract
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/actions/aggregate-job-checks@931b82faa0c30e65f626527a6b3c8cd2d4879c71 # v9.0.11
+        uses: devantler-tech/actions/aggregate-job-checks@5de934e076503c897d43d85680406f8d1d9356b7 # v10.0.0
         with:
           job-results: >-
+            ${{ needs.changes.result }}
             ${{ needs.build-docs.result }}
             ${{ needs.audit-docs.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-maintainer-preflight.result }}
+            ${{ needs.test-product-value-contract.result }}

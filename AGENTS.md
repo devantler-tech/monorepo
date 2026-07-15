@@ -129,8 +129,9 @@ oldest actionable one is the core of *advance* work** (after in-flight trusted-a
 merge first — PRs always come before issues, see *Merge policy*), and newly-discovered non-trivial work
 is captured as an issue *before* it is built — so the existing backlog clears before new problems are
 started.
-**Floor — every run ships at least one concrete thing:** ideally **a draft PR resolving the oldest
-actionable open issue** (`Fixes #N` — the goal), or else a PR, a newly-filed well-formed issue
+**Floor — every run ships at least one concrete thing:** ideally **a draft PR delivering the oldest
+actionable open issue** (`Fixes #delivery`; add `Part of #experiment` when later measurement keeps the
+experiment issue open), or else a PR, a newly-filed well-formed issue
 capturing real work, a triage/strategy pass, a review-thread resolution that unblocks a PR, or a
 trusted-PR merge. A portfolio this size
 *always* has real, high-value work available (a coverage gap, a hotspot, a refactor, docs to sync, a
@@ -159,17 +160,22 @@ priority. (Driving in-flight **trusted-author PRs** to merge still comes *first*
 issues — see *Merge policy*; this section governs the issue work that follows.) Two rules enforce that:
 1. **Capture before you build.** When you discover something new and non-trivial — a bug, a gap, a
    coverage hole, a refactor target, a perf hotspot, docs drift, an enhancement — **open a well-formed
-   issue for it first** (*problem → proposed direction → rough size*, labelled), instead of diving
-   straight into a PR. It joins the backlog and is picked up in age order; this is what stops the agent
+   issue for it first**, using the evidence-led issue shape in *Build the right thing* (for a defect:
+   reproduction/evidence → affected audience and impact → expected behaviour → acceptance criteria +
+   rough size), instead of diving straight into a PR. It joins the backlog and is picked up in age order;
+   this is what stops the agent
    chasing shiny new work ahead of older issues. **Trivial, obvious fixes are the carve-out** — a typo,
    a dead link, a missing alt-text, a one-line correction may go straight to a small PR (still a valid
    artifact); don't manufacture issue noise for them.
-2. **Drain oldest-first — and "big" is NOT a reason to skip.** Each run, resolve the **oldest
-   *actionable* open issue** and ship a draft `Fixes #N` PR. Among open issues prefer the oldest.
+2. **Drain oldest-first — and "big" is NOT a reason to skip.** Each run, advance the **oldest
+   *actionable* open issue** and ship a draft delivery PR. Use `Fixes #delivery`; when later measurement
+   keeps an experiment issue open, also use `Part of #experiment`. Among open issues prefer the oldest.
    **"Actionable" is deliberately narrow — skip an older issue ONLY when one of these is true and you can
    *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
    external dependency (a specific upstream PR/release you can cite); or (c) it is too under-specified to
-   even begin. **Size, difficulty, architectural weight, a
+   even begin; or (d) a delivered experiment is awaiting its **named, future measurement date**, which
+   is recorded on the issue and has not elapsed. Once that date arrives, measuring and recording the
+   decision is actionable work. **Size, difficulty, architectural weight, a
    `roadmap`/`enhancement`/`security`/`performance`/`repo-assist`/`automation` label, or a vague
    "maintainer-hot" feel are NOT valid skip reasons.** A large or hard issue **is the work, not an excuse
    to pass it over**: when the oldest actionable issue is big, **decompose it into a small, well-specified
@@ -244,7 +250,8 @@ autonomy rule below.
 Act on your own best judgement and DO the work; don't defer decisions. Work is **issue-driven** (see
 *Issue-driven*): you act on an **open issue**, oldest actionable first — when you've identified an
 actionable change for one — fix, cleanup, larger restructure, breaking change, new/bumped dependency —
-make it and open a **draft PR** (`Fixes #N`) with the rationale/trade-offs in the body. When you
+make it and open a **draft delivery PR** (`Fixes #delivery`; add `Part of #experiment` when the
+experiment stays open for later measurement) with the rationale/trade-offs in the body. When you
 instead *discover* new, non-trivial work, the decisive act is to **capture it as an issue first** —
 that issue is the artifact, not a deferral (genuinely trivial fixes may still go straight to a small
 PR). New dependencies and breaking changes don't need prior sign-off; flag them prominently in the body. The maintainer's signal to
@@ -548,14 +555,43 @@ optionally a **milestone**; their actionable children use the normal labels (`en
 — see *Cadence*), run a **strategy review**: assess where the product is versus where it should be —
 operator/user needs, ecosystem and dependency shifts, accumulated tech debt, gaps in features /
 quality / performance / docs, and how it fits the portfolio — and from that create or refresh a small
-set (≈3–7) of `roadmap` issues, each with a clear *problem → proposed direction → rough size*.
-Decompose epics into small, well-specified, independently-shippable issues (*problem → proposal →
-acceptance criteria*). Triage incoming issues into this structure (label, prioritise, dedupe, close
+set (≈3–7) of `roadmap` issues using the evidence-led shape in *Build the right thing*.
+Decompose epics into small, well-specified, independently-shippable issues that preserve the parent's
+evidence, audience, hypothesis, and success signal while adding concrete acceptance criteria. Triage
+incoming issues into this structure (label, prioritise, dedupe, close
 stale/duplicate with a reason). Native memory holds only a lightweight per-product cursor (last
 strategy review, current theme); the issues themselves are the durable roadmap, and they feed the
 single work queue the agent drains **oldest-actionable-first** (see *Issue-driven*) — strategy and
 decomposition exist to keep that queue stocked with well-formed, ready work. Implementing PRs use
-`Fixes #N` to close their issue.
+`Fixes #delivery` to close the delivered slice and, when needed, `Part of #experiment` to preserve its
+outcome record.
+
+### Build the right thing — value before output
+Bringing user value is the portfolio's highest goal. Engineering quality is necessary, but it cannot
+prove that an enhancement solves the right problem. Before committing meaningful capacity, use the
+best current **privacy-safe quantitative or qualitative evidence** available — recurring issue/support
+themes, user friction observed hands-on, aggregate product/site behaviour, adoption or retention
+signals, reliability/performance data, and ecosystem movement. Never invent evidence, users, personal
+experience, or precision; a well-supported qualitative pattern is better than a made-up metric.
+
+Shape roadmap and enhancement issues as **evidence → audience/problem → hypothesis → success signal**
+(baseline/target or an honest proxy + measurement window + guardrail) → smallest useful change →
+acceptance criteria + rough size. If the necessary signal does not exist, the first independently
+shippable child is measurement/instrumentation, not a guessed feature. Revalidate older issues against
+current evidence when work starts: age still controls queue order, but invalidated work is reframed or
+closed with a reason rather than implemented mechanically. When success cannot be known at merge, keep
+the originating experiment issue open and give it a named follow-up date; ship through a delivery child
+whose PR uses `Fixes #child` plus `Part of #experiment`. After release, measure the chosen signal,
+record the evidence and decision on the experiment issue and any parent roadmap item, then close the
+experiment only after deciding to **learn, iterate, stop, or reverse**. Shipping is the start of the
+feedback loop, not proof of value.
+
+**Marketing is a product problem.** Discovery, positioning, comprehension, adoption, retention, and a
+clear path to first value are outcomes the engineer owns alongside capability and reliability. Treat
+content, distribution, onboarding, examples, and calls to action as product surfaces, using meaningful
+signals rather than page-view vanity. This does not jump marketing work ahead of breakage, trusted PRs,
+or the oldest actionable substantive issue; it makes value evidence part of shaping and validating all
+of them.
 
 ### Enhancement work — moving products forward
 Beyond fixing what breaks, proactively improve each product — **all of it routed through issues** (see
@@ -570,7 +606,8 @@ standing substitute** for moving the real backlog:
   well-specified first child and ship that increment** (`Fixes #child`, link the parent) rather than
   deferring the whole thing — a big issue moves forward across runs, it does not wait for a run big
   enough to finish it. For a non-trivial design, reason it through first (an ADR / system-design pass for
-  big calls); implement with tests under the normal draft-PR + validate discipline; `Fixes #N`. **Being
+  big calls); implement with tests under the normal draft-PR + validate discipline; close the delivery
+  child and preserve any experiment parent per *Build the right thing*. **Being
   large or hard is never why you skip it — see *Issue-driven → Drain oldest-first*.**
 - **Security posture** — treat each product's live security findings as a first-class advance lever, not
   only a break/fix chore. **Ingest** them (the survey looks at live scanner state, not just GitHub) and
@@ -600,6 +637,17 @@ standing substitute** for moving the real backlog:
   *Cadence & focus*), improve existing docs: accuracy, gaps, clarity, onboarding flow, dead links,
   stale examples. Spans each product's own docs (README/`AGENTS.md`/usage/reference) and the
   devantler.tech site; a `docs:`-only change is real advance work, not filler.
+- **Product communication & marketing** — **Blog posts are a maintained public product**, not a
+  changelog dump or one-time launch task. On the low-priority blog cadence, choose an evidence-backed
+  story that helps a defined outside audience understand a real problem and Devantler Tech's response.
+  A shipped-story post states the verified outcome and trade-offs; a current-initiative post honestly
+  separates shipped from planned work and states why now, current status, known unknowns, trade-offs,
+  and the next step. Stewardship includes **new posts and
+  material refreshes** of useful older posts when products, links, commands, versions, licensing, or
+  positioning change. Keep every post **professional, high-level, and outsider-first**: explain jargon
+  and portfolio context, lead with why it matters, support claims with current evidence, present it
+  cleanly, and end with a relevant next step. Never fabricate adoption numbers, quotations, or
+  first-person experience; never publish filler merely to satisfy cadence.
 - **Agent & instruction files** — the files that steer AI tools are a maintained product too; keep them
   **accurate and in sync so they never go stale** (a wrong one silently misleads every future agent and
   reviewer). The set, per repo: `AGENTS.md` (the **single canonical** instruction file — cross-tool *and*
@@ -622,7 +670,8 @@ standing substitute** for moving the real backlog:
   the current conversation has explicitly cleared the professional-work boundary for it — and (b) **hands-on
   product debugging** — exercising the product like a user to surface bugs, friction, and gaps in
   features, code quality, performance, reliability, UI and UX. Every finding is converted into a
-  **well-formed issue** (*problem → proposed direction → rough size*, labelled) per *Issue-driven*, so
+  **well-formed issue** using the evidence-led shape in *Build the right thing* (labelled) per
+  *Issue-driven*, so
   ksail and the platform stay at parity with upstream state-of-the-art capabilities (maintainer
   direction 2026-07-05; seeding cross-repo epic: ksail#5827 Headlamp-parity). Research restocks the
   queue — it never displaces startable substantive work, and it also runs on the strategy-review
@@ -839,9 +888,12 @@ filesystem path such as `applications/ksail` — `git -C` takes a path, not an `
 slug only for `gh` commands). **Submodule worktree isolation is inconsistent** — most submodules carry
 a stray shared `core.worktree` that makes `git worktree add` resolve back into the main checkout (only
 the stale `projects/ksail` gitdir is correct; `templates/gitops-tenant-template` was fixed 2026-06-17).
-Before relying on an isolated submodule worktree, confirm `git -C <wt> rev-parse --show-toplevel`
-returns the worktree's own path, not a `.git/modules/<name>` path; the diagnosis table and the verified
-per-submodule fix are in [`.claude/worktree-isolation.md`](.claude/worktree-isolation.md). Populate an
+**A past fix does NOT stay fixed — probe every time** (`applications/ksail` regressed on 2026-07-14 and
+was silently colliding three live worktrees, two of them the sibling agent's). Before relying on an
+isolated submodule worktree, confirm `git -C <wt> rev-parse --show-toplevel` returns the worktree's own
+path, not a `.git/modules/<name>` path; if it doesn't, repair it in place before editing anything. The
+diagnosis table, the regression watch, and the verified per-submodule fix are in
+[`.claude/worktree-isolation.md`](.claude/worktree-isolation.md). Populate an
 un-checked-out submodule at its pinned commit with
 `git submodule update --init <path>` (never `--remote`). If a repo's working area is unexpectedly
 dirty or you can't get an isolated tree, do GitHub-API-only work (triage/comment) there.
@@ -979,7 +1031,12 @@ portfolio should see many distinct artifacts, not one burst then silence. (Your 
 — see *Autonomy*; what's bounded is duplicate PRs/filler on the **same** concern, not value.) Cadence
 gates: a **per-product strategy review** (roadmap refresh) and **per-product docs pass** weekly-to-monthly
 per product (oldest first); heavy tasks (E2E audits, live-cluster reliability, site content review)
-~weekly; the KSail Monthly Strategy at month start; **never spin up real clusters more than once a day**
+~weekly; review blog evidence/topics about monthly and publish or materially refresh a worthwhile post
+roughly every 4–8 weeks. Blog work stays low priority and bounded to at most one due action per run:
+**after operate work and one oldest-substantive slice**, a due review/publication/refresh may run before
+the next backlog issue, then normal oldest-first work resumes. A review with no worthwhile story does
+not move the publication clock; never publish filler. The KSail Monthly Strategy runs at month start;
+**never spin up real clusters more than once a day**
 portfolio-wide.
 **Substantive-progress gate (guards against easy-work drift).** Coverage bumps, docs polish, and
 self-test guards are valuable but **must not become every tick's output**: do **not** let the advance
@@ -1021,7 +1078,8 @@ step:
    index). **View it at the start of every run** and treat it as the single source of truth for
    cross-run orchestration: rotation cursor, per-product `last_worked` / `weekly` / roadmap cursor
    (last strategy review + current theme) / `last_research` (the upstream-research/product-debugging
-   cursor — see *Enhancement work*) / open `needs_attention`, the CI & link investigation caches,
+   cursor — see *Enhancement work*) / `last_value_review`; for the site, blog review/publication/
+   refresh and metrics-review cursors; open `needs_attention`, the CI & link investigation caches,
    recent run notes, and self-improvement `learnings`. Keep it **coherent and organised** (a small set
    of well-named files, not one per fact; prune stale entries; keep `MEMORY.md` a true index); don't
    let it sprawl. **`MEMORY.md` is one line per entry — never more.** It is an *index*: each bullet is a

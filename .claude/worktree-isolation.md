@@ -45,7 +45,7 @@ below). Current state:
 | Submodule | shared `core.worktree` | `extensions.worktreeConfig` | State |
 |---|---|---|---|
 | `applications/ascoachingogvaner` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
-| `applications/ksail` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
+| `applications/ksail` | ~~set~~ → unset | true | ⚠️ **REGRESSED 2026-07-14** — re-fixed & verified (see *Regression watch*) |
 | `applications/unifi` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
 | `github/devantler-tech/.github-public` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
 | `github/devantler-tech/github-actions/actions` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
@@ -114,30 +114,73 @@ rtk proxy git -C "$P" worktree remove --force .probe-iso      # clean up
 rtk proxy git -C "$P" worktree prune
 ```
 
-A fixed submodule prints the probe's **own** path; a broken one prints a path under
-`.git/modules/<name>`.
+A fixed submodule prints the probe's **own** path; a broken one prints **anything else** — either a
+path under `.git/modules/<name>` or the shared main checkout itself (whatever the stray
+`core.worktree` points at). Test for exact equality with the worktree's own absolute path; do not
+match on a symptom string.
 
 **Verified 2026-06-17 on `templates/gitops-tenant-template`:** before the fix a probe worktree's
 `show-toplevel` resolved to `…/.git/modules/templates/gitops-tenant-template`; after the fix it resolves
 to `…/templates/gitops-tenant-template/.probe-iso` (its own tree), and the main checkout still resolves
 correctly. This submodule is left fixed.
 
+## Regression watch — the fix is NOT permanent (PROBE EVERY TIME)
+
+**The 2026-06-25 sweep does not stay fixed.** On **2026-07-14** `applications/ksail` was found **broken
+again**: the stray `core.worktree = ../../../../applications/ksail` was back in the shared
+`.git/modules/applications/ksail/config` (with `extensions.worktreeConfig` still `true` — so the flag
+survived, but the stray value returned and was being inherited again). Some routine submodule operation
+rewrites that key back into the shared config; a green row in the table above is therefore a record of
+*a* fix, **not** a guarantee of current state.
+
+What made it dangerous is that it fails **silently**: a `git worktree add` still succeeds, and the
+worktree looks real. Three live linked worktrees — including **two belonging to the parallel sibling
+agent** — were all resolving into the *shared main checkout*, i.e. actively colliding, with nothing
+surfacing it. That is precisely the condition that makes one session's commit land on another's branch.
+
+**So: never trust the table — probe.** Before you edit anything in a freshly-added submodule worktree,
+assert it resolves to its own path:
+
+```sh
+# Canonicalise first: `rev-parse --show-toplevel` prints an ABSOLUTE path, so comparing it against a
+# relative $WT (the form you normally pass to `git worktree add`) would flag a healthy worktree broken.
+WT=$(cd "<path to the worktree you just added>" && pwd -P)
+TOP=$(git -C "$WT" rev-parse --show-toplevel)
+if [ "$TOP" != "$WT" ]; then
+  echo "NOT ISOLATED: resolves to $TOP, not $WT — do not edit; repair first" >&2
+  exit 1   # fail CLOSED: never fall through into a colliding worktree
+fi
+```
+
+**Any** resolved path other than `$WT` is broken — the exact-equality test is the criterion, not a
+particular symptom string. Two shapes both occur: it may print a path under `.git/modules/<name>`, **or
+it may print the shared main checkout itself** (e.g. `…/applications/ksail`) — that is what the stray
+`core.worktree` actually pointed at in the 2026-07-14 regression, so matching only on `.git/modules`
+would have *missed* the live collision. If it is broken, apply the *Live linked worktrees* procedure
+below (it repairs the existing worktrees in place, including any the sibling agent is holding),
+re-probe, and only then start work. Record the regression in the table.
+
 ### Live linked worktrees — repair in place (don't skip)
 
 A submodule that is broken **and** in active use (random-slug `.claude/worktrees/<adj>-<name>-<hex>`
 entries in `git worktree list`) can be repaired **without** waiting for the sessions to go quiet — the
 earlier "skip live ones until quiet" guidance is **superseded**. Such live worktrees have **no own
-`core.worktree`**, so they inherit the stray shared value and resolve into `.git/modules/<name>` (an
-active collision). Pin each one's own path **before** removing the shared value, so no worktree is ever
-left without a resolvable `core.worktree`:
+`core.worktree`**, so they inherit the stray shared value and resolve to whatever it points at — the
+shared **main checkout** or a `.git/modules/<name>` path (either way, an active collision). Pin each
+one's own path **before** removing the shared value, so no worktree is ever left without a resolvable
+`core.worktree`:
 
 ```sh
-M=.git/modules/<name>; ABS=<abs path to submodule main checkout>
+M=<abs path to .git/modules/<name>>; ABS=<abs path to submodule main checkout>
 git config -f "$M/config" extensions.worktreeConfig true
 git config -f "$M/config.worktree" core.worktree "$ABS"               # pin the MAIN worktree
-for d in "$ABS"/.claude/worktrees/*/; do                              # pin EACH live worktree
-  d=${d%/}; G=$(git -C "$d" rev-parse --absolute-git-dir)
-  git config -f "$G/config.worktree" core.worktree "$d"
+# Pin EACH live linked worktree. Enumerate them from the gitdir — NOT by globbing
+# $ABS/.claude/worktrees/*, which misses worktrees living anywhere else (the 2026-07-14 sweep found a
+# sibling-agent worktree under /private/tmp that such a glob would have skipped, leaving it broken).
+for wtdir in "$M"/worktrees/*/; do
+  wtpath=$(dirname "$(cat "$wtdir/gitdir")")                          # .../<worktree>/.git -> <worktree>
+  [ -d "$wtpath" ] || continue
+  git config -f "$wtdir/config.worktree" core.worktree "$wtpath"
 done
 git config -f "$M/config" --unset core.worktree                       # now safe to drop the shared value
 ```
