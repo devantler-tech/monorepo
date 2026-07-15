@@ -148,21 +148,35 @@ initialised_paths() {
   while read -r p; do is_populated "$p" && printf '%s\n' "$p"; done < <(all_paths)
 }
 
+# Is $1 one of the paths declared in .gitmodules? Only these may have their config rewritten.
+is_registered_submodule() {
+  local p=$1 x
+  while read -r x; do [ "$x" = "$p" ] && return 0; done < <(all_paths)
+  return 1
+}
+
 init_repair_probe() {
   local path=${1%/}
-  # If the submodule is ALREADY populated, a stray shared `core.worktree` may point at ANOTHER
-  # checkout — the exact collision this script exists to catch. `git submodule update` honours that
-  # value, so running it first would operate through the wrong worktree: aborting on another
-  # session's local changes, or checking the pinned commit out into THEIR tree. Repair the stale
-  # config FIRST so the update always acts on this tree; the post-update repair then relocates the
-  # `core.worktree` the update itself re-adds. A fresh (unpopulated) submodule has no gitdir to
-  # repair yet — skip straight to the update, which populates it, and let the post-update repair
-  # handle the freshly-written key.
+  # Only ever mutate config for a path git actually registers as a submodule. Handed a linked
+  # worktree path (or any other populated directory) by mistake, `repair` would rewrite the shared
+  # submodule gitdir's `core.worktree` to point THERE — recreating the exact cross-session collision
+  # this script exists to prevent. Validate against .gitmodules first and fail closed.
+  is_registered_submodule "$path" ||
+    die "'$path' is not a registered submodule (see .gitmodules) — refusing to repair"
+
   if is_populated "$path"; then
+    # Already checked out here: only its isolation can be stale, so repair the stray `core.worktree`
+    # IN PLACE and stop. Do NOT run `git submodule update` — its checkout update strategy would
+    # detach/move this tree back to the pinned gitlink commit, silently discarding a local branch or
+    # ahead-of-pin work. Populating is the only thing update is for, and this tree is already
+    # populated.
+    repair "$path"
+  else
+    # Fresh (empty) submodule: populate it at its pinned commit, then relocate the `core.worktree`
+    # that `git submodule update` writes into the shared config.
+    git submodule update --init "$path"
     repair "$path"
   fi
-  git submodule update --init "$path"
-  repair "$path"
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
 }
 
