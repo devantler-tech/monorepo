@@ -11,10 +11,10 @@ import platformImg from "../../../assets/platform.webp";
 
 These are the projects I am currently working on and actively maintaining. I'm always looking for contributors and feedback — feel free to visit each project's GitHub page and follow the contribution guidelines.
 
-{/* projects-submodules: applications/ascoachingogvaner=grouped,applications/fleet-gitops=infra,applications/ksail=section,applications/unifi=omitted,applications/wedding-app=grouped,github/devantler-tech/.github-public=infra,github/devantler-tech/github-actions/actions=section,github/devantler-tech/maintenance=infra,github/personal/.github-public=infra,github/personal/profile=infra,homebrew-tap=omitted,libraries/agent-plugins=section,libraries/agent-skills=section,libraries/provider-upjet-unifi=section,platform=section,templates/dotnet-template=templates-page,templates/gitops-tenant-template=templates-page,templates/go-template=templates-page,templates/platform-template=templates-page
+{/* projects-submodules: applications/ascoachingogvaner=grouped,applications/fleet-gitops=infra,applications/ksail=section,applications/unifi=omitted,applications/wedding-app=grouped,applications/world-at-ruin=section,github/devantler-tech/.github-public=infra,github/devantler-tech/github-actions/actions=section,github/devantler-tech/maintenance=infra,github/personal/.github-public=infra,github/personal/profile=infra,homebrew-tap=omitted,libraries/agent-plugins=section,libraries/agent-skills=section,libraries/provider-upjet-unifi=section,platform=section,templates/dotnet-template=templates-page,templates/gitops-tenant-template=templates-page,templates/go-template=templates-page,templates/platform-template=templates-page
 
   This marker pins EVERY submodule this monorepo tracks (the source-of-truth is .gitmodules) to how it is represented on the site, so a newly-added product can't silently go unlisted. The docs CI drift-check asserts this path set EQUALS the live .gitmodules paths; when a submodule is added or removed, record it here with one disposition and update the page if needed:
-    • section        — has its own H2 product section on this page (KSail, Platform, Reusable Workflows, Actions, Agent Skills, Agent Plugins, UniFi Provider). The Reusable Workflows section is backed by the actions submodule (its .github/workflows), not a submodule of its own.
+    • section        — has its own H2 product section on this page (KSail, Platform, World at Ruin, Reusable Workflows, Actions, Agent Skills, Agent Plugins, UniFi Provider). The Reusable Workflows section is backed by the actions submodule (its .github/workflows), not a submodule of its own.
     • grouped        — a private self-hosted app folded into the "🏠 Self-Hosted Personal Apps" section (wedding-app, ascoachingogvaner).
     • templates-page — a starter template listed on the Templates page (/templates/) instead of here.
     • infra          — an internal config/automation/GitOps-state repo, not surfaced as a project (the .github-public/profile/maintenance/fleet-gitops repos).
@@ -38,6 +38,12 @@ A [Flux](https://fluxcd.io/) GitOps-based Kubernetes cluster running on [Hetzner
 I use this cluster to learn and experiment with new technologies — striving to implement the latest CNCF projects to keep my skills sharp. I also run self-hosted services for entertainment, personal projects, and to own my own data.
 
 **Key Technologies**: [Cilium](https://cilium.io/) (CNI & [Gateway API](https://gateway-api.sigs.k8s.io/) ingress), [cert-manager](https://cert-manager.io/) (TLS), [SOPS](https://getsops.io) & [External Secrets](https://external-secrets.io/) + [OpenBao](https://openbao.org/) (Secrets), [external-dns](https://kubernetes-sigs.github.io/external-dns/) with [Cloudflare](https://www.cloudflare.com) (DNS)
+
+## [⚔️ World at Ruin](https://github.com/devantler-tech/world-at-ruin) ![Godot Engine](https://img.shields.io/badge/Godot-478CBF.svg?style=for-the-badge&logo=godotengine&logoColor=white) ![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5.svg?style=for-the-badge&logo=Kubernetes&logoColor=white)
+
+A **source-available, cloud-native MMORPG built almost entirely by AI agents** — the newest and most experimental project in the portfolio. Everything is authored as code (a [Godot 4](https://godotengine.org/) client with procedurally generated worlds; an [Agones](https://agones.dev/)-based server tier planned on the Platform above), built headlessly in CI, and grown issue by issue over years. Development progress is watched by *playing*: every player-visible change lands in the in-game dev log.
+
+Currently in **pre-alpha** — a first walkable slice exists. The full settled design lives in the repo's [AGENTS.md](https://github.com/devantler-tech/world-at-ruin/blob/main/AGENTS.md).
 
 ## 🏠 Self-Hosted Personal Apps
 

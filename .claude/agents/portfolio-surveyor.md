@@ -40,7 +40,8 @@ public and private — no per-repo loop needed to enumerate):
    use search's unreliable `is_bot` field, a title, or a branch pattern as the classifier.
    For the *few* remaining open **`devantler`-authored or actionable trusted-bot PRs — drafts and
    non-drafts —** (`devantler`, `ksail-bot[bot]`, `github-actions[bot]`, `coderabbitai[bot]` — **exact
-   login match, never a substring**; `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the heavy fields one PR at a time:
+   login match, never a substring**; `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the
+   heavy fields one PR at a time:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,reviewThreads,headRefName,headRefOid,author,body,files`
    — do **not** pull `statusCheckRollup` for every PR in every repo. When the current-head pentad is
    clear (CLEAN + required checks/pre-merge green + zero threads/body findings + a current-head green
@@ -227,8 +228,8 @@ public and private — no per-repo loop needed to enumerate):
 
 Portfolio repos (the org-wide search covers them; this is the canonical list to reason over):
 `ksail`, `platform`, `monorepo`, `go-template`, `dotnet-template`, `gitops-tenant-template`,
-`actions`, `reusable-workflows`, `homebrew-tap`, `skills`, `plugins`, `wedding-app` (private),
-`ascoachingogvaner` (private).
+`actions`, `reusable-workflows`, `homebrew-tap`, `skills`, `plugins`, `world-at-ruin`,
+`wedding-app` (private), `ascoachingogvaner` (private).
 
 Keep your *own* footprint small: prefer `--jq` to project just the fields you need, never echo raw
 JSON blobs — summarise as you go. **No silent truncation:** the `--limit` on the org-wide searches is

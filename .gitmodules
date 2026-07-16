@@ -74,3 +74,7 @@
 	path = libraries/provider-upjet-unifi
 	url = git@github.com:devantler-tech/provider-upjet-unifi.git
 	branch = main
+[submodule "applications/world-at-ruin"]
+	path = applications/world-at-ruin
+	url = git@github.com:devantler-tech/world-at-ruin.git
+	branch = main
