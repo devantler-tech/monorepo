@@ -109,6 +109,12 @@ desktop_cask_commits="$(homebrew_commits_json \
   "v7.172.2" \
   "5ebaed25a8e3c92f38f2c8c6f938186ebca7ffa5" \
   "${desktop_cask_head}")"
+default_title_cask_head="5a5792bb83bd6b8469f10cd7e00abfe75c7f36be"
+default_title_cask_commits="$(homebrew_commits_json \
+  "ksail" \
+  "v7.172.1" \
+  "a22a9f9f56da9f5cdde4c037ec92eabf30768d72" \
+  "${default_title_cask_head}")"
 
 platform_head="1111111111111111111111111111111111111111"
 platform_commits="$(jq -cn --arg head "${platform_head}" '[{
@@ -175,6 +181,16 @@ expect_exempt \
   "${desktop_cask_head}" \
   '["Casks/ksail-desktop.rb"]' \
   "${desktop_cask_commits}"
+
+expect_exempt \
+  "GoReleaser default cask title" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "Brew cask update for ksail version v7.172.1" \
+  "${default_title_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${default_title_cask_commits}"
 
 expect_review_gated \
   "Platform Renovate KSail bump" \

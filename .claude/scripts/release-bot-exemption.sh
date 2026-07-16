@@ -144,14 +144,24 @@ if [[ "${repo}" == "homebrew-tap" && "${author}" == "devantler" ]]; then
     ;;
   esac
 
-  title_prefix="chore(cask): update ${component} to "
-  if [[ "${title}" == "${title_prefix}"* ]]; then
-    version="${title#"${title_prefix}"}"
-    if is_semver "${version}" &&
-      matches_exact_files "${expected_file}" &&
-      matches_homebrew_provenance "${component}" "${version}"; then
-      exit 0
-    fi
+  normalized_title_prefix="chore(cask): update ${component} to "
+  goreleaser_title_prefix="Brew cask update for ${component} version "
+  case "${title}" in
+  "${normalized_title_prefix}"*)
+    version="${title#"${normalized_title_prefix}"}"
+    ;;
+  "${goreleaser_title_prefix}"*)
+    version="${title#"${goreleaser_title_prefix}"}"
+    ;;
+  *)
+    exit 1
+    ;;
+  esac
+
+  if is_semver "${version}" &&
+    matches_exact_files "${expected_file}" &&
+    matches_homebrew_provenance "${component}" "${version}"; then
+    exit 0
   fi
 fi
 
