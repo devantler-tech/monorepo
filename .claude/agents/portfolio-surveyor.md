@@ -100,13 +100,22 @@ public and private — no per-repo loop needed to enumerate):
      **programmed release-bot PRs** (GoReleaser Homebrew-tap cask PRs, KSail release bumps;
      maintainer direction 2026-07-13, ksail#6095): apply this exemption **only** when the checked-in
      exact classifier exits 0:
-     `.claude/scripts/release-bot-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "${files[@]}"`.
+     `.claude/scripts/release-bot-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "$headRefOid" "$files_json" "$commits_json"`.
      Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the exact API author login.
-     Fetch the PR's complete changed-file list with the deepening query above and pass every path as
-     a separate argument. Exit 1 means the normal review/pre-merge gates apply; exit 2 or any query/
-     classifier failure is a survey error and also fails closed. **Never infer exemption from a title,
+     Encode all paths from the deepening query as one compact JSON string array in `files_json`. Fetch
+     the complete commit list separately from the REST endpoint `repos/devantler-tech/<repo>/pulls/<n>/commits`
+     with `gh api --paginate --slurp ... | jq -c 'add | map(...)'` (this `gh` version does not allow
+     `--slurp` together with its own `--jq` flag), then normalize every commit into `commits_json` as an ordered compact
+     JSON array whose objects contain exactly `sha`, `author_login`, `author_name`, `author_email`,
+     `committer_login`, `committer_name`, `committer_email`, and `message` (use an empty string for a
+     null login). Do not substitute `gh pr view --json commits`: it omits raw committer provenance.
+     The list's last SHA must equal `headRefOid`; an agent/maintainer adaptation commit therefore
+     revokes the exemption even when the branch, title, and files still look generated. Exit 1 means
+     the normal review/pre-merge gates apply; exit 2 or any query/classifier failure is a survey error
+     and also fails closed. **Never infer exemption from a title,
      a dependency name, or a generic release-shaped branch.** The classifier deliberately binds the
-     approved repository, actor, branch, title/version, and exact changed-file set; do not recreate a
+     approved repository, PR actor, branch, title/version, current-head commit provenance, and exact
+     changed-file set; do not recreate a
      looser predicate in the survey. Qualifying PRs are check-gated + auto-merging, so report
      their review state as `green_review=exempt-release-bot` **and their pre-merge state as
      `premerge=exempt-release-bot`** — never classify them NEEDS-FIX for lacking a review OR a
