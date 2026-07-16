@@ -135,10 +135,12 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
 4. Open a **draft PR**: Conventional-Commit title (`feat:`/`fix:`/`refactor:`/`perf:`/`test:`/`docs:`),
    AI-disclosure line, labels, and **`Fixes #N`** for the delivery issue. When measuring the outcome
    requires a later window, keep the experiment issue open and add **`Part of #N`** for it instead of
-   closing it from the delivery PR. Body = what & why, trade-offs, and how you validated. It stays draft
-   until the maintainer promotes it — but keep it review-ready meanwhile (root-cause-fix its failing CI
-   and resolve its review threads; both are allowed before promotion — only the promotion itself is the
-   maintainer's).
+   closing it from the delivery PR. Body = what & why, trade-offs, and how you validated. It stays a
+   draft while you drive the hygiene pentad clear (root-cause-fix its failing CI, resolve its review
+   threads, secure a green review at head); **self-promote it only on genuine readiness** —
+   programmatically tested + reviewed green + **tried and evaluated as a user** (contract *Autonomy*,
+   maintainer direction 2026-07-16) — then drive it to merge per the contract's *Merge policy*
+   (definition PRs excepted: those keep the maintainer's promotion gate).
 
 ## 4. Test coverage
 Raise coverage where it *matters*, not for a vanity number.
