@@ -67,7 +67,7 @@ no row are filed on the **default intake repo** below.
 | Building block | Good for | Owning repo |
 |---|---|---|
 | devantler.tech website | Public web pages on devantler.tech — docs, guides, announcements, portfolio content | `devantler-tech/monorepo` |
-| World at Ruin | THIS suite's own online fantasy game — its world, dungeons, characters, monsters, combat, loot and progression (not games in general) | `devantler-tech/world-at-ruin` |
+| World at Ruin | THIS suite's own online fantasy game — its world, dungeons, characters, monsters, combat, loot and progression (not games in general) | `devantler-tech/monorepo` (**until `devantler-tech/world-at-ruin` is bootstrapped** — that repo does not exist yet, so intake would 404; repoint this row on bootstrap) |
 | Wedding app | THIS suite's existing deployed wedding website only — its guest pages, RSVPs, schedules, photos and practical info (not new wedding sites in general) | `devantler-tech/wedding-app` |
 | AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |
 | App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |

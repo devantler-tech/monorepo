@@ -14,8 +14,12 @@ declaratively (org-admin `gh api` create → Observe-adopt, per the repo-creatio
 `applications/world-at-ruin` submodule, and move the design below into its `AGENTS.md`. **After that
 this card becomes a thin pointer, like every other product card here.**
 
-Everything below is **already decided — do not re-litigate it.** It was settled with the maintainer
-directly (2026-07-16). Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md).
+**The stack, the product law and the design pillars below were settled with the maintainer directly
+(2026-07-16) — do not re-litigate those.** The directive covers *decisions*, not the whole card: a few
+points are deliberately still **OPEN**, and they are marked **`OPEN DECISION`** where they appear.
+Those you may not treat as settled — decide them when you implement the subsystem, ship the call as a
+draft PR (he redirects there), and update this card with what was chosen. Shared cross-repo rules are
+in the monorepo [`AGENTS.md`](../../../../AGENTS.md).
 
 ## The premise — “as code”, which decides everything else
 
@@ -120,7 +124,7 @@ policing them (there is no undo).
   an agent-ownable CI guard rather than a matter of taste.
 - **Tune content against the *banked floor*, not peak mastery.** Unlosable progress is the only power
   level every player is guaranteed to have; everything above it is skill expression.
-- **Death penalty in group content breeds blame.** A bloodstain is fine solo; “you cost me my mastery”
+- **`OPEN DECISION` — death penalty in group content breeds blame.** A bloodstain is fine solo; “you cost me my mastery”
   on a raid wipe is why WoW removed corpse runs. Consider full risk in open world/solo (his stated
   risk/reward intent) and a softened penalty in organised group content. Flag it as a decision, not a
   detail.
@@ -129,7 +133,7 @@ policing them (there is no undo).
 - **Axis map, to keep balance legible**: **weapons = horizontal** (your arsenal; cosmetic variety
   only). **Armour = your role/agility axis, and the bounded endgame vertical.** Keep them from
   blurring.
-- **Classless + account-bound unlocks make alts near-pointless** — especially with full appearance
+- **`OPEN DECISION` — classless + account-bound unlocks make alts near-pointless** — especially with full appearance
   freedom. Consider **one character per account**: it simplifies the data model and identity, and
   removes mule characters as an economy vector.
 
@@ -148,3 +152,14 @@ Once bootstrapped, the roadmap lives in **GitHub Issues on `devantler-tech/world
 specified, testable, art-free. **The project stalls the moment the next task is “make the combat feel
 good”**: that is a taste judgement and it needs the maintainer, so route those to him rather than
 guessing.
+
+**Phase 0 is the deliberate exception to “testable, art-free”** — it is *entirely* art and it ends in
+a taste judgement, so the rule above would forbid the project's own mandatory first step. Split it so
+the roadmap can carry it honestly:
+- **The machine-verifiable part IS a normal issue**: a headless Blender container runs in CI, an
+  MPFB2 character and a procedural cave build reproducibly from committed scripts, and the glTF loads
+  in Godot. That is testable, and an agent owns it end to end.
+- **The taste gate is a separate, explicitly maintainer-blocked issue** — he looks at the render and
+  says yes or no. Never self-answer it, never infer a pass from CI being green, and never start game
+  code because the pipeline runs. It is the one issue in the backlog that is *supposed* to wait for
+  him.
