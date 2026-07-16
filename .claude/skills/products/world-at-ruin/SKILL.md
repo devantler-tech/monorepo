@@ -1,6 +1,6 @@
 ---
 name: maintain-world-at-ruin
-description: Product card for World at Ruin — a source-available, cloud-native MMORPG built almost entirely by agents at LOWEST priority. Carries the settled stack and design decisions until the repo exists. Use when the daily maintainer has no higher-priority work and selects World at Ruin.
+description: Product card for World at Ruin — a source-available, cloud-native MMORPG built almost entirely by agents at LOWEST priority. The repo's own AGENTS.md is authoritative for the settled design; this card keeps the operate notes and open decisions. Use when the daily maintainer has no higher-priority work and selects World at Ruin.
 ---
 
 # Maintain: World at Ruin (game)
@@ -9,10 +9,11 @@ A cloud-native MMORPG the maintainer wants to exist, built **almost entirely by 
 priority** — pick it up only when nothing else demands attention, and expect it to accrete over years.
 He redirects via the **PR workflow**; ship draft PRs as usual.
 
-**Status: the repo does not exist yet.** First task is to bootstrap `devantler-tech/world-at-ruin`
-declaratively (org-admin `gh api` create → Observe-adopt, per the repo-creation pattern), add the
-`applications/world-at-ruin` submodule, and move the design below into its `AGENTS.md`. **After that
-this card becomes a thin pointer, like every other product card here.**
+**Status: bootstrapped 2026-07-16.** The repo exists, the `applications/world-at-ruin` submodule is
+in place, the roadmap is seeded as GitHub Issues (`roadmap` label — Phase 0 art-pipeline taste gate
+first), and the settled design lives in **the repo's own `AGENTS.md`, which is authoritative**. This
+card keeps the operate notes and the deliberately-open **`OPEN DECISION`** items below; once those
+are settled and recorded in the repo, thin this card to a plain pointer like the other product cards.
 
 **The stack, the product law and the design pillars below were settled with the maintainer directly
 (2026-07-16) — do not re-litigate those.** The directive covers *decisions*, not the whole card: a few
@@ -146,7 +147,7 @@ his bar, the premise fails — cheap to learn now, ruinous to learn in Phase 6.
 
 ## Roadmap & enhancement
 
-Once bootstrapped, the roadmap lives in **GitHub Issues on `devantler-tech/world-at-ruin`**
+The roadmap lives in **GitHub Issues on `devantler-tech/world-at-ruin`**
 (`roadmap` label), like every other product. Advance via
 [`product-engineering`](../../product-engineering/SKILL.md). Keep issues **agent-shaped** — small,
 specified, testable, art-free. **The project stalls the moment the next task is “make the combat feel

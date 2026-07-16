@@ -202,8 +202,8 @@ public and private — no per-repo loop needed to enumerate):
 
 Portfolio repos (the org-wide search covers them; this is the canonical list to reason over):
 `ksail`, `platform`, `monorepo`, `go-template`, `dotnet-template`, `gitops-tenant-template`,
-`actions`, `reusable-workflows`, `homebrew-tap`, `skills`, `plugins`, `wedding-app` (private),
-`ascoachingogvaner` (private).
+`actions`, `reusable-workflows`, `homebrew-tap`, `skills`, `plugins`, `world-at-ruin`,
+`wedding-app` (private), `ascoachingogvaner` (private).
 
 Keep your *own* footprint small: prefer `--jq` to project just the fields you need, never echo raw
 JSON blobs — summarise as you go. **No silent truncation:** the `--limit` on the org-wide searches is
