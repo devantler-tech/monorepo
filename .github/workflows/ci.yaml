@@ -38,8 +38,11 @@ jobs:
               - 'docs/package.json'
               - 'docs/package-lock.json'
             active-projects:
-              - 'docs/src/content/docs/projects/active.mdx'
-              - 'docs/src/content/docs/templates/**'
+              # The retired-link guard greps the WHOLE content tree, so it must
+              # run for ANY content change — gating it on the two pages the
+              # drift lists live in would let a retired link ship from a blog
+              # post or any other page the guard claims to cover.
+              - 'docs/src/content/**'
               - 'docs/scripts/check-active-projects-drift.sh'
               - 'docs/scripts/check-active-projects-drift.test.sh'
               - '.gitmodules'
