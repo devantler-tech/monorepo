@@ -460,6 +460,7 @@ autonomous: the professional-work boundary must be cleared first, and creating a
 then still needs approval via the ask tool. An existing `devantler` PR never bypasses the boundary.
 
 ### Merge policy — drive actionable trusted-author PRs to merge (incl. majors)
+
 **Driving actionable trusted-author PRs to merge is the first-priority work each run — ahead of
 issues** (only live breakage on `main` outranks it). Automation-owned Renovate/Dependabot dependency
 PRs are not part of this queue. Sweep the actionable set **first**, every run, across the in-scope

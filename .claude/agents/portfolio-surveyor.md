@@ -38,7 +38,7 @@ public and private — no per-repo loop needed to enumerate):
    `gh pr view`, inspect its pentad/reviews/pre-merge state, or count it against `nothing_on_fire`.
    Do not fetch commit provenance or reclassify it because a human/agent commit exists; the actor-wide
    boundary intentionally leaves any such branch with repository automation and the human who edited it.
-   Other API surfaces may render the same exact actors as `app/renovate` or `app/dependabot`; do not
+   Other API surfaces may render the same actors as `app/renovate` or `app/dependabot`; do not
    use search's unreliable `is_bot` field, a title, or a branch pattern as the classifier.
    For the *few* remaining open **`devantler`-authored or actionable trusted-bot PRs — drafts and
    non-drafts —** (`devantler`, `ksail-bot[bot]`, `github-actions[bot]`, `coderabbitai[bot]` — **exact
