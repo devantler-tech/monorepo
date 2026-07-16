@@ -952,6 +952,43 @@ lines). **Don't re-read what's already in context** (this contract, via the `CLA
 **duplicate live GitHub state into memory**. This is the *native-to-Claude* design principle
 (subagents, memory) applied to cost: same work and same guardrails, fewer tokens.
 
+### Latency discipline — overlap the waiting, never block on it
+Token discipline above spends context well; this spends **wall-clock** well. The dominant cost of a
+run is **not** thinking or authoring — it is **waiting on remote systems** (CI, reviewers,
+promotion). Measured on the 744th tick: a 105-minute run authored everything it shipped in the
+**first 28 minutes** and spent **~70 minutes (67%) waiting**, including one **44-minute block that
+produced nothing** while foreground-polling one PR's CI. A trusted-bot PR merged *inside* that
+window, unnoticed. The work was never the bottleneck; the **scheduling** was.
+
+- **NEVER foreground-block on a remote wait.** `sleep`/poll loops that produce no artifact are the
+  single biggest waste. **Push → arm ONE background watcher → immediately start the next item.** Come
+  back when it fires. If you have armed a watcher, **do not also poll** — doing both is pure
+  duplication (a real 744th miss: a background watcher was armed *and* the run busy-waited anyway).
+- **Long-pole first.** Push the change with the **slowest CI first** so its bake overlaps everything
+  else; do the fast-CI and no-CI work (issue triage, review-thread replies, memory, reports) during
+  the bake. Reversing this — fast item first, slow item last — buys a guaranteed idle tail, which is
+  exactly what the 744th did. Each repo's `AGENTS.md ## Maintenance` records its CI duration so the
+  ordering needs no re-derivation — keep the measured per-repo CI durations as a cursor in **native
+  memory** (ksail `CI - KSail` ≈ **22 min**; a docs-only ksail PR ≈ 3 min), refreshed when they drift.
+- **There is always non-blocking work.** A portfolio this size always has a review thread to resolve,
+  an issue to triage, a finding to verify, or memory to sharpen. "Waiting for CI" is never a reason
+  to do nothing — if a wait is truly unavoidable and nothing else is actionable, **end the run and
+  let the next tick collect the result** (the watcher/carry-forward exists for exactly this). A run
+  is measured by what it ships, not by how long it stays open.
+- **Re-read state after any long wait — don't assume it stood still.** Both your own PRs and the
+  sibling's move while you wait; a PR can merge, a head can advance, a thread can be resolved by the
+  other instance. (744th: platform#2662 merged mid-wait, unobserved; the 745th found the sibling had
+  already fixed and resolved all three of platform#2635's findings.)
+- **One read per check, not one per field.** `gh pr view <n> --json a,b,c` **once** and parse it —
+  never a separate call per field inside a loop (the 744th ran 2–3 calls per poll iteration across
+  ~40 iterations). Same for lint: capture the **full** finding list in one run, fix **all** of it,
+  re-verify **once** — not a fix-one/re-run round trip per finding.
+- **Parallelize independent setup.** Clones, subagents, and independent investigations start
+  together in the background, not one after another.
+
+This changes only *ordering and overlap* — never the quality bar. Validation, RED/GREEN proof,
+root-cause fixing, and every guardrail are unaffected; the point is to stop paying for them serially.
+
 ### GitHub artifact conventions
 - **PR titles MUST be Conventional Commits** (`fix:`/`feat:`/`chore:`/`docs:`/`ci:`/`refactor:`/
   `test:`). Every repo squash-merges on the PR title → changelog/release; a bracket prefix corrupts
