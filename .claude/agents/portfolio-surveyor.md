@@ -219,10 +219,15 @@ public and private — no per-repo loop needed to enumerate):
    by `devantler`. The orchestrator cannot authorise an external repository from survey metadata; only
    the maintainer can clear that boundary in a current interactive conversation.
 
-Portfolio repos (the org-wide search covers them; this is the canonical list to reason over):
-`ksail`, `platform`, `monorepo`, `go-template`, `dotnet-template`, `gitops-tenant-template`,
-`actions`, `reusable-workflows`, `homebrew-tap`, `skills`, `plugins`, `world-at-ruin`,
-`wedding-app` (private), `ascoachingogvaner` (private).
+Portfolio repos (the org-wide search covers them; this is the canonical list to reason over — the
+**source of truth is the monorepo `AGENTS.md` portfolio map** plus the org's live repo set; when this
+list and that map disagree, trust the map and flag the drift in the digest):
+`ksail`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
+`gitops-tenant-template`, `platform-template`, `actions`, `homebrew-tap`, `agent-skills`,
+`agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `maintenance`, `world-at-ruin`,
+`wedding-app` (private), `ascoachingogvaner` (private), `unifi` (private).
+Archived repos (currently `reusable-workflows`, `data-product`) are read-only: skip them entirely —
+no CI-red pass, no actionable signal (their stale bot PRs are unmergeable by design).
 
 Keep your *own* footprint small: prefer `--jq` to project just the fields you need, never echo raw
 JSON blobs — summarise as you go. **No silent truncation:** the `--limit` on the org-wide searches is
