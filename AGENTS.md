@@ -68,6 +68,25 @@ PR workflow.
 - **Licensing: source-available and proprietary — NEVER call it open source.** Copying/redistribution
   prohibited; needs a bespoke EULA and a **CLA with copyright assignment** (EU: assignment plus
   fallback exclusive licence) gating the first external PR. No GPL/AGPL in the shipped tree.
+- **Continuously evolving, NO hard resets — an early player must keep playing forever** (maintainer
+  direction 2026-07-16). No wipes, no seasons, no fresh starts, no stat squishes. Every schema and
+  content change is **forward-only and non-destructive**: expand/contract migrations, versioned save
+  data, backward-compatible protocols, and the constitution's **feature-flag-first delivery** (land
+  latent, flip on after validation). This is a **CI-enforceable contract** — a migration/compat test
+  suite is the guard, and an agent shipping a breaking schema change would strand real characters, so
+  the guard must exist before the first player does. Corollary: **there is no undo.** A duplication or
+  economy bug is permanent, so transactional integrity, idempotency and an audit trail are required
+  from the first commit, not retrofitted.
+- **No power/wealth inflation, no ecosystem corruption** (maintainer direction 2026-07-16) — and note
+  the **direct tension with the WoW/D4 loop: their answer to inflation IS the reset** (D4 wipes
+  characters every season; WoW squishes stats and invalidates gear each expansion). Those remedies are
+  forbidden here, so the progression model must be **Guild Wars 2-shaped instead: horizontal
+  progression, a reachable gear ceiling that never rises, breadth over power.** Content adds *places
+  and things to do*, never a bigger number. Design the corruption vectors out rather than policing
+  them: bound loot and no open trading/auction house (kills RMT, botting and dupe value at the root),
+  hard currency sinks, diminishing returns, no pay-to-win surface at all. Take the WoW/D4 *texture*
+  (dungeon crawling, exploration) with GW2's *economics* — that synthesis is the product's spine, not
+  a detail.
 - **Phase 0 before any game code:** prove the art pipeline — headless Blender in CI, one MPFB2
   character, one procedural cave, in Godot. It is a **taste gate** the maintainer judges, and it is the
   project's one unproven bet.
