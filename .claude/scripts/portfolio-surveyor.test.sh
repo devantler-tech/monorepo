@@ -5,6 +5,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 classifier="${repo_root}/.claude/scripts/release-bot-exemption.sh"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
+constitution="${repo_root}/AGENTS.md"
+maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
+monorepo_skill="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
+product_engineering_skill="${repo_root}/.claude/skills/product-engineering/SKILL.md"
+agent_skills_card="${repo_root}/.claude/skills/products/agent-skills/SKILL.md"
+ksail_card="${repo_root}/.claude/skills/products/ksail/SKILL.md"
 
 fail() {
   echo "portfolio surveyor contract: FAIL — $*" >&2
@@ -18,6 +24,38 @@ grep -Fq 'ksail-bot[bot]' "${surveyor}" ||
   fail "surveyor does not recognize the exact KSail App identity returned by search"
 grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
   fail "surveyor does not fetch complete current-head commit provenance"
+grep -Fq 'AUTOMATION-OWNED and need NO agent action' "${constitution}" ||
+  fail "constitution does not exempt Renovate/Dependabot dependency PRs from agent action"
+grep -Fq 'Never request CodeRabbit/Codex review' "${constitution}" ||
+  fail "constitution does not explicitly forbid dependency-bot review requests"
+grep -Fq 'arm auto-merge, or merge them' "${constitution}" ||
+  fail "constitution does not leave dependency-bot merging to repository automation"
+grep -Fq 'AUTOMATION-OWNED (NO-ACTION)' "${surveyor}" ||
+  fail "surveyor does not short-circuit dependency-bot PRs as no-action"
+grep -Fq 'renovate[bot]' "${surveyor}" ||
+  fail "surveyor does not bind no-action to the exact Renovate identity"
+grep -Fq 'dependabot[bot]' "${surveyor}" ||
+  fail "surveyor does not bind no-action to the exact Dependabot identity"
+grep -Fq 'do **not** call' "${surveyor}" ||
+  fail "surveyor still permits heavy dependency-PR deepening"
+grep -Fq 'count it against' "${surveyor}" ||
+  fail "surveyor may still turn dependency automation into operate work"
+grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
+  fail "portfolio-maintenance skill does not defer dependency PRs to automation"
+grep -Fq 'automation-owned dependency PRs' "${monorepo_skill}" ||
+  fail "monorepo product card still treats dependency PRs as agent work"
+grep -Fq 'automation-owned dependency PRs' "${product_engineering_skill}" ||
+  fail "product-engineering skill still treats dependency PRs as agent work"
+grep -Fq 'automation-owned dependency PRs' "${agent_skills_card}" ||
+  fail "agent-skills product card still treats dependency PRs as agent work"
+grep -Fq 'automation-owned dependency PRs' "${ksail_card}" ||
+  fail "KSail product card still treats dependency PRs as agent work"
+if grep -Fq 'Bot PRs are first-priority work, not background noise' "${constitution}"; then
+  fail "constitution still tells agents to drive dependency-bot PRs"
+fi
+if grep -Fq 'Bundle Dependabot/Renovate PRs' "${monorepo_skill}"; then
+  fail "monorepo product card still tells agents to bundle dependency PRs"
+fi
 
 expect_exempt() {
   local name="$1"
@@ -35,6 +73,18 @@ expect_review_gated() {
     rc=$?
   fi
   [[ "${rc}" -eq 1 ]] || fail "classifier errored for review-gated fixture: ${name}"
+}
+
+expect_not_release_exempt() {
+  local name="$1"
+  shift
+  local rc
+  if "${classifier}" "$@"; then
+    fail "unexpected release-bot exemption: ${name}"
+  else
+    rc=$?
+  fi
+  [[ "${rc}" -eq 1 ]] || fail "classifier errored for non-release fixture: ${name}"
 }
 
 expect_classifier_error() {
@@ -192,7 +242,7 @@ expect_exempt \
   '["Casks/ksail.rb"]' \
   "${default_title_cask_commits}"
 
-expect_review_gated \
+expect_not_release_exempt \
   "Platform Renovate KSail bump" \
   "platform" \
   "app/renovate" \
@@ -202,7 +252,7 @@ expect_review_gated \
   '[".github/actions/deploy-prod/action.yml",".github/workflows/ci.yaml",".github/workflows/dr-rebuild.yaml","k8s/bases/infrastructure/controllers/ksail-operator/helm-release.yaml"]' \
   "${platform_commits}"
 
-expect_review_gated \
+expect_not_release_exempt \
   "lookalike KSail release from the wrong actor" \
   "ksail" \
   "app/renovate" \

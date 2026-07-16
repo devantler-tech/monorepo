@@ -21,8 +21,8 @@ put product-specific logic here.
 
 **Advance them via the holistic review** (contract *Holistic review*; [`product-engineering`](../../product-engineering/SKILL.md)
 §7): when a generic skill/convention has emerged across 2+ products, extract it here so every product
-inherits it, then migrate consumers. Triage/label issues, drive trusted-author PRs to merge, keep deps
-& docs current.
+inherits it, then migrate consumers. Triage/label issues, drive actionable trusted-author PRs to merge,
+leave automation-owned dependency PRs alone, and keep dependency automation & docs current.
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a pointer
 by design.

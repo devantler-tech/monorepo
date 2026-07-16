@@ -119,8 +119,9 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    the end-of-run report (he rarely reads it), never an **`@devantler` mention** (no notification). Re-verify
    any "gated" against live state before trusting it (memory goes stale) and name the
    blocker in the report. A **bare assignee does *not* reserve** it (only an open PR does), so if nobody's opened
-   a PR you may take it regardless of who's assigned; if a **trusted-author, non-draft** PR already
-   exists, drive *that* to merge instead of duplicating (leave draft/external PRs per the trust gate). For
+   a PR you may take it regardless of who's assigned; if an **actionable trusted-author, non-draft** PR
+   already exists, drive *that* to merge instead of duplicating; leave automation-owned dependency PRs
+   to repository automation and leave draft/external PRs per the trust gate. For
    a big design, write/extend an ADR or system-design note first and link it.
 2. Isolate a worktree, implement at the **root cause**, and **write tests** that pin the new behaviour
    and its edge cases (tests are part of the change, not optional). **Build a new non-trivial feature
