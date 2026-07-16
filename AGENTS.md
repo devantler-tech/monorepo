@@ -386,8 +386,11 @@ review request.
 (maintainer direction 2026-07-16). Match only the exact app identities: org-search/REST surfaces expose
 `renovate[bot]` and `dependabot[bot]`; deeper GraphQL surfaces may expose `app/renovate` and
 `app/dependabot`. Do not key this classification on the unreliable search `is_bot` field, titles,
-branch names, or dependency labels. Repository checks and dependency automation own these PRs'
-entire lifecycle, including updates and merging. **Never request CodeRabbit/Codex review, inspect or
+branch names, or dependency labels. This is an author-wide ownership boundary. Do not inspect commit provenance
+or reclassify the PR because a human/agent adaptation commit exists. Repository automation
+and the human who chose to edit that bot branch remain responsible; agents never add such commits going
+forward. Repository checks and dependency automation own these PRs' entire lifecycle, including updates
+and merging. **Never request CodeRabbit/Codex review, inspect or
 chase CodeRabbit pre-merge evaluators, comment, rebase/recreate, rerun checks, push adaptation commits,
 arm auto-merge, or merge them.** Red, stale, DIRTY/conflicting, major-version, missing-review, and
 missing-pre-merge states are not routine-agent work and never make one of these PRs a hygiene gap or

@@ -28,6 +28,8 @@ grep -Fq 'AUTOMATION-OWNED and need NO agent action' "${constitution}" ||
   fail "constitution does not exempt Renovate/Dependabot dependency PRs from agent action"
 grep -Fq 'Never request CodeRabbit/Codex review' "${constitution}" ||
   fail "constitution does not explicitly forbid dependency-bot review requests"
+grep -Fq 'Do not inspect commit provenance' "${constitution}" ||
+  fail "constitution may reclassify dependency-bot PRs after human commits"
 grep -Fq 'arm auto-merge, or merge them' "${constitution}" ||
   fail "constitution does not leave dependency-bot merging to repository automation"
 grep -Fq 'AUTOMATION-OWNED (NO-ACTION)' "${surveyor}" ||
