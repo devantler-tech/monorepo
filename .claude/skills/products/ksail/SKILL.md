@@ -1,6 +1,6 @@
 ---
 name: maintain-ksail
-description: Maintenance task menu for devantler-tech/ksail (a Go CLI for local Kubernetes GitOps). Triage, bug fixes, CI/workflow health + CI-failure & flaky-test investigation, docs, driving trusted-author PRs to merge, weekly E2E coverage + live reliability testing, and the monthly KSail Strategy roadmap. Use when the daily maintainer selects KSail.
+description: Maintenance task menu for devantler-tech/ksail (a Go CLI for local Kubernetes GitOps). Triage, bug fixes, CI/workflow health + CI-failure & flaky-test investigation, docs, driving actionable trusted-author PRs to merge while leaving automation-owned dependency PRs alone, weekly E2E coverage + live reliability testing, and the monthly KSail Strategy roadmap. Use when the daily maintainer selects KSail.
 ---
 
 # Maintain: KSail
