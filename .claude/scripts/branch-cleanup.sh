@@ -65,8 +65,8 @@ trap 'rm -f "$keep" "$prs" "$keep2"' EXIT
 # --- PR evidence map for remote decisions ----------------------------------
 # newest-first per branch: state + the head SHA the PR evidence belongs to.
 if ! gh pr list --repo "devantler-tech/$SLUG" --state all --limit 500 \
-    --json headRefName,state,headRefOid \
-    --jq '.[]|"\(.headRefName)\t\(.state)\t\(.headRefOid)"' 2>/dev/null >"$prs"; then
+    --json headRefName,state,headRefOid,headRepositoryOwner \
+    --jq '.[]|select(.headRepositoryOwner.login=="devantler-tech")|"\(.headRefName)\t\(.state)\t\(.headRefOid)"' 2>/dev/null >"$prs"; then
   echo "$SLUG: ABORT — PR-state query failed; remote evidence unavailable" >&2
   exit 1
 fi
@@ -81,6 +81,11 @@ while IFS= read -r b; do
   [ -z "$b" ] && continue
   if is_kept "$b"; then l_keep=$((l_keep+1)); continue; fi
   sha=$(git rev-parse "$b" 2>/dev/null) || continue
+  # Never lose unpushed work: -D only when the tip is reachable from SOME
+  # remote ref; an unpushed-only branch is kept (reported as a candidate).
+  if [ -z "$(git branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
+    candidates=$((candidates+1)); l_keep=$((l_keep+1)); continue
+  fi
   manifest_write "$(printf '%s\tlocal\t%s\t%s' "$SLUG" "$b" "$sha")"
   if [ "$MODE" = "apply" ]; then
     if git branch -D "$b" >/dev/null 2>&1; then l_del=$((l_del+1));
@@ -112,6 +117,14 @@ while IFS= read -r rb; do
   fi
   manifest_write "$(printf '%s\tremote\t%s\t%s\t%s' "$SLUG" "$b" "$sha" "$st")"
   if [ "$MODE" = "apply" ]; then
+    # Final per-branch TOCTOU guard: a PR can open between the loop-level
+    # keep-set refresh and this very deletion. Fail closed on query failure.
+    open_now=$(gh pr list --repo "devantler-tech/$SLUG" --state open --head "$b" \
+      --json number --jq 'length' 2>/dev/null)
+    if [ -z "$open_now" ] || [ "$open_now" != "0" ]; then
+      echo "$SLUG: keep '$b' — open-PR recheck non-empty or failed" >&2
+      r_keep=$((r_keep+1)); continue
+    fi
     # CAS delete: rejected if the remote ref moved off the evidence SHA.
     if git push --force-with-lease="refs/heads/$b:$sha" origin ":refs/heads/$b" >/dev/null 2>&1; then
       r_del=$((r_del+1))
