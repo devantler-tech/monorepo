@@ -913,6 +913,27 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
+**End-of-tick branch hygiene — reap spent branches and return to the default branch, EVERY run**
+(maintainer direction 2026-07-16: *"You never clean up old branches locally or on the remote. I expect
+you to always clean up and switch back to the default branch after a tick."*). Left unswept, every run's
+worktree branch survives it: the first sweep found **~1,140 spent branches** (monorepo alone had **589**
+local; `.github` had **35** stale remote). Run
+[`.claude/scripts/branch-cleanup.sh <repo_path> <slug> <manifest>`](.claude/scripts/branch-cleanup.sh)
+for each repo touched, then remove the per-run worktree.
+
+**🔴 Deleting a remote branch CLOSES its open PR — so the keep-set is the whole safety property:**
+- **KEEP:** the head of an **OPEN PR**; any branch **checked out by a worktree**; the default branch; and
+  anything not `claude/*` (**never touch `codex/*` — the sibling's lane**).
+- **`git branch --merged main` is USELESS here** — the portfolio **squash-merges**, so a merged branch's
+  commits are never in `main`. For the same reason `commits-not-in-main > 0` does **NOT** mean unmerged
+  work. **The PR state is the only authoritative signal** — never infer merge status from the commit graph.
+- **Local:** delete anything outside the keep-set (`-D`; `-d` cannot see squash-merges).
+- **Remote:** delete only on **positive evidence** — an associated **MERGED/CLOSED** PR, or **no PR and
+  older than 14 days**. A *recent* no-PR remote branch may be a **live session's** → leave it.
+- **Write a manifest** (`repo → branch → sha → evidence`) before deleting so any branch is restorable
+  from its SHA, and **assert the delete-set intersects the open-PR heads in ZERO places** before applying.
+- Reap only **your own** per-run worktree — another session's worktree directory may be live.
+
 **Two-writer branches — another instance may be on the same PR right now.** More than one agent
 instance sweeps the same PR dashboard (and instances can overlap inside one hour), so any shared
 branch (`claude/*`, a bot branch you push fixes to) — and even a not-yet-opened artifact like a
