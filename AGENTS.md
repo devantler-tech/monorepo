@@ -30,7 +30,7 @@ keeping them healthy *and* moving them forward.
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | [AGENTS.md](https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md) |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | [AGENTS.md](https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md) |
 | UniFi Crossplane provider (shared lib) | `devantler-tech/provider-upjet-unifi` | `libraries/provider-upjet-unifi` | [AGENTS.md](https://github.com/devantler-tech/provider-upjet-unifi/blob/main/AGENTS.md) |
-| World at Ruin (game) | `devantler-tech/world-at-ruin` (**repo not yet bootstrapped** — see below) | `applications/world-at-ruin` (pending) | (pending) |
+| World at Ruin (game) | `devantler-tech/world-at-ruin` (**repo not yet bootstrapped** — see below) | `applications/world-at-ruin` (pending) | [product card](.claude/skills/products/world-at-ruin/SKILL.md) (until the repo exists) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
 | UniFi network (private) | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
@@ -39,57 +39,12 @@ keeping them healthy *and* moving them forward.
 
 **World at Ruin — newest product, not yet bootstrapped** (maintainer direction 2026-07-16). A
 cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** at **lowest
-priority** — pick it up when nothing else demands attention, and expect it to accrete over years.
-Its roadmap and issues live on its own repo once that exists; **the first task is to bootstrap
-`devantler-tech/world-at-ruin`** declaratively (org-admin `gh api` create → Observe-adopt, per the
-repo-creation pattern), then add it as the `applications/world-at-ruin` submodule and write its
-`AGENTS.md`. The stack below is **already decided — do not re-litigate it**; redirect happens via the
-PR workflow.
-
-- **“As code” is the premise, not a preference.** No UI clicks, no desktop design tools, everything
-  text-authored and built headlessly in CI. If an agent can't author it, it doesn't get built.
-- **Client: Godot 4** — chosen *because* `.tscn`/`.tres`/`.gdshader` are text and headless export is
-  first-class. **Unreal was rejected**: `.uasset`/`.umap` are binary, so agents cannot author levels or
-  materials. This overrides the graphics ceiling (Godot ≈ semi-realistic PBR, no Nanite/Lumen).
-- **Art: generated as code, all OSS/CC0 — never commercial assets.** Blender headless (`bpy`) → glTF;
-  **MPFB2 + Rigify** for characters (core assets CC0, explicitly closed-source-safe); Poly Haven /
-  ambientCG (CC0) materials; WFC interiors, grammar towns, SDF caves, erosion terrain. Blender's GPL
-  covers the tool, never the output. Art target is **stylised-realistic (a more realistic WoW)** — the
-  style is *parametric*, which is what makes it expressible as code; photorealism is out of reach in
-  any engine without a human sculptor.
-- **Server: Go.** Realtime tier = zone/dungeon-instance **Agones** GameServers (CNCF) — **one tick loop
-  per process, never decomposed**; the unit of scale is the number of zones. Meta tier = real
-  microservices, mostly **Nakama** (Apache-2.0) for auth/social/chat/storage. Postgres/CNPG. Runs on
-  the existing platform.
-- **Combat: telegraphed** (WildStar/WoW-like), **physics stays out of the authoritative path** —
-  capsules/navmesh only. This is what makes a Go authority cheap and latency-tolerant. Game loop is
-  WoW/Diablo-4-shaped (dungeon crawling, progression through exploration); **no PvP initially**.
-  Seamless instancing is fine; loading screens and pop-in are not.
-- **Licensing: source-available and proprietary — NEVER call it open source.** Copying/redistribution
-  prohibited; needs a bespoke EULA and a **CLA with copyright assignment** (EU: assignment plus
-  fallback exclusive licence) gating the first external PR. No GPL/AGPL in the shipped tree.
-- **Continuously evolving, NO hard resets — an early player must keep playing forever** (maintainer
-  direction 2026-07-16). No wipes, no seasons, no fresh starts, no stat squishes. Every schema and
-  content change is **forward-only and non-destructive**: expand/contract migrations, versioned save
-  data, backward-compatible protocols, and the constitution's **feature-flag-first delivery** (land
-  latent, flip on after validation). This is a **CI-enforceable contract** — a migration/compat test
-  suite is the guard, and an agent shipping a breaking schema change would strand real characters, so
-  the guard must exist before the first player does. Corollary: **there is no undo.** A duplication or
-  economy bug is permanent, so transactional integrity, idempotency and an audit trail are required
-  from the first commit, not retrofitted.
-- **No power/wealth inflation, no ecosystem corruption** (maintainer direction 2026-07-16) — and note
-  the **direct tension with the WoW/D4 loop: their answer to inflation IS the reset** (D4 wipes
-  characters every season; WoW squishes stats and invalidates gear each expansion). Those remedies are
-  forbidden here, so the progression model must be **Guild Wars 2-shaped instead: horizontal
-  progression, a reachable gear ceiling that never rises, breadth over power.** Content adds *places
-  and things to do*, never a bigger number. Design the corruption vectors out rather than policing
-  them: bound loot and no open trading/auction house (kills RMT, botting and dupe value at the root),
-  hard currency sinks, diminishing returns, no pay-to-win surface at all. Take the WoW/D4 *texture*
-  (dungeon crawling, exploration) with GW2's *economics* — that synthesis is the product's spine, not
-  a detail.
-- **Phase 0 before any game code:** prove the art pipeline — headless Blender in CI, one MPFB2
-  character, one procedural cave, in Godot. It is a **taste gate** the maintainer judges, and it is the
-  project's one unproven bet.
+priority** — pick it up only when nothing else demands attention. **The first task is to bootstrap
+`devantler-tech/world-at-ruin`** (org-admin `gh api` create → Observe-adopt), add the submodule, and
+move the design into its `AGENTS.md`; its roadmap and issues then live there. The stack and design are
+**already settled — do not re-litigate them**: see
+[`.claude/skills/products/world-at-ruin/`](.claude/skills/products/world-at-ruin/SKILL.md), which
+carries them until the repo exists.
 
 **Shared libraries** (leverage points across the whole suite — see *Holistic review* and the
 `product-engineering` skill): the CI building block `devantler-tech/actions` (which
