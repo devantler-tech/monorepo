@@ -226,8 +226,24 @@ rm -rf "$c/github/devantler-tech/github-actions/actions"
 fail_match "die_missing: actions submodule not checked out" "$c" \
   "actions submodule not found"
 
+# 13. Retired-repo link: ANY page under docs/src/content linking to an archived
+#     repo trips the guard — not just the guarded lists. Uses the homepage,
+#     because that is exactly where this drifted in production: active.mdx was
+#     updated when reusable-workflows was archived and the homepage LinkCard was
+#     not (monorepo#1813, theme 2).
+c="$tmp/retired-link"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'FIXTURE'
+---
+title: Home
+---
+
+<LinkCard href="https://github.com/devantler-tech/reusable-workflows" />
+FIXTURE
+fail_match "retired-repo link on an unguarded page" "$c" \
+  "Retired-repo link"
+
 if [ "$fail" -ne 0 ]; then
   printf '❌ active-projects drift-guard self-test FAILED\n' >&2
   exit 1
 fi
-printf '✅ active-projects drift-guard self-test passed (13 cases)\n'
+printf '✅ active-projects drift-guard self-test passed (14 cases)\n'

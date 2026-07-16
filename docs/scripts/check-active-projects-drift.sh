@@ -89,6 +89,7 @@ actions_dir="$repo_root/github/devantler-tech/github-actions/actions"
 rw_workflows_dir="$repo_root/github/devantler-tech/github-actions/actions/.github/workflows"
 gitmodules="$repo_root/.gitmodules"
 templates_dir="$repo_root/docs/src/content/docs/templates"
+content_dir="$repo_root/docs/src/content"
 
 # Anchor each H2 section on the source repo URL it links to — unique and stable.
 actions_anchor="](https://github.com/devantler-tech/actions)"
@@ -103,6 +104,42 @@ die_missing() {
 [ -f "$mdx" ] || die_missing "active.mdx" "$mdx"
 [ -d "$actions_dir" ] || die_missing "actions submodule" "$actions_dir"
 [ -d "$rw_workflows_dir" ] || die_missing "actions submodule workflows directory" "$rw_workflows_dir"
+[ -d "$content_dir" ] || die_missing "docs content directory" "$content_dir"
+
+# --- Retired repos: no page may still link to one -----------------------------
+#
+# The lists above are guarded, so they stay current — but a link somewhere else on
+# the site pointing at a repo we retired is the same drift with no tripwire. It
+# happened: reusable-workflows was merged into actions and archived (2026-07-10,
+# monorepo#1964), active.mdx was updated, and the homepage LinkCard kept pointing
+# at the archived repo — sending readers to a read-only shell (monorepo#1813,
+# theme 2).
+#
+# Network-free by design, like the rest of this script: the retired set is pinned
+# here rather than queried, so add a repo when it is archived/renamed, together
+# with what to link instead.
+retired_repo_urls=(
+  "https://github.com/devantler-tech/reusable-workflows|https://github.com/devantler-tech/actions/tree/main/.github/workflows"
+)
+
+for entry in "${retired_repo_urls[@]}"; do
+  retired_url="${entry%%|*}"
+  replacement_url="${entry##*|}"
+
+  # -F: the URLs are literals, not patterns. Match the whole content tree, not just
+  # active.mdx — an unguarded page is exactly how this drifts.
+  if hits=$(grep -rFl "$retired_url" "$content_dir" 2>/dev/null) && [ -n "$hits" ]; then
+    while IFS= read -r hit; do
+      echo "::error file=${hit#"$repo_root"/}::Retired-repo link: this page links to '${retired_url}', \
+which is archived (read-only). Link '${replacement_url}' instead." >&2
+    done <<<"$hits"
+    fail=1
+  fi
+done
+
+if [ "$fail" -eq 0 ]; then
+  echo "OK: no page links to a retired repo (${#retired_repo_urls[@]} pinned)."
+fi
 [ -f "$gitmodules" ] || die_missing ".gitmodules" "$gitmodules"
 [ -d "$templates_dir" ] || die_missing "templates docs directory" "$templates_dir"
 
