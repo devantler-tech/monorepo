@@ -30,11 +30,47 @@ keeping them healthy *and* moving them forward.
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | [AGENTS.md](https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md) |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | [AGENTS.md](https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md) |
 | UniFi Crossplane provider (shared lib) | `devantler-tech/provider-upjet-unifi` | `libraries/provider-upjet-unifi` | [AGENTS.md](https://github.com/devantler-tech/provider-upjet-unifi/blob/main/AGENTS.md) |
+| World at Ruin (game) | `devantler-tech/world-at-ruin` (**repo not yet bootstrapped** — see below) | `applications/world-at-ruin` (pending) | (pending) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
 | UniFi network (private) | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
 
 > Submodule `AGENTS.md` links use full GitHub URLs because those files live in the submodule repos, not this repo's tree (a relative link would 404 on GitHub).
+
+**World at Ruin — newest product, not yet bootstrapped** (maintainer direction 2026-07-16). A
+cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** at **lowest
+priority** — pick it up when nothing else demands attention, and expect it to accrete over years.
+Its roadmap and issues live on its own repo once that exists; **the first task is to bootstrap
+`devantler-tech/world-at-ruin`** declaratively (org-admin `gh api` create → Observe-adopt, per the
+repo-creation pattern), then add it as the `applications/world-at-ruin` submodule and write its
+`AGENTS.md`. The stack below is **already decided — do not re-litigate it**; redirect happens via the
+PR workflow.
+
+- **“As code” is the premise, not a preference.** No UI clicks, no desktop design tools, everything
+  text-authored and built headlessly in CI. If an agent can't author it, it doesn't get built.
+- **Client: Godot 4** — chosen *because* `.tscn`/`.tres`/`.gdshader` are text and headless export is
+  first-class. **Unreal was rejected**: `.uasset`/`.umap` are binary, so agents cannot author levels or
+  materials. This overrides the graphics ceiling (Godot ≈ semi-realistic PBR, no Nanite/Lumen).
+- **Art: generated as code, all OSS/CC0 — never commercial assets.** Blender headless (`bpy`) → glTF;
+  **MPFB2 + Rigify** for characters (core assets CC0, explicitly closed-source-safe); Poly Haven /
+  ambientCG (CC0) materials; WFC interiors, grammar towns, SDF caves, erosion terrain. Blender's GPL
+  covers the tool, never the output. Art target is **stylised-realistic (a more realistic WoW)** — the
+  style is *parametric*, which is what makes it expressible as code; photorealism is out of reach in
+  any engine without a human sculptor.
+- **Server: Go.** Realtime tier = zone/dungeon-instance **Agones** GameServers (CNCF) — **one tick loop
+  per process, never decomposed**; the unit of scale is the number of zones. Meta tier = real
+  microservices, mostly **Nakama** (Apache-2.0) for auth/social/chat/storage. Postgres/CNPG. Runs on
+  the existing platform.
+- **Combat: telegraphed** (WildStar/WoW-like), **physics stays out of the authoritative path** —
+  capsules/navmesh only. This is what makes a Go authority cheap and latency-tolerant. Game loop is
+  WoW/Diablo-4-shaped (dungeon crawling, progression through exploration); **no PvP initially**.
+  Seamless instancing is fine; loading screens and pop-in are not.
+- **Licensing: source-available and proprietary — NEVER call it open source.** Copying/redistribution
+  prohibited; needs a bespoke EULA and a **CLA with copyright assignment** (EU: assignment plus
+  fallback exclusive licence) gating the first external PR. No GPL/AGPL in the shipped tree.
+- **Phase 0 before any game code:** prove the art pipeline — headless Blender in CI, one MPFB2
+  character, one procedural cave, in Godot. It is a **taste gate** the maintainer judges, and it is the
+  project's one unproven bet.
 
 **Shared libraries** (leverage points across the whole suite — see *Holistic review* and the
 `product-engineering` skill): the CI building block `devantler-tech/actions` (which
@@ -57,6 +93,7 @@ no row are filed on the **default intake repo** below.
 | Building block | Good for | Owning repo |
 |---|---|---|
 | devantler.tech website | Public web pages on devantler.tech — docs, guides, announcements, portfolio content | `devantler-tech/monorepo` |
+| World at Ruin | THIS suite's own online fantasy game — its world, dungeons, characters, monsters, combat, loot and progression (not games in general) | `devantler-tech/world-at-ruin` |
 | Wedding app | THIS suite's existing deployed wedding website only — its guest pages, RSVPs, schedules, photos and practical info (not new wedding sites in general) | `devantler-tech/wedding-app` |
 | AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |
 | App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
