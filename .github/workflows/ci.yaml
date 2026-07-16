@@ -21,6 +21,7 @@ jobs:
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
+      portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
     steps:
       - name: Checkout
@@ -53,6 +54,18 @@ jobs:
             maintainer-preflight:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/maintainer-preflight.test.sh'
+            portfolio-surveyor:
+              - 'AGENTS.md'
+              - '.claude/agents/daily-maintainer.md'
+              - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/product-engineering/SKILL.md'
+              - '.claude/skills/products/agent-skills/SKILL.md'
+              - '.claude/skills/products/ksail/SKILL.md'
+              - '.claude/skills/products/monorepo/SKILL.md'
+              - '.claude/scripts/portfolio-surveyor.test.sh'
+              - '.claude/scripts/release-bot-exemption.sh'
+              - '.github/workflows/ci.yaml'
             product-value:
               - 'AGENTS.md'
               - '.claude/agents/daily-maintainer.md'
@@ -188,6 +201,21 @@ jobs:
       - name: Verify the product value contract
         run: bash .claude/scripts/product-value-contract.test.sh
 
+  test-portfolio-surveyor-contract:
+    name: Test portfolio surveyor contract
+    needs: changes
+    if: needs.changes.outputs.portfolio-surveyor == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify the portfolio surveyor contract
+        run: bash .claude/scripts/portfolio-surveyor.test.sh
+
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
@@ -199,6 +227,7 @@ jobs:
       - drift-check-active-projects
       - test-safe-clone
       - test-maintainer-preflight
+      - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
     steps:
@@ -212,4 +241,5 @@ jobs:
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-maintainer-preflight.result }}
+            ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}

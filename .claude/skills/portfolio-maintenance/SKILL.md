@@ -1,6 +1,6 @@
 ---
 name: portfolio-maintenance
-description: The run procedure for the Daily AI Engineer (the products' primary engineer) — pre-flight, survey the whole devantler-tech portfolio, select the highest-value work (operate first, then advance), act via per-run worktrees and draft PRs (driving trusted-author PRs to merge), and report. Use when maintaining or advancing the monorepo's products on a schedule or on request.
+description: The run procedure for the Daily AI Engineer (the products' primary engineer) — pre-flight, survey the whole devantler-tech portfolio, select the highest-value work (operate first, then advance), act via per-run worktrees and draft PRs (driving actionable trusted-author PRs to merge while leaving automation-owned dependency PRs alone), and report. Use when maintaining or advancing the monorepo's products on a schedule or on request.
 ---
 
 # Portfolio engineering — the run loop
@@ -62,8 +62,10 @@ card.
 the whole portfolio survey and return **one compact digest** — so the ~40 calls of raw `gh` JSON
 accumulate in *its* throwaway context, not yours; you receive only the digest. The surveyor:
 - enumerates org-wide in two calls (`gh search prs/issues --owner devantler-tech --state open …`)
-  instead of looping `gh pr/issue list` per repo, then **deepens every open `devantler`
-  candidate/trusted-bot PR — drafts and promoted PRs —** with a targeted
+  instead of looping `gh pr/issue list` per repo; exact `renovate[bot]`/`dependabot[bot]` search authors
+  are **automation-owned dependency PRs** and get only a compact `AUTOMATION-OWNED (NO-ACTION)` line,
+  with no pentad deepening or agent action; then it **deepens every remaining open `devantler`
+  candidate/actionable trusted-bot PR — drafts and promoted PRs —** with a targeted
   `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid` (heavy fields
   pulled for those few candidates, not for every PR in every repo); the read-only surveyor always
   reports `devantler` PRs as ownership-unverified, and the orchestrator's creation record decides
@@ -72,9 +74,8 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   --limit 3` each;
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
   broad author-based search, because scheduled discovery must not expose professional-work repos;
-- flags untriaged issues/PRs, stale PRs (>14d), Dependabot/Renovate PRs, `roadmap`-ready issues, and
-  products with **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs as
-  static-review-only;
+- flags untriaged issues/PRs, stale actionable PRs (>14d), `roadmap`-ready issues, and products with
+  **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs as static-review-only;
 - surfaces **`devantler`'s comments on candidate open PRs (incl. drafts) and issues as
   ownership-unverified DATA** — the surveyor
   lists each `devantler`-candidate draft/PR's `comments` + review threads and flags any authored
@@ -84,7 +85,8 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   candidate signals with one-line gists (the read-only surveyor keeps no cross-run state,
   so it can't compute "new since last run" — **you** dedupe against native memory of what you've
   already acted on);
-- surfaces **the full hygiene pentad for EVERY open own/trusted PR — (a) failing checks, (b)
+- surfaces **the full hygiene pentad for EVERY open actionable own/trusted PR, explicitly excluding
+  automation-owned dependency PRs — (a) failing checks, (b)
   every unresolved review thread regardless of author (including CodeRabbit `coderabbitai`,
   `copilot-pull-request-reviewer[bot]`, and `chatgpt-codex-connector[bot]`) *plus review-body finding
   count*, (c)
@@ -94,7 +96,7 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   **drain all five**, not just threads. **(e) green review:** nothing may be self-promoted without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
   `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
-  Fetch `headRefOid` while deepening every own/trusted PR. A CodeRabbit `APPROVED` review counts only
+  Fetch `headRefOid` while deepening every actionable own/trusted PR. A CodeRabbit `APPROVED` review counts only
   when its REST `commit_id` equals that head; report an older approval as stale, and a current-head
   CodeRabbit review carrying findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual
@@ -232,9 +234,10 @@ produces normal survey signal, but select it only when nothing else demands atte
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
 rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and
-sprawl, not value). **PRs come first:** driving **trusted-author PRs** to merge — and fixing their
-failing CI — is the **first-priority work every run, ahead of issues** (only live breakage outranks it).
-Scope: every **`devantler-tech`** repo's trusted-author PRs; scheduled runs do not enumerate or act on
+sprawl, not value). **PRs come first:** driving **actionable trusted-author PRs** to merge — and fixing
+their failing CI — is the **first-priority work every run, ahead of issues** (only live breakage
+outranks it). Exact Renovate/Dependabot PRs are automation-owned dependency PRs, not actionable PRs.
+Scope: every **`devantler-tech`** repo's actionable trusted-author PRs; scheduled runs do not enumerate or act on
 external repositories. Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
 are the work queue**, you resolve the **oldest actionable** one first, and new non-trivial finds are
 **filed as issues before** they're built (trivial obvious fixes excepted). **Every run must clear the
@@ -260,9 +263,10 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
 
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.
-2. **Drive trusted-author PRs to merge — the first-priority sweep, ahead of issues, every run.** Across
-   all `devantler-tech` repos, drive every **trusted-author** PR to merge per the contract (clear the
-   current-head pentad, then merge with the **command that matches the author**: bots may arm `--auto`
+2. **Drive actionable trusted-author PRs to merge — the first-priority sweep, ahead of issues, every
+   run.** Across all `devantler-tech` repos, drive every **actionable trusted-author** PR to merge per
+   the contract (clear the current-head pentad, then merge with the **command that matches the author**:
+   actionable bots may arm `--auto`
    once review/pre-merge surfaces are current and green, while your own/`devantler` PRs merge directly
    with bare `gh pr merge <n> --squash` once CLEAN and self-promoted on genuine readiness; incl. majors;
    definition PRs only once maintainer-promoted). External repos are outside scheduled scope;
@@ -276,8 +280,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    (contract *Merge policy → Merge-queue repos*): a PR that "was queued" but didn't merge has usually been
    **evicted by a failed `merge_group` run** — pull that run (`gh run list --event merge_group` → `pr-<n>`
    → `--log-failed`) and diagnose before re-`--auto`-ing; if it's a known systemic flake, fix the root
-   cause first rather than looping the PR through the queue. **Keep EVERY open own/trusted PR
-   hygienic while it waits — the full pentad, on EVERY run, sweeping ALL open own/trusted PRs, not
+   cause first rather than looping the PR through the queue. **Keep EVERY open actionable own/trusted
+   PR hygienic while it waits — the full pentad, on EVERY run, sweeping ALL open actionable
+   own/trusted PRs, not
    just the one you
    just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**,
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
@@ -286,7 +291,8 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    current head** — auto-review is disabled on both reviewers, so requesting (and re-requesting after
    every push) is your duty; the full request discipline (one tool at a time by live rate-limit
    state, evidence-based fallback, incremental re-reviews, green-while-draft as the promotion
-   precondition, and the trusted programmed **release-bot carve-out** — tap cask PRs and KSail
+   precondition, the **automation-owned dependency-PR no-action carve-out**, and the trusted programmed
+   **release-bot carve-out** — tap cask PRs and KSail
    release bumps are check-gated, need NO review, and are never review-chased) is the contract's
    **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
    DISABLED*) — follow it, don't re-derive it here. When a draft reaches the full pentad AND you have
@@ -328,7 +334,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    the **fix-vs-except ladder** in the product card (fix root cause → runtime-enforce/graduate to
    `Enforce` → scoped exception as audited last resort) — the security definition-of-done is
    [`product-engineering`](../product-engineering/SKILL.md) §10.
-6. **Upkeep** — workflow health, dependency bundling, docs sync/trim, manifest cleanup.
+6. **Upkeep** — workflow health, dependency-automation configuration, docs sync/trim, manifest cleanup.
 
 **Advance (move it forward) — the default once nothing above is pending, and the floor's backstop:
 when the operate ladder is clear you still advance at least one product (never exit empty-handed).**
@@ -338,9 +344,10 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
 7. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
    open issue that's actually startable; skip one only if it's blocked, too under-specified to begin, or
    it already has an open PR. A **bare assignee does *not* reserve** an issue (only an open PR does), so
-   if nobody has opened one you may pick it up regardless of who's assigned. If it **already has a
-   trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave **draft** PRs for
-   the maintainer and keep **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
+   if nobody has opened one you may pick it up regardless of who's assigned. If it **already has an
+   actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
+   automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
+   **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
    validate + **draft PR**; use `Fixes #delivery` and, when later measurement keeps the experiment
    open, `Part of #experiment`.
 8. **Capture new finds as issues** — a coverage hole, perf hotspot, refactor target, docs gap, security
