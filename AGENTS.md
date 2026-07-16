@@ -917,9 +917,10 @@ a task explicitly calls for it. Leave every checkout/worktree clean when done.
 (maintainer direction 2026-07-16: *"You never clean up old branches locally or on the remote. I expect
 you to always clean up and switch back to the default branch after a tick."*). Left unswept, every run's
 worktree branch survives it: the first sweep found **~1,140 spent branches** (monorepo alone had **589**
-local; `.github` had **35** stale remote). Run
+local; `.github` had **35** stale remote). **Remove your own per-run worktree FIRST, then run**
 [`.claude/scripts/branch-cleanup.sh <repo_path> <slug> <manifest>`](.claude/scripts/branch-cleanup.sh)
-for each repo touched, then remove the per-run worktree.
+for each repo touched — a branch still checked out by your own worktree sits in the keep-set, so a
+sweep run before the worktree removal silently spares the very branch the tick just spent.
 
 **🔴 Deleting a remote branch CLOSES its open PR — so the keep-set is the whole safety property:**
 - **KEEP:** the head of an **OPEN PR**; any branch **checked out by a worktree**; the default branch; and
@@ -928,10 +929,16 @@ for each repo touched, then remove the per-run worktree.
   commits are never in `main`. For the same reason `commits-not-in-main > 0` does **NOT** mean unmerged
   work. **The PR state is the only authoritative signal** — never infer merge status from the commit graph.
 - **Local:** delete anything outside the keep-set (`-D`; `-d` cannot see squash-merges).
-- **Remote:** delete only on **positive evidence** — an associated **MERGED/CLOSED** PR, or **no PR and
-  older than 14 days**. A *recent* no-PR remote branch may be a **live session's** → leave it.
+- **Remote:** delete only on **positive evidence** — an associated **MERGED/CLOSED PR whose recorded
+  head SHA equals the branch's CURRENT SHA** (a re-pushed branch is a new incarnation the old PR does
+  not account for → keep). **No-PR branches are never deleted, only reported as candidates** — commit
+  time is NOT push time, so "old commits" can be a live session that just pushed; age alone is not
+  evidence. Deletes are **CAS-guarded** (`--force-with-lease` pinned to the evidence SHA) and the
+  open-PR keep-set is **re-fetched immediately before the delete loop**.
+- **Fail closed on infrastructure:** a failed `git fetch`, open-PR query, or manifest write ABORTS the
+  sweep — an empty keep-set from a failed query would otherwise delete every open PR's branch.
 - **Write a manifest** (`repo → branch → sha → evidence`) before deleting so any branch is restorable
-  from its SHA, and **assert the delete-set intersects the open-PR heads in ZERO places** before applying.
+  from its SHA; the write is verified — no restore record, no deletion.
 - Reap only **your own** per-run worktree — another session's worktree directory may be live.
 
 **Two-writer branches — another instance may be on the same PR right now.** More than one agent
