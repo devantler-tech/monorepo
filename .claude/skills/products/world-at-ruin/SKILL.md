@@ -103,8 +103,13 @@ botting and dupe *value* at the root), hard sinks. WoW/D4 texture, GW2 economics
   visual variety so players find the look they want **without touching balance**. **Armour is the
   exception** — real mitigation/lightness trade-offs: light = agile, heavy = takes a hit.
 - **Endgame**: mythic-like dungeons, regular dungeons, raids, endless dungeons. **Loot-based
-  progression here only** — gear upgraded and specialised to take on harder content. **Outside the
-  endgame, loot is visual only**, so the open world stays relevant.
+  progression here only** — vertical, **with a real loft** (maintainer direction 2026-07-17). **In
+  the open world, endgame gear gives a cosmetic edge ONLY**: the open world is a fair challenge for
+  everyone, and an experienced player's edge is their arsenal of abilities and weapon skills.
+- **All endgame stays relevant — keys and scaling everywhere** (maintainer direction 2026-07-17):
+  every endgame activity carries keys and scaling that keep it engaging and replayable; expanding
+  the endgame means BOTH improving what exists and building more; neither the endgame nor the open
+  world may ever go stale or irrelevant.
 
 ## Design guards — the traps in the above, and how to hold them
 
@@ -113,9 +118,10 @@ policing them (there is no undo).
 
 - **🔴 The endgame ladder is the one place power grows — it MUST be bounded and inert outside itself.**
   “Gear upgraded to take on harder and harder content” *is* vertical progression, i.e. the exact
-  inflation the product law forbids. It is only coherent if: (a) endgame gear is **stat-normalised or
-  inert outside endgame instances** (GW2 downscaling / WoW Timewalking), or it trivialises the open
-  world and breaks “all areas relevant”; and (b) the ladder has a **ceiling** — beyond it, **difficulty
+  inflation the product law forbids. **SETTLED by maintainer direction 2026-07-17:** (a) endgame
+  gear is **cosmetic-edge-only in the open world** (stat-normalised/inert outside endgame
+  instances — GW2 downscaling / WoW Timewalking are the reference mechanics); and (b) the vertical
+  has a **loft but a bounded one** — beyond it, **difficulty
   scales, not power** (endless dungeons, mythic keys), and rewards become **score and cosmetics**.
   That is how “harder and harder” runs forever with no inflation and no reset.
 - **🔴 Usage-based progression's classic exploit is AFK/dummy grinding** (UO, Skyrim, ESO all bled
