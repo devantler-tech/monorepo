@@ -33,6 +33,23 @@ fi
 DEFAULT=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
 DEFAULT="${DEFAULT:-main}"
 
+# Return to the default branch FIRST (and again on any abort, via trap): a
+# repo left on its tick's claude/* branch would otherwise keep that branch in
+# the worktree keep-set forever, and an abort must not strand the checkout.
+return_to_default() {
+  local cur
+  cur=$(git branch --show-current 2>/dev/null)
+  if [ "$cur" != "$DEFAULT" ]; then
+    git checkout "$DEFAULT" -q 2>/dev/null
+    local now
+    now=$(git branch --show-current 2>/dev/null)
+    if [ "$now" = "$DEFAULT" ]; then sw="-> $DEFAULT";
+    else sw="FAILED to reach $DEFAULT (on '${now:-detached}')"; errors=$((errors+1)); fi
+  else sw="already on $DEFAULT"; fi
+}
+sw=""
+return_to_default
+
 # Verified manifest write: no restore record, no deletion.
 manifest_write() {
   if ! printf '%s\n' "$1" >>"$MANIFEST" 2>/dev/null; then
@@ -55,7 +72,7 @@ fetch_open_heads() {
 
 # --- KEEP set -------------------------------------------------------------
 keep=$(mktemp); prs=$(mktemp); keep2=$(mktemp)
-trap 'rm -f "$keep" "$prs" "$keep2"' EXIT
+trap 'rm -f "$keep" "$prs" "$keep2"; return_to_default' EXIT
 {
   fetch_open_heads
   git worktree list --porcelain 2>/dev/null | awk '/^branch /{sub("refs/heads/","",$2); print $2}'
@@ -64,7 +81,9 @@ trap 'rm -f "$keep" "$prs" "$keep2"' EXIT
 
 # --- PR evidence map for remote decisions ----------------------------------
 # newest-first per branch: state + the head SHA the PR evidence belongs to.
-if ! gh pr list --repo "devantler-tech/$SLUG" --state all --limit 500 \
+# Bounded evidence is FAIL-CLOSED: a merged PR older than the newest 1000
+# results yields "no evidence" => KEEP/candidate, never a deletion.
+if ! gh pr list --repo "devantler-tech/$SLUG" --state all --limit 1000 \
     --json headRefName,state,headRefOid,headRepositoryOwner \
     --jq '.[]|select(.headRepositoryOwner.login=="devantler-tech")|"\(.headRefName)\t\(.state)\t\(.headRefOid)"' 2>/dev/null >"$prs"; then
   echo "$SLUG: ABORT — PR-state query failed; remote evidence unavailable" >&2
@@ -74,22 +93,29 @@ fi
 is_kept() { grep -Fxq "$1" "$keep"; }
 pr_evidence() { awk -F'\t' -v b="$1" '$1==b{print $2 "\t" $3; exit}' "$prs"; }
 
-l_del=0; r_del=0; l_keep=0; r_keep=0; candidates=0
+l_del=0; r_del=0; l_keep=0; r_keep=0; candidates=0; r_rej=0
 
 # --- LOCAL ----------------------------------------------------------------
 while IFS= read -r b; do
   [ -z "$b" ] && continue
   if is_kept "$b"; then l_keep=$((l_keep+1)); continue; fi
   sha=$(git rev-parse "$b" 2>/dev/null) || continue
-  # Never lose unpushed work: -D only when the tip is reachable from SOME
-  # remote ref; an unpushed-only branch is kept (reported as a candidate).
-  if [ -z "$(git branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
+  # Never lose unpushed work: delete only when the tip is reachable from SOME
+  # remote ref, OR a MERGED/CLOSED PR accounts for this exact sha (a
+  # squash-merged branch whose remote ref was already pruned is reachable
+  # from nothing, yet its work is safely in the PR record). Otherwise keep as
+  # a candidate.
+  ev=$(pr_evidence "$b"); st="${ev%%$'\t'*}"; ev_sha="${ev#*$'\t'}"
+  if [ -z "$(git branch -r --contains "$sha" 2>/dev/null | head -1)" ] &&
+     { [ "$st" != "MERGED" ] && [ "$st" != "CLOSED" ] || [ "$ev_sha" != "$sha" ]; }; then
     candidates=$((candidates+1)); l_keep=$((l_keep+1)); continue
   fi
   manifest_write "$(printf '%s\tlocal\t%s\t%s' "$SLUG" "$b" "$sha")"
   if [ "$MODE" = "apply" ]; then
-    if git branch -D "$b" >/dev/null 2>&1; then l_del=$((l_del+1));
-    else echo "$SLUG: WARN — local delete of '$b' failed" >&2; errors=$((errors+1)); fi
+    # CAS delete: update-ref -d with the expected old value refuses if a
+    # concurrent session re-pointed the ref after evidence-gathering.
+    if git update-ref -d "refs/heads/$b" "$sha" >/dev/null 2>&1; then l_del=$((l_del+1));
+    else echo "$SLUG: WARN — local delete of '$b' rejected (ref moved) or failed" >&2; errors=$((errors+1)); fi
   else l_del=$((l_del+1)); fi
 done < <(git branch --list 'claude/*' --format='%(refname:short)')
 
@@ -119,6 +145,10 @@ while IFS= read -r rb; do
   if [ "$MODE" = "apply" ]; then
     # Final per-branch TOCTOU guard: a PR can open between the loop-level
     # keep-set refresh and this very deletion. Fail closed on query failure.
+    # RESIDUAL RISK (accepted, no server-side conditional delete exists): a PR
+    # opened in the milliseconds between this query and the push below would
+    # be closed by the deletion; the manifest sha makes that restorable
+    # (push the sha back, reopen the PR).
     open_now=$(gh pr list --repo "devantler-tech/$SLUG" --state open --head "$b" \
       --json number --jq 'length' 2>/dev/null)
     if [ -z "$open_now" ] || [ "$open_now" != "0" ]; then
@@ -130,22 +160,13 @@ while IFS= read -r rb; do
       r_del=$((r_del+1))
     else
       echo "$SLUG: WARN — remote delete of '$b' rejected (ref moved or push failed); kept" >&2
-      r_keep=$((r_keep+1))
+      r_rej=$((r_rej+1)); r_keep=$((r_keep+1))
     fi
   else r_del=$((r_del+1)); fi
 done < <(git branch -r --list 'origin/claude/*' --format='%(refname:short)')
 
-# --- return to default ----------------------------------------------------
-cur=$(git branch --show-current 2>/dev/null)
-if [ "$cur" != "$DEFAULT" ]; then
-  git checkout "$DEFAULT" -q 2>/dev/null
-  now=$(git branch --show-current 2>/dev/null)
-  if [ "$now" = "$DEFAULT" ]; then sw="-> $DEFAULT";
-  else sw="FAILED to reach $DEFAULT (on '${now:-detached}')"; errors=$((errors+1)); fi
-else sw="already on $DEFAULT"; fi
-
-printf '%-24s local: -%-4s keep %-3s | remote: -%-3s keep %-3s cand %-3s | %s\n' \
-  "$SLUG" "$l_del" "$l_keep" "$r_del" "$r_keep" "$candidates" "$sw"
+printf '%-24s local: -%-4s keep %-3s | remote: -%-3s keep %-3s rej %-2s cand %-3s | %s\n' \
+  "$SLUG" "$l_del" "$l_keep" "$r_del" "$r_keep" "$r_rej" "$candidates" "$sw"
 
 [ "$errors" -gt 0 ] && exit 3
 exit 0
