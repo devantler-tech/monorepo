@@ -119,9 +119,11 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    the end-of-run report (he rarely reads it), never an **`@devantler` mention** (no notification). Re-verify
    any "gated" against live state before trusting it (memory goes stale) and name the
    blocker in the report. A **bare assignee does *not* reserve** it (only an open PR does), so if nobody's opened
-   a PR you may take it regardless of who's assigned; if an **actionable trusted-author, non-draft** PR
-   already exists, drive *that* to merge instead of duplicating; leave automation-owned dependency PRs
-   to repository automation and leave draft/external PRs per the trust gate. For
+   a PR you may take it regardless of who's assigned; if an **actionable trusted-author** PR already
+   exists, drive *that* one instead of duplicating — a non-draft to merge, a **routine-owned draft**
+   to genuine readiness → self-promotion → merge (contract *Autonomy*); leave
+   automation-owned dependency PRs to repository automation, other authors' drafts to their owners,
+   and external PRs per the trust gate. For
    a big design, write/extend an ADR or system-design note first and link it.
 2. Isolate a worktree, implement at the **root cause**, and **write tests** that pin the new behaviour
    and its edge cases (tests are part of the change, not optional). **Build a new non-trivial feature
@@ -136,10 +138,13 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
 4. Open a **draft PR**: Conventional-Commit title (`feat:`/`fix:`/`refactor:`/`perf:`/`test:`/`docs:`),
    AI-disclosure line, labels, and **`Fixes #N`** for the delivery issue. When measuring the outcome
    requires a later window, keep the experiment issue open and add **`Part of #N`** for it instead of
-   closing it from the delivery PR. Body = what & why, trade-offs, and how you validated. It stays draft
-   until the maintainer promotes it — but keep it review-ready meanwhile (root-cause-fix its failing CI
-   and resolve its review threads; both are allowed before promotion — only the promotion itself is the
-   maintainer's).
+   closing it from the delivery PR. Body = PM-level why & what only (the org template — zero
+   validation detail; how you validated goes in the READINESS COMMENT, per contract *Autonomy*). It stays a
+   draft while you drive the hygiene pentad clear (root-cause-fix its failing CI, resolve its review
+   threads, secure a green review at head); **self-promote it only on genuine readiness** —
+   programmatically tested + reviewed green + **tried and evaluated as a user** (contract *Autonomy*,
+   maintainer direction 2026-07-16) — then drive it to merge per the contract's *Merge policy*
+   (definition PRs excepted: those keep the maintainer's promotion gate).
 
 ## 4. Test coverage
 Raise coverage where it *matters*, not for a vanity number.
