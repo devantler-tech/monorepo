@@ -28,9 +28,11 @@ Enumerate across ALL repos in one shot (an org-wide search naturally covers ever
 public and private — no per-repo loop needed to enumerate):
 
 1. **Open PRs (org-wide, one call):**
-   `gh search prs --owner devantler-tech --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
+   `gh search prs --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
 2. **Open issues (org-wide, one call):**
-   `gh search issues --owner devantler-tech --state open --limit 300 --json number,repository,title,labels,updatedAt,url`
+   `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,labels,updatedAt,url`
+   (`--archived=false` keeps archived repos' stale PRs/issues — e.g. `data-product`'s 2025 bot PRs —
+   out of every survey; archived repos are read-only and carry no actionable signal.)
    (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
 3. **Deepen only the `devantler`-candidate/trusted-bot pentad candidates.** For the *few* open
    **`devantler`-authored or trusted-bot PRs — drafts and non-drafts —** (`devantler`, `ksail-bot[bot]`,
