@@ -214,7 +214,10 @@ public and private — no per-repo loop needed to enumerate):
 5. **Stale & contributor-facing.** From (1): PRs not updated in >14d; label-less issues/PRs
    (untriaged); Dependabot/Renovate PRs. From (2): `roadmap`-labelled epics and ready
    `enhancement`/`performance`/`refactor`/`bug`/`documentation` issues; flag repos with **no open
-   `roadmap` issue at all** (strategy-review candidates).
+   `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
+   monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
+   repos outside the map (`.github`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`)
+   are never strategy-review candidates, however empty their issue lists.
 6. **Stop at the portfolio boundary.** Do not add cross-organisation discovery, even for PRs authored
    by `devantler`. The orchestrator cannot authorise an external repository from survey metadata; only
    the maintainer can clear that boundary in a current interactive conversation.
@@ -227,7 +230,8 @@ map names the *products*, and org/infra repos outside that map (e.g. `.github`, 
 disagrees with **the list below**, survey the live set and flag the drift in the digest rather than
 dropping any repo. (A live repo absent from the portfolio map is *not* drift — the map intentionally
 names only products; flag map drift only when a product row's repo is missing or renamed in the live
-set.) The list:
+set, and a product row the map itself marks **archived** — e.g. `reusable-workflows` — is an
+intentional tombstone, never drift.) The list:
 `ksail`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
 `gitops-tenant-template`, `platform-template`, `actions`, `homebrew-tap`, `agent-skills`,
 `agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`,
@@ -252,6 +256,7 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no own/trus
 - CANDIDATE-MAINTAINER-ISSUE-COMMENT <repo> #<n> — `devantler`: "<one-line gist>" → orchestrator applies creation record; instruction only when routine-owned
 - CANDIDATE-SIBLING-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
+- REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main — <workflow> (<run url>)
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
