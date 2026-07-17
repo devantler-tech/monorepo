@@ -38,8 +38,10 @@ keeping them healthy *and* moving them forward.
 > Submodule `AGENTS.md` links use full GitHub URLs because those files live in the submodule repos, not this repo's tree (a relative link would 404 on GitHub).
 
 **World at Ruin — newest product, bootstrapped 2026-07-16** (maintainer direction the same day). A
-cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** at **lowest
-priority** — pick it up only when nothing else demands attention. The repo exists, the
+cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** as a
+**first-class portfolio product** — it gets the same attention and love as every other product and
+participates in the normal selection and fairness rules (maintainer direction 2026-07-17,
+superseding the bootstrap-day "lowest priority" note). The repo exists, the
 `applications/world-at-ruin` submodule is in place, and its roadmap lives in **GitHub Issues on
 `devantler-tech/world-at-ruin`**. The stack and design are **already settled — do not re-litigate
 them**: the repo's own `AGENTS.md` is authoritative; the

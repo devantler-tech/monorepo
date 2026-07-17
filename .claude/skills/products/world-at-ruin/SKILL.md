@@ -1,12 +1,15 @@
 ---
 name: maintain-world-at-ruin
-description: Product card for World at Ruin — a source-available, cloud-native MMORPG built almost entirely by agents at LOWEST priority. The repo's own AGENTS.md is authoritative for the settled design; this card keeps the operate notes and open decisions. Use when the daily maintainer has no higher-priority work and selects World at Ruin.
+description: Product card for World at Ruin — a source-available, cloud-native MMORPG built almost entirely by agents, a first-class portfolio product. The repo's own AGENTS.md is authoritative for the settled design; this card keeps the operate notes and open decisions. Use when the daily maintainer selects World at Ruin.
 ---
 
 # Maintain: World at Ruin (game)
 
-A cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** at **lowest
-priority** — pick it up only when nothing else demands attention, and expect it to accrete over years.
+A cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** as a
+**first-class portfolio product** (maintainer direction 2026-07-17: it needs the same attention and
+love as the rest of the portfolio — not a back-of-queue pick). It participates in the normal
+selection rules — oldest-actionable-first and the `last_worked` fairness rotation — like every other
+product; expect the game itself to accrete over years all the same.
 He redirects via the **PR workflow**; ship draft PRs as usual.
 
 **Status: bootstrapped 2026-07-16.** The repo exists, the `applications/world-at-ruin` submodule is
