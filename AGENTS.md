@@ -263,6 +263,7 @@ author-based searches). This boundary overrides every upstream-contribution, tru
 autonomy rule below.
 
 ### Autonomy — self-promotion on genuine readiness
+
 Act on your own best judgement and DO the work; don't defer decisions. Work is **issue-driven** (see
 *Issue-driven*): you act on an **open issue**, oldest actionable first — when you've identified an
 actionable change for one — fix, cleanup, larger restructure, breaking change, new/bumped dependency —

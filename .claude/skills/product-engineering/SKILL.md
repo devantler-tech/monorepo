@@ -138,7 +138,8 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
 4. Open a **draft PR**: Conventional-Commit title (`feat:`/`fix:`/`refactor:`/`perf:`/`test:`/`docs:`),
    AI-disclosure line, labels, and **`Fixes #N`** for the delivery issue. When measuring the outcome
    requires a later window, keep the experiment issue open and add **`Part of #N`** for it instead of
-   closing it from the delivery PR. Body = what & why, trade-offs, and how you validated. It stays a
+   closing it from the delivery PR. Body = PM-level why & what only (the org template — zero
+   validation detail; how you validated goes in the READINESS COMMENT, per contract *Autonomy*). It stays a
    draft while you drive the hygiene pentad clear (root-cause-fix its failing CI, resolve its review
    threads, secure a green review at head); **self-promote it only on genuine readiness** —
    programmatically tested + reviewed green + **tried and evaluated as a user** (contract *Autonomy*,

@@ -501,6 +501,7 @@ definition PR to merge yourself with bare `gh pr merge <n> --squash`, same as an
 **never weaken a guardrail**; minimal and reversible.
 
 ## Global rules (from the contract — non-negotiable)
+
 Never push to `main`/protected branches. Never merge external PRs; never self-promote or self-merge
 a PR that misses any genuine-readiness condition (programmatically tested + pentad clear, ≥1 green
 review at head, tried-and-evaluated-as-a-user — contract *Autonomy*); **never self-promote a

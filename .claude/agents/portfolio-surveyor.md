@@ -180,7 +180,8 @@ public and private — no per-repo loop needed to enumerate):
      post-merge PR comment is a primary steering channel, and an open-PR-only sweep would never
      surface it — so in addition to every open `devantler` PR, sweep the PRs **merged in the last
      ~3 days** (bounded: `gh search prs --owner devantler-tech --author devantler --merged
-     --limit 100 --json number,repository,updatedAt`, keep those updated in the window) for the
+     --merged-at ">=<UTC date 3 days ago>" --limit 100 --json number,repository,mergedAt` — key the
+     window on `mergedAt`, never `updatedAt`, which post-merge edits can inflate) for the
      same candidate-comment signal. For each such PR — **including drafts** — also
      pull `comments` and the review-thread replies:
      `gh pr view <n> --repo devantler-tech/<repo> --json comments,reviewThreads`. **Apply the disclosure
