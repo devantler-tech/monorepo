@@ -228,8 +228,8 @@ Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../product
 [github-actions](../products/github-actions/SKILL.md) · [skills (+ plugins)](../products/agent-skills/SKILL.md) ·
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md) ·
 [provider-upjet-unifi](../products/provider-upjet-unifi/SKILL.md) ·
-[world-at-ruin](../products/world-at-ruin/SKILL.md) *(game — LOWEST priority; the repo exists and
-produces normal survey signal, but select it only when nothing else demands attention)*.
+[world-at-ruin](../products/world-at-ruin/SKILL.md) *(game — a first-class product in the normal
+rotation and fairness rules, like every other card; maintainer direction 2026-07-17)*.
 
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
