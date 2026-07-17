@@ -175,8 +175,13 @@ public and private — no per-repo loop needed to enumerate):
      `inconclusive` means a recognized but non-green/unparseable summary; `not-posted` means no
      supported marker. Always fail closed. Any non-green value makes the PR **NEEDS-FIX** even when
      checks/threads/body_findings are clean.
-   - **Candidate maintainer comments on `devantler` PRs (incl. drafts) — disclosure- and
-     ownership-gated.** For each PR authored by `devantler` — **including drafts** — also
+   - **Candidate maintainer comments on `devantler` PRs (incl. drafts, AND recently-MERGED ones) —
+     disclosure- and ownership-gated.** Under self-promotion-on-genuine-readiness the maintainer's
+     post-merge PR comment is a primary steering channel, and an open-PR-only sweep would never
+     surface it — so in addition to every open `devantler` PR, sweep the PRs **merged in the last
+     ~3 days** (bounded: `gh search prs --owner devantler-tech --author devantler --merged
+     --limit 100 --json number,repository,updatedAt`, keep those updated in the window) for the
+     same candidate-comment signal. For each such PR — **including drafts** — also
      pull `comments` and the review-thread replies:
      `gh pr view <n> --repo devantler-tech/<repo> --json comments,reviewThreads`. **Apply the disclosure
      disambiguator before flagging** (the same one the PR-ownership rule above uses, per the contract's

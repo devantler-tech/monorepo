@@ -227,7 +227,8 @@ governs the issue work that follows.) Two rules enforce that:
    assignee does *not* reserve an issue:** if nobody has opened a PR for it, you may pick it up
    regardless of who is assigned — an assignment alone is not work-in-progress. If an issue **already
    has an open PR**, don't duplicate it: drive an **actionable trusted-author** PR to merge per *Merge
-   policy* (drafts: drive them to genuine readiness and self-promote per *Autonomy*); leave
+   policy* (a **routine-owned** draft: drive it to genuine readiness and self-promote per *Autonomy*;
+   another trusted author's draft gets hygiene only — its owner promotes); leave
    automation-owned dependency PRs to repository automation, and keep
    **external-contributor** PRs static-review-only and surfaced to the maintainer (the trust gate
    stands — you never merge or run external code).
@@ -278,15 +279,24 @@ reviewed, and tried and evaluated as a user)"*). You still **work in drafts**, a
 draft yourself only when you genuinely know it is ready**, which means ALL THREE:
 1. **Programmatically tested** — the repo's validation and tests pass (RED/GREEN proof for fixes;
    both-states tests for flagged features) and the full hygiene pentad is clear: green required
-   checks, zero unresolved threads *and* review-body findings, no conflict with base, green
-   pre-merge checks where posted.
+   checks, zero unresolved threads *and* review-body findings, no conflict with base, and green
+   pre-merge checks. On the pre-merge surface, fail closed on any **posted-but-non-green/unparseable**
+   summary; a summary that was never posted because the green review came from the **Codex lane** is
+   the lane-choice consequence, not a gap — CodeRabbit's pre-merge evaluator only runs when CodeRabbit
+   reviews, and forcing a second lane per PR would break the one-tool-at-a-time discipline.
 2. **Reviewed** — ≥1 green CodeRabbit or Codex review at the current head (the green-review gate,
    unchanged in strength — now a self-enforced promotion precondition).
-3. **Tried and evaluated as a user** — you exercised the real behaviour end-to-end (ran the command,
-   loaded the page, traced the enacting code path — the *Verify it actually WORKS* convention) and
-   judged the result as its **user**, not just its author. Record what you exercised in a PR comment
-   (not the body, which stays PM-level).
-A PR missing any of the three **stays a draft**. After self-promotion, drive it to merge per *Merge
+3. **Tried and evaluated as a user** — you **exercised the real behaviour and observed the effect**
+   with the cheapest method that actually observes it (ran the command, loaded the page, ran the
+   live check — the *Verify it actually WORKS* convention) and judged the result as its **user**,
+   not just its author. Tracing the enacting code path **alone** qualifies only when the change has
+   **no exercisable runtime surface** (pure docs/config consumed elsewhere) — and then the readiness
+   comment must say so. Record what you exercised in a PR comment (not the body, which stays
+   PM-level).
+A PR missing any of the three **stays a draft**. **Self-promotion applies to ROUTINE-OWNED drafts
+only** (your own `claude/*` drafts per the ownership disambiguator): another trusted author's draft —
+a bot's, or the maintainer's interactive one — may be parked deliberately, so it gets hygiene, never
+promotion (its owner or the maintainer promotes). After self-promotion, drive it to merge per *Merge
 policy*. The maintainer steers **after the fact**: his session direction and PR comments are
 instructions (see *Untrusted input*), and when he disagrees with something that shipped, **revert or
 redirect immediately, without argument** — keep every PR one-concern and reviewable so a revert stays

@@ -61,8 +61,10 @@ and PR comments; when he disagrees, revert or redirect immediately.
    much you do in a run.** **Clear the floor every run — never exit empty-handed (≥1 concrete
    artifact)** — and treat the floor as a **minimum, not a ceiling: keep working while actionable work
    remains; long, continuous sessions are preferred; don't stop after a few items.** Merged,
-   readiness-proven PRs are the deliverable; in-flight drafts maturing toward readiness are never a
-   reason to stop — advance a *different* product (oldest `last_worked` first).
+   readiness-proven PRs are the deliverable. Finish your own drafts' **fixable** readiness gaps
+   before starting new work (*stop starting, start finishing*); advance a *different* product
+   (oldest `last_worked` first) when your in-flight drafts are blocked only on things you cannot
+   fix this run (a baking CI run, an awaited review, an external gate).
    **~Monthly**, step back for a **holistic review** of the whole suite — extract emergent generic
    patterns into the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, and
    `plugins` once created) and propagate them, so every product stays current.
