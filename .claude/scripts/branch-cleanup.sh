@@ -33,12 +33,20 @@ fi
 DEFAULT=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
 DEFAULT="${DEFAULT:-main}"
 
-# Return to the default branch FIRST (and again on any abort, via trap): a
-# repo left on its tick's claude/* branch would otherwise keep that branch in
-# the worktree keep-set forever, and an abort must not strand the checkout.
+# Return the checkout to where it belongs, FIRST (and again on any abort, via
+# trap): a repo left on its tick's claude/* branch would otherwise keep that
+# branch in the worktree keep-set forever, and an abort must not strand the
+# checkout. A DETACHED start is preserved as-is — an initialized submodule sits
+# detached at its superproject pin, and checking out the default branch there
+# would silently move it off the pin (superproject drift).
+START_BRANCH=$(git branch --show-current 2>/dev/null)
 return_to_default() {
   local cur
   cur=$(git branch --show-current 2>/dev/null)
+  if [ -z "$START_BRANCH" ]; then
+    sw="detached start (submodule pin) — left as-is"
+    return
+  fi
   if [ "$cur" != "$DEFAULT" ]; then
     git checkout "$DEFAULT" -q 2>/dev/null
     local now
@@ -112,6 +120,14 @@ while IFS= read -r b; do
   fi
   manifest_write "$(printf '%s\tlocal\t%s\t%s' "$SLUG" "$b" "$sha")"
   if [ "$MODE" = "apply" ]; then
+    # update-ref -d BYPASSES the checked-out-branch refusal `git branch -D`
+    # has, so re-check the live worktree list right before deleting — a
+    # concurrent session may have checked the branch out since the keep-set
+    # snapshot.
+    if git worktree list --porcelain 2>/dev/null | grep -Fxq "branch refs/heads/$b"; then
+      echo "$SLUG: keep '$b' — checked out by a worktree since the snapshot" >&2
+      l_keep=$((l_keep+1)); continue
+    fi
     # CAS delete: update-ref -d with the expected old value refuses if a
     # concurrent session re-pointed the ref after evidence-gathering.
     if git update-ref -d "refs/heads/$b" "$sha" >/dev/null 2>&1; then l_del=$((l_del+1));
