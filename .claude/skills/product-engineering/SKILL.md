@@ -121,9 +121,9 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    blocker in the report. A **bare assignee does *not* reserve** it (only an open PR does), so if nobody's opened
    a PR you may take it regardless of who's assigned; if an **actionable trusted-author** PR already
    exists, drive *that* one instead of duplicating — a non-draft to merge, a **routine-owned draft**
-   to genuine readiness → self-promotion → merge (contract *Autonomy*); leave automation-owned
-   dependency PRs to repository automation, other authors' drafts to their owners, and external PRs
-   per the trust gate. For
+   to genuine readiness → self-promotion → merge (contract *Autonomy*); leave
+   automation-owned dependency PRs to repository automation, other authors' drafts to their owners,
+   and external PRs per the trust gate. For
    a big design, write/extend an ADR or system-design note first and link it.
 2. Isolate a worktree, implement at the **root cause**, and **write tests** that pin the new behaviour
    and its edge cases (tests are part of the change, not optional). **Build a new non-trivial feature
