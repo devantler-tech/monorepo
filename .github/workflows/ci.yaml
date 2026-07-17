@@ -20,6 +20,7 @@ jobs:
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
+      submodule-init: ${{ steps.filter.outputs.submodule-init }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
@@ -51,6 +52,9 @@ jobs:
             safe-clone:
               - '.claude/scripts/safe-clone.sh'
               - '.claude/scripts/safe-clone.test.sh'
+            submodule-init:
+              - '.claude/scripts/submodule-init.sh'
+              - '.claude/scripts/submodule-init.test.sh'
             maintainer-preflight:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/maintainer-preflight.test.sh'
@@ -171,6 +175,27 @@ jobs:
       - name: Self-test the safe-clone guard
         run: bash .claude/scripts/safe-clone.test.sh
 
+  test-submodule-init:
+    needs: changes
+    if: needs.changes.outputs.submodule-init == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # Self-contained throwaway git fixtures (hermetic config, file:// submodules)
+      # — no network, no real submodules touched. Runs on both OSes because the
+      # guard resolves worktree paths with `pwd -P` (macOS /private/tmp symlinks).
+      - name: Self-test the submodule-init isolation guard
+        run: bash .claude/scripts/submodule-init.test.sh
+
   test-maintainer-preflight:
     name: Test maintainer preflight contract
     needs: changes
@@ -226,6 +251,7 @@ jobs:
       - audit-docs
       - drift-check-active-projects
       - test-safe-clone
+      - test-submodule-init
       - test-maintainer-preflight
       - test-portfolio-surveyor-contract
       - test-product-value-contract
@@ -240,6 +266,7 @@ jobs:
             ${{ needs.audit-docs.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.test-safe-clone.result }}
+            ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}
