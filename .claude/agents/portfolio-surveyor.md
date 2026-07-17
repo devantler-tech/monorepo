@@ -224,8 +224,10 @@ Portfolio repos (the org-wide search covers them; this is the canonical list to 
 map names the *products*, and org/infra repos outside that map (e.g. `.github`, `kyverno-policies`,
 `maintenance`, `fleet-gitops`, `aws`) are in scope too. Reconcile each run with one bounded call —
 `gh repo list devantler-tech --no-archived --limit 100 --json name` — and when that live set
-disagrees with the list below (or with the portfolio map), **survey the live set and flag the drift
-in the digest** rather than dropping any repo:
+disagrees with **the list below**, survey the live set and flag the drift in the digest rather than
+dropping any repo. (A live repo absent from the portfolio map is *not* drift — the map intentionally
+names only products; flag map drift only when a product row's repo is missing or renamed in the live
+set.) The list:
 `ksail`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
 `gitops-tenant-template`, `platform-template`, `actions`, `homebrew-tap`, `agent-skills`,
 `agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`,
