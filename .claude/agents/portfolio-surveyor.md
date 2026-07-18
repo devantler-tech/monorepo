@@ -32,11 +32,15 @@ public and private — no per-repo loop needed to enumerate):
 2. **Open issues (org-wide, one call) — include `assignees`, they are a CLAIM signal:**
    `gh search issues --owner devantler-tech --state open --limit 300 --json number,repository,title,labels,updatedAt,url,assignees`
    (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
-   Report each issue's assignee count. Per the contract's *Claim protocol*, an assignee means **an
-   instance has claimed this** — never "the maintainer took it", since every instance assigns as
-   `devantler` — and paired with a claim branch it is a ~2h lease that makes the issue temporarily
-   skippable (skip reason **(e)**). Without this field the orchestrator selects the oldest issue blind
-   to live claims and re-opens the duplicate-build race the protocol exists to close.
+   Report assignee **logins**, not a count. Only a **`devantler`** assignment can be a claim: the
+   contract's *Claim protocol* lease is specifically the agent account's, and every instance assigns as
+   `devantler`, so that login means **an instance has claimed this** — never "the maintainer took it".
+   An issue assigned to **anyone else** (a human collaborator, `Copilot`) is **not** a claim even with a
+   leftover `claude/*-<issue>` branch present: reporting it as one would park actionable work behind an
+   unrelated person's assignment and time the lease off the wrong assignment event. Report those as
+   ordinary open issues, noting the assignee so the orchestrator can respect a human's in-progress work
+   on its own merits. Without these logins the orchestrator selects the oldest issue blind to live
+   claims and re-opens the duplicate-build race the protocol exists to close.
 2b. **Claim branches (one call per repo that has assigned-but-PR-less issues):**
    `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep '^claude/'` — report any
    `claude/*` branch that either ends in `-<issue>` OR whose normalised stem matches an open issue's
@@ -303,9 +307,11 @@ Digest rules:
 - **Classify, don't decide.** Surface signals; the **orchestrator** selects the work and overlays its
   own native-memory cadence cursors (`last_worked`, `weekly`, docs/roadmap) — **you do not read
   memory**, only live GitHub.
-- **Emit a `CLAIMED` row only when BOTH an assignee and a matching `claude/*-<issue>` branch exist**
-  (and no open PR). An assignment with **no** branch is not a live claim under the contract's *Claim
-  protocol*, so reporting it as one would let a bare assignee park an issue — exactly what "a bare
+- **Emit a `CLAIMED` row only when BOTH a `devantler` assignment and a matching claim branch exist**
+  (and no open PR). Match `claude/*-<issue>`, a takeover branch (`claude/*-<issue>-2`, `-3`, …), or a
+  legacy normalised stem. An assignment to **anyone but `devantler`** is not a claim at all, and a
+  `devantler` assignment with **no** branch is not a live claim under the contract's *Claim
+  protocol*, so reporting either as one would let a bare assignee park an issue — exactly what "a bare
   assignee does not reserve an issue" forbids. Report that case as an ordinary open issue (mention
   `assignees=<n>` if useful), never as skip reason (e). The orchestrator times the ~2h lease from the
   issue's newest `assigned` timeline event; an assignee is an **instance** claim, never the maintainer.

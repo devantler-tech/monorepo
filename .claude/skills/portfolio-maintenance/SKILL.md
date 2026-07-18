@@ -355,7 +355,10 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    before you build:** self-assign + push the branch **with the issue number in its name** the moment
    you select — and if `devantler` is ALREADY assigned (a stale bare assignment from an abandoned run),
    **remove then re-add**, since adding an existing assignee is a no-op that would leave your lease
-   carrying the old timestamp — checking open PRs, remote
+   carrying the old timestamp. **The push decides the race:** put a real commit on the claim branch
+   (never a bare base pointer), push without force, then confirm `git ls-remote` shows YOUR sha — two
+   instances derive the same branch name, so a rejected push or someone else's tip means you lost;
+   stand down rather than force over them. Check open PRs, remote
    `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
    (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
    itself. If it **already has an
