@@ -368,10 +368,13 @@ actionable open issue**, and any new non-trivial find is **filed as an issue fir
 backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
 7. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
    open issue that's actually startable; skip one only if it's blocked, too under-specified to begin, or
-   it already has an open PR. A **bare assignee does *not* reserve** an issue **indefinitely** — an
-   assignment plus a **pushed branch** is a live claim for ~2h (contract *Claim protocol*), and with no
-   branch, or once that lapses with no PR, you may pick it up regardless of who's assigned (timed from
-   the issue's `assigned` timeline event, never a branch commit date). **Claim
+   it already has an open PR. A **bare `devantler` assignee does *not* reserve** an issue
+   **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
+   (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
+   (timed from the issue's newest `devantler` `assigned` timeline event, never a branch commit date).
+   **Only the agent account's assignment is a claim, and only it expires:** an issue assigned to a
+   **human collaborator** (or `Copilot`) is someone else's work-in-progress — respect it and pick a
+   different issue, never take it over on this window. **Claim
    before you build:** self-assign + push the branch **with the issue number in its name** the moment
    you select — and if `devantler` is ALREADY assigned (a stale bare assignment from an abandoned run),
    **remove then re-add**, since adding an existing assignee is a no-op that would leave your lease

@@ -319,7 +319,7 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
-- <repo> #<n> "<title>" — CLAIMED: assignees=<n>, claim-branch=<name>, no open PR
+- <repo> #<n> "<title>" — CLAIMED: assignee=devantler, claim-branch=<name>, no open PR
 ```
 
 Digest rules:
