@@ -55,9 +55,16 @@ Until that is solved, backfill is a standing duty, not an exception.
 
   | View | Layout | Filter |
   |---|---|---|
-  | 🧮 Kanban | Board | `is:issue is:open -status:"✅ Done"` |
-  | 📋 Backlog | Table | `is:issue is:open` |
-  | 🗺️ Roadmap | Roadmap | `is:issue is:open label:roadmap` |
+  | 🧮 Kanban | Board | `is:issue is:open -status:"✅ Done" no:sub-issues-progress` |
+  | 📋 Backlog | Table | `is:issue is:open no:parent-issue` |
+  | 🗺️ Roadmap | Roadmap | `is:issue is:open label:roadmap no:parent-issue` |
+
+  **Each view shows one layer of the hierarchy, and only one** (maintainer direction 2026-07-18):
+  **Kanban = leaves only** (`no:sub-issues-progress`) — a parent is resolved by finishing its children,
+  so an epic is never something you drag across a board; **Backlog = top-level only**
+  (`no:parent-issue`) with children reached by *expanding* the hierarchy, never listed as sibling rows;
+  **Roadmap = top-level strategic items**. Excluding parents from Kanban dropped it 193 → 166 (exactly
+  the 26 epics); excluding children from Backlog leaves 156 top-level rows.
 
   **The board tracks ISSUES, not PRs** (maintainer direction 2026-07-18): a PR that closes an issue
   moves that issue through the ladder via the linked-PR workflow, so showing both double-counts the
@@ -74,10 +81,21 @@ Until that is solved, backfill is a standing duty, not an exception.
   end`**, zoom Year, with the Year marker on; items without a Year show an unscheduled `+` placeholder,
   which is the honest rendering of "not scheduled".
 
-  ⚠️ **`has:sub-issue` does NOT filter in a project view** — tried live, the item count went *up*, so
-  the qualifier is ignored (it works in repo issue search, not here). There is no working "is a parent"
-  project filter; use `label:roadmap` to select strategic items instead. Treat any hierarchy filter
-  beyond `parent-issue:` / `has:parent-issue` / `no:parent-issue` as unverified until tested.
+  **Hierarchy filters — use the FIELD name, and get it from the UI, not from docs.** The working
+  qualifiers are **`has:sub-issues-progress`** (is a parent) / **`no:sub-issues-progress`** (is a leaf),
+  and `has:parent-issue` / `no:parent-issue` / `parent-issue:owner/repo#N`. They key off the *project
+  field* name ("Sub-issues progress"), **not** the issue-search spelling: **`has:sub-issue` is NOT a
+  valid project filter** — GitHub silently ignores an unrecognised qualifier rather than erroring, so a
+  wrong guess looks like it worked.
+
+  ⚠️ **Two method rules, learned the hard way on 2026-07-18:**
+  1. **Never compare item counts across views to test a filter.** Board and table layouts count
+     differently — the same stricter filter read 193 on the board and 163 in the table. A cross-view
+     comparison produced a confidently wrong conclusion (that `has:sub-issue` was being ignored *and*
+     that no parent filter existed). **Always A/B a filter within ONE view.**
+  2. **Type `no:` into the filter box to get the authoritative qualifier list.** GitHub autocompletes
+     every supported field; picking from that list inserts the exact syntax. That is faster and more
+     reliable than docs, which do not enumerate project-field qualifiers.
 - **Status semantics.** Options run **✅ Done → 🚀 In Finalization → 🏃🏻‍♂️ In Progress → 🫴 Ready →
   📥 Backlog → 🧊 Icebox**. The order is **deliberately reversed** — finishing work sits leftmost, so the
   board reads *stop starting, start finishing* (maintainer direction 2026-07-18). **Never re-order it
