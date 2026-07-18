@@ -196,9 +196,21 @@ if want drift; then
   # SIBLING's cadence ("You run in parallel with ... dispatched every second hour"),
   # so an unanchored match reads the wrong agent's schedule back — anchor on the
   # self-identifying clause instead.
+  # Portable awk rather than a regex: the Codex loader packs the whole prompt onto
+  # ONE line containing both cadences, so a greedy `.*dispatched` picks the sibling's.
+  # index() finds the FIRST "dispatched" after the self-identifying clause. awk also
+  # sidesteps bounded/lazy quantifiers, which differ across grep implementations
+  # (BSD grep vs GNU grep vs ugrep) and would make this pass locally and fail in CI.
   self_cadence() {
-    grep -oE 'You are the devantler-tech[^.]{0,160}?dispatched [^.(]{0,40}(\([a-z0-9/ ]+\))?' "$1" 2>/dev/null \
-      | head -1 | sed -E 's/.*dispatched /dispatched /' | cut -c1-80
+    awk '
+      {
+        i = index($0, "You are the devantler-tech")
+        if (i > 0) {
+          rest = substr($0, i)
+          j = index(rest, "dispatched")
+          if (j > 0) { print substr(rest, j, 70); exit }
+        }
+      }' "$1" 2>/dev/null
   }
   if [ -f "$CODEX_LOADER" ]; then
     echo "    codex rrule:  $(grep -o 'BYHOUR=[0-9,]*' "$CODEX_LOADER" 2>/dev/null | head -1)"

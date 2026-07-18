@@ -24,6 +24,7 @@ jobs:
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
+      agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -49,6 +50,9 @@ jobs:
               - 'docs/scripts/check-active-projects-drift.test.sh'
               - '.gitmodules'
               - 'github/devantler-tech/github-actions/actions'
+            agent-telemetry:
+              - '.claude/scripts/agent-telemetry.sh'
+              - '.claude/scripts/agent-telemetry.test.sh'
             safe-clone:
               - '.claude/scripts/safe-clone.sh'
               - '.claude/scripts/safe-clone.test.sh'
@@ -155,6 +159,29 @@ jobs:
       - name: Check Active Projects lists for drift
         run: bash docs/scripts/check-active-projects-drift.sh
 
+  test-agent-telemetry:
+    name: Test agent telemetry miner
+    needs: changes
+    if: needs.changes.outputs.agent-telemetry == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # Synthetic session/loader fixtures in an isolated temp HOME — the miner
+      # never touches the real agent corpus. Both OSes because the daily runs
+      # happen on macOS while CI defaults to Linux, and the miner's date/find
+      # flags differ between the two.
+      - name: Self-test the agent telemetry miner
+        run: bash .claude/scripts/agent-telemetry.test.sh
+
   test-safe-clone:
     needs: changes
     if: needs.changes.outputs.safe-clone == 'true'
@@ -250,6 +277,7 @@ jobs:
       - build-docs
       - audit-docs
       - drift-check-active-projects
+      - test-agent-telemetry
       - test-safe-clone
       - test-submodule-init
       - test-maintainer-preflight
@@ -265,6 +293,7 @@ jobs:
             ${{ needs.build-docs.result }}
             ${{ needs.audit-docs.result }}
             ${{ needs.drift-check-active-projects.result }}
+            ${{ needs.test-agent-telemetry.result }}
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}
