@@ -473,8 +473,11 @@ result at the current head — self-promotion is forbidden before that. Request 
   never let a throttle shortcut you into self-reviewing.
   **Judge lane success or failure by a REAL review artifact at head, never by the tool's ack.**
   CodeRabbit's `@coderabbitai review` reply says *"✅ Action performed — Review finished"* even when
-  the review never started; the *following* comment carries the truth. So both the "it succeeded"
-  and the "it failed" determinations require a real artifact at head — and **the artifact's shape
+  the review never started; the *following* comment carries the truth. **SUCCESS is what requires a
+  real artifact at head; FAILURE is proven by that artifact's ABSENCE plus an outage signal** — a
+  stall past the wait window, an erroring/uninstalled app, or a rate-limit with no usable retry
+  window. (Demanding an artifact to prove failure would make the fallback unreachable in precisely
+  the outages it exists for.) The artifact's **shape
   differs per lane**: a CodeRabbit approval and a *findings-bearing* Codex result are review objects
   matched by `commit_id` == head, but **Codex's GREEN result is an issue COMMENT** carrying
   `**Reviewed commit:** <sha>`, with no `commit_id` field at all. Match a Codex green by that body
@@ -499,6 +502,13 @@ result at the current head — self-promotion is forbidden before that. Request 
     equal to the current PR head**; the survey reports it as `green_review=self@<sha>`, and it
     stales on the next push exactly like any other green. Findings you raise on your own PR are
     **fixed-or-refuted and their threads resolved** like a bot's, before promotion.
+  - **Pre-merge checks when CodeRabbit never reviewed.** CodeRabbit's pre-merge evaluator only runs
+    when CodeRabbit reviews, so in a both-lanes-down fallback there is no summary to be green — the
+    same lane-choice consequence the pentad already tolerates for a Codex-lane green, not a new
+    exemption. `premerge=not-posted` is therefore **not a gap** when CodeRabbit demonstrably did not
+    review; record which applies. This does **not** soften the surface: a **posted** summary that is
+    non-green, inconclusive, or unparseable still **fails closed** and blocks promotion exactly as
+    before, and the moment CodeRabbit is serving again its summary is required.
   - **Never** self-review a PR you did not author as a way to unblock someone else's merge, never
     self-review to bypass a lane that is merely slow, and never let a self-review substitute for the
     other four hygiene surfaces (CI, threads, conflicts, pre-merge checks).
