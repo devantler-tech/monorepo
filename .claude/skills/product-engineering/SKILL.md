@@ -118,8 +118,10 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
 1. **Pick the oldest *actionable* open issue — and "big" is not a reason to skip it.** Prefer the
    **oldest** startable issue. Skip an older one **only** if (a) it already has an open PR, (b) it is
    blocked on a **named, live-verified** external dependency you can cite, (c) it is too
-   under-specified to begin, or (d) a delivered experiment is waiting for its named future measurement
-   date. Once that date arrives, measuring it is actionable. **Size, difficulty, a `roadmap`/`enhancement`/
+   under-specified to begin, (d) a delivered experiment is waiting for its named future measurement
+   date — once that date arrives, measuring it is actionable — or (e) another instance holds a **live
+   claim** (assigned **and** branched, within ~2h, no PR yet; contract *Claim protocol*), the only
+   skip reason that expires on its own. **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
    when the oldest issue is large, **decompose it into a small first child and ship that increment**
    (`Fixes #child`; add `Part of #experiment` when the parent stays open) so the big thing advances
@@ -133,8 +135,19 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    **ship the decision as a draft PR** (he steers there) — never a passive "awaiting-maintainer" note, never
    the end-of-run report (he rarely reads it), never an **`@devantler` mention** (no notification). Re-verify
    any "gated" against live state before trusting it (memory goes stale) and name the
-   blocker in the report. A **bare assignee does *not* reserve** it (only an open PR does), so if nobody's opened
-   a PR you may take it regardless of who's assigned; if an **actionable trusted-author** PR already
+   blocker in the report. A **bare `devantler` assignee does *not* reserve** it **indefinitely** — a
+   `devantler` assignment plus a **pushed branch** is a live claim for ~2h (contract *Claim protocol*);
+   with no branch, or once that lapses with no PR, you may take it (timed from the issue's newest
+   `devantler` `assigned` timeline event, never a branch commit date). **Only the agent account's
+   assignment is a claim, and only it expires:** an issue assigned to a **human collaborator** (or
+   `Copilot`) is someone else's work-in-progress — respect it and pick a different issue. **Claim the lane before you build** (self-assign + push
+   the branch **with the issue number in its name**, then harden), check open PRs / remote `claude/*`
+   branches / assignees by **issue number rather than literal branch name**, and on a lost race
+   **abandon** — then diff your build against the winner's and post only findings you have verified:
+   execute the probe against a **trusted/routine-owned** winner's branch, but for an
+   **external-contributor** winner it is **static review only** (the trust gate is not relaxed by a
+   lost race). If an
+   **actionable trusted-author** PR already
    exists, drive *that* one instead of duplicating — a non-draft to merge, a **routine-owned draft**
    to genuine readiness → self-promotion → merge (contract *Autonomy*); leave
    automation-owned dependency PRs to repository automation, other authors' drafts to their owners,
@@ -159,7 +172,7 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    threads, secure a green review at head); **self-promote it only on genuine readiness** —
    programmatically tested + reviewed green + **tried and evaluated as a user** (contract *Autonomy*,
    maintainer direction 2026-07-16) — then drive it to merge per the contract's *Merge policy*
-   (definition PRs excepted: those keep the maintainer's promotion gate).
+   (definition PRs included: their separate promotion gate was retired 2026-07-18).
 
 ## 4. Test coverage
 Raise coverage where it *matters*, not for a vanity number.
@@ -199,6 +212,22 @@ Treat docs as part of the product — keep them **in sync** with what ships and 
   inaccuracies and stale examples, fill a missing how-to/quickstart/troubleshooting entry, tighten
   clarity and onboarding flow, repair dead links and broken samples, align terminology. Verify
   examples actually run; build-verify the site (the monorepo card's `docs` build) before the PR.
+- **Voice (every user-facing doc).** Write in the `jargon-free-voice` register — concise, and for
+  humans rather than machines (maintainer direction 2026-07-18; contract → *Enhancement work →
+  Documentation*). In practice:
+  - **Frame each item by what the reader gets**, never a bare inventory. *"Secrets — OpenBao holds
+    them, External Secrets pulls them into the cluster at runtime"* beats *"Secrets — OpenBao,
+    External Secrets Operator, SOPS"*.
+  - **Concrete outcomes over abstract process language.** *"so network configuration lives in Git"*
+    beats *"managed declaratively and reconciled by GitOps"*.
+  - **Cut repetition and filler** — bullets restating the sentence above them, an intro re-listing
+    what the next section covers, empty adjectives ("industry-standard", "batteries-included").
+  - **Calibrate to the audience — the SPIRIT, not a literal noun-strip.** For technical readers the
+    **stack nouns stay** (a reader hunting a Talos-based template must see "Talos"); dropping the
+    names that let someone identify what they are getting is a regression. Strip stack nouns only
+    for a genuinely non-technical reader — the vibe-coding case the skill was written for.
+  - Adding explanation where there was none may make a page *longer*; that is an acceptable trade
+    when it raises usefulness per word. Say so plainly in the PR rather than implying it shrank.
 - **Scope.** Spans **every product's own docs** (README, `AGENTS.md`, usage/reference) and the central
   **devantler.tech site** (`docs/`). The site's recurring slice (Site QA, Content Sync, Content Review)
   lives in the [monorepo card](../products/monorepo/SKILL.md); this section is the cross-product
