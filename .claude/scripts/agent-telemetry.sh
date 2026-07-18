@@ -667,18 +667,33 @@ if want safety; then
       { jq -Rr 'select(length>0)|(try (fromjson|..|strings) catch empty)' "$f" 2>/dev/null; \
         cat "$f" 2>/dev/null; } \
         | grep -hoEi "$CRED_TABLE_RE" 2>/dev/null | sed -E 's/^[^A-Za-z0-9_-]//' | sort -u
-    done | sort -u | awk '{
+    done | sort -u | awk '
+      function shape_of(x) {
+        if (index(x, "github_pat_") == 1) return "github-pat (fine-grained)"
+        if (x ~ /^gh[pousr]_/)            return "github-token (classic/app)"
+        if (index(x, "akia") == 1)        return "aws-access-key-id"
+        if (x ~ /^xox[baprs]-/)           return "slack-token"
+        if (index(x, "eyj") == 1)         return "jwt-like"
+        if (index(x, "-----begin") == 1)  return "private-key-block"
+        return ""
+      }
+      {
         t = tolower($0)
-        if      (index(t, "github_pat_") == 1) s = "github-pat (fine-grained)"
-        else if (t ~ /^gh[pousr]_/)            s = "github-token (classic/app)"
-        else if (index(t, "akia") == 1)        s = "aws-access-key-id"
-        else if (t ~ /^xox[baprs]-/)           s = "slack-token"
-        else if (index(t, "eyj") == 1)         s = "jwt-like"
-        else if (index(t, "-----begin") == 1)  s = "private-key-block"
+        s = shape_of(t)
+        if (s == "") {
+          # An ASSIGNMENT-wrapped token (`GITHUB_TOKEN=ghp_…`, `token=eyJ…`) is
+          # consumed by the generic alternative first — grep returns the
+          # LEFTMOST match, and the assignment keyword starts before the token
+          # prefix — so the most common real-leak form would land in the weak
+          # bucket. Classify the VALUE part before falling back to generic.
+          v = t
+          sub("^[^:=]*[:=][ \t]*[\"\047]?", "", v)
+          s = shape_of(v)
+        }
         # NB: the label itself passes through the output-boundary redactor, so
         # it must not be credential-SHAPED ("token=…" would come out mangled
         # as "token=<redacted>").
-        else s = "generic-assignment [WEAK signal: secret/token assignment shapes, names as often as values]"
+        if (s == "") s = "generic-assignment [WEAK signal: secret/token assignment shapes, names as often as values]"
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /'
     echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"
