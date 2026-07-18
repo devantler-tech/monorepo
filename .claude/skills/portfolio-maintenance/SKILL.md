@@ -229,7 +229,10 @@ Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../product
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md) ·
 [provider-upjet-unifi](../products/provider-upjet-unifi/SKILL.md) ·
 [world-at-ruin](../products/world-at-ruin/SKILL.md) *(game — a first-class product in the normal
-rotation and fairness rules, like every other card; maintainer direction 2026-07-17)*.
+rotation and fairness rules, like every other card; maintainer direction 2026-07-17)* ·
+[project-board](../products/project-board/SKILL.md) *(org project 5 — the maintainer's single
+navigation surface; a product in the normal rotation, so coverage/type/status/hierarchy drift is a
+defect somebody owns; maintainer direction 2026-07-18)*.
 
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**

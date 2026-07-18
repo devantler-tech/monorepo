@@ -678,7 +678,11 @@ becomes populated and **groupable** — a table view grouped by it renders each 
 nested beneath, which is the canonical "what is part of what" surface; **`Sub-issues progress`** gives
 a live `completed/total` + percent rollup per epic; and the filters `parent-issue:owner/repo#N`,
 `has:sub-issue`, `no:parent-issue` / `has:parent-issue` become available in both project views and
-repo issue search. Projects' **hierarchy view** — [GA since 2026-03-19](https://github.blog/changelog/2026-03-19-hierarchy-view-in-github-projects-is-now-generally-available/)
+repo issue search. ⚠️ **The two surfaces spell the parent/child qualifiers differently and are not
+interchangeable:** *repo issue search* uses `has:sub-issue`, while a *project view filter* keys off the
+project field name — **`has:sub-issues-progress` / `no:sub-issues-progress`**. GitHub **silently
+ignores** an unrecognised qualifier in a project filter, so the wrong spelling looks like it worked
+while filtering nothing. Projects' **hierarchy view** — [GA since 2026-03-19](https://github.blog/changelog/2026-03-19-hierarchy-view-in-github-projects-is-now-generally-available/)
 and **enabled by default on new views** — renders the full nesting inline in table views, up to 8
 levels, preserved through grouping, slicing and filtering. On an existing view, turn it on with
 *View → Show hierarchy*.
@@ -715,7 +719,14 @@ exactly that on 2026-07-18). The type is true from the moment the issue is filed
 
 Types and sub-issues are **orthogonal**: a type says what a thing *is*, a sub-issue link says what it
 *belongs to*. Labels stay for cross-cutting, repo-local tags (`automation`, `kubernetes`,
-`good first issue`) — never for the things above.
+`good first issue`).
+
+⚠️ **Transition — keep applying the type-labels for now.** The
+[`portfolio-surveyor`](.claude/agents/portfolio-surveyor.md) still selects ready work **by label**
+(`roadmap`, `enhancement`, `performance`, `refactor`, `bug`, `documentation`). Dropping those labels
+today because an issue now has a type would make newly-triaged issues **vanish from the
+oldest-actionable queue**. So set the type *and* keep the matching label until the surveyor is migrated
+to `type:` queries; retiring the duplicate labels is a follow-up, not part of this change.
 
 **Default: every issue belongs to an Epic** (maintainer direction 2026-07-18). A child that hangs off
 nothing is work whose *why* is unrecorded — it cannot roll up, it cannot be prioritised against a
@@ -733,7 +744,7 @@ existed on 2026-07-18), so decomposing them is real, high-value advance work.
 
 ### Every issue belongs on the board
 [Project 5 (🌊 Project Board)](https://github.com/orgs/devantler-tech/projects/5) is the maintainer's
-single navigation surface across the portfolio, so **every open issue in every active
+single navigation surface across the portfolio, so **every open issue in every active **public**
 `devantler-tech` repo belongs on it, and every board item carries a `Status`** — an item with no
 status is invisible in board layout and unsortable in triage, which defeats the surface. **The status
 ladder mirrors the agent's actual lifecycle, so every state answers "what's next":**
@@ -754,7 +765,9 @@ ladder mirrors the agent's actual lifecycle, so every state answers "what's next
 finishing work sits leftmost so the board reads *stop starting, start finishing* (maintainer direction
 2026-07-18). **Never re-order it into left-to-right flow**, and treat an over-limit column as a signal
 to finish rather than a limit to raise. A newly-filed issue lands in **📥 Backlog** unless you know
-better, and *never* in no-status.
+better, and *never* in no-status. **Private repos are the exception: project 5 is PUBLIC, so putting an
+item from a private repo (`wedding-app`, `ascoachingogvaner`, `fleet-gitops`) on it is a maintainer
+decision, never an agent default** — do not sweep them in during a coverage backfill.
 
 **"Blocked" is deliberately NOT a status.** Blocking is orthogonal to position — work can be blocked
 while *Ready* or while *In Review* — so a Blocked column would destroy the information about where it
@@ -778,8 +791,9 @@ Two mechanics make this a standing duty rather than something automation handles
   **backfilled** deliberately, and that is **two commands, not one** — `item-add` has no Status
   option, so adding alone recreates exactly the no-status items this section forbids:
   ```sh
-  gh project item-add 5 --owner devantler-tech --url <issue-url>      # returns the item id
-  gh project item-edit --id <item-id> --project-id <project-id> \
+  # item-add prints nothing useful off-TTY — ASK for the id explicitly:
+  ITEM=$(gh project item-add 5 --owner devantler-tech --url <issue-url> --format json --jq .id)
+  gh project item-edit --id "$ITEM" --project-id <project-id> \
     --field-id <status-field-id> --single-select-option-id <📥 Backlog option id>
   ```
 

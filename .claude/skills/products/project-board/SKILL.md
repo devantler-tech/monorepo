@@ -39,17 +39,24 @@ Until that is solved, backfill is a standing duty, not an exception.
 ## What "advance" means here
 
 - **Views — exactly three, and resist adding a fourth.** The board carries a **kanban (board)**, a
-  **backlog (table)** and a **roadmap (roadmap)** view. **Epic breakdown is a *grouping* on the
-  Backlog view (group by `Parent issue`), NOT a separate view** — maintainer direction 2026-07-18,
-  when a proposed fourth "By epic" view was folded into the Backlog instead. The principle
-  generalises: **prefer an extra grouping, slice or filter on an existing view over a new view.**
+  **backlog (table)** and a **roadmap (roadmap)** view. **Epic breakdown lives on the Backlog view via
+  the `Show hierarchy` toggle, NOT as a separate view and NOT as a `Parent issue` group-by** —
+  maintainer direction 2026-07-18, when a proposed fourth "By epic" view was folded into the Backlog
+  instead. The principle generalises: **prefer an extra grouping, slice or filter on an existing view
+  over a new view.**
   Every additional view is another surface to keep honest and another place for the maintainer to
   look; a board with three well-configured views beats one with seven overlapping ones. Add a fourth
   only when a genuine audience or cadence cannot be served by grouping an existing view.
-  ⚠️ **Views are UI-only — there is NO GraphQL or `gh` mutation to create or edit one** (`ProjectV2View`
-  is a read-only type; `gh project` has no view subcommand). Field and option changes are scriptable;
-  view changes need a browser with the maintainer's session. Propose them precisely (layout, filter
-  string, grouping, visible fields) so applying them is mechanical.
+  ⚠️ **Creating a view is scriptable; EDITING one is not.** REST documents
+  **`POST /orgs/{org}/projectsV2/{project_number}/views`** with `name`, `layout`
+  (`table`/`board`/`roadmap`), `filter` and `visible_fields` — so a *new* view can be created from the
+  API. There is **no documented PATCH/DELETE for a view**, `ProjectV2View` is a **read-only** GraphQL
+  type (no view mutations), and `gh project` has no view subcommand — so **changing an existing view's
+  filter, layout, grouping or toggles needs a browser** with the maintainer's session. (A GET against
+  the views path 404s on this org, so treat the POST as documented-but-unexercised: verify before
+  relying on it, and don't create a throwaway view to test — there is no documented way to delete it.)
+  Propose view *edits* precisely (layout, filter string, grouping, visible fields) so applying them by
+  hand is mechanical.
 
   **The only browser an agent can DRIVE is Chrome via the Claude extension.** Computer-use grants
   browsers at **read tier only** — screenshots work, clicks and typing are blocked at the OS level —
