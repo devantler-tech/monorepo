@@ -60,7 +60,22 @@ MONOREPO="${MONOREPO_DIR:-$HOME/git-personal/monorepo}"
 # NOTE the `-` not `:-`: an explicitly-empty PORTFOLIO_PATHS must stay empty and
 # trigger the refusal below, rather than silently falling back to a default that
 # widens scope. Fail closed means empty scans nothing, not everything.
-PORTFOLIO_PATHS="${PORTFOLIO_PATHS-$MONOREPO}"
+# Default scope = the portfolio root PLUS each submodule checkout inside it.
+# Deriving the real submodule paths is what lets the slug matcher stay strict:
+# a product session at `$MONOREPO/applications/ksail` and a neighbouring
+# `monorepo-client` produce structurally IDENTICAL slugs (`…-monorepo-<rest>`),
+# so slug text alone cannot separate them. Enumerating the paths that actually
+# exist resolves it precisely — in-scope checkouts are named, everything else
+# stays excluded.
+default_portfolio_paths() {
+  printf '%s' "$MONOREPO"
+  [ -f "$MONOREPO/.gitmodules" ] || return 0
+  git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.path$' 2>/dev/null \
+    | awk '{print $2}' | while IFS= read -r sub; do
+        [ -n "$sub" ] && printf ':%s/%s' "$MONOREPO" "$sub"
+      done
+}
+PORTFOLIO_PATHS="${PORTFOLIO_PATHS-$(default_portfolio_paths)}"
 # The GitHub org a Codex worktree's origin remote must belong to for that
 # worktree to count as portfolio scope (see in_scope_cwd).
 PORTFOLIO_ORG="${PORTFOLIO_ORG:-devantler-tech}"
@@ -90,7 +105,27 @@ PORTFOLIO_SLUG_RE=$(
       printf '^%s(/|$)|' "$q"
     done | sed 's/|$//'
 )
+
+# The same rule expressed over a bare DIRECTORY NAME, so scope can be decided
+# from `ls` alone — before descending into any tree (see session_files).
+PORTFOLIO_DIR_RE=$(
+  printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
+  | while IFS= read -r p; do
+      printf '%s(--claude-worktrees-[^/]*|--git-modules-[^/]*)?|' \
+        "$(rx_escape "$(path_to_slug "$p")")"
+    done | sed 's/|$//'
+)
 [ -n "$PORTFOLIO_SLUG_RE" ] || { echo "PORTFOLIO_PATHS resolved empty — refusing to scan" >&2; exit 2; }
+
+# True when the session store root is itself under an allowlisted path — then the
+# store contains only in-scope work by construction and needs no dir filtering.
+store_root_in_scope() {
+  local p
+  printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
+  | while IFS= read -r p; do
+      case "$CLAUDE_PROJECTS" in "$p"|"$p"/*) echo match ;; esac
+    done | grep -q match
+}
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "MISSING-DEP: $1" >&2; return 1; }; }
 need jq || exit 3
@@ -228,10 +263,25 @@ newest_first() {
 }
 
 session_files() {
-  newest_first "$CLAUDE_PROJECTS" \
-    | sort -rn | cut -d' ' -f2- \
-    | grep -E "($PORTFOLIO_SLUG_RE)" \
-    | head -n "$MAX_FILES"
+  # Filter PROJECT DIRECTORIES first, then walk only the in-scope ones. The
+  # contract forbids discovering or enumerating excluded repositories at all —
+  # so walking and statting every *.jsonl on the host and filtering afterwards
+  # was itself the prohibited act, even though excluded files were never read.
+  # One `ls` of directory NAMES (no descent, no stat) is the minimum needed to
+  # decide scope, and out-of-scope trees are never entered.
+  [ -d "$CLAUDE_PROJECTS" ] || return 0
+  # If the store ROOT is itself inside an allowlisted path, it is already scoped
+  # and every directory under it is in scope — no per-directory filter needed.
+  if store_root_in_scope; then
+    newest_first "$CLAUDE_PROJECTS" | sort -rn | cut -d' ' -f2- | head -n "$MAX_FILES"
+    return 0
+  fi
+  ls -1 "$CLAUDE_PROJECTS" 2>/dev/null \
+  | grep -E "^($PORTFOLIO_DIR_RE)$" \
+  | while IFS= read -r d; do
+      newest_first "$CLAUDE_PROJECTS/$d"
+    done \
+  | sort -rn | cut -d' ' -f2- | head -n "$MAX_FILES"
 }
 
 # The Codex instance's own transcripts. Its schema differs from Claude's
@@ -407,7 +457,7 @@ if want efficiency; then
                  | select(.type=="tool_use")) as $t ({};
                    .[$t.id] = ($t.input?.description? // $t.input?.command? // "?"))) as $desc
         | .[] | select(.type=="user") | .message.content[]?
-        | select(.type=="tool_result")
+        | select(.type=="tool_result" and .is_error==true)
         | select((.content | tostring) | test("Command timed out after"))
         | ($desc[.tool_use_id] // "<unknown command>") | .[0:60]
       ' "$f" 2>/dev/null
