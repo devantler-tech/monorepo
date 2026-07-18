@@ -51,7 +51,28 @@ card.
    the maintainer to replace a credential that was never tested. Keep the injected-token result, saved-login
    result, and `git fetch` result as separate gates, because repository reachability cannot prove GitHub API
    identity (and vice versa); record only these gate classifications in durable memory, never credential output.
-3. **Load durable memory:** **`view` your native memory** (Claude: the memory tool / the project
+3. **Check the memory store fits in one read — BEFORE you read it.** A file past the Read cap is
+   **truncated silently**: the run continues on a partial cursor with no signal that carry-forwards,
+   stand-down notes, or `HANDS-OFF` records beyond the cut are missing (the 2026-06-05 blinding;
+   breached again 2026-07-18). This check runs **ahead of the `view` below** — running it after would
+   let the run ingest the truncated cursor first, which is the exact failure it exists to prevent:
+
+   ```sh
+   .claude/scripts/memory-hygiene.sh --dir <memory-dir>   # read-only; exit 1 = consolidate this tick
+   ```
+
+   A non-zero exit makes **consolidating the named file this tick** a mandated hygiene item, not an
+   optional courtesy — that is what stops the size rule (prose living inside the file it governs) from
+   being breached over and over. **Consolidate the flagged file FIRST, then run step 4** so the cursor
+   you act on is complete; if you consolidate later in the run, re-`view` the file afterwards. `near`
+   entries are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or an
+   unreadable store — resolve it rather than proceeding on an unchecked memory read.
+   **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
+   before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
+   rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
+   concurrent append (the same two-writer discipline as a shared `claude/*` branch). Consolidating a
+   large file is read-heavy — **delegate it to a subagent** so the raw content stays out of your context.
+4. **Load durable memory:** **`view` your native memory** (Claude: the memory tool / the project
    `memory/` dir + `MEMORY.md`) — the single source of truth for cross-run orchestration (rotation
    cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent
    run notes, `learnings`). It may be stale — verify against live GitHub. *(The legacy `state.json` is
@@ -352,8 +373,23 @@ actionable open issue**, and any new non-trivial find is **filed as an issue fir
 backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
 7. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
    open issue that's actually startable; skip one only if it's blocked, too under-specified to begin, or
-   it already has an open PR. A **bare assignee does *not* reserve** an issue (only an open PR does), so
-   if nobody has opened one you may pick it up regardless of who's assigned. If it **already has an
+   it already has an open PR. A **bare `devantler` assignee does *not* reserve** an issue
+   **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
+   (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
+   (timed from the issue's newest `devantler` `assigned` timeline event, never a branch commit date).
+   **Only the agent account's assignment is a claim, and only it expires:** an issue assigned to a
+   **human collaborator** (or `Copilot`) is someone else's work-in-progress — respect it and pick a
+   different issue, never take it over on this window. **Claim
+   before you build:** self-assign + push the branch **with the issue number in its name** the moment
+   you select — and if `devantler` is ALREADY assigned (a stale bare assignment from an abandoned run),
+   **remove then re-add**, since adding an existing assignee is a no-op that would leave your lease
+   carrying the old timestamp. **The push decides the race:** put a real commit on the claim branch
+   (never a bare base pointer), push without force, then confirm `git ls-remote` shows YOUR sha — two
+   instances derive the same branch name, so a rejected push or someone else's tip means you lost;
+   stand down rather than force over them. Check open PRs, remote
+   `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
+   (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
+   itself. If it **already has an
    actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
    automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
    **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
@@ -419,7 +455,9 @@ For each selected product:
    .claude/scripts/submodule-init.sh <path>   # init at the pinned commit + repair + probe (fail-closed)
    ```
 
-   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>` and work
+   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>`
+   (issue-less hotfixes and trivial obvious fixes keep plain `claude/<area>-<desc>` — they go straight
+   to a PR, so no claim window applies) and work
    **in that worktree**. A stray `core.worktree` makes the worktree resolve back into
    `.git/modules/<name>`, silently collapsing every parallel session into one physical tree — so on any
    submodule you did **not** initialise through the wrapper (a tree someone else populated), **probe
