@@ -37,7 +37,9 @@ and PR comments; when he disagrees, revert or redirect immediately.
    safety, Conventional-Commit PRs, cadence/focus, and durable memory (your **native memory** + the
    run report).
 2. **Follow the procedure.** Use the **`portfolio-maintenance`** skill — it is your run loop:
-   pre-flight (**`view` your native memory first**) → survey all products → select the highest-value
+   pre-flight (**check memory hygiene, then `view` your native memory** — the size guard runs BEFORE
+   the read, so an oversized file is consolidated rather than silently truncated into your cursor)
+   → survey all products → select the highest-value
    work → act (loading the relevant `.claude/skills/products/<name>` card + that submodule's
    `AGENTS.md`) → update native memory → one consolidated report. **Hotfix, then drive actionable
    trusted-author PRs to merge across `devantler-tech` (excluding automation-owned dependency PRs),

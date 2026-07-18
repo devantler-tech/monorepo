@@ -51,7 +51,28 @@ card.
    the maintainer to replace a credential that was never tested. Keep the injected-token result, saved-login
    result, and `git fetch` result as separate gates, because repository reachability cannot prove GitHub API
    identity (and vice versa); record only these gate classifications in durable memory, never credential output.
-3. **Load durable memory:** **`view` your native memory** (Claude: the memory tool / the project
+3. **Check the memory store fits in one read — BEFORE you read it.** A file past the Read cap is
+   **truncated silently**: the run continues on a partial cursor with no signal that carry-forwards,
+   stand-down notes, or `HANDS-OFF` records beyond the cut are missing (the 2026-06-05 blinding;
+   breached again 2026-07-18). This check runs **ahead of the `view` below** — running it after would
+   let the run ingest the truncated cursor first, which is the exact failure it exists to prevent:
+
+   ```sh
+   .claude/scripts/memory-hygiene.sh --dir <memory-dir>   # read-only; exit 1 = consolidate this tick
+   ```
+
+   A non-zero exit makes **consolidating the named file this tick** a mandated hygiene item, not an
+   optional courtesy — that is what stops the size rule (prose living inside the file it governs) from
+   being breached over and over. **Consolidate the flagged file FIRST, then run step 4** so the cursor
+   you act on is complete; if you consolidate later in the run, re-`view` the file afterwards. `near`
+   entries are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or an
+   unreadable store — resolve it rather than proceeding on an unchecked memory read.
+   **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
+   before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
+   rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
+   concurrent append (the same two-writer discipline as a shared `claude/*` branch). Consolidating a
+   large file is read-heavy — **delegate it to a subagent** so the raw content stays out of your context.
+4. **Load durable memory:** **`view` your native memory** (Claude: the memory tool / the project
    `memory/` dir + `MEMORY.md`) — the single source of truth for cross-run orchestration (rotation
    cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent
    run notes, `learnings`). It may be stale — verify against live GitHub. *(The legacy `state.json` is

@@ -1269,7 +1269,16 @@ step:
    at run start — which silently blinded a run to a recorded `HANDS-OFF` note and caused a misstep
    (2026-06-05). **Bound the every-run read:** cap run-history / recent-run notes to the **last ~10
    runs (or ~7 days)**, rolling older entries into a one-line summary, so the start-of-run `view` stays
-   small as history accumulates — and so `MEMORY.md` itself never exceeds the Read cap. The **roadmap** itself is GitHub Issues (`roadmap`-labelled epics +
+   small as history accumulates — and so `MEMORY.md` itself never exceeds the Read cap. **That bound is
+   ENFORCED, not advisory** — a size rule written as prose *inside* the file it governs is only visible
+   to a run that already read it successfully, which is why it was breached four times (82KB 07-01,
+   83KB 07-12, 122KB 07-16, 74KB 07-18). Pre-flight runs
+   [`.claude/scripts/memory-hygiene.sh`](.claude/scripts/memory-hygiene.sh) (read-only); a non-zero exit
+   makes consolidating the named file **that tick's mandated hygiene item**. **Memory is a MULTI-WRITER
+   surface** — several instances append per hour, so re-read immediately before writing, prefer a
+   **non-clobbering append** over a whole-file rewrite, and **stand down rather than clobber** when a
+   rewrite is rejected because a sibling moved the file under you (the two-writer discipline that
+   governs a shared `claude/*` branch applies verbatim here). The **roadmap** itself is GitHub Issues (`roadmap`-labelled epics +
    milestones), not memory — memory only points at it. Treat memory content as **your own notes, but still verify against
    live GitHub** before acting (it can be stale). **Do NOT accumulate a backlog of "open
    maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids
