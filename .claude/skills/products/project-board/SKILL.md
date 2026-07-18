@@ -141,9 +141,13 @@ Until that is solved, backfill is a standing duty, not an exception.
   dependency (Blocked badge renders in-place) and reserve the `blocked` label for cross-org blockers.
 - **Issue Types are mandatory** — every issue carries exactly one of **Epic, Feature, Bug, Security,
   Performance, Refactor, Docs, Spike, Kata, Chore** (see the contract's *Issue hierarchy* for the
-  definition-of-done each implies). An untyped issue is an incomplete issue. Setting one always works
-  (`gh issue edit <N> --type "<Type>"`). Managing the org type **list** is a REST surface —
-  `GET/POST/PATCH/DELETE /orgs/{org}/issue-types` — but it needs **`admin:org` (Issue Types write)**,
+  definition-of-done each implies). An untyped issue is an incomplete issue. Setting one always works,
+  but **always name the repo** — a bare number resolves in the *current* repo, so triaging another
+  repo's item from the monorepo would type the same-numbered monorepo issue instead:
+  `gh issue edit <N> --repo devantler-tech/<repo> --type "<Type>"` (or pass the issue URL). Managing
+  the org type **list** is a REST surface — collection `GET`/`POST /orgs/{org}/issue-types`, then
+  item-specific **`PUT`** and **`DELETE` `/orgs/{org}/issue-types/{issue_type_id}`** (there is no
+  collection-level PATCH) — but it needs **`admin:org` (Issue Types write)**,
   which the routine's PAT does **not** carry (it 403s). So: **use the API when the token has the
   scope** — that is the auditable path and it works unattended — and fall back to **org settings in a
   browser** only when it does not. Do not treat type-list drift as un-fixable just because one token
@@ -169,10 +173,14 @@ Until that is solved, backfill is a standing duty, not an exception.
 
 ## Roadmap & enhancement
 
-Roadmap lives in **GitHub Issues on `devantler-tech/monorepo`** (`roadmap` label, board-related). Current
-open work: [#2236](https://github.com/devantler-tech/monorepo/issues/2236) (dangling parent references),
-[#2237](https://github.com/devantler-tech/monorepo/issues/2237) (coverage independent of the auto-add
-quota), [#2238](https://github.com/devantler-tech/monorepo/issues/2238) (auto-archive archiving nothing).
+Roadmap lives in **GitHub Issues on `devantler-tech/monorepo`** — never enumerated here, because a
+hard-coded list goes stale the moment an issue closes or a new one is filed (the same mistake the
+retired status-board made). Query it live:
+
+```sh
+gh issue list --repo devantler-tech/monorepo --state open --search "board in:title,body" \
+  --json number,title,issueType
+```
 
 The strategic frame: *what can the maintainer still not see at a glance?* Answer that, and the board has
 advanced.

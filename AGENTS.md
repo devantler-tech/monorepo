@@ -33,7 +33,7 @@ keeping them healthy *and* moving them forward.
 | World at Ruin (game) | `devantler-tech/world-at-ruin` | `applications/world-at-ruin` | [AGENTS.md](https://github.com/devantler-tech/world-at-ruin/blob/main/AGENTS.md) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
-| UniFi network (private) | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
+| UniFi network | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
 | 🌊 Project Board (org project 5) | — (not a repo; [org project 5](https://github.com/orgs/devantler-tech/projects/5)) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
 
 > Submodule `AGENTS.md` links use full GitHub URLs because those files live in the submodule repos, not this repo's tree (a relative link would 404 on GitHub).
@@ -950,8 +950,12 @@ finishing work sits leftmost so the board reads *stop starting, start finishing*
 2026-07-18). **Never re-order it into left-to-right flow**, and treat an over-limit column as a signal
 to finish rather than a limit to raise. A newly-filed issue lands in **📥 Backlog** unless you know
 better, and *never* in no-status. **Private repos are the exception: project 5 is PUBLIC, so putting an
-item from a private repo (`wedding-app`, `ascoachingogvaner`, `fleet-gitops`) on it is a maintainer
-decision, never an agent default** — do not sweep them in during a coverage backfill.
+item from ANY private repo on it is a maintainer decision, never an agent default** — do not sweep
+them in during a coverage backfill. **Determine visibility live, never from a hard-coded list or from
+the portfolio map's parenthetical** (both go stale — the map still said "UniFi network (private)" on
+2026-07-18 when the repo had become public):
+`gh api repos/devantler-tech/<repo> --jq .private`, or enumerate with
+`gh api "orgs/devantler-tech/repos?type=private" --paginate --jq '.[]|select(.archived==false)|.name'`.
 
 **"Blocked" is deliberately NOT a status.** Blocking is orthogonal to position — work can be blocked
 while *Ready* or while *In Review* — so a Blocked column would destroy the information about where it

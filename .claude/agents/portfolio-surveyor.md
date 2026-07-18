@@ -294,7 +294,9 @@ public and private — no per-repo loop needed to enumerate):
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
 5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
    (untriaged); automation-owned dependency PRs remain only their compact no-action rows. From (2): `roadmap`-labelled epics and ready
-   `enhancement`/`performance`/`refactor`/`bug`/`documentation` issues; flag repos with **no open
+   `security`/`enhancement`/`performance`/`refactor`/`bug`/`documentation` issues (**`security` first
+   — the contract treats it as first-class substantive work, so a security issue must never sit behind
+   less critical work in the queue**); flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
    repos outside the map (`.github`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`)
