@@ -299,15 +299,24 @@ public and private — no per-repo loop needed to enumerate):
    Epics carried no `roadmap` label on 2026-07-18, and `Spike`/`Kata`/`Chore` have no label at all, so
    a label sweep silently drops them. Sweep each type once:
    ```sh
-   # The search QUALIFIER type: works; there is NO issueType JSON field (gh search issues --json
-   # errors on it) — verified 2026-07-18. Project created_at (issue AGE, for the oldest-first
-   # queue) — NOT updated_at, which a comment on a years-old issue resets to today — and keep the
-   # WHOLE body, because a Kata's measurement date can sit anywhere in a structured issue:
+   # VERIFIED WORKING 2026-07-18 — run it, don't retype it from memory:
+   #  · the search QUALIFIER type: works; there is NO issueType JSON field (gh search issues --json
+   #    errors on it), and `no:type` is SILENTLY IGNORED (returns the full set, not the untyped set)
+   #  · `gh api --jq` does NOT forward jq CLI options — `--arg` errors ("accepts 1 arg(s)"), so the
+   #    type is prefixed with sed, not passed into jq
+   #  · created_at is issue AGE for the oldest-first queue; updated_at is reset to today by a comment
+   #  · the body is newline/tab-stripped and bounded — a raw body emitted 25 lines for ONE issue
+   #    and would flood this deliberately compact digest
    for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do
      gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate \
-       --jq --arg t "$T" '.items[] | "\($t)\t\(.repository_url|split("/")|last)#\(.number)\t\(.created_at[0:10])\t\(.title)\t\(.body//"")"'
+       --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10],
+              .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"
    done
    ```
+   ⚠️ **Type sweeps alone are NOT complete — 65 open issues were untyped on 2026-07-18.** Since
+   `no:type` does not work, derive the untyped set as **(the primary org-wide open-issue sweep) minus
+   (the union of the type sweeps)** and report it as a **triage** signal: an untyped issue is invisible
+   to every type filter on the board and to this selection, so typing it is the fix.
    **Drop hits from archived repos** — this raw Search call has no archived filter (the primary sweep
    does), so an archived repo's open issue surfaces as actionable when it is a read-only tombstone
    (`reusable-workflows` is the live example). **`security` is REPORTED, not prioritised**: the queue
