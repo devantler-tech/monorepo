@@ -238,9 +238,21 @@ public and private — no per-repo loop needed to enumerate):
      Emit the remaining undisclosed exact-login comments as
      `CANDIDATE-MAINTAINER-ISSUE-COMMENT` with a one-line gist. The orchestrator's creation record
      decides whether the issue is routine-owned before the comment becomes an instruction.
-4. **CI red on `main` (bounded, per-repo).** For each repo, one bounded call:
-   `gh run list --repo devantler-tech/<repo> --branch main --status failure --limit 3 --json workflowName,headSha,createdAt,url,conclusion`
-   — report only repos with a recent (~2-day) failure, one line each.
+4. **CI red on `main` (bounded, per-repo).** Judge `main` by **its current head**, never by a window
+   of failed runs. A failed check-run is bound to the sha it ran against, so it lingers in the repo's
+   history until `main` moves; and a superseded earlier attempt sits in the rollup beside the fresh
+   green ones. Querying `--status failure` therefore reports reds that are not the state of `main`.
+   Two calls per repo:
+   1. `gh api repos/devantler-tech/<repo>/commits/main --jq '.sha'` — resolve the head first.
+   2. `gh api "repos/devantler-tech/<repo>/commits/<sha>/check-runs?per_page=100" --jq '.check_runs[]|"\(.conclusion // .status)\t\(.name)\t\(.completed_at)"'`
+      — only check-runs attached to **that** sha.
+
+   Then, **within that sha, keep only the newest run per check name** (greatest `completed_at`) so a
+   superseded earlier attempt cannot count, and treat `skipped`/`neutral`/still-running as **not
+   red**. Report a red only when a surviving check concluded `failure`/`timed_out`/`cancelled`;
+   prefer the repo's aggregate required check (`CI - Required Checks`) as the headline when present.
+   **Always name the judged sha** in the line so the claim is falsifiable, and fail closed on a query
+   error (report `unknown`, never a silent green).
 5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
    (untriaged); automation-owned dependency PRs remain only their compact no-action rows. From (2): `roadmap`-labelled epics and ready
    `enhancement`/`performance`/`refactor`/`bug`/`documentation` issues; flag repos with **no open
@@ -271,7 +283,7 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 - CANDIDATE-MAINTAINER-ISSUE-COMMENT <repo> #<n> — `devantler`: "<one-line gist>" → orchestrator applies creation record; instruction only when routine-owned
 - CANDIDATE-SIBLING-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
-- <repo>: CI red on main — <workflow> (<run url>)
+- <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]> → AUTOMATION-OWNED (NO-ACTION)
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
