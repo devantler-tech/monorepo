@@ -78,3 +78,7 @@
 	path = applications/world-at-ruin
 	url = git@github.com:devantler-tech/world-at-ruin.git
 	branch = main
+[submodule "libraries/kyverno-policies"]
+	path = libraries/kyverno-policies
+	url = git@github.com:devantler-tech/kyverno-policies.git
+	branch = main

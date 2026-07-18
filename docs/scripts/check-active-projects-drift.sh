@@ -76,6 +76,15 @@
 #                          the doc page and the marker disposition to be updated
 #                          in lockstep. (Reads only the marker and the in-repo doc
 #                          pages, so it stays network-free.)
+#   - Homepage featured  — the homepage intentionally promotes a curated subset
+#                          of Active Projects, but both surfaces are hand-written.
+#                          We extract the literal LinkCard titles from only the
+#                          Featured Projects section and require that set to be a
+#                          subset of the linked H2 titles on Active Projects. A
+#                          stale or renamed featured card therefore fails CI,
+#                          while projects that are active but not featured remain
+#                          valid. Dynamic blog LinkCards are outside the section
+#                          and cannot enter the comparison.
 #
 # Run from the repository root (CI sets the working directory there); falls back
 # to a path relative to this script for local runs.
@@ -85,11 +94,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="${GITHUB_WORKSPACE:-$(cd "$script_dir/../.." && pwd)}"
 
 mdx="$repo_root/docs/src/content/docs/projects/active.mdx"
+homepage="$repo_root/docs/src/content/docs/index.mdx"
 actions_dir="$repo_root/github/devantler-tech/github-actions/actions"
 rw_workflows_dir="$repo_root/github/devantler-tech/github-actions/actions/.github/workflows"
 gitmodules="$repo_root/.gitmodules"
 templates_dir="$repo_root/docs/src/content/docs/templates"
 content_dir="$repo_root/docs/src/content"
+homepage_parity_checker="$script_dir/check-homepage-project-parity.mjs"
 
 # Anchor each H2 section on the source repo URL it links to — unique and stable.
 actions_anchor="](https://github.com/devantler-tech/actions)"
@@ -102,6 +113,8 @@ die_missing() {
 }
 
 [ -f "$mdx" ] || die_missing "active.mdx" "$mdx"
+[ -f "$homepage" ] || die_missing "homepage index.mdx" "$homepage"
+[ -f "$homepage_parity_checker" ] || die_missing "homepage parity checker" "$homepage_parity_checker"
 [ -d "$actions_dir" ] || die_missing "actions submodule" "$actions_dir"
 [ -d "$rw_workflows_dir" ] || die_missing "actions submodule workflows directory" "$rw_workflows_dir"
 [ -d "$content_dir" ] || die_missing "docs content directory" "$content_dir"
@@ -140,6 +153,13 @@ done
 if [ "$fail" -eq 0 ]; then
   echo "OK: no page links to a retired repo (${#retired_repo_urls[@]} pinned)."
 fi
+
+# The homepage/Active Projects relation is semantic MDX, so parse its AST rather
+# than guessing at comments, code fences, JSX attributes, or JavaScript strings.
+if ! node "$homepage_parity_checker" "$homepage" "$mdx"; then
+  fail=1
+fi
+
 [ -f "$gitmodules" ] || die_missing ".gitmodules" "$gitmodules"
 [ -d "$templates_dir" ] || die_missing "templates docs directory" "$templates_dir"
 

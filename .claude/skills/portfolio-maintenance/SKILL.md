@@ -240,7 +240,8 @@ result. **Overlay your native-memory cadence cursors yourself** — each product
 `needs_attention`, and the
 CI/link caches — since the surveyor reads only live GitHub, not memory. ~Monthly, also do the
 **holistic review** (contract *Holistic review*): scan the suite for generic patterns to extract into
-the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, `plugins`) — and, on
+the shared libraries (`devantler-tech/actions`, `agent-skills`, `agent-plugins`, and
+`kyverno-policies` for cluster guardrail/admission/generation policy patterns) — and, on
 the same cadence (plus after any credential or agent-tooling change), a **read-only local-host
 least-privilege review** (contract *Local agent host*): token scopes, both agents' permission/sandbox
 configs, secret exposure, cluster credential scope, OS-account privileges. Record findings in
@@ -256,6 +257,7 @@ Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../product
 [github-actions](../products/github-actions/SKILL.md) · [skills (+ plugins)](../products/agent-skills/SKILL.md) ·
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md) ·
 [provider-upjet-unifi](../products/provider-upjet-unifi/SKILL.md) ·
+[kyverno-policies](../products/kyverno-policies/SKILL.md) ·
 [world-at-ruin](../products/world-at-ruin/SKILL.md) *(game — a first-class product in the normal
 rotation and fairness rules, like every other card; maintainer direction 2026-07-17)*.
 

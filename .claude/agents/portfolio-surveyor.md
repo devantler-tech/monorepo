@@ -297,7 +297,7 @@ public and private — no per-repo loop needed to enumerate):
    `enhancement`/`performance`/`refactor`/`bug`/`documentation` issues; flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
-   repos outside the map (`.github`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`)
+   repos outside the map (`.github`, `maintenance`, `fleet-gitops`, `aws`)
    are never strategy-review candidates, however empty their issue lists.
 6. **Stop at the portfolio boundary.** Do not add cross-organisation discovery, even for PRs authored
    by `devantler`. The orchestrator cannot authorise an external repository from survey metadata; only
@@ -305,7 +305,7 @@ public and private — no per-repo loop needed to enumerate):
 
 Portfolio repos (the org-wide search covers them; this is the canonical list to reason over). The
 **authoritative set is the org's live non-archived repo list**: the monorepo `AGENTS.md` portfolio
-map names the *products*, and org/infra repos outside that map (e.g. `.github`, `kyverno-policies`,
+map names the *products*, and org/infra repos outside that map (e.g. `.github`,
 `maintenance`, `fleet-gitops`, `aws`) are in scope too. Reconcile each run with one bounded call —
 `gh repo list devantler-tech --no-archived --limit 100 --json name` — and when that live set
 disagrees with **the list below**, survey the live set and flag the drift in the digest rather than
