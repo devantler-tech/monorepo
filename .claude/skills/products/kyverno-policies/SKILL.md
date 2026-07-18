@@ -31,9 +31,12 @@ unless a positive control proves the policy loaded
 repo's own validation block rather than a naive invocation.
 
 **Validation** (run every gate before opening or updating a PR — the repo's `AGENTS.md` is
-authoritative if this drifts):
+authoritative if this drifts). **First confirm your local CLI matches the repo's pinned
+`KYVERNO_CLI_VERSION`** (in `.github/workflows/ci.yaml`) — the CLI defines how the behaviour
+fixtures evaluate, so a version mismatch makes a local pass mean something different from CI:
 
 ```sh
+kyverno version   # must match KYVERNO_CLI_VERSION in .github/workflows/ci.yaml
 yamllint .
 kubectl kustomize . > /dev/null
 kyverno test . --require-tests --detailed-results --remove-color

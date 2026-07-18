@@ -51,10 +51,12 @@ them**: the repo's own `AGENTS.md` is authoritative; the
 
 **Shared libraries** (leverage points across the whole suite — see *Holistic review* and the
 `product-engineering` skill): the CI building block `devantler-tech/actions` (which
-absorbed the archived `reusable-workflows` repo), and the agent extensions `devantler-tech/agent-skills` (generic,
+absorbed the archived `reusable-workflows` repo), the agent extensions `devantler-tech/agent-skills` (generic,
 cross-tool agent skills) + `devantler-tech/agent-plugins` (a tool-neutral marketplace bundling those skills
 for VS Code / Copilot CLI / Claude Code; rescope in progress —
-[plugins#7](https://github.com/devantler-tech/agent-plugins/issues/7)). A generic pattern proven in one
+[plugins#7](https://github.com/devantler-tech/agent-plugins/issues/7)), and the cluster-guardrail
+catalog `devantler-tech/kyverno-policies` (shared, tested Kyverno policies the platform and
+platform-template consume instead of vendoring copies). A generic pattern proven in one
 product belongs in a shared library so *every* product inherits it — keep them **industry-standard and
 tool-neutral** (the portability principle).
 
@@ -1512,7 +1514,8 @@ work misses:
   lint/test setup, an agent skill, a docs convention) has independently appeared in 2+ products, it has
   become *generic* — extract it into the right **shared library** so every product inherits it instead
   of drifting: CI → `devantler-tech/actions` (composite actions + reusable workflows); agent skills →
-  `devantler-tech/agent-skills`; (plugins → `devantler-tech/agent-plugins` once created). Then propagate consumers
+  `devantler-tech/agent-skills`; (plugins → `devantler-tech/agent-plugins` once created); cluster
+  guardrail / admission / generation policies → `devantler-tech/kyverno-policies`. Then propagate consumers
   to the shared version.
 - **Consistency & drift.** Versions, pinned actions, toolchains, conventions, and `AGENTS.md
   ## Maintenance` sections aligned across the suite; divergence reconciled toward the best pattern.
