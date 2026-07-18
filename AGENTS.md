@@ -610,14 +610,91 @@ operator/user needs, ecosystem and dependency shifts, accumulated tech debt, gap
 quality / performance / docs, and how it fits the portfolio — and from that create or refresh a small
 set (≈3–7) of `roadmap` issues using the evidence-led shape in *Build the right thing*.
 Decompose epics into small, well-specified, independently-shippable issues that preserve the parent's
-evidence, audience, hypothesis, and success signal while adding concrete acceptance criteria. Triage
-incoming issues into this structure (label, prioritise, dedupe, close
-stale/duplicate with a reason). Native memory holds only a lightweight per-product cursor (last
+evidence, audience, hypothesis, and success signal while adding concrete acceptance criteria — and
+**link each child to its epic as a real sub-issue** (see *Issue hierarchy* below; a prose `Part of #N`
+is not a link). Triage incoming issues into this structure (type, label, prioritise, dedupe, add to
+the board with a `Status`, close stale/duplicate with a reason). Native memory holds only a lightweight per-product cursor (last
 strategy review, current theme); the issues themselves are the durable roadmap, and they feed the
 single work queue the agent drains **oldest-actionable-first** (see *Issue-driven*) — strategy and
 decomposition exist to keep that queue stocked with well-formed, ready work. Implementing PRs use
 `Fixes #delivery` to close the delivered slice and, when needed, `Part of #experiment` to preserve its
 outcome record.
+
+### Issue hierarchy — sub-issues are the structure; prose is NOT
+**Writing `Part of #99` in an issue body creates NO relationship.** It renders a cross-reference and
+nothing else: no parent, no rollup, no project field, no filterable edge. Decomposition is expressed
+with GitHub **sub-issues** (GA since 2025-04-09) — a first-class link — and a decomposition that
+exists only as prose is **not decomposed**, it is merely described. (Evidence, 2026-07-18: 52 of 203
+open portfolio issues carried a prose `Part of #N` and **2** carried a real link, so every epic on
+[project 5](https://github.com/orgs/devantler-tech/projects/5) showed an empty `Sub-issues progress`
+and the maintainer could not see what belonged to what. Maintainer direction the same day: correct
+hierarchy use is what makes that legible.)
+
+**Every child issue gets a real link, at creation time:**
+```sh
+gh issue create --repo devantler-tech/<repo> --title "…" --body "…" --parent <PARENT>
+gh issue edit <PARENT> --repo devantler-tech/<repo> --add-sub-issue <CHILD>[,<CHILD>…]
+gh issue edit <CHILD>  --repo devantler-tech/<repo> --remove-parent      # reversible
+# bulk/scripted — NOTE the body param is the numeric DATABASE id, not the issue number,
+# and the DELETE path is singular `sub_issue` while GET/POST are plural `sub_issues`:
+gh api --method POST repos/devantler-tech/<repo>/issues/<PARENT>/sub_issues \
+  -F sub_issue_id="$(gh api repos/devantler-tech/<repo>/issues/<CHILD> --jq .id)"
+```
+Keep `Part of #N` in the body as human-readable context if you like — but it is **never** the link.
+
+**The rules that bound it** (all documented limits): **100 sub-issues per parent**, **8 levels** of
+nesting, children may live in **another repo of the same owner** (never another org), and an issue has
+**at most ONE parent** — re-parenting requires `replaceParent`, so pick the right parent rather than
+attaching an issue to two epics. Adding sub-issues needs **triage** permission or above.
+
+**Hierarchy is decomposition; it is NOT sequencing.** "This must land before that" is an **issue
+dependency** (`gh issue edit <N> --add-blocked-by <M>` / `--add-blocking`, 50 per relationship type,
+cross-repo, renders a *Blocked* badge on the board) — never a nested sub-issue and never a bare
+`blocked` label. Do not nest an issue to mean "waiting on".
+
+**Two failure modes seen live, both of which produce a silently broken tree — do not repeat them:**
+1. **`Part of #<PR>`** — pointing the parent reference at a *pull request*. A PR can never be a
+   sub-issue parent; the link is unmakeable. Parent references point at **issues** only.
+2. **A bare `#N` that means another repo.** `#N` always resolves within the *current* repo. A
+   cross-repo parent must be written `owner/repo#N`, or the reference silently dangles.
+
+**What a real link buys** (and why this is the whole point): the project's **`Parent issue`** field
+becomes populated and **groupable** — a table view grouped by it renders each epic with its children
+nested beneath, which is the canonical "what is part of what" surface; **`Sub-issues progress`** gives
+a live `completed/total` + percent rollup per epic; and the filters `parent-issue:owner/repo#N`,
+`has:sub-issue`, `no:parent-issue` / `has:parent-issue` become available in both project views and
+repo issue search. Projects' **hierarchy view** (public preview since 2026-01-15) renders the full
+nesting inline in table views, up to 8 levels, preserved through grouping, slicing and filtering.
+Note the two features that do **not** exist: a roadmap layout does **not** render hierarchy (it plots
+dates/iterations only — grouping by `Parent issue` yields flat groups, not nested bars), and closing a
+parent is **not documented** to cascade to children in either direction — never assume it does.
+
+**Classify with Issue Types, not type-labels.** The org has issue types enabled (**Chore, Bug,
+Feature, Kata** — matching the four issue templates); set one on every issue you file
+(`gh issue create --type "Feature"`). They are org-wide, exactly one per issue, and filterable as
+`type:"bug"` — the structured replacement for type-labels. Labels stay for cross-cutting, repo-local
+tags. Types and sub-issues are **orthogonal**: a type says what a thing *is*, a sub-issue link says
+what it *belongs to*.
+
+### Every issue belongs on the board
+[Project 5 (🌊 Project Board)](https://github.com/orgs/devantler-tech/projects/5) is the maintainer's
+single navigation surface across the portfolio, so **every open issue in every active
+`devantler-tech` repo belongs on it, and every board item carries a `Status`** — an item with no
+status is invisible in board layout and unsortable in triage, which defeats the surface. Statuses run
+**🧊 Icebox → 📥 Backlog → 🫴 Ready → 🏃🏻‍♂️ In Progress → 🚀 In Finalization → ✅ Done**; a newly-filed
+issue lands in **📥 Backlog** unless you know better, and *never* in no-status.
+
+Two mechanics make this a standing duty rather than something automation handles:
+- **Auto-add workflows are capped at 5 on the Team plan** and each one targets exactly **one**
+  repository — so built-in auto-add can **never** cover a ~20-repo portfolio. Until an
+  `actions/add-to-project` workflow backed by a GitHub App exists org-wide (`GITHUB_TOKEN` provably
+  cannot reach Projects), **adding the issue to the board is part of filing it**.
+- **Auto-add is forward-only** — enabling it never adds pre-existing issues. Any coverage gap must be
+  **backfilled** deliberately (`gh project item-add 5 --owner devantler-tech --url <issue-url>`).
+
+When bulk-operating on issues or board items, **serialize and pace** — GitHub's secondary limits allow
+roughly **80 content-generating requests/minute and 500/hour**, and both sub-issue endpoints carry an
+explicit rate-limit warning. Never fan these out concurrently.
 
 ### Build the right thing — value before output
 Bringing user value is the portfolio's highest goal. Engineering quality is necessary, but it cannot
