@@ -1378,6 +1378,16 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   single biggest waste. **Push → arm ONE background watcher → immediately start the next item.** Come
   back when it fires. If you have armed a watcher, **do not also poll** — doing both is pure
   duplication (a real 744th miss: a background watcher was armed *and* the run busy-waited anyway).
+  **Unchaining the sleep does not comply.** The enforcement hook blocks `sleep N && <poll>` chains,
+  and sessions measurably adapt by issuing the bare `sleep N` as its **own** tool call and polling in
+  the next one (telemetry 2026-07-18: **442 standalone sleeps in one day, all on this instance**, vs
+  ~10 blocked chained forms). That is the **same busy-wait** — the hook marks the *class*, not the
+  edge of what is allowed. If the thing you are waiting on is **remote state** (CI, a review, a
+  merge, a deploy), any `sleep` — chained, standalone, or split across calls — is the wrong tool:
+  arm the watcher, do other actionable work, or end the run and let the next tick collect the
+  result. A bare `sleep` is legitimate only as a **local timer for a process you yourself started**
+  (e.g. bounding a backgrounded windowed render before killing it), never as a wait for a remote
+  system to change state.
 - **Long-pole first.** Push the change with the **slowest CI first** so its bake overlaps everything
   else; do the fast-CI and no-CI work (issue triage, review-thread replies, memory, reports) during
   the bake. Reversing this — fast item first, slow item last — buys a guaranteed idle tail, which is
