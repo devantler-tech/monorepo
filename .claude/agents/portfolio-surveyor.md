@@ -260,6 +260,22 @@ a generous ceiling, not an expected cap — if a result set actually reaches it,
 paginate) and say so, rather than surveying a partial list.
 
 ## Return — one compact digest (target < ~1.5K tokens), this exact shape
+
+**Report per-PR state; never diagnose a portfolio-level condition from it.** You are a reporter, and
+several of the states you emit look alarming in aggregate without being so. Specifically: **never
+conclude that a review lane is down, stalled, rate-limited, or outaged, and never suggest the
+*Fallback — agent self-review* precondition is met** — that inference is the orchestrator's alone,
+it requires per-lane evidence you do not gather, and acting on it wrongly means self-reviewing PRs a
+reviewer already covered. A row of `none`/`*-stale` across many PRs is **not** outage evidence: the
+overwhelmingly more common causes are a green staled by a push, a request that was silently dropped,
+and — because Codex's clean pass is an issue COMMENT with no `commit_id`, and its findings are a
+review OBJECT — a surface you looked at with the wrong key. Before emitting `none` for any row,
+confirm you checked **both** surfaces at the **abbreviated** head sha; `none` means you found no
+review output of any kind, not that you found none matching your filter. (Live 2026-07-18: a digest
+reported "zero review objects and zero comments" plus a "fresh both-lane outage" across 12 PRs while
+Codex review objects existed on at least three of them, one at head — a conclusion that would have
+triggered unwarranted self-reviews portfolio-wide.)
+
 Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
