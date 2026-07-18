@@ -55,9 +55,18 @@ Until that is solved, backfill is a standing duty, not an exception.
 
   | View | Layout | Filter |
   |---|---|---|
-  | 🧮 Kanban | Board | `is:issue,pr is:open -status:"✅ Done"` |
+  | 🧮 Kanban | Board | `is:issue is:open -status:"✅ Done"` |
   | 📋 Backlog | Table | `is:issue is:open` |
   | 🗺️ Roadmap | Roadmap | `is:issue is:open label:roadmap` |
+
+  **The board tracks ISSUES, not PRs** (maintainer direction 2026-07-18): a PR that closes an issue
+  moves that issue through the ladder via the linked-PR workflow, so showing both double-counts the
+  same work — dropping `,pr` took the Ready column from 8/5 to a true 2/5. **This makes
+  `Fixes #N` load-bearing for visibility, not just bookkeeping:** an agent-authored PR with no linked
+  issue is now *invisible on the board*, so the capture-before-you-build rule is what keeps the board
+  complete. When a substantive PR has no issue, the fix is to file/link the issue — never to put PRs
+  back on the board. Dependency-automation PRs correctly disappear: they are automation-owned and
+  need no action, so they were only ever noise on a planning surface.
 
   Backlog has **Show hierarchy = On**, which nests sub-issues under their parents inline (up to 8
   levels) — that is what makes it the by-epic view; do not add a `Parent issue` group-by on top, and do
