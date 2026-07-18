@@ -67,16 +67,24 @@ the OSD). Copying/redistribution prohibited. Needs a **bespoke EULA** and a **CL
 assignment** (EU: assignment plus fallback exclusive licence) gating the first external PR. **No
 GPL/AGPL in the shipped tree** — enforce in CI, don't remember it.
 
-## Product law — the two constraints that outrank the design
+## Product law — the constraints that outrank the design
 
-1. **No hard resets, ever.** An early player keeps playing as it evolves: no wipes, no seasons, no
-   stat squishes. Every change is **forward-only and non-destructive** (expand/contract migrations,
-   versioned save data, backward-compatible protocols, feature-flag-first). **CI-enforceable, and the
-   guard must exist before the first player does** — an agent must not be able to merge a change that
-   strands a character.
-2. **No power/wealth inflation, no ecosystem corruption.** **There is no undo**: a dupe, a runaway drop
-   rate or a bad migration is permanent. Transactional integrity, idempotency and an audit trail are
-   day-one requirements.
+1. **No hard resets, and nothing is taken from a player silently.** An early player keeps playing as
+   it evolves: no wipes, no seasons, no stat squishes. **The world may be migrated** — that is
+   expected — but every migration is either **non-breaking** (expand/contract migrations, versioned
+   save data, backward-compatible protocols; the player never notices) **or goes through a visible
+   deprecation** that tells the player, in-game and ahead of time, exactly what is changing, removed,
+   or destroyed and when. **CI-enforceable, and the guard must exist before the first player does** —
+   an agent must not merge a change that strands a character or removes something from a player
+   without an announced deprecation.
+2. **Experimental features are opt-in behind a feature flag.** Anything unsettled ships **default-off**
+   behind a flag; a player must **opt in**, it is validated in that state, and only once proven does it
+   flip default-on and the short-lived release flag retire — the game-facing edge of the portfolio
+   **feature-flag-first delivery** rule.
+3. **No power/wealth inflation, no ecosystem corruption.** A dupe, a runaway drop rate or a botched
+   economy change cannot be un-printed without the very reset the game forbids — economic integrity is
+   engineered at the root: transactional integrity, idempotency and an audit trail are day-one
+   requirements. Migrating *content and data* forward is expected; letting *value* leak is never allowed.
 
 **The collision to keep front of mind: WoW/Diablo-4's answer to inflation IS the reset** (D4 wipes
 seasonally; WoW squishes stats). Both are forbidden, so economics come from **Guild Wars 2** instead:
@@ -114,7 +122,8 @@ botting and dupe *value* at the root), hard sinks. WoW/D4 texture, GW2 economics
 ## Design guards — the traps in the above, and how to hold them
 
 These are the non-obvious failure modes. Treat them as laws, and prefer designing them out over
-policing them (there is no undo).
+policing them after the fact — economic corruption, once loose, cannot be recalled without the reset
+the game forbids.
 
 - **🔴 The endgame ladder is the one place power grows — it MUST be bounded and inert outside itself.**
   “Gear upgraded to take on harder and harder content” *is* vertical progression, i.e. the exact
