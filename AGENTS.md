@@ -1115,6 +1115,18 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   re-verify **once** — not a fix-one/re-run round trip per finding.
 - **Parallelize independent setup.** Clones, subagents, and independent investigations start
   together in the background, not one after another.
+- **The Bash tool's shell is `zsh`, which does NOT word-split unquoted expansions — never sweep a
+  PR list with `set -- $pair`.** The bash idiom for iterating `"repo number"` pairs silently
+  collapses: `for pr in "ksail 6045" …; do set -- $pr; gh pr view $2 --repo devantler-tech/$1` leaves
+  `$1` holding the *whole* string and `$2` **empty**, so `gh` runs with no PR number and fails
+  `argument required when using the --repo flag`. The flag is present — the positional argument in
+  front of it vanished, which is why the error misdirects. Measured: **24 of 24** such failures
+  across 250 sessions (2026-07-14→18) used this idiom; **zero** used literal arguments. It is not a
+  flaky call, it is a shell mismatch, and it hits hardest in the per-run trusted-PR sweep where these
+  loops are written most. Use one of:
+  `IFS=' ' read -r repo n <<< "$pr"` (portable), `set -- ${=pr}` (zsh's explicit split flag), or
+  simply **write the calls out** — two plain `gh` lines beat a clever loop and stay readable.
+  The same trap applies to every implicit-splitting idiom (`for x in $(cmd)`, `cmd $args`).
 
 This changes only *ordering and overlap* — never the quality bar. Validation, RED/GREEN proof,
 root-cause fixing, and every guardrail are unaffected; the point is to stop paying for them serially.
