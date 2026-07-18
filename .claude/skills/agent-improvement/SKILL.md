@@ -189,6 +189,28 @@ improvement corrupts the record every future run reasons from, which makes it wo
   path that logged it fixed.
 - A new runtime capability replaces a hand-rolled workaround the definition still teaches.
 
+## Verify the GENERALISATION, not just the finding
+
+A fix starts as a verified local fact and becomes a **rule** covering a scope you did not test. That
+widening step is where the defect usually hides, and it is invisible because the underlying finding is
+genuinely correct. Observed three times in one session, each caught only by review:
+
+| Verified fact | Rule written | What broke |
+|---|---|---|
+| this call site leaks | "redaction is at the output boundary" | other call sites still leaked |
+| `set -- $x` breaks in zsh | written into the cross-tool contract | bash agents told working code was broken, handed a syntax error |
+| `read <<<` works in bash+zsh | offered as "use when shell is unknown" | a syntax error under POSIX `/bin/sh` |
+
+So before writing the rule, ask: **what scope am I claiming, and have I tested its edges?** Name the
+scope explicitly in the text ("in zsh-backed sessions", "bash and zsh only"), and test one case from
+each part of it — the sibling instance's runtime, the CI runner's OS, the other shell. A rule stated
+without its scope will be applied outside it.
+
+The corollary for fixes: **fix the class, not the instance.** If a finding names one call site, ask
+what the class is (every emitter, every metric, every credential shape) and close that — then add a
+guard that fails when a new member of the class misses it, rather than trusting review to catch the
+next one.
+
 ## Bad improvements look like
 
 - Rewording the constitution with no measured pattern behind it.
