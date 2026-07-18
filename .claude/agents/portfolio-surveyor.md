@@ -128,7 +128,9 @@ public and private — no per-repo loop needed to enumerate):
      their review state as `green_review=exempt-release-bot` **and their pre-merge state as
      `premerge=exempt-release-bot`** — never classify them NEEDS-FIX for lacking a review OR a
      pre-merge summary (their (a)/(b)/(c) hygiene still counts). Report
-     `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|none>`.
+     `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|none(rev=<n>,cmt=<n>@<abbrev-head>)>`. The
+     evidence suffix belongs to `green_review` ONLY — never decorate `rd=none`, which is GitHub's
+     unrelated `reviewDecision`.
      `self@<sha>` is the **last-resort agent self-review** (contract *Autonomy → Fallback — agent
      self-review*), and applies **only to `devantler`-authored PRs** — never to a trusted-bot row,
      since the fallback forbids self-reviewing a PR you did not author. Recognise it only when ALL
@@ -286,9 +288,15 @@ review output of any kind, not that you found none matching your filter.
 `none(rev=<n>,cmt=<n>@<abbrev-head>)` — the count of `chatgpt-codex-connector`/`coderabbitai` review
 objects and issue comments you actually saw on that PR, and the abbreviated head you matched against.
 `none(rev=0,cmt=0@a1b2c3d4e5)` is a checkable claim; a bare `none` is an assertion the orchestrator
-cannot distinguish from the filter miss this rule exists to prevent. A non-zero count next to `none`
-is a **contradiction to investigate, not a row to emit** — it means artifacts exist and your match
-key was wrong. (Live 2026-07-18: a digest reported "zero review objects and zero comments" plus a
+cannot distinguish from the filter miss this rule exists to prevent.
+
+**Count REVIEW OUTPUT only.** `rev=` counts review objects; `cmt=` counts comments carrying actual
+review output (a `Codex Review:` clean-pass marker). A CodeRabbit walkthrough summary, a
+command/setup reply, and a rate-limit or error notice are **not** review output — they do not count,
+and `green_review=none` beside them is correct and expected (surface the notice as its own
+`LANE-SIGNAL` row instead). Only a non-zero **review-output** count next to `none` is a
+**contradiction to investigate rather than a row to emit** — that means real review artifacts exist
+and your match key was wrong. (Live 2026-07-18: a digest reported "zero review objects and zero comments" plus a
 "fresh both-lane outage" across 12 PRs while Codex review objects existed on at least three of them,
 one at head — a conclusion that would have triggered unwarranted self-reviews portfolio-wide.)
 
@@ -302,11 +310,12 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 - CANDIDATE-MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator applies creation record; instruction only when routine-owned
 - CANDIDATE-MAINTAINER-ISSUE-COMMENT <repo> #<n> — `devantler`: "<one-line gist>" → orchestrator applies creation record; instruction only when routine-owned
 - CANDIDATE-SIBLING-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
+- LANE-SIGNAL <repo> #<n> — `lane_signal=<coderabbit|codex>:<rate-limit|error>@<UTC time>`<, retry=<window>> — quote the reviewer's own wording; state it, never characterise it
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - <repo>: CI red on main — <workflow> (<run url>)
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]> → AUTOMATION-OWNED (NO-ACTION)
-- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
-- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|none(rev=<n>,cmt=<n>@<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|none(rev=<n>,cmt=<n>@<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…> (orchestrator applies creation-record test before action; NOT asserted mine)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
