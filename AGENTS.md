@@ -287,8 +287,9 @@ draft yourself only when you genuinely know it is ready**, which means ALL THREE
    summary; a summary that was never posted because the green review came from the **Codex lane** is
    the lane-choice consequence, not a gap — CodeRabbit's pre-merge evaluator only runs when CodeRabbit
    reviews, and forcing a second lane per PR would break the one-tool-at-a-time discipline.
-2. **Reviewed** — ≥1 green CodeRabbit or Codex review at the current head (the green-review gate,
-   unchanged in strength — now a self-enforced promotion precondition).
+2. **Reviewed** — ≥1 green CodeRabbit or Codex review at the current head — or, when BOTH lanes are
+   unavailable, a clean current-head **agent self-review** posted per *Fallback — agent self-review*
+   (the green-review gate, unchanged in strength — now a self-enforced promotion precondition).
 3. **Tried and evaluated as a user** — you **exercised the real behaviour and observed the effect**
    with the cheapest method that actually observes it (ran the command, loaded the page, ran the
    live check — the *Verify it actually WORKS* convention) and judged the result as its **user**,
@@ -473,8 +474,12 @@ result at the current head — self-promotion is forbidden before that. Request 
   **Judge lane success or failure by a REAL review artifact at head, never by the tool's ack.**
   CodeRabbit's `@coderabbitai review` reply says *"✅ Action performed — Review finished"* even when
   the review never started; the *following* comment carries the truth. So both the "it succeeded"
-  and the "it failed" determinations require looking at `pulls/<n>/reviews` (or the Codex green
-  comment) with `commit_id` == head — an ack proves nothing in either direction.
+  and the "it failed" determinations require a real artifact at head — and **the artifact's shape
+  differs per lane**: a CodeRabbit approval and a *findings-bearing* Codex result are review objects
+  matched by `commit_id` == head, but **Codex's GREEN result is an issue COMMENT** carrying
+  `**Reviewed commit:** <sha>`, with no `commit_id` field at all. Match a Codex green by that body
+  marker; requiring `commit_id` there would misread a perfectly good green as a failed lane and
+  trigger the fallback for nothing. An ack proves nothing in either direction.
   The self-review is held to the same bar as a bot lane — correctness, security, and the repo's
   `## Review guidelines`; going easy on your own diff defeats the entire gate.
   - **Post it as a REAL GitHub Review, in a standardized shape — this is the point of the fallback.**
@@ -580,7 +585,8 @@ For every other actionable trusted-author PR, the merge itself is
 `gh pr view <n> --json number,isDraft,author,headRefOid,mergeStateStatus,statusCheckRollup` immediately
 before merging. It must show `isDraft:false`, a trusted author, owner `devantler-tech`, and
 `mergeStateStatus:CLEAN`; the pentad must show zero review findings, green pre-merge checks, and a
-CodeRabbit/Codex green review whose commit SHA equals that same `headRefOid`. That is **sufficient
+CodeRabbit/Codex green review — or a qualifying clean **agent self-review** under *Fallback — agent
+self-review*, which is available on own PRs only — whose commit SHA equals that same `headRefOid`. That is **sufficient
 evidence** — then run the merge. `CLEAN` is authoritative for required checks: don't re-derive required
 checks from the rollup, don't re-fetch branch protection on every merge (it's confirmed **once per
 repo per session**), and don't bundle the evidence and the merge into one chained command. Driving a
