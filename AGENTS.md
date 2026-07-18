@@ -460,11 +460,16 @@ result at the current head — self-promotion is forbidden before that. Request 
   so the lane preference stays evidence-based.
 - **Fallback — agent self-review, ONLY when BOTH lanes are unavailable** (maintainer direction
   2026-07-18). When CodeRabbit *and* Codex have each been tried and demonstrably failed to deliver a
-  review at the current head — an explicit rate-limit/quota response, no artifact after a generous
-  window, or the app erroring/uninstalled on the repo — the agent may review the PR **itself** using
+  review at the current head — no artifact after a generous window, the app erroring/uninstalled on
+  the repo, or a rate-limit response with **no** stated retry window (or one so long the draft would
+  sit idle for hours) — the agent may review the PR **itself** using
   its own review skills (`/review`, `/code-review`, `/security-review`) rather than leaving the draft
   stuck. This is a **last resort, never a shortcut**: an available lane is always preferred, a
   self-review never pre-empts one, and the two-lane failure must be **evidenced in the run report**.
+  **A CodeRabbit rolling-quota shell that states a short window (`Next review available in: N
+  minutes`) is NOT an unavailable lane** — it is the wait-and-retrigger case: schedule the
+  retrigger in the background and carry on;
+  never let a throttle shortcut you into self-reviewing.
   The self-review is held to the same bar as a bot lane — correctness, security, and the repo's
   `## Review guidelines`; going easy on your own diff defeats the entire gate.
   - **Post it as a REAL GitHub Review, in a standardized shape — this is the point of the fallback.**
