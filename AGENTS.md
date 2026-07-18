@@ -1137,8 +1137,8 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   **Shell-specific notes, so nobody "fixes" working code:** in **bash** `set -- $pair` splits
   correctly and needs no change; `set -- ${=pair}` is zsh's explicit-split flag and is a **syntax
   error in bash** (`bad substitution`), so never introduce it in a script with a `#!/usr/bin/env bash`
-  shebang or in the Codex sibling's bash-backed session. When you do not know the active shell, use
-  the `read` form.
+  shebang or in the Codex sibling's bash-backed session. **When you do not know the active shell, use
+  the parameter-expansion form above** — it is the only one of the three with no shell restriction.
   **Not the same hazard:** `for x in $(cmd)` *does* split under zsh (command substitution is still
   IFS-split; only parameter expansion is exempt), so an unexpected result there is ordinary
   whitespace splitting, not this bug. Keep the two diagnoses apart — the parameter-expansion family
