@@ -294,19 +294,26 @@ public and private — no per-repo loop needed to enumerate):
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
 5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
    (untriaged); automation-owned dependency PRs remain only their compact no-action rows. From (2): `roadmap`-labelled epics and ready
-   `security`/`enhancement`/`performance`/`refactor`/`bug`/`documentation` issues (**`security` first
-   — the contract treats it as first-class substantive work, so a security issue must never sit behind
-   less critical work in the queue**) **plus the three types that have no label equivalent — `Spike`,
+   `security`/`enhancement`/`performance`/`refactor`/`bug`/`documentation` issues (**`security` was
+   missing from this list until 2026-07-18, so security work was invisible to the queue. It is
+   *reported*, not *prioritised*: the canonical queue stays oldest-actionable-first and a `security`
+   label is NOT a skip reason for an older issue — only an urgent security hotfix jumps the queue,
+   under the normal breakage rule**) **plus the three types that have no label equivalent — `Spike`,
    `Kata`, `Chore` — which a label-only sweep silently drops.**
    ⚠️ **Fetch those with the search `type:` QUALIFIER, not a JSON field:** `gh search issues --json`
    has **no `issueType` field** (verified 2026-07-18), so asking for it errors and a label-only sweep
    silently misses them. Use one extra bounded search per type:
    ```sh
-   # Return ROWS, not a count — a count cannot be ordered against the other candidates,
-   # cannot fill a digest row, and cannot expose a Kata's measurement date:
+   # Return ROWS, not a count — a count cannot be ordered, cannot fill a digest row, and
+   # cannot expose a Kata's measurement date. Project created_at (issue AGE, for the
+   # oldest-first queue) — NOT updated_at, which a comment on a years-old issue resets to
+   # today — plus the body, which is where a Kata's measurement date lives:
    gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:Spike&per_page=100" \
-     --jq '.items[] | "\(.repository_url|split("/")|last)#\(.number)\t\(.updated_at[0:10])\t\(.title)"'
+     --jq '.items[] | "\(.repository_url|split("/")|last)#\(.number)\t\(.created_at[0:10])\t\(.title)\t\(.body//"" | gsub("\\s+";" ") | .[0:200])"'
    ```
+   **Drop hits from archived repos** (the primary sweep already excludes them; this raw Search call
+   does not, so an archived repo's open Spike would surface as actionable when it is a read-only
+   tombstone — `reusable-workflows` is the live example).
    (`type:Epic` → 62, `type:Chore` → 7, `type:Spike` → 1, `type:Kata` → 0 on 2026-07-18, so this is
    cheap — three bounded searches.)
    **Exclude a `Kata` whose named measurement date is still in the FUTURE** — contract skip reason (d)

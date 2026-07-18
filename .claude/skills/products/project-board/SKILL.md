@@ -39,7 +39,7 @@ carries **thousands** of items, so an unbounded pass samples the first page and 
 | **Dangling parents** | `Part of` references resolving to a PR, to self, or to nothing | 0 |
 | **Stale epics** | epics at `Sub-issues progress` 100% but still open | 0 (close or extend) |
 | **Reopened stuck at Done** | **open** issues whose Status is still `✅ Done` | 0 — closed→Done is a built-in workflow but **nothing moves an issue back out on reopen**, and the Kanban filters `-status:"✅ Done"`, so reopened work vanishes from the main view exactly when it needs attention. Move it back to the state that matches reality (0 on 2026-07-18 — latent, not live) |
-| **Archive** | closed/merged items still active on the board | none older than **30 days closed** — **except a closed child whose Epic is still open**, which stays active: archiving it removes it from the Backlog's hierarchy, so the epic's decomposition becomes unreadable while its progress bar still counts it, and "what is part of what" (the whole point of the board) silently loses rows. Younger items also stay active so Insights keeps recent history — see the Insights trap below; manual until [#2238](https://github.com/devantler-tech/monorepo/issues/2238)'s auto-archive works |
+| **Archive** | closed/merged items still active on the board | none older than **30 days closed** — **except a closed item with ANY still-open ancestor** (not just an open immediate parent: a closed sub-Epic under an open top-level Epic must keep its own closed children too), which stays active. Archiving it removes it from the Backlog's hierarchy, so the decomposition becomes unreadable while the progress bar still counts it, and "what is part of what" (the whole point of the board) silently loses rows. Younger items also stay active so Insights keeps recent history — see the Insights trap below; manual until [#2238](https://github.com/devantler-tech/monorepo/issues/2238)'s auto-archive works |
 
 Coverage and hierarchy are the two that silently rot, because **auto-add is forward-only and capped at
 5 workflows on the Team plan** — see [monorepo#2237](https://github.com/devantler-tech/monorepo/issues/2237).
@@ -188,13 +188,19 @@ Roadmap lives in **GitHub Issues on `devantler-tech/monorepo`** — never enumer
 hard-coded list goes stale the moment an issue closes or a new one is filed (the same mistake the
 retired status-board made). Query it live:
 
+Board work hangs off the board Epic — **[monorepo#2261](https://github.com/devantler-tech/monorepo/issues/2261)** —
+so it is found **structurally**, never by string matching:
+
 ```sh
-# --limit is REQUIRED: gh defaults to 30 and truncates SILENTLY, which would
-# quietly drop older board work from the rotation — the same staleness the
-# hard-coded list caused, just harder to notice.
-gh issue list --repo devantler-tech/monorepo --state open --limit 200 \
-  --search "board in:title,body" --json number,title,issueType,labels
+gh api "search/issues?q=org:devantler-tech+is:issue+is:open+parent-issue:devantler-tech/monorepo%232261&per_page=100" \
+  --jq '.items[] | "#\(.number)\t\(.created_at[0:10])\t\(.title)"'
 ```
+
+A text search (`"board" in:title,body`) was tried and rejected: it misses board issues that don't
+contain the word ("Automate stale-item archiving") and pulls in unrelated issues that merely mention a
+board. A hard-coded list was rejected before that, for going stale on the first close. **File new board
+work as a child of #2261** — the contract's default that every issue belongs to an Epic, applied to the
+board's own product.
 
 The strategic frame: *what can the maintainer still not see at a glance?* Answer that, and the board has
 advanced.

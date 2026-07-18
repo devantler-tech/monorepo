@@ -955,7 +955,7 @@ ladder mirrors the agent's actual lifecycle, so every state answers "what's next
 | Status | Entry condition | What's next |
 |---|---|---|
 | **✅ Done** | Acceptance criteria validated, outcome decided | — |
-| **📊 Verifying** | **Merged and released**, outcome not yet proven | Verify it actually works E2E; measure a Kata's signal; then decide |
+| **📊 Verifying** | **Merged**, outcome not yet proven (covers the wait for an async release, and the wait for a Kata's measurement date) | Verify it actually works E2E once released; measure a Kata's signal; then decide |
 | **🚀 Ready to Merge** | Green review at head, all checks green, nothing unresolved | Self-promote and merge |
 | **👀 In Review** | PR open, CI green, review requested | Fix findings, re-request, re-secure green at the new head |
 | **🏃🏻‍♂️ In Progress** | Assignee has time to implement | Finish the implementation, get CI green |
