@@ -228,6 +228,24 @@ commands_in() {
   ' "$f" 2>/dev/null
 }
 
+# Remove heredoc BODIES from command text. A command that writes a fixture or a
+# doc containing `sleep 60` is not busy-waiting — the text is data it emits, not
+# a command it runs. Counting it inflated the very metric used to argue the
+# agent busy-waits (and this suite's own fixtures do exactly that).
+strip_heredocs() {
+  awk '
+    {
+      line = $0
+      if (inhd) { if (line ~ ("^[[:space:]]*" tag "[[:space:]]*$")) { inhd = 0 }; next }
+      if (match(line, /<<-?[\"'"'"']?[A-Za-z_][A-Za-z0-9_]*[\"'"'"']?/)) {
+        t = substr(line, RSTART, RLENGTH)
+        gsub(/[<>\-\"'"'"']/, "", t)
+        tag = t; inhd = 1
+      }
+      print line
+    }'
+}
+
 # Text emitted by a real tool RESULT (both schemas). Used for outcome signals
 # that must never be grepped from raw transcript prose, because prose can then
 # fabricate the metric.
@@ -263,21 +281,20 @@ tool_result_failure_text() {
          | .content
          | if type=="array" then (map(select(.type=="text").text)|join(" "))
            elif type=="string" then . else empty end),
-        # Codex records carry NO is_error/status field (verified against live
-        # sessions: keys are type/id/call_id/output). Requiring one dropped
-        # EVERY Codex failure — reporting zero, which reads as "healthy".
-        # So: honour the flag when present, and otherwise fall back to an
-        # explicit failure marker in the output. Weaker than the structural
-        # Claude flag, and scoped to real tool OUTPUT records (never transcript
-        # prose) — but a stated approximation beats a silent zero.
+        # CODEX FAILURE DETECTION DEPENDS ON A FLAG THAT DOES NOT EXIST.
+        # Verified against live sessions: output records carry keys
+        # type/id/call_id/output and no is_error/status. A scan of 40 real
+        # sessions found ZERO harness-style failure or denial markers, and that
+        # instance runs approval-policy=never, so it is not denied by design.
+        # Earlier rounds oscillated between requiring a flag (which reported
+        # zero) and matching text (which counted replayed logs) — both were
+        # tuning against an INVENTED format. Honour a real flag if one ever
+        # appears; otherwise contribute nothing here and let the report state
+        # the gap, rather than manufacture a number from a shape never observed.
         # NOTE: no apostrophes in these comments; the whole jq program is a
         # single-quoted shell string, so one would terminate it.
         (select(.type=="function_call_output" or .type=="custom_tool_call_output")
-         | select(((.is_error? // false) == true)
-                  or ((.status? // "") == "error")
-                  or ((.is_error? == null) and (.status? == null)
-                      and ((.output | tostring)
-                           | test("^[[:space:]]*(Command timed out after|Exit code [1-9]|command not found|Traceback \\(most recent|fatal: |error: |has been modified since read|non-fast-forward|Blocked:|Permission to use |approval (denied|required))"))))
+         | select(((.is_error? // false) == true) or ((.status? // "") == "error"))
          | .output
          | if type=="array" then (map(.text? // empty)|join(" "))
            elif type=="string" then . else empty end)
@@ -415,7 +432,7 @@ if want reliability; then
   else
     printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      jq -rs '
+      jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty))|
         (reduce (.[] | select(.type=="assistant") | .message.content[]?
                  | select(.type=="tool_use")) as $t ({}; .[$t.id] = $t.name)) as $names
         | .[] | select(.type=="user") | .message.content[]?
@@ -475,6 +492,7 @@ if want efficiency; then
     # a busy-wait pattern, and this metric is evidence for definition changes.
     SLEEPS=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
              | while IFS= read -r f; do commands_in "$f"; done \
+             | strip_heredocs \
              | grep -cE '(^|[;&|[:space:]])sleep[[:space:]]+["'"'"']?[$0-9{]' || true)
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
@@ -487,7 +505,7 @@ if want efficiency; then
     # labelled them "timeout victims" — in a window with zero timeouts it still
     # produced a confident-looking list, which is worse than an empty one.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      jq -rs '
+      jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty))|
         (reduce (.[] | select(.type=="assistant") | .message.content[]?
                  | select(.type=="tool_use")) as $t ({};
                    .[$t.id] = ($t.input?.description? // $t.input?.command? // "?"))) as $desc
@@ -513,9 +531,10 @@ if want safety; then
     echo "  (no sessions in window — neither instance)"
   else
     echo "  hook permission decisions:"
-    printf '%s\n' "$SF_CACHE" | xargs grep -ho '"permissionDecision":"[a-z]*"' 2>/dev/null \
+    printf '%s\n' "$SF_CACHE" | grep -v '^$' \
+      | while IFS= read -r f; do grep -ho '"permissionDecision":"[a-z]*"' "$f" 2>/dev/null; done \
       | sed 's/.*:"//; s/"//' | sort | uniq -c | sort -rn | sed 's/^/    /'
-    [ -z "$(printf '%s\n' "$SF_CACHE" | xargs grep -ho '"permissionDecision"' 2>/dev/null)" ] \
+    [ -z "$(printf '%s\n' "$SF_CACHE" | grep -v '^$' | while IFS= read -r f; do grep -ho '"permissionDecision"' "$f" 2>/dev/null; done)" ] \
       && echo "    (none recorded)"
     echo
     echo "  blocked / denied actions (the guard firing):"
@@ -551,10 +570,14 @@ if want safety; then
                          elif type=="string" then . else empty end)
           )
         | select(type=="string")
-        | select(test("^(<tool_use_error>)?(Blocked:|Permission to use |Claude requested permissions|approval (denied|required)|command (rejected|not permitted))"))
+        | select(test("<tool_use_error>[[:space:]]*Blocked:|^[[:space:]]*Permission to use [A-Za-z_]+ with command|Claude requested permissions to use|approval (denied|required) for tool"))
         | .[0:80]
       ' "$f" 2>/dev/null
     done | redact | sed -E 's/[0-9]+/<n>/g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
+    echo "    NOTE: denial detection is CLAUDE-SCHEMA ONLY. Codex output records carry no"
+    echo "          error/status flag, 40 live sessions showed no harness-style denial text,"
+    echo "          and that instance runs approval-policy=never. A zero here says nothing"
+    echo "          about Codex — it is an unmeasured surface, not a clean one."
     echo "    (each line = a real errored tool result, so transcript prose cannot fake one;"
     echo "     a recurring entry is EITHER a definition bug OR a permission gap — resolve"
     echo "     which before touching a guard: if the contract already forbids the action,"

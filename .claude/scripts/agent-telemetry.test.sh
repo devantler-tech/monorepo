@@ -655,12 +655,12 @@ cat >> "$FIX/cxdeny/sessions/r.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxdeny" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
-check "a flagless Codex denial is still counted" "$OUT" "Blocked:"
+check "the Codex denial gap is DISCLOSED, not implied clean" "$OUT" "CLAUDE-SCHEMA ONLY"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxdeny" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
-if printf '%s' "$OUT" | grep -qE 'two-writer races \.+ 1'; then
-  ok "a flagless Codex two-writer race is still counted"
-else bad "a flagless Codex two-writer race is still counted" "$(printf '%s' "$OUT" | grep 'two-writer')"; fi
+if printf '%s' "$OUT" | grep -qE 'two-writer races \.+ 0'; then
+  ok "a flagless Codex record is NOT counted from invented markers"
+else bad "a flagless Codex record is NOT counted from invented markers" "$(printf '%s' "$OUT" | grep 'two-writer')"; fi
 
 # A short PEM body line must not survive redaction.
 mkdir -p "$FIX/shortpem"
@@ -726,9 +726,9 @@ cat >> "$FIX/cxreal2/sessions/r.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreal2" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'bash timeouts \.+ 1'; then
-  ok "a real leading-marker Codex failure IS counted"
-else bad "a real leading-marker Codex failure IS counted" "$(printf '%s' "$OUT" | grep 'timeouts')"; fi
+if printf '%s' "$OUT" | grep -qE 'bash timeouts \.+ 0'; then
+  ok "Codex text without a real flag is NOT counted (no invented format)"
+else bad "Codex text without a real flag is NOT counted" "$(printf '%s' "$OUT" | grep 'timeouts')"; fi
 
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
