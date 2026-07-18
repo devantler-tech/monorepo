@@ -46,9 +46,29 @@ Until that is solved, backfill is a standing duty, not an exception.
   Every additional view is another surface to keep honest and another place for the maintainer to
   look; a board with three well-configured views beats one with seven overlapping ones. Add a fourth
   only when a genuine audience or cadence cannot be served by grouping an existing view.
-  ⚠️ **Views are UI-only — there is NO GraphQL or `gh` mutation to create or edit one.** Field and
-  option changes are scriptable; view changes need the browser. Propose them precisely (layout, filter
+  ⚠️ **Views are UI-only — there is NO GraphQL or `gh` mutation to create or edit one** (`ProjectV2View`
+  is a read-only type; `gh project` has no view subcommand). Field and option changes are scriptable;
+  view changes need a browser with the maintainer's session. Propose them precisely (layout, filter
   string, grouping, visible fields) so applying them is mechanical.
+
+  **Current configuration** (verified live 2026-07-18):
+
+  | View | Layout | Filter |
+  |---|---|---|
+  | 🧮 Kanban | Board | `is:issue,pr is:open -status:"✅ Done"` |
+  | 📋 Backlog | Table | `is:issue is:open` |
+  | 🗺️ Roadmap | Roadmap | `is:issue is:open label:roadmap` |
+
+  Backlog has **Show hierarchy = On**, which nests sub-issues under their parents inline (up to 8
+  levels) — that is what makes it the by-epic view; do not add a `Parent issue` group-by on top, and do
+  not turn the toggle off. Roadmap binds Start/Target to the **`Year` iteration's `Year start`/`Year
+  end`**, zoom Year, with the Year marker on; items without a Year show an unscheduled `+` placeholder,
+  which is the honest rendering of "not scheduled".
+
+  ⚠️ **`has:sub-issue` does NOT filter in a project view** — tried live, the item count went *up*, so
+  the qualifier is ignored (it works in repo issue search, not here). There is no working "is a parent"
+  project filter; use `label:roadmap` to select strategic items instead. Treat any hierarchy filter
+  beyond `parent-issue:` / `has:parent-issue` / `no:parent-issue` as unverified until tested.
 - **Status semantics.** Options run **✅ Done → 🚀 In Finalization → 🏃🏻‍♂️ In Progress → 🫴 Ready →
   📥 Backlog → 🧊 Icebox**. The order is **deliberately reversed** — finishing work sits leftmost, so the
   board reads *stop starting, start finishing* (maintainer direction 2026-07-18). **Never re-order it
