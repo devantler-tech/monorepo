@@ -80,8 +80,12 @@ PORTFOLIO_SLUG_RE=$(
   | while IFS= read -r p; do
       s=$(rx_escape "$(path_to_slug "$p")")
       q=$(rx_escape "$p")
-      # slug dir: exactly the slug, or the slug + Claude's `--worktrees` marker
-      printf '/%s(--[^/]*)?/[^/]+\.jsonl$|' "$s"
+      # slug dir: exactly the slug, or the slug + one of the TWO real markers.
+      # `--` alone is still a hole — a neighbouring checkout named
+      # `monorepo--client` slugs to `…-monorepo--client` and would match. Only
+      # Claude's per-session worktree marker and the submodule-path marker are
+      # legitimate continuations; anything else is a different repository.
+      printf '/%s(--claude-worktrees-[^/]*|--git-modules-[^/]*)?/[^/]+\.jsonl$|' "$s"
       # real path: must end at a component boundary
       printf '^%s(/|$)|' "$q"
     done | sed 's/|$//'
@@ -126,7 +130,7 @@ redact() {
 # form), each time reporting a real leak as "clean". The test suite asserts a
 # sample of EVERY numbered shape is both detected AND redacted; add to both
 # lists together or the test fails.
-CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],};]{8,})'
+CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
@@ -167,9 +171,9 @@ commands_in() {
   ' "$f" 2>/dev/null
 }
 
-# Text emitted by a real tool RESULT (both schemas). Used for outcome signals —
-# timeouts, denials — that must never be grepped from raw transcript prose,
-# because prose can then fabricate the metric.
+# Text emitted by a real tool RESULT (both schemas). Used for outcome signals
+# that must never be grepped from raw transcript prose, because prose can then
+# fabricate the metric.
 tool_result_text() {
   local f="$1"
   jq -r '
@@ -180,6 +184,30 @@ tool_result_text() {
          | if type=="array" then (map(select(.type=="text").text)|join(" "))
            elif type=="string" then . else empty end),
         (select(.type=="function_call_output" or .type=="custom_tool_call_output")
+         | .output
+         | if type=="array" then (map(.text? // empty)|join(" "))
+           elif type=="string" then . else empty end)
+      )
+    | select(type=="string") | select(length > 0)
+  ' "$f" 2>/dev/null
+}
+
+# FAILURE text only — errored results. Every metric that counts something going
+# WRONG (timeouts, two-writer races, push collisions) must use this, not the
+# unfiltered helper: a SUCCESSFUL command that prints a prior log containing
+# "Command timed out after" or "non-fast-forward" would otherwise be counted as
+# a fresh failure, inflating exactly the numbers the improver acts on.
+tool_result_failure_text() {
+  local f="$1"
+  jq -r '
+    .. | objects
+    | (
+        (select(.type=="tool_result" and .is_error==true)
+         | .content
+         | if type=="array" then (map(select(.type=="text").text)|join(" "))
+           elif type=="string" then . else empty end),
+        (select((.type=="function_call_output" or .type=="custom_tool_call_output")
+                and ((.is_error? // false) == true or (.status? // "") == "error"))
          | .output
          | if type=="array" then (map(.text? // empty)|join(" "))
            elif type=="string" then . else empty end)
@@ -238,8 +266,13 @@ in_scope_cwd() {
           "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
             [ -d "$cwd" ] || continue
             url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || continue
+            # Anchor the HOST, not a substring: `*github.com/org/*` also matches
+            # `https://notgithub.com/org/…` and internal mirrors that merely
+            # contain the string. Only these exact remote forms count.
             case "$url" in
-              *"github.com:$PORTFOLIO_ORG/"*|*"github.com/$PORTFOLIO_ORG/"*) echo match ;;
+              "git@github.com:$PORTFOLIO_ORG/"*|\
+              "https://github.com/$PORTFOLIO_ORG/"*|\
+              "ssh://git@github.com/$PORTFOLIO_ORG/"*) echo match ;;
             esac ;;
         esac
       done
@@ -348,7 +381,7 @@ if want efficiency; then
     # let prose quoting "Command timed out after 2m" inflate the count, the same
     # fabrication route already closed for denials and sleeps.
     all_files() { printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$'; }
-    TIMEOUTS=$(all_files | while IFS= read -r f; do tool_result_text "$f"; done \
+    TIMEOUTS=$(all_files | while IFS= read -r f; do tool_result_failure_text "$f"; done \
                | grep -cE 'Command timed out after' || true)
     INTERRUPT=$(all_files | while IFS= read -r f; do grep -hoE '"interrupted":true' "$f" 2>/dev/null; done \
                 | wc -l | tr -d ' ')
@@ -462,7 +495,7 @@ if want safety; then
           if commands_in "$f" 2>/dev/null \
              | grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))'; then
             commands_in "$f" 2>/dev/null \
-              | grep -E '(npm ci|npm i |npm run|pnpm |yarn |go generate|go run|make [a-z]+)'
+              | grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|make [a-z]+)'
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
     echo "    (empty = no session both checked out a non-own ref and built)"
@@ -475,8 +508,10 @@ fi
 if want a2a; then
   echo
   echo "── CROSS-INSTANCE / A2A ─────────────────────────────────────────"
-  CODEX_SESS=$(find "$CODEX_HOME/sessions" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null | wc -l | tr -d ' ')
-  echo "  codex sessions in window ... ${CODEX_SESS}"
+  # SCOPED count. A raw find here counted every file under sessions/, including
+  # the ones codex_session_files() deliberately excluded as out of scope — so the
+  # cross-instance scorecard reported professional sessions it must not see.
+  echo "  codex sessions in window ... ${CX_COUNT}  (scope-filtered)"
   echo "  claude sessions in window .. ${SF_COUNT}"
   # Collisions are inherently a CROSS-instance metric, so reading only the Claude
   # corpus was self-defeating: a race the Codex instance hit — the sibling half of
@@ -484,10 +519,10 @@ if want a2a; then
   # so quoted prose cannot inflate it, and across both corpora.
   if [ $((SF_COUNT + CX_COUNT)) -gt 0 ]; then
     RACES=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
-            | while IFS= read -r f; do tool_result_text "$f"; done \
+            | while IFS= read -r f; do tool_result_failure_text "$f"; done \
             | grep -cE 'has been modified since read' || true)
     NONFF=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
-            | while IFS= read -r f; do tool_result_text "$f"; done \
+            | while IFS= read -r f; do tool_result_failure_text "$f"; done \
             | grep -ciE '(non-fast-forward|rejected.*fetch first|would be overwritten by merge)' || true)
     echo "  file two-writer races ...... ${RACES}   (file changed between read and edit; BOTH instances)"
     echo "  push/merge collisions ...... ${NONFF}   (BOTH instances)"
@@ -597,10 +632,25 @@ if want outcomes; then
 $REPOS
 EOF
     echo "    ────────────────────────────────────────── total: ${TOTAL}"
-    echo "  revert commits on main (window, monorepo):"
-    git -C "$MONOREPO" log --since="${SINCE_DAYS} days ago" --oneline --grep='^Revert' 2>/dev/null \
-      | head -5 | sed 's/^/    /'
-    echo "    (empty = nothing needed reverting)"
+    # PORTFOLIO-WIDE, matching the merge count above. Reverts are the sharper
+    # half of the quality signal, and most agent work lands in product repos —
+    # a submodule revert against a monorepo-only check reported "nothing needed
+    # reverting" while the work was actively being undone.
+    echo "  revert commits since ${SINCE_ISO} (portfolio):"
+    RTOTAL=0
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      rc=$(gh api "repos/$r/commits" -X GET -f since="${SINCE_ISO}T00:00:00Z" --paginate \
+             --jq '[.[]|select(.commit.message|test("^Revert";"i"))]|length' 2>/dev/null \
+           | awk '{s+=$1} END{print s+0}')
+      case "$rc" in ''|*[!0-9]*) rc=0 ;; esac
+      [ "$rc" -gt 0 ] && printf '    %-42s %s\n' "$r" "$rc"
+      RTOTAL=$((RTOTAL + rc))
+    done <<EOF
+$REPOS
+EOF
+    echo "    ────────────────────────────────────────── total: ${RTOTAL}"
+    echo "    (0 = nothing needed reverting anywhere in the portfolio)"
   else
     echo "  (gh or monorepo unavailable)"
   fi

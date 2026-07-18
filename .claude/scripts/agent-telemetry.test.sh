@@ -567,6 +567,70 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/punct" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 nocheck "punctuated secret value is redacted" "$OUT" "abc:defghijklmnop"
 
+# ── 6h. round-5 findings ──────────────────────────────────────────────────────
+echo
+echo "round-5 regressions"
+
+# BOUNDARY HOLE, THIRD ITERATION. Allowing a bare `--` continuation still admits
+# a different repo: `monorepo--client` slugs to `…-monorepo--client`. Only the
+# two REAL markers are legitimate continuations of a project slug.
+mkdir -p "$FIX/mark/-Users-x-git-personal-monorepo" \
+         "$FIX/mark/-Users-x-git-personal-monorepo--claude-worktrees-z9" \
+         "$FIX/mark/-Users-x-git-personal-monorepo--git-modules-platform" \
+         "$FIX/mark/-Users-x-git-personal-monorepo--client"
+for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-z9" "-Users-x-git-personal-monorepo--git-modules-platform"; do
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"sleep 3"}}]}}' \
+    > "$FIX/mark/$d/s.jsonl"
+done
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m2","name":"Bash","input":{"command":"sleep 4"}}]}}' \
+  > "$FIX/mark/-Users-x-git-personal-monorepo--client/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/mark" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 3'; then
+  ok "'monorepo--client' excluded; worktree + git-modules markers kept"
+else bad "'monorepo--client' excluded; worktree + git-modules markers kept" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+
+# Failure metrics must come from ERRORED results — a successful command printing
+# an old log containing "Command timed out after" is not a fresh timeout.
+mkdir -p "$FIX/oldlog"
+cat > "$FIX/oldlog/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"L1","name":"Bash","input":{"command":"cat ci.log"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"L1","is_error":false,"content":[{"type":"text","text":"Command timed out after 2m 0s ... non-fast-forward ... has been modified since read"}]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/oldlog" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'bash timeouts \.+ 0'; then
+  ok "a successful command echoing an old log is not a timeout"
+else bad "a successful command echoing an old log is not a timeout" "$(printf '%s' "$OUT" | grep 'timeouts')"; fi
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/oldlog" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+if printf '%s' "$OUT" | grep -qE 'two-writer races \.+ 0'; then
+  ok "...nor a two-writer race"
+else bad "...nor a two-writer race" "$(printf '%s' "$OUT" | grep 'two-writer')"; fi
+
+# Parity, 5th break: redact() allows ';' inside a secret value; the detector
+# excluded it, so `password=abc;def…` was redacted on stdout but reported clean.
+mkdir -p "$FIX/semi"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"cfg password=abc;defghijklmn"}]}}\n' \
+  > "$FIX/semi/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/semi" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+nocheck "semicolon-bearing secret is redacted" "$OUT" "abc;defghijklmn"
+if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^\s+[0-9]+ '; then
+  ok "semicolon-bearing secret is also DETECTED (parity)"
+else bad "semicolon-bearing secret is also DETECTED (parity)" "detector missed what redact() masks"; fi
+
+# Test runners execute code from a checked-out ref just as builds do.
+mkdir -p "$FIX/testrun"
+cat > "$FIX/testrun/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"T1","name":"Bash","input":{"command":"gh pr checkout 55"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"T2","name":"Bash","input":{"command":"go test ./..."}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/testrun" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "'go test' after a PR checkout is a candidate" "$OUT" "go test"
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"
