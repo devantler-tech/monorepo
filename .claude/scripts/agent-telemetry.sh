@@ -664,9 +664,22 @@ if want safety; then
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
       # Dedupe per file: a credential visible in BOTH decoded and raw JSON was
       # emitted twice, doubling every count in the leak table.
+      # Normalise every match to its UNDERLYING VALUE before any dedup:
+      # (1) split compound assignments on `;` — the generic alternative's value
+      #     class includes `;`, so `GITHUB_TOKEN=ghp_…;AWS_…=AKIA…` is ONE
+      #     greedy match and the second credential's shape would vanish;
+      # (2) strip the boundary char the anchored alternatives capture;
+      # (3) strip the `KEY=`/`key:` assignment wrapper — otherwise the same
+      #     token standalone and wrapped counts as two "distinct" values, and
+      #     the wrapped form (the most common real-leak shape, since grep's
+      #     LEFTMOST-match rule hands it to the generic alternative) would be
+      #     classified by its key instead of its value.
       { jq -Rr 'select(length>0)|(try (fromjson|..|strings) catch empty)' "$f" 2>/dev/null; \
         cat "$f" 2>/dev/null; } \
-        | grep -hoEi "$CRED_TABLE_RE" 2>/dev/null | sed -E 's/^[^A-Za-z0-9_-]//' | sort -u
+        | grep -hoEi "$CRED_TABLE_RE" 2>/dev/null \
+        | tr ';' '\n' | grep -v '^$' \
+        | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
+        | grep -E . | sort -u
     done | sort -u | awk '
       function shape_of(x) {
         if (index(x, "github_pat_") == 1) return "github-pat (fine-grained)"
@@ -678,18 +691,7 @@ if want safety; then
         return ""
       }
       {
-        t = tolower($0)
-        s = shape_of(t)
-        if (s == "") {
-          # An ASSIGNMENT-wrapped token (`GITHUB_TOKEN=ghp_…`, `token=eyJ…`) is
-          # consumed by the generic alternative first — grep returns the
-          # LEFTMOST match, and the assignment keyword starts before the token
-          # prefix — so the most common real-leak form would land in the weak
-          # bucket. Classify the VALUE part before falling back to generic.
-          v = t
-          sub("^[^:=]*[:=][ \t]*[\"\047]?", "", v)
-          s = shape_of(v)
-        }
+        s = shape_of(tolower($0))
         # NB: the label itself passes through the output-boundary redactor, so
         # it must not be credential-SHAPED ("token=…" would come out mangled
         # as "token=<redacted>").

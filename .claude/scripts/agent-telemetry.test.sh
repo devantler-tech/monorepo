@@ -399,16 +399,30 @@ parity_case "generic"    "config token=__GEN__" "__GEN__"
 echo
 echo "leak-table boundary anchoring"
 mkdir -p "$FIX/blob"
-printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=AAAA__GHPE__zz"}]}}\n' > "$FIX/blob/s.jsonl"
+{
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=AAAA__GHPE__zz"}]}}\n'
+  # The blob ALSO flows through a real errored tool result, so the redaction
+  # half below is exercised by an output path that actually prints corpus text
+  # (reliability error signatures) — asserting raw-absent on the label-only
+  # safety table alone would stay green even with the redactor broken.
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"true"}}]}}\n'
+  printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b1","is_error":true,"content":[{"type":"text","text":"boom sig=AAAA__GHPE__zz tail"}]}]}}\n'
+} > "$FIX/blob/s.jsonl"
 subst "$FIX/blob/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blob" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
+ROUT=$(CLAUDE_PROJECTS_DIR="$FIX/blob" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section reliability 2>&1)
 if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -q 'github-token'; then
   bad "mid-blob gh?_ substring is NOT counted" "counted as a token"
 else ok "mid-blob gh?_ substring is NOT counted"; fi
 # …but the output-boundary redactor still masks it (broad CRED_RE unchanged),
-# so refusing to COUNT blob noise never means ECHOING it.
-nocheck "mid-blob token is still redacted on output" "$OUT" "$(ex __GHPE__)"
+# so refusing to COUNT blob noise never means ECHOING it — proven POSITIVELY
+# on the error-signature path, not by absence alone.
+if printf '%s' "$ROUT" | grep 'boom' | grep -q 'redacted'; then
+  ok "mid-blob token is still redacted on output"
+else bad "mid-blob token is still redacted on output" "$(printf '%s' "$ROUT" | grep 'boom' | head -1)"; fi
+nocheck "mid-blob raw token never appears" "$ROUT" "$(ex __GHPE__)"
 
 # An ASSIGNMENT-wrapped token (`GITHUB_TOKEN=ghp_…`) is the most common real
 # leak form, and grep's leftmost-match rule hands the whole string to the
@@ -426,6 +440,31 @@ else bad "assignment-wrapped token classifies by its VALUE shape" "$TABLE"; fi
 if printf '%s' "$TABLE" | grep -q 'generic-assignment'; then
   bad "assignment-wrapped token is not buried in the weak bucket" "counted as generic"
 else ok "assignment-wrapped token is not buried in the weak bucket"; fi
+
+# The SAME credential standalone and assignment-wrapped is ONE value to rotate:
+# normalisation to the underlying value must happen BEFORE dedup, or the table
+# double-counts and its "distinct values" promise is false (Codex, round 2).
+mkdir -p "$FIX/dedup"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"saw __GHPE__ and GITHUB_TOKEN=__GHPE__"}]}}\n' > "$FIX/dedup/s.jsonl"
+subst "$FIX/dedup/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/dedup" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+1 github-token'; then
+  ok "standalone + wrapped same token dedups to ONE distinct value"
+else bad "standalone + wrapped same token dedups to ONE distinct value" \
+  "$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep 'github-token')"; fi
+
+# A compound `KEY=tok;KEY2=tok2` is ONE greedy generic match; both credentials'
+# shapes must still surface or the second is never rotated (Codex, round 2).
+mkdir -p "$FIX/compound"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"env GITHUB_TOKEN=__GHPE__;AWS_ACCESS_KEY_ID=__AWS__"}]}}\n' > "$FIX/compound/s.jsonl"
+subst "$FIX/compound/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/compound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)' && printf '%s' "$TABLE" | grep -q 'aws-access-key-id'; then
+  ok "compound assignment surfaces BOTH credential shapes"
+else bad "compound assignment surfaces BOTH credential shapes" "$TABLE"; fi
 
 # ── 6e. round-3 findings ──────────────────────────────────────────────────────
 echo
