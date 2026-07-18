@@ -17,6 +17,11 @@ nocheck(){ if printf '%s' "$2" | grep -qF -- "$3"; then bad "$1" "should NOT con
 FIX=$(mktemp -d)
 trap 'rm -rf "$FIX"' EXIT
 
+# Every fixture lives under $FIX, so scoping the professional-work allowlist to
+# $FIX lets the ordinary tests run while the boundary itself stays enforced.
+# The boundary tests below override this deliberately to prove exclusion works.
+export PORTFOLIO_PATHS="$FIX"
+
 # Credential samples are ASSEMBLED AT RUNTIME and written into fixtures via
 # placeholder substitution, so no credential-shaped literal ever exists in this
 # file. GitHub push protection blocks a repository containing one — correctly,
@@ -174,8 +179,10 @@ cat > "$FIX/projects/leak/s.jsonl" <<'EOF'
 EOF
 subst "$FIX/projects/leak/s.jsonl"
 # Codex-format session: proves the format-agnostic detectors cover it.
-printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 99\"}"}}' \
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/codex\"}}" \
   > "$FIX/codex/sessions/r.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 99\"}"}}' \
+  >> "$FIX/codex/sessions/r.jsonl"
 
 runleak() {
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
@@ -290,8 +297,10 @@ else bad "JWT flagged AND redacted" "not detected at all"; fi
 # CLASS: a Codex-ONLY window must not report 'no sessions' — the format-agnostic
 # detectors still apply, so gating on the Claude count alone hid Codex leaks.
 mkdir -p "$FIX/cxonly/sessions" "$FIX/empty"
-printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 45\"}"}}' \
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/cxonly\"}}" \
   > "$FIX/cxonly/sessions/r.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 45\"}"}}' \
+  >> "$FIX/cxonly/sessions/r.jsonl"
 printf '%s\n' '{"type":"response_item","payload":{"type":"function_call_output","output":"__AWS__"}}' \
   >> "$FIX/cxonly/sessions/r.jsonl"
 subst "$FIX/cxonly/sessions/r.jsonl"
@@ -368,7 +377,8 @@ echo "round-3 regressions"
 # The REAL Codex shape: custom_tool_call name=exec, .input is JavaScript source.
 # An invented JSON fixture passed for two rounds while this shape went unparsed.
 mkdir -p "$FIX/cxreal/sessions"
-cat > "$FIX/cxreal/sessions/r.jsonl" <<'EOF'
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/cxreal\"}}" > "$FIX/cxreal/sessions/r.jsonl"
+cat >> "$FIX/cxreal/sessions/r.jsonl" <<'EOF'
 {"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":"const r = await tools.exec_command({\n  cmd: \"sleep 77\",\n  yield_time_ms: 1000\n});"}}
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreal" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
@@ -422,6 +432,58 @@ else bad "scratch file is cleaned up on exit" "leftover temp files"; fi
 if grep -rqF "$(ex __GHPE__)" "${TMPDIR:-/tmp}"/.agtel_err* 2>/dev/null; then
   bad "scratch file never holds a raw credential" "raw token found on disk"
 else ok "scratch file never holds a raw credential"; fi
+
+# ── 6f. professional-work boundary (hard exclusion) ───────────────────────────
+# The host's session stores hold transcripts for every project worked on there.
+# Reading an employer/client repo's transcript is itself an interaction with
+# categorically-excluded material, so scope is enforced BEFORE anything is read.
+echo
+echo "professional-work boundary"
+
+mkdir -p "$FIX/scoped/-Users-x-git-personal-monorepo" \
+         "$FIX/scoped/-Users-x-git-personal-monorepo--claude-worktrees-abc123" \
+         "$FIX/scoped/-Users-x-work-employer-secret-service" \
+         "$FIX/scoped/-Users-x-Library-something-else"
+for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-abc123"; do
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"sleep 11"}}]}}' \
+    > "$FIX/scoped/$d/s.jsonl"
+done
+# Out-of-scope transcripts carry a DIFFERENT marker; if either is read, the
+# counts below change and the test fails.
+for d in "-Users-x-work-employer-secret-service" "-Users-x-Library-something-else"; do
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"o1","name":"Bash","input":{"command":"sleep 22"}}]}}' \
+    > "$FIX/scoped/$d/s.jsonl"
+done
+
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
+# Two in-scope sessions each ran one sleep; the two out-of-scope ones must not count.
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2'; then
+  ok "only portfolio sessions are read (2 in-scope, 2 excluded)"
+else bad "only portfolio sessions are read" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --max-files 50 --section reliability 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sessions in window: 2 '; then
+  ok "session count reflects only in-scope projects"
+else bad "session count reflects only in-scope projects" "$(printf '%s' "$OUT" | grep 'sessions in window')"; fi
+
+# Worktree dirs share the root slug as a PREFIX and must stay included — losing
+# them would blind the miner to nearly every real agent run.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --max-files 50 --section reliability 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sessions in window: 2 '; then
+  ok "per-session worktree dirs are still in scope"
+else bad "per-session worktree dirs are still in scope" "worktree sessions dropped"; fi
+
+# Empty allowlist must refuse to scan rather than default to everything.
+CLAUDE_PROJECTS_DIR="$FIX/scoped" HOME="$FIX" PORTFOLIO_PATHS="" MONOREPO_DIR="" \
+  bash "$TARGET" --since-days 3650 --section reliability >/dev/null 2>&1
+if [ $? -eq 2 ]; then ok "empty allowlist refuses to scan (fails closed)"
+else bad "empty allowlist refuses to scan" "did not exit 2"; fi
 
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo

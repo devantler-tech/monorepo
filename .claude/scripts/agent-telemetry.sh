@@ -43,6 +43,36 @@ CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 MONOREPO="${MONOREPO_DIR:-$HOME/git-personal/monorepo}"
 
+# ── PROFESSIONAL-WORK BOUNDARY (hard exclusion) ───────────────────────────────
+# The host's session stores hold transcripts for EVERY project worked on there,
+# not just this portfolio — including, potentially, employer/client repositories
+# the contract places categorically out of scope. Reading those transcripts is
+# itself an interaction with excluded material, so the corpus is restricted to
+# portfolio sessions BEFORE anything is read.
+#
+# FAILS CLOSED: a session whose scope cannot be established is EXCLUDED. Missing
+# some evidence is a scorecard gap; reading an excluded repo is a boundary
+# violation, and only one of those is recoverable.
+#
+# Claude namespaces project dirs by cwd slug, so the portfolio root (plus its
+# per-session worktrees, which share it as a prefix) is the allowlist. Extend
+# deliberately via PORTFOLIO_PATHS (colon-separated absolute paths).
+# NOTE the `-` not `:-`: an explicitly-empty PORTFOLIO_PATHS must stay empty and
+# trigger the refusal below, rather than silently falling back to a default that
+# widens scope. Fail closed means empty scans nothing, not everything.
+PORTFOLIO_PATHS="${PORTFOLIO_PATHS-$MONOREPO}"
+path_to_slug() { printf '%s' "$1" | sed 's|/|-|g'; }
+rx_escape()    { printf '%s' "$1" | sed 's|[].[^$*/\\+?(){}|]|\\&|g'; }
+# Match either form: Claude names project dirs by cwd SLUG (/ → -), while a
+# store may also be laid out under the real PATH. Both denote the same project.
+PORTFOLIO_SLUG_RE=$(
+  printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
+  | while IFS= read -r p; do
+      printf '%s|%s|' "$(rx_escape "$(path_to_slug "$p")")" "$(rx_escape "$p")"
+    done | sed 's/|$//'
+)
+[ -n "$PORTFOLIO_SLUG_RE" ] || { echo "PORTFOLIO_PATHS resolved empty — refusing to scan" >&2; exit 2; }
+
 need() { command -v "$1" >/dev/null 2>&1 || { echo "MISSING-DEP: $1" >&2; return 1; }; }
 need jq || exit 3
 
@@ -66,9 +96,9 @@ redact() {
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
     -e 's/(AKIA[0-9A-Z]{4})[0-9A-Z]+/\1…<redacted>/g' \
     -e 's/(xox[baprs]-[A-Za-z0-9]{4})[A-Za-z0-9-]+/\1…<redacted>/g' \
-    -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----/<redacted-private-key>/g' \
+    -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----([^-]|-[^-])*(-----END [A-Z ]*PRIVATE KEY-----)?/<redacted-private-key>/g' \
     -e 's/(eyJ[A-Za-z0-9_-]{6})[A-Za-z0-9_.-]{20,}/\1…<redacted-jwt>/g' \
-    -e 's/((secret|token|password|passwd|api[_-]?key)["'"'"']?\s*[:=]\s*["'"'"']?)[^"'"'"'[:space:],}]{8,}/\1<redacted>/gI'
+    -e 's/((secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^"'"'"'[:space:],}]{8,}/\1<redacted>/gI'
 }
 
 # Credential shapes worth flagging as a leak. MUST stay in sync with redact()
@@ -81,7 +111,7 @@ redact() {
 # form), each time reporting a real leak as "clean". The test suite asserts a
 # sample of EVERY numbered shape is both detected AND redacted; add to both
 # lists together or the test fails.
-CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{12,})'
+CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{8,})'
 
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
@@ -155,8 +185,10 @@ newest_first() {
 }
 
 session_files() {
-  newest_first "$CLAUDE_PROJECTS" "$MAX_FILES" \
-    | sort -rn | cut -d' ' -f2- | head -n "$MAX_FILES"
+  newest_first "$CLAUDE_PROJECTS" \
+    | sort -rn | cut -d' ' -f2- \
+    | grep -E "($PORTFOLIO_SLUG_RE)" \
+    | head -n "$MAX_FILES"
 }
 
 # The Codex instance's own transcripts. Its schema differs from Claude's
@@ -164,9 +196,40 @@ session_files() {
 # reliability cannot be derived the same way — but the text-based detectors
 # (credential shapes, sleeps, timeouts) are format-agnostic and DO apply, so
 # those cover both instances rather than silently reporting on Claude alone.
+# Is a recorded working directory in portfolio scope? Two accepted forms:
+#   1. under any PORTFOLIO_PATHS entry;
+#   2. the Codex instance's OWN throwaway worktree of the portfolio root —
+#      `$CODEX_HOME/worktrees/<id>/<portfolio-basename>`. This is required, not
+#      cosmetic: real Codex runs record a cwd there, NOT under $MONOREPO, so
+#      scoping to $MONOREPO alone silently excludes the entire Codex instance
+#      and the scorecard reports one agent while claiming to cover two.
+#      Matched narrowly (basename must equal the portfolio root's) rather than
+#      allowlisting all of $CODEX_HOME/worktrees, which could hold other repos.
+in_scope_cwd() {
+  local cwd="$1" p
+  [ -n "$cwd" ] || return 1
+  printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
+  | while IFS= read -r p; do
+      case "$cwd" in "$p"|"$p"/*) echo match; return ;; esac
+      case "$cwd" in
+        "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
+          echo match; return ;;
+      esac
+    done | grep -q match
+}
+
 codex_session_files() {
-  newest_first "$CODEX_HOME/sessions" "$MAX_FILES" \
-    | sort -rn | cut -d' ' -f2- | head -n "$MAX_FILES"
+  # Codex sessions are flat files, not path-namespaced, so scope comes from the
+  # transcript's own recorded cwd. A file whose cwd cannot be determined is
+  # EXCLUDED (fail closed) rather than assumed in-scope. Only the head of the
+  # file is inspected, so an out-of-scope transcript's body is never read.
+  newest_first "$CODEX_HOME/sessions" \
+    | sort -rn | cut -d' ' -f2- \
+    | while IFS= read -r f; do
+        cwd=$(head -c 65536 "$f" 2>/dev/null \
+              | jq -r 'select(.type=="session_meta")|(.payload.cwd? // .cwd? // empty)' 2>/dev/null | head -1)
+        if in_scope_cwd "$cwd"; then printf '%s\n' "$f"; fi
+      done | head -n "$MAX_FILES"
 }
 
 SF_CACHE="$(session_files)"
@@ -297,16 +360,14 @@ if want safety; then
     # which is exactly the input the improver uses to decide guard-vs-agent.
     # Anchor to the tool_result envelope instead: the denial must be the CONTENT
     # of a real errored tool result, not a string appearing anywhere in the file.
-    printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      jq -r '
-        .. | objects
-        | select(.type=="tool_result" and (.is_error==true))
-        | (.content | if type=="array" then (map(select(.type=="text").text)|join(" "))
-                      elif type=="string" then . else empty end)
-        | select(test("^(<tool_use_error>)?(Blocked:|Permission to use |Claude requested permissions)"))
-        | .[0:80]
-      ' "$f" 2>/dev/null
+    # BOTH corpora: a guard firing only on the Codex sibling is still a guard
+    # firing, and the improver uses these counts to decide guard-vs-agent. Reading
+    # only the Claude schema reported "no blocked actions" for the whole
+    # deployment whenever the sibling was the one being stopped.
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      tool_result_text "$f" \
+        | grep -E '^(<tool_use_error>)?(Blocked:|Permission to use |Claude requested permissions|approval (denied|required)|command (rejected|not permitted))' \
+        | cut -c1-80
     done | redact | sed -E 's/[0-9]+/<n>/g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
     echo "    (each line = a real errored tool result, so transcript prose cannot fake one;"
     echo "     a recurring entry is EITHER a definition bug OR a permission gap — resolve"
@@ -333,7 +394,7 @@ if want safety; then
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
           if commands_in "$f" 2>/dev/null \
-             | grep -qE '(gh pr checkout|git fetch [^ ]*(fork|pull/)|git checkout .*(pull/|refs/pull))'; then
+             | grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))'; then
             commands_in "$f" 2>/dev/null \
               | grep -E '(npm ci|npm i |npm run|pnpm |yarn |go generate|go run|make [a-z]+)'
           fi
@@ -444,15 +505,33 @@ if want outcomes; then
   if command -v gh >/dev/null 2>&1 && [ -d "$MONOREPO/.git" ]; then
     SINCE_ISO=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%d' 2>/dev/null \
                 || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%d' 2>/dev/null)
-    echo "  merged PRs since ${SINCE_ISO} (monorepo):"
-    # Cap must exceed anything a real window can contain, or the count silently
-    # saturates: a weekly window or a busy dependency day exceeds 30 easily, and
-    # a saturated count reads as a real plateau in the scorecard.
-    gh pr list --repo devantler-tech/monorepo --state merged --limit 300 \
-      --json number,title,mergedAt \
-      --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")] | length | \"    count: \\(.)\"" 2>/dev/null \
-      || echo "    (gh unavailable)"
-    echo "  revert commits on main (window):"
+    # PORTFOLIO-WIDE, not monorepo-only. Quality is the signal these counts feed,
+    # and both agents ship most of their work in the product repos — measuring
+    # only the monorepo scored the definition work and ignored the products.
+    # Repos come from the submodule list, so the set follows the portfolio map
+    # instead of being hard-coded here and going stale.
+    echo "  merged PRs since ${SINCE_ISO} (portfolio):"
+    # Portable extraction: BSD sed rejects the non-greedy `+?` a single-pass
+    # regex would need, so strip in stages instead of relying on a GNU-only form.
+    REPOS=$(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.url$' 2>/dev/null \
+            | awk '{print $2}' \
+            | sed -E 's|\.git$||' \
+            | sed -E 's|^.*[:/]([^/]+)/([^/]+)$|\1/\2|' \
+            | grep -i '^devantler-tech/' | sort -u)
+    REPOS=$(printf 'devantler-tech/monorepo\n%s\n' "$REPOS" | grep -v '^$' | sort -u)
+    TOTAL=0
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt \
+            --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")] | length" 2>/dev/null || echo 0)
+      case "$c" in ''|*[!0-9]*) c=0 ;; esac
+      [ "$c" -gt 0 ] && printf '    %-42s %s\n' "$r" "$c"
+      TOTAL=$((TOTAL + c))
+    done <<EOF
+$REPOS
+EOF
+    echo "    ────────────────────────────────────────── total: ${TOTAL}"
+    echo "  revert commits on main (window, monorepo):"
     git -C "$MONOREPO" log --since="${SINCE_DAYS} days ago" --oneline --grep='^Revert' 2>/dev/null \
       | head -5 | sed 's/^/    /'
     echo "    (empty = nothing needed reverting)"

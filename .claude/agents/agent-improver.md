@@ -116,10 +116,14 @@ weight here, not less:
      bug is the agent attempting it ~50×/day, not the hook stopping it.)*
    - The guard blocks **mandated work** the contract requires → the guard is a **gap**; narrow it to
      the minimum that unblocks the real work.
-5. **Never break the sibling mid-flight.** A shared-credential or cross-instance runtime change can
-   kill the other instance's run. Prepare it, verify it, and apply it **between** ticks — or hand it to
-   the maintainer when timing cannot be controlled. Never edit the *other* instance's guard
-   configuration at all; surface cross-instance findings in the report instead.
+5. **Never break the sibling mid-flight — timing, not permission.** The symmetric grant covers the
+   sibling runtime's approval guards, so you *may* change them; what you may not do is change them
+   underneath a running tick. A shared-credential or cross-instance runtime change can kill the other
+   instance mid-run. So: prepare it, verify it, and apply it **between** ticks (the two schedules are
+   offset — use the gap), backing up the file first like any non-version-controlled edit. When the
+   timing cannot be controlled, or the change would take effect mid-run, hand it to the maintainer
+   instead. Record every sibling-side change in the report, since that instance cannot see your
+   memory and will otherwise meet an unexplained configuration change.
 6. **Touch each instance's own surfaces.** Both loaders are yours to fix (that is the point of a
    cross-instance observer), but keep changes symmetric and record them per instance — divergence
    between the siblings is a defect you exist to catch, not one to introduce.
