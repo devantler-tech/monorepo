@@ -29,9 +29,20 @@ public and private — no per-repo loop needed to enumerate):
 
 1. **Open PRs (org-wide, one call):**
    `gh search prs --owner devantler-tech --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
-2. **Open issues (org-wide, one call):**
-   `gh search issues --owner devantler-tech --state open --limit 300 --json number,repository,title,labels,updatedAt,url`
+2. **Open issues (org-wide, one call) — include `assignees`, they are a CLAIM signal:**
+   `gh search issues --owner devantler-tech --state open --limit 300 --json number,repository,title,labels,updatedAt,url,assignees`
    (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
+   Report each issue's assignee count. Per the contract's *Claim protocol*, an assignee means **an
+   instance has claimed this** — never "the maintainer took it", since every instance assigns as
+   `devantler` — and paired with a claim branch it is a ~2h lease that makes the issue temporarily
+   skippable (skip reason **(e)**). Without this field the orchestrator selects the oldest issue blind
+   to live claims and re-opens the duplicate-build race the protocol exists to close.
+2b. **Claim branches (one call per repo that has assigned-but-PR-less issues):**
+   `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep '^claude/'` — report any
+   `claude/*` branch whose name ends in `-<issue>` for an open issue with **no** open PR, as
+   `CLAIMED <repo>#<issue> (branch, no PR)`. This is the only pre-PR claim signal that exists: before
+   a PR there is no body to grep, so the issue number in the branch name is what makes the claim
+   discoverable. Keep it bounded — skip the call for repos with no assigned-and-PR-less issues.
 3. **Short-circuit dependency automation, then deepen only actionable candidates.** An org-search PR
    whose author is the exact `renovate[bot]` or `dependabot[bot]` identity is an automation-owned
    dependency PR. Emit only `AUTOMATION-OWNED (NO-ACTION)` from the cheap search row; do **not** call
@@ -282,6 +293,7 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
+- <repo> #<n> "<title>" — CLAIMED: assignees=<n>, claim-branch=<name|none>, no open PR (contract *Claim protocol* skip reason (e); the orchestrator times the ~2h lease from the issue's NEWEST `assigned` timeline event — an assignee is an INSTANCE claim, never the maintainer)
 ```
 
 Digest rules:

@@ -103,8 +103,10 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
 1. **Pick the oldest *actionable* open issue — and "big" is not a reason to skip it.** Prefer the
    **oldest** startable issue. Skip an older one **only** if (a) it already has an open PR, (b) it is
    blocked on a **named, live-verified** external dependency you can cite, (c) it is too
-   under-specified to begin, or (d) a delivered experiment is waiting for its named future measurement
-   date. Once that date arrives, measuring it is actionable. **Size, difficulty, a `roadmap`/`enhancement`/
+   under-specified to begin, (d) a delivered experiment is waiting for its named future measurement
+   date — once that date arrives, measuring it is actionable — or (e) another instance holds a **live
+   claim** (assigned **and** branched, within ~2h, no PR yet; contract *Claim protocol*), the only
+   skip reason that expires on its own. **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
    when the oldest issue is large, **decompose it into a small first child and ship that increment**
    (`Fixes #child`; add `Part of #experiment` when the parent stays open) so the big thing advances

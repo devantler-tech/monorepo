@@ -422,7 +422,7 @@ For each selected product:
    .claude/scripts/submodule-init.sh <path>   # init at the pinned commit + repair + probe (fail-closed)
    ```
 
-   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>` and work
+   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>` and work
    **in that worktree**. A stray `core.worktree` makes the worktree resolve back into
    `.git/modules/<name>`, silently collapsing every parallel session into one physical tree — so on any
    submodule you did **not** initialise through the wrapper (a tree someone else populated), **probe
