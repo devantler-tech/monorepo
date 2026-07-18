@@ -128,7 +128,7 @@ check "normalises digits for grouping" "$OUT" "<n>"
 echo
 echo "safety"
 OUT=$(run --section safety)
-check   "redacts credential-shaped strings" "$OUT" "…<redacted>"
+check   "reports the credential by SHAPE, not value" "$OUT" "github-token (classic/app)"
 nocheck "never echoes a full credential"    "$OUT" "$(ex __GHPA__)"
 # The fixture's injected prose contains a literal "Permission to use Bash with command
 # rm -rf /". The detector is deliberately anchored, so a transcript quoting that shape
@@ -201,7 +201,7 @@ OUT=$(runleak --section safety)
 nocheck "P2: quoted prose is not counted as a denial" "$OUT" "rm -rf"
 check   "P2: a real errored tool_result is still counted" "$OUT" "Blocked:"
 nocheck "P2: never echoes a fine-grained PAT"  "$OUT" "$(ex __PATZ__)"
-if printf '%s' "$OUT" | grep -qE 'github_pat_[A-Za-z0-9_]{4,}…<redacted>'; then
+if printf '%s' "$OUT" | grep -qF 'github-pat (fine-grained)'; then
   ok "P2: fine-grained PAT detected AND redacted"
 else bad "P2: fine-grained PAT detected AND redacted" "not flagged"; fi
 
@@ -289,8 +289,10 @@ EOF
 subst "$FIX/projects/jwt/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/projects/jwt" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
-if printf '%s' "$OUT" | grep -q 'redacted-jwt\|__JWTHEAD__'; then
-  printf '%s' "$OUT" | grep -q '__JWTTAIL__' \
+if printf '%s' "$OUT" | grep -q 'jwt-like'; then
+  # NB: match the EXPANDED token, not the literal placeholder — grepping OUT for
+  # "__JWTTAIL__" post-subst could never fire, making the echo check vacuous.
+  printf '%s' "$OUT" | grep -qF "$(ex __JWTTAIL__)" \
     && bad "JWT flagged AND redacted" "raw JWT echoed" || ok "JWT flagged AND redacted"
 else bad "JWT flagged AND redacted" "not detected at all"; fi
 
@@ -307,7 +309,7 @@ subst "$FIX/cxonly/sessions/r.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 nocheck "Codex-only window is not skipped as empty" "$OUT" "no sessions in window — neither"
-if printf '%s' "$OUT" | grep -qE 'AKIA[0-9A-Z]{4}…<redacted>'; then
+if printf '%s' "$OUT" | grep -qF 'aws-access-key-id'; then
   ok "Codex-only credential leak is still caught"
 else bad "Codex-only credential leak is still caught" "missed"; fi
 
@@ -369,6 +371,25 @@ parity_case "aws"        "leak __AWS__" "__AWS__"
 parity_case "slack"      "leak __SLACK__" "__SLACK__"
 parity_case "jwt"        "leak __JWT__" "__JWTTAIL__"
 parity_case "generic"    "config token=__GEN__" "__GEN__"
+
+# ── 6d². leak-table boundary anchoring ────────────────────────────────────────
+# First live run (2026-07-18): the top "real-looking" GitHub-token hits were
+# substrings INSIDE base64url blobs (signed-URL params, JWT signatures) —
+# base64url's alphabet includes `-` and `_`, so the TABLE anchors prefix shapes
+# on a preceding char outside [A-Za-z0-9_-]. Redaction stays unanchored.
+echo
+echo "leak-table boundary anchoring"
+mkdir -p "$FIX/blob"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=AAAA__GHPE__zz"}]}}\n' > "$FIX/blob/s.jsonl"
+subst "$FIX/blob/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blob" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -q 'github-token'; then
+  bad "mid-blob gh?_ substring is NOT counted" "counted as a token"
+else ok "mid-blob gh?_ substring is NOT counted"; fi
+# …but the output-boundary redactor still masks it (broad CRED_RE unchanged),
+# so refusing to COUNT blob noise never means ECHOING it.
+nocheck "mid-blob token is still redacted on output" "$OUT" "$(ex __GHPE__)"
 
 # ── 6e. round-3 findings ──────────────────────────────────────────────────────
 echo
