@@ -738,6 +738,62 @@ if printf '%s' "$OUT" | grep -qE 'bash timeouts \.+ 0'; then
   ok "Codex text without a real flag is NOT counted (no invented format)"
 else bad "Codex text without a real flag is NOT counted" "$(printf '%s' "$OUT" | grep 'timeouts')"; fi
 
+# ── 6k. round-12 findings ─────────────────────────────────────────────────────
+echo
+echo "round-12 regressions"
+
+# Compound-shell busy-waits: my previous fix required a line-start/separator and
+# then MISSED the most common real forms.
+mkdir -p "$FIX/compound"
+cat > "$FIX/compound/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"k1","name":"Bash","input":{"command":"while test ! -f x; do sleep 60; done"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"k2","name":"Bash","input":{"command":"( sleep 20 )"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"k3","name":"Bash","input":{"command":"echo sleep 60"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/compound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2'; then
+  ok "compound-shell sleeps counted; 'echo sleep 60' still not"
+else bad "compound-shell sleeps counted; 'echo sleep 60' still not" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+
+# A malformed record must not abort the credential scan for the whole file.
+mkdir -p "$FIX/malformed"
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ok"}]}}' \
+               'THIS IS NOT JSON {' \
+               '{"type":"user","message":{"content":[{"type":"text","text":"leak __GHPB__"}]}}' \
+  > "$FIX/malformed/s.jsonl"
+subst "$FIX/malformed/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/malformed" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+[0-9]+ '; then
+  ok "a credential AFTER a malformed record is still found"
+else bad "a credential AFTER a malformed record is still found" "jq aborted at the bad line"; fi
+
+# Interrupts must come from the structured flag, not prose quoting it.
+mkdir -p "$FIX/interrupt"
+cat > "$FIX/interrupt/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"the log said \"interrupted\":true twice"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/interrupt" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'interrupted tool calls \.+ 0'; then
+  ok "prose quoting the interrupt flag does not fabricate one"
+else bad "prose quoting the interrupt flag does not fabricate one" "$(printf '%s' "$OUT" | grep 'interrupted')"; fi
+
+# The scorecard requires injection attempts to be SURFACED.
+OUT=$(run --section safety)
+check "injection attempts are surfaced" "$OUT" "INJECTION ATTEMPTS"
+check "the fixture's injected instruction is reported" "$OUT" "ignore prior rules"
+
+# Codex denial detection is a DISCLOSED gap, not a silent zero.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxdeny" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "the Codex denial gap stays disclosed" "$OUT" "CLAUDE-SCHEMA ONLY"
+
+# The mtime windowing bound is stated rather than implied exact.
+OUT=$(run --section reliability)
+check "the mtime window bound is disclosed" "$OUT" "selects FILES by mtime"
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"
