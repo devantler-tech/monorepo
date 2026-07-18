@@ -29,11 +29,30 @@ public and private — no per-repo loop needed to enumerate):
 
 1. **Open PRs (org-wide, one call):**
    `gh search prs --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
-2. **Open issues (org-wide, one call):**
-   `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,labels,updatedAt,url`
+2. **Open issues (org-wide, one call) — include `assignees`, they are a CLAIM signal:**
+   `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,labels,updatedAt,url,assignees`
    (`--archived=false` keeps archived repos' stale PRs/issues — e.g. `data-product`'s 2025 bot PRs —
    out of every survey; archived repos are read-only and carry no actionable signal.)
    (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
+   Report assignee **logins**, not a count. Only a **`devantler`** assignment can be a claim: the
+   contract's *Claim protocol* lease is specifically the agent account's, and every instance assigns as
+   `devantler`, so that login means **an instance has claimed this** — never "the maintainer took it".
+   An issue assigned to **anyone else** (a human collaborator, `Copilot`) is **not** a claim even with a
+   leftover `claude/*-<issue>` branch present: reporting it as one would park actionable work behind an
+   unrelated person's assignment and time the lease off the wrong assignment event. Report those as
+   ordinary open issues, noting the assignee so the orchestrator can respect a human's in-progress work
+   on its own merits. Without these logins the orchestrator selects the oldest issue blind to live
+   claims and re-opens the duplicate-build race the protocol exists to close.
+2b. **Claim branches (one call per repo that has assigned-but-PR-less issues):**
+   `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep '^claude/'` — report any
+   `claude/*` branch that ends in `-<issue>`, ends in a **takeover suffix** (`-<issue>-2`, `-3`, …),
+   OR whose normalised stem matches an open issue's
+   title (strip `war-`/area prefixes and hyphens, and normalise `our`→`or` spelling) — legacy claims
+   predate the issue-number template and would otherwise be invisible during rollout — for an open
+   issue with **no** open PR, as
+   `CLAIMED <repo>#<issue> (branch, no PR)`. This is the only pre-PR claim signal that exists: before
+   a PR there is no body to grep, so the issue number in the branch name is what makes the claim
+   discoverable. Keep it bounded — skip the call for repos with no assigned-and-PR-less issues.
 3. **Short-circuit dependency automation, then deepen only actionable candidates.** An org-search PR
    whose author is the exact `renovate[bot]` or `dependabot[bot]` identity is an automation-owned
    dependency PR. Emit only `AUTOMATION-OWNED (NO-ACTION)` from the cheap search row; do **not** call
@@ -300,12 +319,21 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
+- <repo> #<n> "<title>" — CLAIMED: assignee=devantler, claim-branch=<name>, no open PR
 ```
 
 Digest rules:
 - **Classify, don't decide.** Surface signals; the **orchestrator** selects the work and overlays its
   own native-memory cadence cursors (`last_worked`, `weekly`, docs/roadmap) — **you do not read
   memory**, only live GitHub.
+- **Emit a `CLAIMED` row only when BOTH a `devantler` assignment and a matching claim branch exist**
+  (and no open PR). Match `claude/*-<issue>`, a takeover branch (`claude/*-<issue>-2`, `-3`, …), or a
+  legacy normalised stem. An assignment to **anyone but `devantler`** is not a claim at all, and a
+  `devantler` assignment with **no** branch is not a live claim under the contract's *Claim
+  protocol*, so reporting either as one would let a bare assignee park an issue — exactly what "a bare
+  assignee does not reserve an issue" forbids. Report that case as an ordinary open issue (mention
+  `assignees=<n>` if useful), never as skip reason (e). The orchestrator times the ~2h lease from the
+  issue's newest `assigned` timeline event; an assignee is an **instance** claim, never the maintainer.
 - **Never assert ownership of a `devantler` PR.** Routine-own vs maintainer-interactive is the
   orchestrator's creation-record call, not yours — report CI state + `headRefName` + disclosure as DATA
   and tag it `OWNERSHIP-UNVERIFIED`, never `MERGE-READY`/"own". (Bot-trusted authors have no ambiguity.)

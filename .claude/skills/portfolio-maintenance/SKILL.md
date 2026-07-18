@@ -368,8 +368,23 @@ actionable open issue**, and any new non-trivial find is **filed as an issue fir
 backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
 7. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
    open issue that's actually startable; skip one only if it's blocked, too under-specified to begin, or
-   it already has an open PR. A **bare assignee does *not* reserve** an issue (only an open PR does), so
-   if nobody has opened one you may pick it up regardless of who's assigned. If it **already has an
+   it already has an open PR. A **bare `devantler` assignee does *not* reserve** an issue
+   **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
+   (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
+   (timed from the issue's newest `devantler` `assigned` timeline event, never a branch commit date).
+   **Only the agent account's assignment is a claim, and only it expires:** an issue assigned to a
+   **human collaborator** (or `Copilot`) is someone else's work-in-progress — respect it and pick a
+   different issue, never take it over on this window. **Claim
+   before you build:** self-assign + push the branch **with the issue number in its name** the moment
+   you select — and if `devantler` is ALREADY assigned (a stale bare assignment from an abandoned run),
+   **remove then re-add**, since adding an existing assignee is a no-op that would leave your lease
+   carrying the old timestamp. **The push decides the race:** put a real commit on the claim branch
+   (never a bare base pointer), push without force, then confirm `git ls-remote` shows YOUR sha — two
+   instances derive the same branch name, so a rejected push or someone else's tip means you lost;
+   stand down rather than force over them. Check open PRs, remote
+   `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
+   (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
+   itself. If it **already has an
    actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
    automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
    **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
@@ -435,7 +450,9 @@ For each selected product:
    .claude/scripts/submodule-init.sh <path>   # init at the pinned commit + repair + probe (fail-closed)
    ```
 
-   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>` and work
+   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>`
+   (issue-less hotfixes and trivial obvious fixes keep plain `claude/<area>-<desc>` — they go straight
+   to a PR, so no claim window applies) and work
    **in that worktree**. A stray `core.worktree` makes the worktree resolve back into
    `.git/modules/<name>`, silently collapsing every parallel session into one physical tree — so on any
    submodule you did **not** initialise through the wrapper (a tree someone else populated), **probe
