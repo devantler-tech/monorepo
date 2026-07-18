@@ -271,7 +271,11 @@ submodule. Split its work in two, because only one half is path-less:
   assignment is not a claim, so two instances can pick the same board issue and mutate the board
   concurrently. Before mutating, **comment the claim on the issue** (disclosure line + what you are
   about to change) and **re-read the issue immediately before acting** — if a sibling's disclosed
-  claim is already there, that lane is owned this tick; pick something else.
+  claim is already there, that lane is owned; pick something else. **The claim MUST expire and MUST be
+  closed out**, or a crashed run blocks the issue forever: treat a disclosed claim as **live for ~2
+  hours** (matching the branch-claim lease) and **stale after that — take it over and say so in a
+  reply**. On finishing, **reply to your own claim** stating what changed; an un-replied claim older
+  than the lease is abandoned, not owned.
 - **Any accompanying file change** (an `add-to-project` workflow, an agent-definition or card update)
   is **ordinary monorepo work and keeps the FULL discipline** — per-run worktree, validate, draft PR.
   **Never skip isolation for it:** several instances run concurrently, and editing the shared checkout

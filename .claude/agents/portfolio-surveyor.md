@@ -293,29 +293,26 @@ public and private — no per-repo loop needed to enumerate):
    Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
 5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
-   (untriaged); automation-owned dependency PRs remain only their compact no-action rows. From (2): `roadmap`-labelled epics and ready
-   `security`/`enhancement`/`performance`/`refactor`/`bug`/`documentation` issues (**`security` was
-   missing from this list until 2026-07-18, so security work was invisible to the queue. It is
-   *reported*, not *prioritised*: the canonical queue stays oldest-actionable-first and a `security`
-   label is NOT a skip reason for an older issue — only an urgent security hotfix jumps the queue,
-   under the normal breakage rule**) **plus the three types that have no label equivalent — `Spike`,
-   `Kata`, `Chore` — which a label-only sweep silently drops.**
-   ⚠️ **Fetch those with the search `type:` QUALIFIER, not a JSON field:** `gh search issues --json`
-   has **no `issueType` field** (verified 2026-07-18), so asking for it errors and a label-only sweep
-   silently misses them. Use one extra bounded search per type:
+   (untriaged); automation-owned dependency PRs remain only their compact no-action rows.
+   **Select ready work BY ISSUE TYPE, not by label.** Every issue carries exactly one type, so type is
+   the complete and canonical partition; labels are legacy and **provably incomplete** — 8 of 63 open
+   Epics carried no `roadmap` label on 2026-07-18, and `Spike`/`Kata`/`Chore` have no label at all, so
+   a label sweep silently drops them. Sweep each type once:
    ```sh
-   # Return ROWS, not a count — a count cannot be ordered, cannot fill a digest row, and
-   # cannot expose a Kata's measurement date. Project created_at (issue AGE, for the
-   # oldest-first queue) — NOT updated_at, which a comment on a years-old issue resets to
-   # today — plus the body, which is where a Kata's measurement date lives:
-   gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:Spike&per_page=100" \
-     --jq '.items[] | "\(.repository_url|split("/")|last)#\(.number)\t\(.created_at[0:10])\t\(.title)\t\(.body//"" | gsub("\\s+";" ") | .[0:200])"'
+   # The search QUALIFIER type: works; there is NO issueType JSON field (gh search issues --json
+   # errors on it) — verified 2026-07-18. Project created_at (issue AGE, for the oldest-first
+   # queue) — NOT updated_at, which a comment on a years-old issue resets to today — and keep the
+   # WHOLE body, because a Kata's measurement date can sit anywhere in a structured issue:
+   for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do
+     gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate \
+       --jq --arg t "$T" '.items[] | "\($t)\t\(.repository_url|split("/")|last)#\(.number)\t\(.created_at[0:10])\t\(.title)\t\(.body//"")"'
+   done
    ```
-   **Drop hits from archived repos** (the primary sweep already excludes them; this raw Search call
-   does not, so an archived repo's open Spike would surface as actionable when it is a read-only
-   tombstone — `reusable-workflows` is the live example).
-   (`type:Epic` → 62, `type:Chore` → 7, `type:Spike` → 1, `type:Kata` → 0 on 2026-07-18, so this is
-   cheap — three bounded searches.)
+   **Drop hits from archived repos** — this raw Search call has no archived filter (the primary sweep
+   does), so an archived repo's open issue surfaces as actionable when it is a read-only tombstone
+   (`reusable-workflows` is the live example). **`security` is REPORTED, not prioritised**: the queue
+   stays oldest-actionable-first and a security issue is *not* a reason to skip an older one — only an
+   urgent security hotfix jumps, under the normal breakage rule.
    **Exclude a `Kata` whose named measurement date is still in the FUTURE** — contract skip reason (d)
    makes it not-yet-actionable, and listing it as ready work makes runs either re-skip it every tick or
    measure before the agreed date. Report future-dated Katas separately, with their date.

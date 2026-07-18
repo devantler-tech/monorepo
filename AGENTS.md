@@ -908,28 +908,13 @@ Types and sub-issues are **orthogonal**: a type says what a thing *is*, a sub-is
 *belongs to*. Labels stay for cross-cutting, repo-local tags (`automation`, `kubernetes`,
 `good first issue`).
 
-⚠️ **Transition — keep applying the type-labels for now.** The
-[`portfolio-surveyor`](.claude/agents/portfolio-surveyor.md) still selects ready work **by label**
-by label, so **a type alone does not put an issue in the queue.** Apply the matching label too, using
-this mapping — **every type must map, or the issue is filed correctly and still never worked**:
-
-| Type | Label to also apply |
-|---|---|
-| Epic | `roadmap` |
-| Feature | `enhancement` |
-| Bug | `bug` |
-| Security | `security` |
-| Performance | `performance` |
-| Refactor | `refactor` |
-| Docs | `documentation` |
-| **Spike / Kata / Chore** | **no label equivalent exists** — the surveyor selects these **by type**; do not invent a label for them |
-
-`security` and the three type-only selections were **missing** until 2026-07-18: a correctly-typed
-Security issue, a Kata that reached its measurement date, or a Spike ready to run could sit unseen
-behind less critical work. Both gaps are now closed in the surveyor. Dropping the mapped labels today
-would make newly-triaged issues **vanish from the oldest-actionable queue**, so keep type *and* label
-until the surveyor is migrated
-to `type:` queries; retiring the duplicate labels is a follow-up, not part of this change.
+**The queue selects BY TYPE, not by label.** The
+[`portfolio-surveyor`](.claude/agents/portfolio-surveyor.md) sweeps each of the ten types directly, so
+**a correct type is sufficient to be queued** — no companion label is required. That matters because
+labels were provably incomplete: on 2026-07-18, **8 of 63 open Epics carried no `roadmap` label**, and
+`Spike`/`Kata`/`Chore` have no label equivalent at all, so a label-based sweep silently dropped them.
+Existing type-labels are harmless legacy and stay until pruned (#2242); do **not** add new ones, and
+never treat a missing label as a reason an issue is unqueued.
 
 **Default: every issue belongs to an Epic** (maintainer direction 2026-07-18). A child that hangs off
 nothing is work whose *why* is unrecorded — it cannot roll up, it cannot be prioritised against a
