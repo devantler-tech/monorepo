@@ -120,10 +120,12 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    **ship the decision as a draft PR** (he steers there) — never a passive "awaiting-maintainer" note, never
    the end-of-run report (he rarely reads it), never an **`@devantler` mention** (no notification). Re-verify
    any "gated" against live state before trusting it (memory goes stale) and name the
-   blocker in the report. A **bare assignee does *not* reserve** it **indefinitely** — an assignment plus a
-   **pushed branch** is a live claim for ~2h (contract *Claim protocol*); with no branch, or once that
-   lapses with no PR, you may take it regardless of who's assigned (timed from the issue's `assigned`
-   timeline event, never a branch commit date). **Claim the lane before you build** (self-assign + push
+   blocker in the report. A **bare `devantler` assignee does *not* reserve** it **indefinitely** — a
+   `devantler` assignment plus a **pushed branch** is a live claim for ~2h (contract *Claim protocol*);
+   with no branch, or once that lapses with no PR, you may take it (timed from the issue's newest
+   `devantler` `assigned` timeline event, never a branch commit date). **Only the agent account's
+   assignment is a claim, and only it expires:** an issue assigned to a **human collaborator** (or
+   `Copilot`) is someone else's work-in-progress — respect it and pick a different issue. **Claim the lane before you build** (self-assign + push
    the branch **with the issue number in its name**, then harden), check open PRs / remote `claude/*`
    branches / assignees by **issue number rather than literal branch name**, and on a lost race
    **abandon** — then diff your build against the winner's and post only findings you have verified:
