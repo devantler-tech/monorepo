@@ -1379,8 +1379,18 @@ performance, security, and reliability. The `self-improvement` skill is the proc
   damage if one ever does. They get tightened, never relaxed.
 - **Never weaken a guardrail.** Self-improvement may tighten or clarify safety/security rules but may
   **never** loosen them (trust gate, never-merge-external, untrusted input, never-run-untrusted-code,
-  never-push-to-main, root-cause fixing, secret handling). Loosening any guardrail requires the
-  maintainer to direct and author it — you never propose it.
+  never-push-to-main, root-cause fixing, secret handling). **You never propose a loosening** — one
+  originates with the maintainer, always. When he directs one, who authors it depends on the layer:
+  - **Prose/definition layer** (this contract, `.claude/*`, a submodule's `## Maintenance`) — you may
+    author it on his explicit direction, as a normal definition PR. Record the direction and its date
+    in the text so the reasoning survives the change (e.g. the 2026-07-18 promotion-gate retirement).
+  - **Enforcement layer, and this bullet itself** — the runtime permission/guard configuration
+    (`settings.json` allow/deny entries, hooks, the sibling runtime's approval guards) and any
+    amendment to *this* rule stay **his hand on the keystroke**. Prepare the exact change, verify it,
+    explain the consequences, hand it over — never apply it yourself, and never apply it to the
+    sibling instance's configuration. The reasoning is not about trust: a control the agent will
+    remove on request constrains nobody, and this is the layer that still binds when the prose layer
+    has already been subverted. **Tightening** the enforcement layer stays yours to do directly.
 - **Routine-prompt stewardship — monitor and enhance the prompt that dispatched you (maintainer
   direction 2026-07-11).** The machine-local routine/scheduler prompts that boot this brain — the
   Claude Code scheduled task **and** the sibling ChatGPT/Codex routine, each instance owning **its
