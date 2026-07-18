@@ -116,9 +116,14 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   green-review state** — so a run can
   **drain all five**, not just threads. **(e) green review:** nothing may be self-promoted without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
-  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|none>`
+  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>`
   (`self@<sha>` = the last-resort agent self-review on an **own** PR when both lanes are down —
-  contract *Autonomy → Fallback — agent self-review*; never on a bot-authored PR).
+  contract *Autonomy → Fallback — agent self-review*; never on a bot-authored PR). **`none` carries
+  its evidence** — the review-output artifact counts the surveyor actually saw, **per lane**, and the abbreviated
+  head it matched — so a real absence is distinguishable from a filter miss; a bare `none` is an
+  unverifiable claim, and the suffix is scoped to `green_review` only (never `rd=none`, which is
+  GitHub's unrelated `reviewDecision`). Non-zero counts beside `none` are normal when the artifacts
+  are **stale** (at a non-head SHA) — that is a re-request signal, not a contradiction.
   Fetch `headRefOid` while deepening every actionable own/trusted PR. A CodeRabbit `APPROVED` review counts only
   when its REST `commit_id` equals that head; report an older approval as stale, and a current-head
   CodeRabbit review carrying findings as `cr-findings@<sha>`. For Codex, sweep
@@ -368,8 +373,23 @@ actionable open issue**, and any new non-trivial find is **filed as an issue fir
 backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
 7. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
    open issue that's actually startable; skip one only if it's blocked, too under-specified to begin, or
-   it already has an open PR. A **bare assignee does *not* reserve** an issue (only an open PR does), so
-   if nobody has opened one you may pick it up regardless of who's assigned. If it **already has an
+   it already has an open PR. A **bare `devantler` assignee does *not* reserve** an issue
+   **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
+   (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
+   (timed from the issue's newest `devantler` `assigned` timeline event, never a branch commit date).
+   **Only the agent account's assignment is a claim, and only it expires:** an issue assigned to a
+   **human collaborator** (or `Copilot`) is someone else's work-in-progress — respect it and pick a
+   different issue, never take it over on this window. **Claim
+   before you build:** self-assign + push the branch **with the issue number in its name** the moment
+   you select — and if `devantler` is ALREADY assigned (a stale bare assignment from an abandoned run),
+   **remove then re-add**, since adding an existing assignee is a no-op that would leave your lease
+   carrying the old timestamp. **The push decides the race:** put a real commit on the claim branch
+   (never a bare base pointer), push without force, then confirm `git ls-remote` shows YOUR sha — two
+   instances derive the same branch name, so a rejected push or someone else's tip means you lost;
+   stand down rather than force over them. Check open PRs, remote
+   `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
+   (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
+   itself. If it **already has an
    actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
    automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
    **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
@@ -435,7 +455,9 @@ For each selected product:
    .claude/scripts/submodule-init.sh <path>   # init at the pinned commit + repair + probe (fail-closed)
    ```
 
-   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>` and work
+   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>`
+   (issue-less hotfixes and trivial obvious fixes keep plain `claude/<area>-<desc>` — they go straight
+   to a PR, so no claim window applies) and work
    **in that worktree**. A stray `core.worktree` makes the worktree resolve back into
    `.git/modules/<name>`, silently collapsing every parallel session into one physical tree — so on any
    submodule you did **not** initialise through the wrapper (a tree someone else populated), **probe
@@ -463,7 +485,14 @@ For each selected product:
    is forbidden unless the current interactive conversation first clears the professional-work
    boundary for that named repo; creating an upstream artifact then still needs ask-tool approval.
 4. **Clean up:** `git -C <path> worktree remove .claude/worktrees/maint-<runid>` (and prune). Leave
-   no worktree or dirty state behind.
+   no worktree or dirty state behind. **Then reap spent branches EVERY run** (contract *End-of-tick
+   branch hygiene*): with the worktree already removed (a branch still checked out sits in the keep-set),
+   run [`.claude/scripts/branch-cleanup.sh <repo_path> <slug> <manifest>`](../../scripts/branch-cleanup.sh)
+   for each repo touched. It restores the default-branch checkout and deletes only spent `claude/*`
+   branches — KEEPING open-PR heads, worktree-checked-out branches, and the maintainer's interactive
+   random-slug branches, and deleting a remote branch only on MERGED/CLOSED PR evidence (a restore
+   manifest is written before each delete). This step is what makes the *reap EVERY run* duty actually
+   run in a scheduled tick — the paragraph alone does not.
 
 ## 4. Always: update native memory + one consolidated report
 - **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
