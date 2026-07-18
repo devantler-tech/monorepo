@@ -95,6 +95,16 @@ is_archive() { [[ "$(basename "$1")" == *archive* ]]; }
 over_count=0
 checked=0
 
+# Enumerate BEFORE the loop and check the status explicitly. Piping find into
+# the loop via process substitution discards its exit status, so a permission
+# denial or filesystem error would leave checked=0 and exit 0 — reporting "no
+# memory files" and FAILING OPEN on the very case this guard exists to catch.
+# A check that silently skips its own target case is worse than no check.
+if ! file_list="$(find "$dir" -maxdepth 1 -type f -name '*.md' 2>/dev/null)"; then
+  echo "memory-hygiene: failed to enumerate memory files in $dir" >&2
+  exit 2
+fi
+
 # Sorted for deterministic output (test-stable, diff-friendly across runs).
 while IFS= read -r file; do
   [[ -n "$file" ]] || continue
@@ -123,7 +133,7 @@ while IFS= read -r file; do
     # are worth surfacing even in the quiet default view.
     say "$(printf 'near %5sK / %3sK  %s' "$kb" "$limit_kb" "$base")"
   fi
-done < <(find "$dir" -maxdepth 1 -type f -name '*.md' | sort)
+done <<< "$(printf '%s' "$file_list" | sort)"
 
 if [[ "$checked" -eq 0 ]]; then
   say "memory-hygiene: no memory files found in $dir"

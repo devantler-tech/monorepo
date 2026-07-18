@@ -133,6 +133,24 @@ check "zero threshold exits 2" "2" "$(run --dir "$tmp/under" --threshold-kb 0)"
 check "unknown flag exits 2" "2" "$(run --dir "$tmp/under" --bogus)"
 
 # ---------------------------------------------------------------------------
+# FAIL CLOSED when the store cannot be enumerated. Process substitution discards
+# find's exit status, so an enumeration failure would otherwise look identical
+# to "no memory files" and exit 0 — fail-open on the guard's own target case.
+# A `find` shim that fails stands in for a permission/filesystem denial.
+# ---------------------------------------------------------------------------
+shim="$tmp/shim"
+mkdir -p "$shim"
+cat > "$shim/find" <<'SHIM'
+#!/usr/bin/env bash
+echo "find: simulated enumeration failure" >&2
+exit 1
+SHIM
+chmod +x "$shim/find"
+shim_rc=0
+PATH="$shim:$PATH" "$tool" --dir "$tmp/under" >/dev/null 2>&1 || shim_rc=$?
+check "enumeration failure fails CLOSED (exit 2, not 0)" "2" "$shim_rc"
+
+# ---------------------------------------------------------------------------
 # An empty store is not an error — a fresh deployment has no memory yet.
 # ---------------------------------------------------------------------------
 mkdir -p "$tmp/empty"
