@@ -132,6 +132,17 @@ check "non-numeric threshold exits 2" "2" "$(run --dir "$tmp/under" --threshold-
 check "zero threshold exits 2" "2" "$(run --dir "$tmp/under" --threshold-kb 0)"
 check "unknown flag exits 2" "2" "$(run --dir "$tmp/under" --bogus)"
 
+# A leading zero must not be read as octal. Unfixed, `048` passes the regex and
+# then breaks every later (( )) INSIDE the scan loop, so the script printed "no
+# memory files found" and exited 0 with an over-cap file present — fail-open.
+check "leading-zero threshold is base-10, not octal" "1" "$(run --dir "$tmp/over" --threshold-kb 048)"
+check "leading-zero index bound is base-10" "1" "$(run --dir "$tmp/index" --index-kb 024)"
+out="$(run_out --dir "$tmp/over" --threshold-kb 048)"
+if grep -qi "value too great for base\|no memory files found" <<<"$out"; then
+  fail "leading-zero threshold scans cleanly (got: $out)"
+else pass "leading-zero threshold scans cleanly"; fi
+check "leading-zero zero value still rejected" "2" "$(run --dir "$tmp/under" --threshold-kb 00)"
+
 # ---------------------------------------------------------------------------
 # FAIL CLOSED when the store cannot be enumerated. Process substitution discards
 # find's exit status, so an enumeration failure would otherwise look identical

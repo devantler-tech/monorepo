@@ -67,8 +67,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for v in "$threshold_kb" "$index_kb"; do
-  if ! [[ "$v" =~ ^[0-9]+$ ]] || [[ "$v" -eq 0 ]]; then
+# Validate as a STRING first, then normalise to base 10. Bash arithmetic treats
+# a leading zero as octal, so `--threshold-kb 048` would pass the regex and then
+# blow up in every later `(( ))` — and because those failures happen inside the
+# scan loop, the script would report "no memory files found" and exit 0, failing
+# OPEN with a file sitting right there. Normalising here keeps the arithmetic
+# total.
+for name in threshold_kb index_kb; do
+  v="${!name}"
+  if ! [[ "$v" =~ ^[0-9]+$ ]]; then
+    echo "memory-hygiene: thresholds must be positive integers (got '$v')" >&2
+    exit 2
+  fi
+  printf -v "$name" '%d' "$((10#$v))"
+  if [[ "${!name}" -le 0 ]]; then
     echo "memory-hygiene: thresholds must be positive integers (got '$v')" >&2
     exit 2
   fi

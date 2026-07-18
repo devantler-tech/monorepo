@@ -59,6 +59,9 @@ jobs:
             memory-hygiene:
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-hygiene.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             maintainer-preflight:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/maintainer-preflight.test.sh'
