@@ -240,7 +240,8 @@ result. **Overlay your native-memory cadence cursors yourself** — each product
 `needs_attention`, and the
 CI/link caches — since the surveyor reads only live GitHub, not memory. ~Monthly, also do the
 **holistic review** (contract *Holistic review*): scan the suite for generic patterns to extract into
-the shared libraries (`devantler-tech/actions`, `reusable-workflows`, `skills`, `plugins`) — and, on
+the shared libraries (`devantler-tech/actions`, `agent-skills`, `agent-plugins`, and
+`kyverno-policies` for cluster guardrail/admission/generation policy patterns) — and, on
 the same cadence (plus after any credential or agent-tooling change), a **read-only local-host
 least-privilege review** (contract *Local agent host*): token scopes, both agents' permission/sandbox
 configs, secret exposure, cluster credential scope, OS-account privileges. Record findings in
