@@ -115,7 +115,14 @@ Fix the top item — occasionally a small batch **within one area**. One concern
 | Submodule `## Maintenance` | that submodule | draft PR |
 | Claude loader | `~/.claude/scheduled-tasks/daily-ai-assistant/SKILL.md` | direct edit + `.bak-<UTC>-<reason>` |
 | Codex loader | `$CODEX_HOME/automations/daily-ai-engineer/automation.toml` | direct edit + `.bak-<UTC>-<reason>` |
-| Permissions / hooks | `~/.claude/settings.json`, Codex approval guards | direct edit + `.bak-<UTC>-<reason>` |
+| Permissions / hooks — **TIGHTENING** | `~/.claude/settings.json`, Codex approval guards | direct edit + `.bak-<UTC>-<reason>` |
+| Permissions / hooks — **WIDENING** | same files | **prepare + hand to the maintainer — never apply** |
+
+**That last row is a split, not a formality.** A finding where a guard blocks mandated work is the exact
+case that tempts a direct edit, and this table is the runbook you follow — so an undivided row would let
+you widen your own guard while the authority model forbids it. Narrowing a guard is yours; widening one
+is the maintainer's keystroke. Prepare the exact change, verify it, explain the consequence, hand it
+over. **Never** reach the same outcome by editing the prose rule that reserves it.
 
 **Every change carries its evidence** — the signature, the count, the window — in the PR body or the
 run report. **Every non-version-controlled edit is backed up first**, and the before/after goes into

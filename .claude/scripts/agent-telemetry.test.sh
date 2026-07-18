@@ -169,6 +169,102 @@ if [ "$_rc" -eq 2 ]; then ok "P3: missing option value exits 2 (no hang)"
 elif [ "$_rc" -eq 137 ]; then bad "P3: missing option value exits 2" "HUNG until killed"
 else bad "P3: missing option value exits 2" "rc=$_rc"; fi
 
+# ── 6c. second-round review findings ──────────────────────────────────────────
+# These are the SAME CLASSES as 6b, caught at call sites the first fix missed.
+# They are guarded per-class here, not per-instance.
+echo
+echo "class-level regressions (round 2)"
+
+mkdir -p "$FIX/projects/r2" "$FIX/codex/sessions"
+
+# A command carrying an inline credential (the sampler path that bypassed
+# per-call-site redaction), plus prose that merely MENTIONS a sleep.
+cat > "$FIX/projects/r2/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{"command":"GITHUB_TOKEN=ghp_CCCCCCCCCCCCCCCCCCCCCCCC npm ci"}}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"a reviewer wrote: just run sleep 60 and poll it in a loop, also sleep 30 works"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"Bash","input":{"command":"echo hi"}}]}}
+EOF
+
+runr2() {
+  CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" \
+  CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
+  bash "$TARGET" --since-days 3650 --max-files 50 "$@" 2>&1
+}
+
+# CLASS: redaction must hold for EVERY emitted line, including new detectors.
+OUT=$(runr2 --section safety)
+nocheck "redaction covers the command sampler too" "$OUT" "ghp_CCCCCCCCCCCCCCCCCCCCCCCC"
+check   "the near-miss itself is still reported"   "$OUT" "npm ci"
+
+# CLASS: behavioural counts are structural, so prose cannot fabricate them.
+# ISOLATED corpus — the shared fixture dir holds earlier sessions with REAL
+# sleep commands, which would mask this assertion (and did, on first run).
+mkdir -p "$FIX/proseonly" "$FIX/nocodex/sessions"
+cat > "$FIX/proseonly/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"a reviewer wrote: just run sleep 60 and poll in a loop, also sleep 30 works"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"z1","name":"Bash","input":{"command":"echo hi"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/proseonly" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 0'; then
+  ok "prose mentioning sleep does not fabricate a busy-wait"
+else bad "prose mentioning sleep does not fabricate a busy-wait" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+
+# ...and a REAL sleep command in the same shape IS still counted, so the
+# structural filter did not simply stop counting everything.
+cat > "$FIX/proseonly/real.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"z2","name":"Bash","input":{"command":"sleep 90; echo done"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/proseonly" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 1'; then
+  ok "a real sleep command is still counted (filter is not vacuous)"
+else bad "a real sleep command is still counted" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+
+# CLASS: detector/redactor pattern parity — a shape the redactor masks but the
+# detector misses reports "clean", the worst failure a leak detector has.
+mkdir -p "$FIX/projects/jwt"
+cat > "$FIX/projects/jwt/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/projects/jwt" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if printf '%s' "$OUT" | grep -q 'redacted-jwt\|eyJhbGciOiJIUzI1'; then
+  printf '%s' "$OUT" | grep -q 'eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop' \
+    && bad "JWT flagged AND redacted" "raw JWT echoed" || ok "JWT flagged AND redacted"
+else bad "JWT flagged AND redacted" "not detected at all"; fi
+
+# CLASS: a Codex-ONLY window must not report 'no sessions' — the format-agnostic
+# detectors still apply, so gating on the Claude count alone hid Codex leaks.
+mkdir -p "$FIX/cxonly/sessions" "$FIX/empty"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 45\"}"}}' \
+  > "$FIX/cxonly/sessions/r.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call_output","output":"AKIAIOSFODNN7EXAMPLE"}}' \
+  >> "$FIX/cxonly/sessions/r.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+nocheck "Codex-only window is not skipped as empty" "$OUT" "no sessions in window — neither"
+if printf '%s' "$OUT" | grep -qE 'AKIA[0-9A-Z]{4}…<redacted>'; then
+  ok "Codex-only credential leak is still caught"
+else bad "Codex-only credential leak is still caught" "missed"; fi
+
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. [1-9]'; then
+  ok "Codex-only busy-wait is still counted"
+else bad "Codex-only busy-wait is still counted" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+
+# CLASS: portable mtime listing. GNU `stat -f` means --file-system and SUCCEEDS,
+# so a failure-based fallback never fires on Linux and its output pollutes the
+# file list — one real session counted as several phantom paths.
+mkdir -p "$FIX/one"; echo '{}' > "$FIX/one/only.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/one" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section reliability 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sessions in window: 1 '; then
+  ok "one file counts as exactly one (no stat-flavour phantoms)"
+else bad "one file counts as exactly one" "$(printf '%s' "$OUT" | grep 'sessions in window')"; fi
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"
