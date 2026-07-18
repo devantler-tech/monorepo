@@ -38,5 +38,6 @@ Check that each project landed on the right branch. One left on a detached commi
 | Point one at a new URL | `git submodule set-url -- <path> <new-url>` |
 | Remove one | `./delete-submodule.sh <path>` |
 
-Projects follow their tracked branch and pick up its latest commit automatically, so there is nothing
-to run to stay current.
+Each project is pinned to a specific commit, and your checkout stays on that pin — the init script
+deliberately does not jump to the tip of the branch. Automated pull requests here move the pins
+forward, so to catch up, pull this repository and run the init script again.
