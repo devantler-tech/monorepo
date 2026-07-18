@@ -56,8 +56,9 @@ seeing what exists, what is moving, and where it is headed across the whole port
 own roadmap issues and its own health checks. Drift in it (coverage gaps, missing hierarchy, statusless
 items, a view that renders nothing) is a **defect**, not cosmetics. Its
 [product card](.claude/skills/products/project-board/SKILL.md) carries the health checks, the
-mutation-safety rules, and the standing constraint that **views are UI-only — no API can create or edit
-one**, so view changes are proposed precisely and applied by the maintainer.
+mutation-safety rules, and the standing constraint that **editing an existing view is UI-only** —
+creating one is scriptable (the card documents the REST views endpoint), but a change to an existing
+view is proposed precisely and applied by the maintainer.
 
 **Shared libraries** (leverage points across the whole suite — see *Holistic review* and the
 `product-engineering` skill): the CI building block `devantler-tech/actions` (which
@@ -647,9 +648,11 @@ gh issue create --repo devantler-tech/<repo> --title "…" --body "…" --parent
 gh issue edit <PARENT> --repo devantler-tech/<repo> --add-sub-issue <CHILD>[,<CHILD>…]
 gh issue edit <CHILD>  --repo devantler-tech/<repo> --remove-parent      # reversible
 # bulk/scripted — NOTE the body param is the numeric DATABASE id, not the issue number,
-# and the DELETE path is singular `sub_issue` while GET/POST are plural `sub_issues`:
+# and the DELETE path is singular `sub_issue` while GET/POST are plural `sub_issues`.
+# Resolve the id from the CHILD's OWN repo — a child may live in another same-owner
+# repo, and fetching <CHILD> from the parent's repo returns an unrelated same-number issue:
 gh api --method POST repos/devantler-tech/<repo>/issues/<PARENT>/sub_issues \
-  -F sub_issue_id="$(gh api repos/devantler-tech/<repo>/issues/<CHILD> --jq .id)"
+  -F sub_issue_id="$(gh api repos/devantler-tech/<child-repo>/issues/<CHILD> --jq .id)"
 ```
 Keep `Part of #N` in the body as human-readable context if you like — but it is **never** the link.
 
@@ -675,10 +678,11 @@ cross-repo, renders a *Blocked* badge on the board) — never a nested sub-issue
 
 **What a real link buys** (and why this is the whole point): the project's **`Parent issue`** field
 becomes populated and **groupable** — a table view grouped by it renders each epic with its children
-nested beneath, which is the canonical "what is part of what" surface; **`Sub-issues progress`** gives
-a live `completed/total` + percent rollup per epic; and the filters `parent-issue:owner/repo#N`,
-`has:sub-issue`, `no:parent-issue` / `has:parent-issue` become available in both project views and
-repo issue search. ⚠️ **The two surfaces spell the parent/child qualifiers differently and are not
+nested beneath (a capability; this board's chosen "what is part of what" surface is the Backlog
+view's `Show hierarchy` toggle — see *Every issue belongs on the board*); **`Sub-issues progress`** gives
+a live `completed/total` + percent rollup per epic; and the filters `parent-issue:owner/repo#N` and
+`no:parent-issue` / `has:parent-issue` become available in both project views and repo issue search
+(`has:sub-issue` is **repo issue search only** — see the warning that follows). ⚠️ **The two surfaces spell the parent/child qualifiers differently and are not
 interchangeable:** *repo issue search* uses `has:sub-issue`, while a *project view filter* keys off the
 project field name — **`has:sub-issues-progress` / `no:sub-issues-progress`**. GitHub **silently
 ignores** an unrecognised qualifier in a project filter, so the wrong spelling looks like it worked
@@ -774,8 +778,9 @@ while *Ready* or while *In Review* — so a Blocked column would destroy the inf
 actually is. Express it as a native **issue dependency** (`gh issue edit <N> --add-blocked-by <M>`),
 which renders a Blocked badge on the card in whatever column it sits. Reserve the `blocked` **label**
 for blockers that dependencies cannot express — an upstream release in another org. The board carries **exactly three
-views** — **kanban (board)**, **backlog (table)**, **roadmap (roadmap)** — and epic breakdown is a
-**grouping on the Backlog** (`Parent issue`), not a fourth view: **prefer an extra grouping/slice on an
+views** — **kanban (board)**, **backlog (table)**, **roadmap (roadmap)** — and epic breakdown is the
+**Backlog view's hierarchy** (its `Show hierarchy` toggle — **not** a `Parent issue` group-by), not a
+fourth view: **prefer an extra grouping/slice on an
 existing view over a new one** (maintainer direction 2026-07-18). See its
 [product card](.claude/skills/products/project-board/SKILL.md).
 

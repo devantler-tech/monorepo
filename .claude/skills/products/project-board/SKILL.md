@@ -27,10 +27,11 @@ Run these as a survey pass; each has a known-good answer.
 |---|---|---|
 | **Coverage** | open issues in active repos vs. items on the board | 100% |
 | **Status hygiene** | board items with no `Status` | 0 |
+| **Type hygiene** | board items whose issue carries no **Issue Type** | 0 (the contract makes a type mandatory; an untyped item is invisible to Kanban/Roadmap type filters) |
 | **Hierarchy** | open issues with a prose `Part of #N` but no real parent link | 0 |
 | **Dangling parents** | `Part of` references resolving to a PR, to self, or to nothing | 0 |
 | **Stale epics** | epics at `Sub-issues progress` 100% but still open | 0 (close or extend) |
-| **Archive** | closed/merged items still active on the board | aged out per the rule |
+| **Archive** | closed/merged items still active on the board | none older than **30 days closed** (archive those; younger ones stay active so Insights keeps its recent history — see the Insights trap below; manual until [#2238](https://github.com/devantler-tech/monorepo/issues/2238)'s auto-archive works) |
 
 Coverage and hierarchy are the two that silently rot, because **auto-add is forward-only and capped at
 5 workflows on the Team plan** — see [monorepo#2237](https://github.com/devantler-tech/monorepo/issues/2237).
