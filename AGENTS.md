@@ -34,6 +34,7 @@ keeping them healthy *and* moving them forward.
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
 | UniFi network (private) | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
+| 🌊 Project Board (org project 5) | — (not a repo; [org project 5](https://github.com/orgs/devantler-tech/projects/5)) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
 
 > Submodule `AGENTS.md` links use full GitHub URLs because those files live in the submodule repos, not this repo's tree (a relative link would 404 on GitHub).
 
@@ -47,6 +48,16 @@ superseding the bootstrap-day "lowest priority" note). The repo exists, the
 them**: the repo's own `AGENTS.md` is authoritative; the
 [product card](.claude/skills/products/world-at-ruin/SKILL.md) tracks the deliberately-open
 **`OPEN DECISION`** items and the operate notes.
+
+**The 🌊 Project Board is a PRODUCT, not a byproduct** (maintainer direction 2026-07-18). Org
+[project 5](https://github.com/orgs/devantler-tech/projects/5) is the maintainer's *single* surface for
+seeing what exists, what is moving, and where it is headed across the whole portfolio — so it
+**participates in the normal rotation and gets continuously enhanced like any other product**, with its
+own roadmap issues and its own health checks. Drift in it (coverage gaps, missing hierarchy, statusless
+items, a view that renders nothing) is a **defect**, not cosmetics. Its
+[product card](.claude/skills/products/project-board/SKILL.md) carries the health checks, the
+mutation-safety rules, and the standing constraint that **views are UI-only — no API can create or edit
+one**, so view changes are proposed precisely and applied by the maintainer.
 
 **Shared libraries** (leverage points across the whole suite — see *Holistic review* and the
 `product-engineering` skill): the CI building block `devantler-tech/actions` (which
@@ -680,9 +691,14 @@ what it *belongs to*.
 [Project 5 (🌊 Project Board)](https://github.com/orgs/devantler-tech/projects/5) is the maintainer's
 single navigation surface across the portfolio, so **every open issue in every active
 `devantler-tech` repo belongs on it, and every board item carries a `Status`** — an item with no
-status is invisible in board layout and unsortable in triage, which defeats the surface. Statuses run
-**🧊 Icebox → 📥 Backlog → 🫴 Ready → 🏃🏻‍♂️ In Progress → 🚀 In Finalization → ✅ Done**; a newly-filed
-issue lands in **📥 Backlog** unless you know better, and *never* in no-status.
+status is invisible in board layout and unsortable in triage, which defeats the surface. The status
+ladder is **✅ Done · 🚀 In Finalization · 🏃🏻‍♂️ In Progress · 🫴 Ready · 📥 Backlog · 🧊 Icebox** — and that
+**reversed order is deliberate**: finishing work sits leftmost so the board reads *stop starting, start
+finishing* (maintainer direction 2026-07-18). **Never re-order it into left-to-right flow**, and treat
+an over-limit column as a signal to finish rather than a limit to raise. A newly-filed issue lands in
+**📥 Backlog** unless you know better, and *never* in no-status. The board must carry at least a
+**kanban (board)**, a **backlog (table)** and a **roadmap (roadmap)** view; see its
+[product card](.claude/skills/products/project-board/SKILL.md).
 
 Two mechanics make this a standing duty rather than something automation handles:
 - **Auto-add workflows are capped at 5 on the Team plan** and each one targets exactly **one**
