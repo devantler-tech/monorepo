@@ -485,7 +485,14 @@ For each selected product:
    is forbidden unless the current interactive conversation first clears the professional-work
    boundary for that named repo; creating an upstream artifact then still needs ask-tool approval.
 4. **Clean up:** `git -C <path> worktree remove .claude/worktrees/maint-<runid>` (and prune). Leave
-   no worktree or dirty state behind.
+   no worktree or dirty state behind. **Then reap spent branches EVERY run** (contract *End-of-tick
+   branch hygiene*): with the worktree already removed (a branch still checked out sits in the keep-set),
+   run [`.claude/scripts/branch-cleanup.sh <repo_path> <slug> <manifest>`](../../scripts/branch-cleanup.sh)
+   for each repo touched. It restores the default-branch checkout and deletes only spent `claude/*`
+   branches — KEEPING open-PR heads, worktree-checked-out branches, and the maintainer's interactive
+   random-slug branches, and deleting a remote branch only on MERGED/CLOSED PR evidence (a restore
+   manifest is written before each delete). This step is what makes the *reap EVERY run* duty actually
+   run in a scheduled tick — the paragraph alone does not.
 
 ## 4. Always: update native memory + one consolidated report
 - **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
