@@ -54,9 +54,9 @@ fail_match() { # name root expected-substring
 # reusable (workflow_call) workflows living in the actions submodule's
 # .github/workflows (the standalone reusable-workflows repo is archived —
 # monorepo#1964) alongside a non-workflow_call workflow the guard must ignore,
-# four submodules (two infra-section, one grouped, one templates-page), and one
-# matching template doc page — all four markers in active.mdx agreeing with the
-# live sources.
+# four submodules (two infra-section, one grouped, one templates-page), one
+# matching template doc page, and a homepage whose featured project is present
+# on Active Projects — all guarded surfaces agreeing with their live sources.
 build_fixture() {
   local root="$1"
   rm -rf "$root"
@@ -102,6 +102,8 @@ EOF
 title: Active Projects
 ---
 
+<div class="projects-page">
+
 {/* projects-submodules: applications/bar=grouped,github/devantler-tech/github-actions/actions=section,github/devantler-tech/github-actions/reusable-workflows=omitted,templates/foo-template=templates-page */}
 
 ## [⚡ Actions](https://github.com/devantler-tech/actions)
@@ -111,6 +113,11 @@ title: Active Projects
 
 {/* actions-dirs: alpha,beta */}
 
+## [☯️ Platform](https://github.com/devantler-tech/platform)
+
+An active project that is intentionally not featured on the homepage. This
+proves the guarded relation is a strict subset rather than set equality.
+
 ## 🔄 Reusable Workflows
 
 - CI bucket
@@ -118,6 +125,28 @@ title: Active Projects
 
 {/* reusable-workflows-count: 2 */}
 {/* reusable-workflows-names: cd-two,ci-one */}
+
+</div>
+EOF
+
+  cat > "$root/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<CardGrid>
+  <Card title="About the portfolio" />
+  <LinkCard
+    title="⚡ Actions"
+    href="https://github.com/devantler-tech/actions"
+  />
+</CardGrid>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
 EOF
 }
 
@@ -242,8 +271,652 @@ FIXTURE
 fail_match "retired-repo link on an unguarded page" "$c" \
   "Retired-repo link"
 
+# 14. Homepage featured-project set: a literal card with no matching linked H2
+#     on Active Projects must fail. The blog's dynamic LinkCard is deliberately
+#     outside the Featured Projects section and must not enter the comparison.
+c="$tmp/homepage-featured-project"; build_fixture "$c"
+sed -i.bak 's/title="⚡ Actions"/title="👻 Ghost Project"/' \
+  "$c/docs/src/content/docs/index.mdx"
+fail_match "Homepage: featured project absent from Active Projects" "$c" \
+  "Homepage featured-project drift"
+
+# 15. The homepage is now a required source for the cross-page invariant. A
+#     missing file must fail closed instead of silently skipping the check.
+c="$tmp/homepage-missing"; build_fixture "$c"
+rm "$c/docs/src/content/docs/index.mdx"
+fail_match "Homepage: source file missing" "$c" \
+  "homepage index.mdx not found"
+
+# 16. A rendered LinkCard without a literal title cannot participate in the
+#     invariant and must fail closed with the card-shape error.
+c="$tmp/homepage-empty-featured"; build_fixture "$c"
+sed -i.bak '/title="⚡ Actions"/d' "$c/docs/src/content/docs/index.mdx"
+fail_match "Homepage: Featured Projects has no literal card titles" "$c" \
+  "Every homepage Featured Projects LinkCard must have exactly one literal title"
+
+# 17. Bracketed text without an inline-link target is not a linked project H2.
+#     Removing every target must identify the broken Active Projects source,
+#     not masquerade as unrelated stale homepage cards.
+c="$tmp/active-projects-empty-linked-headings"; build_fixture "$c"
+sed -i.bak -E 's|^## \[([^]]+)\]\([^)]*\).*$|## [\1]|' "$(mdx_path "$c")"
+fail_match "Active Projects: no linked project headings" "$c" \
+  "No linked H2 project titles found on Active Projects"
+
+# 18. Single quotes are valid MDX literal syntax. A ghost card using them must
+#     not disappear merely because another double-quoted card was extracted.
+c="$tmp/homepage-single-quoted-title"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<CardGrid>
+  <LinkCard title='👻 Ghost Project' href="https://example.invalid/ghost" />
+  <LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+</CardGrid>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: single-quoted ghost project is not omitted" "$c" \
+  "Homepage featured-project drift"
+
+# 19. Two LinkCards on one line are still separate rendered MDX nodes. Both must
+#     enter the comparison, so the Ghost card is caught.
+c="$tmp/homepage-compact-cards"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<CardGrid>
+  <LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" /> <LinkCard title="👻 Ghost Project" href="https://example.invalid/ghost" />
+</CardGrid>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: compact LinkCards fail closed" "$c" \
+  "Homepage featured-project drift"
+
+# 20. Attribute order is irrelevant in MDX. A preceding data-title must not
+#     impersonate the real Ghost title.
+c="$tmp/homepage-data-title"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<CardGrid>
+  <LinkCard data-title="⚡ Actions" title='👻 Ghost Project' href="https://example.invalid/ghost" />
+</CardGrid>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: data-title cannot mask the real title" "$c" \
+  "Homepage featured-project drift"
+
+# 21. Two cards with the same visible identity are not a valid set. Raw title
+#     and LinkCard counts still agree, so only the uniqueness guard catches it.
+c="$tmp/homepage-duplicate-title"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<CardGrid>
+  <LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+  <LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+</CardGrid>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: duplicate featured title" "$c" \
+  "titles must be unique"
+
+# 22. Attribute-looking text inside another quoted value must not mask the real
+#     title; the MDX AST identifies the Ghost title semantically.
+c="$tmp/homepage-quoted-title-text"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<CardGrid>
+  <LinkCard description='See title="⚡ Actions" docs' title="👻 Ghost Project" href="https://example.invalid/ghost" />
+</CardGrid>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: quoted title text cannot mask the real title" "$c" \
+  "Homepage featured-project drift"
+
+# 23. A preceding component on the same line is a separate MDX node and cannot
+#     donate its title to the following Ghost LinkCard.
+c="$tmp/homepage-preceding-card"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<CardGrid>
+  <Card title="⚡ Actions" /> <LinkCard title="👻 Ghost Project" href="https://example.invalid/ghost" />
+</CardGrid>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: preceding Card cannot mask LinkCard title" "$c" \
+  "Homepage featured-project drift"
+
+# 24. An MDX comment is not rendered content. A commented-out card must not
+#     satisfy an otherwise-empty Featured Projects section.
+c="$tmp/homepage-commented-card"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+{/* <LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" /> */}
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: commented LinkCard is not rendered content" "$c" \
+  "No literal LinkCard titles found in the homepage Featured Projects section"
+
+# 25. A fenced example is likewise source text rather than a rendered card. It
+#     must not satisfy the required live-card extraction.
+c="$tmp/homepage-fenced-card"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+```mdx
+<LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+```
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: fenced LinkCard is not rendered content" "$c" \
+  "No literal LinkCard titles found in the homepage Featured Projects section"
+
+# 26. A closing fence must use at least as many markers as its opener. The
+#     triple-backtick line inside this four-backtick example is literal content,
+#     so the Actions card remains excluded; the matching closer must then restore
+#     parsing so the live Ghost card is caught.
+c="$tmp/homepage-long-fence"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+````mdx
+```
+<LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+````
+
+<LinkCard title="👻 Ghost Project" href="https://example.invalid/ghost" />
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: shorter fence marker does not close a long fence" "$c" \
+  "Homepage featured-project drift"
+
+# 27. A linked H2 inside an MDX comment is not a rendered Active Project and
+#     cannot satisfy a ghost homepage card.
+c="$tmp/active-projects-commented-heading"; build_fixture "$c"
+sed -i.bak 's/title="⚡ Actions"/title="👻 Ghost Project"/' \
+  "$c/docs/src/content/docs/index.mdx"
+cat >>"$(mdx_path "$c")" <<'EOF'
+
+{/*
+## [👻 Ghost Project](https://example.invalid/ghost)
+*/}
+EOF
+fail_match "Active Projects: commented heading cannot satisfy homepage" "$c" \
+  "Homepage featured-project drift"
+
+# 28. A linked H2 inside a fenced example is likewise non-rendered source and
+#     must not enter the independently navigable project-title set.
+c="$tmp/active-projects-fenced-heading"; build_fixture "$c"
+sed -i.bak 's/title="⚡ Actions"/title="👻 Ghost Project"/' \
+  "$c/docs/src/content/docs/index.mdx"
+cat >>"$(mdx_path "$c")" <<'EOF'
+
+````mdx
+```
+## [👻 Ghost Project](https://example.invalid/ghost)
+````
+EOF
+fail_match "Active Projects: fenced heading cannot satisfy homepage" "$c" \
+  "Homepage featured-project drift"
+
+# 29. Comment-looking text inside inline code is rendered text, not an MDX
+#     comment opener. It must not hide the real Ghost card that follows.
+c="$tmp/homepage-inline-code-comment-marker"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+`{/*`
+<LinkCard title="👻 Ghost Project" href="https://example.invalid/ghost" />
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: inline-code comment marker cannot hide a card" "$c" \
+  "Homepage featured-project drift"
+
+# 30. CommonMark forbids a backtick in a backtick fence info string, so this is
+#     rendered text rather than a fence opener and cannot hide the Ghost card.
+c="$tmp/homepage-invalid-backtick-fence"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+```foo`bar
+<LinkCard title="👻 Ghost Project" href="https://example.invalid/ghost" />
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: invalid backtick fence cannot hide a card" "$c" \
+  "Homepage featured-project drift"
+
+# 31. An escaped comment opener is rendered text too. Reject the ambiguous
+#     source shape rather than entering comment state and hiding the real card.
+c="$tmp/homepage-escaped-comment-marker"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+\{/*
+<LinkCard title="👻 Ghost Project" href="https://example.invalid/ghost" />
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: escaped comment marker cannot hide a card" "$c" \
+  "Homepage featured-project drift"
+
+# 32. Attribute-looking text inside a multiline template expression is not a
+#     literal title attribute. The actual expression-valued title is unsupported
+#     by the cross-page invariant and must fail closed.
+c="$tmp/homepage-template-string-title"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<LinkCard
+  description={`example
+title="⚡ Actions"
+`}
+  title={"👻 Ghost Project"}
+  href="https://example.invalid/ghost"
+/>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: template text cannot impersonate literal title" "$c" \
+  "Every homepage Featured Projects LinkCard must have exactly one literal title"
+
+# 33. A linked-H2-looking line inside MDX ESM is JavaScript data, not a rendered
+#     Active Project section, and cannot satisfy the homepage subset.
+c="$tmp/active-projects-template-heading"; build_fixture "$c"
+sed -i.bak 's/title="⚡ Actions"/title="👻 Ghost Project"/' \
+  "$c/docs/src/content/docs/index.mdx"
+cat >>"$(mdx_path "$c")" <<'EOF'
+
+export const fakeProject = `
+## [👻 Ghost Project](https://example.invalid/ghost)
+`;
+EOF
+fail_match "Active Projects: JS template heading cannot satisfy homepage" "$c" \
+  "Homepage featured-project drift"
+
+# 34. Conditional JSX is runtime-dependent and cannot be enumerated from the
+#     static LinkCard nodes. Reject it rather than silently omitting Ghost.
+c="$tmp/homepage-conditional-card"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+{showGhost && <LinkCard title="👻 Ghost Project" href="https://example.invalid/ghost" />}
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: conditional LinkCard fails closed" "$c" \
+  "Featured Projects must remain statically inspectable"
+
+# 35. A spread can override a literal title at runtime, so a card using one is
+#     not statically safe even when it also declares an accepted title.
+c="$tmp/homepage-spread-card"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<LinkCard title="⚡ Actions" {...projectProps} />
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: spread attributes fail closed" "$c" \
+  "Every homepage Featured Projects LinkCard must have exactly one literal title"
+
+# 36. Inline JSX uses mdxJsxTextElement rather than mdxJsxFlowElement. It is
+#     still rendered and must enter the comparison.
+c="$tmp/homepage-inline-linkcard"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+Featured now: <LinkCard title="👻 Ghost Project" href="https://example.invalid/ghost" />
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: inline LinkCard enters comparison" "$c" \
+  "Homepage featured-project drift"
+
+# 37. The section boundary must be unique, otherwise choosing one silently
+#     leaves another rendered Featured Projects section unchecked.
+c="$tmp/homepage-duplicate-featured-heading"; build_fixture "$c"
+cat >>"$c/docs/src/content/docs/index.mdx" <<'EOF'
+
+## Featured Projects
+
+<LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+EOF
+fail_match "Homepage: duplicate Featured Projects headings fail closed" "$c" \
+  "Expected exactly one rendered '## Featured Projects' heading"
+
+# 38. Malformed MDX must fail at the semantic parser rather than degrading to
+#     an incomplete text scan.
+c="$tmp/homepage-malformed-mdx"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<LinkCard title="⚡ Actions"
+EOF
+fail_match "Homepage: malformed MDX fails closed" "$c" \
+  "Unable to parse project metadata as MDX"
+
+# 39. A non-LinkCard JSX element can still render a card through an expression-
+#     valued prop. Reject all runtime JSX attributes in the guarded section.
+c="$tmp/homepage-expression-attribute-card"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+<CardGrid children={<LinkCard title="👻 Ghost Project" href="https://example.invalid/ghost" />} />
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: expression-valued JSX attributes fail closed" "$c" \
+  "Featured Projects must remain statically inspectable"
+
+# 40. Decoded title text is untrusted workflow-command data. Newlines must be
+#     escaped so a title cannot inject a second GitHub Actions command.
+c="$tmp/homepage-annotation-injection"; build_fixture "$c"
+sed -i.bak 's/title="⚡ Actions"/title="👻 Ghost\&#10;::notice::Injected"/' \
+  "$c/docs/src/content/docs/index.mdx"
+fail_match "Homepage: annotation data escapes decoded newlines" "$c" \
+  "%0A::notice::Injected"
+
+# 41. Parse failures must identify the source file that failed, including the
+#     Active Projects side of the comparison.
+c="$tmp/active-projects-malformed-mdx"; build_fixture "$c"
+cat >>"$(mdx_path "$c")" <<'EOF'
+
+<Broken
+EOF
+fail_match "Active Projects: malformed MDX reports its own file" "$c" \
+  "file=docs/src/content/docs/projects/active.mdx::Unable to parse project metadata as MDX"
+
+# 42. Astro frontmatter is metadata, not rendered Markdown. A linked-H2-looking
+#     YAML block scalar cannot satisfy the homepage subset.
+c="$tmp/active-projects-frontmatter-heading"; build_fixture "$c"
+sed -i.bak '/title: Active Projects/a\
+fake: |\
+  ## [👻 Ghost Project](https://example.invalid/ghost)' "$(mdx_path "$c")"
+sed -i.bak 's/title="⚡ Actions"/title="👻 Ghost Project"/' \
+  "$c/docs/src/content/docs/index.mdx"
+fail_match "Active Projects: frontmatter heading cannot satisfy homepage" "$c" \
+  "Homepage featured-project drift"
+
+# 43. The whole section must not sit beneath a runtime-controlled JSX ancestor.
+#     Keeping its H2 top-level makes the section boundary statically meaningful.
+c="$tmp/homepage-runtime-wrapper"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+<Conditional show={false}>
+
+## Featured Projects
+
+<LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+
+</Conditional>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: runtime-wrapped Featured section fails closed" "$c" \
+  "Featured Projects heading must remain top-level"
+
+# 44. A nested or blockquoted H2 is rendered content inside the section, not the
+#     top-level boundary. It must not truncate inspection before a later card.
+c="$tmp/homepage-nested-h2"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+## Featured Projects
+
+<LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+
+> ## Note
+>
+> Featured projects can change over time.
+
+<LinkCard title="👻 Ghost Project" href="https://example.invalid/ghost" />
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: nested H2 cannot truncate Featured section" "$c" \
+  "Homepage featured-project drift"
+
+# 45. A linked project H2 beneath a runtime JSX ancestor is not a statically
+#     rendered Active Projects section and cannot satisfy homepage parity.
+c="$tmp/active-projects-runtime-wrapper"; build_fixture "$c"
+cat >>"$(mdx_path "$c")" <<'EOF'
+
+<Conditional show={false}>
+
+## [👻 Ghost Project](https://example.invalid/ghost)
+
+</Conditional>
+EOF
+sed -i.bak 's/title="⚡ Actions"/title="👻 Ghost Project"/' \
+  "$c/docs/src/content/docs/index.mdx"
+fail_match "Active Projects: runtime-wrapped H2 cannot satisfy homepage" "$c" \
+  "Homepage featured-project drift"
+
+# 46. Runtime content inside a linked Active Project H2 changes its rendered
+#     identity. It must not be dropped by literal-text extraction.
+c="$tmp/active-projects-computed-title"; build_fixture "$c"
+sed -i.bak '/<div class="projects-page">/i\
+export const suffix = " Renamed";\
+' "$(mdx_path "$c")"
+sed -i.bak 's/\[⚡ Actions\]/[⚡ Actions{suffix}]/' "$(mdx_path "$c")"
+fail_match "Active Projects: computed linked-H2 title fails closed" "$c" \
+  "Linked Active Projects H2 titles must remain literal"
+
+# 47. Attribute-free JSX can still compute rendered link text. Literal-title
+#     validation must reject the component itself, not just computed props.
+c="$tmp/active-projects-jsx-title"; build_fixture "$c"
+sed -i.bak '/<div class="projects-page">/i\
+export const Suffix = () => " Renamed";\
+' "$(mdx_path "$c")"
+sed -i.bak 's/\[⚡ Actions\]/[⚡ Actions<Suffix \/>]/' "$(mdx_path "$c")"
+fail_match "Active Projects: JSX inside linked-H2 title fails closed" "$c" \
+  "Linked Active Projects H2 titles must remain literal"
+
+# 48. A rendered LinkCard can be imported under another component name. Unknown
+#     JSX in the guarded section must fail closed instead of disappearing from
+#     the comparison while a different normal LinkCard keeps the set non-empty.
+c="$tmp/homepage-aliased-linkcard"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+import { CardGrid, LinkCard, LinkCard as FeaturedLink } from "@astrojs/starlight/components";
+
+## Featured Projects
+
+<CardGrid>
+  <LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+  <FeaturedLink title="👻 Ghost Project" href="https://example.invalid/ghost" />
+</CardGrid>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: aliased LinkCard renderer fails closed" "$c" \
+  "Unsupported JSX component in Featured Projects"
+
+# 49. A custom component can suppress children without accepting any props.
+#     Only the page's known static layout wrapper may contain source headings.
+c="$tmp/active-projects-static-custom-wrapper"; build_fixture "$c"
+sed -i.bak '/<div class="projects-page">/i\
+export const Hidden = () => null;\
+' "$(mdx_path "$c")"
+cat >>"$(mdx_path "$c")" <<'EOF'
+
+<Hidden>
+
+## [👻 Ghost Project](https://example.invalid/ghost)
+
+</Hidden>
+EOF
+sed -i.bak 's/title="⚡ Actions"/title="👻 Ghost Project"/' \
+  "$c/docs/src/content/docs/index.mdx"
+fail_match "Active Projects: custom wrapper cannot satisfy homepage" "$c" \
+  "Homepage featured-project drift"
+
+# 50. An allowlisted JSX tag name is not sufficient when an import aliases a
+#     different renderer under it. This valid MDX renders Ghost via LinkCard-as-
+#     Card while retaining a normal LinkCard that keeps the inspected set nonempty.
+c="$tmp/homepage-rebound-linkcard"; build_fixture "$c"
+cat >"$c/docs/src/content/docs/index.mdx" <<'EOF'
+---
+title: Home
+---
+
+import { CardGrid, LinkCard, LinkCard as Card } from "@astrojs/starlight/components";
+
+## Featured Projects
+
+<CardGrid>
+  <Card title="👻 Ghost Project" href="https://example.invalid/ghost" />
+  <LinkCard title="⚡ Actions" href="https://github.com/devantler-tech/actions" />
+</CardGrid>
+
+## Latest from the Blog
+
+<LinkCard title={post.data.title} href={`/${post.id}/`} />
+EOF
+fail_match "Homepage: rebound LinkCard binding fails closed" "$c" \
+  "Featured Projects component bindings must use named exports"
+
 if [ "$fail" -ne 0 ]; then
   printf '❌ active-projects drift-guard self-test FAILED\n' >&2
   exit 1
 fi
-printf '✅ active-projects drift-guard self-test passed (14 cases)\n'
+printf '✅ active-projects drift-guard self-test passed (51 cases)\n'
