@@ -631,6 +631,45 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/testrun" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR=
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 check "'go test' after a PR checkout is a candidate" "$OUT" "go test"
 
+# ── 6i. round-8 findings — the "silent zero / silent no-op" family ────────────
+echo
+echo "round-8 regressions"
+
+# An unknown section used to pass validation, make every `want` false, and exit 0
+# after printing only the banner — a scheduled run looking successful with no
+# metrics at all.
+CLAUDE_PROJECTS_DIR="$FIX/projects" HOME="$FIX" bash "$TARGET" --section effciency >/dev/null 2>&1
+if [ $? -eq 2 ]; then ok "a misspelled --section fails instead of printing nothing"
+else bad "a misspelled --section fails instead of printing nothing" "exited 0 with an empty report"; fi
+CLAUDE_PROJECTS_DIR="$FIX/projects" HOME="$FIX" bash "$TARGET" --section a2a >/dev/null 2>&1
+if [ $? -ne 2 ]; then ok "...and a real section name is still accepted"
+else bad "...and a real section name is still accepted" "rejected a valid section"; fi
+
+# Codex denials/collisions carry no is_error flag; requiring one reported ZERO
+# guard firings and ZERO races for that instance.
+mkdir -p "$FIX/cxdeny/sessions"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/cxdeny\"}}" > "$FIX/cxdeny/sessions/r.jsonl"
+cat >> "$FIX/cxdeny/sessions/r.jsonl" <<'EOF'
+{"type":"response_item","payload":{"type":"function_call_output","output":"Blocked: sleep 60 followed by: cat x"}}
+{"type":"response_item","payload":{"type":"function_call_output","output":"has been modified since read"}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxdeny" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "a flagless Codex denial is still counted" "$OUT" "Blocked:"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxdeny" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section a2a 2>&1)
+if printf '%s' "$OUT" | grep -qE 'two-writer races \.+ 1'; then
+  ok "a flagless Codex two-writer race is still counted"
+else bad "a flagless Codex two-writer race is still counted" "$(printf '%s' "$OUT" | grep 'two-writer')"; fi
+
+# A short PEM body line must not survive redaction.
+mkdir -p "$FIX/shortpem"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"-----BEGIN PRIVATE KEY-----"}]}}\n{"type":"user","message":{"content":[{"type":"text","text":"MIIBVgIBADANBgkqhkiG9w0BAQEF"}]}}\n' \
+  > "$FIX/shortpem/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/shortpem" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+nocheck "a short PEM body line is redacted" "$OUT" "MIIBVgIBADANBgkqhkiG9w0BAQEF"
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"

@@ -43,7 +43,14 @@ case "$SINCE_DAYS" in ''|*[!0-9]*) echo "--since-days must be an integer" >&2; e
 case "$MAX_FILES"  in ''|*[!0-9]*) echo "--max-files must be an integer"  >&2; exit 2 ;; esac
 # Lowercase letters AND digits — section names include `a2a`, which a
 # letters-only class silently rejected.
-case "$SECTION" in ''|*[!a-z0-9]*) echo "--section must be lowercase alphanumeric" >&2; exit 2 ;; esac
+# Validate against the REAL section names. A misspelling like `effciency` used
+# to pass the character check, make every `want` test false, and exit 0 after
+# printing just the banner — a scheduled run looking successful while producing
+# no metrics at all.
+case "$SECTION" in
+  all|reliability|efficiency|safety|a2a|drift|outcomes) ;;
+  *) echo "unknown --section (expected: all reliability efficiency safety a2a drift outcomes)" >&2; exit 2 ;;
+esac
 
 CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
@@ -151,14 +158,21 @@ trap 'rm -f "$ERRTMP"' EXIT HUP INT TERM
 # carry a token in its error text — so redaction lives at the output boundary
 # rather than in each detector, where one forgotten call-site leaks.
 redact() {
-  sed -E \
+  # A multi-line key block is masked with a sed RANGE (BEGIN..END), which is
+  # stateful across lines. The obvious alternative — masking any line that looks
+  # like base64 — over-redacts badly: tried against the real corpus it collapsed
+  # 30 distinct guard-denial entries into one unreadable bucket. Destroying real
+  # signal to catch a rare shape is a bad trade, and a redactor that eats the
+  # report is its own kind of failure.
+  sed -E '/-----BEGIN [A-Z ]*PRIVATE KEY-----/,/-----END [A-Z ]*PRIVATE KEY-----/ s/^.*$/<redacted-key-material>/' \
+  | sed -E \
     -e 's/(github_pat_[A-Za-z0-9_]{6})[A-Za-z0-9_]+/\1…<redacted>/g' \
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
     -e 's/(AKIA[0-9A-Z]{4})[0-9A-Z]+/\1…<redacted>/g' \
     -e 's/(xox[baprs]-[A-Za-z0-9]{4})[A-Za-z0-9-]+/\1…<redacted>/g' \
     -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----([^-]|-[^-])*(-----END [A-Z ]*PRIVATE KEY-----)?/<redacted-private-key>/g' \
     -e 's/-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/<redacted-private-key>/g' \
-    -e 's/^[[:space:]]*[A-Za-z0-9+\/]{40,}={0,2}[[:space:]]*$/<redacted-key-material>/' \
+    -e 's/(-----BEGIN [A-Z ]*PRIVATE KEY-----)[^-]*/\1<redacted-key-material>/g' \
     -e 's/(eyJ[A-Za-z0-9_-]{6})[A-Za-z0-9_.-]{20,}/\1…<redacted-jwt>/g' \
     -e 's/((secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^"'"'"'[:space:],}]{8,}/\1<redacted>/gI'
 }
@@ -263,7 +277,7 @@ tool_result_failure_text() {
                   or ((.status? // "") == "error")
                   or ((.is_error? == null) and (.status? == null)
                       and ((.output | tostring)
-                           | test("Command timed out after|Exit code [1-9]|command not found|Traceback \\(most recent|fatal: |error: "))))
+                           | test("Command timed out after|Exit code [1-9]|command not found|Traceback \\(most recent|fatal: |error: |has been modified since read|non-fast-forward|rejected.*fetch first|would be overwritten by merge|Blocked:|Permission to use |approval (denied|required)"))))
          | .output
          | if type=="array" then (map(.text? // empty)|join(" "))
            elif type=="string" then . else empty end)
@@ -527,10 +541,12 @@ if want safety; then
             (select(.type=="tool_result" and .is_error==true)
              | .content | if type=="array" then (map(select(.type=="text").text)|join(" "))
                           elif type=="string" then . else empty end),
-            # Codex marks failure on the output record itself; absent an explicit
-            # flag, only an explicit denial shape counts (never bare output).
-            (select((.type=="function_call_output" or .type=="custom_tool_call_output")
-                    and ((.is_error? // false) == true or (.status? // "") == "error"))
+            # Codex output records carry NO is_error/status, so requiring one
+            # dropped every Codex denial — the safety scorecard then reported no
+            # Codex guard firings in exactly the cases used to decide
+            # guard-vs-agent. The denial SHAPE below is itself the discriminator
+            # here (bare output never matches it), so the flag is optional.
+            (select(.type=="function_call_output" or .type=="custom_tool_call_output")
              | .output | if type=="array" then (map(.text? // empty)|join(" "))
                          elif type=="string" then . else empty end)
           )
