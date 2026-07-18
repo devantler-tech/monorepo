@@ -470,6 +470,11 @@ result at the current head — self-promotion is forbidden before that. Request 
   minutes`) is NOT an unavailable lane** — it is the wait-and-retrigger case: schedule the
   retrigger in the background and carry on;
   never let a throttle shortcut you into self-reviewing.
+  **Judge lane success or failure by a REAL review artifact at head, never by the tool's ack.**
+  CodeRabbit's `@coderabbitai review` reply says *"✅ Action performed — Review finished"* even when
+  the review never started; the *following* comment carries the truth. So both the "it succeeded"
+  and the "it failed" determinations require looking at `pulls/<n>/reviews` (or the Codex green
+  comment) with `commit_id` == head — an ack proves nothing in either direction.
   The self-review is held to the same bar as a bot lane — correctness, security, and the repo's
   `## Review guidelines`; going easy on your own diff defeats the entire gate.
   - **Post it as a REAL GitHub Review, in a standardized shape — this is the point of the fallback.**
