@@ -48,6 +48,14 @@ need jq || exit 3
 
 want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
 
+# Scratch file for the error-signature pass. `mktemp` (0600, unpredictable name)
+# rather than a guessable `/tmp/.name.$$`, and removed on ANY exit including a
+# signal — a predictable world-readable path holding raw error text is a leak
+# even when stdout is redacted, because the redactor only covers stdout.
+# Everything written here is redacted on the way IN as well.
+ERRTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_err.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+trap 'rm -f "$ERRTMP"' EXIT HUP INT TERM
+
 # Redact credential-shaped strings from ANYTHING this script prints.
 # Every emitted line originates in a transcript, and a failed tool result can
 # carry a token in its error text — so redaction lives at the output boundary
@@ -67,7 +75,13 @@ redact() {
 # above — a shape the redactor masks but the detector misses reports "clean",
 # which is the worst failure mode a leak detector has. agent-telemetry.test.sh
 # enforces the parity with a sample of every shape.
-CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
+#   1. github_pat_  2. gh?_  3. AKIA  4. xox?-  5. PRIVATE KEY  6. JWT
+#   7. generic `secret=`/`token=`/`password=`/`api_key=` assignment
+# Parity with redact() has now broken TWICE (JWT, then the generic assignment
+# form), each time reporting a real leak as "clean". The test suite asserts a
+# sample of EVERY numbered shape is both detected AND redacted; add to both
+# lists together or the test fails.
+CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{12,})'
 
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
@@ -88,14 +102,44 @@ commands_in() {
   jq -r '
     .. | objects
     | (
-        # Claude: tool_use with a Bash-style command input
+        # Claude: tool_use carrying a Bash command.
         (select(.type=="tool_use") | .input?.command? // empty),
-        # Codex: function_call / custom_tool_call arguments carrying a command
-        (select(.type=="function_call" or .type=="custom_tool_call")
+        # Codex, JSON-argument shape (function_call).
+        (select(.type=="function_call")
          | .arguments? // empty
-         | (try (fromjson | .command? // empty) catch empty))
+         | (try (fromjson | (.command? // .cmd? // empty)) catch empty)),
+        # Codex, REAL observed shape: custom_tool_call name="exec" whose .input is
+        # a JavaScript source string — `tools.exec_command({ cmd: "…" })`. It is not
+        # JSON, so fromjson fails; pull the cmd literal out of the source instead.
+        # (An invented JSON fixture passed here for two rounds while this real
+        #  shape was silently unparsed — match the format that actually ships.)
+        (select(.type=="custom_tool_call")
+         | .input? // empty
+         | select(type=="string")
+         | [scan("cmd:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")] | .[]? | .[0]?)
       )
-    | select(type=="string")
+    | select(type=="string") | select(length > 0)
+  ' "$f" 2>/dev/null
+}
+
+# Text emitted by a real tool RESULT (both schemas). Used for outcome signals —
+# timeouts, denials — that must never be grepped from raw transcript prose,
+# because prose can then fabricate the metric.
+tool_result_text() {
+  local f="$1"
+  jq -r '
+    .. | objects
+    | (
+        (select(.type=="tool_result")
+         | .content
+         | if type=="array" then (map(select(.type=="text").text)|join(" "))
+           elif type=="string" then . else empty end),
+        (select(.type=="function_call_output" or .type=="custom_tool_call_output")
+         | .output
+         | if type=="array" then (map(.text? // empty)|join(" "))
+           elif type=="string" then . else empty end)
+      )
+    | select(type=="string") | select(length > 0)
   ' "$f" 2>/dev/null
 }
 
@@ -167,22 +211,22 @@ if want reliability; then
                       elif type=="string" then . else (.|tostring) end) as $msg
         | "\($tool)\t\($msg | gsub("[\\n\\t]+";" ") | .[0:100])"
       ' "$f" 2>/dev/null
-    done > /tmp/.agtel_err.$$ || true
+    done | redact > "$ERRTMP" || true
 
-    TOTAL_ERR=$(wc -l < /tmp/.agtel_err.$$ | tr -d ' ')
+    TOTAL_ERR=$(wc -l < "$ERRTMP" | tr -d ' ')
     echo "  tool errors in window: ${TOTAL_ERR}   [Claude instance only — see note]"
     echo
     echo "  by tool:"
-    cut -f1 /tmp/.agtel_err.$$ | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
+    cut -f1 "$ERRTMP" | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
     echo
     echo "  top recurring error signatures (tool + message head):"
     # redact BEFORE printing: a failed tool result routinely carries the command
     # that failed, and that command can carry a token.
-    awk -F'\t' '{print $1": "substr($2,1,72)}' /tmp/.agtel_err.$$ \
+    awk -F'\t' '{print $1": "substr($2,1,72)}' "$ERRTMP" \
       | redact \
       | sed -E 's/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g' \
       | sort | uniq -c | sort -rn | head -12 | sed 's/^/    /'
-    rm -f /tmp/.agtel_err.$$
+    rm -f "$ERRTMP"
     echo
     echo "  NOTE: tool-attributed errors are Claude-schema only (tool_use/tool_result)."
     echo "        Codex uses response_item/function_call_output with no is_error flag,"
@@ -203,11 +247,15 @@ if want efficiency; then
   if [ $((SF_COUNT + CX_COUNT)) -eq 0 ]; then
     echo "  (no sessions in window — neither instance)"
   else
-    # Format-agnostic scans across BOTH corpora.
-    scan_both() { printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
-                  | while IFS= read -r f; do grep -hoE "$1" "$f" 2>/dev/null; done | wc -l | tr -d ' '; }
-    TIMEOUTS=$(scan_both 'Command timed out after [0-9hms ]*')
-    INTERRUPT=$(scan_both '"interrupted":true')
+    # STRUCTURAL for every behavioural metric, not just sleeps. A timeout is an
+    # outcome, so it must come from a real tool RESULT — grepping the whole file
+    # let prose quoting "Command timed out after 2m" inflate the count, the same
+    # fabrication route already closed for denials and sleeps.
+    all_files() { printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$'; }
+    TIMEOUTS=$(all_files | while IFS= read -r f; do tool_result_text "$f"; done \
+               | grep -cE 'Command timed out after' || true)
+    INTERRUPT=$(all_files | while IFS= read -r f; do grep -hoE '"interrupted":true' "$f" 2>/dev/null; done \
+                | wc -l | tr -d ' ')
     # STRUCTURAL, not a text grep: only commands the agent actually ran count.
     # A grep would let untrusted prose that merely mentions `sleep 60` fabricate
     # a busy-wait pattern, and this metric is evidence for definition changes.
@@ -275,15 +323,22 @@ if want safety; then
     echo "    (empty = clean; any line here means rotate the credential AND fix the"
     echo "     path that logged it — see the cross-system rotation rule)"
     echo
-    echo "  untrusted-code-execution near-misses (external branch checkout+build):"
-    # Structured, and the sample is a COMMAND — commands carry inline env
-    # assignments like `GITHUB_TOKEN=… npm ci`, so this is one of the likeliest
-    # places for a credential to reach the report.
+    echo "  build/codegen commands run in a session that ALSO checked out a"
+    echo "  non-own branch (candidates for untrusted-code execution):"
+    # Per-session correlation, not a global grep. Building is normal and constant
+    # in our own repos, so flagging every `npm ci` produced noise indistinguishable
+    # from a real finding — and a detector that always fires teaches you to ignore
+    # it. Only sessions showing a checkout of a fork/PR-ref are considered, and the
+    # output stays a CANDIDATE list requiring context, not an assertion of a breach.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
-      | while IFS= read -r f; do commands_in "$f"; done \
-      | grep -E '(npm ci|npm run|go generate|make [a-z]+|pnpm |yarn )' 2>/dev/null \
-      | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
-    echo "    (empty = none)"
+      | while IFS= read -r f; do
+          if commands_in "$f" 2>/dev/null \
+             | grep -qE '(gh pr checkout|git fetch [^ ]*(fork|pull/)|git checkout .*(pull/|refs/pull))'; then
+            commands_in "$f" 2>/dev/null \
+              | grep -E '(npm ci|npm i |npm run|pnpm |yarn |go generate|go run|make [a-z]+)'
+          fi
+        done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
+    echo "    (empty = no session both checked out a non-own ref and built)"
   fi
 fi
 
@@ -296,11 +351,19 @@ if want a2a; then
   CODEX_SESS=$(find "$CODEX_HOME/sessions" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null | wc -l | tr -d ' ')
   echo "  codex sessions in window ... ${CODEX_SESS}"
   echo "  claude sessions in window .. ${SF_COUNT}"
-  if [ "$SF_COUNT" -gt 0 ]; then
-    RACES=$(printf '%s\n' "$SF_CACHE" | xargs grep -ho 'has been modified since read' 2>/dev/null | wc -l | tr -d ' ')
-    NONFF=$(printf '%s\n' "$SF_CACHE" | xargs grep -hoiE '(non-fast-forward|rejected.*fetch first|would be overwritten by merge)' 2>/dev/null | wc -l | tr -d ' ')
-    echo "  file two-writer races ...... ${RACES}   (file changed between read and edit)"
-    echo "  push/merge collisions ...... ${NONFF}"
+  # Collisions are inherently a CROSS-instance metric, so reading only the Claude
+  # corpus was self-defeating: a race the Codex instance hit — the sibling half of
+  # the very interaction being measured — was invisible. Structural (tool results),
+  # so quoted prose cannot inflate it, and across both corpora.
+  if [ $((SF_COUNT + CX_COUNT)) -gt 0 ]; then
+    RACES=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
+            | while IFS= read -r f; do tool_result_text "$f"; done \
+            | grep -cE 'has been modified since read' || true)
+    NONFF=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
+            | while IFS= read -r f; do tool_result_text "$f"; done \
+            | grep -ciE '(non-fast-forward|rejected.*fetch first|would be overwritten by merge)' || true)
+    echo "  file two-writer races ...... ${RACES}   (file changed between read and edit; BOTH instances)"
+    echo "  push/merge collisions ...... ${NONFF}   (BOTH instances)"
   fi
   if command -v sqlite3 >/dev/null 2>&1 && [ -f "$CODEX_HOME/logs_2.sqlite" ]; then
     CUT=$(( $(date +%s) - SINCE_DAYS*86400 ))
@@ -382,7 +445,10 @@ if want outcomes; then
     SINCE_ISO=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%d' 2>/dev/null \
                 || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%d' 2>/dev/null)
     echo "  merged PRs since ${SINCE_ISO} (monorepo):"
-    gh pr list --repo devantler-tech/monorepo --state merged --limit 30 \
+    # Cap must exceed anything a real window can contain, or the count silently
+    # saturates: a weekly window or a busy dependency day exceeds 30 easily, and
+    # a saturated count reads as a real plateau in the scorecard.
+    gh pr list --repo devantler-tech/monorepo --state merged --limit 300 \
       --json number,title,mergedAt \
       --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")] | length | \"    count: \\(.)\"" 2>/dev/null \
       || echo "    (gh unavailable)"
