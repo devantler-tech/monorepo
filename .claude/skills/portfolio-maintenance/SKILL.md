@@ -56,6 +56,21 @@ card.
    cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent
    run notes, `learnings`). It may be stale — verify against live GitHub. *(The legacy `state.json` is
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
+4. **Check the memory store fits in one read** — a file past the Read cap is **truncated silently**,
+   and the run continues on a partial cursor with no signal that carry-forwards, stand-down notes, or
+   `HANDS-OFF` records beyond the cut are missing (the 2026-06-05 blinding; breached again 2026-07-18):
+
+   ```sh
+   .claude/scripts/memory-hygiene.sh --dir <memory-dir>   # read-only; exit 1 = consolidate this tick
+   ```
+
+   A non-zero exit makes **consolidating the named file this tick** a mandated hygiene item, not an
+   optional courtesy — that is what stops the size rule (prose living inside the file it governs) from
+   being breached over and over. `near` entries are next tick's breach; fold them in when cheap.
+   **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
+   before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
+   rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
+   concurrent append (the same two-writer discipline as a shared `claude/*` branch).
 
 ## 1. Survey (delegate to a read-only subagent — keep the JSON out of your context)
 **Spawn the [`portfolio-surveyor`](../../agents/portfolio-surveyor.md) subagent** (read-only) to run
