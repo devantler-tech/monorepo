@@ -290,8 +290,11 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    not be self-promoted — rooted in direction 2026-07-06), and **secure ≥1 green review at the
    current head** — auto-review is disabled on both reviewers, so requesting (and re-requesting after
    every push) is your duty; the full request discipline (one tool at a time by live rate-limit
-   state, evidence-based fallback, incremental re-reviews, green-while-draft as the promotion
-   precondition, the **automation-owned dependency-PR no-action carve-out**, and the trusted programmed
+   state, evidence-based fallback to the other lane, the **last-resort agent self-review** when BOTH
+   lanes are unavailable — reviewed with your own review skills and posted as a **real GitHub Review
+   with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
+   verdict line) so the sibling agent can see and act on it, incremental re-reviews,
+   green-while-draft as the promotion precondition, the **automation-owned dependency-PR no-action carve-out**, and the trusted programmed
    **release-bot carve-out** — tap cask PRs and KSail
    release bumps are check-gated, need NO review, and are never review-chased) is the contract's
    **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
