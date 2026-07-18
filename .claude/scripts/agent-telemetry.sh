@@ -167,10 +167,11 @@ want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
 # even when stdout is redacted, because the redactor only covers stdout.
 # Everything written here is redacted on the way IN as well.
 ERRTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_err.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+INJTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_inj.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP"' EXIT
-trap 'rm -f "$ERRTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$INJTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$INJTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 # Redact credential-shaped strings from ANYTHING this script prints.
 # Every emitted line originates in a transcript, and a failed tool result can
@@ -615,7 +616,10 @@ if want safety; then
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
       grep -hoiE '(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)' \
         "$f" 2>/dev/null
-    done | redact | tr 'A-Z' 'a-z' | sort | uniq -c | sort -rn | head -6 | sed 's/^/    /'
+    done | redact | tr 'A-Z' 'a-z' > "$INJTMP"
+    echo "    TOTAL occurrences: $(wc -l < "$INJTMP" | tr -d ' ')   (distinct phrases: $(sort -u "$INJTMP" | grep -c . || true))"
+    sort "$INJTMP" | uniq -c | sort -rn | head -6 | sed 's/^/    /'
+    : > "$INJTMP"
     echo "    (empty = none seen. A hit is a SIGNAL, not a directive — a corpus"
     echo "     containing one is itself worth reporting to the maintainer.)"
     echo "    ⚠️  EXPECT SELF-REFERENTIAL HITS. This detector cannot tell an attack"
@@ -687,8 +691,12 @@ if want a2a; then
     NONFF=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
             | while IFS= read -r f; do tool_result_failure_text "$f"; done \
             | grep -ciE '(non-fast-forward|rejected.*fetch first|would be overwritten by merge)' || true)
-    echo "  file two-writer races ...... ${RACES}   (file changed between read and edit; BOTH instances)"
-    echo "  push/merge collisions ...... ${NONFF}   (BOTH instances)"
+    echo "  file two-writer races ...... ${RACES}   (CLAUDE ONLY — see note)"
+    echo "  push/merge collisions ...... ${NONFF}   (CLAUDE ONLY — see note)"
+    echo "    NOTE: collisions read errored tool results, and Codex records carry no"
+    echo "          error flag (verified). Its side of a two-writer race is therefore"
+    echo "          NOT counted — which understates precisely the cross-instance"
+    echo "          coordination this section exists to measure. Unmeasured, not zero."
   fi
   if command -v sqlite3 >/dev/null 2>&1 && [ -f "$CODEX_HOME/logs_2.sqlite" ]; then
     CUT=$(( $(date +%s) - SINCE_DAYS*86400 ))
@@ -774,7 +782,7 @@ if want outcomes; then
     # only the monorepo scored the definition work and ignored the products.
     # Repos come from the submodule list, so the set follows the portfolio map
     # instead of being hard-coded here and going stale.
-    echo "  merged PRs since ${SINCE_ISO} (portfolio):"
+    echo "  AGENT-authored merged PRs since ${SINCE_ISO} (claude/* + codex/* branches):"
     # Portable extraction: BSD sed rejects the non-greedy `+?` a single-pass
     # regex would need, so strip in stages instead of relying on a GNU-only form.
     REPOS=$(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.url$' 2>/dev/null \
@@ -786,8 +794,15 @@ if want outcomes; then
     TOTAL=0; APIFAIL=0
     while IFS= read -r r; do
       [ -n "$r" ] || continue
-      if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt \
-            --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")] | length" 2>/dev/null); then
+      # AGENT-AUTHORED ONLY. This scorecard diagnoses the two agents, so a
+      # maintainer, external-contributor, or dependency-bot merge must not move
+      # it — otherwise a quiet week for the agents plus a busy week for Renovate
+      # reads as agent productivity and can trigger a definition change.
+      # Both instances ship from claude/* and codex/* branches; author login
+      # cannot discriminate, because the agent commits as the maintainer.
+      if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt,headRefName \
+            --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")
+                       | select(.headRefName | test(\"^(claude|codex)/\"))] | length" 2>/dev/null); then
         printf '    %-42s QUERY FAILED (auth/rate-limit/network)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
       fi
       case "$c" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; APIFAIL=$((APIFAIL+1)); continue ;; esac
@@ -801,6 +816,39 @@ EOF
     # half of the quality signal, and most agent work lands in product repos —
     # a submodule revert against a monorepo-only check reported "nothing needed
     # reverting" while the work was actively being undone.
+    # post_merge_red: the scorecard names it and this section claimed it as a
+    # quality signal, but only merges and reverts were ever queried. A merge that
+    # leaves main red WITHOUT being reverted produced no signal at all — the
+    # worst case to miss, since nothing else surfaces it.
+    echo "  main CI state per repo (post-merge red — a merge that broke main):"
+    REDS=0
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      # Read the CHECK-RUNS on main's head, not "the latest workflow run".
+      # The latter picks up path-filtered workflows that legitimately report
+      # `skipped`, which is not a broken main — treating any non-success as RED
+      # produced three false alarms on the live portfolio. Only genuine failure
+      # conclusions count.
+      fails=$(gh api "repos/$r/commits/main/check-runs?per_page=100" \
+                --jq '[.check_runs[]? | select(.conclusion == "failure" or .conclusion == "timed_out"
+                                               or .conclusion == "startup_failure")] | length' 2>/dev/null)
+      case "$fails" in
+        ''|*[!0-9]*) printf '    %-42s %s\n' "$r" "UNKNOWN (query failed)" ;;
+        0) ;;
+        *) names=$(gh api "repos/$r/commits/main/check-runs?per_page=100" \
+                     --jq '[.check_runs[]? | select(.conclusion == "failure" or .conclusion == "timed_out"
+                                                    or .conclusion == "startup_failure") | .name]
+                           | join(", ")' 2>/dev/null | cut -c1-46)
+           printf '    %-42s RED: %s\n' "$r" "$names"; REDS=$((REDS+1)) ;;
+      esac
+    done <<EOF
+$REPOS
+EOF
+    echo "    ────────────────────────────────────────── repos RED on main: ${REDS}"
+    echo "    (a RED here outranks every advance item next run — see the skill)"
+    echo "    UNKNOWN usually means HTTP 403: the token lacks checks:read on that"
+    echo "    repo (seen on the private ones). Verified cause, not a mystery —"
+    echo "    treat it as UNMEASURED, never as green, and surface the scope gap.
     echo "  revert commits since ${SINCE_ISO} (portfolio):"
     RTOTAL=0
     while IFS= read -r r; do
