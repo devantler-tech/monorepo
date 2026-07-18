@@ -266,15 +266,31 @@ several of the states you emit look alarming in aggregate without being so. Spec
 conclude that a review lane is down, stalled, rate-limited, or outaged, and never suggest the
 *Fallback — agent self-review* precondition is met** — that inference is the orchestrator's alone,
 it requires per-lane evidence you do not gather, and acting on it wrongly means self-reviewing PRs a
-reviewer already covered. A row of `none`/`*-stale` across many PRs is **not** outage evidence: the
+reviewer already covered.
+
+**Do report the raw per-lane signal when one exists** — that is evidence, not diagnosis, and the
+orchestrator's fallback decision depends on it. When a reviewer posts an explicit rate-limit notice,
+an error, or an app failure on a PR, emit a neutral factual row
+`lane_signal=<coderabbit|codex>:<rate-limit|error>@<UTC time>` with its retry window if one is
+stated. State what the reviewer said; never characterise it as an outage, a lane being down, or
+grounds for any fallback.
+
+A row of `none`/`*-stale` across many PRs is **not** outage evidence: the
 overwhelmingly more common causes are a green staled by a push, a request that was silently dropped,
 and — because Codex's clean pass is an issue COMMENT with no `commit_id`, and its findings are a
 review OBJECT — a surface you looked at with the wrong key. Before emitting `none` for any row,
 confirm you checked **both** surfaces at the **abbreviated** head sha; `none` means you found no
-review output of any kind, not that you found none matching your filter. (Live 2026-07-18: a digest
-reported "zero review objects and zero comments" plus a "fresh both-lane outage" across 12 PRs while
-Codex review objects existed on at least three of them, one at head — a conclusion that would have
-triggered unwarranted self-reviews portfolio-wide.)
+review output of any kind, not that you found none matching your filter.
+
+**`none` must CARRY ITS EVIDENCE, or the rule above is satisfiable by asserting it.** Report it as
+`none(rev=<n>,cmt=<n>@<abbrev-head>)` — the count of `chatgpt-codex-connector`/`coderabbitai` review
+objects and issue comments you actually saw on that PR, and the abbreviated head you matched against.
+`none(rev=0,cmt=0@a1b2c3d4e5)` is a checkable claim; a bare `none` is an assertion the orchestrator
+cannot distinguish from the filter miss this rule exists to prevent. A non-zero count next to `none`
+is a **contradiction to investigate, not a row to emit** — it means artifacts exist and your match
+key was wrong. (Live 2026-07-18: a digest reported "zero review objects and zero comments" plus a
+"fresh both-lane outage" across 12 PRs while Codex review objects existed on at least three of them,
+one at head — a conclusion that would have triggered unwarranted self-reviews portfolio-wide.)
 
 Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
