@@ -287,8 +287,9 @@ draft yourself only when you genuinely know it is ready**, which means ALL THREE
    summary; a summary that was never posted because the green review came from the **Codex lane** is
    the lane-choice consequence, not a gap — CodeRabbit's pre-merge evaluator only runs when CodeRabbit
    reviews, and forcing a second lane per PR would break the one-tool-at-a-time discipline.
-2. **Reviewed** — ≥1 green CodeRabbit or Codex review at the current head (the green-review gate,
-   unchanged in strength — now a self-enforced promotion precondition).
+2. **Reviewed** — ≥1 green CodeRabbit or Codex review at the current head — or, when BOTH lanes are
+   unavailable, a clean current-head **agent self-review** posted per *Fallback — agent self-review*
+   (the green-review gate, unchanged in strength — now a self-enforced promotion precondition).
 3. **Tried and evaluated as a user** — you **exercised the real behaviour and observed the effect**
    with the cheapest method that actually observes it (ran the command, loaded the page, ran the
    live check — the *Verify it actually WORKS* convention) and judged the result as its **user**,
@@ -413,7 +414,9 @@ for it, including unresolved connector threads, and **verify the reviewed sha
 against the PR head** — a green from either reviewer on a stale commit is not a green; re-secure it
 after pushes. A current-head Codex result with findings is a **NEEDS-FIX** review surface that the
 survey must report with its link/count; it is never collapsed to "no review" followed by another
-review request.
+review request. A **third satisfier exists only as a last resort** when BOTH lanes are genuinely
+unavailable — the agent's own posted self-review (see *Fallback — agent self-review* in the request
+discipline below); it is never a way around requesting a real reviewer.
 **Carve-out — Renovate/Dependabot dependency PRs are AUTOMATION-OWNED and need NO agent action**
 (maintainer direction 2026-07-16). Match only the exact app identities: org-search/REST surfaces expose
 `renovate[bot]` and `dependabot[bot]`; deeper GraphQL surfaces may expose `app/renovate` and
@@ -456,6 +459,59 @@ result at the current head — self-promotion is forbidden before that. Request 
 - **Fall back to the other tool only after the first demonstrably stalled or failed** (no review
   artifact after a generous window, or an explicit rate-limit response) — note the fallback and why,
   so the lane preference stays evidence-based.
+- **Fallback — agent self-review, ONLY when BOTH lanes are unavailable** (maintainer direction
+  2026-07-18). When CodeRabbit *and* Codex have each been tried and demonstrably failed to deliver a
+  review at the current head — no artifact after a generous window, the app erroring/uninstalled on
+  the repo, or a rate-limit response with **no** stated retry window (or one so long the draft would
+  sit idle for hours) — the agent may review the PR **itself** using
+  its own review skills (`/review`, `/code-review`, `/security-review`) rather than leaving the draft
+  stuck. This is a **last resort, never a shortcut**: an available lane is always preferred, a
+  self-review never pre-empts one, and the two-lane failure must be **evidenced in the run report**.
+  **A CodeRabbit rolling-quota shell that states a short window (`Next review available in: N
+  minutes`) is NOT an unavailable lane** — it is the wait-and-retrigger case: schedule the
+  retrigger in the background and carry on;
+  never let a throttle shortcut you into self-reviewing.
+  **Judge lane success or failure by a REAL review artifact at head, never by the tool's ack.**
+  CodeRabbit's `@coderabbitai review` reply says *"✅ Action performed — Review finished"* even when
+  the review never started; the *following* comment carries the truth. **SUCCESS is what requires a
+  real artifact at head; FAILURE is proven by that artifact's ABSENCE plus an outage signal** — a
+  stall past the wait window, an erroring/uninstalled app, or a rate-limit with no usable retry
+  window. (Demanding an artifact to prove failure would make the fallback unreachable in precisely
+  the outages it exists for.) The artifact's **shape
+  differs per lane**: a CodeRabbit approval and a *findings-bearing* Codex result are review objects
+  matched by `commit_id` == head, but **Codex's GREEN result is an issue COMMENT** carrying
+  `**Reviewed commit:** <sha>`, with no `commit_id` field at all. Match a Codex green by that body
+  marker; requiring `commit_id` there would misread a perfectly good green as a failed lane and
+  trigger the fallback for nothing. An ack proves nothing in either direction.
+  The self-review is held to the same bar as a bot lane — correctness, security, and the repo's
+  `## Review guidelines`; going easy on your own diff defeats the entire gate.
+  - **Post it as a REAL GitHub Review, in a standardized shape — this is the point of the fallback.**
+    The sibling agent (and the maintainer) must be able to see and act on it exactly like a bot
+    review, so it goes through `POST /repos/<owner>/<repo>/pulls/<n>/reviews` with inline
+    `comments[]` (each anchored to `path` + `line`/`side`), so every finding becomes a **resolvable
+    review thread** — never a plain issue comment, and never a findings dump in the PR body. Use
+    **`event: COMMENT`** — GitHub refuses `APPROVE`/`REQUEST_CHANGES` on your own PR, and the agent
+    authors as `devantler`, so `COMMENT` is the only submittable event on an own PR.
+  - **Standard body shape:** the `> 🤖 Generated by the Daily AI Engineer` disclosure line (so the
+    untrusted-input disambiguator reads it as own-output DATA, never a maintainer instruction), then
+    a `## Self-review (fallback — CodeRabbit and Codex unavailable)` heading, the **reviewed commit
+    SHA**, one line per lane naming *what* failed and *when*, and a verdict line
+    `Verdict: no P0/P1 findings` or `Verdict: N findings (P0: a, P1: b)`. Each inline comment states
+    its severity (`P0`/`P1`/`nit`) as its first token.
+  - **It satisfies the green-review gate only when it is clean** — no P0/P1 findings — **at a SHA
+    equal to the current PR head**; the survey reports it as `green_review=self@<sha>`, and it
+    stales on the next push exactly like any other green. Findings you raise on your own PR are
+    **fixed-or-refuted and their threads resolved** like a bot's, before promotion.
+  - **Pre-merge checks when CodeRabbit never reviewed.** CodeRabbit's pre-merge evaluator only runs
+    when CodeRabbit reviews, so in a both-lanes-down fallback there is no summary to be green — the
+    same lane-choice consequence the pentad already tolerates for a Codex-lane green, not a new
+    exemption. `premerge=not-posted` is therefore **not a gap** when CodeRabbit demonstrably did not
+    review; record which applies. This does **not** soften the surface: a **posted** summary that is
+    non-green, inconclusive, or unparseable still **fails closed** and blocks promotion exactly as
+    before, and the moment CodeRabbit is serving again its summary is required.
+  - **Never** self-review a PR you did not author as a way to unblock someone else's merge, never
+    self-review to bypass a lane that is merely slow, and never let a self-review substitute for the
+    other four hygiene surfaces (CI, threads, conflicts, pre-merge checks).
 - **Incremental reviews (maintainer direction 2026-07-12): EVERY push to the branch — a review-fix,
   a missed file, a conflict resolution, anything — stales the green and requires re-requesting a
   successful review at the new head.** Fixing a reviewer's findings is not the end of the loop; the
@@ -539,7 +595,8 @@ For every other actionable trusted-author PR, the merge itself is
 `gh pr view <n> --json number,isDraft,author,headRefOid,mergeStateStatus,statusCheckRollup` immediately
 before merging. It must show `isDraft:false`, a trusted author, owner `devantler-tech`, and
 `mergeStateStatus:CLEAN`; the pentad must show zero review findings, green pre-merge checks, and a
-CodeRabbit/Codex green review whose commit SHA equals that same `headRefOid`. That is **sufficient
+CodeRabbit/Codex green review — or a qualifying clean **agent self-review** under *Fallback — agent
+self-review*, which is available on own PRs only — whose commit SHA equals that same `headRefOid`. That is **sufficient
 evidence** — then run the merge. `CLEAN` is authoritative for required checks: don't re-derive required
 checks from the rollup, don't re-fetch branch protection on every merge (it's confirmed **once per
 repo per session**), and don't bundle the evidence and the merge into one chained command. Driving a
@@ -1111,7 +1168,9 @@ non-trivial finds as issues (see *Issue-driven*).
 outranks starting new work. Each run, before opening any **new** draft, first drive **every own
 in-flight PR** to its terminal state: clear its hygiene pentad (green CI + all CodeRabbit/bot threads
 resolved + green CodeRabbit pre-merge checks + not conflicting with main + ≥1 green review from
-CodeRabbit or Codex), complete the user-evaluation condition, **self-promote, and merge it** (per
+CodeRabbit or Codex — or, when both lanes are down, a qualifying agent self-review, which likewise
+makes an unposted pre-merge summary a non-gap; see *Fallback — agent self-review*), complete the
+user-evaluation condition, **self-promote, and merge it** (per
 *Merge policy*) — or leave it a draft with the missing readiness condition or external blocker
 explicitly named. Only once your own open PRs are each either **merged or named-blocker-parked** do
 you start a new advance slice. The *waste* this targets is a pile of **half-finished** own PRs —
