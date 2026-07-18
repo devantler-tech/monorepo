@@ -266,12 +266,18 @@ public and private — no per-repo loop needed to enumerate):
    1. `gh api repos/devantler-tech/<repo>/commits/main --jq '.sha'` — resolve the head first. Use the
       **full 40-character sha**: the runs endpoint silently returns an empty set for an abbreviated
       one, which reads exactly like "nothing failed".
-   2. `gh api "repos/devantler-tech/<repo>/actions/runs?head_sha=<full-sha>&per_page=100"` — then keep
-      only runs whose `event` is a **main-branch event** (`push`, `schedule`, `merge_group`,
-      `workflow_dispatch`, `dynamic`), take the **latest run per workflow name** (greatest
-      `created_at`), and report a red for any that concluded `failure` or `timed_out`.
+   2. `gh api --paginate "repos/devantler-tech/<repo>/actions/runs?head_sha=<full-sha>&branch=main&per_page=100"`
+      — `--paginate`, because a busy head can carry more runs than one page (the API serves up to
+      1,000 results per `head_sha` search at 100/page, and an unpaginated call silently drops the
+      rest; each page is a separate JSON document, so aggregate in the shell, never with a per-page
+      `--jq` reduction) and `branch=main`, because another branch can point at the same commit and
+      its runs share the `head_sha`. Then keep only runs whose `event` is a **main-branch event**
+      (`push`, `schedule`, `merge_group`, `workflow_dispatch`, `dynamic`), take the **latest run per
+      `workflow_id`** (greatest `created_at`; the id, never the display `name`, which two workflow
+      files can legally share — collapsing them hides one workflow's failure behind the other
+      file's later success), and report a red for any that concluded `failure` or `timed_out`.
 
-   Both filters are load-bearing, for different false positives:
+   All three filters are load-bearing, for different false positives:
    - **Not keyed to head** — a failed run stays attached to the sha it executed against, so it lingers
      in history long after `main` moved on. This is what made a two-day-old `CI - KSail` failure
      surface as live breakage.
@@ -280,6 +286,9 @@ public and private — no per-repo loop needed to enumerate):
      main's health. Do **not** instead de-duplicate check-runs by name to suppress them: several
      independent comment-triggered runs coexist at one sha, so "newest per check name" hides a genuine
      failure behind a later `skipped` — a fail-open this exact check was caught making.
+   - **Not filtered to `branch=main`** — a release or sync branch can point at main's exact commit,
+     and its `push`/`workflow_dispatch` runs then pass both filters above while failing for reasons
+     that are not main's health.
 
    Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
