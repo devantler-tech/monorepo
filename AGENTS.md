@@ -1389,6 +1389,34 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   re-verify **once** — not a fix-one/re-run round trip per finding.
 - **Parallelize independent setup.** Clones, subagents, and independent investigations start
   together in the background, not one after another.
+- **Splitting a `"repo number"` pair with `set -- $pair` breaks under `zsh` — use the POSIX
+  parameter-expansion form instead.** Claude Code's Bash tool runs **zsh**, which (unlike bash) does **not**
+  word-split unquoted *parameter expansions*. So the common bash sweep idiom silently collapses
+  there: `for pr in "ksail 6045" …; do set -- $pr; gh pr view $2 --repo devantler-tech/$1` leaves
+  `$1` holding the *whole* string and `$2` **empty**, so `gh` runs with no PR number and fails
+  `argument required when using the --repo flag`. The flag is present — the positional argument in
+  front of it vanished, which is why the error misdirects. Measured: **24 of 24** such failures
+  across 250 sessions (2026-07-14→18) used this idiom; **zero** used literal arguments. It hits
+  hardest in the per-run trusted-PR sweep, where these loops get written most.
+  **Write it portably and it is correct in every shell:**
+  ```sh
+  repo=${pr%% *}; n=${pr##* }           # POSIX parameter expansion: sh, bash AND zsh
+  gh pr view "$n" --repo "devantler-tech/$repo"
+  ```
+  (`IFS=' ' read -r repo n <<< "$pr"` is equivalent **in bash and zsh only** — the here-string `<<<`
+  is a bash/zsh extension and a **syntax error** under POSIX `/bin/sh`, e.g. dash. The parameter-
+  expansion form above has no such limit, so prefer it when the shell is unknown or the file carries
+  a `#!/bin/sh` shebang.)
+  Or simply **write the calls out** — two plain `gh` lines beat a clever loop and stay readable.
+  **Shell-specific notes, so nobody "fixes" working code:** in **bash** `set -- $pair` splits
+  correctly and needs no change; `set -- ${=pair}` is zsh's explicit-split flag and is a **syntax
+  error in bash** (`bad substitution`), so never introduce it in a script with a `#!/usr/bin/env bash`
+  shebang or in the Codex sibling's bash-backed session. **When you do not know the active shell, use
+  the parameter-expansion form above** — it is the only one of the three with no shell restriction.
+  **Not the same hazard:** `for x in $(cmd)` *does* split under zsh (command substitution is still
+  IFS-split; only parameter expansion is exempt), so an unexpected result there is ordinary
+  whitespace splitting, not this bug. Keep the two diagnoses apart — the parameter-expansion family
+  is `set -- $var` and `cmd $args`.
 
 This changes only *ordering and overlap* — never the quality bar. Validation, RED/GREEN proof,
 root-cause fixing, and every guardrail are unaffected; the point is to stop paying for them serially.
