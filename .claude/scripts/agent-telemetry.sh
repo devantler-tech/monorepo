@@ -848,7 +848,7 @@ EOF
     echo "    (a RED here outranks every advance item next run — see the skill)"
     echo "    UNKNOWN usually means HTTP 403: the token lacks checks:read on that"
     echo "    repo (seen on the private ones). Verified cause, not a mystery —"
-    echo "    treat it as UNMEASURED, never as green, and surface the scope gap.
+    echo "    treat it as UNMEASURED, never as green, and surface the scope gap."
     echo "  revert commits since ${SINCE_ISO} (portfolio):"
     RTOTAL=0
     while IFS= read -r r; do
