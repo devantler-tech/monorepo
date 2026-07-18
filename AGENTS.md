@@ -284,11 +284,14 @@ touch of an unconfirmed repo:
    number is the one token that cannot be spelled two ways.
 3. **Claims expire, timed from the ASSIGNMENT.** A claim carrying no open PR after **~2 hours** is
    stale and may be taken over, so a crashed or abandoned session never parks an issue permanently.
-   Measure that window from the issue's **NEWEST `assigned` timeline event** — paginate, and take the
-   last one, or a long-lived issue will hand you a year-old assignment from page 1:
+   Measure that window from the issue's **NEWEST `assigned` timeline event**, or a long-lived issue
+   hands you a year-old assignment from page 1. Emit every match as its own line and take the max in
+   the shell — under `--paginate` each page is a **separate JSON array**, so an aggregate like
+   `'[…]|last'` runs *per page* and silently returns the last match of the final page, not the newest
+   overall (and `--slurp`, which would wrap the pages, is rejected alongside `--jq`):
    ```sh
    gh api repos/<o>/<r>/issues/<n>/timeline --paginate \
-     --jq '[.[]|select(.event=="assigned")|.created_at]|last'
+     --jq '.[]|select(.event=="assigned")|.created_at' | sort | tail -1
    ```
    **Never measure from the branch's commit date** — a claim branch usually points at the base commit,
    whose date is far older, so every fresh claim would read as long expired. If an issue is assigned
@@ -296,9 +299,15 @@ touch of an unconfirmed repo:
    **Taking over a stale claim: unassign, then re-assign.** Every instance uses the same `devantler`
    login, and GitHub's add-assignees endpoint is a no-op for an already-assigned user — so a plain
    re-assign creates **no new `assigned` event**, the lease keeps the dead claim's timestamp, and the
-   next run reads your fresh claim as already expired and races you. Clear it first
-   (`gh issue edit <n> --remove-assignee devantler && gh issue edit <n> --add-assignee devantler`), so
-   the takeover starts a genuinely new lease. This time-boxing is what keeps the rule compatible with
+   next run reads your fresh claim as already expired and races you. Clear it first — and **always
+   pass `-R <owner>/<repo>`**, because a run works from the monorepo checkout or a submodule worktree
+   and an unqualified `gh issue edit` resolves against *that* repo, silently editing whatever issue
+   happens to carry the same number:
+   ```sh
+   gh issue edit <n> -R <owner>/<repo> --remove-assignee devantler
+   gh issue edit <n> -R <owner>/<repo> --add-assignee devantler
+   ```
+   so the takeover starts a genuinely new lease. This time-boxing is what keeps the rule compatible with
    *"a bare assignee does not reserve an issue"* above: a claim is a short lease, not a lock.
 4. **Re-verify immediately before the first push.** The residual window is seconds wide but real
    (that is exactly how #88 and #96 were lost) — this is the backstop, not the primary mechanism.

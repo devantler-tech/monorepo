@@ -293,7 +293,8 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
-- <repo> #<n> "<title>" — CLAIMED: assignees=<n>, claim-branch=<name|none>, no open PR (contract *Claim protocol* skip reason (e); the orchestrator times the ~2h lease from the issue's NEWEST `assigned` timeline event — an assignee is an INSTANCE claim, never the maintainer)
+- <repo> #<n> "<title>" — CLAIMED: assignees=<n>, claim-branch=<name>, no open PR (contract *Claim protocol* skip reason (e); the orchestrator times the ~2h lease from the issue's NEWEST `assigned` timeline event — an assignee is an INSTANCE claim, never the maintainer)
+- Emit `CLAIMED` **only when BOTH an assignee and a matching `claude/*-<issue>` branch exist.** An assignment with no branch is **not** a live claim under the contract, so reporting it as one would make a bare assignee park the issue — the exact behaviour "a bare assignee does not reserve an issue" forbids. Report that case as the ordinary open issue it is (mention `assignees=<n>` if useful), never as skip reason (e).
 ```
 
 Digest rules:
