@@ -711,6 +711,20 @@ Types and sub-issues are **orthogonal**: a type says what a thing *is*, a sub-is
 *belongs to*. Labels stay for cross-cutting, repo-local tags (`automation`, `kubernetes`,
 `good first issue`) — never for the things above.
 
+**Default: every issue belongs to an Epic** (maintainer direction 2026-07-18). A child that hangs off
+nothing is work whose *why* is unrecorded — it cannot roll up, it cannot be prioritised against a
+theme, and it makes the board a flat list again. So when filing, **ask which Epic this serves**; if
+none fits, that is usually a signal the Epic is missing, not that the issue is exempt — **file the
+Epic**. Genuine exemptions, kept narrow:
+- **Hotfixes** — live breakage is fixed immediately; parenting it later is optional.
+- **Trivial/mechanical one-offs** — a typo, a dead link, a stale pin: a `Chore` too small to belong
+  to a theme.
+- **Top-level Epics themselves**, and standalone `Spike`s whose whole purpose is to decide whether an
+  Epic should exist.
+Everything else gets a parent. A backlog of orphans is the failure state this rule prevents — and the
+inverse is a signal too: **an Epic with no children is undecomposed, not finished** (37 such epics
+existed on 2026-07-18), so decomposing them is real, high-value advance work.
+
 ### Every issue belongs on the board
 [Project 5 (🌊 Project Board)](https://github.com/orgs/devantler-tech/projects/5) is the maintainer's
 single navigation surface across the portfolio, so **every open issue in every active

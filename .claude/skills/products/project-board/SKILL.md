@@ -51,6 +51,14 @@ Until that is solved, backfill is a standing duty, not an exception.
   view changes need a browser with the maintainer's session. Propose them precisely (layout, filter
   string, grouping, visible fields) so applying them is mechanical.
 
+  **The only browser an agent can DRIVE is Chrome via the Claude extension.** Computer-use grants
+  browsers at **read tier only** — screenshots work, clicks and typing are blocked at the OS level —
+  so Safari/Firefox/Arc can be *seen* but never operated, by design. Don't burn a round trip
+  requesting browser access for a click-through task; check `list_connected_browsers` first, and if
+  nothing is connected, say so and offer the tooltip-guided walkthrough instead. When saving a view,
+  GitHub prompts *"make it the default for everyone"* — the board is shared, so **every view save is
+  a public change**.
+
   **Current configuration** (verified live 2026-07-18):
 
   | View | Layout | Filter |
