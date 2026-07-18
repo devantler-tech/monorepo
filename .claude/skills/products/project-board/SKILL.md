@@ -28,7 +28,9 @@ Run these as a survey pass; each has a known-good answer.
 | **Coverage** | open issues in active **public** repos vs. items on the board (private-repo items are a maintainer decision, never counted against coverage) | 100% |
 | **Status hygiene** | board items with no `Status` | 0 |
 | **Type hygiene** | board items whose issue carries no **Issue Type** | 0 (the contract makes a type mandatory; an untyped item is invisible to Kanban/Roadmap type filters) |
-| **Hierarchy** | open issues with a prose `Part of #N` but no real parent link | 0 |
+| **Hierarchy — migration** | open issues with a prose `Part of #N` but no real parent link | 0 |
+| **Hierarchy — orphans** | open **non-Epic** issues with `no:parent-issue`, minus the contract's exemptions (hotfixes, trivial `Chore`s, standalone `Spike`s) | 0 — the default is that every issue belongs to an Epic, so a growing orphan count means the board is flattening back into a list |
+| **Hierarchy — undecomposed** | `type:"Epic"` issues with **no sub-issues** (`no:sub-issues-progress`) | 0 — an Epic with no children is *undecomposed, not finished*; decomposing them is high-value advance work (37 existed on 2026-07-18) |
 | **Dangling parents** | `Part of` references resolving to a PR, to self, or to nothing | 0 |
 | **Stale epics** | epics at `Sub-issues progress` 100% but still open | 0 (close or extend) |
 | **Archive** | closed/merged items still active on the board | none older than **30 days closed** (archive those; younger ones stay active so Insights keeps its recent history — see the Insights trap below; manual until [#2238](https://github.com/devantler-tech/monorepo/issues/2238)'s auto-archive works) |
@@ -178,8 +180,11 @@ hard-coded list goes stale the moment an issue closes or a new one is filed (the
 retired status-board made). Query it live:
 
 ```sh
-gh issue list --repo devantler-tech/monorepo --state open --search "board in:title,body" \
-  --json number,title,issueType
+# --limit is REQUIRED: gh defaults to 30 and truncates SILENTLY, which would
+# quietly drop older board work from the rotation — the same staleness the
+# hard-coded list caused, just harder to notice.
+gh issue list --repo devantler-tech/monorepo --state open --limit 200 \
+  --search "board in:title,body" --json number,title,issueType,labels
 ```
 
 The strategic frame: *what can the maintainer still not see at a glance?* Answer that, and the board has

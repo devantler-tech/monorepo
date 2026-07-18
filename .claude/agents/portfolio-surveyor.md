@@ -296,7 +296,10 @@ public and private — no per-repo loop needed to enumerate):
    (untriaged); automation-owned dependency PRs remain only their compact no-action rows. From (2): `roadmap`-labelled epics and ready
    `security`/`enhancement`/`performance`/`refactor`/`bug`/`documentation` issues (**`security` first
    — the contract treats it as first-class substantive work, so a security issue must never sit behind
-   less critical work in the queue**); flag repos with **no open
+   less critical work in the queue**) **plus, BY ISSUE TYPE, `type:"Spike"`, `type:"Kata"` and
+   `type:"Chore"` — these three have no label equivalent, so a label-only sweep silently drops them
+   (a Kata that reached its measurement date, or a Spike ready to run, would never surface)**;
+   flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
    repos outside the map (`.github`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`)

@@ -875,7 +875,10 @@ parent is **not documented** to cascade to children in either direction — neve
 **EVERY issue carries an Issue Type — no exceptions** (maintainer direction 2026-07-18). Types are
 org-wide, exactly **one per issue**, filterable as `type:"Bug"`, and they are the structured
 replacement for type-labels. An untyped issue is an incomplete issue: fix it at triage. Set it at
-creation — `gh issue create --type "Feature"` — or retrofit with `gh issue edit <N> --type "Bug"`.
+creation — `gh issue create --repo devantler-tech/<repo> --type "Feature"` — or retrofit with
+`gh issue edit <N> --repo devantler-tech/<repo> --type "Bug"`. **Always name the repo** (or pass the
+issue URL): a bare number resolves in the *current* repo, so triaging a submodule's issue from the
+monorepo checkout would retype the same-numbered **monorepo** issue instead.
 
 **Each type exists because it changes what *done* means** — that is the test for whether something
 deserves a type rather than a label, and it is why the type tells you what "next" looks like:
@@ -905,11 +908,25 @@ Types and sub-issues are **orthogonal**: a type says what a thing *is*, a sub-is
 
 ⚠️ **Transition — keep applying the type-labels for now.** The
 [`portfolio-surveyor`](.claude/agents/portfolio-surveyor.md) still selects ready work **by label**
-(`roadmap`, `enhancement`, `performance`, `refactor`, `bug`, `documentation` — and **`security`**,
-which the contract treats as substantive first-class work: a Type-`Security` issue without the
-`security` label would silently vanish behind less critical work). Dropping those labels
-today because an issue now has a type would make newly-triaged issues **vanish from the
-oldest-actionable queue**. So set the type *and* keep the matching label until the surveyor is migrated
+by label, so **a type alone does not put an issue in the queue.** Apply the matching label too, using
+this mapping — **every type must map, or the issue is filed correctly and still never worked**:
+
+| Type | Label to also apply |
+|---|---|
+| Epic | `roadmap` |
+| Feature | `enhancement` |
+| Bug | `bug` |
+| Security | `security` |
+| Performance | `performance` |
+| Refactor | `refactor` |
+| Docs | `documentation` |
+| **Spike / Kata / Chore** | **no label equivalent exists** — the surveyor selects these **by type**; do not invent a label for them |
+
+`security` and the three type-only selections were **missing** until 2026-07-18: a correctly-typed
+Security issue, a Kata that reached its measurement date, or a Spike ready to run could sit unseen
+behind less critical work. Both gaps are now closed in the surveyor. Dropping the mapped labels today
+would make newly-triaged issues **vanish from the oldest-actionable queue**, so keep type *and* label
+until the surveyor is migrated
 to `type:` queries; retiring the duplicate labels is a follow-up, not part of this change.
 
 **Default: every issue belongs to an Epic** (maintainer direction 2026-07-18). A child that hangs off
