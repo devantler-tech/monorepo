@@ -25,7 +25,7 @@ Run these as a survey pass; each has a known-good answer.
 
 | Check | Query | Healthy |
 |---|---|---|
-| **Coverage** | open issues in active repos vs. items on the board | 100% |
+| **Coverage** | open issues in active **public** repos vs. items on the board (private-repo items are a maintainer decision, never counted against coverage) | 100% |
 | **Status hygiene** | board items with no `Status` | 0 |
 | **Type hygiene** | board items whose issue carries no **Issue Type** | 0 (the contract makes a type mandatory; an untyped item is invisible to Kanban/Roadmap type filters) |
 | **Hierarchy** | open issues with a prose `Part of #N` but no real parent link | 0 |
@@ -89,8 +89,13 @@ Until that is solved, backfill is a standing duty, not an exception.
   as a type is a superset (62 epics vs 55 roadmap-labelled).
 
   **The board tracks ISSUES, not PRs** (maintainer direction 2026-07-18): a PR that closes an issue
-  moves that issue through the ladder via the linked-PR workflow, so showing both double-counts the
-  same work — dropping `,pr` took the Ready column from 8/5 to a true 2/5. **This makes
+  stands in for that issue's progress, so showing both double-counts the same work — dropping `,pr`
+  took the Ready column from 8/5 to a true 2/5. ⚠️ **No automation moves an issue card from its
+  linked PR's state** — native Project workflows act only on the project's own items, and nothing in
+  this org updates an issue's Status from PR events. **The agent working the PR moves the issue's
+  Status by hand at each lifecycle step** (delivery PR opened → 👀 In Review; self-promoted →
+  🚀 Ready to Merge; merged with post-merge verification pending → 📊 Verifying); only the final
+  closed→Done move is a built-in workflow. **This also makes
   `Fixes #N` load-bearing for visibility, not just bookkeeping:** an agent-authored PR with no linked
   issue is now *invisible on the board*, so the capture-before-you-build rule is what keeps the board
   complete. When a substantive PR has no issue, the fix is to file/link the issue — never to put PRs

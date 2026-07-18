@@ -898,7 +898,9 @@ Types and sub-issues are **orthogonal**: a type says what a thing *is*, a sub-is
 
 ⚠️ **Transition — keep applying the type-labels for now.** The
 [`portfolio-surveyor`](.claude/agents/portfolio-surveyor.md) still selects ready work **by label**
-(`roadmap`, `enhancement`, `performance`, `refactor`, `bug`, `documentation`). Dropping those labels
+(`roadmap`, `enhancement`, `performance`, `refactor`, `bug`, `documentation` — and **`security`**,
+which the contract treats as substantive first-class work: a Type-`Security` issue without the
+`security` label would silently vanish behind less critical work). Dropping those labels
 today because an issue now has a type would make newly-triaged issues **vanish from the
 oldest-actionable queue**. So set the type *and* keep the matching label until the surveyor is migrated
 to `type:` queries; retiring the duplicate labels is a follow-up, not part of this change.
