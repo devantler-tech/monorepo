@@ -296,10 +296,17 @@ public and private — no per-repo loop needed to enumerate):
    (untriaged); automation-owned dependency PRs remain only their compact no-action rows. From (2): `roadmap`-labelled epics and ready
    `security`/`enhancement`/`performance`/`refactor`/`bug`/`documentation` issues (**`security` first
    — the contract treats it as first-class substantive work, so a security issue must never sit behind
-   less critical work in the queue**) **plus, BY ISSUE TYPE, `type:"Spike"`, `type:"Kata"` and
-   `type:"Chore"` — these three have no label equivalent, so a label-only sweep silently drops them
-   (a Kata that reached its measurement date, or a Spike ready to run, would never surface)**;
-   flag repos with **no open
+   less critical work in the queue**) **plus the three types that have no label equivalent — `Spike`,
+   `Kata`, `Chore` — which a label-only sweep silently drops.**
+   ⚠️ **Fetch those with the search `type:` QUALIFIER, not a JSON field:** `gh search issues --json`
+   has **no `issueType` field** (verified 2026-07-18), so asking for it errors and a label-only sweep
+   silently misses them. Use one extra bounded search per type:
+   `gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:Spike" --jq '.total_count'`
+   (`type:Epic` → 62, `type:Chore` → 7, `type:Spike` → 1 on 2026-07-18, so this is cheap).
+   **Exclude a `Kata` whose named measurement date is still in the FUTURE** — contract skip reason (d)
+   makes it not-yet-actionable, and listing it as ready work makes runs either re-skip it every tick or
+   measure before the agreed date. Report future-dated Katas separately, with their date.
+   Flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
    repos outside the map (`.github`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`)

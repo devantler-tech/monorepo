@@ -23,6 +23,11 @@ product it is working on. This card is the place where the board itself gets *im
 
 Run these as a survey pass; each has a known-good answer.
 
+⚠️ **Paginate, or every check lies.** `gh project item-list` **defaults to `--limit 30`** and the board
+carries **thousands** of items, so an unbounded pass samples the first page and cheerfully reports
+100% clean while drift sits at item 31. Always pass an explicit high limit (or page the GraphQL
+`items(first:100, after:…)` connection to exhaustion) before trusting any number below.
+
 | Check | Query | Healthy |
 |---|---|---|
 | **Coverage** | open issues in active **public** repos vs. items on the board (private-repo items are a maintainer decision, never counted against coverage) | 100% |

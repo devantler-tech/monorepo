@@ -51,8 +51,11 @@ The roadmap of record is **GitHub Issues** (Issues are enabled on every repo) �
   Record the roadmap cursor (`last_strategy_review` + `current_theme`) in **native memory** (a pointer,
   not the roadmap).
 - **Decompose** an epic into small, independently-shippable child issues **linked as real sub-issues**
-  — `gh issue create --parent <EPIC>` at creation, or `gh issue edit <EPIC> --add-sub-issue <CHILD>`
-  after the fact. A prose `Part of #N` creates **no** relationship and leaves the epic's
+  — `gh issue create --repo devantler-tech/<repo> --parent <EPIC>` at creation, or
+  `gh issue edit <EPIC> --repo devantler-tech/<repo> --add-sub-issue <CHILD>` after the fact.
+  **Always name the repo** — run from the monorepo checkout, a bare number resolves against
+  *the monorepo*, so decomposing a KSail epic would create or attach the child in the wrong repo.
+  Cross-repo (same owner) children must be passed as a **full issue URL**, not a number. A prose `Part of #N` creates **no** relationship and leaves the epic's
   `Sub-issues progress` rollup empty; see the contract's *Issue hierarchy* section for the limits
   (100 children, 8 levels, one parent per issue) and the two live failure modes (pointing `Part of` at
   a PR; a bare `#N` that meant another repo). Each child preserves the relevant evidence, audience,

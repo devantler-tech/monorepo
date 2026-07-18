@@ -262,6 +262,14 @@ rotation and fairness rules, like every other card; maintainer direction 2026-07
 navigation surface; a product in the normal rotation, so coverage/type/status/hierarchy drift is a
 defect somebody owns; maintainer direction 2026-07-18)*.
 
+⚠️ **`project-board` is the one product with NO repository path** — it is org project 5, not a repo or
+submodule. When rotation selects it, **skip the worktree/submodule-init/validate steps entirely**:
+there is nothing to check out, no `AGENTS.md ## Maintenance` to load, and no build to validate. Its
+work is **API-and-board mutations** (types, statuses, hierarchy links, item backfills) plus the
+occasional browser pass for a *view* edit, and any accompanying definition change is a normal
+monorepo-root PR. Don't let the repo-shaped Act step below cause the board to be skipped for want of a
+`<path>`.
+
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
 rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and

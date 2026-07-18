@@ -829,7 +829,9 @@ gh issue edit <PARENT> --repo devantler-tech/<parent-repo> \
 # and the DELETE path is singular `sub_issue` while GET/POST are plural `sub_issues`.
 # Resolve the id from the CHILD's OWN repo — a child may live in another same-owner
 # repo, and fetching <CHILD> from the parent's repo returns an unrelated same-number issue:
-gh api --method POST repos/devantler-tech/<repo>/issues/<PARENT>/sub_issues \
+# The URL path is the PARENT's repo; the id is resolved from the CHILD's repo. Mixing these up
+# posts to the wrong repo and attaches the wrong issue:
+gh api --method POST repos/devantler-tech/<parent-repo>/issues/<PARENT>/sub_issues \
   -F sub_issue_id="$(gh api repos/devantler-tech/<child-repo>/issues/<CHILD> --jq .id)"
 ```
 Keep `Part of #N` in the body as human-readable context if you like — but it is **never** the link.
