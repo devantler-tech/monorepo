@@ -815,9 +815,16 @@ hierarchy use is what makes that legible.)
 
 **Every child issue gets a real link, at creation time:**
 ```sh
+# SAME-REPO parent and child — bare numbers are fine:
 gh issue create --repo devantler-tech/<repo> --title "…" --body "…" --parent <PARENT>
 gh issue edit <PARENT> --repo devantler-tech/<repo> --add-sub-issue <CHILD>[,<CHILD>…]
 gh issue edit <CHILD>  --repo devantler-tech/<repo> --remove-parent      # reversible
+
+# CROSS-REPO (same owner) — you MUST pass a full URL for the other side. `--repo` selects the
+# repo that bare numbers resolve against, so a bare <CHILD> here silently links the unrelated
+# same-numbered issue in the parent's repo, or fails:
+gh issue edit <PARENT> --repo devantler-tech/<parent-repo> \
+  --add-sub-issue https://github.com/devantler-tech/<child-repo>/issues/<CHILD>
 # bulk/scripted — NOTE the body param is the numeric DATABASE id, not the issue number,
 # and the DELETE path is singular `sub_issue` while GET/POST are plural `sub_issues`.
 # Resolve the id from the CHILD's OWN repo — a child may live in another same-owner

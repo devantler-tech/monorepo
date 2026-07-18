@@ -94,8 +94,16 @@ Until that is solved, backfill is a standing duty, not an exception.
   linked PR's state** — native Project workflows act only on the project's own items, and nothing in
   this org updates an issue's Status from PR events. **The agent working the PR moves the issue's
   Status by hand at each lifecycle step** (delivery PR opened → 👀 In Review; self-promoted →
-  🚀 Ready to Merge; merged with post-merge verification pending → 📊 Verifying); only the final
-  closed→Done move is a built-in workflow. **This also makes
+  🚀 Ready to Merge); only the final closed→Done move is a built-in workflow.
+
+  ⚠️ **📊 Verifying belongs on the issue that is still OPEN, not on the one the merge just closed.**
+  A delivery PR carries `Fixes #delivery`, so merging **closes** that issue and the built-in
+  closed→Done workflow marks it ✅ Done — moving it to *Verifying* would either be immediately
+  overwritten or leave finished work looking pending. When the outcome cannot be known at merge, the
+  PR also carries `Part of #experiment`; **that experiment/Kata issue stays open, and it is the one
+  that goes to 📊 Verifying** until its measurement date, when it becomes ✅ Done with the decision
+  recorded. If a change has no separate experiment issue but still needs a post-merge check, keep the
+  delivery issue **open** (drop `Fixes`, use `Part of`) rather than closing it and reopening it. **This also makes
   `Fixes #N` load-bearing for visibility, not just bookkeeping:** an agent-authored PR with no linked
   issue is now *invisible on the board*, so the capture-before-you-build rule is what keeps the board
   complete. When a substantive PR has no issue, the fix is to file/link the issue — never to put PRs
@@ -133,9 +141,13 @@ Until that is solved, backfill is a standing duty, not an exception.
   dependency (Blocked badge renders in-place) and reserve the `blocked` label for cross-org blockers.
 - **Issue Types are mandatory** — every issue carries exactly one of **Epic, Feature, Bug, Security,
   Performance, Refactor, Docs, Spike, Kata, Chore** (see the contract's *Issue hierarchy* for the
-  definition-of-done each implies). An untyped issue is an incomplete issue. Managing the org type
-  list needs **org settings in a browser** — a PAT gets 403 on `orgs/<org>/issue-types` — but
-  `gh issue edit <N> --type "<Type>"` works fine for setting one.
+  definition-of-done each implies). An untyped issue is an incomplete issue. Setting one always works
+  (`gh issue edit <N> --type "<Type>"`). Managing the org type **list** is a REST surface —
+  `GET/POST/PATCH/DELETE /orgs/{org}/issue-types` — but it needs **`admin:org` (Issue Types write)**,
+  which the routine's PAT does **not** carry (it 403s). So: **use the API when the token has the
+  scope** — that is the auditable path and it works unattended — and fall back to **org settings in a
+  browser** only when it does not. Do not treat type-list drift as un-fixable just because one token
+  lacks the scope.
 - **The roadmap axis.** A roadmap layout plots **date or iteration fields only** — it does **not** render
   hierarchy. The `Year` iteration field (2026/2027/2028) is the current coarse axis and is assigned **on
   evidence of activity**, never by assumption. Finer `Start date`/`Due date` values encode *the
