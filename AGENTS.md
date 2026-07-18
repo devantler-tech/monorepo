@@ -1115,8 +1115,8 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   re-verify **once** — not a fix-one/re-run round trip per finding.
 - **Parallelize independent setup.** Clones, subagents, and independent investigations start
   together in the background, not one after another.
-- **Splitting a `"repo number"` pair with `set -- $pair` breaks under `zsh` — use the portable
-  `read` form instead.** Claude Code's Bash tool runs **zsh**, which (unlike bash) does **not**
+- **Splitting a `"repo number"` pair with `set -- $pair` breaks under `zsh` — use the POSIX
+  parameter-expansion form instead.** Claude Code's Bash tool runs **zsh**, which (unlike bash) does **not**
   word-split unquoted *parameter expansions*. So the common bash sweep idiom silently collapses
   there: `for pr in "ksail 6045" …; do set -- $pr; gh pr view $2 --repo devantler-tech/$1` leaves
   `$1` holding the *whole* string and `$2` **empty**, so `gh` runs with no PR number and fails
