@@ -259,7 +259,11 @@ seconds**, #96 lost by **135 seconds**. Every one was correct, validated work; o
 failed. So, on every repo:
 
 1. **Check three signals before selecting, not one:** open PRs, remote `claude/*` branches, and issue
-   assignees. **Match on the issue NUMBER or a normalised stem — never the literal branch name.** On
+   assignees. An assignee here means "an instance has claimed this", **not** "the human maintainer
+   took it" — every instance commits and assigns as `devantler` (see *Trust gate*), so the login
+   cannot distinguish one instance from another or from him. Read it as a claim, never as a
+   hands-off signal, and never let it park an issue past the expiry below.
+   **Match on the issue NUMBER or a normalised stem — never the literal branch name.** On
    #96 two sessions collided on `claude/war-armour-…` versus `claude/war-armor-…`: the repo's code is
    American, the issue's title British, so each session derived a different stem from a different part
    of the same issue and neither's exact-name scan could see the other. Grepping open PR *bodies* for
