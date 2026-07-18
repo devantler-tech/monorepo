@@ -30,6 +30,7 @@ keeping them healthy *and* moving them forward.
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | [AGENTS.md](https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md) |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | [AGENTS.md](https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md) |
 | UniFi Crossplane provider (shared lib) | `devantler-tech/provider-upjet-unifi` | `libraries/provider-upjet-unifi` | [AGENTS.md](https://github.com/devantler-tech/provider-upjet-unifi/blob/main/AGENTS.md) |
+| Kyverno policy library (shared lib) | `devantler-tech/kyverno-policies` | `libraries/kyverno-policies` | [AGENTS.md](https://github.com/devantler-tech/kyverno-policies/blob/main/AGENTS.md) |
 | World at Ruin (game) | `devantler-tech/world-at-ruin` | `applications/world-at-ruin` | [AGENTS.md](https://github.com/devantler-tech/world-at-ruin/blob/main/AGENTS.md) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
@@ -50,10 +51,12 @@ them**: the repo's own `AGENTS.md` is authoritative; the
 
 **Shared libraries** (leverage points across the whole suite — see *Holistic review* and the
 `product-engineering` skill): the CI building block `devantler-tech/actions` (which
-absorbed the archived `reusable-workflows` repo), and the agent extensions `devantler-tech/agent-skills` (generic,
+absorbed the archived `reusable-workflows` repo), the agent extensions `devantler-tech/agent-skills` (generic,
 cross-tool agent skills) + `devantler-tech/agent-plugins` (a tool-neutral marketplace bundling those skills
 for VS Code / Copilot CLI / Claude Code; rescope in progress —
-[plugins#7](https://github.com/devantler-tech/agent-plugins/issues/7)). A generic pattern proven in one
+[plugins#7](https://github.com/devantler-tech/agent-plugins/issues/7)), and the cluster-guardrail
+catalog `devantler-tech/kyverno-policies` (shared, tested Kyverno policies the platform and
+platform-template consume instead of vendoring copies). A generic pattern proven in one
 product belongs in a shared library so *every* product inherits it — keep them **industry-standard and
 tool-neutral** (the portability principle).
 
@@ -83,6 +86,7 @@ no row are filed on the **default intake repo** below.
 | Platform template | The starter template new platform repositories are created from | `devantler-tech/platform-template` |
 | UniFi home network | Changing THIS suite's deployed UniFi network — SSIDs, VLANs, firewall rules, device and VPN config | `devantler-tech/unifi` |
 | UniFi Crossplane provider | Developing the Crossplane provider library itself (new resource support, codegen, provider bugs) | `devantler-tech/provider-upjet-unifi` |
+| Cluster guardrail policies | Shared rules that check or adjust what may run on the suite's clusters, so every platform inherits the same guardrails | `devantler-tech/kyverno-policies` |
 | Mac install packages | Making the suite's tools installable on a Mac via Homebrew | `devantler-tech/homebrew-tap` |
 
 **Default intake repo:** `devantler-tech/monorepo`
@@ -1538,7 +1542,8 @@ work misses:
   lint/test setup, an agent skill, a docs convention) has independently appeared in 2+ products, it has
   become *generic* — extract it into the right **shared library** so every product inherits it instead
   of drifting: CI → `devantler-tech/actions` (composite actions + reusable workflows); agent skills →
-  `devantler-tech/agent-skills`; (plugins → `devantler-tech/agent-plugins` once created). Then propagate consumers
+  `devantler-tech/agent-skills`; (plugins → `devantler-tech/agent-plugins` once created); cluster
+  guardrail / admission / generation policies → `devantler-tech/kyverno-policies`. Then propagate consumers
   to the shared version.
 - **Consistency & drift.** Versions, pinned actions, toolchains, conventions, and `AGENTS.md
   ## Maintenance` sections aligned across the suite; divergence reconciled toward the best pattern.
