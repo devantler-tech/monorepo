@@ -353,7 +353,9 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    branch, or once that lapses with no PR, you may pick it up regardless of who's assigned (timed from
    the issue's `assigned` timeline event, never a branch commit date). **Claim
    before you build:** self-assign + push the branch **with the issue number in its name** the moment
-   you select, checking open PRs, remote
+   you select — and if `devantler` is ALREADY assigned (a stale bare assignment from an abandoned run),
+   **remove then re-add**, since adding an existing assignee is a no-op that would leave your lease
+   carrying the old timestamp — checking open PRs, remote
    `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
    (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
    itself. If it **already has an
@@ -422,7 +424,9 @@ For each selected product:
    .claude/scripts/submodule-init.sh <path>   # init at the pinned commit + repair + probe (fail-closed)
    ```
 
-   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>` and work
+   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>`
+   (issue-less hotfixes and trivial obvious fixes keep plain `claude/<area>-<desc>` — they go straight
+   to a PR, so no claim window applies) and work
    **in that worktree**. A stray `core.worktree` makes the worktree resolve back into
    `.git/modules/<name>`, silently collapsing every parallel session into one physical tree — so on any
    submodule you did **not** initialise through the wrapper (a tree someone else populated), **probe

@@ -313,10 +313,24 @@ touch of an unconfirmed repo:
    gh issue edit <n> -R <owner>/<repo> --remove-assignee devantler
    gh issue edit <n> -R <owner>/<repo> --add-assignee devantler
    ```
-   so the takeover starts a genuinely new lease. This time-boxing is what keeps the rule compatible with
+   so the takeover starts a genuinely new lease. **If the dead claim left a remote branch carrying
+   commits**, do not reuse that name: the deterministic name collides, and pushing onto it either gets
+   rejected or silently builds on abandoned work. Start a fresh branch
+   (`claude/<area>-<desc>-<issue>-2`) and leave theirs alone — it is another instance's work, and the
+   branch-cleanup sweep reaps it once it is provably stale. Never force-push over it. This time-boxing is what keeps the rule compatible with
    *"a bare assignee does not reserve an issue"* above: a claim is a short lease, not a lock.
-4. **Re-verify immediately before the first push.** The residual window is seconds wide but real
-   (that is exactly how #88 and #96 were lost) — this is the backstop, not the primary mechanism.
+4. **Re-verify immediately before the first push, and make that push DECIDE the race.** The residual
+   window is seconds wide but real (that is exactly how #88 and #96 were lost). Two instances picking
+   the same issue derive the *same* deterministic branch name, so a bare re-check is not enough —
+   both would see "no branch" and both would then believe they claimed it. Settle it on the push:
+   - Put a **real commit** on the claim branch (the first substantive change, or an empty
+     `git commit --allow-empty -m "chore: claim #<issue>"`), never a bare pointer at the base commit —
+     otherwise both pushes are trivially fast-forwards and neither is refused.
+   - Push **without force**, then **verify the remote tip is yours**:
+     `git ls-remote origin claude/<area>-<desc>-<issue>` must return **your** sha. If the push is
+     rejected, or the tip is someone else's, **you lost the race** — stand down under rule 5 rather
+     than force-pushing over them. Never `--force`/`--force-with-lease` a claim branch: that is how a
+     "won" race silently destroys the winner's work.
 5. **On a lost race, ABANDON.** Never duplicate the work, never force-push onto a sibling's branch,
    never open a competing PR. Then **use the loss**: two independent implementations of one spec are
    a free **differential-testing oracle**. Diff yours against the winner's and post **only findings

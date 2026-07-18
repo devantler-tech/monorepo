@@ -39,7 +39,10 @@ public and private — no per-repo loop needed to enumerate):
    to live claims and re-opens the duplicate-build race the protocol exists to close.
 2b. **Claim branches (one call per repo that has assigned-but-PR-less issues):**
    `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep '^claude/'` — report any
-   `claude/*` branch whose name ends in `-<issue>` for an open issue with **no** open PR, as
+   `claude/*` branch that either ends in `-<issue>` OR whose normalised stem matches an open issue's
+   title (strip `war-`/area prefixes and hyphens, and normalise `our`→`or` spelling) — legacy claims
+   predate the issue-number template and would otherwise be invisible during rollout — for an open
+   issue with **no** open PR, as
    `CLAIMED <repo>#<issue> (branch, no PR)`. This is the only pre-PR claim signal that exists: before
    a PR there is no body to grep, so the issue number in the branch name is what makes the claim
    discoverable. Keep it bounded — skip the call for repos with no assigned-and-PR-less issues.
