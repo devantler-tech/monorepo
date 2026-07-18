@@ -38,6 +38,10 @@ Check that each project landed on the right branch. One left on a detached commi
 | Point one at a new URL | `git submodule set-url -- <path> <new-url>` |
 | Remove one | `./delete-submodule.sh <path>` |
 
-Each project is pinned to a specific commit, and your checkout stays on that pin — the init script
-deliberately does not jump to the tip of the branch. Automated pull requests here move the pins
-forward, so to catch up, pull this repository and run the init script again.
+Each project is pinned to a specific commit, and your checkout stays on that pin. Automated pull
+requests here move the pins forward, but **your existing checkout does not follow — and re-running
+the init script will not move it either.**
+
+That is deliberate: the script only populates projects that are empty, and leaves already-populated
+ones alone so it can never discard work you have sitting in one. Moving a populated project to a
+newer pin is a manual, per-project decision — commit or push anything you care about there first.
