@@ -120,10 +120,14 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    any "gated" against live state before trusting it (memory goes stale) and name the
    blocker in the report. A **bare assignee does *not* reserve** it **indefinitely** — an assignment plus a
    **pushed branch** is a live claim for ~2h (contract *Claim protocol*); with no branch, or once that
-   lapses with no PR, you may take it regardless of who's assigned. **Claim the lane before you build**
-   (self-assign + push the branch, then harden), check open PRs / remote `claude/*` branches / assignees
-   by **issue number rather than literal branch name**, and on a lost race **abandon** — then diff your
-   build against the winner's and post only findings you have executed against their code. If an
+   lapses with no PR, you may take it regardless of who's assigned (timed from the issue's `assigned`
+   timeline event, never a branch commit date). **Claim the lane before you build** (self-assign + push
+   the branch **with the issue number in its name**, then harden), check open PRs / remote `claude/*`
+   branches / assignees by **issue number rather than literal branch name**, and on a lost race
+   **abandon** — then diff your build against the winner's and post only findings you have verified:
+   execute the probe against a **trusted/routine-owned** winner's branch, but for an
+   **external-contributor** winner it is **static review only** (the trust gate is not relaxed by a
+   lost race). If an
    **actionable trusted-author** PR already
    exists, drive *that* one instead of duplicating — a non-draft to merge, a **routine-owned draft**
    to genuine readiness → self-promotion → merge (contract *Autonomy*); leave

@@ -190,7 +190,10 @@ governs the issue work that follows.) Two rules enforce that:
    external dependency (a specific upstream PR/release you can cite); or (c) it is too under-specified to
    even begin; or (d) a delivered experiment is awaiting its **named, future measurement date**, which
    is recorded on the issue and has not elapsed. Once that date arrives, measuring and recording the
-   decision is actionable work. **Size, difficulty, architectural weight, a
+   decision is actionable work; or (e) another instance holds a **live claim** on it — assigned **and**
+   branched, within the ~2h window, no PR yet (see *Claim protocol*). (e) is the only skip reason that
+   expires on its own: once the window lapses with no PR, the issue is fair game again.
+   **Size, difficulty, architectural weight, a
    `roadmap`/`enhancement`/`security`/`performance`/`repo-assist`/`automation` label, or a vague
    "maintainer-hot" feel are NOT valid skip reasons.** A large or hard issue **is the work, not an excuse
    to pass it over**: when the oldest actionable issue is big, **decompose it into a small, well-specified
@@ -256,7 +259,10 @@ late to prevent the collision. Measured on `world-at-ruin` (2026-07-18): **six e
 discarded in ~24 hours** — #66 built to completion twice over, #81 lost after a full build with a
 committed golden and five negative controls, #86 lost 12 minutes after filing, #88 lost by **52
 seconds**, #96 lost by **135 seconds**. Every one was correct, validated work; only the coordination
-failed. So, on every repo:
+failed. So, on every **in-scope `devantler-tech`** repo — claiming is a *write* action (an assignment
+and a pushed branch), so the *Professional-work repository boundary* below still wins outright: never
+claim, probe, or push anywhere that boundary has not been cleared, and nothing here licenses a first
+touch of an unconfirmed repo:
 
 1. **Check three signals before selecting, not one:** open PRs, remote `claude/*` branches, and issue
    assignees. An assignee here means "an instance has claimed this", **not** "the human maintainer
@@ -272,23 +278,41 @@ failed. So, on every repo:
    (b) push the branch — both cheap, visible and reversible — and only **then** harden (tests,
    ablations, docs, comments). Opening the **draft PR after the first real commit** is stronger still
    and is the recommended default. A pre-flight scan with no branch and no PR is **not** a claim.
-3. **Claims expire.** A claim carrying no open PR after **~2 hours** is stale and may be taken over,
-   so a crashed or abandoned session never parks an issue permanently. This is what keeps the rule
-   compatible with *"a bare assignee does not reserve an issue"* above: the claim is time-boxed, not a
-   lock.
+   **Put the issue number IN the claim branch name** — `claude/<area>-<desc>-<issue>` (e.g.
+   `claude/war-foliage-spatial-hash-109`). Before a PR exists there is no body to grep, so a bare
+   `claude/<area>-<desc>` leaves a rival only the normalised-stem match that #96 proved fragile; the
+   number is the one token that cannot be spelled two ways.
+3. **Claims expire, timed from the ASSIGNMENT.** A claim carrying no open PR after **~2 hours** is
+   stale and may be taken over, so a crashed or abandoned session never parks an issue permanently.
+   Measure that window from the issue's **`assigned` timeline event**
+   (`gh api repos/<o>/<r>/issues/<n>/timeline --jq '.[]|select(.event=="assigned")|.created_at'`),
+   **never from the branch's commit date** — a claim branch usually points at the base commit, whose
+   date is far older, so a fresh claim would read as long expired. If an issue is assigned with no
+   branch, or branched with no assignment, treat it as no claim at all. This time-boxing is what keeps
+   the rule compatible with *"a bare assignee does not reserve an issue"* above: a claim is a short
+   lease, not a lock.
 4. **Re-verify immediately before the first push.** The residual window is seconds wide but real
    (that is exactly how #88 and #96 were lost) — this is the backstop, not the primary mechanism.
 5. **On a lost race, ABANDON.** Never duplicate the work, never force-push onto a sibling's branch,
    never open a competing PR. Then **use the loss**: two independent implementations of one spec are
    a free **differential-testing oracle**. Diff yours against the winner's and post **only findings
-   you have executed against their code** — on w-a-r#88 that surfaced a real integer-overflow gap the
-   merged twin shared. Likewise, a review you obtained on your own losing PR **audits the winner
-   too**: re-check its findings against `main` before discarding them (that is how the merged
-   armour guard's membership-vs-mapping gap was found).
+   you have verified** — on w-a-r#88 that surfaced a real integer-overflow gap the merged twin shared.
+   **How you verify depends on who won, and the trust gate is not relaxed here:** against a
+   **trusted/routine-owned** winner, execute the probe on their branch; against an
+   **external-contributor** winner, it is **static review ONLY** — never check out, build, run or
+   probe their branch, exactly as the trust gate requires, and say plainly in the finding that it is
+   reasoned from the diff rather than executed. Likewise, a review you obtained on your own losing PR
+   **audits the winner too**: re-check its findings against `main` before discarding them (that is how
+   the merged armour guard's membership-vs-mapping gap was found).
 
-None of this licenses skipping an older actionable issue because it *looks* contested — the skip
-test in *Drain oldest-first* is unchanged. It only moves the claim to the start of the build, where
-it can actually prevent waste.
+**A live claim is a temporary skip — the one addition to the skip test.** *Drain oldest-first* lists
+when an older issue may be passed over; a **live claim** (assigned **and** branched, inside the ~2h
+window, no PR yet) now joins it as skip reason **(e)**, and it is the only one that expires on its
+own. Without that, an oldest issue carrying a fresh claim would be both un-takeable and un-skippable —
+which either stalls the queue or recreates the duplicate build the protocol exists to prevent. Note it
+in the report as claimed-elsewhere and move to the next actionable issue; if it is still branch-only
+after the window, it is fair game again. **Nothing else in that test changes** — in particular, an
+issue is never skipped merely because it *looks* contested, is large, or is hard.
 
 ### Professional-work repository boundary — hard exclusion
 Repositories connected to the maintainer's employment or professional obligations are
