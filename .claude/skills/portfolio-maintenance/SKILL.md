@@ -343,8 +343,11 @@ actionable open issue**, and any new non-trivial find is **filed as an issue fir
 backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
 7. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
    open issue that's actually startable; skip one only if it's blocked, too under-specified to begin, or
-   it already has an open PR. A **bare assignee does *not* reserve** an issue (only an open PR does), so
-   if nobody has opened one you may pick it up regardless of who's assigned. If it **already has an
+   it already has an open PR. A **bare assignee does *not* reserve** an issue **indefinitely** — an
+   assignment plus a **pushed branch** is a live claim for ~2h (contract *Claim protocol*), and with no
+   branch, or once that lapses with no PR, you may pick it up regardless of who's assigned. **Claim
+   before you build:** self-assign + push the branch the moment you select, checking open PRs, remote
+   `claude/*` branches AND assignees by **issue number, never literal branch name**. If it **already has an
    actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
    automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
    **external** PRs static-review-only (trust gate). Otherwise ship it: tests +

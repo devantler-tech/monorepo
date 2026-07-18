@@ -118,8 +118,13 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    **ship the decision as a draft PR** (he steers there) — never a passive "awaiting-maintainer" note, never
    the end-of-run report (he rarely reads it), never an **`@devantler` mention** (no notification). Re-verify
    any "gated" against live state before trusting it (memory goes stale) and name the
-   blocker in the report. A **bare assignee does *not* reserve** it (only an open PR does), so if nobody's opened
-   a PR you may take it regardless of who's assigned; if an **actionable trusted-author** PR already
+   blocker in the report. A **bare assignee does *not* reserve** it **indefinitely** — an assignment plus a
+   **pushed branch** is a live claim for ~2h (contract *Claim protocol*); with no branch, or once that
+   lapses with no PR, you may take it regardless of who's assigned. **Claim the lane before you build**
+   (self-assign + push the branch, then harden), check open PRs / remote `claude/*` branches / assignees
+   by **issue number rather than literal branch name**, and on a lost race **abandon** — then diff your
+   build against the winner's and post only findings you have executed against their code. If an
+   **actionable trusted-author** PR already
    exists, drive *that* one instead of duplicating — a non-draft to merge, a **routine-owned draft**
    to genuine readiness → self-promotion → merge (contract *Autonomy*); leave
    automation-owned dependency PRs to repository automation, other authors' drafts to their owners,

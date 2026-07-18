@@ -226,8 +226,10 @@ governs the issue work that follows.) Two rules enforce that:
    KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
    interactive-PR HANDS-OFF rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
    about an *issue's* label or its bot author. **A bare
-   assignee does *not* reserve an issue:** if nobody has opened a PR for it, you may pick it up
-   regardless of who is assigned — an assignment alone is not work-in-progress. If an issue **already
+   assignee does *not* reserve an issue INDEFINITELY:** an assignment paired with a **pushed branch**
+   is a *live claim* for ~2 hours (see *Claim protocol* below); with no branch, or once that window
+   has elapsed with no open PR, you may pick the issue up regardless of who is assigned — a stale
+   assignment is never work-in-progress. If an issue **already
    has an open PR**, don't duplicate it: drive an **actionable trusted-author** PR to merge per *Merge
    policy* (a **routine-owned** draft: drive it to genuine readiness and self-promote per *Autonomy*;
    another trusted author's draft gets hygiene only — its owner promotes); leave
@@ -244,6 +246,45 @@ dependency PRs — see *Merge policy*;
 PRs always come before issues) → resolve the oldest actionable issue → capture any new finds as
 issues.** And **keep going** — don't stop after a few items;
 work until actionable work is exhausted or blocked (see *Cadence & focus*).
+
+### Claim protocol — reserve the lane before you build
+This brain runs as **several instances at once**, all executing "pick the oldest actionable issue"
+over the same backlog. Two sessions surveying minutes apart will reliably pick the same issue —
+convergence is the **expected** behaviour of the selection rule, not bad luck. And because an open PR
+only exists at the **end** of a build, the one recognised claim signal arrives exactly when it is too
+late to prevent the collision. Measured on `world-at-ruin` (2026-07-18): **six end-to-end builds
+discarded in ~24 hours** — #66 built to completion twice over, #81 lost after a full build with a
+committed golden and five negative controls, #86 lost 12 minutes after filing, #88 lost by **52
+seconds**, #96 lost by **135 seconds**. Every one was correct, validated work; only the coordination
+failed. So, on every repo:
+
+1. **Check three signals before selecting, not one:** open PRs, remote `claude/*` branches, and issue
+   assignees. **Match on the issue NUMBER or a normalised stem — never the literal branch name.** On
+   #96 two sessions collided on `claude/war-armour-…` versus `claude/war-armor-…`: the repo's code is
+   American, the issue's title British, so each session derived a different stem from a different part
+   of the same issue and neither's exact-name scan could see the other. Grepping open PR *bodies* for
+   `#<issue>` is spelling-proof; so is `--search "<issue> in:body"`.
+2. **Claim before you build, not after.** The moment you select an issue, (a) self-assign it and
+   (b) push the branch — both cheap, visible and reversible — and only **then** harden (tests,
+   ablations, docs, comments). Opening the **draft PR after the first real commit** is stronger still
+   and is the recommended default. A pre-flight scan with no branch and no PR is **not** a claim.
+3. **Claims expire.** A claim carrying no open PR after **~2 hours** is stale and may be taken over,
+   so a crashed or abandoned session never parks an issue permanently. This is what keeps the rule
+   compatible with *"a bare assignee does not reserve an issue"* above: the claim is time-boxed, not a
+   lock.
+4. **Re-verify immediately before the first push.** The residual window is seconds wide but real
+   (that is exactly how #88 and #96 were lost) — this is the backstop, not the primary mechanism.
+5. **On a lost race, ABANDON.** Never duplicate the work, never force-push onto a sibling's branch,
+   never open a competing PR. Then **use the loss**: two independent implementations of one spec are
+   a free **differential-testing oracle**. Diff yours against the winner's and post **only findings
+   you have executed against their code** — on w-a-r#88 that surfaced a real integer-overflow gap the
+   merged twin shared. Likewise, a review you obtained on your own losing PR **audits the winner
+   too**: re-check its findings against `main` before discarding them (that is how the merged
+   armour guard's membership-vs-mapping gap was found).
+
+None of this licenses skipping an older actionable issue because it *looks* contested — the skip
+test in *Drain oldest-first* is unchanged. It only moves the claim to the start of the build, where
+it can actually prevent waste.
 
 ### Professional-work repository boundary — hard exclusion
 Repositories connected to the maintainer's employment or professional obligations are
