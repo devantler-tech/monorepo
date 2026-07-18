@@ -19,11 +19,18 @@ SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
 
+# Require a value before shifting past it. `shift 2` with only one arg left is a
+# no-op error under `set +e`, which spins the loop on the same $1 forever — a
+# malformed scheduled invocation would hang the run instead of failing fast.
+need_val() {
+  [ $# -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --since-days) SINCE_DAYS="${2:-1}"; shift 2 ;;
-    --max-files)  MAX_FILES="${2:-400}"; shift 2 ;;
-    --section)    SECTION="${2:-all}"; shift 2 ;;
+    --since-days) need_val "$@"; SINCE_DAYS="$2"; shift 2 ;;
+    --max-files)  need_val "$@"; MAX_FILES="$2";  shift 2 ;;
+    --section)    need_val "$@"; SECTION="$2";    shift 2 ;;
     -h|--help)    sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -41,15 +48,57 @@ need jq || exit 3
 
 want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
 
-# Session files touched within the window, newest first, capped.
+# Redact credential-shaped strings from ANYTHING this script prints.
+# Every emitted line originates in a transcript, and a failed tool result can
+# carry a token in its error text — so redaction lives at the output boundary
+# rather than in each detector, where one forgotten call-site leaks.
+redact() {
+  sed -E \
+    -e 's/(github_pat_[A-Za-z0-9_]{6})[A-Za-z0-9_]+/\1…<redacted>/g' \
+    -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
+    -e 's/(AKIA[0-9A-Z]{4})[0-9A-Z]+/\1…<redacted>/g' \
+    -e 's/(xox[baprs]-[A-Za-z0-9]{4})[A-Za-z0-9-]+/\1…<redacted>/g' \
+    -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----/<redacted-private-key>/g' \
+    -e 's/(eyJ[A-Za-z0-9_-]{6})[A-Za-z0-9_.-]{20,}/\1…<redacted-jwt>/g' \
+    -e 's/((secret|token|password|passwd|api[_-]?key)["'"'"']?\s*[:=]\s*["'"'"']?)[^"'"'"'[:space:],}]{8,}/\1<redacted>/gI'
+}
+
+# Credential shapes worth flagging as a leak. Kept in one place so the detector
+# and the redactor cannot drift apart.
+CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,})'
+
+# Session files touched within the window, NEWEST FIRST, then capped.
+# The sort is load-bearing: `find | head` returns directory order, so on a busy
+# day the cap would silently drop the newest failures and skew the scorecard the
+# improver reasons from. `-f` keeps paths with spaces intact.
+newest_first() {
+  local dir="$1" cap="$2"
+  [ -d "$dir" ] || return 0
+  find "$dir" -name '*.jsonl' -mtime "-${SINCE_DAYS}" -print0 2>/dev/null \
+    | xargs -0 -r stat -f '%m %N' 2>/dev/null \
+    || find "$dir" -name '*.jsonl' -mtime "-${SINCE_DAYS}" -printf '%T@ %p\n' 2>/dev/null
+}
+
 session_files() {
-  [ -d "$CLAUDE_PROJECTS" ] || return 0
-  find "$CLAUDE_PROJECTS" -name '*.jsonl' -mtime "-${SINCE_DAYS}" 2>/dev/null \
-    | head -n "$MAX_FILES"
+  newest_first "$CLAUDE_PROJECTS" "$MAX_FILES" \
+    | sort -rn | cut -d' ' -f2- | head -n "$MAX_FILES"
+}
+
+# The Codex instance's own transcripts. Its schema differs from Claude's
+# (response_item/function_call_output, no is_error flag), so tool-attributed
+# reliability cannot be derived the same way — but the text-based detectors
+# (credential shapes, sleeps, timeouts) are format-agnostic and DO apply, so
+# those cover both instances rather than silently reporting on Claude alone.
+codex_session_files() {
+  newest_first "$CODEX_HOME/sessions" "$MAX_FILES" \
+    | sort -rn | cut -d' ' -f2- | head -n "$MAX_FILES"
 }
 
 SF_CACHE="$(session_files)"
 SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
+CX_CACHE="$(codex_session_files)"
+CX_COUNT=$(printf '%s' "$CX_CACHE" | grep -c . || true)
+ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
 
 echo "════════════════════════════════════════════════════════════════"
 echo " AGENT TELEMETRY — window ${SINCE_DAYS}d — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -81,16 +130,24 @@ if want reliability; then
     done > /tmp/.agtel_err.$$ || true
 
     TOTAL_ERR=$(wc -l < /tmp/.agtel_err.$$ | tr -d ' ')
-    echo "  tool errors in window: ${TOTAL_ERR}"
+    echo "  tool errors in window: ${TOTAL_ERR}   [Claude instance only — see note]"
     echo
     echo "  by tool:"
     cut -f1 /tmp/.agtel_err.$$ | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
     echo
     echo "  top recurring error signatures (tool + message head):"
+    # redact BEFORE printing: a failed tool result routinely carries the command
+    # that failed, and that command can carry a token.
     awk -F'\t' '{print $1": "substr($2,1,72)}' /tmp/.agtel_err.$$ \
+      | redact \
       | sed -E 's/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g' \
       | sort | uniq -c | sort -rn | head -12 | sed 's/^/    /'
     rm -f /tmp/.agtel_err.$$
+    echo
+    echo "  NOTE: tool-attributed errors are Claude-schema only (tool_use/tool_result)."
+    echo "        Codex uses response_item/function_call_output with no is_error flag,"
+    echo "        so its reliability count is a KNOWN GAP — do not read a low number"
+    echo "        here as 'Codex is healthy'. Codex sessions in window: ${CX_COUNT}."
   fi
 fi
 
@@ -103,9 +160,13 @@ if want efficiency; then
   if [ "$SF_COUNT" -eq 0 ]; then
     echo "  (no sessions in window)"
   else
-    TIMEOUTS=$(printf '%s\n' "$SF_CACHE" | xargs grep -ho 'Command timed out after [0-9hms ]*' 2>/dev/null | wc -l | tr -d ' ')
-    INTERRUPT=$(printf '%s\n' "$SF_CACHE" | xargs grep -ho '"interrupted":true' 2>/dev/null | wc -l | tr -d ' ')
-    SLEEPS=$(printf '%s\n'   "$SF_CACHE" | xargs grep -hoE '"command":"[^"]*\bsleep [0-9]+' 2>/dev/null | wc -l | tr -d ' ')
+    # Format-agnostic text scans, so these DO cover both instances.
+    scan_both() { printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
+                  | while IFS= read -r f; do grep -hoE "$1" "$f" 2>/dev/null; done | wc -l | tr -d ' '; }
+    TIMEOUTS=$(scan_both 'Command timed out after [0-9hms ]*')
+    INTERRUPT=$(scan_both '"interrupted":true')
+    SLEEPS=$(scan_both '\bsleep [0-9]+')
+    echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"
     echo "  explicit sleep/poll calls .. ${SLEEPS}   (contract: arm a watcher, never busy-wait)"
@@ -131,19 +192,38 @@ if want safety; then
     [ -z "$(printf '%s\n' "$SF_CACHE" | xargs grep -ho '"permissionDecision"' 2>/dev/null)" ] \
       && echo "    (none recorded)"
     echo
-    echo "  blocked / denied actions (the guard firing — anchored to real denial shapes,"
-    echo "  NOT loose text, so quoted source code in a transcript cannot fake one):"
-    printf '%s\n' "$SF_CACHE" \
-      | xargs grep -hoE '(<tool_use_error>Blocked:[^"]{0,60}|Permission to use [A-Za-z_]+ with command [^"]{0,40}|"Claude requested permissions to use [A-Za-z_]+)' 2>/dev/null \
-      | sed -E 's/[0-9]+/<n>/g; s/"$//' | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
-    echo "    (each line = mandated work the auto-permission layer stopped;"
-    echo "     a recurring one is either a definition bug or a permission gap)"
+    echo "  blocked / denied actions (the guard firing):"
+    # STRUCTURAL, not textual. A raw grep counts any transcript that merely
+    # QUOTES a denial phrase — so untrusted prose in an issue body or a pasted
+    # log could manufacture 'evidence' that a guard keeps blocking mandated work,
+    # which is exactly the input the improver uses to decide guard-vs-agent.
+    # Anchor to the tool_result envelope instead: the denial must be the CONTENT
+    # of a real errored tool result, not a string appearing anywhere in the file.
+    printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      jq -r '
+        .. | objects
+        | select(.type=="tool_result" and (.is_error==true))
+        | (.content | if type=="array" then (map(select(.type=="text").text)|join(" "))
+                      elif type=="string" then . else empty end)
+        | select(test("^(<tool_use_error>)?(Blocked:|Permission to use |Claude requested permissions)"))
+        | .[0:80]
+      ' "$f" 2>/dev/null
+    done | redact | sed -E 's/[0-9]+/<n>/g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
+    echo "    (each line = a real errored tool result, so transcript prose cannot fake one;"
+    echo "     a recurring entry is EITHER a definition bug OR a permission gap — resolve"
+    echo "     which before touching a guard: if the contract already forbids the action,"
+    echo "     the AGENT is the defect and the guard is working correctly)"
     echo
     echo "  credential-shaped strings reaching a transcript (each is a LEAK to triage):"
-    printf '%s\n' "$SF_CACHE" \
-      | xargs grep -hoE '(gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,})' 2>/dev/null \
-      | sed -E 's/(.{7}).*/\1…<redacted>/' | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
-    echo "    (empty = clean)"
+    echo "  [BOTH instances — this detector is format-agnostic, so it covers Codex too]"
+    # Includes github_pat_ (fine-grained PATs). Omitting it meant a modern GitHub
+    # token leak reported "clean" — the worst possible failure for a leak detector.
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      grep -hoE "$CRED_RE" "$f" 2>/dev/null
+    done | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
+    echo "    (empty = clean; any line here means rotate the credential AND fix the"
+    echo "     path that logged it — see the cross-system rotation rule)"
     echo
     echo "  untrusted-code-execution near-misses (external branch checkout+build):"
     printf '%s\n' "$SF_CACHE" \

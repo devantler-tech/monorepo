@@ -112,6 +112,63 @@ sed -i.bak 's/ definition\/self-improvement PRs are the one exception: NEVER sel
 OUT=$(run --section drift)
 nocheck "no drift reported once loaders agree" "$OUT" "⚠️  DRIFT"
 
+# ── 6b. regression guards for the Codex review findings on PR #2251 ───────────
+# Each of these reproduced a real defect; they stay as guards because every one
+# of them failed silently in a way that looked like a clean result.
+echo
+echo "review-finding regressions"
+
+mkdir -p "$FIX/projects/leak" "$FIX/codex/sessions"
+# A REAL errored tool result carrying a token, plus benign USER TEXT that merely
+# QUOTES a denial phrase and a fine-grained PAT.
+cat > "$FIX/projects/leak/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"e1","name":"Bash","input":{"command":"git push"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"e1","is_error":true,"content":[{"type":"text","text":"fatal: bad creds ghp_BBBBBBBBBBBBBBBBBBBBBBBB here"}]}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"quoting a log: Permission to use Bash with command rm -rf / plus github_pat_11ZZZZZZZ0123456789_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"e1","is_error":true,"content":[{"type":"text","text":"<tool_use_error>Blocked: sleep 30 followed by: cat x"}]}]}}
+EOF
+# Codex-format session: proves the format-agnostic detectors cover it.
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 99\"}"}}' \
+  > "$FIX/codex/sessions/r.jsonl"
+
+runleak() {
+  CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" \
+  CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
+  bash "$TARGET" --since-days 3650 --max-files 50 "$@" 2>&1
+}
+
+OUT=$(runleak --section reliability)
+nocheck "P1: never echoes a token in an error signature" "$OUT" "ghp_BBBBBBBBBBBBBBBBBBBBBBBB"
+
+OUT=$(runleak --section safety)
+# Injection resistance: quoted prose is NOT a guard firing; a real errored
+# tool_result IS. Conflating them lets transcript text manufacture the evidence
+# the improver uses to decide whether to loosen a guard.
+nocheck "P2: quoted prose is not counted as a denial" "$OUT" "rm -rf"
+check   "P2: a real errored tool_result is still counted" "$OUT" "Blocked:"
+nocheck "P2: never echoes a fine-grained PAT"  "$OUT" "github_pat_11ZZZZZZZ0123456789_abcdefghijklmnop"
+if printf '%s' "$OUT" | grep -qE 'github_pat_[A-Za-z0-9_]{4,}…<redacted>'; then
+  ok "P2: fine-grained PAT detected AND redacted"
+else bad "P2: fine-grained PAT detected AND redacted" "not flagged"; fi
+
+OUT=$(runleak --section efficiency)
+check "P2: Codex sessions feed the detectors" "$OUT" "BOTH instances"
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. [1-9]'; then
+  ok "P2: a Codex-format sleep is counted"
+else bad "P2: a Codex-format sleep is counted" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+
+# P3: a missing option value must fail fast, not spin forever on the same $1.
+# macOS has no `timeout`, so use a background watchdog.
+CLAUDE_PROJECTS_DIR="$FIX/projects" HOME="$FIX" bash "$TARGET" --since-days >/dev/null 2>&1 &
+_pid=$!
+( sleep 10; kill -9 $_pid 2>/dev/null ) & _wd=$!
+wait $_pid; _rc=$?
+kill -9 $_wd 2>/dev/null; wait $_wd 2>/dev/null
+if [ "$_rc" -eq 2 ]; then ok "P3: missing option value exits 2 (no hang)"
+elif [ "$_rc" -eq 137 ]; then bad "P3: missing option value exits 2" "HUNG until killed"
+else bad "P3: missing option value exits 2" "rc=$_rc"; fi
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"
