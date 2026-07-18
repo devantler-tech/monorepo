@@ -89,9 +89,19 @@ fetch_open_heads() {
 # --- KEEP set -------------------------------------------------------------
 keep=$(mktemp); prs=$(mktemp); keep2=$(mktemp)
 trap 'rm -f "$keep" "$prs" "$keep2"; return_to_default' EXIT
+# Capture the worktree enumeration SEPARATELY and ABORT on failure: the REMOTE
+# delete loop trusts this one snapshot for its worktree KEEP rule (the local loop
+# re-checks per branch, the remote loop does not), so a silently-empty list here
+# could let a checked-out claude/* branch with merged/closed PR evidence have its
+# upstream deleted — violating the documented worktree KEEP guarantee. A failed
+# enumeration means the keep-set cannot be trusted.
+if ! wt_branches=$(git worktree list --porcelain 2>/dev/null); then
+  echo "$SLUG: ABORT — worktree enumeration failed; keep-set cannot be trusted" >&2
+  exit 1
+fi
 {
   fetch_open_heads
-  git worktree list --porcelain 2>/dev/null | awk '/^branch /{sub("refs/heads/","",$2); print $2}'
+  printf '%s\n' "$wt_branches" | awk '/^branch /{sub("refs/heads/","",$2); print $2}'
   printf '%s\n' "$DEFAULT"
 } >>"$keep"
 
@@ -107,6 +117,18 @@ if ! gh pr list --repo "devantler-tech/$SLUG" --state all --limit 1000 \
 fi
 
 is_kept() { grep -Fxq "$1" "$keep"; }
+
+# HANDS-OFF the maintainer's INTERACTIVE Claude work. The maintainer also drives
+# Claude Code interactively; those sessions use the harness's random-slug worktree
+# branch `claude/<adjective>-<name>-<6hex>` (e.g. claude/unruffled-kepler-f3e922),
+# marked HANDS-OFF in AGENTS.md. This routine's OWN branches are `claude/<area>-<desc>`
+# and never carry a trailing 6-hex slug, so skip anything that does — fail-closed (an
+# ambiguous match is KEPT, never reaped), so a merged/closed interactive PR's branch is
+# never mistaken for one of this routine's spent per-run worktrees.
+is_interactive_slug() {
+  local last="${1##*-}"
+  [[ "$last" =~ ^[0-9a-f]{6}$ ]]
+}
 pr_evidence() { awk -F'\t' -v b="$1" '$1==b{print $2 "\t" $3; exit}' "$prs"; }
 
 l_del=0; r_del=0; l_keep=0; r_keep=0; candidates=0; r_rej=0
@@ -115,6 +137,7 @@ l_del=0; r_del=0; l_keep=0; r_keep=0; candidates=0; r_rej=0
 while IFS= read -r b; do
   [ -z "$b" ] && continue
   if is_kept "$b"; then l_keep=$((l_keep+1)); continue; fi
+  if is_interactive_slug "$b"; then l_keep=$((l_keep+1)); continue; fi
   sha=$(git rev-parse "$b" 2>/dev/null) || continue
   # Never lose unpushed work: delete only when the tip is reachable from SOME
   # remote ref, OR a MERGED/CLOSED PR accounts for this exact sha (a
@@ -161,6 +184,7 @@ while IFS= read -r rb; do
   b="${rb#origin/}"
   [ -z "$b" ] && continue
   if re_kept "$b"; then r_keep=$((r_keep+1)); continue; fi
+  if is_interactive_slug "$b"; then r_keep=$((r_keep+1)); continue; fi
   sha=$(git rev-parse "$rb" 2>/dev/null) || { r_keep=$((r_keep+1)); continue; }
   ev=$(pr_evidence "$b"); st="${ev%%$'\t'*}"; ev_sha="${ev#*$'\t'}"
   if [ "$st" != "MERGED" ] && [ "$st" != "CLOSED" ]; then

@@ -923,7 +923,9 @@ for each repo touched — a branch still checked out by your own worktree sits i
 sweep run before the worktree removal silently spares the very branch the tick just spent.
 
 **🔴 Deleting a remote branch CLOSES its open PR — so the keep-set is the whole safety property:**
-- **KEEP:** the head of an **OPEN PR**; any branch **checked out by a worktree**; the default branch; and
+- **KEEP:** the head of an **OPEN PR**; any branch **checked out by a worktree**; the default branch;
+  the maintainer's **interactive random-slug** branches `claude/<adjective>-<name>-<6hex>` (HANDS-OFF —
+  never reaped even with a merged/closed PR, since they were never this routine's per-run worktree); and
   anything not `claude/*` (**never touch `codex/*` — the sibling's lane**).
 - **`git branch --merged main` is USELESS here** — the portfolio **squash-merges**, so a merged branch's
   commits are never in `main`. For the same reason `commits-not-in-main > 0` does **NOT** mean unmerged
