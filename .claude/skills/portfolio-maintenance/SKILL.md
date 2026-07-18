@@ -95,7 +95,9 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   green-review state** — so a run can
   **drain all five**, not just threads. **(e) green review:** nothing may be self-promoted without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
-  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|none>`.
+  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|none>`
+  (`self@<sha>` = the last-resort agent self-review on an **own** PR when both lanes are down —
+  contract *Autonomy → Fallback — agent self-review*; never on a bot-authored PR).
   Fetch `headRefOid` while deepening every actionable own/trusted PR. A CodeRabbit `APPROVED` review counts only
   when its REST `commit_id` equals that head; report an older approval as stale, and a current-head
   CodeRabbit review carrying findings as `cr-findings@<sha>`. For Codex, sweep

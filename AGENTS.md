@@ -1168,7 +1168,9 @@ non-trivial finds as issues (see *Issue-driven*).
 outranks starting new work. Each run, before opening any **new** draft, first drive **every own
 in-flight PR** to its terminal state: clear its hygiene pentad (green CI + all CodeRabbit/bot threads
 resolved + green CodeRabbit pre-merge checks + not conflicting with main + ≥1 green review from
-CodeRabbit or Codex), complete the user-evaluation condition, **self-promote, and merge it** (per
+CodeRabbit or Codex — or, when both lanes are down, a qualifying agent self-review, which likewise
+makes an unposted pre-merge summary a non-gap; see *Fallback — agent self-review*), complete the
+user-evaluation condition, **self-promote, and merge it** (per
 *Merge policy*) — or leave it a draft with the missing readiness condition or external blocker
 explicitly named. Only once your own open PRs are each either **merged or named-blocker-parked** do
 you start a new advance slice. The *waste* this targets is a pile of **half-finished** own PRs —

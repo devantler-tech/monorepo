@@ -180,10 +180,16 @@ public and private — no per-repo loop needed to enumerate):
      count and no positive `❌`, `❓`, or `⚠️` counter; mixed results such as `✅ 4 | ❌ 1` are failed.
      A full summary is green only when every listed check is explicitly passed and no
      error/inconclusive result appears — absence of a failed heading alone is insufficient. Report
-     exactly `premerge=<green|failed:<names>|failed:unnamed|inconclusive|not-posted>`:
+     exactly `premerge=<green|failed:<names>|failed:unnamed|inconclusive|not-posted|exempt-lanes-down>`:
      `inconclusive` means a recognized but non-green/unparseable summary; `not-posted` means no
      supported marker. Always fail closed. Any non-green value makes the PR **NEEDS-FIX** even when
-     checks/threads/body_findings are clean.
+     checks/threads/body_findings are clean — with ONE exception: report
+     **`exempt-lanes-down`** when no summary was posted *because CodeRabbit demonstrably did not
+     review* and the PR carries a qualifying `green_review=self@<sha>` (contract *Autonomy → Fallback
+     — agent self-review*). CodeRabbit's evaluator only runs when CodeRabbit reviews, so this is the
+     same lane-choice consequence already tolerated for a Codex-lane green — not a licence to soften
+     the surface: a **posted** non-green/inconclusive summary still fails closed and is NEEDS-FIX, and
+     `not-posted` without a qualifying self-review stays NEEDS-FIX as before.
    - **Candidate maintainer comments on `devantler` PRs (incl. drafts, AND recently-MERGED ones) —
      disclosure- and ownership-gated.** Under self-promotion-on-genuine-readiness the maintainer's
      post-merge PR comment is a primary steering channel, and an open-PR-only sweep would never
