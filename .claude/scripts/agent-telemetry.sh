@@ -681,6 +681,17 @@ if want safety; then
       # Compounds split on `;&|` — the shell separators the generic value
       # class admits; none appears in any token alphabet, so splitting costs
       # no true positives.
+      # KNOWN IDENTITY LIMITS (deliberate, do not "fix" by carrying values):
+      # (a) PEM rows count header lines and the JWT alternative stops at
+      #     header.payload, so N distinct keys/signatures can read as one row —
+      #     the operator action (triage, rotate) is identical either way, and
+      #     hashing full key material through more pipeline stages contradicts
+      #     the value-minimisation this table exists for. Counts are
+      #     DIRECTIONAL, as the report banner states.
+      # (b) A generic value legitimately containing `;&|` splits into extra
+      #     weak-bucket rows; the asymmetry is chosen — a splittable fragment
+      #     only ever reaches a high-signal row by passing a FULL shape regex,
+      #     while not splitting silently drops a real second credential.
       { jq -Rr 'select(length>0)|(try (fromjson|..|strings) catch empty)' "$f" 2>/dev/null; \
         cat "$f" 2>/dev/null; } \
         | sed -E "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" \
