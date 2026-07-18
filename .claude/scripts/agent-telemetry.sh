@@ -103,6 +103,22 @@ rx_escape()    { printf '%s' "$1" | sed 's|[].[^$*/\\+?(){}|]|\\&|g'; }
 # silently admits a differently-named (possibly professional) repository. The
 # only legitimate continuation of a project slug is Claude's worktree marker
 # `--`; a single `-` starts a DIFFERENT repository name.
+# The `--git-modules-<path>` marker must name a REAL submodule, not any suffix:
+# a neighbouring repo slugged `monorepo--git-modules-client` matched the loose
+# form. Derived from .gitmodules, same source as the scope paths themselves.
+submodule_slug_alternation() {
+  local out=""
+  if [ -f "$MONOREPO/.gitmodules" ]; then
+    out=$(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.path$' 2>/dev/null \
+          | awk '{print $2}' | while IFS= read -r sub; do
+              [ -n "$sub" ] && printf '%s|' "$(rx_escape "$(printf '%s' "$sub" | tr '/' '-')")"
+            done | sed 's/|$//')
+  fi
+  # No submodules (or none readable) => match nothing, rather than everything.
+  printf '%s' "${out:-__no_submodules__}"
+}
+SUBMOD_RE=$(submodule_slug_alternation)
+
 PORTFOLIO_SLUG_RE=$(
   printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
   | while IFS= read -r p; do
@@ -113,7 +129,7 @@ PORTFOLIO_SLUG_RE=$(
       # `monorepo--client` slugs to `…-monorepo--client` and would match. Only
       # Claude's per-session worktree marker and the submodule-path marker are
       # legitimate continuations; anything else is a different repository.
-      printf '/%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-[a-z0-9-]+)?/[^/]+\.jsonl$|' "$s"
+      printf '/%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-('"$SUBMOD_RE"'))?/[^/]+\.jsonl$|' "$s"
       # real path: must end at a component boundary
       printf '^%s(/|$)|' "$q"
     done | sed 's/|$//'
@@ -124,7 +140,7 @@ PORTFOLIO_SLUG_RE=$(
 PORTFOLIO_DIR_RE=$(
   printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
   | while IFS= read -r p; do
-      printf '%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-[a-z0-9-]+)?|' \
+      printf '%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-('"$SUBMOD_RE"'))?|' \
         "$(rx_escape "$(path_to_slug "$p")")"
     done | sed 's/|$//'
 )
@@ -151,7 +167,10 @@ want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
 # even when stdout is redacted, because the redactor only covers stdout.
 # Everything written here is redacted on the way IN as well.
 ERRTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_err.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
-trap 'rm -f "$ERRTMP"' EXIT HUP INT TERM
+# Remove on normal exit; on a SIGNAL also terminate, since a trap that only
+# cleans up leaves the script running after the scheduler asked it to stop.
+trap 'rm -f "$ERRTMP"' EXIT
+trap 'rm -f "$ERRTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 # Redact credential-shaped strings from ANYTHING this script prints.
 # Every emitted line originates in a transcript, and a failed tool result can
@@ -222,7 +241,8 @@ commands_in() {
         (select(.type=="custom_tool_call")
          | .input? // empty
          | select(type=="string")
-         | [scan("cmd:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")] | .[]? | .[0]?)
+         | [scan("cmd:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")] | .[]? | .[0]?
+         | gsub("\\\\n"; "\n") | gsub("\\\\t"; " ") | gsub("\\\\\""; "\""))
       )
     | select(type=="string") | select(length > 0)
   ' "$f" 2>/dev/null
@@ -493,7 +513,7 @@ if want efficiency; then
     SLEEPS=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
              | while IFS= read -r f; do commands_in "$f"; done \
              | strip_heredocs \
-             | grep -cE '(^|[;&|[:space:]])sleep[[:space:]]+["'"'"']?[$0-9{]' || true)
+             | grep -cE '(^|[;&|]|&&|\|\|)[[:space:]]*sleep[[:space:]]+["'"'"']?[$0-9{]' || true)
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"
@@ -594,8 +614,10 @@ if want safety; then
     # it. Same detector/redactor drift, new disguise. Raw is still scanned too,
     # so a malformed line cannot turn the leak scan into a silent no-op.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      # Dedupe per file: a credential visible in BOTH decoded and raw JSON was
+      # emitted twice, doubling every count in the leak table.
       { jq -r '.. | strings' "$f" 2>/dev/null; cat "$f" 2>/dev/null; } \
-        | grep -hoEi "$CRED_RE" 2>/dev/null
+        | grep -hoEi "$CRED_RE" 2>/dev/null | sort -u
     done | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
     echo "    (empty = clean; any line here means rotate the credential AND fix the"
     echo "     path that logged it — see the cross-system rotation rule)"

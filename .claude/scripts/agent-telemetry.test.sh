@@ -574,6 +574,14 @@ echo "round-5 regressions"
 # BOUNDARY HOLE, THIRD ITERATION. Allowing a bare `--` continuation still admits
 # a different repo: `monorepo--client` slugs to `…-monorepo--client`. Only the
 # two REAL markers are legitimate continuations of a project slug.
+# The git-modules marker now only matches REAL submodules, so the fixture
+# monorepo needs a .gitmodules declaring `platform` — otherwise fail-closed
+# (correctly) rejects the marker.
+mkdir -p "$FIX/fixmono"
+# %b (not %s) so the tab is a real tab — git config cannot parse a literal \t.
+printf '%b\n' '[submodule "platform"]' '\tpath = platform' '\turl = git@github.com:devantler-tech/platform.git' \
+  > "$FIX/fixmono/.gitmodules"
+( cd "$FIX/fixmono" && git init -q 2>/dev/null ) || true
 mkdir -p "$FIX/mark/-Users-x-git-personal-monorepo" \
          "$FIX/mark/-Users-x-git-personal-monorepo--claude-worktrees-wizardly-ellis-19cf5b" \
          "$FIX/mark/-Users-x-git-personal-monorepo--git-modules-platform" \
@@ -584,7 +592,7 @@ for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claud
 done
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m2","name":"Bash","input":{"command":"sleep 4"}}]}}' \
   > "$FIX/mark/-Users-x-git-personal-monorepo--client/s.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/mark" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/mark" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/fixmono" \
       PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
 if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 3'; then
