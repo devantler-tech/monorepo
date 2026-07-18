@@ -696,8 +696,10 @@ ladder is **✅ Done · 🚀 In Finalization · 🏃🏻‍♂️ In Progress ·
 **reversed order is deliberate**: finishing work sits leftmost so the board reads *stop starting, start
 finishing* (maintainer direction 2026-07-18). **Never re-order it into left-to-right flow**, and treat
 an over-limit column as a signal to finish rather than a limit to raise. A newly-filed issue lands in
-**📥 Backlog** unless you know better, and *never* in no-status. The board must carry at least a
-**kanban (board)**, a **backlog (table)** and a **roadmap (roadmap)** view; see its
+**📥 Backlog** unless you know better, and *never* in no-status. The board carries **exactly three
+views** — **kanban (board)**, **backlog (table)**, **roadmap (roadmap)** — and epic breakdown is a
+**grouping on the Backlog** (`Parent issue`), not a fourth view: **prefer an extra grouping/slice on an
+existing view over a new one** (maintainer direction 2026-07-18). See its
 [product card](.claude/skills/products/project-board/SKILL.md).
 
 Two mechanics make this a standing duty rather than something automation handles:

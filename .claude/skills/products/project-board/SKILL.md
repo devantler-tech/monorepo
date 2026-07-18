@@ -38,12 +38,17 @@ Until that is solved, backfill is a standing duty, not an exception.
 
 ## What "advance" means here
 
-- **Views.** The board must carry at least a **kanban (board)**, a **backlog (table)** and a **roadmap
-  (roadmap)** view, and should grow more as they earn their place (an epic-breakdown view grouped by
-  `Parent issue`; a per-product slice; a triage view). ⚠️ **Views are UI-only — there is NO GraphQL or
-  `gh` mutation to create or edit one.** Field and option changes are scriptable; view changes are the
-  maintainer's click or nothing. Propose view changes precisely (layout, filter string, grouping,
-  visible fields) so applying them is mechanical.
+- **Views — exactly three, and resist adding a fourth.** The board carries a **kanban (board)**, a
+  **backlog (table)** and a **roadmap (roadmap)** view. **Epic breakdown is a *grouping* on the
+  Backlog view (group by `Parent issue`), NOT a separate view** — maintainer direction 2026-07-18,
+  when a proposed fourth "By epic" view was folded into the Backlog instead. The principle
+  generalises: **prefer an extra grouping, slice or filter on an existing view over a new view.**
+  Every additional view is another surface to keep honest and another place for the maintainer to
+  look; a board with three well-configured views beats one with seven overlapping ones. Add a fourth
+  only when a genuine audience or cadence cannot be served by grouping an existing view.
+  ⚠️ **Views are UI-only — there is NO GraphQL or `gh` mutation to create or edit one.** Field and
+  option changes are scriptable; view changes need the browser. Propose them precisely (layout, filter
+  string, grouping, visible fields) so applying them is mechanical.
 - **Status semantics.** Options run **✅ Done → 🚀 In Finalization → 🏃🏻‍♂️ In Progress → 🫴 Ready →
   📥 Backlog → 🧊 Icebox**. The order is **deliberately reversed** — finishing work sits leftmost, so the
   board reads *stop starting, start finishing* (maintainer direction 2026-07-18). **Never re-order it
