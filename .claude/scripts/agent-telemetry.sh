@@ -113,7 +113,7 @@ PORTFOLIO_SLUG_RE=$(
       # `monorepo--client` slugs to `…-monorepo--client` and would match. Only
       # Claude's per-session worktree marker and the submodule-path marker are
       # legitimate continuations; anything else is a different repository.
-      printf '/%s(--claude-worktrees-[^/]*|--git-modules-[^/]*)?/[^/]+\.jsonl$|' "$s"
+      printf '/%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-[a-z0-9-]+)?/[^/]+\.jsonl$|' "$s"
       # real path: must end at a component boundary
       printf '^%s(/|$)|' "$q"
     done | sed 's/|$//'
@@ -124,7 +124,7 @@ PORTFOLIO_SLUG_RE=$(
 PORTFOLIO_DIR_RE=$(
   printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
   | while IFS= read -r p; do
-      printf '%s(--claude-worktrees-[^/]*|--git-modules-[^/]*)?|' \
+      printf '%s(--claude-worktrees-[a-z]+-[a-z]+-[0-9a-f]{6}|--git-modules-[a-z0-9-]+)?|' \
         "$(rx_escape "$(path_to_slug "$p")")"
     done | sed 's/|$//'
 )
@@ -277,7 +277,7 @@ tool_result_failure_text() {
                   or ((.status? // "") == "error")
                   or ((.is_error? == null) and (.status? == null)
                       and ((.output | tostring)
-                           | test("Command timed out after|Exit code [1-9]|command not found|Traceback \\(most recent|fatal: |error: |has been modified since read|non-fast-forward|rejected.*fetch first|would be overwritten by merge|Blocked:|Permission to use |approval (denied|required)"))))
+                           | test("^[[:space:]]*(Command timed out after|Exit code [1-9]|command not found|Traceback \\(most recent|fatal: |error: |has been modified since read|non-fast-forward|Blocked:|Permission to use |approval (denied|required))"))))
          | .output
          | if type=="array" then (map(.text? // empty)|join(" "))
            elif type=="string" then . else empty end)
@@ -564,8 +564,15 @@ if want safety; then
     echo "  [BOTH instances — this detector is format-agnostic, so it covers Codex too]"
     # Includes github_pat_ (fine-grained PATs). Omitting it meant a modern GitHub
     # token leak reported "clean" — the worst possible failure for a leak detector.
+    # Scan the DECODED strings as well as the raw file. A quoted secret
+    # (`api_key="abcdefghij"`) is stored in JSONL with ESCAPED quotes
+    # (`api_key=\"…\"`), so a raw grep sees a backslash where the value should
+    # begin and misses it — while redact(), which runs on decoded output, masks
+    # it. Same detector/redactor drift, new disguise. Raw is still scanned too,
+    # so a malformed line cannot turn the leak scan into a silent no-op.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      grep -hoEi "$CRED_RE" "$f" 2>/dev/null
+      { jq -r '.. | strings' "$f" 2>/dev/null; cat "$f" 2>/dev/null; } \
+        | grep -hoEi "$CRED_RE" 2>/dev/null
     done | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
     echo "    (empty = clean; any line here means rotate the credential AND fix the"
     echo "     path that logged it — see the cross-system rotation rule)"

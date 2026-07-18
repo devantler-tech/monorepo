@@ -441,10 +441,10 @@ echo
 echo "professional-work boundary"
 
 mkdir -p "$FIX/scoped/-Users-x-git-personal-monorepo" \
-         "$FIX/scoped/-Users-x-git-personal-monorepo--claude-worktrees-abc123" \
+         "$FIX/scoped/-Users-x-git-personal-monorepo--claude-worktrees-keen-proskuriakova-4c1726" \
          "$FIX/scoped/-Users-x-work-employer-secret-service" \
          "$FIX/scoped/-Users-x-Library-something-else"
-for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-abc123"; do
+for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-keen-proskuriakova-4c1726"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"sleep 11"}}]}}' \
     > "$FIX/scoped/$d/s.jsonl"
 done
@@ -493,9 +493,9 @@ echo "round-4 regressions"
 # name merely extends an allowlisted one. `monorepo-client` is the whole point —
 # a plausible professional repo sitting next to the portfolio one.
 mkdir -p "$FIX/anchor/-Users-x-git-personal-monorepo" \
-         "$FIX/anchor/-Users-x-git-personal-monorepo--claude-worktrees-a1" \
+         "$FIX/anchor/-Users-x-git-personal-monorepo--claude-worktrees-admiring-babbage-4af60d" \
          "$FIX/anchor/-Users-x-git-personal-monorepo-client"
-for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-a1"; do
+for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-admiring-babbage-4af60d"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash","input":{"command":"sleep 5"}}]}}' \
     > "$FIX/anchor/$d/s.jsonl"
 done
@@ -575,10 +575,10 @@ echo "round-5 regressions"
 # a different repo: `monorepo--client` slugs to `…-monorepo--client`. Only the
 # two REAL markers are legitimate continuations of a project slug.
 mkdir -p "$FIX/mark/-Users-x-git-personal-monorepo" \
-         "$FIX/mark/-Users-x-git-personal-monorepo--claude-worktrees-z9" \
+         "$FIX/mark/-Users-x-git-personal-monorepo--claude-worktrees-wizardly-ellis-19cf5b" \
          "$FIX/mark/-Users-x-git-personal-monorepo--git-modules-platform" \
          "$FIX/mark/-Users-x-git-personal-monorepo--client"
-for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-z9" "-Users-x-git-personal-monorepo--git-modules-platform"; do
+for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-wizardly-ellis-19cf5b" "-Users-x-git-personal-monorepo--git-modules-platform"; do
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"sleep 3"}}]}}' \
     > "$FIX/mark/$d/s.jsonl"
 done
@@ -669,6 +669,66 @@ printf '{"type":"user","message":{"content":[{"type":"text","text":"-----BEGIN P
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/shortpem" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 nocheck "a short PEM body line is redacted" "$OUT" "MIIBVgIBADANBgkqhkiG9w0BAQEF"
+
+# ── 6j. round-9 findings ──────────────────────────────────────────────────────
+echo
+echo "round-9 regressions"
+
+# A repo whose name IMITATES Claude's worktree marker must not be admitted. The
+# real marker has a fixed shape (adjective-name-hex6), verified against the live
+# store, so an imitation like `--claude-worktrees-client` no longer matches.
+mkdir -p "$FIX/imit/-Users-x-git-personal-monorepo" \
+         "$FIX/imit/-Users-x-git-personal-monorepo--claude-worktrees-keen-proskuriakova-4c1726" \
+         "$FIX/imit/-Users-x-git-personal-monorepo--claude-worktrees-client"
+for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-keen-proskuriakova-4c1726"; do
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"sleep 2"}}]}}' \
+    > "$FIX/imit/$d/s.jsonl"
+done
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"i2","name":"Bash","input":{"command":"sleep 9"}}]}}' \
+  > "$FIX/imit/-Users-x-git-personal-monorepo--claude-worktrees-client/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/imit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2'; then
+  ok "a repo imitating the worktree marker is excluded"
+else bad "a repo imitating the worktree marker is excluded" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+
+# A quoted secret is stored with ESCAPED quotes in JSONL; a raw grep misses it
+# while redact() (which runs on decoded output) masks it.
+mkdir -p "$FIX/escq"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"cfg api_key=\\"abcdefghijklmnop\\" done"}]}}\n' \
+  > "$FIX/escq/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/escq" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+nocheck "an escaped-quote secret is redacted" "$OUT" "abcdefghijklmnop"
+if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+[0-9]+ '; then
+  ok "an escaped-quote secret is also DETECTED"
+else bad "an escaped-quote secret is also DETECTED" "raw grep missed what redact() masks"; fi
+
+# A Codex log REPLAY (marker mid-stream) is not a fresh failure; a real failure
+# LEADS with its marker.
+mkdir -p "$FIX/cxreplay/sessions"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/cxreplay\"}}" > "$FIX/cxreplay/sessions/r.jsonl"
+cat >> "$FIX/cxreplay/sessions/r.jsonl" <<'EOF'
+{"type":"response_item","payload":{"type":"function_call_output","output":"Script completed. prior log said Command timed out after 2m 0s earlier"}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreplay" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'bash timeouts \.+ 0'; then
+  ok "a Codex log replay is not counted as a fresh timeout"
+else bad "a Codex log replay is not counted as a fresh timeout" "$(printf '%s' "$OUT" | grep 'timeouts')"; fi
+
+# ...but a real leading-marker Codex failure IS still counted (not vacuous).
+mkdir -p "$FIX/cxreal2/sessions"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/cxreal2\"}}" > "$FIX/cxreal2/sessions/r.jsonl"
+cat >> "$FIX/cxreal2/sessions/r.jsonl" <<'EOF'
+{"type":"response_item","payload":{"type":"function_call_output","output":"Command timed out after 2m 0s"}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreal2" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'bash timeouts \.+ 1'; then
+  ok "a real leading-marker Codex failure IS counted"
+else bad "a real leading-marker Codex failure IS counted" "$(printf '%s' "$OUT" | grep 'timeouts')"; fi
 
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
