@@ -747,6 +747,21 @@ standing substitute** for moving the real backlog:
   *Cadence & focus*), improve existing docs: accuracy, gaps, clarity, onboarding flow, dead links,
   stale examples. Spans each product's own docs (README/`AGENTS.md`/usage/reference) and the
   devantler.tech site; a `docs:`-only change is real advance work, not filler.
+  **VOICE — every user-facing document is written in the `jargon-free-voice` register: concise, and
+  written for humans rather than machines** (maintainer direction 2026-07-18). Concretely: **frame
+  every item by what the reader gets**, never as a bare inventory ("Secrets — OpenBao holds them,
+  External Secrets pulls them into the cluster at runtime" beats "Secrets — OpenBao, External Secrets
+  Operator, SOPS"); **prefer concrete outcomes to abstract process language** ("so network
+  configuration lives in Git" beats "managed declaratively and reconciled by GitOps"); and **cut
+  repetition and filler** — bullets restating the sentence above them, intros re-listing what the
+  next section covers, empty adjectives ("industry-standard", "batteries-included"). **Calibrate the
+  register to the audience — this is the SPIRIT of the skill, not a literal noun-strip.** For
+  technical readers the **stack nouns STAY**: someone looking for a Talos-based platform template
+  needs to see "Talos", so removing the names that let a reader identify what they are getting is a
+  regression, not simplification. Strip stack nouns only where the reader genuinely has no technical
+  background (the vibe-coding case the skill was written for). Scope is every user-facing doc —
+  site pages, product docs, READMEs, usage/reference. This governs **docs**; PR bodies have their own
+  PM-level rule under *GitHub artifact conventions*.
 - **Product communication & marketing** — **Blog posts are a maintained public product**, not a
   changelog dump or one-time launch task. On the low-priority blog cadence, choose an evidence-backed
   story that helps a defined outside audience understand a real problem and Devantler Tech's response.
