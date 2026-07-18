@@ -293,14 +293,19 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
-- <repo> #<n> "<title>" — CLAIMED: assignees=<n>, claim-branch=<name>, no open PR (contract *Claim protocol* skip reason (e); the orchestrator times the ~2h lease from the issue's NEWEST `assigned` timeline event — an assignee is an INSTANCE claim, never the maintainer)
-- Emit `CLAIMED` **only when BOTH an assignee and a matching `claude/*-<issue>` branch exist.** An assignment with no branch is **not** a live claim under the contract, so reporting it as one would make a bare assignee park the issue — the exact behaviour "a bare assignee does not reserve an issue" forbids. Report that case as the ordinary open issue it is (mention `assignees=<n>` if useful), never as skip reason (e).
+- <repo> #<n> "<title>" — CLAIMED: assignees=<n>, claim-branch=<name>, no open PR
 ```
 
 Digest rules:
 - **Classify, don't decide.** Surface signals; the **orchestrator** selects the work and overlays its
   own native-memory cadence cursors (`last_worked`, `weekly`, docs/roadmap) — **you do not read
   memory**, only live GitHub.
+- **Emit a `CLAIMED` row only when BOTH an assignee and a matching `claude/*-<issue>` branch exist**
+  (and no open PR). An assignment with **no** branch is not a live claim under the contract's *Claim
+  protocol*, so reporting it as one would let a bare assignee park an issue — exactly what "a bare
+  assignee does not reserve an issue" forbids. Report that case as an ordinary open issue (mention
+  `assignees=<n>` if useful), never as skip reason (e). The orchestrator times the ~2h lease from the
+  issue's newest `assigned` timeline event; an assignee is an **instance** claim, never the maintainer.
 - **Never assert ownership of a `devantler` PR.** Routine-own vs maintainer-interactive is the
   orchestrator's creation-record call, not yours — report CI state + `headRefName` + disclosure as DATA
   and tag it `OWNERSHIP-UNVERIFIED`, never `MERGE-READY`/"own". (Bot-trusted authors have no ambiguity.)

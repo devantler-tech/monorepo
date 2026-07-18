@@ -273,8 +273,14 @@ touch of an unconfirmed repo:
    #96 two sessions collided on `claude/war-armour-…` versus `claude/war-armor-…`: the repo's code is
    American, the issue's title British, so each session derived a different stem from a different part
    of the same issue and neither's exact-name scan could see the other. Grepping open PR *bodies* for
-   `#<issue>` is spelling-proof; so is `--search "<issue> in:body"`.
-2. **Claim before you build, not after.** The moment you select an issue, (a) self-assign it and
+   the **`#<issue>` reference — with the hash, not the bare digits** — is spelling-proof:
+   `gh pr list -R <o>/<r> --state open --search '"#<issue>" in:body'`. A bare number matches any body
+   that merely contains it (a benchmark count, a date, another repo's issue number), which would hide
+   the oldest actionable issue behind an unrelated PR.
+2. **Claim before you build, not after.** The moment you select an issue, (a) self-assign it —
+   **if `devantler` is already assigned (a stale bare assignment from an abandoned run), remove and
+   re-add**, because the add is a no-op for an existing assignee and would leave your lease carrying
+   the *old* timestamp, so your fresh claim reads as expired the moment another run checks it — and
    (b) push the branch — both cheap, visible and reversible — and only **then** harden (tests,
    ablations, docs, comments). Opening the **draft PR after the first real commit** is stronger still
    and is the recommended default. A pre-flight scan with no branch and no PR is **not** a claim.
@@ -1099,7 +1105,11 @@ hijacked run *could* do.
 ### Execution model — per-run worktrees
 Each run works in **throwaway git worktrees**, never a shared main checkout, so it can't collide with
 the maintainer's parallel sessions. For each repo touched:
-`git -C <repo_path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>`, work there,
+`git -C <repo_path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>`
+(the trailing issue number is what makes a pre-PR claim matchable — see *Claim protocol*; for the
+legitimate **issue-less** flows the contract allows, a hotfix or a trivial obvious fix, there is no
+number to append, so use plain `claude/<area>-<desc>` — those go straight to a PR, so the PR body is
+the discoverable signal and no claim window applies), work there,
 open the PR, then `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local
 filesystem path such as `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the
 slug only for `gh` commands). **Submodule worktree isolation breaks whenever a submodule is
