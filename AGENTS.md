@@ -655,11 +655,15 @@ Keep `Part of #N` in the body as human-readable context if you like — but it i
 
 **The rules that bound it** (all documented limits): **100 sub-issues per parent**, **8 levels** of
 nesting, children may live in **another repo of the same owner** (never another org), and an issue has
-**at most ONE parent** — re-parenting requires `replaceParent`, so pick the right parent rather than
-attaching an issue to two epics. Adding sub-issues needs **triage** permission or above.
+**at most ONE parent**, so pick the right parent rather than attaching an issue to two epics.
+Re-parenting an issue that already has one needs the replace flag, and **the two APIs spell it
+differently** — REST takes `-F replace_parent=true`, GraphQL's `AddSubIssueInput` takes
+`replaceParent: true`. Omit it and the add **fails** instead of moving the child. Adding sub-issues
+needs **triage** permission or above.
 
 **Hierarchy is decomposition; it is NOT sequencing.** "This must land before that" is an **issue
-dependency** (`gh issue edit <N> --add-blocked-by <M>` / `--add-blocking`, 50 per relationship type,
+dependency** (`gh issue edit <N> --add-blocked-by <M>` / `gh issue edit <N> --add-blocking <M>` —
+both flags take the other issue's number or URL; 50 per relationship type,
 cross-repo, renders a *Blocked* badge on the board) — never a nested sub-issue and never a bare
 `blocked` label. Do not nest an issue to mean "waiting on".
 
@@ -674,8 +678,10 @@ becomes populated and **groupable** — a table view grouped by it renders each 
 nested beneath, which is the canonical "what is part of what" surface; **`Sub-issues progress`** gives
 a live `completed/total` + percent rollup per epic; and the filters `parent-issue:owner/repo#N`,
 `has:sub-issue`, `no:parent-issue` / `has:parent-issue` become available in both project views and
-repo issue search. Projects' **hierarchy view** (public preview since 2026-01-15) renders the full
-nesting inline in table views, up to 8 levels, preserved through grouping, slicing and filtering.
+repo issue search. Projects' **hierarchy view** — [GA since 2026-03-19](https://github.blog/changelog/2026-03-19-hierarchy-view-in-github-projects-is-now-generally-available/)
+and **enabled by default on new views** — renders the full nesting inline in table views, up to 8
+levels, preserved through grouping, slicing and filtering. On an existing view, turn it on with
+*View → Show hierarchy*.
 Note the two features that do **not** exist: a roadmap layout does **not** render hierarchy (it plots
 dates/iterations only — grouping by `Parent issue` yields flat groups, not nested bars), and closing a
 parent is **not documented** to cascade to children in either direction — never assume it does.
@@ -762,11 +768,20 @@ existing view over a new one** (maintainer direction 2026-07-18). See its
 
 Two mechanics make this a standing duty rather than something automation handles:
 - **Auto-add workflows are capped at 5 on the Team plan** and each one targets exactly **one**
-  repository — so built-in auto-add can **never** cover a ~20-repo portfolio. Until an
-  `actions/add-to-project` workflow backed by a GitHub App exists org-wide (`GITHUB_TOKEN` provably
-  cannot reach Projects), **adding the issue to the board is part of filing it**.
+  repository — so built-in auto-add can **never** cover a ~20-repo portfolio. The durable fix is an
+  `actions/add-to-project` workflow backed by a GitHub App (`GITHUB_TOKEN` provably cannot reach
+  Projects) — but note **a workflow lives in one repository and only fires on that repository's
+  events**, so it must be deployed to **every** repo you want tracked; a single central workflow will
+  silently miss all the others. Until that exists, **adding the issue to the board is part of filing
+  it**.
 - **Auto-add is forward-only** — enabling it never adds pre-existing issues. Any coverage gap must be
-  **backfilled** deliberately (`gh project item-add 5 --owner devantler-tech --url <issue-url>`).
+  **backfilled** deliberately, and that is **two commands, not one** — `item-add` has no Status
+  option, so adding alone recreates exactly the no-status items this section forbids:
+  ```sh
+  gh project item-add 5 --owner devantler-tech --url <issue-url>      # returns the item id
+  gh project item-edit --id <item-id> --project-id <project-id> \
+    --field-id <status-field-id> --single-select-option-id <📥 Backlog option id>
+  ```
 
 When bulk-operating on issues or board items, **serialize and pace** — GitHub's secondary limits allow
 roughly **80 content-generating requests/minute and 500/hour**, and both sub-issue endpoints carry an
