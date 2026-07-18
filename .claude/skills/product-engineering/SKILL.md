@@ -184,6 +184,22 @@ Treat docs as part of the product — keep them **in sync** with what ships and 
   inaccuracies and stale examples, fill a missing how-to/quickstart/troubleshooting entry, tighten
   clarity and onboarding flow, repair dead links and broken samples, align terminology. Verify
   examples actually run; build-verify the site (the monorepo card's `docs` build) before the PR.
+- **Voice (every user-facing doc).** Write in the `jargon-free-voice` register — concise, and for
+  humans rather than machines (maintainer direction 2026-07-18; contract → *Enhancement work →
+  Documentation*). In practice:
+  - **Frame each item by what the reader gets**, never a bare inventory. *"Secrets — OpenBao holds
+    them, External Secrets pulls them into the cluster at runtime"* beats *"Secrets — OpenBao,
+    External Secrets Operator, SOPS"*.
+  - **Concrete outcomes over abstract process language.** *"so network configuration lives in Git"*
+    beats *"managed declaratively and reconciled by GitOps"*.
+  - **Cut repetition and filler** — bullets restating the sentence above them, an intro re-listing
+    what the next section covers, empty adjectives ("industry-standard", "batteries-included").
+  - **Calibrate to the audience — the SPIRIT, not a literal noun-strip.** For technical readers the
+    **stack nouns stay** (a reader hunting a Talos-based template must see "Talos"); dropping the
+    names that let someone identify what they are getting is a regression. Strip stack nouns only
+    for a genuinely non-technical reader — the vibe-coding case the skill was written for.
+  - Adding explanation where there was none may make a page *longer*; that is an acceptable trade
+    when it raises usefulness per word. Say so plainly in the PR rather than implying it shrank.
 - **Scope.** Spans **every product's own docs** (README, `AGENTS.md`, usage/reference) and the central
   **devantler.tech site** (`docs/`). The site's recurring slice (Site QA, Content Sync, Content Review)
   lives in the [monorepo card](../products/monorepo/SKILL.md); this section is the cross-product
