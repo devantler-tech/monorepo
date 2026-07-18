@@ -301,8 +301,14 @@ public and private — no per-repo loop needed to enumerate):
    ⚠️ **Fetch those with the search `type:` QUALIFIER, not a JSON field:** `gh search issues --json`
    has **no `issueType` field** (verified 2026-07-18), so asking for it errors and a label-only sweep
    silently misses them. Use one extra bounded search per type:
-   `gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:Spike" --jq '.total_count'`
-   (`type:Epic` → 62, `type:Chore` → 7, `type:Spike` → 1 on 2026-07-18, so this is cheap).
+   ```sh
+   # Return ROWS, not a count — a count cannot be ordered against the other candidates,
+   # cannot fill a digest row, and cannot expose a Kata's measurement date:
+   gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:Spike&per_page=100" \
+     --jq '.items[] | "\(.repository_url|split("/")|last)#\(.number)\t\(.updated_at[0:10])\t\(.title)"'
+   ```
+   (`type:Epic` → 62, `type:Chore` → 7, `type:Spike` → 1, `type:Kata` → 0 on 2026-07-18, so this is
+   cheap — three bounded searches.)
    **Exclude a `Kata` whose named measurement date is still in the FUTURE** — contract skip reason (d)
    makes it not-yet-actionable, and listing it as ready work makes runs either re-skip it every tick or
    measure before the agreed date. Report future-dated Katas separately, with their date.

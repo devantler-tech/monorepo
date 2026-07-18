@@ -38,7 +38,8 @@ carries **thousands** of items, so an unbounded pass samples the first page and 
 | **Hierarchy — undecomposed** | `type:"Epic"` issues with **no sub-issues** (`no:sub-issues-progress`) | 0 — an Epic with no children is *undecomposed, not finished*; decomposing them is high-value advance work (37 existed on 2026-07-18) |
 | **Dangling parents** | `Part of` references resolving to a PR, to self, or to nothing | 0 |
 | **Stale epics** | epics at `Sub-issues progress` 100% but still open | 0 (close or extend) |
-| **Archive** | closed/merged items still active on the board | none older than **30 days closed** (archive those; younger ones stay active so Insights keeps its recent history — see the Insights trap below; manual until [#2238](https://github.com/devantler-tech/monorepo/issues/2238)'s auto-archive works) |
+| **Reopened stuck at Done** | **open** issues whose Status is still `✅ Done` | 0 — closed→Done is a built-in workflow but **nothing moves an issue back out on reopen**, and the Kanban filters `-status:"✅ Done"`, so reopened work vanishes from the main view exactly when it needs attention. Move it back to the state that matches reality (0 on 2026-07-18 — latent, not live) |
+| **Archive** | closed/merged items still active on the board | none older than **30 days closed** — **except a closed child whose Epic is still open**, which stays active: archiving it removes it from the Backlog's hierarchy, so the epic's decomposition becomes unreadable while its progress bar still counts it, and "what is part of what" (the whole point of the board) silently loses rows. Younger items also stay active so Insights keeps recent history — see the Insights trap below; manual until [#2238](https://github.com/devantler-tech/monorepo/issues/2238)'s auto-archive works |
 
 Coverage and hierarchy are the two that silently rot, because **auto-add is forward-only and capped at
 5 workflows on the Team plan** — see [monorepo#2237](https://github.com/devantler-tech/monorepo/issues/2237).
@@ -100,8 +101,11 @@ Until that is solved, backfill is a standing duty, not an exception.
   took the Ready column from 8/5 to a true 2/5. ⚠️ **No automation moves an issue card from its
   linked PR's state** — native Project workflows act only on the project's own items, and nothing in
   this org updates an issue's Status from PR events. **The agent working the PR moves the issue's
-  Status by hand at each lifecycle step** (delivery PR opened → 👀 In Review; self-promoted →
-  🚀 Ready to Merge); only the final closed→Done move is a built-in workflow.
+  Status by hand at each lifecycle step, **when that step's entry condition in `AGENTS.md` actually
+  holds** — a PR merely being *open* is still 🏃🏻‍♂️ In Progress; it becomes 👀 In Review only once CI is
+  green **and** a review has been requested, and 🚀 Ready to Merge only on a green review at head with
+  the pentad clear. Moving a card early makes the board overstate progress, which is the one thing a
+  status ladder must never do. Only the final closed→Done move is a built-in workflow.
 
   ⚠️ **📊 Verifying belongs on the issue that is still OPEN, not on the one the merge just closed.**
   A delivery PR carries `Fixes #delivery`, so merging **closes** that issue and the built-in

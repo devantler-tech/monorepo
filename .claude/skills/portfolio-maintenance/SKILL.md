@@ -263,12 +263,15 @@ navigation surface; a product in the normal rotation, so coverage/type/status/hi
 defect somebody owns; maintainer direction 2026-07-18)*.
 
 ⚠️ **`project-board` is the one product with NO repository path** — it is org project 5, not a repo or
-submodule. When rotation selects it, **skip the worktree/submodule-init/validate steps entirely**:
-there is nothing to check out, no `AGENTS.md ## Maintenance` to load, and no build to validate. Its
-work is **API-and-board mutations** (types, statuses, hierarchy links, item backfills) plus the
-occasional browser pass for a *view* edit, and any accompanying definition change is a normal
-monorepo-root PR. Don't let the repo-shaped Act step below cause the board to be skipped for want of a
-`<path>`.
+submodule. Split its work in two, because only one half is path-less:
+- **Board/API mutations** (types, statuses, hierarchy links, item backfills, a browser pass for a
+  *view* edit) touch no files, so **skip worktree/submodule-init/validate** — there is nothing to
+  check out and no build to validate. Don't let the repo-shaped Act step below cause the board to be
+  skipped for want of a `<path>`.
+- **Any accompanying file change** (an `add-to-project` workflow, an agent-definition or card update)
+  is **ordinary monorepo work and keeps the FULL discipline** — per-run worktree, validate, draft PR.
+  **Never skip isolation for it:** several instances run concurrently, and editing the shared checkout
+  is exactly the collision this loop's worktree rule exists to prevent.
 
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
