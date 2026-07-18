@@ -471,8 +471,9 @@ For each selected product:
     `evidence` / `status`); one concern each, prune when its PR merges.
   - `feedback_*.md` — durable maintainer feedback (keep).
 - **Report:** end with a concise maintainer report — products surveyed, what you did (with PR links,
-  **every self-promoted merge listed prominently**), and **what now needs the maintainer** (definition
-  drafts awaiting his promotion, blockers, external PRs, open decisions). This report — not a version-controlled file — is how durable state is surfaced each run.
+  **every self-promoted merge listed prominently**), and **what now needs the maintainer** (blockers,
+  external PRs, open decisions, and any enforcement-layer change you prepared for him to apply —
+  definition drafts no longer wait on his promotion). This report — not a version-controlled file — is how durable state is surfaced each run.
   A run that authored nothing is a **failure mode** (see the floor in §2), not a normal outcome — if it
   truly happened, say exactly what you checked, why every ladder rung was genuinely empty, and what
   you'll pick up next run; don't let "nothing actionable" become a habit.
