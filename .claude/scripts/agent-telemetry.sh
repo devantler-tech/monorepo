@@ -61,14 +61,29 @@ MONOREPO="${MONOREPO_DIR:-$HOME/git-personal/monorepo}"
 # trigger the refusal below, rather than silently falling back to a default that
 # widens scope. Fail closed means empty scans nothing, not everything.
 PORTFOLIO_PATHS="${PORTFOLIO_PATHS-$MONOREPO}"
+# The GitHub org a Codex worktree's origin remote must belong to for that
+# worktree to count as portfolio scope (see in_scope_cwd).
+PORTFOLIO_ORG="${PORTFOLIO_ORG:-devantler-tech}"
 path_to_slug() { printf '%s' "$1" | sed 's|/|-|g'; }
 rx_escape()    { printf '%s' "$1" | sed 's|[].[^$*/\\+?(){}|]|\\&|g'; }
 # Match either form: Claude names project dirs by cwd SLUG (/ → -), while a
 # store may also be laid out under the real PATH. Both denote the same project.
+#
+# ANCHORED AT A COMPONENT BOUNDARY — an unanchored substring match is a boundary
+# HOLE, not a convenience: the slug for `/Users/x/git-personal/monorepo-client`
+# contains the slug for `/Users/x/git-personal/monorepo`, so a substring test
+# silently admits a differently-named (possibly professional) repository. The
+# only legitimate continuation of a project slug is Claude's worktree marker
+# `--`; a single `-` starts a DIFFERENT repository name.
 PORTFOLIO_SLUG_RE=$(
   printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
   | while IFS= read -r p; do
-      printf '%s|%s|' "$(rx_escape "$(path_to_slug "$p")")" "$(rx_escape "$p")"
+      s=$(rx_escape "$(path_to_slug "$p")")
+      q=$(rx_escape "$p")
+      # slug dir: exactly the slug, or the slug + Claude's `--worktrees` marker
+      printf '/%s(--[^/]*)?/[^/]+\.jsonl$|' "$s"
+      # real path: must end at a component boundary
+      printf '^%s(/|$)|' "$q"
     done | sed 's/|$//'
 )
 [ -n "$PORTFOLIO_SLUG_RE" ] || { echo "PORTFOLIO_PATHS resolved empty — refusing to scan" >&2; exit 2; }
@@ -111,7 +126,7 @@ redact() {
 # form), each time reporting a real leak as "clean". The test suite asserts a
 # sample of EVERY numbered shape is both detected AND redacted; add to both
 # lists together or the test fails.
-CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{8,})'
+CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],};]{8,})'
 
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
@@ -208,14 +223,27 @@ session_files() {
 in_scope_cwd() {
   local cwd="$1" p
   [ -n "$cwd" ] || return 1
-  printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
-  | while IFS= read -r p; do
-      case "$cwd" in "$p"|"$p"/*) echo match; return ;; esac
-      case "$cwd" in
-        "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
-          echo match; return ;;
-      esac
-    done | grep -q match
+  {
+    printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
+    | while IFS= read -r p; do
+        # Form 1: literally under an allowlisted path, at a component boundary.
+        case "$cwd" in "$p"|"$p"/*) echo match ;; esac
+        # Form 2: the Codex instance's own worktree of a portfolio repo. Basename
+        # alone is NOT sufficient — a professional repo checked out as
+        # `$CODEX_HOME/worktrees/<id>/monorepo` would match by name while being
+        # categorically out of scope. Confirm identity by the worktree's actual
+        # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
+        # no remote, not a repo): an unverifiable worktree is excluded.
+        case "$cwd" in
+          "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
+            [ -d "$cwd" ] || continue
+            url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || continue
+            case "$url" in
+              *"github.com:$PORTFOLIO_ORG/"*|*"github.com/$PORTFOLIO_ORG/"*) echo match ;;
+            esac ;;
+        esac
+      done
+  } | grep -q match
 }
 
 codex_session_files() {
@@ -226,7 +254,12 @@ codex_session_files() {
   newest_first "$CODEX_HOME/sessions" \
     | sort -rn | cut -d' ' -f2- \
     | while IFS= read -r f; do
-        cwd=$(head -c 65536 "$f" 2>/dev/null \
+        # Read ONLY the metadata records, not 64 KiB. `session_meta` is the first
+        # record; a byte budget spills into real transcript content, so an
+        # out-of-scope transcript would be partially read before the scope check
+        # that exists to prevent reading it. Two lines covers meta + a sibling
+        # header without touching conversation records.
+        cwd=$(head -n 2 "$f" 2>/dev/null \
               | jq -r 'select(.type=="session_meta")|(.payload.cwd? // .cwd? // empty)' 2>/dev/null | head -1)
         if in_scope_cwd "$cwd"; then printf '%s\n' "$f"; fi
       done | head -n "$MAX_FILES"
@@ -324,15 +357,29 @@ if want efficiency; then
     # a busy-wait pattern, and this metric is evidence for definition changes.
     SLEEPS=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
              | while IFS= read -r f; do commands_in "$f"; done \
-             | grep -cE '(^|[;&|[:space:]])sleep[[:space:]]+[0-9]' || true)
+             | grep -cE '(^|[;&|[:space:]])sleep[[:space:]]+["'"'"']?[$0-9{]' || true)
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"
     echo "  explicit sleep/poll calls .. ${SLEEPS}   (contract: arm a watcher, never busy-wait)"
     echo
-    echo "  longest-running bash commands (timeout victims):"
-    printf '%s\n' "$SF_CACHE" | xargs grep -hoE '"description":"[^"]{0,60}"' 2>/dev/null \
-      | sed 's/"description":"//; s/"$//' | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
+    echo "  descriptions of commands that ACTUALLY timed out:"
+    # Correlated by tool_use_id, not a bare grep over every description. The
+    # previous version listed the most common descriptions in the corpus and
+    # labelled them "timeout victims" — in a window with zero timeouts it still
+    # produced a confident-looking list, which is worse than an empty one.
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      jq -rs '
+        (reduce (.[] | select(.type=="assistant") | .message.content[]?
+                 | select(.type=="tool_use")) as $t ({};
+                   .[$t.id] = ($t.input?.description? // $t.input?.command? // "?"))) as $desc
+        | .[] | select(.type=="user") | .message.content[]?
+        | select(.type=="tool_result")
+        | select((.content | tostring) | test("Command timed out after"))
+        | ($desc[.tool_use_id] // "<unknown command>") | .[0:60]
+      ' "$f" 2>/dev/null
+    done | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
+    echo "    (empty = nothing timed out in this window)"
   fi
 fi
 
@@ -364,10 +411,29 @@ if want safety; then
     # firing, and the improver uses these counts to decide guard-vs-agent. Reading
     # only the Claude schema reported "no blocked actions" for the whole
     # deployment whenever the sibling was the one being stopped.
+    # ERRORED results only. Consolidating onto tool_result_text dropped the
+    # is_error filter, so a SUCCESSFUL output that merely begins "Blocked:" —
+    # an application log, a test fixture — counted as a guard firing. These
+    # counts decide guard-vs-agent, so inflating them argues for loosening a
+    # guard that never actually fired.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      tool_result_text "$f" \
-        | grep -E '^(<tool_use_error>)?(Blocked:|Permission to use |Claude requested permissions|approval (denied|required)|command (rejected|not permitted))' \
-        | cut -c1-80
+      jq -r '
+        .. | objects
+        | (
+            (select(.type=="tool_result" and .is_error==true)
+             | .content | if type=="array" then (map(select(.type=="text").text)|join(" "))
+                          elif type=="string" then . else empty end),
+            # Codex marks failure on the output record itself; absent an explicit
+            # flag, only an explicit denial shape counts (never bare output).
+            (select((.type=="function_call_output" or .type=="custom_tool_call_output")
+                    and ((.is_error? // false) == true or (.status? // "") == "error"))
+             | .output | if type=="array" then (map(.text? // empty)|join(" "))
+                         elif type=="string" then . else empty end)
+          )
+        | select(type=="string")
+        | select(test("^(<tool_use_error>)?(Blocked:|Permission to use |Claude requested permissions|approval (denied|required)|command (rejected|not permitted))"))
+        | .[0:80]
+      ' "$f" 2>/dev/null
     done | redact | sed -E 's/[0-9]+/<n>/g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
     echo "    (each line = a real errored tool result, so transcript prose cannot fake one;"
     echo "     a recurring entry is EITHER a definition bug OR a permission gap — resolve"

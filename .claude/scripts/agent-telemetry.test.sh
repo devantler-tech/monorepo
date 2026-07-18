@@ -485,6 +485,88 @@ CLAUDE_PROJECTS_DIR="$FIX/scoped" HOME="$FIX" PORTFOLIO_PATHS="" MONOREPO_DIR=""
 if [ $? -eq 2 ]; then ok "empty allowlist refuses to scan (fails closed)"
 else bad "empty allowlist refuses to scan" "did not exit 2"; fi
 
+# ── 6g. round-4 findings ──────────────────────────────────────────────────────
+echo
+echo "round-4 regressions"
+
+# BOUNDARY HOLE: an unanchored substring match admits a DIFFERENT repo whose
+# name merely extends an allowlisted one. `monorepo-client` is the whole point —
+# a plausible professional repo sitting next to the portfolio one.
+mkdir -p "$FIX/anchor/-Users-x-git-personal-monorepo" \
+         "$FIX/anchor/-Users-x-git-personal-monorepo--claude-worktrees-a1" \
+         "$FIX/anchor/-Users-x-git-personal-monorepo-client"
+for d in "-Users-x-git-personal-monorepo" "-Users-x-git-personal-monorepo--claude-worktrees-a1"; do
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash","input":{"command":"sleep 5"}}]}}' \
+    > "$FIX/anchor/$d/s.jsonl"
+done
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a2","name":"Bash","input":{"command":"sleep 6"}}]}}' \
+  > "$FIX/anchor/-Users-x-git-personal-monorepo-client/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/anchor" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2'; then
+  ok "sibling repo 'monorepo-client' is NOT admitted by prefix"
+else bad "sibling repo 'monorepo-client' is NOT admitted by prefix" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+
+# A Codex worktree matching only by BASENAME must not be admitted: identity is
+# confirmed by the origin remote, and an unverifiable worktree fails closed.
+mkdir -p "$FIX/cxwt/worktrees/abc/monorepo" "$FIX/cxwt/sessions"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/cxwt/worktrees/abc/monorepo\"}}" \
+  > "$FIX/cxwt/sessions/r.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 8\"}"}}' \
+  >> "$FIX/cxwt/sessions/r.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxwt" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
+      PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+# Excluding the only session empties the corpus, so the section short-circuits
+# rather than printing a zero — either outcome proves the worktree was excluded,
+# and the `sleep 8` inside it must never be counted.
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 0|no sessions in window'; then
+  ok "codex worktree with no verifiable origin fails closed"
+else bad "codex worktree with no verifiable origin fails closed" "$(printf '%s' "$OUT" | grep -E 'sleep/poll|sessions')"; fi
+nocheck "...and its command is not counted" "$OUT" "sleep/poll calls .. 1"
+
+# Guard denials must require an ERRORED result — a successful output that merely
+# begins "Blocked:" is an application log, not a guard firing.
+mkdir -p "$FIX/notdenial"
+cat > "$FIX/notdenial/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"n1","name":"Bash","input":{"command":"cat app.log"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"n1","is_error":false,"content":[{"type":"text","text":"Blocked: user 42 was blocked by the firewall rule"}]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/notdenial" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+nocheck "a successful 'Blocked:' output is not a guard firing" "$OUT" "firewall rule"
+
+# Sleeps with a non-literal delay are still busy-waits.
+mkdir -p "$FIX/varsleep"
+cat > "$FIX/varsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"v1","name":"Bash","input":{"command":"d=30; sleep \"$d\""}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"v2","name":"Bash","input":{"command":"sleep ${backoff}"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/varsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2'; then
+  ok "sleeps with variable delays are counted"
+else bad "sleeps with variable delays are counted" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
+
+# Timeout victims must correlate to an actual timeout, not list every command.
+mkdir -p "$FIX/notimeout"
+cat > "$FIX/notimeout/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q1","name":"Bash","input":{"command":"ls","description":"Very common description"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"q1","is_error":false,"content":[{"type":"text","text":"ok"}]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/notimeout" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+nocheck "no timeouts ⇒ no 'timeout victims' listed" "$OUT" "Very common description"
+
+# Generic secrets containing punctuation must still be detected.
+mkdir -p "$FIX/punct"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"config token=abc:defghijklmnop"}]}}\n' \
+  > "$FIX/punct/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/punct" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+nocheck "punctuated secret value is redacted" "$OUT" "abc:defghijklmnop"
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"
