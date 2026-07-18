@@ -294,9 +294,11 @@ cannot distinguish from the filter miss this rule exists to prevent.
 review output (a `Codex Review:` clean-pass marker). A CodeRabbit walkthrough summary, a
 command/setup reply, and a rate-limit or error notice are **not** review output — they do not count,
 and `green_review=none` beside them is correct and expected (surface the notice as its own
-`LANE-SIGNAL` row instead). Only a non-zero **review-output** count next to `none` is a
-**contradiction to investigate rather than a row to emit** — that means real review artifacts exist
-and your match key was wrong. (Live 2026-07-18: a digest reported "zero review objects and zero comments" plus a
+`LANE-SIGNAL` row instead). **Stale artifacts are also normal beside `none`:** a Codex findings
+review at a previous head, with no current-head result, is exactly the common review-needed state —
+report `none(rev=1,cmt=0@<head>)`, which tells the orchestrator to re-request. Only review output
+**at the CURRENT head** contradicts `none`; that means a real current artifact exists and your match
+key was wrong, so **investigate rather than emit the row**. (Live 2026-07-18: a digest reported "zero review objects and zero comments" plus a
 "fresh both-lane outage" across 12 PRs while Codex review objects existed on at least three of them,
 one at head — a conclusion that would have triggered unwarranted self-reviews portfolio-wide.)
 
