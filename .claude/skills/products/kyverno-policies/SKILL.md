@@ -23,9 +23,12 @@ consumer repo, never here.
 **Behaviour is test-first, and the gate has teeth.** Every policy carries a `kyverno test` contract
 under `tests/<policy>/`; for a generate rule, assert the complete generated resource **and** at least
 one nonmatching resource. `kyverno test .` discovers fixtures recursively, so a new policy is covered
-as soon as its fixture exists — never hand-list fixture paths in a runner. Note that a bare
-`kyverno apply` is **fail-open** (it exits 0 on failures unless `--warn-exit-code` is set), so trust
-the repo's own validation block rather than a naive invocation.
+as soon as its fixture exists — never hand-list fixture paths in a runner. Note that `kyverno apply`
+exits 1 on rule *failures*, but is **fail-open on load**: a policy it cannot parse is silently
+dropped ("Applying 0 policy rule(s)", exit 0), so an apply-based negative control passes vacuously
+unless a positive control proves the policy loaded
+([kyverno-policies#19](https://github.com/devantler-tech/kyverno-policies/issues/19)). Trust the
+repo's own validation block rather than a naive invocation.
 
 **Validation** (run every gate before opening or updating a PR — the repo's `AGENTS.md` is
 authoritative if this drifts):
