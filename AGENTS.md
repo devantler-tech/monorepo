@@ -229,10 +229,13 @@ governs the issue work that follows.) Two rules enforce that:
    KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
    interactive-PR HANDS-OFF rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
    about an *issue's* label or its bot author. **A bare
-   assignee does *not* reserve an issue INDEFINITELY:** an assignment paired with a **pushed branch**
-   is a *live claim* for ~2 hours (see *Claim protocol* below); with no branch, or once that window
-   has elapsed with no open PR, you may pick the issue up regardless of who is assigned — a stale
-   assignment is never work-in-progress. If an issue **already
+   assignee does *not* reserve an issue INDEFINITELY:** a **`devantler`** assignment paired with a
+   **pushed claim branch** is a *live claim* for ~2 hours (see *Claim protocol* below); with no branch,
+   or once that window has elapsed with no open PR, you may pick the issue up — a stale assignment is
+   never work-in-progress. **Only the agent account's own assignment is a claim.** An issue assigned to
+   a **human collaborator** (or `Copilot`) is not an agent lease and must never be taken over on this
+   window: respect it as someone else's work-in-progress per the standing "do not do work others are
+   assigned to" rule, and pick a different issue. If an issue **already
    has an open PR**, don't duplicate it: drive an **actionable trusted-author** PR to merge per *Merge
    policy* (a **routine-owned** draft: drive it to genuine readiness and self-promote per *Autonomy*;
    another trusted author's draft gets hygiene only — its owner promotes); leave
@@ -297,8 +300,10 @@ touch of an unconfirmed repo:
    overall (and `--slurp`, which would wrap the pages, is rejected alongside `--jq`):
    ```sh
    gh api repos/<o>/<r>/issues/<n>/timeline --paginate \
-     --jq '.[]|select(.event=="assigned")|.created_at' | sort | tail -1
+     --jq '.[]|select(.event=="assigned" and .assignee.login=="devantler")|.created_at' | sort | tail -1
    ```
+   Filter to **`devantler`**: an issue can carry several assignees, and a later assignment of someone
+   else would otherwise set your lease clock — restarting a window you never renewed.
    **Never measure from the branch's commit date** — a claim branch usually points at the base commit,
    whose date is far older, so every fresh claim would read as long expired. If an issue is assigned
    with no branch, or branched with no assignment, treat it as no claim at all.

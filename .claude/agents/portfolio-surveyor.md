@@ -43,7 +43,8 @@ public and private — no per-repo loop needed to enumerate):
    claims and re-opens the duplicate-build race the protocol exists to close.
 2b. **Claim branches (one call per repo that has assigned-but-PR-less issues):**
    `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep '^claude/'` — report any
-   `claude/*` branch that either ends in `-<issue>` OR whose normalised stem matches an open issue's
+   `claude/*` branch that ends in `-<issue>`, ends in a **takeover suffix** (`-<issue>-2`, `-3`, …),
+   OR whose normalised stem matches an open issue's
    title (strip `war-`/area prefixes and hyphens, and normalise `our`→`or` spelling) — legacy claims
    predate the issue-number template and would otherwise be invisible during rollout — for an open
    issue with **no** open PR, as
