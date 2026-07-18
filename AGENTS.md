@@ -554,11 +554,17 @@ touch the bot PR branch. This actor-wide no-action rule is stronger than the tru
 below and is separate from the narrower programmed release-bot review exemption.
 
 **Carve-out — trusted programmed release-bot PRs need NO review** (maintainer direction 2026-07-13,
-ksail#6095): PRs produced by the suite's own programmed release paths — GoReleaser's Homebrew-tap
-cask PRs and KSail release version bumps — are gated by their required checks and auto-merge on
-their own; do **not** request a CodeRabbit/Codex review or chase a pre-merge evaluator result on
-them, and never count their `green_review=none` or `premerge=not-posted` as a hygiene gap (their
-checks/threads/conflicts hygiene still counts). The green-review gate governs
+ksail#6095): PRs produced by the suite's own programmed release paths — **every product's**
+Homebrew-tap cask PR (GoReleaser's for ksail, and World at Ruin's CD-generated
+`chore(cask): update world-at-ruin to vX.Y.Z` PRs on the evergreen `goreleaser/world-at-ruin`
+branch — maintainer direction 2026-07-18: these were wrongly review-gated because only GoReleaser's
+were named here, wasting a review lane per release) and KSail release version bumps — are gated by
+their required checks and auto-merge on their own; do **not** request a CodeRabbit/Codex review or
+chase a pre-merge evaluator result on them, and never count their `green_review=none` or
+`premerge=not-posted` as a hygiene gap (their checks/threads/conflicts hygiene still counts). The
+identifying mark of this class is the **programmed path** (a `goreleaser/*` head branch on the tap,
+machine-generated content), never the commit identity — cask PRs are authored by the tap token as
+`devantler` and are still programmed-path PRs. The green-review gate governs
 **own/human-authored** PRs (and any bot PR that leaves its programmed path, e.g. one you push
 adaptation commits to — your commit makes it review-bearing again).
 **AUTO-REVIEW IS DISABLED — requesting reviews is the agent's job** (maintainer direction

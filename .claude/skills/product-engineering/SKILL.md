@@ -357,7 +357,7 @@ coverage and performance (contract → *Enhancement work → Security posture*).
 - **monorepo + site**: advance = docs/site features, accessibility, performance (bundle/Lighthouse),
   content quality, evidence-led discovery/adoption, and low-priority blog stewardship (see the
   monorepo card's Site QA / Content Review / Blog Stewardship).
-- **homebrew-tap**: Casks are GoReleaser-generated (`# DO NOT EDIT`) — advance is limited to CI/tap
-  hygiene; never chase version/sha bumps.
+- **homebrew-tap**: Casks are machine-generated (`# DO NOT EDIT` — GoReleaser for ksail, World at
+  Ruin's CD for its cask) — advance is limited to CI/tap hygiene; never chase version/sha bumps.
 - **applications** (private, SvelteKit): conservative, extra discretion; coverage/quality/perf within
   the app owner's intent.
