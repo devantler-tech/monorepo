@@ -680,23 +680,67 @@ Note the two features that do **not** exist: a roadmap layout does **not** rende
 dates/iterations only — grouping by `Parent issue` yields flat groups, not nested bars), and closing a
 parent is **not documented** to cascade to children in either direction — never assume it does.
 
-**Classify with Issue Types, not type-labels.** The org has issue types enabled (**Chore, Bug,
-Feature, Kata** — matching the four issue templates); set one on every issue you file
-(`gh issue create --type "Feature"`). They are org-wide, exactly one per issue, and filterable as
-`type:"bug"` — the structured replacement for type-labels. Labels stay for cross-cutting, repo-local
-tags. Types and sub-issues are **orthogonal**: a type says what a thing *is*, a sub-issue link says
-what it *belongs to*.
+**EVERY issue carries an Issue Type — no exceptions** (maintainer direction 2026-07-18). Types are
+org-wide, exactly **one per issue**, filterable as `type:"Bug"`, and they are the structured
+replacement for type-labels. An untyped issue is an incomplete issue: fix it at triage. Set it at
+creation — `gh issue create --type "Feature"` — or retrofit with `gh issue edit <N> --type "Bug"`.
+
+**Each type exists because it changes what *done* means** — that is the test for whether something
+deserves a type rather than a label, and it is why the type tells you what "next" looks like:
+
+| Type | What it is | The definition-of-done it implies |
+|---|---|---|
+| **Epic** | Strategic item | **Decomposed into sub-issues, never implemented directly**; closes when its children do |
+| **Feature** | New user-visible capability | Feature-flag-first, default-off, **tested in BOTH states**, docs in the same PR |
+| **Bug** | A defect | **RED/GREEN reproduction proof** |
+| **Security** | Vulnerability or hardening gap | Fix-vs-except ladder; **sanitized** public body, evidence kept private |
+| **Performance** | Speed / resource usage | **Before/after numbers** in the PR body, against a measured baseline |
+| **Refactor** | Behaviour-preserving quality | **Never mixed with a behaviour change**; existing tests pass unmodified |
+| **Docs** | Documentation | Generators **re-run, never hand-edited**; examples actually run |
+| **Spike** | Timeboxed investigation | Output is a **recorded decision + follow-up issues**, not a PR |
+| **Kata** | Improvement Kata | Target condition + **named measurement date**; stays open until the outcome is decided |
+| **Chore** | Mechanical upkeep | No flag required |
+
+**`type:"Epic"` — not a label, not a structural guess — is what keeps epics off the Kanban.** A
+`no:sub-issues-progress` filter only excludes epics that have *already* been decomposed; an
+**undecomposed** epic has no children and slips through looking like actionable work (37 were doing
+exactly that on 2026-07-18). The type is true from the moment the issue is filed, so
+`-type:"Epic"` is correct on day one.
+
+Types and sub-issues are **orthogonal**: a type says what a thing *is*, a sub-issue link says what it
+*belongs to*. Labels stay for cross-cutting, repo-local tags (`automation`, `kubernetes`,
+`good first issue`) — never for the things above.
 
 ### Every issue belongs on the board
 [Project 5 (🌊 Project Board)](https://github.com/orgs/devantler-tech/projects/5) is the maintainer's
 single navigation surface across the portfolio, so **every open issue in every active
 `devantler-tech` repo belongs on it, and every board item carries a `Status`** — an item with no
-status is invisible in board layout and unsortable in triage, which defeats the surface. The status
-ladder is **✅ Done · 🚀 In Finalization · 🏃🏻‍♂️ In Progress · 🫴 Ready · 📥 Backlog · 🧊 Icebox** — and that
-**reversed order is deliberate**: finishing work sits leftmost so the board reads *stop starting, start
-finishing* (maintainer direction 2026-07-18). **Never re-order it into left-to-right flow**, and treat
-an over-limit column as a signal to finish rather than a limit to raise. A newly-filed issue lands in
-**📥 Backlog** unless you know better, and *never* in no-status. The board carries **exactly three
+status is invisible in board layout and unsortable in triage, which defeats the surface. **The status
+ladder mirrors the agent's actual lifecycle, so every state answers "what's next":**
+
+| Status | Entry condition | What's next |
+|---|---|---|
+| **✅ Done** | Acceptance criteria validated, outcome decided | — |
+| **📊 Verifying** | **Merged and released**, outcome not yet proven | Verify it actually works E2E; measure a Kata's signal; then decide |
+| **🚀 Ready to Merge** | Green review at head, all checks green, nothing unresolved | Self-promote and merge |
+| **👀 In Review** | PR open, CI green, review requested | Fix findings, re-request, re-secure green at the new head |
+| **🏃🏻‍♂️ In Progress** | Assignee has time to implement | Finish the implementation, get CI green |
+| **🫴 Ready** | Refinement criteria met | Pick it up, oldest first |
+| **📥 Backlog** | Captured and triaged, not yet refined | Refine, or decompose if it is an Epic |
+| **🧊 Icebox** | Parked | Revisit at triage |
+
+**The merge is the boundary** between *Ready to Merge* (pre-merge, mechanical) and *Verifying*
+(post-merge, evidential) — shipped is not the same as decided. The **reversed order is deliberate**:
+finishing work sits leftmost so the board reads *stop starting, start finishing* (maintainer direction
+2026-07-18). **Never re-order it into left-to-right flow**, and treat an over-limit column as a signal
+to finish rather than a limit to raise. A newly-filed issue lands in **📥 Backlog** unless you know
+better, and *never* in no-status.
+
+**"Blocked" is deliberately NOT a status.** Blocking is orthogonal to position — work can be blocked
+while *Ready* or while *In Review* — so a Blocked column would destroy the information about where it
+actually is. Express it as a native **issue dependency** (`gh issue edit <N> --add-blocked-by <M>`),
+which renders a Blocked badge on the card in whatever column it sits. Reserve the `blocked` **label**
+for blockers that dependencies cannot express — an upstream release in another org. The board carries **exactly three
 views** — **kanban (board)**, **backlog (table)**, **roadmap (roadmap)** — and epic breakdown is a
 **grouping on the Backlog** (`Parent issue`), not a fourth view: **prefer an extra grouping/slice on an
 existing view over a new one** (maintainer direction 2026-07-18). See its

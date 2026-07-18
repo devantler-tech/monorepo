@@ -55,16 +55,22 @@ Until that is solved, backfill is a standing duty, not an exception.
 
   | View | Layout | Filter |
   |---|---|---|
-  | 🧮 Kanban | Board | `is:issue is:open -status:"✅ Done" no:sub-issues-progress` |
+  | 🧮 Kanban | Board | `is:issue is:open -status:"✅ Done" -type:"Epic"` |
   | 📋 Backlog | Table | `is:issue is:open no:parent-issue` |
-  | 🗺️ Roadmap | Roadmap | `is:issue is:open label:roadmap no:parent-issue` |
+  | 🗺️ Roadmap | Roadmap | `is:issue is:open type:"Epic" no:parent-issue` |
 
   **Each view shows one layer of the hierarchy, and only one** (maintainer direction 2026-07-18):
-  **Kanban = leaves only** (`no:sub-issues-progress`) — a parent is resolved by finishing its children,
-  so an epic is never something you drag across a board; **Backlog = top-level only**
-  (`no:parent-issue`) with children reached by *expanding* the hierarchy, never listed as sibling rows;
-  **Roadmap = top-level strategic items**. Excluding parents from Kanban dropped it 193 → 166 (exactly
-  the 26 epics); excluding children from Backlog leaves 156 top-level rows.
+  **Kanban = actionable work only** — a parent is resolved by finishing its children, so an epic is
+  never something you drag across a board; **Backlog = top-level only** (`no:parent-issue`) with
+  children reached by *expanding* the hierarchy, never listed as sibling rows; **Roadmap = top-level
+  Epics**.
+
+  ⚠️ **Filter on `type:"Epic"`, NOT on `no:sub-issues-progress` or `label:roadmap`.** The structural
+  filter only excludes epics that have *already* been decomposed — 37 **undecomposed** epics were
+  sitting on the Kanban looking like actionable work, because an epic nobody has broken down yet has no
+  children to detect. Switching to `-type:"Epic"` dropped the Kanban 166 → 130 and is correct from the
+  moment an issue is filed. The label is likewise unreliable: it depends on label hygiene, and `Epic`
+  as a type is a superset (62 epics vs 55 roadmap-labelled).
 
   **The board tracks ISSUES, not PRs** (maintainer direction 2026-07-18): a PR that closes an issue
   moves that issue through the ladder via the linked-PR workflow, so showing both double-counts the
@@ -96,11 +102,19 @@ Until that is solved, backfill is a standing duty, not an exception.
   2. **Type `no:` into the filter box to get the authoritative qualifier list.** GitHub autocompletes
      every supported field; picking from that list inserts the exact syntax. That is faster and more
      reliable than docs, which do not enumerate project-field qualifiers.
-- **Status semantics.** Options run **✅ Done → 🚀 In Finalization → 🏃🏻‍♂️ In Progress → 🫴 Ready →
-  📥 Backlog → 🧊 Icebox**. The order is **deliberately reversed** — finishing work sits leftmost, so the
-  board reads *stop starting, start finishing* (maintainer direction 2026-07-18). **Never re-order it
-  into left-to-right flow.** Column **limits** encode the same WIP discipline; treat an over-limit column
-  as a signal to finish, never as a reason to raise the limit.
+- **Status semantics.** Options run **✅ Done → 📊 Verifying → 🚀 Ready to Merge → 👀 In Review →
+  🏃🏻‍♂️ In Progress → 🫴 Ready → 📥 Backlog → 🧊 Icebox**, and the **merge is the boundary** between
+  *Ready to Merge* (pre-merge, mechanical) and *Verifying* (post-merge, evidential). The order is
+  **deliberately reversed** — finishing work sits leftmost, so the board reads *stop starting, start
+  finishing* (maintainer direction 2026-07-18). **Never re-order it into left-to-right flow.** Column
+  **limits** encode the same WIP discipline; treat an over-limit column as a signal to finish, never as
+  a reason to raise the limit. **"Blocked" is intentionally not a status** — use a native issue
+  dependency (Blocked badge renders in-place) and reserve the `blocked` label for cross-org blockers.
+- **Issue Types are mandatory** — every issue carries exactly one of **Epic, Feature, Bug, Security,
+  Performance, Refactor, Docs, Spike, Kata, Chore** (see the contract's *Issue hierarchy* for the
+  definition-of-done each implies). An untyped issue is an incomplete issue. Managing the org type
+  list needs **org settings in a browser** — a PAT gets 403 on `orgs/<org>/issue-types` — but
+  `gh issue edit <N> --type "<Type>"` works fine for setting one.
 - **The roadmap axis.** A roadmap layout plots **date or iteration fields only** — it does **not** render
   hierarchy. The `Year` iteration field (2026/2027/2028) is the current coarse axis and is assigned **on
   evidence of activity**, never by assumption. Finer `Start date`/`Due date` values encode *the
