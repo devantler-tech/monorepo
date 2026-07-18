@@ -674,20 +674,32 @@ if want safety; then
       #     the wrapped form (the most common real-leak shape, since grep's
       #     LEFTMOST-match rule hands it to the generic alternative) would be
       #     classified by its key instead of its value.
+      # ANSI escapes are stripped BEFORE matching: a styled credential
+      # (`ESC[31mghp_…`) puts the sequence's terminating letter right before
+      # the token prefix, which the boundary anchor would misread as blob
+      # noise and silently NOT count — the worst failure for this table.
+      # Compounds split on `;&|` — the shell separators the generic value
+      # class admits; none appears in any token alphabet, so splitting costs
+      # no true positives.
       { jq -Rr 'select(length>0)|(try (fromjson|..|strings) catch empty)' "$f" 2>/dev/null; \
         cat "$f" 2>/dev/null; } \
+        | sed -E "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" \
         | grep -hoEi "$CRED_TABLE_RE" 2>/dev/null \
-        | tr ';' '\n' | grep -v '^$' \
+        | tr ';&|' '\n' | grep -v '^$' \
         | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
         | grep -E . | sort -u
     done | sort -u | awk '
+      # FULL-shape validation, not prefix sniffing: a generic value that merely
+      # BEGINS like a token (`token=ghp_abcdefgh`, too short to be one) must
+      # stay in the weak bucket, or the high-signal rows inherit false
+      # positives from the generic alternative. Input is lowercased.
       function shape_of(x) {
-        if (index(x, "github_pat_") == 1) return "github-pat (fine-grained)"
-        if (x ~ /^gh[pousr]_/)            return "github-token (classic/app)"
-        if (index(x, "akia") == 1)        return "aws-access-key-id"
-        if (x ~ /^xox[baprs]-/)           return "slack-token"
-        if (index(x, "eyj") == 1)         return "jwt-like"
-        if (index(x, "-----begin") == 1)  return "private-key-block"
+        if (x ~ /^github_pat_[a-z0-9_]{20,}/)            return "github-pat (fine-grained)"
+        if (x ~ /^gh[pousr]_[a-z0-9]{16,}/)              return "github-token (classic/app)"
+        if (x ~ /^akia[0-9a-z]{12,}/)                    return "aws-access-key-id"
+        if (x ~ /^xox[baprs]-[a-z0-9-]{10,}/)            return "slack-token"
+        if (x ~ /^eyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}/)  return "jwt-like"
+        if (index(x, "-----begin") == 1)                 return "private-key-block"
         return ""
       }
       {

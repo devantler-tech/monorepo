@@ -466,6 +466,48 @@ if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)' && printf '%s' "$
   ok "compound assignment surfaces BOTH credential shapes"
 else bad "compound assignment surfaces BOTH credential shapes" "$TABLE"; fi
 
+# `&&`-separated compounds evade a `;`-only split the same way (Codex, round 3):
+# every shell separator the generic value class admits must split.
+mkdir -p "$FIX/compound2"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"run GITHUB_TOKEN=__GHPE__&&AWS_ACCESS_KEY_ID=__AWS__"}]}}\n' > "$FIX/compound2/s.jsonl"
+subst "$FIX/compound2/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/compound2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)' && printf '%s' "$TABLE" | grep -q 'aws-access-key-id'; then
+  ok "ampersand-compound surfaces BOTH credential shapes"
+else bad "ampersand-compound surfaces BOTH credential shapes" "$TABLE"; fi
+
+# A value that merely BEGINS like a token but fails its full shape must stay
+# weak-signal — prefix sniffing would let the generic alternative inject false
+# positives into the high-signal rows (Codex, round 3).
+mkdir -p "$FIX/shortval"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"cfg token=ghp_abcdefgh"}]}}\n' > "$FIX/shortval/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/shortval" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token'; then
+  bad "short prefix-only value stays weak-signal" "upgraded to github-token"
+else ok "short prefix-only value stays weak-signal"; fi
+if printf '%s' "$TABLE" | grep -q 'generic-assignment'; then
+  ok "short prefix-only value still counted as generic"
+else bad "short prefix-only value still counted as generic" "$TABLE"; fi
+
+# An ANSI-styled credential (`ESC[31mghp_…`) puts the escape terminator letter
+# right before the prefix; without pre-match stripping the boundary anchor
+# rejects a REAL token as blob noise — a silent real-leak miss (Codex, round 3).
+mkdir -p "$FIX/ansi"
+ANSI_SAMPLE=$(printf 'log \033[31m__GHPE__\033[0m end')
+printf '{"type":"user","message":{"content":[{"type":"text","text":%s}]}}\n' \
+  "$(printf '%s' "$ANSI_SAMPLE" | jq -Rs .)" > "$FIX/ansi/s.jsonl"
+subst "$FIX/ansi/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/ansi" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+  ok "ANSI-styled real token is still counted"
+else bad "ANSI-styled real token is still counted" "$TABLE"; fi
+
 # ── 6e. round-3 findings ──────────────────────────────────────────────────────
 echo
 echo "round-3 regressions"
