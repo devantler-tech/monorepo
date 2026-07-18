@@ -230,6 +230,7 @@ Products → cards: [ksail](../products/ksail/SKILL.md) · [platform](../product
 [github-actions](../products/github-actions/SKILL.md) · [skills (+ plugins)](../products/agent-skills/SKILL.md) ·
 [homebrew-tap](../products/homebrew-tap/SKILL.md) · [applications](../products/applications/SKILL.md) ·
 [provider-upjet-unifi](../products/provider-upjet-unifi/SKILL.md) ·
+[kyverno-policies](../products/kyverno-policies/SKILL.md) ·
 [world-at-ruin](../products/world-at-ruin/SKILL.md) *(game — a first-class product in the normal
 rotation and fairness rules, like every other card; maintainer direction 2026-07-17)*.
 

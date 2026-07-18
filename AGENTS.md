@@ -30,6 +30,7 @@ keeping them healthy *and* moving them forward.
 | Agent skills (shared lib) | `devantler-tech/agent-skills` | `libraries/agent-skills` | [AGENTS.md](https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md) |
 | Agent plugins (shared lib) | `devantler-tech/agent-plugins` (renamed from `copilot-plugins`) | `libraries/agent-plugins` | [AGENTS.md](https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md) |
 | UniFi Crossplane provider (shared lib) | `devantler-tech/provider-upjet-unifi` | `libraries/provider-upjet-unifi` | [AGENTS.md](https://github.com/devantler-tech/provider-upjet-unifi/blob/main/AGENTS.md) |
+| Kyverno policy library (shared lib) | `devantler-tech/kyverno-policies` | `libraries/kyverno-policies` | [AGENTS.md](https://github.com/devantler-tech/kyverno-policies/blob/main/AGENTS.md) |
 | World at Ruin (game) | `devantler-tech/world-at-ruin` | `applications/world-at-ruin` | [AGENTS.md](https://github.com/devantler-tech/world-at-ruin/blob/main/AGENTS.md) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
@@ -83,6 +84,7 @@ no row are filed on the **default intake repo** below.
 | Platform template | The starter template new platform repositories are created from | `devantler-tech/platform-template` |
 | UniFi home network | Changing THIS suite's deployed UniFi network — SSIDs, VLANs, firewall rules, device and VPN config | `devantler-tech/unifi` |
 | UniFi Crossplane provider | Developing the Crossplane provider library itself (new resource support, codegen, provider bugs) | `devantler-tech/provider-upjet-unifi` |
+| Cluster guardrail policies | Shared rules that check or adjust what may run on the suite's clusters, so every platform inherits the same guardrails | `devantler-tech/kyverno-policies` |
 | Mac install packages | Making the suite's tools installable on a Mac via Homebrew | `devantler-tech/homebrew-tap` |
 
 **Default intake repo:** `devantler-tech/monorepo`
