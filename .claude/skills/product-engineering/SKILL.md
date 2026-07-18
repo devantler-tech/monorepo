@@ -155,7 +155,7 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    threads, secure a green review at head); **self-promote it only on genuine readiness** —
    programmatically tested + reviewed green + **tried and evaluated as a user** (contract *Autonomy*,
    maintainer direction 2026-07-16) — then drive it to merge per the contract's *Merge policy*
-   (definition PRs excepted: those keep the maintainer's promotion gate).
+   (definition PRs included: their separate promotion gate was retired 2026-07-18).
 
 ## 4. Test coverage
 Raise coverage where it *matters*, not for a vanity number.
