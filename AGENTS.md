@@ -1126,9 +1126,13 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   hardest in the per-run trusted-PR sweep, where these loops get written most.
   **Write it portably and it is correct in every shell:**
   ```sh
-  IFS=' ' read -r repo n <<< "$pr"      # works in bash AND zsh
+  repo=${pr%% *}; n=${pr##* }           # POSIX parameter expansion: sh, bash AND zsh
   gh pr view "$n" --repo "devantler-tech/$repo"
   ```
+  (`IFS=' ' read -r repo n <<< "$pr"` is equivalent **in bash and zsh only** — the here-string `<<<`
+  is a bash/zsh extension and a **syntax error** under POSIX `/bin/sh`, e.g. dash. The parameter-
+  expansion form above has no such limit, so prefer it when the shell is unknown or the file carries
+  a `#!/bin/sh` shebang.)
   Or simply **write the calls out** — two plain `gh` lines beat a clever loop and stay readable.
   **Shell-specific notes, so nobody "fixes" working code:** in **bash** `set -- $pair` splits
   correctly and needs no change; `set -- ${=pair}` is zsh's explicit-split flag and is a **syntax
