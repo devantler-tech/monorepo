@@ -24,6 +24,7 @@ jobs:
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
+      memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -55,6 +56,12 @@ jobs:
             submodule-init:
               - '.claude/scripts/submodule-init.sh'
               - '.claude/scripts/submodule-init.test.sh'
+            memory-hygiene:
+              - '.claude/scripts/memory-hygiene.sh'
+              - '.claude/scripts/memory-hygiene.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             maintainer-preflight:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/maintainer-preflight.test.sh'
@@ -211,6 +218,21 @@ jobs:
       - name: Verify the maintainer preflight contract
         run: bash .claude/scripts/maintainer-preflight.test.sh
 
+  test-memory-hygiene:
+    name: Test memory hygiene guard
+    needs: changes
+    if: needs.changes.outputs.memory-hygiene == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify the memory hygiene guard
+        run: bash .claude/scripts/memory-hygiene.test.sh
+
   test-product-value-contract:
     name: Test product value contract
     needs: changes
@@ -253,6 +275,7 @@ jobs:
       - test-safe-clone
       - test-submodule-init
       - test-maintainer-preflight
+      - test-memory-hygiene
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
@@ -268,5 +291,6 @@ jobs:
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}
+            ${{ needs.test-memory-hygiene.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}
