@@ -3,34 +3,34 @@ title: ☸️ Platform Template
 description: A batteries-included Kubernetes platform (Flux GitOps + KSail + Talos) you instantiate from a template and bootstrap onto Hetzner Cloud, fully unattended.
 ---
 
-A GitHub template that provisions a complete, **batteries-included Kubernetes platform** for you — managed end-to-end with [Flux](https://fluxcd.io/) GitOps, [KSail](https://github.com/devantler-tech/ksail), and [Talos Linux](https://www.talos.dev/). It runs locally on Docker for development and in production on [Hetzner Cloud](https://www.hetzner.com/cloud), and every change is validated in CI before it reaches the cluster. It is a genericized, fully-automated-bootstrap version of the [devantler-tech platform](https://github.com/devantler-tech/platform), from which it is derived.
+A starting point for your own homelab or small-team Kubernetes platform. Create a repository from the template, point it at your accounts, and you get a working cluster with the usual groundwork — networking, certificates, secrets, SSO, security, storage, databases, observability, backups and autoscaling — already wired together.
+
+It runs on [Talos Linux](https://www.talos.dev/), provisioned by [KSail](https://github.com/devantler-tech/ksail) and managed by [Flux](https://fluxcd.io/) GitOps: locally on Docker for development, on [Hetzner Cloud](https://www.hetzner.com/cloud) for production. Every change is validated in CI before it reaches the cluster. It is a generic, self-bootstrapping version of the [devantler-tech platform](https://github.com/devantler-tech/platform).
 
 **Repository**: [devantler-tech/platform-template](https://github.com/devantler-tech/platform-template)
 
-Use it as a starting point for your own homelab or small-team platform — instantiate it, point it at your accounts, and you get a production-grade cluster with networking, certificates, secrets management, SSO, policy/runtime security, storage, databases, observability, backups, and autoscaling already wired together.
-
 ## What's Inside
 
-A high-level inventory of what Flux reconciles onto the cluster. The exact set is overlay-dependent — local/CI (Docker) deploys the full base set, while the Hetzner/prod overlay opts out of a few controllers to save resources.
+Everything below is reconciled onto the cluster by Flux — you don't wire any of it up yourself. Local and CI (Docker) get the full set; the Hetzner/prod overlay drops a few controllers to save resources.
 
-- **GitOps & config** — Flux Operator, Reloader
-- **Networking** — Cilium (CNI + Gateway API), CoreDNS, external-dns (Cloudflare), Hetzner CCM (prod)
-- **Certificates** — cert-manager, trust-manager, Cloudflare Origin CA issuer
-- **Secrets** — OpenBao + External Secrets Operator (runtime), SOPS + Age (at-rest seeds)
-- **Identity / SSO** — Dex (OIDC) with oauth2-proxy / auth-proxy
-- **Policy & runtime security** — Kyverno (admission policy), Kubescape (posture + runtime detection), Tetragon (runtime enforcement)
-- **Storage** — Longhorn (replicated block / RWX), CloudNativePG (PostgreSQL operator)
-- **Autoscaling** — Cluster Autoscaler, Vertical Pod Autoscaler, KEDA + KEDA HTTP add-on
-- **Observability** — kube-prometheus-stack (Prometheus, Grafana, Alertmanager), Loki (logs), Grafana Alloy (collection), OpenCost (cost)
-- **Backup / DR** — Velero with CloudNativePG backups to S3-compatible storage (Cloudflare R2 in prod)
-- **Virtualization** — KubeVirt + CDI (Containerized Data Importer), so VM workloads run alongside containers (local/CI only; opted out of the Hetzner/prod overlay)
-- **Demo apps** — Homepage (dashboard), Headlamp (Kubernetes web UI), and whoami, so the platform stands up with something to look at
+- **GitOps & config** — Flux Operator applies every change you commit; Reloader restarts workloads when their config changes.
+- **Networking** — Cilium carries traffic and terminates ingress (Gateway API), CoreDNS resolves in-cluster names, external-dns keeps your Cloudflare records pointed at the cluster, and the Hetzner CCM provisions cloud load balancers in prod.
+- **Certificates** — cert-manager issues and renews TLS certificates automatically, trust-manager distributes CA bundles, and a Cloudflare Origin CA issuer covers Cloudflare-fronted domains.
+- **Secrets** — OpenBao holds them, External Secrets pulls them into the cluster at runtime, and SOPS + Age keep the seed secrets encrypted in Git.
+- **Identity / SSO** — Dex is the single sign-on front door; oauth2-proxy puts a login in front of apps that have none of their own.
+- **Policy & runtime security** — Kyverno blocks non-compliant workloads before they start, Kubescape scores posture and flags vulnerabilities, and Tetragon enforces at runtime.
+- **Storage** — Longhorn provides replicated block and shared volumes; CloudNativePG runs PostgreSQL with failover and backups.
+- **Autoscaling** — Cluster Autoscaler adds and removes nodes, the Vertical Pod Autoscaler right-sizes resource requests, and KEDA scales workloads on demand, including straight from HTTP traffic.
+- **Observability** — Prometheus, Grafana and Alertmanager for metrics, dashboards and alerts; Loki for logs; Grafana Alloy to collect it all; OpenCost to see what it costs.
+- **Backup / DR** — Velero backs up cluster state and CloudNativePG ships database backups to S3-compatible storage (Cloudflare R2 in prod).
+- **Virtualization** — KubeVirt and CDI run VM workloads alongside containers (local/CI only).
+- **Demo apps** — Homepage, Headlamp and whoami, so the platform comes up with something to look at.
 
 To run **your own** application on the platform, add it as a GitOps tenant from its own repository — see the [GitOps Tenant Template](/templates/gitops-tenant-template/).
 
 ## Getting Started
 
-The headline feature is the **Bootstrap workflow**: it takes a fresh instance from "Use this template + GitHub config" all the way to a running Hetzner cluster, fully unattended.
+The **Bootstrap workflow** takes you from a fresh copy of the template to a running Hetzner cluster without further input.
 
 ```bash
 # Create a new repo from the template
@@ -39,11 +39,11 @@ gh repo create my-platform --template devantler-tech/platform-template --private
 
 Then, in your new repository:
 
-1. **Install a GitHub App** (or fine-grained PAT) granted **Contents: write, Secrets: write, Environments: write, Actions: write** — the bootstrap writes cluster-derived credentials back as `prod` environment secrets, which the default `GITHUB_TOKEN` cannot do. Then expose its credentials to the workflow as the `APP_ID` variable and the `APP_PRIVATE_KEY` secret.
-2. **Set the Variables + Secrets** (variables `DOMAIN`, `CLOUDFLARE_ZONE`, `CLOUDFLARE_ACCOUNT_ID`, `ADMIN_EMAIL`, `HETZNER_LOCATION`; secrets `HCLOUD_TOKEN`, `GHCR_TOKEN`, `CLOUDFLARE_API_TOKEN`, …). A few cluster secrets (`SOPS_AGE_KEY`, `KUBE_CONFIG`, `TALOS_CONFIG`) are auto-generated — you never set those.
-3. **Run the Bootstrap workflow** (Actions → 🌱 Bootstrap → *Run workflow*, choose `prod`, type `yes`). It provisions the Talos cluster via `ksail cluster create`, persists credentials back as `prod` secrets, points Cloudflare DNS at the new load balancer, and commits the rendered + encrypted tree back to your repo.
+1. **Install a GitHub App** (or fine-grained PAT) with **Contents, Secrets, Environments and Actions** write access, exposed to the workflow as the `APP_ID` variable and `APP_PRIVATE_KEY` secret. The bootstrap writes credentials back as `prod` environment secrets, which the default `GITHUB_TOKEN` is not allowed to do.
+2. **Set your variables and secrets** — variables `DOMAIN`, `CLOUDFLARE_ZONE`, `CLOUDFLARE_ACCOUNT_ID`, `ADMIN_EMAIL`, `HETZNER_LOCATION`; secrets `HCLOUD_TOKEN`, `GHCR_TOKEN`, `CLOUDFLARE_API_TOKEN`, and so on. Leave `SOPS_AGE_KEY`, `KUBE_CONFIG` and `TALOS_CONFIG` alone; the bootstrap generates those for you.
+3. **Run the Bootstrap workflow** (Actions → 🌱 Bootstrap → *Run workflow*, choose `prod`, type `yes`). It creates the Talos cluster, saves the resulting credentials as `prod` secrets, points your Cloudflare DNS at the new load balancer, and commits the encrypted result back to your repository.
 
-The authoritative, step-by-step guide — prerequisites, configuration tables, verification, teardown, and troubleshooting — lives in the template's [`docs/BOOTSTRAP.md`](https://github.com/devantler-tech/platform-template/blob/main/docs/BOOTSTRAP.md).
+Full prerequisites, configuration tables, verification, teardown and troubleshooting live in the template's [`docs/BOOTSTRAP.md`](https://github.com/devantler-tech/platform-template/blob/main/docs/BOOTSTRAP.md).
 
 ### Local development
 

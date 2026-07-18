@@ -11,10 +11,10 @@ It is intentionally **stack-neutral**: it carries no application code or languag
 
 ## What's Inside
 
-- **Signed supply chain** — On a `v*` tag, the image and `deploy/` manifests are built, digest-pinned, pushed as an OCI artifact, and [cosign](https://docs.sigstore.dev/)-signed. The platform's `OCIRepository` verifies that signature, so only artifacts from this trusted workflow are reconciled.
-- **Release automation** — [semantic-release](https://semantic-release.gitbook.io/) turns Conventional-Commit merges to `main` into `vX.Y.Z` tags that drive deployment.
+- **Signed supply chain** — On a `v*` tag, your image and `deploy/` manifests are built, digest-pinned, pushed as an OCI artifact, and [cosign](https://docs.sigstore.dev/)-signed. The platform checks that signature before it deploys anything, so only builds from this workflow can reach the cluster.
+- **Release automation** — [semantic-release](https://semantic-release.gitbook.io/) turns Conventional-Commit merges to `main` into the `vX.Y.Z` tags that trigger deployment.
 - **Stays current** — [template-sync](https://github.com/AndreasAugustin/actions-template-sync) opens a weekly PR keeping the shared CI/CD plumbing up to date across every tenant.
-- **Security baseline** — A `zizmor.yml` policy enforces GitHub Actions pinning, scanned in CI.
+- **Security baseline** — A `zizmor.yml` policy requires GitHub Actions to be pinned, and CI enforces it.
 
 ## What the template owns vs. what you own
 
@@ -32,10 +32,9 @@ See the template's [README](https://github.com/devantler-tech/gitops-tenant-temp
 gh repo create devantler-tech/my-tenant --template devantler-tech/gitops-tenant-template --private --clone
 cd my-tenant
 
-# Rename the placeholders in deploy/ to your tenant name (defaults to the repo
-# directory name, or pass one). Run this FIRST — it rewrites the `app` and
-# `REPLACE_ME` placeholders consistently. Doing it by hand is easy to get
-# half-wrong; delete the one-shot helper once adopted.
+# Run this FIRST. It renames the `app` and `REPLACE_ME` placeholders in deploy/
+# to your tenant name — defaulting to the repo directory name, or pass your own.
+# Doing it by hand is easy to get half-wrong. Delete the helper once you're set up.
 scripts/rename-placeholders.sh        # or: scripts/rename-placeholders.sh my-tenant
 
 # Replace the rest of the scaffolding with your app (code, Dockerfile, ci.yaml),
