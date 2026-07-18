@@ -288,12 +288,15 @@ review output of any kind, not that you found none matching your filter.
 `none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)` — the count of `chatgpt-codex-connector`/`coderabbitai` review
 objects and issue comments you actually saw on that PR, and the abbreviated head you matched against.
 `none(cr:rev=0,cmt=0; codex:rev=0,cmt=0 @a1b2c3d4e5)` is a checkable claim; a bare `none` is an assertion the orchestrator
-cannot distinguish from the filter miss this rule exists to prevent.
+cannot distinguish from the filter miss this rule exists to prevent. **A bare `none` is never
+emittable** — where this document says "`none`" in prose it names the *state*; the *token* you emit
+always carries the suffix.
 
 **Count REVIEW OUTPUT only.** `rev=` counts review objects; `cmt=` counts comments carrying actual
 review output (a `Codex Review:` clean-pass marker). A CodeRabbit walkthrough summary, a
 command/setup reply, and a rate-limit or error notice are **not** review output — they do not count,
-and `green_review=none` beside them is correct and expected (surface the notice as its own
+and a `green_review=none(…)` row beside them is correct and expected — still carrying its per-lane
+evidence suffix, like every emitted `none` (surface the notice as its own
 `LANE-SIGNAL` row instead). **Stale artifacts are also normal beside `none`:** a Codex findings
 review at a previous head, with no current-head result, is exactly the common review-needed state —
 report it per lane — `none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)` — which tells the orchestrator to re-request. **Per-lane, never combined:** an aggregate count lets one lane's stale artifact mask the other lane's missed one, which is the exact failure this evidence exists to catch. Only review output
