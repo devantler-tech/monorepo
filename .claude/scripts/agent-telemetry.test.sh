@@ -349,9 +349,9 @@ parity_case() { # name, sample-with-placeholders, distinctive-secret-placeholder
         bash "$TARGET" --since-days 3650 --section safety 2>&1)
   local detected=no redacted=yes
   printf '%s' "$out" | grep -q 'empty = clean' && \
-    printf '%s' "$out" | grep -qE '^\s+[0-9]+\s' || true
+    printf '%s' "$out" | grep -qE '^[[:space:]]+[0-9]+[[:space:]]' || true
   # detected = the credential section lists at least one count line
-  if printf '%s' "$out" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^\s+[0-9]+ '; then
+  if printf '%s' "$out" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+[0-9]+ '; then
     detected=yes
   fi
   printf '%s' "$out" | grep -qF "$secret" && redacted=no
@@ -617,7 +617,7 @@ printf '{"type":"user","message":{"content":[{"type":"text","text":"cfg password
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/semi" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 nocheck "semicolon-bearing secret is redacted" "$OUT" "abc;defghijklmn"
-if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^\s+[0-9]+ '; then
+if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+[0-9]+ '; then
   ok "semicolon-bearing secret is also DETECTED (parity)"
 else bad "semicolon-bearing secret is also DETECTED (parity)" "detector missed what redact() masks"; fi
 

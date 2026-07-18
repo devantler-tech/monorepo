@@ -22,6 +22,9 @@ SECTION=all
 # Require a value before shifting past it. `shift 2` with only one arg left is a
 # no-op error under `set +e`, which spins the loop on the same $1 forever — a
 # malformed scheduled invocation would hang the run instead of failing fast.
+# Argument errors are printed BEFORE `main | redact` is installed, and a
+# malformed invocation can carry a credential in the bad value — so these
+# messages name the OPTION only and never echo the value itself.
 need_val() {
   [ $# -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
 }
@@ -32,12 +35,15 @@ while [ $# -gt 0 ]; do
     --max-files)  need_val "$@"; MAX_FILES="$2";  shift 2 ;;
     --section)    need_val "$@"; SECTION="$2";    shift 2 ;;
     -h|--help)    sed -n '2,16p' "$0"; exit 0 ;;
-    *) echo "unknown arg: $1" >&2; exit 2 ;;
+    *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
 done
 
 case "$SINCE_DAYS" in ''|*[!0-9]*) echo "--since-days must be an integer" >&2; exit 2 ;; esac
 case "$MAX_FILES"  in ''|*[!0-9]*) echo "--max-files must be an integer"  >&2; exit 2 ;; esac
+# Lowercase letters AND digits — section names include `a2a`, which a
+# letters-only class silently rejected.
+case "$SECTION" in ''|*[!a-z0-9]*) echo "--section must be lowercase alphanumeric" >&2; exit 2 ;; esac
 
 CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
@@ -151,6 +157,8 @@ redact() {
     -e 's/(AKIA[0-9A-Z]{4})[0-9A-Z]+/\1…<redacted>/g' \
     -e 's/(xox[baprs]-[A-Za-z0-9]{4})[A-Za-z0-9-]+/\1…<redacted>/g' \
     -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----([^-]|-[^-])*(-----END [A-Z ]*PRIVATE KEY-----)?/<redacted-private-key>/g' \
+    -e 's/-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/<redacted-private-key>/g' \
+    -e 's/^[[:space:]]*[A-Za-z0-9+\/]{40,}={0,2}[[:space:]]*$/<redacted-key-material>/' \
     -e 's/(eyJ[A-Za-z0-9_-]{6})[A-Za-z0-9_.-]{20,}/\1…<redacted-jwt>/g' \
     -e 's/((secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^"'"'"'[:space:],}]{8,}/\1<redacted>/gI'
 }
@@ -241,8 +249,21 @@ tool_result_failure_text() {
          | .content
          | if type=="array" then (map(select(.type=="text").text)|join(" "))
            elif type=="string" then . else empty end),
-        (select((.type=="function_call_output" or .type=="custom_tool_call_output")
-                and ((.is_error? // false) == true or (.status? // "") == "error"))
+        # Codex records carry NO is_error/status field (verified against live
+        # sessions: keys are type/id/call_id/output). Requiring one dropped
+        # EVERY Codex failure — reporting zero, which reads as "healthy".
+        # So: honour the flag when present, and otherwise fall back to an
+        # explicit failure marker in the output. Weaker than the structural
+        # Claude flag, and scoped to real tool OUTPUT records (never transcript
+        # prose) — but a stated approximation beats a silent zero.
+        # NOTE: no apostrophes in these comments; the whole jq program is a
+        # single-quoted shell string, so one would terminate it.
+        (select(.type=="function_call_output" or .type=="custom_tool_call_output")
+         | select(((.is_error? // false) == true)
+                  or ((.status? // "") == "error")
+                  or ((.is_error? == null) and (.status? == null)
+                      and ((.output | tostring)
+                           | test("Command timed out after|Exit code [1-9]|command not found|Traceback \\(most recent|fatal: |error: "))))
          | .output
          | if type=="array" then (map(.text? // empty)|join(" "))
            elif type=="string" then . else empty end)
@@ -342,7 +363,7 @@ codex_session_files() {
         # out-of-scope transcript would be partially read before the scope check
         # that exists to prevent reading it. Two lines covers meta + a sibling
         # header without touching conversation records.
-        cwd=$(head -n 2 "$f" 2>/dev/null \
+        cwd=$(head -n 1 "$f" 2>/dev/null \
               | jq -r 'select(.type=="session_meta")|(.payload.cwd? // .cwd? // empty)' 2>/dev/null | head -1)
         if in_scope_cwd "$cwd"; then printf '%s\n' "$f"; fi
       done | head -n "$MAX_FILES"
@@ -528,7 +549,7 @@ if want safety; then
     # Includes github_pat_ (fine-grained PATs). Omitting it meant a modern GitHub
     # token leak reported "clean" — the worst possible failure for a leak detector.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      grep -hoE "$CRED_RE" "$f" 2>/dev/null
+      grep -hoEi "$CRED_RE" "$f" 2>/dev/null
     done | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
     echo "    (empty = clean; any line here means rotate the credential AND fix the"
     echo "     path that logged it — see the cross-system rotation rule)"
@@ -670,12 +691,14 @@ if want outcomes; then
             | sed -E 's|^.*[:/]([^/]+)/([^/]+)$|\1/\2|' \
             | grep -i '^devantler-tech/' | sort -u)
     REPOS=$(printf 'devantler-tech/monorepo\n%s\n' "$REPOS" | grep -v '^$' | sort -u)
-    TOTAL=0
+    TOTAL=0; APIFAIL=0
     while IFS= read -r r; do
       [ -n "$r" ] || continue
-      c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt \
-            --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")] | length" 2>/dev/null || echo 0)
-      case "$c" in ''|*[!0-9]*) c=0 ;; esac
+      if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt \
+            --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")] | length" 2>/dev/null); then
+        printf '    %-42s QUERY FAILED (auth/rate-limit/network)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
+      fi
+      case "$c" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; APIFAIL=$((APIFAIL+1)); continue ;; esac
       [ "$c" -gt 0 ] && printf '    %-42s %s\n' "$r" "$c"
       TOTAL=$((TOTAL + c))
     done <<EOF
@@ -690,17 +713,24 @@ EOF
     RTOTAL=0
     while IFS= read -r r; do
       [ -n "$r" ] || continue
-      rc=$(gh api "repos/$r/commits" -X GET -f since="${SINCE_ISO}T00:00:00Z" --paginate \
-             --jq '[.[]|select(.commit.message|test("^Revert";"i"))]|length' 2>/dev/null \
-           | awk '{s+=$1} END{print s+0}')
-      case "$rc" in ''|*[!0-9]*) rc=0 ;; esac
+      if ! rcraw=$(gh api "repos/$r/commits" -X GET -f since="${SINCE_ISO}T00:00:00Z" --paginate \
+             --jq '[.[]|select(.commit.message|test("^Revert";"i"))]|length' 2>/dev/null); then
+        printf '    %-42s QUERY FAILED (auth/rate-limit/network)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
+      fi
+      rc=$(printf '%s' "$rcraw" | awk '{s+=$1} END{print s+0}')
+      case "$rc" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; APIFAIL=$((APIFAIL+1)); continue ;; esac
       [ "$rc" -gt 0 ] && printf '    %-42s %s\n' "$r" "$rc"
       RTOTAL=$((RTOTAL + rc))
     done <<EOF
 $REPOS
 EOF
     echo "    ────────────────────────────────────────── total: ${RTOTAL}"
-    echo "    (0 = nothing needed reverting anywhere in the portfolio)"
+    if [ "${APIFAIL:-0}" -gt 0 ]; then
+      echo "    ⚠️  ${APIFAIL} repo quer(y|ies) FAILED — these totals are INCOMPLETE."
+      echo "        Do NOT read them as 'nothing merged / nothing reverted'."
+    else
+      echo "    (0 = nothing needed reverting anywhere in the portfolio)"
+    fi
   else
     echo "  (gh or monorepo unavailable)"
   fi
