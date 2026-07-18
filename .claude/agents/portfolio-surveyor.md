@@ -238,21 +238,28 @@ public and private — no per-repo loop needed to enumerate):
      Emit the remaining undisclosed exact-login comments as
      `CANDIDATE-MAINTAINER-ISSUE-COMMENT` with a one-line gist. The orchestrator's creation record
      decides whether the issue is routine-owned before the comment becomes an instruction.
-4. **CI red on `main` (bounded, per-repo).** Judge `main` by **its current head**, never by a window
-   of failed runs. A failed check-run is bound to the sha it ran against, so it lingers in the repo's
-   history until `main` moves; and a superseded earlier attempt sits in the rollup beside the fresh
-   green ones. Querying `--status failure` therefore reports reds that are not the state of `main`.
-   Two calls per repo:
-   1. `gh api repos/devantler-tech/<repo>/commits/main --jq '.sha'` — resolve the head first.
-   2. `gh api "repos/devantler-tech/<repo>/commits/<sha>/check-runs?per_page=100" --jq '.check_runs[]|"\(.conclusion // .status)\t\(.name)\t\(.completed_at)"'`
-      — only check-runs attached to **that** sha.
+4. **CI red on `main` (bounded, per-repo).** Judge `main` by **its current head**, and only by runs
+   that actually represent main's health. Two calls per repo:
+   1. `gh api repos/devantler-tech/<repo>/commits/main --jq '.sha'` — resolve the head first. Use the
+      **full 40-character sha**: the runs endpoint silently returns an empty set for an abbreviated
+      one, which reads exactly like "nothing failed".
+   2. `gh api "repos/devantler-tech/<repo>/actions/runs?head_sha=<full-sha>&per_page=100"` — then keep
+      only runs whose `event` is a **main-branch event** (`push`, `schedule`, `merge_group`,
+      `workflow_dispatch`, `dynamic`), take the **latest run per workflow name** (greatest
+      `created_at`), and report a red for any that concluded `failure` or `timed_out`.
 
-   Then, **within that sha, keep only the newest run per check name** (greatest `completed_at`) so a
-   superseded earlier attempt cannot count, and treat `skipped`/`neutral`/still-running as **not
-   red**. Report a red only when a surviving check concluded `failure`/`timed_out`/`cancelled`;
-   prefer the repo's aggregate required check (`CI - Required Checks`) as the headline when present.
-   **Always name the judged sha** in the line so the claim is falsifiable, and fail closed on a query
-   error (report `unknown`, never a silent green).
+   Both filters are load-bearing, for different false positives:
+   - **Not keyed to head** — a failed run stays attached to the sha it executed against, so it lingers
+     in history long after `main` moved on. This is what made a two-day-old `CI - KSail` failure
+     surface as live breakage.
+   - **Not a main-branch event** — a `pull_request`/`issue_comment`-triggered workflow can carry
+     `head_sha` equal to main's sha and `head_branch: main` while testing a PR. Those runs are not
+     main's health. Do **not** instead de-duplicate check-runs by name to suppress them: several
+     independent comment-triggered runs coexist at one sha, so "newest per check name" hides a genuine
+     failure behind a later `skipped` — a fail-open this exact check was caught making.
+
+   Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
+   is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
 5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
    (untriaged); automation-owned dependency PRs remain only their compact no-action rows. From (2): `roadmap`-labelled epics and ready
    `enhancement`/`performance`/`refactor`/`bug`/`documentation` issues; flag repos with **no open
