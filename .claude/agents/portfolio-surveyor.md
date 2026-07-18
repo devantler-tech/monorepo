@@ -293,8 +293,39 @@ public and private — no per-repo loop needed to enumerate):
    Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
 5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
-   (untriaged); automation-owned dependency PRs remain only their compact no-action rows. From (2): `roadmap`-labelled epics and ready
-   `enhancement`/`performance`/`refactor`/`bug`/`documentation` issues; flag repos with **no open
+   (untriaged); automation-owned dependency PRs remain only their compact no-action rows.
+   **Select ready work BY ISSUE TYPE, not by label.** Every issue carries exactly one type, so type is
+   the complete and canonical partition; labels are legacy and **provably incomplete** — 8 of 63 open
+   Epics carried no `roadmap` label on 2026-07-18, and `Spike`/`Kata`/`Chore` have no label at all, so
+   a label sweep silently drops them. Sweep each type once:
+   ```sh
+   # VERIFIED WORKING 2026-07-18 — run it, don't retype it from memory:
+   #  · the search QUALIFIER type: works; there is NO issueType JSON field (gh search issues --json
+   #    errors on it), and `no:type` is SILENTLY IGNORED (returns the full set, not the untyped set)
+   #  · `gh api --jq` does NOT forward jq CLI options — `--arg` errors ("accepts 1 arg(s)"), so the
+   #    type is prefixed with sed, not passed into jq
+   #  · created_at is issue AGE for the oldest-first queue; updated_at is reset to today by a comment
+   #  · the body is newline/tab-stripped and bounded — a raw body emitted 25 lines for ONE issue
+   #    and would flood this deliberately compact digest
+   for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do
+     gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate \
+       --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10],
+              .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"
+   done
+   ```
+   ⚠️ **Type sweeps alone are NOT complete — 65 open issues were untyped on 2026-07-18.** Since
+   `no:type` does not work, derive the untyped set as **(the primary org-wide open-issue sweep) minus
+   (the union of the type sweeps)** and report it as a **triage** signal: an untyped issue is invisible
+   to every type filter on the board and to this selection, so typing it is the fix.
+   **Drop hits from archived repos** — this raw Search call has no archived filter (the primary sweep
+   does), so an archived repo's open issue surfaces as actionable when it is a read-only tombstone
+   (`reusable-workflows` is the live example). **`security` is REPORTED, not prioritised**: the queue
+   stays oldest-actionable-first and a security issue is *not* a reason to skip an older one — only an
+   urgent security hotfix jumps, under the normal breakage rule.
+   **Exclude a `Kata` whose named measurement date is still in the FUTURE** — contract skip reason (d)
+   makes it not-yet-actionable, and listing it as ready work makes runs either re-skip it every tick or
+   measure before the agreed date. Report future-dated Katas separately, with their date.
+   Flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
    repos outside the map (`.github`, `maintenance`, `fleet-gitops`, `aws`)
