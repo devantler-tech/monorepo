@@ -24,12 +24,8 @@ errors=0
 
 cd "$REPO_PATH" || exit 1
 
-# Stale refs make every later judgement wrong — abort the whole run on fetch failure.
-if ! git fetch origin --prune -q 2>/dev/null; then
-  echo "$SLUG: ABORT — git fetch failed; refusing to act on stale refs" >&2
-  exit 1
-fi
-
+# DEFAULT reads the LOCAL origin/HEAD (set at clone) and needs no fresh fetch,
+# so the checkout-restoration path can be armed BEFORE fetching.
 DEFAULT=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
 DEFAULT="${DEFAULT:-main}"
 
@@ -56,7 +52,19 @@ return_to_default() {
   else sw="already on $DEFAULT"; fi
 }
 sw=""
+# Arm restoration BEFORE the fetch (superseded by the tmpfile trap below once it
+# is installed): an attached claude/* checkout whose fetch then fails must still
+# be returned to the default branch, or it stays worktree-protected on the next
+# sweep and defeats the end-of-tick return-and-reap guarantee.
+trap 'return_to_default' EXIT
 return_to_default
+
+# Stale refs make every later judgement wrong — abort the whole run on fetch
+# failure (the EXIT trap above still returns the checkout to the default first).
+if ! git fetch origin --prune -q 2>/dev/null; then
+  echo "$SLUG: ABORT — git fetch failed; refusing to act on stale refs" >&2
+  exit 1
+fi
 
 # Verified manifest write: no restore record, no deletion.
 manifest_write() {
@@ -123,8 +131,16 @@ while IFS= read -r b; do
     # update-ref -d BYPASSES the checked-out-branch refusal `git branch -D`
     # has, so re-check the live worktree list right before deleting — a
     # concurrent session may have checked the branch out since the keep-set
-    # snapshot.
-    if git worktree list --porcelain 2>/dev/null | grep -Fxq "branch refs/heads/$b"; then
+    # snapshot. Capture the enumeration SEPARATELY and fail CLOSED (keep) if it
+    # errors: piping the failing command straight into grep would let a
+    # transient worktree-metadata read error read as "checked out nowhere",
+    # and update-ref would then delete a branch live in another worktree,
+    # leaving that worktree on a dangling/unborn HEAD.
+    if ! wt_list=$(git worktree list --porcelain 2>/dev/null); then
+      echo "$SLUG: keep '$b' — worktree enumeration failed; refusing to delete (fail-closed)" >&2
+      l_keep=$((l_keep+1)); errors=$((errors+1)); continue
+    fi
+    if printf '%s\n' "$wt_list" | grep -Fxq "branch refs/heads/$b"; then
       echo "$SLUG: keep '$b' — checked out by a worktree since the snapshot" >&2
       l_keep=$((l_keep+1)); continue
     fi
