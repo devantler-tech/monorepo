@@ -53,7 +53,8 @@ cat > "$tmp/items.json" <<'EOF'
   {"id":6,"node_id":"PVTI_a6","content_type":"Issue","archived_at":null,"content":{"number":16,"state":"open","title":"t8","repository_url":"https://api.github.com/repos/devantler-tech/beta"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"98236657","name":{"html":"✅ Done","raw":"✅ Done"}}}]},
   {"id":7,"node_id":"PVTI_a7","content_type":"PullRequest","archived_at":null,"content":{"number":15,"state":"open","title":"t6","repository_url":"https://api.github.com/repos/devantler-tech/beta"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"f75ad846","name":{"html":"🫴 Ready","raw":"🫴 Ready"}}}]},
   {"id":8,"node_id":"PVTI_a8","content_type":"DraftIssue","archived_at":null,"content":{"title":"t7"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"f498da34","name":{"html":"📥 Backlog","raw":"📥 Backlog"}}}]},
-  {"id":9,"node_id":"PVTI_a9","content_type":"Issue","archived_at":null,"content":{"number":17,"state":"open","title":"t9","repository_url":"https://api.github.com/repos/devantler-tech/alpha"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"f498da34","name":{"html":"📥 Backlog","raw":"📥 Backlog"}}},{"data_type":"issue_type","id":169063398,"name":"Type","value":{"id":35167302,"name":"Epic","is_enabled":true}}]}
+  {"id":9,"node_id":"PVTI_a9","content_type":"Issue","archived_at":null,"content":{"number":17,"state":"open","title":"t9","repository_url":"https://api.github.com/repos/devantler-tech/alpha"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"f498da34","name":{"html":"📥 Backlog","raw":"📥 Backlog"}}},{"data_type":"issue_type","id":169063398,"name":"Type","value":{"id":35167302,"name":"Epic","is_enabled":true}}]},
+  {"id":10,"node_id":"PVTI_a10","content_type":"Issue","archived_at":"2026-07-01T00:00:00Z","content":{"number":18,"state":"open","title":"t10","repository_url":"https://api.github.com/repos/devantler-tech/alpha"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"866b30bb","name":{"html":"🧊 Icebox","raw":"🧊 Icebox"}}}]}
 ]
 EOF
 
@@ -122,6 +123,7 @@ contains "unconfigured column is honestly unmeasured"     "$out" "(limit ?)"
 contains "UI-only limits gap stated"                      "$out" "limits are board-UI-only"
 contains "open issue stuck in Done is flagged"            "$out" "⚠ OPEN issue in Done"
 not_contains "Epic with a Status is excluded from WIP (Kanban parity)" "$out" "📥 Backlog"
+not_contains "archived board card is excluded from WIP"                "$out" "🧊 Icebox"
 
 # Throughput: 3 in-window closures; durations [1,4,17] → median 4, p85 17
 contains "throughput counts only in-window closures" "$out" "issues closed in window: 3"

@@ -130,12 +130,15 @@ if want wip; then
     # failed item request feeds empty output into `jq -s .`, which happily
     # returns `[]` with exit 0 — a silent empty scorecard instead of a loud
     # UNMEASURED section.
+    # per_page=100 covers the documented 50-field project cap, and an empty id
+    # is rejected explicitly — a field pushed past the page would otherwise
+    # yield an empty id that "succeeds" into a malformed items query.
     items=$(load_array FLOW_ITEMS_JSON bash -c '
       set -o pipefail
-      fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=30" \
-        --jq ".[] | select(.name==\"Status\") | .id") || exit 1
-      fid_type=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=30" \
-        --jq ".[] | select(.name==\"Type\") | .id") || exit 1
+      fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" \
+        --jq ".[] | select(.name==\"Status\") | .id") && [ -n "$fid_status" ] || exit 1
+      fid_type=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" \
+        --jq ".[] | select(.name==\"Type\") | .id") && [ -n "$fid_type" ] || exit 1
       gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid_status,$fid_type" \
         --paginate --jq ".[]" | jq -s .') || items=""
     if ! printf '%s' "$items" | is_array; then
@@ -145,7 +148,7 @@ if want wip; then
       # parents, not actionable cards, and counting them against a column limit
       # would flag over-limit on work the board deliberately does not show.
       printf '%s' "$items" | jq -r --argjson ladder "$LADDER" --argjson limits "$limits_json" '
-        map(select(.content_type=="Issue"))
+        map(select(.content_type=="Issue" and .archived_at == null))
         | map(select(([.fields[]? | select(.name=="Type") | .value.name] | index("Epic")) | not))
         | map({status: (first(.fields[]? | select(.name=="Status") | .value.name.raw)
                         // "(no status)")})
@@ -178,13 +181,22 @@ if want throughput; then
   # reason). Each attempt is BUFFERED and only a fully-successful attempt's
   # output is emitted — streaming into the pipe would let a partial first
   # attempt's pages be double-counted by the retry and bias the median/p85.
+  # `-type:Epic` (negation verified honored live) keeps roadmap-scale Epic
+  # lifetimes from skewing the Kanban-population median/p85; the envelope check
+  # rejects `incomplete_results: true` (a Search-side timeout returned as HTTP
+  # success) instead of silently publishing an undercount; and the retry fires
+  # only on a rate-limit/incomplete signature — a permanent error fails the
+  # section immediately rather than blocking on a pointless cooldown.
   closed=$(load_array FLOW_CLOSED_JSON bash -c '
     set -o pipefail
+    errf=$(mktemp); trap "rm -f \"$errf\"" EXIT
     fetch() {
-      gh api "search/issues?q=org:devantler-tech+is:issue+closed:%3E%3D'"$CUTOFF_DATE"'&per_page=100" \
-        --paginate --jq ".items[] | {number, created_at, closed_at, repository_url}"
+      gh api "search/issues?q=org:devantler-tech+is:issue+closed:%3E%3D'"$CUTOFF_DATE"'+-type:Epic&per_page=100" \
+        --paginate --jq "if .incomplete_results then error(\"incomplete_results\") else .items[] | {number, created_at, closed_at, repository_url} end" \
+        2>"$errf"
     }
-    out=$(fetch) || { sleep 65; out=$(fetch); } || exit 1
+    retryable() { grep -qiE "rate limit|HTTP 4(03|29)|incomplete_results" "$errf"; }
+    out=$(fetch) || { retryable || exit 1; sleep 65; out=$(fetch) || exit 1; }
     printf "%s\n" "$out" | jq -s .') || closed=""
   if ! printf '%s' "$closed" | is_array; then
     section_failed throughput "closed-issue query returned no JSON array"
@@ -203,7 +215,8 @@ if want throughput; then
         end'
     echo "  NOTE: PROXY — the API exposes no Status-change history, so this is issue"
     echo "        LIFETIME (created→closed), not board cycle time; stalled-in-column"
-    echo "        detection is likewise UNMEASURED today. Search caps at 1000 results."
+    echo "        detection is likewise UNMEASURED today. Epics are excluded (same"
+    echo "        population as the WIP section). Search caps at 1000 results."
   fi
 fi
 
@@ -218,12 +231,15 @@ if want age; then
   # would otherwise sit as the oldest entry forever).
   substantive=$(load_array FLOW_SUBSTANTIVE_JSON bash -c '
     set -o pipefail
+    errf=$(mktemp); trap "rm -f \"$errf\"" EXIT
+    retryable() { grep -qiE "rate limit|HTTP 4(03|29)|incomplete_results" "$errf"; }
     for t in Feature Bug Security Performance; do
       fetch() {
         gh api "search/issues?q=org:devantler-tech+is:issue+is:open+archived:false+type:$t&sort=created&order=asc&per_page=100" \
-          --paginate --jq ".items[] | {number, created_at, repository_url, type: \"$t\"}"
+          --paginate --jq "if .incomplete_results then error(\"incomplete_results\") else .items[] | {number, created_at, repository_url, type: \"$t\"} end" \
+          2>"$errf"
       }
-      out=$(fetch) || { sleep 65; out=$(fetch); } || exit 1
+      out=$(fetch) || { retryable || exit 1; sleep 65; out=$(fetch) || exit 1; }
       printf "%s\n" "$out"
       sleep 2
     done | jq -s .') || substantive=""
