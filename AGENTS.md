@@ -991,14 +991,17 @@ Two mechanics make this a standing duty rather than something automation handles
   silently miss all the others. Until that exists, **adding the issue to the board is part of filing
   it**.
 - **Auto-add is forward-only** — enabling it never adds pre-existing issues. Any coverage gap must be
-  **backfilled** deliberately, and that is **two commands, not one** — `item-add` has no Status
-  option, so adding alone recreates exactly the no-status items this section forbids:
+  **backfilled** deliberately. Adding an item is `item-add` **plus** `item-edit` (`item-add` has no
+  Status option), and the first exits 0 and prints an item id, so a half-completed add is
+  indistinguishable from a finished one — which is exactly how status-less items keep appearing
+  (measured 2026-07-19: **0 status-less items at 15:25Z, 9 by 19:2xZ**, all created that day).
+  Describing the two steps did not hold, so **use the script — it does both halves and verifies the
+  Status by reading it back, exiting non-zero if it did not land**:
   ```sh
-  # item-add prints nothing useful off-TTY — ASK for the id explicitly:
-  ITEM=$(gh project item-add 5 --owner devantler-tech --url <issue-url> --format json --jq .id)
-  gh project item-edit --id "$ITEM" --project-id <project-id> \
-    --field-id <status-field-id> --single-select-option-id <📥 Backlog option id>
+  .claude/scripts/board-add.sh <issue-url> [status]   # default: 📥 Backlog
   ```
+  It is idempotent for an issue already on the board, and **refuses a private repo's issue** — project
+  5 is public, so that is a maintainer decision, never an agent default.
 
 When bulk-operating on issues or board items, **serialize and pace** — GitHub's secondary limits allow
 roughly **80 content-generating requests/minute and 500/hour**, and both sub-issue endpoints carry an

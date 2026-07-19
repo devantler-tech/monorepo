@@ -25,6 +25,7 @@ jobs:
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
+      board-add: ${{ steps.filter.outputs.board-add }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
     steps:
@@ -58,6 +59,12 @@ jobs:
             agent-telemetry:
               - '.claude/scripts/agent-telemetry.sh'
               - '.claude/scripts/agent-telemetry.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            board-add:
+              - '.claude/scripts/board-add.sh'
+              - '.claude/scripts/board-add.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -211,6 +218,28 @@ jobs:
       - name: Self-test the agent telemetry miner
         run: bash .claude/scripts/agent-telemetry.test.sh
 
+  test-board-add:
+    name: Test board add
+    needs: changes
+    if: needs.changes.outputs.board-add == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # Fixture-only run behind a stubbed `gh` on PATH — no network, no token,
+      # no live board touched. Both OSes because the daily runs happen on macOS
+      # while CI defaults to Linux, and bash/jq portability is what this pins.
+      - name: Self-test board-add
+        run: bash .claude/scripts/board-add.test.sh
+
   test-flow-scorecard:
     name: Test flow scorecard
     needs: changes
@@ -344,6 +373,7 @@ jobs:
       - audit-docs
       - drift-check-active-projects
       - test-agent-telemetry
+      - test-board-add
       - test-flow-scorecard
       - test-safe-clone
       - test-submodule-init
@@ -362,6 +392,7 @@ jobs:
             ${{ needs.audit-docs.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.test-agent-telemetry.result }}
+            ${{ needs.test-board-add.result }}
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-submodule-init.result }}
