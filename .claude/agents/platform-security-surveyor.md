@@ -43,10 +43,12 @@ identically, so every surface check is **liveness first, values second**.
    count) vs baseline.
 2. **CVE (kubevuln)** — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests` (+ `openvulnerabilityexchangecontainers`
    for VEX). Liveness: directly GET both named `vulnerabilitymanifests` and their corresponding
-   `vulnerabilitymanifestsummaries` for 2–3 workloads — real grype `matches`/`tool.name` present,
-   `.all` and `.relevant` populated; on suspicion, kubevuln logs for `ScanCP … partial`. Then:
-   critical/high counts (all vs relevant), notable new reachable CVEs vs baseline, VEX doc count,
-   collected only from the direct-object/verified-aggregate rule above.
+   `vulnerabilitymanifestsummaries` for 2–3 workloads — **Grype matches plus scanner version metadata**
+   (`spec.metadata.tool.version` or `kubescape.io/tool-version`) observed across the sample, with `.all`
+   and `.relevant` refs/counters populated. Do not require `spec.metadata.tool.name`; healthy current
+   objects leave it blank. On suspicion, check kubevuln logs for `ScanCP … partial`. Then: critical/high
+   counts (all vs relevant), notable new reachable CVEs vs baseline, VEX doc count, collected only from
+   the direct-object/verified-aggregate rule above.
 3. **Runtime (node-agent)** — `applicationprofiles`, `networkneighborhoods`, alert routing. Liveness:
    profiles present and not all `partial`; routing **visible, not stdout-only** (exporter config /
    `alertManagerExporterUrls` / Prometheus exporter state, and whether alerts reach the routed sink —

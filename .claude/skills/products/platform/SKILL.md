@@ -88,11 +88,14 @@ verified against direct samples). Never extrapolate cluster-wide findings from t
   aborts. Note: the CI gate (`ksail workload scan --framework nsa --compliance-threshold N`) is a
   **separate** static scan in a healthy CLI context — **a green CI gate does NOT prove the in-cluster
   scan works.**
-- **CVE** (kubevuln) — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests`. **Broken if**
-  manifests carry no grype `matches` / no `tool.name` and summaries are empty (both `.all` and
-  `.relevant`) — check kubevuln logs for `ScanCP … partial` (the relevancy path aborting on partial
-  ApplicationProfiles). Prioritise by relevancy × severity × fixability; emit VEX to suppress
-  non-reachable CVEs.
+- **CVE** (kubevuln) — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests`. Liveness requires
+  **Grype matches plus scanner version metadata** (`spec.metadata.tool.version` or the
+  `kubescape.io/tool-version` annotation) across the direct samples, with populated summary refs and
+  counters. A blank `spec.metadata.tool.name` alone is an upstream representation quirk, not an outage.
+  **Broken if** direct manifests carry neither matches nor scanner-version evidence and summaries are
+  empty (both `.all` and `.relevant`) — check kubevuln logs for `ScanCP … partial` (the relevancy path
+  aborting on partial ApplicationProfiles). Prioritise by relevancy × severity × fixability; emit VEX
+  to suppress non-reachable CVEs.
 - **Runtime** (node-agent) — `applicationprofiles`, `networkneighborhoods`, and the
   `node_agent_alert_counter` metric. **Invisible if** the exporters are stdout-only
   (`alertManagerExporterUrls: []`, `prometheusExporterEnabled: false`). Route **natively to Coroot**
