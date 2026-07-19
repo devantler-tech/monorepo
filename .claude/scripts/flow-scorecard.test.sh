@@ -163,10 +163,14 @@ not_contains "--section wip omits mix"            "$out" "merged agent PRs"
 
 # ── Argument validation fails fast (never a banner-only success) ─
 if env "${fixture_env[@]}" bash "$tool" --section wpi > "$tmp/out-bad.txt" 2>&1; then
-  fail "misspelled --section exits nonzero"
+  fail "misspelled --section exits with code 2"
 else
-  [ "$?" -eq 2 ] 2>/dev/null || true
-  pass "misspelled --section exits nonzero"
+  status=$?
+  if [ "$status" -eq 2 ]; then
+    pass "misspelled --section exits with code 2"
+  else
+    fail "misspelled --section exits with code 2 (got $status)"
+  fi
 fi
 not_contains "misspelled --section prints no banner" "$tmp/out-bad.txt" "FLOW SCORECARD"
 
@@ -204,12 +208,14 @@ else
 fi
 contains "malformed limits are named" "$tmp/out-badlim.txt" "FLOW_WIP_LIMITS is malformed"
 
-# ── Help exits clean ─────────────────────────────────────────────
-if bash "$tool" --help > /dev/null 2>&1; then
+# ── Help exits clean and actually documents the seams ────────────
+if bash "$tool" --help > "$tmp/help.txt" 2>&1; then
   pass "--help exits 0"
 else
   fail "--help exits 0"
 fi
+contains "--help lists the test seams (sed range covers the whole header)" \
+  "$tmp/help.txt" "FLOW_NOW_UTC"
 
 echo ""
 if [ "$failures" -gt 0 ]; then

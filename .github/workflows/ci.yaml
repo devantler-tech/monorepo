@@ -344,6 +344,7 @@ jobs:
       - audit-docs
       - drift-check-active-projects
       - test-agent-telemetry
+      - test-flow-scorecard
       - test-safe-clone
       - test-submodule-init
       - test-maintainer-preflight
@@ -361,6 +362,7 @@ jobs:
             ${{ needs.audit-docs.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.test-agent-telemetry.result }}
+            ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}

@@ -48,7 +48,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --window-days) need_val "$@"; WINDOW_DAYS="$2"; shift 2 ;;
     --section)     need_val "$@"; SECTION="$2";     shift 2 ;;
-    -h|--help)     sed -n '2,27p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
 done
@@ -161,9 +161,15 @@ fi
 if want throughput; then
   echo ""
   echo "── Throughput & created→closed duration — PROXY for cycle time ──"
+  # gh api --paginate does not back off on secondary limits, and the Search API
+  # allows only 30 req/min — retry ONCE after a cooldown rather than dying on a
+  # transient 403/429 (the age section below paces its queries for the same reason).
   closed=$(load_array FLOW_CLOSED_JSON bash -c '
-    gh api "search/issues?q=org:devantler-tech+is:issue+closed:%3E%3D'"$CUTOFF_DATE"'&per_page=100" \
-      --paginate --jq ".items[] | {number, created_at, closed_at, repository_url}" | jq -s .')
+    fetch() {
+      gh api "search/issues?q=org:devantler-tech+is:issue+closed:%3E%3D'"$CUTOFF_DATE"'&per_page=100" \
+        --paginate --jq ".items[] | {number, created_at, closed_at, repository_url}"
+    }
+    { fetch || { sleep 65; fetch; }; } | jq -s .')
   if ! printf '%s' "$closed" | is_array; then
     section_failed throughput "closed-issue query returned no JSON array"
   else
@@ -189,10 +195,16 @@ fi
 if want age; then
   echo ""
   echo "── Oldest open substantive issue per repo (types: Feature, Bug, Security, Performance) ──"
+  # Serialized and PACED (Search API: 30 req/min shared), with one retry after a
+  # cooldown per query — never fanned out.
   substantive=$(load_array FLOW_SUBSTANTIVE_JSON bash -c '
     for t in Feature Bug Security Performance; do
-      gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$t&sort=created&order=asc&per_page=100" \
-        --paginate --jq ".items[] | {number, created_at, repository_url, type: \"$t\"}"
+      fetch() {
+        gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$t&sort=created&order=asc&per_page=100" \
+          --paginate --jq ".items[] | {number, created_at, repository_url, type: \"$t\"}"
+      }
+      fetch || { sleep 65; fetch; } || exit 1
+      sleep 2
     done | jq -s .')
   if ! printf '%s' "$substantive" | is_array; then
     section_failed age "open-substantive-issue query returned no JSON array"
