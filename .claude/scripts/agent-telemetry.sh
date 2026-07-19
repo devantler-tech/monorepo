@@ -256,14 +256,24 @@ fi
 # as never-run and removed from every class — silently deleting a real block,
 # which is the same failure mode as the is_error over-match this replaced.
 NEVER_RAN_SHAPES='Blocked:|Permission to use [A-Za-z_]+ with command|Claude requested permissions to use|approval (denied|required) for tool'
-NEVER_RAN_RE='^[[:space:]]*("|\[)?[[:space:]]*(<tool_use_error>)?[[:space:]]*('"$NEVER_RAN_SHAPES"')'
+NEVER_RAN_RE='^[[:space:]]*(<tool_use_error>)?[[:space:]]*('"$NEVER_RAN_SHAPES"')'
 
 # tool_use ids whose result shows the call never ran, resolved once per file.
+#
+# The content is NORMALISED to its text before matching, exactly as the safety
+# detector does. A tool_result may carry `content` as a plain string OR as the
+# array-of-text-blocks shape; `tostring` on the array yields `[{"type":"text"…`,
+# so an anchored pattern never reaches the denial text and the call is counted
+# as an executed foreground launch even though it never ran. Anchoring without
+# normalising is precisely that bug.
 denied_ids() {
   jq -Rr --arg re "$NEVER_RAN_RE" 'select(length>0)|(try fromjson catch empty)
           | select(.type=="user") | .message.content[]?
           | select(.type=="tool_result" and .is_error==true)
-          | select((.content | tostring) | test($re))
+          | select((.content
+                    | if type=="array" then (map(select(.type=="text").text // empty)|join(" "))
+                      elif type=="string" then . else tostring end)
+                   | test($re))
           | .tool_use_id // empty' "$1" 2>/dev/null \
     | jq -Rs 'split("\n")|map(select(length>0))' 2>/dev/null
 }

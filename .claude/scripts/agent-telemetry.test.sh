@@ -1121,12 +1121,19 @@ else bad "a TIMED-OUT sleep still counts (it ran; is_error is not 'never ran')" 
 # EVERY recognised never-ran shape must be excluded, not just the hook's. The
 # sleep classifier and the safety detector share ONE regex constant precisely so
 # a shape recognised by one cannot be missed by the other.
+# NOTE the two content SHAPES here: a plain string and the array-of-text-blocks
+# form. Both are supported by the harness, and an anchored pattern applied to
+# `tostring` of the array sees `[{"type":"text"…` and never reaches the denial
+# text — so the array case must be covered explicitly or the anchoring silently
+# counts a never-run sleep as an executed foreground launch.
 mkdir -p "$FIX/deniedsleep"
 cat > "$FIX/deniedsleep/s.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"d1","name":"Bash","input":{"command":"sleep 60"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","is_error":true,"content":"Claude requested permissions to use Bash, but you have not granted it yet"}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"d2","name":"Bash","input":{"command":"sleep 45"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d2","is_error":true,"content":"approval denied for tool Bash"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d2","is_error":true,"content":[{"type":"text","text":"approval denied for tool Bash"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d3","name":"Bash","input":{"command":"sleep 30"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d3","is_error":true,"content":[{"type":"text","text":"<tool_use_error>Blocked: sleep 30 followed by: gh pr checks"}]}]}}
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deniedsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
