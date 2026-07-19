@@ -252,14 +252,39 @@ fi
 #                                   FG — a false coverage claim beats no claim.
 #   ""  (default) every command, unchanged legacy behaviour.
 commands_in() {
-  local f="$1" cls="${2:-}"
-  jq -r --arg cls "$cls" '
+  local f="$1" cls="${2:-}" errs='[]'
+  # Exclude only calls that NEVER EXECUTED: the enforcement hook rejects
+  # `sleep N && <poll>` and the permission layer denies a command, both leaving
+  # the tool_use in the transcript with no time spent. Counting those as blocks
+  # reports waiting that never happened, and inflates exactly the metric the
+  # hook exists to drive down.
+  #
+  # NOT keyed on is_error, which is far broader than "never ran" — a TIMED-OUT
+  # sleep carries is_error:true and is the single most expensive real block in
+  # the corpus. Suppressing it would hide the worst case while claiming to
+  # measure it. Match the two never-ran shapes explicitly instead.
+  if [ -n "$cls" ]; then
+    errs=$(jq -Rr 'select(length>0)|(try fromjson catch empty)
+                   | select(.type=="user") | .message.content[]?
+                   | select(.type=="tool_result" and .is_error==true)
+                   | select((.content | tostring)
+                            | test("<tool_use_error>Blocked:|^Permission to use|\\\"Permission to use"))
+                   | .tool_use_id // empty' "$f" 2>/dev/null \
+           | jq -Rs 'split("\n")|map(select(length>0))' 2>/dev/null)
+    [ -n "$errs" ] || errs='[]'
+  fi
+  jq -r --arg cls "$cls" --argjson errs "$errs" '
     .. | objects
     | (
         # Claude: tool_use carrying a Bash command.
         (select(.type=="tool_use")
          | select($cls == "" or $cls == (if .input?.run_in_background == true
                                          then "BG" else "FG" end))
+         # $i is bound BEFORE index() so `.` is not rebound inside the test —
+         # `$arr | index(.)` there would compare the array against itself and
+         # match everything (a trap that has made a guard vacuous before).
+         | (.id? // "") as $i
+         | select($i == "" or (($errs | index($i)) | not))
          | .input?.command? // empty),
         # Codex, JSON-argument shape (function_call).
         (select(.type=="function_call")
@@ -555,14 +580,30 @@ if want efficiency; then
       strip_heredocs \
         | grep -cE '(^|[;&|(]|&&|\|\||[[:space:]](do|then|else)[[:space:]])[[:space:]]*sleep[[:space:]]+["'"'"']?[$0-9{]' || true
     }
-    sleeps_for_class() {  # $1 = "" | FG | BG | CX
-      printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
-        | while IFS= read -r f; do commands_in "$f" "$1"; done | count_sleeps
-    }
-    SLEEPS=$(sleeps_for_class "")
-    SLEEP_FG=$(sleeps_for_class FG)
-    SLEEP_BG=$(sleeps_for_class BG)
-    SLEEP_CX=$(sleeps_for_class CX)
+    # The corpus is LIVE: the sibling instance writes transcripts while we read.
+    # Scanning once per class could observe a different corpus each time, so a
+    # sleep appended mid-run would make the classes disagree with a separately
+    # scanned total. Snapshot each file ONCE and derive every class from that
+    # copy, so the counts are mutually consistent by construction rather than
+    # merely checked afterwards.
+    SNAP=$(mktemp -d) || SNAP=""
+    : > "$SNAP/FG"; : > "$SNAP/BG"; : > "$SNAP/CX"
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      cp "$f" "$SNAP/cur" 2>/dev/null || continue
+      commands_in "$SNAP/cur" FG >> "$SNAP/FG"
+      commands_in "$SNAP/cur" BG >> "$SNAP/BG"
+      commands_in "$SNAP/cur" CX >> "$SNAP/CX"
+    done
+    SLEEP_FG=$(count_sleeps < "$SNAP/FG")
+    SLEEP_BG=$(count_sleeps < "$SNAP/BG")
+    SLEEP_CX=$(count_sleeps < "$SNAP/CX")
+    # The total is now the SUM of the classes, not a fourth independent scan.
+    # That makes class-vs-total drift impossible instead of detectable — and a
+    # drift warning over a sum would be a vacuous guard, which is worse than
+    # none. Classification is exhaustive by construction (a Claude tool_use is
+    # FG or BG; a Codex call is CX; there is no fourth command source).
+    SLEEPS=$((SLEEP_FG + SLEEP_BG + SLEEP_CX))
+    rm -rf "$SNAP" 2>/dev/null
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"
@@ -573,13 +614,9 @@ if want efficiency; then
     # improver's own runs emit several compliant watchers each, landing as
     # self-noise in the very bucket used to judge the agents. These lines split
     # the two. This SHARPENS the measurement; it removes nothing.
-    echo "    ├ foreground block ....... ${SLEEP_FG}   [Claude] ← the contract violation"
-    echo "    ├ deferred watcher ....... ${SLEEP_BG}   [Claude, backgrounded] ← COMPLIANT, not waste"
-    echo "    └ unclassified ........... ${SLEEP_CX}   [Codex — see gap note below]"
-    if [ "$((SLEEP_FG + SLEEP_BG + SLEEP_CX))" -ne "$SLEEPS" ]; then
-      echo "    ⚠️  CLASS SUM $((SLEEP_FG + SLEEP_BG + SLEEP_CX)) != TOTAL ${SLEEPS} — the class"
-      echo "        filter and the total have drifted; trust NEITHER until fixed."
-    fi
+    echo "    ├ foreground launch ...... ${SLEEP_FG}   [Claude, synchronous]"
+    echo "    ├ background launch ...... ${SLEEP_BG}   [Claude, run_in_background]"
+    echo "    └ launch mode unknown .... ${SLEEP_CX}   [Codex — see gap note below]"
     # Rates, because a raw total is not a rate. The window selects FILES by
     # mtime, so session counts swing hard day to day and a raw count fell while
     # the per-session rate ROSE (442→328 total, but 2.02→3.73/session). Every
@@ -590,9 +627,19 @@ if want efficiency; then
     if [ "$CX_COUNT" -gt 0 ]; then
       echo "    per-session (Codex,  n=${CX_COUNT}): unclassified $(awk -v a="$SLEEP_CX" -v b="$CX_COUNT" 'BEGIN{printf "%.2f", a/b}')/session"
     fi
-    echo "    NOTE: the Claude split reads run_in_background on the tool call, so"
-    echo "          it is STRUCTURAL — prose cannot fake it. The key is OMITTED"
-    echo "          when false, so absence is correctly read as foreground."
+    echo "    NOTE: this splits LAUNCH MODE, which is NOT a compliance verdict."
+    echo "          run_in_background says how Bash started the command, never"
+    echo "          why the sleep exists. The contract permits a FOREGROUND bare"
+    echo "          sleep as a local timer for a process the agent itself"
+    echo "          started, and a BACKGROUND sleep can still be a redundant"
+    echo "          poll alongside foreground polling. So a foreground count is"
+    echo "          a busy-wait CANDIDATE, not a violation, and a background"
+    echo "          count is not an exoneration — correlate with what was being"
+    echo "          waited on before drawing a conclusion."
+    echo "          The split is STRUCTURAL (read off the tool call), so prose"
+    echo "          cannot fake it. The key is OMITTED when false, so absence is"
+    echo "          correctly read as foreground. Calls whose RESULT errored are"
+    echo "          excluded from these classes: a hook-rejected sleep never ran."
     echo "          CODEX IS A STATED GAP, NOT A ZERO: 767 live exec_command"
     echo "          calls carried yield_time_ms (an output-read timeout) and"
     echo "          ZERO carried any background flag, so that runtime exposes no"

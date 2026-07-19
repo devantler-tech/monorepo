@@ -1025,7 +1025,7 @@ check "the mtime window bound is disclosed" "$OUT" "selects FILES by mtime"
 
 # ── 6f. sleep background classification ───────────────────────────────────────
 echo
-echo "sleep classification (foreground block vs deferred watcher)"
+echo "sleep classification (launch mode: foreground vs background)"
 
 # A BACKGROUNDED sleep is the contract's CHEAP WATCHER, not a busy-wait. Scoring
 # it as waste is what made the raw total unusable as evidence — the improver's
@@ -1036,12 +1036,12 @@ cat > "$FIX/bgsleep/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bgsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'deferred watcher \.+ 1'; then
-  ok "a backgrounded sleep counts as a deferred watcher"
-else bad "a backgrounded sleep counts as a deferred watcher" "$(printf '%s' "$OUT" | grep -E 'foreground|deferred|unclass')"; fi
-if printf '%s' "$OUT" | grep -qE 'foreground block \.+ 0'; then
-  ok "...and is NOT counted as a foreground block"
-else bad "...and is NOT counted as a foreground block" "$(printf '%s' "$OUT" | grep -E 'foreground')"; fi
+if printf '%s' "$OUT" | grep -qE 'background launch \.+ 1'; then
+  ok "a backgrounded sleep is classified background-launch"
+else bad "a backgrounded sleep is classified background-launch" "$(printf '%s' "$OUT" | grep -E 'foreground|deferred|unclass')"; fi
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 0'; then
+  ok "...and is NOT classified foreground-launch"
+else bad "...and is NOT classified foreground-launch" "$(printf '%s' "$OUT" | grep -E 'foreground')"; fi
 
 # The key is OMITTED when false, so ABSENCE must read as foreground. If this
 # regressed to "absent => unknown", every ordinary busy-wait would vanish.
@@ -1052,7 +1052,7 @@ cat > "$FIX/fgsleep/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/fgsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'foreground block \.+ 2'; then
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 2'; then
   ok "an omitted AND an explicit-false flag both read as foreground"
 else bad "an omitted AND an explicit-false flag both read as foreground" "$(printf '%s' "$OUT" | grep -E 'foreground|deferred')"; fi
 
@@ -1061,30 +1061,62 @@ else bad "an omitted AND an explicit-false flag both read as foreground" "$(prin
 # them into foreground would invent an attribution the data cannot support.
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreal" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'unclassified \.+ 1'; then
-  ok "a Codex sleep is counted as unclassified"
-else bad "a Codex sleep is counted as unclassified" "$(printf '%s' "$OUT" | grep -E 'unclass|foreground')"; fi
-if printf '%s' "$OUT" | grep -qE 'foreground block \.+ 0'; then
+if printf '%s' "$OUT" | grep -qE 'launch mode unknown \.+ 1'; then
+  ok "a Codex sleep has unknown launch mode"
+else bad "a Codex sleep has unknown launch mode" "$(printf '%s' "$OUT" | grep -E 'unclass|foreground')"; fi
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 0'; then
   ok "...and is NOT attributed to foreground"
 else bad "...and is NOT attributed to foreground" "$(printf '%s' "$OUT" | grep -E 'foreground')"; fi
 check "the Codex classification gap is stated" "$OUT" "STATED GAP, NOT A ZERO"
+check "launch mode is not presented as a compliance verdict" "$OUT" "NOT a compliance verdict"
 
 # The classes must SUM to the total, or a trend is read off a broken split.
 # Mixed corpus: 2 Claude (1 fg + 1 bg) + 1 Codex = 3.
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bgsleep" CODEX_HOME="$FIX/cxreal" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2' \
-   && printf '%s' "$OUT" | grep -qE 'deferred watcher \.+ 1' \
-   && printf '%s' "$OUT" | grep -qE 'unclassified \.+ 1'; then
+   && printf '%s' "$OUT" | grep -qE 'background launch \.+ 1' \
+   && printf '%s' "$OUT" | grep -qE 'launch mode unknown \.+ 1'; then
   ok "classes sum to the total across both instances"
 else bad "classes sum to the total across both instances" "$(printf '%s' "$OUT" | grep -E 'sleep/poll|foreground|deferred|unclass')"; fi
-if printf '%s' "$OUT" | grep -q 'CLASS SUM'; then
-  bad "no drift warning on a consistent split" "$(printf '%s' "$OUT" | grep 'CLASS SUM')"
-else ok "no drift warning on a consistent split"; fi
+# The total is DERIVED from the classes now, so a drift warning would be a
+# vacuous guard. Exhaustiveness is what must hold instead: every counted sleep
+# lands in exactly one class, which the sum check above asserts directly.
 
 # Rates carry their denominator — a raw total is not a rate, and comparing one
 # against the other is exactly how the 07-19 sleep reading was misread as a win.
 check "per-session rate states its denominator" "$OUT" "per-session (Claude, n="
+
+# A sleep the enforcement hook REJECTED never ran. Counting it as a foreground
+# block reports time the agent never spent blocking, and inflates precisely the
+# metric the hook exists to drive down.
+mkdir -p "$FIX/blockedsleep"
+cat > "$FIX/blockedsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"blk1","name":"Bash","input":{"command":"sleep 60 && gh pr checks 1"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"blk1","is_error":true,"content":"<tool_use_error>Blocked: sleep 60 followed by: gh pr checks 1"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"ok1","name":"Bash","input":{"command":"sleep 5"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"ok1","is_error":false,"content":"done"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blockedsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1'; then
+  ok "a hook-BLOCKED sleep is excluded; the executed one still counts"
+else bad "a hook-BLOCKED sleep is excluded; the executed one still counts" "$(printf '%s' "$OUT" | grep -E 'foreground|sleep/poll')"; fi
+
+# A TIMED-OUT sleep also carries is_error:true, but it RAN — and it is the most
+# expensive block in the corpus. Excluding it (by keying on is_error rather than
+# on the never-ran shapes) would hide the worst case while claiming to measure
+# busy-waiting. This guard exists because that regression was written and caught.
+mkdir -p "$FIX/timedoutsleep"
+cat > "$FIX/timedoutsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"to1","name":"Bash","input":{"command":"sleep 600"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"to1","is_error":true,"content":[{"type":"text","text":"Command timed out after 2m 0s"}]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/timedoutsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1'; then
+  ok "a TIMED-OUT sleep still counts (it ran; is_error is not 'never ran')"
+else bad "a TIMED-OUT sleep still counts (it ran; is_error is not 'never ran')" "$(printf '%s' "$OUT" | grep -E 'foreground|sleep/poll')"; fi
 
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
