@@ -273,9 +273,9 @@ if want mix; then
     cursor=""; out="[]"
     for _page in 1 2 3 4 5 6 7 8 9 10; do
       args=(-f q="$q"); [ -n "$cursor" ] && args+=(-f after="$cursor")
-      resp=$(gh api graphql -f query="query(\$q:String!,\$after:String){search(query:\$q,type:ISSUE,first:100,after:\$after){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{title headRefName mergedAt repository{name}}}}}" "${args[@]}") || exit 1
+      resp=$(gh api graphql -f query="query(\$q:String!,\$after:String){search(query:\$q,type:ISSUE,first:100,after:\$after){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{title headRefName mergedAt isCrossRepository repository{name}}}}}" "${args[@]}") || exit 1
       out=$(jq -n --argjson a "$out" --argjson r "$resp" \
-        "\$a + [\$r.data.search.nodes[] | {title, headRefName, mergedAt, repo: .repository.name}]")
+        "\$a + [\$r.data.search.nodes[] | {title, headRefName, mergedAt, isCrossRepository, repo: .repository.name}]")
       [ "$(printf "%s" "$resp" | jq -r .data.search.pageInfo.hasNextPage)" = "true" ] || break
       cursor=$(printf "%s" "$resp" | jq -r .data.search.pageInfo.endCursor)
     done
@@ -286,6 +286,9 @@ if want mix; then
     printf '%s' "$prs" | jq -r --arg now "$NOW_UTC" --argjson d "$WINDOW_DAYS" '
       (($now|fromdateiso8601) - ($d*86400)) as $cut
       | map(select((.headRefName // "") | test("^(claude|codex)/"))
+            # Branch names are contributor-controlled, so a fork PR can name
+            # itself claude/* — a cross-repository head is never agent work.
+            | select(.isCrossRepository != true)
             | select(.mergedAt != null and (.mergedAt|fromdateiso8601) >= $cut))
       | map((.title | capture("^(?<t>[A-Za-z]+)") | .t | ascii_downcase) // "unparsed") as $types
       | ($types | map(select(. == "feat" or . == "fix" or . == "perf")) | length) as $sub

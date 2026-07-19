@@ -88,7 +88,8 @@ cat > "$tmp/prs.json" <<'EOF'
   {"title":"docs: sync page","headRefName":"codex/y-docs","mergedAt":"2026-07-14T00:00:00Z","repo":"beta"},
   {"title":"fix(deps): bump lib","headRefName":"renovate/lib-1.x","mergedAt":"2026-07-15T00:00:00Z","repo":"beta"},
   {"title":"feat: too old","headRefName":"claude/old-2","mergedAt":"2026-07-01T00:00:00Z","repo":"alpha"},
-  {"title":"🤖 unparseable title","headRefName":"claude/w-3","mergedAt":"2026-07-16T00:00:00Z","repo":"beta"}
+  {"title":"🤖 unparseable title","headRefName":"claude/w-3","mergedAt":"2026-07-16T00:00:00Z","repo":"beta"},
+  {"title":"feat: fork impersonating an agent branch","headRefName":"claude/evil-4","mergedAt":"2026-07-15T00:00:00Z","isCrossRepository":true,"repo":"beta"}
 ]
 EOF
 
@@ -141,7 +142,7 @@ else
 fi
 
 # Mix: renovate + pre-window excluded → n=3, 1 substantive / 1 supporting / 1 other
-contains "mix counts agent PRs only, in-window" "$out" "merged agent PRs: 3"
+contains "mix counts agent PRs only, in-window (fork claude/* excluded)" "$out" "merged agent PRs: 3"
 contains "substantive classified"               "$out" "substantive (feat|fix|perf): 1"
 contains "supporting classified"                "$out" "supporting  (docs|chore|ci|test|build|style|refactor): 1"
 contains "unparseable title counted as other"   "$out" "other/unparsed titles: 1"
