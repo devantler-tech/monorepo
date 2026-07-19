@@ -1701,8 +1701,11 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   disambiguator above). Never pretend to be human.
 
 ### Cadence & focus
-**Dispatched hourly** (the deployment loader owns the exact cadence) — that is the **interval
-between runs, not a per-run time budget.** Each run: **hotfix any breakage**, then **sweep every
+**Each instance is dispatched every 2 hours; the two instances alternate, so the portfolio is swept
+about hourly** (the deployment loader owns the exact cadence — Claude Code on even hours, the
+ChatGPT/Codex sibling on uneven). That interval is the gap **between runs, not a per-run time
+budget** — and it is the *instance's* own gap that bounds a carry-forward, so a run that defers a
+watch item to "the next tick" is deferring it ~2 hours, not one. Each run: **hotfix any breakage**, then **sweep every
 failing-CI / mergeable actionable trusted-author PR toward green and merge — first priority, across all
 repos, excluding automation-owned dependency PRs; PRs always come before issues**, then **work the issue
 backlog oldest-actionable-first**, capturing new
