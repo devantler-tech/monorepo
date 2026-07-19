@@ -27,6 +27,10 @@ acts on it, not a human); return the digest and nothing else.
 all-zero severities and empty VEX/matches even when the real objects are full — you MUST `kubectl get
 <crd> <name> -n <ns> -o json` **by name** (sample 2–3 objects per surface) before concluding anything
 about data quality. An all-zero LIST is a *display artifact*, not a finding.
+Sampling proves **liveness only**. Before reporting cluster-wide scores, severity totals, finding
+deltas, or cleanliness, **directly GET every object whose payload contributes** (or use a trusted
+aggregate endpoint already verified against direct samples); never extrapolate from the liveness
+sample.
 And the standing trap this agent exists to catch: **an empty/zero reading almost always means the
 scanner is BROKEN, not that the cluster is clean** — a broken scanner and a compliant cluster read
 identically, so every surface check is **liveness first, values second**.
@@ -38,9 +42,11 @@ identically, so every surface check is **liveness first, values second**.
    --tail=50` for scan aborts. Then: framework scores + the top failed controls (id, name, failing
    count) vs baseline.
 2. **CVE (kubevuln)** — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests` (+ `openvulnerabilityexchangecontainers`
-   for VEX). Liveness: GET 2–3 summaries by name — real grype `matches`/`tool.name` present, `.all`
-   and `.relevant` populated; on suspicion, kubevuln logs for `ScanCP … partial`. Then: critical/high
-   counts (all vs relevant), notable new reachable CVEs vs baseline, VEX doc count.
+   for VEX). Liveness: directly GET both named `vulnerabilitymanifests` and their corresponding
+   `vulnerabilitymanifestsummaries` for 2–3 workloads — real grype `matches`/`tool.name` present,
+   `.all` and `.relevant` populated; on suspicion, kubevuln logs for `ScanCP … partial`. Then:
+   critical/high counts (all vs relevant), notable new reachable CVEs vs baseline, VEX doc count,
+   collected only from the direct-object/verified-aggregate rule above.
 3. **Runtime (node-agent)** — `applicationprofiles`, `networkneighborhoods`, alert routing. Liveness:
    profiles present and not all `partial`; routing **visible, not stdout-only** (exporter config /
    `alertManagerExporterUrls` / Prometheus exporter state, and whether alerts reach the routed sink —

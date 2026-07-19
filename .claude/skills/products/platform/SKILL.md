@@ -77,7 +77,10 @@ or empty VEX payloads in that response are display artifacts, not findings. Befo
 quality, `kubectl get <crd> <name> -n <ns> -o json` by name and **sample 2–3 objects per surface**. For
 CVE liveness, directly GET both named `vulnerabilitymanifests` and their corresponding
 `vulnerabilitymanifestsummaries`, then cross-check scanner freshness and logs. Never declare the
-scanner broken or the cluster clean from a LIST projection.
+scanner broken or the cluster clean from a LIST projection. Sampling proves **liveness only**. Before
+reporting cluster-wide scores, severity totals, finding deltas, or cleanliness,
+directly GET every object whose payload contributes (or use a trusted aggregate endpoint already
+verified against direct samples). Never extrapolate cluster-wide findings from the liveness sample.
 
 - **Posture** (config scan) — `configurationscansummaries` / `workloadconfigurationscansummaries`
   (per-namespace scores + failed controls). **Broken if** scores are `0.00` across frameworks,

@@ -24,6 +24,12 @@ for security_definition in "${platform_card}" "${platform_security_surveyor}"; d
     fail "${security_definition#"${repo_root}/"} can mistake a Kubescape LIST skeleton for empty scanner output"
   grep -Fq 'sample 2–3 objects per surface' "${security_definition}" ||
     fail "${security_definition#"${repo_root}/"} does not require direct per-object Kubescape payload checks"
+  grep -Fq 'directly GET every object whose payload contributes' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can extrapolate cluster-wide findings from a liveness sample"
+  # Literal Markdown code spans; command substitution is intentionally disabled.
+  # shellcheck disable=SC2016
+  grep -Fq 'both named `vulnerabilitymanifests` and their corresponding' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} does not require direct reads of both CVE object types"
 done
 
 [[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
