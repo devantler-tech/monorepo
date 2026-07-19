@@ -1023,6 +1023,163 @@ check "the Codex denial gap stays disclosed" "$OUT" "CLAUDE-SCHEMA ONLY"
 OUT=$(run --section reliability)
 check "the mtime window bound is disclosed" "$OUT" "selects FILES by mtime"
 
+# ── 6f. sleep background classification ───────────────────────────────────────
+echo
+echo "sleep classification (launch mode: foreground vs background)"
+
+# A BACKGROUNDED sleep is the contract's CHEAP WATCHER, not a busy-wait. Scoring
+# it as waste is what made the raw total unusable as evidence — the improver's
+# own runs arm several per tick, polluting the bucket used to judge the agents.
+mkdir -p "$FIX/bgsleep"
+cat > "$FIX/bgsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"sleep 300 && gh pr checks 1","run_in_background":true}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bgsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'background launch \.+ 1'; then
+  ok "a backgrounded sleep is classified background-launch"
+else bad "a backgrounded sleep is classified background-launch" "$(printf '%s' "$OUT" | grep -E 'foreground|deferred|unclass')"; fi
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 0'; then
+  ok "...and is NOT classified foreground-launch"
+else bad "...and is NOT classified foreground-launch" "$(printf '%s' "$OUT" | grep -E 'foreground')"; fi
+
+# The key is OMITTED when false, so ABSENCE must read as foreground. If this
+# regressed to "absent => unknown", every ordinary busy-wait would vanish.
+mkdir -p "$FIX/fgsleep"
+cat > "$FIX/fgsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"f1","name":"Bash","input":{"command":"sleep 60"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"f2","name":"Bash","input":{"command":"sleep 30","run_in_background":false}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/fgsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 2'; then
+  ok "an omitted AND an explicit-false flag both read as foreground"
+else bad "an omitted AND an explicit-false flag both read as foreground" "$(printf '%s' "$OUT" | grep -E 'foreground|deferred')"; fi
+
+# Codex exposes NO backgrounding surface (767 live exec calls: yield_time_ms
+# only, zero background flags). Its sleeps must land in `unclassified` — folding
+# them into foreground would invent an attribution the data cannot support.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreal" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'launch mode unknown \.+ 1'; then
+  ok "a Codex sleep has unknown launch mode"
+else bad "a Codex sleep has unknown launch mode" "$(printf '%s' "$OUT" | grep -E 'unclass|foreground')"; fi
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 0'; then
+  ok "...and is NOT attributed to foreground"
+else bad "...and is NOT attributed to foreground" "$(printf '%s' "$OUT" | grep -E 'foreground')"; fi
+check "the Codex classification gap is stated" "$OUT" "STATED GAP, NOT A ZERO"
+check "launch mode is not presented as a compliance verdict" "$OUT" "NOT a compliance verdict"
+
+# The classes must SUM to the total, or a trend is read off a broken split.
+# Mixed corpus: 2 Claude (1 fg + 1 bg) + 1 Codex = 3.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bgsleep" CODEX_HOME="$FIX/cxreal" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2' \
+   && printf '%s' "$OUT" | grep -qE 'background launch \.+ 1' \
+   && printf '%s' "$OUT" | grep -qE 'launch mode unknown \.+ 1'; then
+  ok "classes sum to the total across both instances"
+else bad "classes sum to the total across both instances" "$(printf '%s' "$OUT" | grep -E 'sleep/poll|foreground|deferred|unclass')"; fi
+# The total is DERIVED from the classes now, so a drift warning would be a
+# vacuous guard. Exhaustiveness is what must hold instead: every counted sleep
+# lands in exactly one class, which the sum check above asserts directly.
+
+# Rates carry their denominator — a raw total is not a rate, and comparing one
+# against the other is exactly how the 07-19 sleep reading was misread as a win.
+check "per-session rate states its denominator" "$OUT" "per-session (Claude, n="
+
+# A sleep the enforcement hook REJECTED never ran. Counting it as a foreground
+# block reports time the agent never spent blocking, and inflates precisely the
+# metric the hook exists to drive down.
+mkdir -p "$FIX/blockedsleep"
+cat > "$FIX/blockedsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"blk1","name":"Bash","input":{"command":"sleep 60 && gh pr checks 1"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"blk1","is_error":true,"content":"<tool_use_error>Blocked: sleep 60 followed by: gh pr checks 1"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"ok1","name":"Bash","input":{"command":"sleep 5"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"ok1","is_error":false,"content":"done"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blockedsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1'; then
+  ok "a hook-BLOCKED sleep is excluded; the executed one still counts"
+else bad "a hook-BLOCKED sleep is excluded; the executed one still counts" "$(printf '%s' "$OUT" | grep -E 'foreground|sleep/poll')"; fi
+
+# A TIMED-OUT sleep also carries is_error:true, but it RAN — and it is the most
+# expensive block in the corpus. Excluding it (by keying on is_error rather than
+# on the never-ran shapes) would hide the worst case while claiming to measure
+# busy-waiting. This guard exists because that regression was written and caught.
+mkdir -p "$FIX/timedoutsleep"
+cat > "$FIX/timedoutsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"to1","name":"Bash","input":{"command":"sleep 600"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"to1","is_error":true,"content":[{"type":"text","text":"Command timed out after 2m 0s"}]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/timedoutsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1'; then
+  ok "a TIMED-OUT sleep still counts (it ran; is_error is not 'never ran')"
+else bad "a TIMED-OUT sleep still counts (it ran; is_error is not 'never ran')" "$(printf '%s' "$OUT" | grep -E 'foreground|sleep/poll')"; fi
+
+# EVERY recognised never-ran shape must be excluded, not just the hook's. The
+# sleep classifier and the safety detector share ONE regex constant precisely so
+# a shape recognised by one cannot be missed by the other.
+# NOTE the two content SHAPES here: a plain string and the array-of-text-blocks
+# form. Both are supported by the harness, and an anchored pattern applied to
+# `tostring` of the array sees `[{"type":"text"…` and never reaches the denial
+# text — so the array case must be covered explicitly or the anchoring silently
+# counts a never-run sleep as an executed foreground launch.
+mkdir -p "$FIX/deniedsleep"
+cat > "$FIX/deniedsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d1","name":"Bash","input":{"command":"sleep 60"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","is_error":true,"content":"Claude requested permissions to use Bash, but you have not granted it yet"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d2","name":"Bash","input":{"command":"sleep 45"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d2","is_error":true,"content":[{"type":"text","text":"approval denied for tool Bash"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d3","name":"Bash","input":{"command":"sleep 30"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d3","is_error":true,"content":[{"type":"text","text":"<tool_use_error>Blocked: sleep 30 followed by: gh pr checks"}]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deniedsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 0'; then
+  ok "permission-denied sleeps are excluded too, not just hook-blocked ones"
+else bad "permission-denied sleeps are excluded too, not just hook-blocked ones" "$(printf '%s' "$OUT" | grep -E 'foreground|sleep/poll')"; fi
+
+# The snapshot holds an UNREDACTED transcript copy plus extracted command text,
+# so a signal must not leave it in /tmp.
+#
+# STRUCTURAL check, and the limitation is stated rather than papered over: an
+# end-to-end "kill the miner mid-snapshot" test was attempted TWICE and was
+# VACUOUS both times — first the run finished before the signal landed, then the
+# signal landed before the snapshot was created, and on a corpus large enough to
+# widen the window the miner still self-cleaned before the TERM arrived. Both
+# versions passed with SNAP deliberately removed from the traps, which is the
+# definition of a guard that cannot fail. A deterministic assertion that the
+# signal traps actually cover SNAP is worth more than a green test that proves
+# nothing; the residual gap is that this reads the registration, not the effect.
+# The classifier must never write an unredacted transcript copy to disk. An
+# earlier revision snapshotted each transcript to a temp dir to keep the class
+# counts consistent, which put credential-bearing content in /tmp — and it could
+# not be protected in place, because `main` runs in a pipeline subshell so a trap
+# set there never fires when the scheduler signals the top-level PID. The copy
+# was removed rather than hardened; this guard stops it coming back.
+SNAPLEFT=$(ls -d "${TMPDIR:-/tmp}"/.agtel_snap.* 2>/dev/null | wc -l | tr -d ' ')
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+SNAPNOW=$(ls -d "${TMPDIR:-/tmp}"/.agtel_snap.* 2>/dev/null | wc -l | tr -d ' ')
+if [ "$SNAPNOW" -le "$SNAPLEFT" ]; then
+  ok "no transcript snapshot directory is left on disk"
+else bad "no transcript snapshot directory is left on disk" "before=$SNAPLEFT after=$SNAPNOW"; fi
+if grep -q 'cp "$f" "$SNAP/cur"' "$TARGET"; then
+  bad "the classifier does not copy raw transcripts to a temp dir" "found a raw transcript cp"
+else ok "the classifier does not copy raw transcripts to a temp dir"; fi
+
+# A command's own text must not be able to forge a class tag and move itself
+# between classes — the tag is control-character delimited for exactly this.
+mkdir -p "$FIX/forgetag"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"echo BGnot-a-real-tag\nsleep 60"}}]}}' > "$FIX/forgetag/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/forgetag" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1' && printf '%s' "$OUT" | grep -qE 'background launch \.+ 0'; then
+  ok "command text cannot forge a class tag"
+else bad "command text cannot forge a class tag" "$(printf '%s' "$OUT" | grep -E 'foreground|background')"; fi
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"

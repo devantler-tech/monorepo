@@ -235,13 +235,90 @@ fi
 # schemas. Behavioural metrics must never be grepped from raw transcript text:
 # untrusted prose that merely mentions `sleep 60` would otherwise manufacture a
 # busy-wait pattern, and busy-wait counts are evidence the improver acts on.
+#
+# Every command, unclassified. Launch-mode classification lives ONLY in
+# tagged_commands_in — one classifier, so there is no second copy to drift.
+# The ONE definition of "this tool call never executed", shared by the safety
+# section's denial detector and the sleep classifier. Kept as a single constant
+# because two hand-maintained copies of a shape list is exactly how detector
+# parity broke six times on the redactor: the sleep classifier originally
+# matched a narrower subset, so a permission-DENIED sleep still counted as a
+# foreground launch.
+#
+# Deliberately NOT `is_error`, which is far broader than "never ran" — a
+# TIMED-OUT sleep carries is_error:true and is the single most expensive real
+# block in the corpus, so suppressing it would hide the worst case while
+# claiming to measure it.
+#
+# ANCHORED to the harness's denial envelope, not searched anywhere in the text.
+# An executed command that sleeps and later fails while printing application or
+# test output containing "approval denied for tool" would otherwise be treated
+# as never-run and removed from every class — silently deleting a real block,
+# which is the same failure mode as the is_error over-match this replaced.
+NEVER_RAN_SHAPES='Blocked:|Permission to use [A-Za-z_]+ with command|Claude requested permissions to use|approval (denied|required) for tool'
+NEVER_RAN_RE='^[[:space:]]*(<tool_use_error>)?[[:space:]]*('"$NEVER_RAN_SHAPES"')'
+
+# tool_use ids whose result shows the call never ran, resolved once per file.
+#
+# The content is NORMALISED to its text before matching, exactly as the safety
+# detector does. A tool_result may carry `content` as a plain string OR as the
+# array-of-text-blocks shape; `tostring` on the array yields `[{"type":"text"…`,
+# so an anchored pattern never reaches the denial text and the call is counted
+# as an executed foreground launch even though it never ran. Anchoring without
+# normalising is precisely that bug.
+denied_ids() {
+  jq -Rr --arg re "$NEVER_RAN_RE" 'select(length>0)|(try fromjson catch empty)
+          | select(.type=="user") | .message.content[]?
+          | select(.type=="tool_result" and .is_error==true)
+          | select((.content
+                    | if type=="array" then (map(select(.type=="text").text // empty)|join(" "))
+                      elif type=="string" then . else tostring end)
+                   | test($re))
+          | .tool_use_id // empty' "$1" 2>/dev/null \
+    | jq -Rs 'split("\n")|map(select(length>0))' 2>/dev/null
+}
+
+# ONE traversal per transcript emitting EVERY command tagged with its launch
+# class, so the three class counts come from a single consistent read instead of
+# one re-parse per class. Each LINE of a command is prefixed \001<CLS>\002 so a
+# multi-line command survives intact; control characters are used because no
+# real shell command line starts with one, which keeps untrusted command text
+# from forging a tag and moving itself between classes.
+tagged_commands_in() {
+  local f="$1" errs
+  errs=$(denied_ids "$f"); [ -n "$errs" ] || errs='[]'
+  jq -r --argjson errs "$errs" '
+    .. | objects
+    | (
+        (select(.type=="tool_use")
+         | ((if .input?.run_in_background == true then "BG" else "FG" end)) as $c
+         | (.id? // "") as $i
+         | select($i == "" or (($errs | index($i)) | not))
+         | (.input?.command? // empty) | select(type=="string") | select(length>0)
+         | split("\n") | map("\u0001" + $c + "\u0002" + .) | .[]),
+        (select(.type=="function_call")
+         | (.arguments? // empty)
+         | (try (fromjson | (.command? // .cmd? // empty)) catch empty)
+         | select(type=="string") | select(length>0)
+         | split("\n") | map("\u0001CX\u0002" + .) | .[]),
+        (select(.type=="custom_tool_call")
+         | .input? // empty | select(type=="string")
+         | [scan("cmd:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")] | .[]? | .[0]?
+         | select(type=="string") | select(length>0)
+         | gsub("\\\\n"; "\n") | gsub("\\\\t"; " ") | gsub("\\\\\""; "\"")
+         | split("\n") | map("\u0001CX\u0002" + .) | .[])
+      )
+  ' "$f" 2>/dev/null
+}
+
 commands_in() {
   local f="$1"
   jq -r '
     .. | objects
     | (
         # Claude: tool_use carrying a Bash command.
-        (select(.type=="tool_use") | .input?.command? // empty),
+        (select(.type=="tool_use")
+         | .input?.command? // empty),
         # Codex, JSON-argument shape (function_call).
         (select(.type=="function_call")
          | .arguments? // empty
@@ -527,14 +604,90 @@ if want efficiency; then
     # STRUCTURAL, not a text grep: only commands the agent actually ran count.
     # A grep would let untrusted prose that merely mentions `sleep 60` fabricate
     # a busy-wait pattern, and this metric is evidence for definition changes.
-    SLEEPS=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
-             | while IFS= read -r f; do commands_in "$f"; done \
-             | strip_heredocs \
-             | grep -cE '(^|[;&|(]|&&|\|\||[[:space:]](do|then|else)[[:space:]])[[:space:]]*sleep[[:space:]]+["'"'"']?[$0-9{]' || true)
+    # ONE definition of "this command sleeps", shared by the total and every
+    # class count below. Duplicating the regex is how the two would drift apart
+    # and stop summing.
+    count_sleeps() {
+      strip_heredocs \
+        | grep -cE '(^|[;&|(]|&&|\|\||[[:space:]](do|then|else)[[:space:]])[[:space:]]*sleep[[:space:]]+["'"'"']?[$0-9{]' || true
+    }
+    # The corpus is LIVE: the sibling instance writes transcripts while we read.
+    # Scanning once per class could observe a different corpus each time, so a
+    # sleep appended mid-run would make the classes disagree with a separately
+    # scanned total. Snapshot each file ONCE and derive every class from that
+    # copy, so the counts are mutually consistent by construction rather than
+    # merely checked afterwards.
+    # ONE tagged pass per transcript, held in memory — no temp copy.
+    #
+    # The earlier design copied each transcript to a temp dir so the classes
+    # could not disagree. That copy was an UNREDACTED transcript holding
+    # potential credentials, and protecting it turned out to be unfixable in
+    # place: `main` is the left side of `main | redact`, so it runs in a
+    # pipeline SUBSHELL and a trap set here never fires when the scheduler
+    # signals the top-level PID. Rather than harden the copy, the copy is gone —
+    # a single pass is inherently self-consistent, needs no snapshot, and cannot
+    # leave anything on disk to clean up.
+    TAGGED=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
+             | while IFS= read -r f; do tagged_commands_in "$f"; done)
+    # Each LINE of a command carries its class tag, so multi-line commands keep
+    # their structure and their order within a class — which the separator-
+    # anchored sleep regex and the heredoc stripper both depend on.
+    class_lines() { printf '%s\n' "$TAGGED" | awk -v c="$1" '
+        index($0, "\001" c "\002")==1 { print substr($0, length(c)+3) }'; }
+    SLEEP_FG=$(class_lines FG | count_sleeps)
+    SLEEP_BG=$(class_lines BG | count_sleeps)
+    SLEEP_CX=$(class_lines CX | count_sleeps)
+    # The total is the SUM of the classes, not a separate scan. That makes
+    # class-vs-total drift impossible instead of detectable — and a drift
+    # warning over a sum would be a vacuous guard, which is worse than none.
+    # Classification is exhaustive by construction (a Claude tool_use is FG or
+    # BG; a Codex call is CX; there is no fourth command source).
+    SLEEPS=$((SLEEP_FG + SLEEP_BG + SLEEP_CX))
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"
     echo "  explicit sleep/poll calls .. ${SLEEPS}   (contract: arm a watcher, never busy-wait)"
+    # The raw total above cannot answer the question the contract actually asks,
+    # because it scores a CONTRACT-COMPLIANT backgrounded watcher (`sleep N &&
+    # check`, run_in_background) identically to a foreground busy-wait — and the
+    # improver's own runs emit several compliant watchers each, landing as
+    # self-noise in the very bucket used to judge the agents. These lines split
+    # the two. This SHARPENS the measurement; it removes nothing.
+    echo "    ├ foreground launch ...... ${SLEEP_FG}   [Claude, synchronous]"
+    echo "    ├ background launch ...... ${SLEEP_BG}   [Claude, run_in_background]"
+    echo "    └ launch mode unknown .... ${SLEEP_CX}   [Codex — see gap note below]"
+    # Rates, because a raw total is not a rate. The window selects FILES by
+    # mtime, so session counts swing hard day to day and a raw count fell while
+    # the per-session rate ROSE (442→328 total, but 2.02→3.73/session). Every
+    # trend claim must name its denominator.
+    if [ "$SF_COUNT" -gt 0 ]; then
+      echo "    per-session (Claude, n=${SF_COUNT}): foreground $(awk -v a="$SLEEP_FG" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session, deferred $(awk -v a="$SLEEP_BG" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session"
+    fi
+    if [ "$CX_COUNT" -gt 0 ]; then
+      echo "    per-session (Codex,  n=${CX_COUNT}): unclassified $(awk -v a="$SLEEP_CX" -v b="$CX_COUNT" 'BEGIN{printf "%.2f", a/b}')/session"
+    fi
+    echo "    NOTE: this splits LAUNCH MODE, which is NOT a compliance verdict."
+    echo "          run_in_background says how Bash started the command, never"
+    echo "          why the sleep exists. The contract permits a FOREGROUND bare"
+    echo "          sleep as a local timer for a process the agent itself"
+    echo "          started, and a BACKGROUND sleep can still be a redundant"
+    echo "          poll alongside foreground polling. So a foreground count is"
+    echo "          a busy-wait CANDIDATE, not a violation, and a background"
+    echo "          count is not an exoneration — correlate with what was being"
+    echo "          waited on before drawing a conclusion."
+    echo "          The split is STRUCTURAL (read off the tool call), so prose"
+    echo "          cannot fake it. The key is OMITTED when false, so absence is"
+    echo "          correctly read as foreground. HOOK-REJECTED and"
+    echo "          PERMISSION-DENIED calls are excluded from these classes"
+    echo "          because they never ran; a call that ran and FAILED still"
+    echo "          counts, including a TIMED-OUT sleep — that one blocked"
+    echo "          longest and is the last thing to hide."
+    echo "          CODEX IS A STATED GAP, NOT A ZERO: 767 live exec_command"
+    echo "          calls carried yield_time_ms (an output-read timeout) and"
+    echo "          ZERO carried any background flag, so that runtime exposes no"
+    echo "          backgrounding surface to classify. Codex sleeps are counted"
+    echo "          but NOT attributed — never read 'unclassified' as compliant"
+    echo "          or as a violation."
     echo
     echo "  descriptions of commands that ACTUALLY timed out:"
     # Correlated by tool_use_id, not a bare grep over every description. The
@@ -591,7 +744,7 @@ if want safety; then
     # counts decide guard-vs-agent, so inflating them argues for loosening a
     # guard that never actually fired.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      jq -r '
+      jq -r --arg never_ran "$NEVER_RAN_RE" '
         .. | objects
         | (
             (select(.type=="tool_result" and .is_error==true)
@@ -610,7 +763,7 @@ if want safety; then
                          elif type=="string" then . else empty end)
           )
         | select(type=="string")
-        | select(test("<tool_use_error>[[:space:]]*Blocked:|^[[:space:]]*Permission to use [A-Za-z_]+ with command|Claude requested permissions to use|approval (denied|required) for tool"))
+        | select(test($never_ran))
         | .[0:80]
       ' "$f" 2>/dev/null
     done | redact | sed -E 's/[0-9]+/<n>/g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
