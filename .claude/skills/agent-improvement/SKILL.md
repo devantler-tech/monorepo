@@ -36,6 +36,7 @@ is not present — **stop and report**, change nothing. You never improve what y
 ```sh
 .claude/scripts/agent-telemetry.sh --since-days 1        # daily window
 .claude/scripts/agent-telemetry.sh --since-days 7 --max-files 800   # weekly, for trend confirmation
+.claude/scripts/flow-scorecard.sh                        # Kanban-Kata flow metrics (monorepo#2271)
 ```
 
 The script is read-only and covers reliability, efficiency, safety, cross-instance, drift and
@@ -68,7 +69,14 @@ efficiency:   sleep_poll_calls, timeouts, redundant_call_patterns[]
 quality:      merged_prs, reverts, post_merge_red, review_findings_per_pr
 coordination: two_writer_races, push_collisions, duplicate_artifacts[]
 currency:     loader_drift[], stale_memory[], unused_capabilities[]
+flow:         wip_per_status[], over_limit_columns[], closed_in_window,
+              lifetime_median_days (PROXY), oldest_substantive_age_days_per_repo[],
+              substantive_share_pct
 ```
+
+The `flow` row is the Kanban Kata's measurement surface ([monorepo#2271](https://github.com/devantler-tech/monorepo/issues/2271)):
+it comes from `flow-scorecard.sh`, and its stated gaps (UI-only column limits, lifetime as a
+cycle-time proxy) are part of the record — never silently paper over them.
 
 **A metric that moved the wrong way since yesterday outranks a new finding** — regression first.
 Verify any change from a previous run that is awaiting confirmation (step 5) before starting new work.

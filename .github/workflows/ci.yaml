@@ -25,6 +25,7 @@ jobs:
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
+      flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
     steps:
       - name: Checkout
@@ -57,6 +58,12 @@ jobs:
             agent-telemetry:
               - '.claude/scripts/agent-telemetry.sh'
               - '.claude/scripts/agent-telemetry.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            flow-scorecard:
+              - '.claude/scripts/flow-scorecard.sh'
+              - '.claude/scripts/flow-scorecard.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -204,6 +211,28 @@ jobs:
       - name: Self-test the agent telemetry miner
         run: bash .claude/scripts/agent-telemetry.test.sh
 
+  test-flow-scorecard:
+    name: Test flow scorecard
+    needs: changes
+    if: needs.changes.outputs.flow-scorecard == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # Fixture-only run behind a poisoned `gh` shim — no network, no token.
+      # Both OSes because the daily runs happen on macOS while CI defaults to
+      # Linux, and jq/bash portability is exactly what the test pins.
+      - name: Self-test the flow scorecard
+        run: bash .claude/scripts/flow-scorecard.test.sh
+
   test-safe-clone:
     needs: changes
     if: needs.changes.outputs.safe-clone == 'true'
@@ -315,6 +344,7 @@ jobs:
       - audit-docs
       - drift-check-active-projects
       - test-agent-telemetry
+      - test-flow-scorecard
       - test-safe-clone
       - test-submodule-init
       - test-maintainer-preflight
@@ -332,6 +362,7 @@ jobs:
             ${{ needs.audit-docs.result }}
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.test-agent-telemetry.result }}
+            ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}
