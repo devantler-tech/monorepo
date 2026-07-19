@@ -236,21 +236,8 @@ fi
 # untrusted prose that merely mentions `sleep 60` would otherwise manufacture a
 # busy-wait pattern, and busy-wait counts are evidence the improver acts on.
 #
-# Optional $2 = BACKGROUND CLASS filter, so a caller can split the same commands
-# by whether the agent blocked on them. Deliberately ONE jq expression with a
-# filter rather than a second extractor: a parallel copy is how detector parity
-# broke six times on the redactor, and here it would silently make the class
-# counts stop summing to the total.
-#   FG  Claude, foreground        — run_in_background absent/false (the default;
-#                                   the key is OMITTED when false, so absence=FG)
-#   BG  Claude, backgrounded      — run_in_background:true
-#   CX  Codex                     — UNCLASSIFIABLE: 767 live exec_command calls
-#                                   carried `yield_time_ms` (an output-read
-#                                   timeout) and ZERO carried a background flag,
-#                                   so no backgrounding surface exists to read.
-#                                   Reported as a stated gap, never folded into
-#                                   FG — a false coverage claim beats no claim.
-#   ""  (default) every command, unchanged legacy behaviour.
+# Every command, unclassified. Launch-mode classification lives ONLY in
+# tagged_commands_in — one classifier, so there is no second copy to drift.
 # The ONE definition of "this tool call never executed", shared by the safety
 # section's denial detector and the sleep classifier. Kept as a single constant
 # because two hand-maintained copies of a shape list is exactly how detector
@@ -262,12 +249,16 @@ fi
 # TIMED-OUT sleep carries is_error:true and is the single most expensive real
 # block in the corpus, so suppressing it would hide the worst case while
 # claiming to measure it.
-NEVER_RAN_RE='<tool_use_error>[[:space:]]*Blocked:|^[[:space:]]*Permission to use [A-Za-z_]+ with command|"Permission to use [A-Za-z_]+ with command|Claude requested permissions to use|approval (denied|required) for tool'
+#
+# ANCHORED to the harness's denial envelope, not searched anywhere in the text.
+# An executed command that sleeps and later fails while printing application or
+# test output containing "approval denied for tool" would otherwise be treated
+# as never-run and removed from every class — silently deleting a real block,
+# which is the same failure mode as the is_error over-match this replaced.
+NEVER_RAN_SHAPES='Blocked:|Permission to use [A-Za-z_]+ with command|Claude requested permissions to use|approval (denied|required) for tool'
+NEVER_RAN_RE='^[[:space:]]*("|\[)?[[:space:]]*(<tool_use_error>)?[[:space:]]*('"$NEVER_RAN_SHAPES"')'
 
-# tool_use ids whose result shows the call never ran. Computed ONCE per file and
-# passed into commands_in: recomputing it per class made every transcript parsed
-# six times instead of two, which on a 400-session corpus is real scheduled
-# latency, not a micro-optimisation.
+# tool_use ids whose result shows the call never ran, resolved once per file.
 denied_ids() {
   jq -Rr --arg re "$NEVER_RAN_RE" 'select(length>0)|(try fromjson catch empty)
           | select(.type=="user") | .message.content[]?
@@ -277,24 +268,49 @@ denied_ids() {
     | jq -Rs 'split("\n")|map(select(length>0))' 2>/dev/null
 }
 
+# ONE traversal per transcript emitting EVERY command tagged with its launch
+# class, so the three class counts come from a single consistent read instead of
+# one re-parse per class. Each LINE of a command is prefixed \001<CLS>\002 so a
+# multi-line command survives intact; control characters are used because no
+# real shell command line starts with one, which keeps untrusted command text
+# from forging a tag and moving itself between classes.
+tagged_commands_in() {
+  local f="$1" errs
+  errs=$(denied_ids "$f"); [ -n "$errs" ] || errs='[]'
+  jq -r --argjson errs "$errs" '
+    .. | objects
+    | (
+        (select(.type=="tool_use")
+         | ((if .input?.run_in_background == true then "BG" else "FG" end)) as $c
+         | (.id? // "") as $i
+         | select($i == "" or (($errs | index($i)) | not))
+         | (.input?.command? // empty) | select(type=="string") | select(length>0)
+         | split("\n") | map("\u0001" + $c + "\u0002" + .) | .[]),
+        (select(.type=="function_call")
+         | (.arguments? // empty)
+         | (try (fromjson | (.command? // .cmd? // empty)) catch empty)
+         | select(type=="string") | select(length>0)
+         | split("\n") | map("\u0001CX\u0002" + .) | .[]),
+        (select(.type=="custom_tool_call")
+         | .input? // empty | select(type=="string")
+         | [scan("cmd:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")] | .[]? | .[0]?
+         | select(type=="string") | select(length>0)
+         | gsub("\\\\n"; "\n") | gsub("\\\\t"; " ") | gsub("\\\\\""; "\"")
+         | split("\n") | map("\u0001CX\u0002" + .) | .[])
+      )
+  ' "$f" 2>/dev/null
+}
+
 commands_in() {
-  local f="$1" cls="${2:-}" errs="${3:-[]}"
-  jq -r --arg cls "$cls" --argjson errs "$errs" '
+  local f="$1"
+  jq -r '
     .. | objects
     | (
         # Claude: tool_use carrying a Bash command.
         (select(.type=="tool_use")
-         | select($cls == "" or $cls == (if .input?.run_in_background == true
-                                         then "BG" else "FG" end))
-         # $i is bound BEFORE index() so `.` is not rebound inside the test —
-         # `$arr | index(.)` there would compare the array against itself and
-         # match everything (a trap that has made a guard vacuous before).
-         | (.id? // "") as $i
-         | select($i == "" or (($errs | index($i)) | not))
          | .input?.command? // empty),
         # Codex, JSON-argument shape (function_call).
         (select(.type=="function_call")
-         | select($cls == "" or $cls == "CX")
          | .arguments? // empty
          | (try (fromjson | (.command? // .cmd? // empty)) catch empty)),
         # Codex, REAL observed shape: custom_tool_call name="exec" whose .input is
@@ -303,7 +319,6 @@ commands_in() {
         # (An invented JSON fixture passed here for two rounds while this real
         #  shape was silently unparsed — match the format that actually ships.)
         (select(.type=="custom_tool_call")
-         | select($cls == "" or $cls == "CX")
          | .input? // empty
          | select(type=="string")
          | [scan("cmd:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")] | .[]? | .[0]?
@@ -592,36 +607,32 @@ if want efficiency; then
     # scanned total. Snapshot each file ONCE and derive every class from that
     # copy, so the counts are mutually consistent by construction rather than
     # merely checked afterwards.
-    # SNAP holds an UNREDACTED transcript copy plus extracted command text, both
-    # of which can contain inline credentials — so it is registered with the
-    # signal traps BEFORE it is populated. A scheduler SIGTERM between here and
-    # the cleanup below would otherwise leave that material in /tmp.
-    SNAP=$(mktemp -d "${TMPDIR:-/tmp}/.agtel_snap.XXXXXXXX") || { echo "cannot create temp dir" >&2; exit 3; }
-    trap 'rm -f "$ERRTMP" "$INJTMP"; rm -rf "$SNAP"' EXIT
-    trap 'rm -f "$ERRTMP" "$INJTMP"; rm -rf "$SNAP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
-    : > "$SNAP/FG"; : > "$SNAP/BG"; : > "$SNAP/CX"
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      cp "$f" "$SNAP/cur" 2>/dev/null || continue
-      # Denial ids resolved ONCE per file, then reused for all three classes:
-      # recomputing per class parsed every transcript six times instead of two.
-      d=$(denied_ids "$SNAP/cur"); [ -n "$d" ] || d='[]'
-      commands_in "$SNAP/cur" FG "$d" >> "$SNAP/FG"
-      commands_in "$SNAP/cur" BG "$d" >> "$SNAP/BG"
-      commands_in "$SNAP/cur" CX "$d" >> "$SNAP/CX"
-    done
-    SLEEP_FG=$(count_sleeps < "$SNAP/FG")
-    SLEEP_BG=$(count_sleeps < "$SNAP/BG")
-    SLEEP_CX=$(count_sleeps < "$SNAP/CX")
-    # The total is now the SUM of the classes, not a fourth independent scan.
-    # That makes class-vs-total drift impossible instead of detectable — and a
-    # drift warning over a sum would be a vacuous guard, which is worse than
-    # none. Classification is exhaustive by construction (a Claude tool_use is
-    # FG or BG; a Codex call is CX; there is no fourth command source).
+    # ONE tagged pass per transcript, held in memory — no temp copy.
+    #
+    # The earlier design copied each transcript to a temp dir so the classes
+    # could not disagree. That copy was an UNREDACTED transcript holding
+    # potential credentials, and protecting it turned out to be unfixable in
+    # place: `main` is the left side of `main | redact`, so it runs in a
+    # pipeline SUBSHELL and a trap set here never fires when the scheduler
+    # signals the top-level PID. Rather than harden the copy, the copy is gone —
+    # a single pass is inherently self-consistent, needs no snapshot, and cannot
+    # leave anything on disk to clean up.
+    TAGGED=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
+             | while IFS= read -r f; do tagged_commands_in "$f"; done)
+    # Each LINE of a command carries its class tag, so multi-line commands keep
+    # their structure and their order within a class — which the separator-
+    # anchored sleep regex and the heredoc stripper both depend on.
+    class_lines() { printf '%s\n' "$TAGGED" | awk -v c="$1" '
+        index($0, "\001" c "\002")==1 { print substr($0, length(c)+3) }'; }
+    SLEEP_FG=$(class_lines FG | count_sleeps)
+    SLEEP_BG=$(class_lines BG | count_sleeps)
+    SLEEP_CX=$(class_lines CX | count_sleeps)
+    # The total is the SUM of the classes, not a separate scan. That makes
+    # class-vs-total drift impossible instead of detectable — and a drift
+    # warning over a sum would be a vacuous guard, which is worse than none.
+    # Classification is exhaustive by construction (a Claude tool_use is FG or
+    # BG; a Codex call is CX; there is no fourth command source).
     SLEEPS=$((SLEEP_FG + SLEEP_BG + SLEEP_CX))
-    rm -rf "$SNAP" 2>/dev/null
-    SNAP=""
-    trap 'rm -f "$ERRTMP" "$INJTMP"' EXIT
-    trap 'rm -f "$ERRTMP" "$INJTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"

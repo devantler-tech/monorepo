@@ -1146,13 +1146,32 @@ else bad "permission-denied sleeps are excluded too, not just hook-blocked ones"
 # definition of a guard that cannot fail. A deterministic assertion that the
 # signal traps actually cover SNAP is worth more than a green test that proves
 # nothing; the residual gap is that this reads the registration, not the effect.
-TRAPS=$(grep -c "rm -rf \"\$SNAP\"" "$TARGET" || true)
-if [ "${TRAPS:-0}" -ge 2 ]; then
-  ok "SNAP is registered in BOTH the EXIT and HUP/INT/TERM traps"
-else bad "SNAP is registered in BOTH the EXIT and HUP/INT/TERM traps" "occurrences=$TRAPS (expected >=2: EXIT + signal trap)"; fi
-if grep -q "trap 'rm -f \"\$ERRTMP\" \"\$INJTMP\"; rm -rf \"\$SNAP\"; trap - HUP INT TERM" "$TARGET"; then
-  ok "the signal trap (not just EXIT) removes the unredacted snapshot"
-else bad "the signal trap (not just EXIT) removes the unredacted snapshot" "signal trap does not cover SNAP"; fi
+# The classifier must never write an unredacted transcript copy to disk. An
+# earlier revision snapshotted each transcript to a temp dir to keep the class
+# counts consistent, which put credential-bearing content in /tmp — and it could
+# not be protected in place, because `main` runs in a pipeline subshell so a trap
+# set there never fires when the scheduler signals the top-level PID. The copy
+# was removed rather than hardened; this guard stops it coming back.
+SNAPLEFT=$(ls -d "${TMPDIR:-/tmp}"/.agtel_snap.* 2>/dev/null | wc -l | tr -d ' ')
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+SNAPNOW=$(ls -d "${TMPDIR:-/tmp}"/.agtel_snap.* 2>/dev/null | wc -l | tr -d ' ')
+if [ "$SNAPNOW" -le "$SNAPLEFT" ]; then
+  ok "no transcript snapshot directory is left on disk"
+else bad "no transcript snapshot directory is left on disk" "before=$SNAPLEFT after=$SNAPNOW"; fi
+if grep -q 'cp "$f" "$SNAP/cur"' "$TARGET"; then
+  bad "the classifier does not copy raw transcripts to a temp dir" "found a raw transcript cp"
+else ok "the classifier does not copy raw transcripts to a temp dir"; fi
+
+# A command's own text must not be able to forge a class tag and move itself
+# between classes — the tag is control-character delimited for exactly this.
+mkdir -p "$FIX/forgetag"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"echo BGnot-a-real-tag\nsleep 60"}}]}}' > "$FIX/forgetag/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/forgetag" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1' && printf '%s' "$OUT" | grep -qE 'background launch \.+ 0'; then
+  ok "command text cannot forge a class tag"
+else bad "command text cannot forge a class tag" "$(printf '%s' "$OUT" | grep -E 'foreground|background')"; fi
 
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo

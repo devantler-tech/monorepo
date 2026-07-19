@@ -82,9 +82,16 @@ cycle-time proxy) are part of the record — never silently paper over them.
 **Record sleeps as RATES, split by class — a raw total is not a rate.** The window selects files by
 mtime, so session counts swing hard day to day: a raw sleep total once fell 442→328 while the
 per-session rate *rose* 2.02→3.73, and the fall was read as a win. Always state the denominator, and
-never compare a raw count against a per-session one. The classes are not interchangeable either — a
-backgrounded `deferred watcher` is contract-COMPLIANT, and Codex's sleeps are **unattributed** (that
-runtime exposes no backgrounding flag), so only `foreground block` is evidence of busy-waiting.
+never compare a raw count against a per-session one.
+
+**The class is a LAUNCH MODE, never a compliance verdict.** `foreground launch` and `background
+launch` say only how the command was started. The contract permits a foreground bare sleep as a
+local timer for a process the agent itself started, and a backgrounded sleep can still be a
+redundant poll running alongside foreground polling — so a foreground count is a busy-wait
+*candidate* to investigate, not a violation to report, and a background count is not an
+exoneration. Correlate with what was actually being waited on before drawing any conclusion. Codex's
+sleeps carry no launch mode at all (that runtime exposes no backgrounding flag) and are
+**unattributed** — never fold them into either class.
 
 **A metric that moved the wrong way since yesterday outranks a new finding** — regression first.
 Verify any change from a previous run that is awaiting confirmation (step 5) before starting new work.
