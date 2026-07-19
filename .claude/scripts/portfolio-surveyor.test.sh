@@ -30,7 +30,7 @@ for security_definition in "${platform_card}" "${platform_security_surveyor}"; d
   # shellcheck disable=SC2016
   grep -Fq 'both named `vulnerabilitymanifests` and their corresponding' "${security_definition}" ||
     fail "${security_definition#"${repo_root}/"} does not require direct reads of both CVE object types"
-  grep -Fq 'Grype matches plus scanner version metadata' "${security_definition}" ||
+  grep -Fq 'Grype matches or scanner version metadata with coherent summaries' "${security_definition}" ||
     fail "${security_definition#"${repo_root}/"} can treat Kubescape's blank tool.name as a scanner outage"
   grep -Fq 'LIST metadata for coverage and freshness' "${security_definition}" ||
     fail "${security_definition#"${repo_root}/"} does not define a bounded use for Kubescape LISTs"

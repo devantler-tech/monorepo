@@ -94,9 +94,10 @@ extrapolate cluster-wide findings from the liveness sample.
   **separate** static scan in a healthy CLI context — **a green CI gate does NOT prove the in-cluster
   scan works.**
 - **CVE** (kubevuln) — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests`. Liveness requires
-  **Grype matches plus scanner version metadata** (`spec.metadata.tool.version` or the
-  `kubescape.io/tool-version` annotation) across the direct samples, with populated summary refs and
-  counters. A blank `spec.metadata.tool.name` alone is an upstream representation quirk, not an outage.
+  **Grype matches or scanner version metadata with coherent summaries** (`spec.metadata.tool.version`
+  or the `kubescape.io/tool-version` annotation) across the direct samples. A genuinely zero-match
+  image is healthy when version evidence, summary refs, and zero counters agree. A blank
+  `spec.metadata.tool.name` alone is an upstream representation quirk, not an outage.
   **Broken if** direct manifests carry neither matches nor scanner-version evidence and summaries are
   empty (both `.all` and `.relevant`) — check kubevuln logs for `ScanCP … partial` (the relevancy path
   aborting on partial ApplicationProfiles). Prioritise by relevancy × severity × fixability; emit VEX
