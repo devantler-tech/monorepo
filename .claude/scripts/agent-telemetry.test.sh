@@ -35,6 +35,7 @@ S_GHPD=$(_j 'gh' 'p_DDDDDDDDDDDDDDDDDDDDDDDDDDDD')
 S_GHPE=$(_j 'gh' 'p_EEEEEEEEEEEEEEEEEEEEEEEE')
 S_PATA=$(_j 'github_' 'pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ')
 S_PATZ=$(_j 'github_' 'pat_11ZZZZZZZ0123456789_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ')
+S_PATP=$(_j 'github_' 'pat_11PREFIXQRSTUV0123456')
 S_JWTHEAD=$(_j 'eyJ' 'hbGciOiJIUzI1')
 S_JWTTAIL=$(_j 'eyJ' 'zdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop')
 S_JWT="${S_JWTHEAD}NiJ9.${S_JWTTAIL}"
@@ -50,7 +51,8 @@ subst() {
       -e "s|__GHPA__|$S_GHPA|g"   -e "s|__GHPB__|$S_GHPB|g" \
       -e "s|__GHPC__|$S_GHPC|g"   -e "s|__GHPD__|$S_GHPD|g" \
       -e "s|__GHPE__|$S_GHPE|g"   -e "s|__PATA__|$S_PATA|g" \
-      -e "s|__PATZ__|$S_PATZ|g"   -e "s|__JWTTAIL__|$S_JWTTAIL|g" \
+      -e "s|__PATZ__|$S_PATZ|g"   -e "s|__PATP__|$S_PATP|g" \
+      -e "s|__JWTTAIL__|$S_JWTTAIL|g" \
       -e "s|__JWTHEAD__|$S_JWTHEAD|g" -e "s|__JWT__|$S_JWT|g" \
       -e "s|__AWS__|$S_AWS|g"     -e "s|__SLACK__|$S_SLACK|g" \
       -e "s|__GEN__|$S_GEN|g" "$_f" && rm -f "$_f.bak"
@@ -61,7 +63,8 @@ ex() { printf '%s' "$1" | sed \
       -e "s|__GHPA__|$S_GHPA|g"   -e "s|__GHPB__|$S_GHPB|g" \
       -e "s|__GHPC__|$S_GHPC|g"   -e "s|__GHPD__|$S_GHPD|g" \
       -e "s|__GHPE__|$S_GHPE|g"   -e "s|__PATA__|$S_PATA|g" \
-      -e "s|__PATZ__|$S_PATZ|g"   -e "s|__JWTTAIL__|$S_JWTTAIL|g" \
+      -e "s|__PATZ__|$S_PATZ|g"   -e "s|__PATP__|$S_PATP|g" \
+      -e "s|__JWTTAIL__|$S_JWTTAIL|g" \
       -e "s|__JWTHEAD__|$S_JWTHEAD|g" -e "s|__JWT__|$S_JWT|g" \
       -e "s|__AWS__|$S_AWS|g"     -e "s|__SLACK__|$S_SLACK|g" \
       -e "s|__GEN__|$S_GEN|g"; }
@@ -522,6 +525,79 @@ TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/
 if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
   ok "colon-parameter CSI-styled token is still counted"
 else bad "colon-parameter CSI-styled token is still counted" "$TABLE"; fi
+
+# A tool's own MASKED token display (`gh auth status` prints
+# `Token: github_pat_<prefix>***…`) is a prefix+mask rendering: the secret
+# segment never reached the transcript. Second live run (2026-07-19): one such
+# display accounted for 97 of 97 non-fixture github-pat occurrences across ~53
+# sessions of BOTH instances — a permanent false positive that would force
+# re-triage of the table's highest-severity rows every day. It gets a DISTINCT
+# label — the measurement is subdivided, never dropped — and only a run of ≥3
+# asterisks immediately after the token chars counts as a mask, so anything
+# ambiguous fails closed into the plain high-signal row.
+echo
+echo "masked-display labelling"
+mkdir -p "$FIX/masked"
+{
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"  - Token: __PATP__**********"}]}}\n'
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"leak __PATZ__"}]}}\n'
+} > "$FIX/masked/s.jsonl"
+subst "$FIX/masked/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/masked" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -qF 'github-pat (fine-grained) [masked-display]'; then
+  ok "gh-style masked token prefix labels as masked-display"
+else bad "gh-style masked token prefix labels as masked-display" "$TABLE"; fi
+if printf '%s' "$TABLE" | grep -Eq 'github-pat \(fine-grained\)$'; then
+  ok "full unmasked token keeps its plain high-signal row"
+else bad "full unmasked token keeps its plain high-signal row" "$TABLE"; fi
+
+# Standalone masked prefix (no assignment wrapper) reaches the classifier via
+# the boundary-anchored alternative, which must carry the mask run through.
+mkdir -p "$FIX/masked2"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"status shows __GHPE__******** here"}]}}\n' > "$FIX/masked2/s.jsonl"
+subst "$FIX/masked2/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/masked2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -qF 'github-token (classic/app) [masked-display]'; then
+  ok "standalone masked token prefix labels as masked-display"
+else bad "standalone masked token prefix labels as masked-display" "$TABLE"; fi
+
+# The SAME masked token rendered with different mask lengths (line truncation,
+# tool version drift) — or captured by the RAW JSONL leg with an escaped-text
+# tail (`…***\nShell cwd…`) — is ONE display to verify, not N: the value is
+# canonicalised to `<prefix>***` before dedup or the table's "distinct values"
+# promise is false (13 rows for one display on the 2026-07-19 live corpus).
+mkdir -p "$FIX/masked3"
+{
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"a Token: __PATP__*****"}]}}\n'
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"b Token: __PATP__***********"}]}}\n'
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"c Token: __PATP__*****\\nShell cwd was reset"}]}}\n'
+} > "$FIX/masked3/s.jsonl"
+subst "$FIX/masked3/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/masked3" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -qE '^[[:space:]]+1 github-pat \(fine-grained\) \[masked-display\]'; then
+  ok "same token under different mask lengths dedups to ONE masked row"
+else bad "same token under different mask lengths dedups to ONE masked row" "$TABLE"; fi
+
+# NEGATIVE CONTROL: a single trailing asterisk is a shell glob, not a mask —
+# it must stay a PLAIN high-signal row (fail closed toward "leak").
+mkdir -p "$FIX/maskedglob"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"ls __GHPD__*"}]}}\n' > "$FIX/maskedglob/s.jsonl"
+subst "$FIX/maskedglob/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/maskedglob" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -Eq 'github-token \(classic/app\)$'; then
+  ok "single-glob-asterisk token stays a plain high-signal row"
+else bad "single-glob-asterisk token stays a plain high-signal row" "$TABLE"; fi
+if printf '%s' "$TABLE" | grep -qF '[masked-display]'; then
+  bad "single-glob-asterisk token is NOT labelled masked" "labelled masked"
+else ok "single-glob-asterisk token is NOT labelled masked"; fi
 
 # ── 6e. round-3 findings ──────────────────────────────────────────────────────
 echo

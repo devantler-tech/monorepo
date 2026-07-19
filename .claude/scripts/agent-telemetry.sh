@@ -219,7 +219,7 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # start) from blob noise. The anchor costs no true positives and is used ONLY
 # for the leak TABLE; redact() keeps the broad unanchored CRED_RE, so
 # over-redaction is preserved even where the table refuses to count.
-CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN [A-Z ]*PRIVATE KEY-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN [A-Z ]*PRIVATE KEY-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
@@ -673,7 +673,16 @@ if want safety; then
       #     token standalone and wrapped counts as two "distinct" values, and
       #     the wrapped form (the most common real-leak shape, since grep's
       #     LEFTMOST-match rule hands it to the generic alternative) would be
-      #     classified by its key instead of its value.
+      #     classified by its key instead of its value;
+      # (4) canonicalise a masked display: a value that is token chars running
+      #     straight into a mask run (>=3 asterisks) is truncated to
+      #     `<prefix>***`, dropping mask-length differences AND raw-scan tails
+      #     (the raw JSONL leg captures `…***\nShell cwd…` as escaped text) —
+      #     the same tool-masked display captured at different widths is ONE
+      #     display to verify, not N distinct values. A weak generic value
+      #     shaped `aaa***bbb` also truncates; that can merge weak-bucket
+      #     rows, which is accepted — no token alphabet contains `*`, so a
+      #     real high-signal credential can never be merged away.
       # ANSI escapes are stripped BEFORE matching: a styled credential
       # (`ESC[31mghp_…`) puts the sequence's terminating letter right before
       # the token prefix, which the boundary anchor would misread as blob
@@ -698,6 +707,7 @@ if want safety; then
         | grep -hoEi "$CRED_TABLE_RE" 2>/dev/null \
         | tr ';&|' '\n' | grep -v '^$' \
         | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
+        -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
         | grep -E . | sort -u
     done | sort -u | awk '
       # FULL-shape validation, not prefix sniffing: a generic value that merely
@@ -714,16 +724,30 @@ if want safety; then
         return ""
       }
       {
-        s = shape_of(tolower($0))
+        x = tolower($0)
+        s = shape_of(x)
         # NB: the label itself passes through the output-boundary redactor, so
         # it must not be credential-SHAPED ("token=…" would come out mangled
         # as "token=<redacted>").
         if (s == "") s = "generic-assignment [WEAK signal: secret/token assignment shapes, names as often as values]"
+        # A token-shape match whose chars run straight into >=3 asterisks is a
+        # tool'\''s own prefix+mask rendering (gh auth status prints
+        # "Token: github_pat_<prefix>***…" every boot) — the secret segment
+        # never reached the transcript. Label it distinctly so the count stays
+        # visible but the triage is precomputed; a single asterisk (a shell
+        # glob) or anything ambiguous fails closed into the plain row. Scope:
+        # the four single-token shapes — a JWT/PEM cannot surface in
+        # prefix+mask form under these regexes, and the weak generic bucket
+        # keeps its own label.
+        else if (x ~ /^[a-z0-9_-]+\*\*\*/) s = s " [masked-display]"
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /'
     echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"
     echo "     fix the path that logged it — see the cross-system rotation rule; triage"
-    echo "     the weak-signal generic bucket before treating it as a leak)"
+    echo "     the weak-signal generic bucket before treating it as a leak."
+    echo "     [masked-display] = a tool's own prefix+mask token rendering, e.g."
+    echo "     gh auth status — the secret segment never reached the transcript;"
+    echo "     verify the mask is the tool's own display, don't rotate)"
     echo
     echo "  build/codegen commands run in a session that ALSO checked out a"
     echo "  non-own branch (candidates for untrusted-code execution):"
