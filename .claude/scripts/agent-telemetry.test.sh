@@ -508,6 +508,21 @@ if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
   ok "ANSI-styled real token is still counted"
 else bad "ANSI-styled real token is still counted" "$TABLE"; fi
 
+# CSI parameters may use COLONS (ITU truecolor `ESC[38:2:255:0:0m`) — a strip
+# that only knows `;` leaves the terminator letter before the token and the
+# boundary anchor silently drops a real credential (CodeRabbit finding).
+mkdir -p "$FIX/ansi2"
+ANSI2_SAMPLE=$(printf 'log \033[38:2:255:0:0m__GHPE__\033[0m end')
+printf '{"type":"user","message":{"content":[{"type":"text","text":%s}]}}\n' \
+  "$(printf '%s' "$ANSI2_SAMPLE" | jq -Rs .)" > "$FIX/ansi2/s.jsonl"
+subst "$FIX/ansi2/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/ansi2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+  ok "colon-parameter CSI-styled token is still counted"
+else bad "colon-parameter CSI-styled token is still counted" "$TABLE"; fi
+
 # ── 6e. round-3 findings ──────────────────────────────────────────────────────
 echo
 echo "round-3 regressions"

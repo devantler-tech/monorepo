@@ -694,7 +694,7 @@ if want safety; then
       #     while not splitting silently drops a real second credential.
       { jq -Rr 'select(length>0)|(try (fromjson|..|strings) catch empty)' "$f" 2>/dev/null; \
         cat "$f" 2>/dev/null; } \
-        | sed -E "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" \
+        | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
         | grep -hoEi "$CRED_TABLE_RE" 2>/dev/null \
         | tr ';&|' '\n' | grep -v '^$' \
         | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
