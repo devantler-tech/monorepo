@@ -1,6 +1,6 @@
 ---
 name: agent-improvement
-description: The daily run procedure for the agent-improver meta-engineer — gather operational telemetry from both deployed Daily AI Engineer instances (Claude Code + ChatGPT/Codex), score them on reliability, safety, efficiency, quality, coordination and currency, diagnose root causes from measured patterns, ship the highest-value fix with its evidence and a reversible audit trail, then verify the targeted metric actually moved. Use on the daily schedule or when asked to improve the autonomous agents themselves.
+description: The daily run procedure for the agent-improver meta-engineer — gather operational telemetry from every deployed Daily AI Engineer instance (Claude Code + ChatGPT/Codex + Gemini), score them on reliability, safety, efficiency, quality, coordination and currency, diagnose root causes from measured patterns, ship the highest-value fix with its evidence and a reversible audit trail, then verify the targeted metric actually moved. Use on the daily schedule or when asked to improve the autonomous agents themselves.
 ---
 
 # Agent-improvement run loop
@@ -8,7 +8,7 @@ description: The daily run procedure for the agent-improver meta-engineer — ga
 The procedure for [`agent-improver`](../../agents/agent-improver.md). Read that agent definition first
 — especially the **ingestion boundary**, which governs everything below. This skill is the *how*.
 
-**One line:** measure both instances from their own behaviour → find the pattern that costs the most →
+**One line:** measure every instance from its own behaviour → find the pattern that costs the most →
 fix it at the root, reversibly, with evidence → prove next run that the metric moved.
 
 ---
@@ -133,8 +133,12 @@ memory and the report. A PR is auditable by `git log`; a loader edit is only aud
 bootstrap guard → memory → hand off. If a fix would *grow* a loader, it belongs in the constitution
 instead — a fat loader is drift waiting to happen, and drift is what you exist to catch.
 
-**Keep the siblings symmetric.** A definition fix usually applies to both instances. Apply it to both,
-record it per instance, and treat any asymmetry you did not deliberately choose as a defect.
+**Keep the siblings symmetric.** A definition fix usually applies to every instance. Apply it to all
+of them, record it per instance, and treat any asymmetry you did not deliberately choose as a defect.
+**Some asymmetry IS deliberate and must not be "fixed" flat:** the runtimes differ in what they
+provide (only Gemini is dispatched by `launchd` and carries a wrapper script, because its CLI has no
+native scheduler; each has its own memory-store shape). Normalise the *behaviour* the constitution
+specifies, not the mechanism each runtime uses to reach it.
 
 **Loosening ships alone** (agent definition → authority §3), with the evidence showing the guard firing
 on correct, mandated work — never merely that it was inconvenient.
