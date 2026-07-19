@@ -90,7 +90,10 @@ load_array() { # $1=override-file-var-name  $2...=live command
     "$@" 2>/dev/null
   fi
 }
+# A *valid but empty* array is not success: on these known-nonempty surfaces it
+# is indistinguishable from a drifted query, and the contract is fail-loud.
 is_array() { jq -e 'type=="array"' >/dev/null 2>&1; }
+is_nonempty_array() { jq -e 'type=="array" and length>0' >/dev/null 2>&1; }
 
 # The board's ladder order, used to render WIP rows in board order (deliberately
 # reversed — finish-first; see the project-board card). Names not in this list
@@ -141,8 +144,8 @@ if want wip; then
         --jq ".[] | select(.name==\"Type\") | .id") && [ -n "$fid_type" ] || exit 1
       gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid_status,$fid_type" \
         --paginate --jq ".[]" | jq -s .') || items=""
-    if ! printf '%s' "$items" | is_array; then
-      section_failed wip "board item query returned no JSON array"
+    if ! printf '%s' "$items" | is_nonempty_array; then
+      section_failed wip "board item query returned no JSON array, or an empty one (project 5 is never empty)"
     else
       # Epics are excluded to match the Kanban view (`-type:"Epic"`): they are
       # parents, not actionable cards, and counting them against a column limit
@@ -150,8 +153,18 @@ if want wip; then
       printf '%s' "$items" | jq -r --argjson ladder "$LADDER" --argjson limits "$limits_json" '
         map(select(.content_type=="Issue" and .archived_at == null))
         | map(select(([.fields[]? | select(.name=="Type") | .value.name] | index("Epic")) | not))
-        | map({status: (first(.fields[]? | select(.name=="Status") | .value.name.raw)
-                        // "(no status)")})
+        # A Status name is board-editor-controlled text. This script feeds the
+        # high-authority improver, whose ingestion boundary forbids untrusted
+        # prose passing through, so a name is emitted ONLY when it matches the
+        # known ladder; anything else renders as a bounded placeholder that
+        # still reports the count. Never echo `.value.name.raw` directly.
+        # NOTE the `as $s` binding: inside `$ladder | index(.)` the `.` would be
+        # rebound to $ladder itself, so the membership test silently passes for
+        # EVERY name — the guard proved vacuous exactly that way in test.
+        | map((first(.fields[]? | select(.name=="Status") | .value.name.raw)
+               // "(no status)") as $s
+              | {status: (if ($ladder | index($s)) then $s
+                          else "(unrecognized status — renamed or added on the board)" end)})
         | group_by(.status)
         | map({status: .[0].status, n: length})
         | sort_by(.status as $s | ($ladder | index($s)) // 99)
@@ -161,7 +174,7 @@ if want wip; then
           + (if $lim == null then "   (limit ?)"
              elif .n > $lim then "   (limit \($lim))  ⚠ OVER LIMIT — finish, do not raise the limit"
              else "   (limit \($lim))" end)
-          + (if .status == "✅ Done" then "   ⚠ OPEN issue in Done — the reopened-stuck-at-Done defect" else "" end)'
+          + (if .status == "✅ Done" then "   ⚠ OPEN issue in Done — the reopened-stuck-at-Done defect" else "" end)' || section_failed wip "metric rendering failed (malformed or drifted board payload)"
       echo "  NOTE: open Issue items only (server-side q=is:open; PRs, drafts and"
       echo "        Epics excluded — Epics match the Kanban view's -type:\"Epic\")."
       echo "        Column limits are board-UI-only (not in the API): columns marked"
@@ -212,7 +225,7 @@ if want throughput; then
           | $s[(($n*85/100|ceil)-1)] as $p85
           | "  issues closed in window: \($n)\n"
             + "  created→closed: median \($med*10|round/10)d   p85 \($p85*10|round/10)d"
-        end'
+        end' || section_failed throughput "metric rendering failed (malformed or drifted issue payload)"
     echo "  NOTE: PROXY — the API exposes no Status-change history, so this is issue"
     echo "        LIFETIME (created→closed), not board cycle time; stalled-in-column"
     echo "        detection is likewise UNMEASURED today. Epics are excluded (same"
@@ -256,7 +269,7 @@ if want age; then
                age_days: ((($t0 - (.created_at|fromdateiso8601)) / 86400) | floor)})
       | sort_by(-.age_days)
       | (if length == 0 then "  (none open — verify the query, an empty backlog is unlikely)"
-         else .[] | "  \(.age_days | tostring | (" " * (5 - length)) + .)d  \(.repo)#\(.number)  (\(.type), created \(.created))" end)'
+         else .[] | "  \(.age_days | tostring | (" " * (5 - length)) + .)d  \(.repo)#\(.number)  (\(.type), created \(.created))" end)' || section_failed age "metric rendering failed (malformed or drifted issue payload)"
     echo "  NOTE: substantive = Issue Types Feature/Bug/Security/Performance (the"
     echo "        contract's substantive-progress gate); Epics are parents, not queue"
     echo "        items, and archived repos are tombstones, so both are excluded."
@@ -299,9 +312,12 @@ if want mix; then
         + "  substantive (feat|fix|perf): \($sub)\n"
         + "  supporting  (docs|chore|ci|test|build|style|refactor): \($sup)\n"
         + "  other/unparsed titles: \($n - $sub - $sup)"
-        + (if ($sub + $sup) > 0
-           then "\n  substantive share: \(($sub * 100 / ($sub + $sup)) | round)%"
-           else "" end)'
+        # Denominator is ALL merged agent PRs, not just the classified ones —
+        # otherwise one feat PR plus any number of unparsed titles reports 100%
+        # and the trend moves on title formatting rather than work mix.
+        + (if $n > 0
+           then "\n  substantive share: \(($sub * 100 / $n) | round)%  (of all \($n); classification coverage \((($sub + $sup) * 100 / $n) | round)%)"
+           else "" end)' || section_failed mix "metric rendering failed (malformed or drifted PR payload)"
     echo "  NOTE: classified by Conventional-Commit title type — a heuristic for the"
     echo "        easy-vs-substantive gate, not a quality judgement (a docs PR can be"
     echo "        real advance work). Codex-side races/branches are included via codex/*."
