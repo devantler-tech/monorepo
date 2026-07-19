@@ -1118,6 +1118,42 @@ if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1'; then
   ok "a TIMED-OUT sleep still counts (it ran; is_error is not 'never ran')"
 else bad "a TIMED-OUT sleep still counts (it ran; is_error is not 'never ran')" "$(printf '%s' "$OUT" | grep -E 'foreground|sleep/poll')"; fi
 
+# EVERY recognised never-ran shape must be excluded, not just the hook's. The
+# sleep classifier and the safety detector share ONE regex constant precisely so
+# a shape recognised by one cannot be missed by the other.
+mkdir -p "$FIX/deniedsleep"
+cat > "$FIX/deniedsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d1","name":"Bash","input":{"command":"sleep 60"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d1","is_error":true,"content":"Claude requested permissions to use Bash, but you have not granted it yet"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d2","name":"Bash","input":{"command":"sleep 45"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"d2","is_error":true,"content":"approval denied for tool Bash"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deniedsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 0'; then
+  ok "permission-denied sleeps are excluded too, not just hook-blocked ones"
+else bad "permission-denied sleeps are excluded too, not just hook-blocked ones" "$(printf '%s' "$OUT" | grep -E 'foreground|sleep/poll')"; fi
+
+# The snapshot holds an UNREDACTED transcript copy plus extracted command text,
+# so a signal must not leave it in /tmp.
+#
+# STRUCTURAL check, and the limitation is stated rather than papered over: an
+# end-to-end "kill the miner mid-snapshot" test was attempted TWICE and was
+# VACUOUS both times — first the run finished before the signal landed, then the
+# signal landed before the snapshot was created, and on a corpus large enough to
+# widen the window the miner still self-cleaned before the TERM arrived. Both
+# versions passed with SNAP deliberately removed from the traps, which is the
+# definition of a guard that cannot fail. A deterministic assertion that the
+# signal traps actually cover SNAP is worth more than a green test that proves
+# nothing; the residual gap is that this reads the registration, not the effect.
+TRAPS=$(grep -c "rm -rf \"\$SNAP\"" "$TARGET" || true)
+if [ "${TRAPS:-0}" -ge 2 ]; then
+  ok "SNAP is registered in BOTH the EXIT and HUP/INT/TERM traps"
+else bad "SNAP is registered in BOTH the EXIT and HUP/INT/TERM traps" "occurrences=$TRAPS (expected >=2: EXIT + signal trap)"; fi
+if grep -q "trap 'rm -f \"\$ERRTMP\" \"\$INJTMP\"; rm -rf \"\$SNAP\"; trap - HUP INT TERM" "$TARGET"; then
+  ok "the signal trap (not just EXIT) removes the unredacted snapshot"
+else bad "the signal trap (not just EXIT) removes the unredacted snapshot" "signal trap does not cover SNAP"; fi
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"

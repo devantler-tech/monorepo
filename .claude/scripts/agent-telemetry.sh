@@ -251,28 +251,34 @@ fi
 #                                   Reported as a stated gap, never folded into
 #                                   FG — a false coverage claim beats no claim.
 #   ""  (default) every command, unchanged legacy behaviour.
+# The ONE definition of "this tool call never executed", shared by the safety
+# section's denial detector and the sleep classifier. Kept as a single constant
+# because two hand-maintained copies of a shape list is exactly how detector
+# parity broke six times on the redactor: the sleep classifier originally
+# matched a narrower subset, so a permission-DENIED sleep still counted as a
+# foreground launch.
+#
+# Deliberately NOT `is_error`, which is far broader than "never ran" — a
+# TIMED-OUT sleep carries is_error:true and is the single most expensive real
+# block in the corpus, so suppressing it would hide the worst case while
+# claiming to measure it.
+NEVER_RAN_RE='<tool_use_error>[[:space:]]*Blocked:|^[[:space:]]*Permission to use [A-Za-z_]+ with command|"Permission to use [A-Za-z_]+ with command|Claude requested permissions to use|approval (denied|required) for tool'
+
+# tool_use ids whose result shows the call never ran. Computed ONCE per file and
+# passed into commands_in: recomputing it per class made every transcript parsed
+# six times instead of two, which on a 400-session corpus is real scheduled
+# latency, not a micro-optimisation.
+denied_ids() {
+  jq -Rr --arg re "$NEVER_RAN_RE" 'select(length>0)|(try fromjson catch empty)
+          | select(.type=="user") | .message.content[]?
+          | select(.type=="tool_result" and .is_error==true)
+          | select((.content | tostring) | test($re))
+          | .tool_use_id // empty' "$1" 2>/dev/null \
+    | jq -Rs 'split("\n")|map(select(length>0))' 2>/dev/null
+}
+
 commands_in() {
-  local f="$1" cls="${2:-}" errs='[]'
-  # Exclude only calls that NEVER EXECUTED: the enforcement hook rejects
-  # `sleep N && <poll>` and the permission layer denies a command, both leaving
-  # the tool_use in the transcript with no time spent. Counting those as blocks
-  # reports waiting that never happened, and inflates exactly the metric the
-  # hook exists to drive down.
-  #
-  # NOT keyed on is_error, which is far broader than "never ran" — a TIMED-OUT
-  # sleep carries is_error:true and is the single most expensive real block in
-  # the corpus. Suppressing it would hide the worst case while claiming to
-  # measure it. Match the two never-ran shapes explicitly instead.
-  if [ -n "$cls" ]; then
-    errs=$(jq -Rr 'select(length>0)|(try fromjson catch empty)
-                   | select(.type=="user") | .message.content[]?
-                   | select(.type=="tool_result" and .is_error==true)
-                   | select((.content | tostring)
-                            | test("<tool_use_error>Blocked:|^Permission to use|\\\"Permission to use"))
-                   | .tool_use_id // empty' "$f" 2>/dev/null \
-           | jq -Rs 'split("\n")|map(select(length>0))' 2>/dev/null)
-    [ -n "$errs" ] || errs='[]'
-  fi
+  local f="$1" cls="${2:-}" errs="${3:-[]}"
   jq -r --arg cls "$cls" --argjson errs "$errs" '
     .. | objects
     | (
@@ -586,13 +592,22 @@ if want efficiency; then
     # scanned total. Snapshot each file ONCE and derive every class from that
     # copy, so the counts are mutually consistent by construction rather than
     # merely checked afterwards.
-    SNAP=$(mktemp -d) || SNAP=""
+    # SNAP holds an UNREDACTED transcript copy plus extracted command text, both
+    # of which can contain inline credentials — so it is registered with the
+    # signal traps BEFORE it is populated. A scheduler SIGTERM between here and
+    # the cleanup below would otherwise leave that material in /tmp.
+    SNAP=$(mktemp -d "${TMPDIR:-/tmp}/.agtel_snap.XXXXXXXX") || { echo "cannot create temp dir" >&2; exit 3; }
+    trap 'rm -f "$ERRTMP" "$INJTMP"; rm -rf "$SNAP"' EXIT
+    trap 'rm -f "$ERRTMP" "$INJTMP"; rm -rf "$SNAP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
     : > "$SNAP/FG"; : > "$SNAP/BG"; : > "$SNAP/CX"
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
       cp "$f" "$SNAP/cur" 2>/dev/null || continue
-      commands_in "$SNAP/cur" FG >> "$SNAP/FG"
-      commands_in "$SNAP/cur" BG >> "$SNAP/BG"
-      commands_in "$SNAP/cur" CX >> "$SNAP/CX"
+      # Denial ids resolved ONCE per file, then reused for all three classes:
+      # recomputing per class parsed every transcript six times instead of two.
+      d=$(denied_ids "$SNAP/cur"); [ -n "$d" ] || d='[]'
+      commands_in "$SNAP/cur" FG "$d" >> "$SNAP/FG"
+      commands_in "$SNAP/cur" BG "$d" >> "$SNAP/BG"
+      commands_in "$SNAP/cur" CX "$d" >> "$SNAP/CX"
     done
     SLEEP_FG=$(count_sleeps < "$SNAP/FG")
     SLEEP_BG=$(count_sleeps < "$SNAP/BG")
@@ -604,6 +619,9 @@ if want efficiency; then
     # FG or BG; a Codex call is CX; there is no fourth command source).
     SLEEPS=$((SLEEP_FG + SLEEP_BG + SLEEP_CX))
     rm -rf "$SNAP" 2>/dev/null
+    SNAP=""
+    trap 'rm -f "$ERRTMP" "$INJTMP"' EXIT
+    trap 'rm -f "$ERRTMP" "$INJTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"
@@ -638,8 +656,11 @@ if want efficiency; then
     echo "          waited on before drawing a conclusion."
     echo "          The split is STRUCTURAL (read off the tool call), so prose"
     echo "          cannot fake it. The key is OMITTED when false, so absence is"
-    echo "          correctly read as foreground. Calls whose RESULT errored are"
-    echo "          excluded from these classes: a hook-rejected sleep never ran."
+    echo "          correctly read as foreground. HOOK-REJECTED and"
+    echo "          PERMISSION-DENIED calls are excluded from these classes"
+    echo "          because they never ran; a call that ran and FAILED still"
+    echo "          counts, including a TIMED-OUT sleep — that one blocked"
+    echo "          longest and is the last thing to hide."
     echo "          CODEX IS A STATED GAP, NOT A ZERO: 767 live exec_command"
     echo "          calls carried yield_time_ms (an output-read timeout) and"
     echo "          ZERO carried any background flag, so that runtime exposes no"
@@ -702,7 +723,7 @@ if want safety; then
     # counts decide guard-vs-agent, so inflating them argues for loosening a
     # guard that never actually fired.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      jq -r '
+      jq -r --arg never_ran "$NEVER_RAN_RE" '
         .. | objects
         | (
             (select(.type=="tool_result" and .is_error==true)
@@ -721,7 +742,7 @@ if want safety; then
                          elif type=="string" then . else empty end)
           )
         | select(type=="string")
-        | select(test("<tool_use_error>[[:space:]]*Blocked:|^[[:space:]]*Permission to use [A-Za-z_]+ with command|Claude requested permissions to use|approval (denied|required) for tool"))
+        | select(test($never_ran))
         | .[0:80]
       ' "$f" 2>/dev/null
     done | redact | sed -E 's/[0-9]+/<n>/g' | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
