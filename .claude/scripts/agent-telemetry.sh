@@ -209,6 +209,18 @@ redact() {
 # lists together or the test fails.
 CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 
+# TABLE variant of CRED_RE — identical shapes, but the prefix-identified ones
+# (gh?_ / github_pat_ / AKIA / xox / eyJ) are BOUNDARY-ANCHORED: the char before
+# the prefix must fall outside [A-Za-z0-9_-]. Triage of the first live run
+# (2026-07-18) showed the top "real-looking" GitHub-token hits were substrings
+# INSIDE base64url blobs (signed-URL params, JWT signatures) — base64url's
+# alphabet includes `-` and `_`, so only a boundary outside that alphabet
+# separates a pasted token (preceded by a quote, space, `=`, `:`, or line
+# start) from blob noise. The anchor costs no true positives and is used ONLY
+# for the leak TABLE; redact() keeps the broad unanchored CRED_RE, so
+# over-redaction is preserved even where the table refuses to count.
+CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN [A-Z ]*PRIVATE KEY-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
 # on Linux and its output pollutes the file list — six phantom paths for one
@@ -630,7 +642,7 @@ if want safety; then
     echo "        definition text itself. A rising count with no new external source"
     echo "        means the docs were read, not that the deployment is under attack."
     echo
-    echo "  credential-shaped strings reaching a transcript (each is a LEAK to triage):"
+    echo "  credential-shaped strings reaching a transcript (distinct values, BY SHAPE):"
     echo "  [BOTH instances — this detector is format-agnostic, so it covers Codex too]"
     # Includes github_pat_ (fine-grained PATs). Omitting it meant a modern GitHub
     # token leak reported "clean" — the worst possible failure for a leak detector.
@@ -640,15 +652,78 @@ if want safety; then
     # begin and misses it — while redact(), which runs on decoded output, masks
     # it. Same detector/redactor drift, new disguise. Raw is still scanned too,
     # so a malformed line cannot turn the leak scan into a silent no-op.
+    # Per-SHAPE counts, never one redacted bucket. The first live run printed a
+    # single line `871 <redacted-key-material>` — every shape collapsed into one
+    # opaque number that needed an hour of ad-hoc probing to triage (verdict: 89%
+    # weak-signal generic-assignment matches, the rest test fixtures and mid-blob
+    # substrings; zero real leaks). A table that cannot tell a fine-grained PAT
+    # from a k8s secret NAME buries the one real hit it exists to surface — so
+    # the shapes are counted separately, the weak-signal generic bucket is
+    # labelled as such, and the counts are of DISTINCT matched values (one leak
+    # pasted into fifty transcripts is one credential to rotate, not fifty).
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
       # Dedupe per file: a credential visible in BOTH decoded and raw JSON was
       # emitted twice, doubling every count in the leak table.
+      # Normalise every match to its UNDERLYING VALUE before any dedup:
+      # (1) split compound assignments on `;` — the generic alternative's value
+      #     class includes `;`, so `GITHUB_TOKEN=ghp_…;AWS_…=AKIA…` is ONE
+      #     greedy match and the second credential's shape would vanish;
+      # (2) strip the boundary char the anchored alternatives capture;
+      # (3) strip the `KEY=`/`key:` assignment wrapper — otherwise the same
+      #     token standalone and wrapped counts as two "distinct" values, and
+      #     the wrapped form (the most common real-leak shape, since grep's
+      #     LEFTMOST-match rule hands it to the generic alternative) would be
+      #     classified by its key instead of its value.
+      # ANSI escapes are stripped BEFORE matching: a styled credential
+      # (`ESC[31mghp_…`) puts the sequence's terminating letter right before
+      # the token prefix, which the boundary anchor would misread as blob
+      # noise and silently NOT count — the worst failure for this table.
+      # Compounds split on `;&|` — the shell separators the generic value
+      # class admits; none appears in any token alphabet, so splitting costs
+      # no true positives.
+      # KNOWN IDENTITY LIMITS (deliberate, do not "fix" by carrying values):
+      # (a) PEM rows count header lines and the JWT alternative stops at
+      #     header.payload, so N distinct keys/signatures can read as one row —
+      #     the operator action (triage, rotate) is identical either way, and
+      #     hashing full key material through more pipeline stages contradicts
+      #     the value-minimisation this table exists for. Counts are
+      #     DIRECTIONAL, as the report banner states.
+      # (b) A generic value legitimately containing `;&|` splits into extra
+      #     weak-bucket rows; the asymmetry is chosen — a splittable fragment
+      #     only ever reaches a high-signal row by passing a FULL shape regex,
+      #     while not splitting silently drops a real second credential.
       { jq -Rr 'select(length>0)|(try (fromjson|..|strings) catch empty)' "$f" 2>/dev/null; \
         cat "$f" 2>/dev/null; } \
-        | grep -hoEi "$CRED_RE" 2>/dev/null | sort -u
-    done | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
-    echo "    (empty = clean; any line here means rotate the credential AND fix the"
-    echo "     path that logged it — see the cross-system rotation rule)"
+        | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
+        | grep -hoEi "$CRED_TABLE_RE" 2>/dev/null \
+        | tr ';&|' '\n' | grep -v '^$' \
+        | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
+        | grep -E . | sort -u
+    done | sort -u | awk '
+      # FULL-shape validation, not prefix sniffing: a generic value that merely
+      # BEGINS like a token (`token=ghp_abcdefgh`, too short to be one) must
+      # stay in the weak bucket, or the high-signal rows inherit false
+      # positives from the generic alternative. Input is lowercased.
+      function shape_of(x) {
+        if (x ~ /^github_pat_[a-z0-9_]{20,}/)            return "github-pat (fine-grained)"
+        if (x ~ /^gh[pousr]_[a-z0-9]{16,}/)              return "github-token (classic/app)"
+        if (x ~ /^akia[0-9a-z]{12,}/)                    return "aws-access-key-id"
+        if (x ~ /^xox[baprs]-[a-z0-9-]{10,}/)            return "slack-token"
+        if (x ~ /^eyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}/)  return "jwt-like"
+        if (index(x, "-----begin") == 1)                 return "private-key-block"
+        return ""
+      }
+      {
+        s = shape_of(tolower($0))
+        # NB: the label itself passes through the output-boundary redactor, so
+        # it must not be credential-SHAPED ("token=…" would come out mangled
+        # as "token=<redacted>").
+        if (s == "") s = "generic-assignment [WEAK signal: secret/token assignment shapes, names as often as values]"
+        print s
+      }' | sort | uniq -c | sort -rn | sed 's/^/    /'
+    echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"
+    echo "     fix the path that logged it — see the cross-system rotation rule; triage"
+    echo "     the weak-signal generic bucket before treating it as a leak)"
     echo
     echo "  build/codegen commands run in a session that ALSO checked out a"
     echo "  non-own branch (candidates for untrusted-code execution):"

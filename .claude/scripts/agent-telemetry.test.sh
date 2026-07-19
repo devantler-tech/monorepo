@@ -128,7 +128,7 @@ check "normalises digits for grouping" "$OUT" "<n>"
 echo
 echo "safety"
 OUT=$(run --section safety)
-check   "redacts credential-shaped strings" "$OUT" "…<redacted>"
+check   "reports the credential by SHAPE, not value" "$OUT" "github-token (classic/app)"
 nocheck "never echoes a full credential"    "$OUT" "$(ex __GHPA__)"
 # The fixture's injected prose contains a literal "Permission to use Bash with command
 # rm -rf /". The detector is deliberately anchored, so a transcript quoting that shape
@@ -201,7 +201,7 @@ OUT=$(runleak --section safety)
 nocheck "P2: quoted prose is not counted as a denial" "$OUT" "rm -rf"
 check   "P2: a real errored tool_result is still counted" "$OUT" "Blocked:"
 nocheck "P2: never echoes a fine-grained PAT"  "$OUT" "$(ex __PATZ__)"
-if printf '%s' "$OUT" | grep -qE 'github_pat_[A-Za-z0-9_]{4,}…<redacted>'; then
+if printf '%s' "$OUT" | grep -qF 'github-pat (fine-grained)'; then
   ok "P2: fine-grained PAT detected AND redacted"
 else bad "P2: fine-grained PAT detected AND redacted" "not flagged"; fi
 
@@ -289,8 +289,10 @@ EOF
 subst "$FIX/projects/jwt/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/projects/jwt" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
-if printf '%s' "$OUT" | grep -q 'redacted-jwt\|__JWTHEAD__'; then
-  printf '%s' "$OUT" | grep -q '__JWTTAIL__' \
+if printf '%s' "$OUT" | grep -q 'jwt-like'; then
+  # NB: match the EXPANDED token, not the literal placeholder — grepping OUT for
+  # "__JWTTAIL__" post-subst could never fire, making the echo check vacuous.
+  printf '%s' "$OUT" | grep -qF "$(ex __JWTTAIL__)" \
     && bad "JWT flagged AND redacted" "raw JWT echoed" || ok "JWT flagged AND redacted"
 else bad "JWT flagged AND redacted" "not detected at all"; fi
 
@@ -307,7 +309,7 @@ subst "$FIX/cxonly/sessions/r.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 nocheck "Codex-only window is not skipped as empty" "$OUT" "no sessions in window — neither"
-if printf '%s' "$OUT" | grep -qE 'AKIA[0-9A-Z]{4}…<redacted>'; then
+if printf '%s' "$OUT" | grep -qF 'aws-access-key-id'; then
   ok "Codex-only credential leak is still caught"
 else bad "Codex-only credential leak is still caught" "missed"; fi
 
@@ -342,23 +344,42 @@ parity_case() { # name, sample-with-placeholders, distinctive-secret-placeholder
   sample=$(ex "$2"); secret=$(ex "$3")
   local dir="$FIX/parity_$name"
   mkdir -p "$dir"
-  printf '{"type":"user","message":{"content":[{"type":"text","text":%s}]}}\n' \
-    "$(printf '%s' "$sample" | jq -Rs .)" > "$dir/s.jsonl"
-  local out
+  # TWO copies of the credential: plain text for the DETECTOR leg (the leak
+  # table), and inside a REAL errored tool result for the REDACTOR leg — the
+  # label-only table no longer passes values through redact(), so asserting
+  # the raw secret is absent from the table output alone became vacuous (it
+  # would pass even with the redaction rule deleted). The reliability error
+  # signatures DO print corpus text through redact(); the "boom" marker proves
+  # that path was actually reached, so the redactor leg cannot pass by the
+  # credential simply never flowing anywhere.
+  {
+    printf '{"type":"user","message":{"content":[{"type":"text","text":%s}]}}\n' \
+      "$(printf '%s' "$sample" | jq -Rs .)"
+    printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p1","name":"Bash","input":{"command":"true"}}]}}\n'
+    printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"p1","is_error":true,"content":[{"type":"text","text":%s}]}]}}\n' \
+      "$(printf 'boom %s tail' "$sample" | jq -Rs .)"
+  } > "$dir/s.jsonl"
+  local out rout
   out=$(CLAUDE_PROJECTS_DIR="$dir" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$TARGET" --since-days 3650 --section safety 2>&1)
-  local detected=no redacted=yes
-  printf '%s' "$out" | grep -q 'empty = clean' && \
-    printf '%s' "$out" | grep -qE '^[[:space:]]+[0-9]+[[:space:]]' || true
+  rout=$(CLAUDE_PROJECTS_DIR="$dir" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section reliability 2>&1)
+  local detected=no redacted=yes exercised=no masked=no
   # detected = the credential section lists at least one count line
   if printf '%s' "$out" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+[0-9]+ '; then
     detected=yes
   fi
-  printf '%s' "$out" | grep -qF "$secret" && redacted=no
-  if [ "$detected" = yes ] && [ "$redacted" = yes ]; then
-    ok "$name: detected AND redacted"
+  # exercised = the errored result reached the printed error signatures at all;
+  # masked = redact() visibly fired on that very line. Digit normalisation in
+  # the signature pipeline mangles digit-bearing secrets, so a raw-absent grep
+  # alone could miss a leak — the POSITIVE marker is the guard.
+  printf '%s' "$rout" | grep -q 'boom' && exercised=yes
+  printf '%s' "$rout" | grep 'boom' | grep -q 'redacted' && masked=yes
+  { printf '%s' "$out"; printf '%s' "$rout"; } | grep -qF "$secret" && redacted=no
+  if [ "$detected" = yes ] && [ "$redacted" = yes ] && [ "$exercised" = yes ] && [ "$masked" = yes ]; then
+    ok "$name: detected AND redacted (redactor exercised)"
   else
-    bad "$name: detected AND redacted" "detected=$detected redacted=$redacted"
+    bad "$name: detected AND redacted" "detected=$detected redacted=$redacted exercised=$exercised masked=$masked"
   fi
 }
 
@@ -369,6 +390,138 @@ parity_case "aws"        "leak __AWS__" "__AWS__"
 parity_case "slack"      "leak __SLACK__" "__SLACK__"
 parity_case "jwt"        "leak __JWT__" "__JWTTAIL__"
 parity_case "generic"    "config token=__GEN__" "__GEN__"
+
+# ── 6d². leak-table boundary anchoring ────────────────────────────────────────
+# First live run (2026-07-18): the top "real-looking" GitHub-token hits were
+# substrings INSIDE base64url blobs (signed-URL params, JWT signatures) —
+# base64url's alphabet includes `-` and `_`, so the TABLE anchors prefix shapes
+# on a preceding char outside [A-Za-z0-9_-]. Redaction stays unanchored.
+echo
+echo "leak-table boundary anchoring"
+mkdir -p "$FIX/blob"
+{
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=AAAA__GHPE__zz"}]}}\n'
+  # The blob ALSO flows through a real errored tool result, so the redaction
+  # half below is exercised by an output path that actually prints corpus text
+  # (reliability error signatures) — asserting raw-absent on the label-only
+  # safety table alone would stay green even with the redactor broken.
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"true"}}]}}\n'
+  printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b1","is_error":true,"content":[{"type":"text","text":"boom sig=AAAA__GHPE__zz tail"}]}]}}\n'
+} > "$FIX/blob/s.jsonl"
+subst "$FIX/blob/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blob" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+ROUT=$(CLAUDE_PROJECTS_DIR="$FIX/blob" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section reliability 2>&1)
+if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -q 'github-token'; then
+  bad "mid-blob gh?_ substring is NOT counted" "counted as a token"
+else ok "mid-blob gh?_ substring is NOT counted"; fi
+# …but the output-boundary redactor still masks it (broad CRED_RE unchanged),
+# so refusing to COUNT blob noise never means ECHOING it — proven POSITIVELY
+# on the error-signature path, not by absence alone.
+if printf '%s' "$ROUT" | grep 'boom' | grep -q 'redacted'; then
+  ok "mid-blob token is still redacted on output"
+else bad "mid-blob token is still redacted on output" "$(printf '%s' "$ROUT" | grep 'boom' | head -1)"; fi
+nocheck "mid-blob raw token never appears" "$ROUT" "$(ex __GHPE__)"
+
+# An ASSIGNMENT-wrapped token (`GITHUB_TOKEN=ghp_…`) is the most common real
+# leak form, and grep's leftmost-match rule hands the whole string to the
+# generic alternative — so the classifier must look INSIDE the value or the
+# highest-value catch lands in the weak bucket (Codex review finding, #2263).
+mkdir -p "$FIX/assign"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"env GITHUB_TOKEN=__GHPE__"}]}}\n' > "$FIX/assign/s.jsonl"
+subst "$FIX/assign/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/assign" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+  ok "assignment-wrapped token classifies by its VALUE shape"
+else bad "assignment-wrapped token classifies by its VALUE shape" "$TABLE"; fi
+if printf '%s' "$TABLE" | grep -q 'generic-assignment'; then
+  bad "assignment-wrapped token is not buried in the weak bucket" "counted as generic"
+else ok "assignment-wrapped token is not buried in the weak bucket"; fi
+
+# The SAME credential standalone and assignment-wrapped is ONE value to rotate:
+# normalisation to the underlying value must happen BEFORE dedup, or the table
+# double-counts and its "distinct values" promise is false (Codex, round 2).
+mkdir -p "$FIX/dedup"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"saw __GHPE__ and GITHUB_TOKEN=__GHPE__"}]}}\n' > "$FIX/dedup/s.jsonl"
+subst "$FIX/dedup/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/dedup" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+1 github-token'; then
+  ok "standalone + wrapped same token dedups to ONE distinct value"
+else bad "standalone + wrapped same token dedups to ONE distinct value" \
+  "$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep 'github-token')"; fi
+
+# A compound `KEY=tok;KEY2=tok2` is ONE greedy generic match; both credentials'
+# shapes must still surface or the second is never rotated (Codex, round 2).
+mkdir -p "$FIX/compound"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"env GITHUB_TOKEN=__GHPE__;AWS_ACCESS_KEY_ID=__AWS__"}]}}\n' > "$FIX/compound/s.jsonl"
+subst "$FIX/compound/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/compound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)' && printf '%s' "$TABLE" | grep -q 'aws-access-key-id'; then
+  ok "compound assignment surfaces BOTH credential shapes"
+else bad "compound assignment surfaces BOTH credential shapes" "$TABLE"; fi
+
+# `&&`-separated compounds evade a `;`-only split the same way (Codex, round 3):
+# every shell separator the generic value class admits must split.
+mkdir -p "$FIX/compound2"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"run GITHUB_TOKEN=__GHPE__&&AWS_ACCESS_KEY_ID=__AWS__"}]}}\n' > "$FIX/compound2/s.jsonl"
+subst "$FIX/compound2/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/compound2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)' && printf '%s' "$TABLE" | grep -q 'aws-access-key-id'; then
+  ok "ampersand-compound surfaces BOTH credential shapes"
+else bad "ampersand-compound surfaces BOTH credential shapes" "$TABLE"; fi
+
+# A value that merely BEGINS like a token but fails its full shape must stay
+# weak-signal — prefix sniffing would let the generic alternative inject false
+# positives into the high-signal rows (Codex, round 3).
+mkdir -p "$FIX/shortval"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"cfg token=ghp_abcdefgh"}]}}\n' > "$FIX/shortval/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/shortval" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token'; then
+  bad "short prefix-only value stays weak-signal" "upgraded to github-token"
+else ok "short prefix-only value stays weak-signal"; fi
+if printf '%s' "$TABLE" | grep -q 'generic-assignment'; then
+  ok "short prefix-only value still counted as generic"
+else bad "short prefix-only value still counted as generic" "$TABLE"; fi
+
+# An ANSI-styled credential (`ESC[31mghp_…`) puts the escape terminator letter
+# right before the prefix; without pre-match stripping the boundary anchor
+# rejects a REAL token as blob noise — a silent real-leak miss (Codex, round 3).
+mkdir -p "$FIX/ansi"
+ANSI_SAMPLE=$(printf 'log \033[31m__GHPE__\033[0m end')
+printf '{"type":"user","message":{"content":[{"type":"text","text":%s}]}}\n' \
+  "$(printf '%s' "$ANSI_SAMPLE" | jq -Rs .)" > "$FIX/ansi/s.jsonl"
+subst "$FIX/ansi/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/ansi" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+  ok "ANSI-styled real token is still counted"
+else bad "ANSI-styled real token is still counted" "$TABLE"; fi
+
+# CSI parameters may use COLONS (ITU truecolor `ESC[38:2:255:0:0m`) — a strip
+# that only knows `;` leaves the terminator letter before the token and the
+# boundary anchor silently drops a real credential (CodeRabbit finding).
+mkdir -p "$FIX/ansi2"
+ANSI2_SAMPLE=$(printf 'log \033[38:2:255:0:0m__GHPE__\033[0m end')
+printf '{"type":"user","message":{"content":[{"type":"text","text":%s}]}}\n' \
+  "$(printf '%s' "$ANSI2_SAMPLE" | jq -Rs .)" > "$FIX/ansi2/s.jsonl"
+subst "$FIX/ansi2/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/ansi2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+  ok "colon-parameter CSI-styled token is still counted"
+else bad "colon-parameter CSI-styled token is still counted" "$TABLE"; fi
 
 # ── 6e. round-3 findings ──────────────────────────────────────────────────────
 echo
