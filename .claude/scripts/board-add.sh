@@ -82,6 +82,13 @@ REPO_NAME="${_rest%%/*}"
 command -v gh >/dev/null 2>&1 || die "gh CLI not found"
 command -v jq >/dev/null 2>&1 || die "jq not found"
 
+# ORG SCOPE, checked before the repo is even inspected. Cross-repo scope is
+# closed by default (AGENTS.md → Merge policy), so an arbitrary external issue
+# URL must not cause this script to probe that repository, let alone put it on
+# the org board. This is a scope gate, not a convenience check.
+[ "$REPO_OWNER" = "$PROJECT_OWNER" ] \
+  || die "refusing ${REPO_OWNER}/${REPO_NAME}: only ${PROJECT_OWNER} issues belong on this board" 1
+
 # FAIL CLOSED on visibility: project 5 is public, so a private repo's issue must
 # never be swept onto it by an agent. An unreadable repo is treated as private.
 IS_PRIVATE=$(gh api "repos/${REPO_OWNER}/${REPO_NAME}" --jq '.private' 2>/dev/null || echo "unknown")
@@ -127,22 +134,6 @@ if [ -z "$OPTION_ID" ]; then
            renamed on the board, reconcile it in the UI rather than guessing)" 1
 fi
 
-# Was this issue ALREADY on the board? Needed so a failed Status set can roll
-# back only an item WE created — deleting a pre-existing item would destroy the
-# maintainer's board state. Resolved by a single cheap node lookup rather than
-# `item-list`, which walks every board item over the shared GraphQL budget.
-PRE_EXISTING_ITEM=$(gh api graphql -f url="$ISSUE_URL" -f query='
-  query($url: URI!) {
-    resource(url: $url) {
-      ... on Issue {
-        projectItems(first: 20, includeArchived: true) {
-          nodes { id project { number } }
-        }
-      }
-    }
-  }' --jq ".data.resource.projectItems.nodes[]? | select(.project.number == ${PROJECT_NUMBER}) | .id" \
-  2>/dev/null | head -1 || true)
-
 # Add. `item-add` is idempotent server-side (an existing item is returned, not
 # duplicated), and prints nothing useful off-TTY, so ask for the id explicitly.
 ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
@@ -150,19 +141,22 @@ ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
             || die "item-add failed for ${ISSUE_URL} (auth, network, or scope)"
 [ -n "$ITEM_ID" ] || die "item-add returned no item id for ${ISSUE_URL}"
 
+# DELIBERATELY NO ROLLBACK-BY-DELETE. An earlier revision deleted the item when
+# the Status could not be set, which looks tidier but is strictly worse: telling
+# a newly-created item from a pre-existing one depends on a lookup that can fail,
+# paginate, or match another owner's project #5 — and every one of those
+# misreadings ends in DELETING a board card the maintainer already had. That
+# trades a recoverable failure for a destructive one.
+#
+# The failure left behind here is benign and self-healing instead: a status-less
+# item, which is exactly what this script fixes, and re-running it on the same
+# URL sets the Status (item-add is idempotent). So we fail loudly and tell the
+# caller the one thing that resolves it.
 if ! gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" \
         --field-id "$FIELD_ID" --single-select-option-id "$OPTION_ID" >/dev/null 2>&1; then
-  # ROLL BACK a newly-created item. Leaving it would put a status-less item on
-  # the board — precisely the drift this script exists to prevent, created by
-  # the tool meant to stop it. An item that existed before we ran is left alone.
-  if [ -z "$PRE_EXISTING_ITEM" ]; then
-    if gh project item-delete "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
-         --id "$ITEM_ID" >/dev/null 2>&1; then
-      die "item-edit failed for ${ISSUE_URL}; rolled back the item we added (no status-less item left behind)"
-    fi
-    die "item-edit failed for ${ISSUE_URL} (item ${ITEM_ID}) AND rollback failed — REMOVE IT MANUALLY, it is on the board with no Status"
-  fi
-  die "item-edit failed for ${ISSUE_URL} (item ${ITEM_ID}); it was already on the board, so it was left as-is"
+  die "could not set the Status for ${ISSUE_URL} (item ${ITEM_ID}).
+          The item may now be on the board WITHOUT a Status — re-run this script
+          on the same URL to finish it; it is idempotent and will not duplicate."
 fi
 
 # VERIFY BY READ-BACK — the whole point of the script. An exit-0 from item-edit is
@@ -183,7 +177,14 @@ ACTUAL=$(gh api graphql -f id="$ITEM_ID" -f query='
   }' --jq '.data.node.fieldValueByName.name // empty' 2>/dev/null || true)
 
 if [ "$ACTUAL" != "$STATUS_NAME" ]; then
-  die "read-back MISMATCH for ${ISSUE_URL}: wanted \"${STATUS_NAME}\", board shows \"${ACTUAL:-<none>}\""
+  # Do NOT echo $ACTUAL — it is board-controlled text, the same untrusted class
+  # as the option names above. Reporting only whether a value was present keeps
+  # a renamed-to-instruction-shaped Status out of this agent's transcript while
+  # still saying everything the operator needs to act.
+  if [ -z "$ACTUAL" ]; then observed="no Status at all"; else observed="a different Status"; fi
+  die "read-back MISMATCH for ${ISSUE_URL}: wanted \"${STATUS_NAME}\", board shows ${observed}.
+          Re-run to retry; if it persists, inspect the board in the UI (the live
+          value is not printed here because board text is not trusted input)."
 fi
 
 printf 'board-add: %s → %s (item %s) [verified]\n' "$ISSUE_URL" "$STATUS_NAME" "$ITEM_ID"
