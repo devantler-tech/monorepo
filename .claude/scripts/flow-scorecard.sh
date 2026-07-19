@@ -125,19 +125,29 @@ if want wip; then
     # core REST budget is uncontended, where the GraphQL-backed
     # `gh project item-list` walks EVERY board item (~4,300, 43 paginated calls)
     # on the 5,000/hr GraphQL budget all agent sessions share — the first live
-    # run of this script died on exactly that. The Status field id is resolved
-    # per run (one cheap call), never hard-coded.
+    # run of this script died on exactly that. Field ids are resolved per run
+    # (cheap calls), never hard-coded. `set -o pipefail` because without it a
+    # failed item request feeds empty output into `jq -s .`, which happily
+    # returns `[]` with exit 0 — a silent empty scorecard instead of a loud
+    # UNMEASURED section.
     items=$(load_array FLOW_ITEMS_JSON bash -c '
-      fid=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=30" \
+      set -o pipefail
+      fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=30" \
         --jq ".[] | select(.name==\"Status\") | .id") || exit 1
-      gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid" \
-        --paginate --jq ".[]" | jq -s .')
+      fid_type=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=30" \
+        --jq ".[] | select(.name==\"Type\") | .id") || exit 1
+      gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid_status,$fid_type" \
+        --paginate --jq ".[]" | jq -s .') || items=""
     if ! printf '%s' "$items" | is_array; then
       section_failed wip "board item query returned no JSON array"
     else
+      # Epics are excluded to match the Kanban view (`-type:"Epic"`): they are
+      # parents, not actionable cards, and counting them against a column limit
+      # would flag over-limit on work the board deliberately does not show.
       printf '%s' "$items" | jq -r --argjson ladder "$LADDER" --argjson limits "$limits_json" '
-        map(select(.content_type=="Issue")
-            | {status: (first(.fields[]? | select(.name=="Status") | .value.name.raw)
+        map(select(.content_type=="Issue"))
+        | map(select(([.fields[]? | select(.name=="Type") | .value.name] | index("Epic")) | not))
+        | map({status: (first(.fields[]? | select(.name=="Status") | .value.name.raw)
                         // "(no status)")})
         | group_by(.status)
         | map({status: .[0].status, n: length})
@@ -149,10 +159,11 @@ if want wip; then
              elif .n > $lim then "   (limit \($lim))  ⚠ OVER LIMIT — finish, do not raise the limit"
              else "   (limit \($lim))" end)
           + (if .status == "✅ Done" then "   ⚠ OPEN issue in Done — the reopened-stuck-at-Done defect" else "" end)'
-      echo "  NOTE: open Issue items only (server-side q=is:open; PRs and drafts"
-      echo "        excluded). Column limits are board-UI-only (not in the API):"
-      echo "        columns marked 'limit ?' are UNMEASURED for over-limit —"
-      echo "        configure FLOW_WIP_LIMITS from the UI to close the gap."
+      echo "  NOTE: open Issue items only (server-side q=is:open; PRs, drafts and"
+      echo "        Epics excluded — Epics match the Kanban view's -type:\"Epic\")."
+      echo "        Column limits are board-UI-only (not in the API): columns marked"
+      echo "        'limit ?' are UNMEASURED for over-limit — configure"
+      echo "        FLOW_WIP_LIMITS from the UI to close the gap."
     fi
   fi
 fi
@@ -163,13 +174,18 @@ if want throughput; then
   echo "── Throughput & created→closed duration — PROXY for cycle time ──"
   # gh api --paginate does not back off on secondary limits, and the Search API
   # allows only 30 req/min — retry ONCE after a cooldown rather than dying on a
-  # transient 403/429 (the age section below paces its queries for the same reason).
+  # transient 403/429 (the age section below paces its queries for the same
+  # reason). Each attempt is BUFFERED and only a fully-successful attempt's
+  # output is emitted — streaming into the pipe would let a partial first
+  # attempt's pages be double-counted by the retry and bias the median/p85.
   closed=$(load_array FLOW_CLOSED_JSON bash -c '
+    set -o pipefail
     fetch() {
       gh api "search/issues?q=org:devantler-tech+is:issue+closed:%3E%3D'"$CUTOFF_DATE"'&per_page=100" \
         --paginate --jq ".items[] | {number, created_at, closed_at, repository_url}"
     }
-    { fetch || { sleep 65; fetch; }; } | jq -s .')
+    out=$(fetch) || { sleep 65; out=$(fetch); } || exit 1
+    printf "%s\n" "$out" | jq -s .') || closed=""
   if ! printf '%s' "$closed" | is_array; then
     section_failed throughput "closed-issue query returned no JSON array"
   else
@@ -196,16 +212,21 @@ if want age; then
   echo ""
   echo "── Oldest open substantive issue per repo (types: Feature, Bug, Security, Performance) ──"
   # Serialized and PACED (Search API: 30 req/min shared), with one retry after a
-  # cooldown per query — never fanned out.
+  # cooldown per query, each attempt buffered so a partial first attempt is
+  # never double-counted — and never fanned out. `archived:false` is honored by
+  # issue search (verified live: it excludes archived-repo tombstone issues that
+  # would otherwise sit as the oldest entry forever).
   substantive=$(load_array FLOW_SUBSTANTIVE_JSON bash -c '
+    set -o pipefail
     for t in Feature Bug Security Performance; do
       fetch() {
-        gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$t&sort=created&order=asc&per_page=100" \
+        gh api "search/issues?q=org:devantler-tech+is:issue+is:open+archived:false+type:$t&sort=created&order=asc&per_page=100" \
           --paginate --jq ".items[] | {number, created_at, repository_url, type: \"$t\"}"
       }
-      fetch || { sleep 65; fetch; } || exit 1
+      out=$(fetch) || { sleep 65; out=$(fetch); } || exit 1
+      printf "%s\n" "$out"
       sleep 2
-    done | jq -s .')
+    done | jq -s .') || substantive=""
   if ! printf '%s' "$substantive" | is_array; then
     section_failed age "open-substantive-issue query returned no JSON array"
   else
@@ -222,7 +243,7 @@ if want age; then
          else .[] | "  \(.age_days | tostring | (" " * (5 - length)) + .)d  \(.repo)#\(.number)  (\(.type), created \(.created))" end)'
     echo "  NOTE: substantive = Issue Types Feature/Bug/Security/Performance (the"
     echo "        contract's substantive-progress gate); Epics are parents, not queue"
-    echo "        items, so they are deliberately excluded here."
+    echo "        items, and archived repos are tombstones, so both are excluded."
   fi
 fi
 
@@ -231,6 +252,7 @@ if want mix; then
   echo ""
   echo "── Merged agent-PR mix, window ${WINDOW_DAYS}d (claude/* + codex/* head branches) ──"
   prs=$(load_array FLOW_PRS_JSON bash -c '
+    set -o pipefail
     q="org:devantler-tech is:pr is:merged merged:>='"$CUTOFF_DATE"'"
     cursor=""; out="[]"
     for _page in 1 2 3 4 5 6 7 8 9 10; do
@@ -241,7 +263,7 @@ if want mix; then
       [ "$(printf "%s" "$resp" | jq -r .data.search.pageInfo.hasNextPage)" = "true" ] || break
       cursor=$(printf "%s" "$resp" | jq -r .data.search.pageInfo.endCursor)
     done
-    printf "%s" "$out"')
+    printf "%s" "$out"') || prs=""
   if ! printf '%s' "$prs" | is_array; then
     section_failed mix "merged-PR query returned no JSON array"
   else

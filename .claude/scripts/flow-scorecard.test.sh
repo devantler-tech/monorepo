@@ -52,7 +52,8 @@ cat > "$tmp/items.json" <<'EOF'
   {"id":5,"node_id":"PVTI_a5","content_type":"Issue","archived_at":null,"content":{"number":14,"state":"open","title":"t5","repository_url":"https://api.github.com/repos/devantler-tech/beta"},"fields":[]},
   {"id":6,"node_id":"PVTI_a6","content_type":"Issue","archived_at":null,"content":{"number":16,"state":"open","title":"t8","repository_url":"https://api.github.com/repos/devantler-tech/beta"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"98236657","name":{"html":"✅ Done","raw":"✅ Done"}}}]},
   {"id":7,"node_id":"PVTI_a7","content_type":"PullRequest","archived_at":null,"content":{"number":15,"state":"open","title":"t6","repository_url":"https://api.github.com/repos/devantler-tech/beta"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"f75ad846","name":{"html":"🫴 Ready","raw":"🫴 Ready"}}}]},
-  {"id":8,"node_id":"PVTI_a8","content_type":"DraftIssue","archived_at":null,"content":{"title":"t7"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"f498da34","name":{"html":"📥 Backlog","raw":"📥 Backlog"}}}]}
+  {"id":8,"node_id":"PVTI_a8","content_type":"DraftIssue","archived_at":null,"content":{"title":"t7"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"f498da34","name":{"html":"📥 Backlog","raw":"📥 Backlog"}}}]},
+  {"id":9,"node_id":"PVTI_a9","content_type":"Issue","archived_at":null,"content":{"number":17,"state":"open","title":"t9","repository_url":"https://api.github.com/repos/devantler-tech/alpha"},"fields":[{"data_type":"single_select","id":169063393,"name":"Status","value":{"id":"f498da34","name":{"html":"📥 Backlog","raw":"📥 Backlog"}}},{"data_type":"issue_type","id":169063398,"name":"Type","value":{"id":35167302,"name":"Epic","is_enabled":true}}]}
 ]
 EOF
 
@@ -120,6 +121,7 @@ contains "over-limit flag fires at 3>2"                   "$out" "⚠ OVER LIMIT
 contains "unconfigured column is honestly unmeasured"     "$out" "(limit ?)"
 contains "UI-only limits gap stated"                      "$out" "limits are board-UI-only"
 contains "open issue stuck in Done is flagged"            "$out" "⚠ OPEN issue in Done"
+not_contains "Epic with a Status is excluded from WIP (Kanban parity)" "$out" "📥 Backlog"
 
 # Throughput: 3 in-window closures; durations [1,4,17] → median 4, p85 17
 contains "throughput counts only in-window closures" "$out" "issues closed in window: 3"
@@ -198,6 +200,32 @@ fi
 contains "malformed section is marked UNMEASURED"    "$out" "treat as UNMEASURED, never as clean"
 contains "other sections still report"               "$out" "issues closed in window: 3"
 contains "failed section named on stderr"            "$tmp/err-malformed.txt" "FAILED SECTIONS: wip"
+
+# A live fetch that emits a valid partial page and THEN fails must surface as
+# UNMEASURED, never as a silent empty (or partial) scorecard — without pipefail
+# in the inner scripts, `jq -s .` converts the partial stream into a clean array
+# and exits 0. The shim answers the field-id lookups, then emits one valid item
+# and fails, exactly the mid-pagination rate-limit shape seen live.
+mkdir -p "$tmp/bin-fail"
+cat > "$tmp/bin-fail/gh" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *projectsV2/5/items*) printf '{"content_type":"Issue","fields":[]}\n'; exit 1 ;;
+  *"Status"*)           echo 169063393 ;;
+  *"Type"*)             echo 169063398 ;;
+  *)                    exit 9 ;;
+esac
+SHIM
+chmod +x "$tmp/bin-fail/gh"
+out="$tmp/out-partial.txt"
+if env "${fixture_env[@]}" FLOW_ITEMS_JSON= PATH="$tmp/bin-fail:$PATH" \
+    bash "$tool" --section wip > "$out" 2>/dev/null; then
+  fail "partial-page fetch failure exits nonzero"
+else
+  pass "partial-page fetch failure exits nonzero"
+fi
+contains "partial-page fetch failure is marked UNMEASURED" "$out" "treat as UNMEASURED, never as clean"
+not_contains "partial-page fetch never renders rows"       "$out" "(limit ?)"
 
 # Malformed FLOW_WIP_LIMITS fails the wip section rather than flagging nothing
 if env "${fixture_env[@]}" FLOW_WIP_LIMITS="Ready-5" bash "$tool" --section wip \
