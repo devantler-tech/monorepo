@@ -37,18 +37,29 @@ set -euo pipefail
 readonly PROJECT_NUMBER=5
 readonly PROJECT_OWNER="devantler-tech"
 readonly DEFAULT_STATUS="📥 Backlog"
+# Fields default to 30 per page and the documented project cap is 50, so Status
+# can fall off the first page and read as "field missing" on a project that has
+# it. Ask for the whole set.
+readonly FIELD_PAGE_LIMIT=100
+
+# The CANONICAL ladder, as documented in the contract. Deliberately a local
+# constant rather than the live option names: option names are editable by
+# anyone with project write access, so echoing them into this agent's transcript
+# would put board-controlled text in front of a high-authority reader. Untrusted
+# input is never echoed unbounded — see AGENTS.md → Untrusted input / Egress.
+readonly STATUS_LADDER='✅ Done | 📊 Verifying | 🚀 Ready to Merge | 👀 In Review
+          🏃🏻‍♂️ In Progress | 🫴 Ready | 📥 Backlog | 🧊 Icebox'
 
 die() { printf 'board-add: %s\n' "$1" >&2; exit "${2:-2}"; }
 
 usage() {
-  cat >&2 <<'EOF'
+  cat >&2 <<EOF
 usage: board-add.sh <issue-url> [status-name]
 
   <issue-url>    full https://github.com/<owner>/<repo>/issues/<n> URL
-  [status-name]  board Status, default "📥 Backlog"
+  [status-name]  board Status, default "${DEFAULT_STATUS}"
 
-Statuses: ✅ Done | 📊 Verifying | 🚀 Ready to Merge | 👀 In Review
-          🏃🏻‍♂️ In Progress | 🫴 Ready | 📥 Backlog | 🧊 Icebox
+Statuses: ${STATUS_LADDER}
 EOF
   exit 1
 }
@@ -94,7 +105,8 @@ PROJECT_ID=$(gh project view "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format
              || die "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER} (auth, network, or scope)"
 [ -n "$PROJECT_ID" ] || die "could not resolve project ${PROJECT_OWNER}/${PROJECT_NUMBER}"
 
-FIELD_JSON=$(gh project field-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json 2>/dev/null \
+FIELD_JSON=$(gh project field-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
+               --limit "$FIELD_PAGE_LIMIT" --format json 2>/dev/null \
              | jq -r '.fields[] | select(.name=="Status")') \
              || die "could not read the field list of project ${PROJECT_NUMBER} (auth, network, or scope)"
 [ -n "$FIELD_JSON" ] || die "could not resolve the Status field on project ${PROJECT_NUMBER}"
@@ -104,9 +116,32 @@ OPTION_ID=$(printf '%s' "$FIELD_JSON" \
             | jq -r --arg n "$STATUS_NAME" '.options[]? | select(.name==$n) | .id // empty')
 
 if [ -z "$OPTION_ID" ]; then
-  VALID=$(printf '%s' "$FIELD_JSON" | jq -r '[.options[]?.name] | join(" | ")')
-  die "unknown status \"${STATUS_NAME}\" — valid: ${VALID}" 1
+  # Report the CANONICAL ladder, never the live option names. Option names come
+  # from the board and are editable by anyone with project write access, so
+  # echoing them here would render board-controlled text — potentially
+  # instruction-shaped — into the transcript of an agent with high authority.
+  # Only the count of live options is reported, which carries no attacker text.
+  LIVE_COUNT=$(printf '%s' "$FIELD_JSON" | jq -r '[.options[]?] | length' 2>/dev/null || echo "?")
+  die "unknown status \"${STATUS_NAME}\" — expected one of: ${STATUS_LADDER}
+          (the board currently defines ${LIVE_COUNT} options; if the ladder was
+           renamed on the board, reconcile it in the UI rather than guessing)" 1
 fi
+
+# Was this issue ALREADY on the board? Needed so a failed Status set can roll
+# back only an item WE created — deleting a pre-existing item would destroy the
+# maintainer's board state. Resolved by a single cheap node lookup rather than
+# `item-list`, which walks every board item over the shared GraphQL budget.
+PRE_EXISTING_ITEM=$(gh api graphql -f url="$ISSUE_URL" -f query='
+  query($url: URI!) {
+    resource(url: $url) {
+      ... on Issue {
+        projectItems(first: 20, includeArchived: true) {
+          nodes { id project { number } }
+        }
+      }
+    }
+  }' --jq ".data.resource.projectItems.nodes[]? | select(.project.number == ${PROJECT_NUMBER}) | .id" \
+  2>/dev/null | head -1 || true)
 
 # Add. `item-add` is idempotent server-side (an existing item is returned, not
 # duplicated), and prints nothing useful off-TTY, so ask for the id explicitly.
@@ -115,9 +150,20 @@ ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
             || die "item-add failed for ${ISSUE_URL} (auth, network, or scope)"
 [ -n "$ITEM_ID" ] || die "item-add returned no item id for ${ISSUE_URL}"
 
-gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" \
-   --field-id "$FIELD_ID" --single-select-option-id "$OPTION_ID" >/dev/null 2>&1 \
-   || die "item-edit failed for ${ISSUE_URL} (item ${ITEM_ID})"
+if ! gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" \
+        --field-id "$FIELD_ID" --single-select-option-id "$OPTION_ID" >/dev/null 2>&1; then
+  # ROLL BACK a newly-created item. Leaving it would put a status-less item on
+  # the board — precisely the drift this script exists to prevent, created by
+  # the tool meant to stop it. An item that existed before we ran is left alone.
+  if [ -z "$PRE_EXISTING_ITEM" ]; then
+    if gh project item-delete "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
+         --id "$ITEM_ID" >/dev/null 2>&1; then
+      die "item-edit failed for ${ISSUE_URL}; rolled back the item we added (no status-less item left behind)"
+    fi
+    die "item-edit failed for ${ISSUE_URL} (item ${ITEM_ID}) AND rollback failed — REMOVE IT MANUALLY, it is on the board with no Status"
+  fi
+  die "item-edit failed for ${ISSUE_URL} (item ${ITEM_ID}); it was already on the board, so it was left as-is"
+fi
 
 # VERIFY BY READ-BACK — the whole point of the script. An exit-0 from item-edit is
 # not evidence the status landed; only reading it back off the board is.
