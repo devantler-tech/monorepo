@@ -27,10 +27,14 @@ acts on it, not a human); return the digest and nothing else.
 all-zero severities and empty VEX/matches even when the real objects are full — you MUST `kubectl get
 <crd> <name> -n <ns> -o json` **by name** (sample 2–3 objects per surface) before concluding anything
 about data quality. An all-zero LIST is a *display artifact*, not a finding.
-Sampling proves **liveness only**. Before reporting cluster-wide scores, severity totals, finding
-deltas, or cleanliness, **directly GET every object whose payload contributes** (or use a trusted
-aggregate endpoint already verified against direct samples); never extrapolate from the liveness
-sample.
+Use **LIST metadata for coverage and freshness** only: reconcile result names, identity labels,
+manifest/summary pairs, and timestamps against the **current workload/container inventory** with
+bounded metadata LISTs. A missing or stale pair is a coverage gap, not zero findings. Sampling proves
+**liveness only**. If the contributing set fits the ~dozen-read bound,
+directly GET every object whose payload contributes; otherwise use a trusted aggregate endpoint already
+verified against direct samples. When neither a payload-complete source nor complete inventory coverage fits the bound,
+**report the cluster-wide result as unavailable or partial** and name the missing proof; never
+extrapolate from the liveness sample.
 And the standing trap this agent exists to catch: **an empty/zero reading almost always means the
 scanner is BROKEN, not that the cluster is clean** — a broken scanner and a compliant cluster read
 identically, so every surface check is **liveness first, values second**.
@@ -61,7 +65,8 @@ identically, so every surface check is **liveness first, values second**.
 ## Security digest — <UTC date> (baseline: <the baseline date/state the orchestrator gave you>)
 scanners_alive: posture=<yes|BROKEN:why> cve=<yes|BROKEN:why> runtime=<yes|INVISIBLE:why>
 posture: score <x> vs baseline <y> — top failed: <C-xxxx name (n)>, …
-cve: crit/high all=<a>/<b> relevant=<c>/<d> — new reachable: <cve id → workload>, … ; vex_docs=<n>
+coverage: cve=<complete|PARTIAL: n current containers lack fresh paired results>
+cve: crit/high all=<a>/<b>|<unavailable:why> relevant=<c>/<d>|<unavailable:why> — new reachable: <cve id → workload>, … ; vex_docs=<n>
 runtime: <n> new detections — routing=<routed-to-X|stdout-only>
 ci_gate: threshold=<n> (in-cluster agrees|DIVERGES: <how>)
 deltas_needing_action:
@@ -70,4 +75,5 @@ deltas_needing_action:
 Digest rules: **classify, don't decide** — the orchestrator turns confirmed deltas into `security`
 issues under the epic (platform#2447) or a hotfix; you never file, comment, or fix. A broken/invisible
 scanner is itself a `deltas_needing_action` line (worst class of finding). If the context/credentials
-are unavailable, say so in one line and stop — never guess from stale data.
+are unavailable, say so in one line and stop — never guess from stale data. A partial coverage set or
+missing payload-complete aggregate is also explicit `unavailable`/`partial` evidence, never a zero.

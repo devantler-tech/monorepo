@@ -72,15 +72,20 @@ empty/zero reading almost always means the scanner is broken, not that the clust
 scanner and a compliant cluster look identical, so **check liveness first, every time**:
 
 **Probe rule that overrides reflex:** **Kubescape CR LISTs return spec-stripped skeletons.** Use a
-cluster-wide LIST only to select object names and inspect metadata; all-zero severities, empty matches,
-or empty VEX payloads in that response are display artifacts, not findings. Before judging payload
-quality, `kubectl get <crd> <name> -n <ns> -o json` by name and **sample 2–3 objects per surface**. For
-CVE liveness, directly GET both named `vulnerabilitymanifests` and their corresponding
+cluster-wide LIST only as **LIST metadata for coverage and freshness**: select object names, timestamps,
+and identity labels; all-zero severities, empty matches, or empty VEX payloads in that response are
+display artifacts, not findings. For CVE coverage, reconcile the result identities and manifest/summary
+pairs against the **current workload/container inventory** before making any cluster-wide claim; an
+absent or stale result is a coverage gap, not zero findings. Before judging payload quality,
+`kubectl get <crd> <name> -n <ns> -o json` by name and **sample 2–3 objects per surface**. For CVE
+liveness, directly GET both named `vulnerabilitymanifests` and their corresponding
 `vulnerabilitymanifestsummaries`, then cross-check scanner freshness and logs. Never declare the
-scanner broken or the cluster clean from a LIST projection. Sampling proves **liveness only**. Before
-reporting cluster-wide scores, severity totals, finding deltas, or cleanliness,
-directly GET every object whose payload contributes (or use a trusted aggregate endpoint already
-verified against direct samples). Never extrapolate cluster-wide findings from the liveness sample.
+scanner broken or the cluster clean from a LIST projection. Sampling proves **liveness only**. If the
+contributing set fits the read bound, directly GET every object whose payload contributes; otherwise
+use a trusted aggregate endpoint already verified against direct samples. When neither a payload-
+complete source nor complete inventory coverage can be established safely,
+**report the cluster-wide result as unavailable or partial** and name the missing proof. Never
+extrapolate cluster-wide findings from the liveness sample.
 
 - **Posture** (config scan) — `configurationscansummaries` / `workloadconfigurationscansummaries`
   (per-namespace scores + failed controls). **Broken if** scores are `0.00` across frameworks,

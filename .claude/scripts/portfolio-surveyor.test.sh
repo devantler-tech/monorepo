@@ -32,6 +32,12 @@ for security_definition in "${platform_card}" "${platform_security_surveyor}"; d
     fail "${security_definition#"${repo_root}/"} does not require direct reads of both CVE object types"
   grep -Fq 'Grype matches plus scanner version metadata' "${security_definition}" ||
     fail "${security_definition#"${repo_root}/"} can treat Kubescape's blank tool.name as a scanner outage"
+  grep -Fq 'LIST metadata for coverage and freshness' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} does not define a bounded use for Kubescape LISTs"
+  grep -Fq 'current workload/container inventory' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can miss workloads with no vulnerability result object"
+  grep -Fq 'report the cluster-wide result as unavailable or partial' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can overclaim cluster-wide findings when bounded proof is unavailable"
 done
 
 [[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
