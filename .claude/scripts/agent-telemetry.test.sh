@@ -1023,6 +1023,69 @@ check "the Codex denial gap stays disclosed" "$OUT" "CLAUDE-SCHEMA ONLY"
 OUT=$(run --section reliability)
 check "the mtime window bound is disclosed" "$OUT" "selects FILES by mtime"
 
+# ── 6f. sleep background classification ───────────────────────────────────────
+echo
+echo "sleep classification (foreground block vs deferred watcher)"
+
+# A BACKGROUNDED sleep is the contract's CHEAP WATCHER, not a busy-wait. Scoring
+# it as waste is what made the raw total unusable as evidence — the improver's
+# own runs arm several per tick, polluting the bucket used to judge the agents.
+mkdir -p "$FIX/bgsleep"
+cat > "$FIX/bgsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"sleep 300 && gh pr checks 1","run_in_background":true}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bgsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'deferred watcher \.+ 1'; then
+  ok "a backgrounded sleep counts as a deferred watcher"
+else bad "a backgrounded sleep counts as a deferred watcher" "$(printf '%s' "$OUT" | grep -E 'foreground|deferred|unclass')"; fi
+if printf '%s' "$OUT" | grep -qE 'foreground block \.+ 0'; then
+  ok "...and is NOT counted as a foreground block"
+else bad "...and is NOT counted as a foreground block" "$(printf '%s' "$OUT" | grep -E 'foreground')"; fi
+
+# The key is OMITTED when false, so ABSENCE must read as foreground. If this
+# regressed to "absent => unknown", every ordinary busy-wait would vanish.
+mkdir -p "$FIX/fgsleep"
+cat > "$FIX/fgsleep/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"f1","name":"Bash","input":{"command":"sleep 60"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"f2","name":"Bash","input":{"command":"sleep 30","run_in_background":false}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/fgsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'foreground block \.+ 2'; then
+  ok "an omitted AND an explicit-false flag both read as foreground"
+else bad "an omitted AND an explicit-false flag both read as foreground" "$(printf '%s' "$OUT" | grep -E 'foreground|deferred')"; fi
+
+# Codex exposes NO backgrounding surface (767 live exec calls: yield_time_ms
+# only, zero background flags). Its sleeps must land in `unclassified` — folding
+# them into foreground would invent an attribution the data cannot support.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreal" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'unclassified \.+ 1'; then
+  ok "a Codex sleep is counted as unclassified"
+else bad "a Codex sleep is counted as unclassified" "$(printf '%s' "$OUT" | grep -E 'unclass|foreground')"; fi
+if printf '%s' "$OUT" | grep -qE 'foreground block \.+ 0'; then
+  ok "...and is NOT attributed to foreground"
+else bad "...and is NOT attributed to foreground" "$(printf '%s' "$OUT" | grep -E 'foreground')"; fi
+check "the Codex classification gap is stated" "$OUT" "STATED GAP, NOT A ZERO"
+
+# The classes must SUM to the total, or a trend is read off a broken split.
+# Mixed corpus: 2 Claude (1 fg + 1 bg) + 1 Codex = 3.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bgsleep" CODEX_HOME="$FIX/cxreal" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2' \
+   && printf '%s' "$OUT" | grep -qE 'deferred watcher \.+ 1' \
+   && printf '%s' "$OUT" | grep -qE 'unclassified \.+ 1'; then
+  ok "classes sum to the total across both instances"
+else bad "classes sum to the total across both instances" "$(printf '%s' "$OUT" | grep -E 'sleep/poll|foreground|deferred|unclass')"; fi
+if printf '%s' "$OUT" | grep -q 'CLASS SUM'; then
+  bad "no drift warning on a consistent split" "$(printf '%s' "$OUT" | grep 'CLASS SUM')"
+else ok "no drift warning on a consistent split"; fi
+
+# Rates carry their denominator — a raw total is not a rate, and comparing one
+# against the other is exactly how the 07-19 sleep reading was misread as a win.
+check "per-session rate states its denominator" "$OUT" "per-session (Claude, n="
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"

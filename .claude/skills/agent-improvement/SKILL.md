@@ -65,7 +65,8 @@ than absolute values, and only a recorded number can trend.
 date_utc, window_days
 reliability:  tool_error_count, top_signatures[], timeout_count
 safety:       blocked_actions[], near_misses[], credential_hits, injection_attempts_in_corpus
-efficiency:   sleep_poll_calls, timeouts, redundant_call_patterns[]
+efficiency:   sleep_poll_calls{total, fg_per_session, bg_per_session, codex_unclassified},
+              timeouts, redundant_call_patterns[]
 quality:      merged_prs, reverts, post_merge_red, review_findings_per_pr
 coordination: two_writer_races, push_collisions, duplicate_artifacts[]
 currency:     loader_drift[], stale_memory[], unused_capabilities[]
@@ -77,6 +78,13 @@ flow:         wip_per_status[], over_limit_columns[], closed_in_window,
 The `flow` row is the Kanban Kata's measurement surface ([monorepo#2271](https://github.com/devantler-tech/monorepo/issues/2271)):
 it comes from `flow-scorecard.sh`, and its stated gaps (UI-only column limits, lifetime as a
 cycle-time proxy) are part of the record — never silently paper over them.
+
+**Record sleeps as RATES, split by class — a raw total is not a rate.** The window selects files by
+mtime, so session counts swing hard day to day: a raw sleep total once fell 442→328 while the
+per-session rate *rose* 2.02→3.73, and the fall was read as a win. Always state the denominator, and
+never compare a raw count against a per-session one. The classes are not interchangeable either — a
+backgrounded `deferred watcher` is contract-COMPLIANT, and Codex's sleeps are **unattributed** (that
+runtime exposes no backgrounding flag), so only `foreground block` is evidence of busy-waiting.
 
 **A metric that moved the wrong way since yesterday outranks a new finding** — regression first.
 Verify any change from a previous run that is awaiting confirmation (step 5) before starting new work.

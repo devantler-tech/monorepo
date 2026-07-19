@@ -235,15 +235,35 @@ fi
 # schemas. Behavioural metrics must never be grepped from raw transcript text:
 # untrusted prose that merely mentions `sleep 60` would otherwise manufacture a
 # busy-wait pattern, and busy-wait counts are evidence the improver acts on.
+#
+# Optional $2 = BACKGROUND CLASS filter, so a caller can split the same commands
+# by whether the agent blocked on them. Deliberately ONE jq expression with a
+# filter rather than a second extractor: a parallel copy is how detector parity
+# broke six times on the redactor, and here it would silently make the class
+# counts stop summing to the total.
+#   FG  Claude, foreground        — run_in_background absent/false (the default;
+#                                   the key is OMITTED when false, so absence=FG)
+#   BG  Claude, backgrounded      — run_in_background:true
+#   CX  Codex                     — UNCLASSIFIABLE: 767 live exec_command calls
+#                                   carried `yield_time_ms` (an output-read
+#                                   timeout) and ZERO carried a background flag,
+#                                   so no backgrounding surface exists to read.
+#                                   Reported as a stated gap, never folded into
+#                                   FG — a false coverage claim beats no claim.
+#   ""  (default) every command, unchanged legacy behaviour.
 commands_in() {
-  local f="$1"
-  jq -r '
+  local f="$1" cls="${2:-}"
+  jq -r --arg cls "$cls" '
     .. | objects
     | (
         # Claude: tool_use carrying a Bash command.
-        (select(.type=="tool_use") | .input?.command? // empty),
+        (select(.type=="tool_use")
+         | select($cls == "" or $cls == (if .input?.run_in_background == true
+                                         then "BG" else "FG" end))
+         | .input?.command? // empty),
         # Codex, JSON-argument shape (function_call).
         (select(.type=="function_call")
+         | select($cls == "" or $cls == "CX")
          | .arguments? // empty
          | (try (fromjson | (.command? // .cmd? // empty)) catch empty)),
         # Codex, REAL observed shape: custom_tool_call name="exec" whose .input is
@@ -252,6 +272,7 @@ commands_in() {
         # (An invented JSON fixture passed here for two rounds while this real
         #  shape was silently unparsed — match the format that actually ships.)
         (select(.type=="custom_tool_call")
+         | select($cls == "" or $cls == "CX")
          | .input? // empty
          | select(type=="string")
          | [scan("cmd:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")] | .[]? | .[0]?
@@ -527,14 +548,57 @@ if want efficiency; then
     # STRUCTURAL, not a text grep: only commands the agent actually ran count.
     # A grep would let untrusted prose that merely mentions `sleep 60` fabricate
     # a busy-wait pattern, and this metric is evidence for definition changes.
-    SLEEPS=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
-             | while IFS= read -r f; do commands_in "$f"; done \
-             | strip_heredocs \
-             | grep -cE '(^|[;&|(]|&&|\|\||[[:space:]](do|then|else)[[:space:]])[[:space:]]*sleep[[:space:]]+["'"'"']?[$0-9{]' || true)
+    # ONE definition of "this command sleeps", shared by the total and every
+    # class count below. Duplicating the regex is how the two would drift apart
+    # and stop summing.
+    count_sleeps() {
+      strip_heredocs \
+        | grep -cE '(^|[;&|(]|&&|\|\||[[:space:]](do|then|else)[[:space:]])[[:space:]]*sleep[[:space:]]+["'"'"']?[$0-9{]' || true
+    }
+    sleeps_for_class() {  # $1 = "" | FG | BG | CX
+      printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
+        | while IFS= read -r f; do commands_in "$f" "$1"; done | count_sleeps
+    }
+    SLEEPS=$(sleeps_for_class "")
+    SLEEP_FG=$(sleeps_for_class FG)
+    SLEEP_BG=$(sleeps_for_class BG)
+    SLEEP_CX=$(sleeps_for_class CX)
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"
     echo "  explicit sleep/poll calls .. ${SLEEPS}   (contract: arm a watcher, never busy-wait)"
+    # The raw total above cannot answer the question the contract actually asks,
+    # because it scores a CONTRACT-COMPLIANT backgrounded watcher (`sleep N &&
+    # check`, run_in_background) identically to a foreground busy-wait — and the
+    # improver's own runs emit several compliant watchers each, landing as
+    # self-noise in the very bucket used to judge the agents. These lines split
+    # the two. This SHARPENS the measurement; it removes nothing.
+    echo "    ├ foreground block ....... ${SLEEP_FG}   [Claude] ← the contract violation"
+    echo "    ├ deferred watcher ....... ${SLEEP_BG}   [Claude, backgrounded] ← COMPLIANT, not waste"
+    echo "    └ unclassified ........... ${SLEEP_CX}   [Codex — see gap note below]"
+    if [ "$((SLEEP_FG + SLEEP_BG + SLEEP_CX))" -ne "$SLEEPS" ]; then
+      echo "    ⚠️  CLASS SUM $((SLEEP_FG + SLEEP_BG + SLEEP_CX)) != TOTAL ${SLEEPS} — the class"
+      echo "        filter and the total have drifted; trust NEITHER until fixed."
+    fi
+    # Rates, because a raw total is not a rate. The window selects FILES by
+    # mtime, so session counts swing hard day to day and a raw count fell while
+    # the per-session rate ROSE (442→328 total, but 2.02→3.73/session). Every
+    # trend claim must name its denominator.
+    if [ "$SF_COUNT" -gt 0 ]; then
+      echo "    per-session (Claude, n=${SF_COUNT}): foreground $(awk -v a="$SLEEP_FG" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session, deferred $(awk -v a="$SLEEP_BG" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session"
+    fi
+    if [ "$CX_COUNT" -gt 0 ]; then
+      echo "    per-session (Codex,  n=${CX_COUNT}): unclassified $(awk -v a="$SLEEP_CX" -v b="$CX_COUNT" 'BEGIN{printf "%.2f", a/b}')/session"
+    fi
+    echo "    NOTE: the Claude split reads run_in_background on the tool call, so"
+    echo "          it is STRUCTURAL — prose cannot fake it. The key is OMITTED"
+    echo "          when false, so absence is correctly read as foreground."
+    echo "          CODEX IS A STATED GAP, NOT A ZERO: 767 live exec_command"
+    echo "          calls carried yield_time_ms (an output-read timeout) and"
+    echo "          ZERO carried any background flag, so that runtime exposes no"
+    echo "          backgrounding surface to classify. Codex sleeps are counted"
+    echo "          but NOT attributed — never read 'unclassified' as compliant"
+    echo "          or as a violation."
     echo
     echo "  descriptions of commands that ACTUALLY timed out:"
     # Correlated by tool_use_id, not a bare grep over every description. The
