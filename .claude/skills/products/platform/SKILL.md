@@ -71,6 +71,14 @@ The recurring trap, learned the hard way (2026-07-04, all three surfaces were si
 empty/zero reading almost always means the scanner is broken, not that the cluster is clean** — a broken
 scanner and a compliant cluster look identical, so **check liveness first, every time**:
 
+**Probe rule that overrides reflex:** **Kubescape CR LISTs return spec-stripped skeletons.** Use a
+cluster-wide LIST only to select object names and inspect metadata; all-zero severities, empty matches,
+or empty VEX payloads in that response are display artifacts, not findings. Before judging payload
+quality, `kubectl get <crd> <name> -n <ns> -o json` by name and **sample 2–3 objects per surface**. For
+CVE liveness, directly GET both named `vulnerabilitymanifests` and their corresponding
+`vulnerabilitymanifestsummaries`, then cross-check scanner freshness and logs. Never declare the
+scanner broken or the cluster clean from a LIST projection.
+
 - **Posture** (config scan) — `configurationscansummaries` / `workloadconfigurationscansummaries`
   (per-namespace scores + failed controls). **Broken if** scores are `0.00` across frameworks,
   `controls: null` en masse, or objects are days stale — check the `kubescape` scanner pod logs for scan

@@ -11,11 +11,20 @@ monorepo_skill="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
 product_engineering_skill="${repo_root}/.claude/skills/product-engineering/SKILL.md"
 agent_skills_card="${repo_root}/.claude/skills/products/agent-skills/SKILL.md"
 ksail_card="${repo_root}/.claude/skills/products/ksail/SKILL.md"
+platform_card="${repo_root}/.claude/skills/products/platform/SKILL.md"
+platform_security_surveyor="${repo_root}/.claude/agents/platform-security-surveyor.md"
 
 fail() {
   echo "portfolio surveyor contract: FAIL — $*" >&2
   exit 1
 }
+
+for security_definition in "${platform_card}" "${platform_security_surveyor}"; do
+  grep -Fq 'Kubescape CR LISTs return spec-stripped skeletons.' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can mistake a Kubescape LIST skeleton for empty scanner output"
+  grep -Fq 'sample 2–3 objects per surface' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} does not require direct per-object Kubescape payload checks"
+done
 
 [[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
 grep -Fq '.claude/scripts/release-bot-exemption.sh' "${surveyor}" ||
