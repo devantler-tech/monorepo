@@ -44,8 +44,10 @@ case "$1 ${2:-}" in
   "api repos"*|"api "*)
                   # repos/<o>/<r> visibility probe
                   printf '%s\n' "${STUB_PRIVATE:-false}" ;;
-  "project view") printf '{"id":"PVT_test","number":5}\n' ;;
+  "project view") [ "${STUB_FAIL_ON:-}" = "project view" ] && exit 1
+                  printf '{"id":"PVT_test","number":5}\n' ;;
   "project field-list")
+                  [ "${STUB_FAIL_ON:-}" = "project field-list" ] && exit 1
                   cat <<'JSON'
 {"fields":[{"id":"PVTSSF_test","name":"Status","options":[
   {"id":"opt_done","name":"✅ Done"},
@@ -54,6 +56,7 @@ case "$1 ${2:-}" in
 JSON
                   ;;
   "project item-add")
+                  [ "${STUB_FAIL_ON:-}" = "project item-add" ] && exit 1
                   # NOTE `-` not `:-`: the empty-id case is set-but-empty, and
                   # `:-` would substitute the default and silently skip the test.
                   printf '{"id":"%s"}\n' "${STUB_ADD_ID-PVTI_test}" ;;
@@ -86,6 +89,18 @@ check "RED: wrong status on board is caught" 2 "$rc" "$out" "read-back MISMATCH"
 # exactly the 9 status-less items measured on 2026-07-19.
 STUB_READBACK="" run "$URL"
 check "RED: absent status is caught" 2 "$rc" "$out" "read-back MISMATCH"
+
+# ── OPERATIONAL failures keep exit 2 AND print a diagnostic ────────────────
+# Under `set -euo pipefail` a failing gh aborts the assignment itself, so the
+# script used to die before its own check ran: exit 1 (the code documented for
+# USAGE errors) with stderr discarded, i.e. silent. Codex P2 on #2281, RED-proven
+# before the fix. One arm per metadata lookup — the defect was a class of three,
+# not one line.
+for stage in "project view" "project field-list" "project item-add"; do
+  STUB_FAIL_ON="$stage" run "$URL"
+  check "operational failure in '$stage' → exit 2" 2 "$rc"
+  check "operational failure in '$stage' → diagnostic" 2 "$rc" "$out" "board-add:"
+done
 
 # ── FAIL-CLOSED paths ──────────────────────────────────────────────────────
 STUB_PRIVATE=true run "$URL"

@@ -82,12 +82,21 @@ esac
 
 # Field metadata. Resolved live rather than hardcoded: option ids change whenever
 # the maintainer edits the column set, and a stale id sets the WRONG column silently.
+#
+# NOTE the `|| die` on each assignment. Under `set -euo pipefail` a failing gh
+# makes the ASSIGNMENT fail, which aborts the script immediately — before the
+# empty-value check below can run. The caller would then get exit 1 (documented
+# here as a *usage* error) and, because stderr is discarded, no diagnostic at
+# all. Binding the failure to `die` keeps operational failures on exit 2 where
+# they belong. An assignment inside a `||` list does not trip `set -e`.
 PROJECT_ID=$(gh project view "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json 2>/dev/null \
-             | jq -r '.id // empty')
+             | jq -r '.id // empty') \
+             || die "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER} (auth, network, or scope)"
 [ -n "$PROJECT_ID" ] || die "could not resolve project ${PROJECT_OWNER}/${PROJECT_NUMBER}"
 
 FIELD_JSON=$(gh project field-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json 2>/dev/null \
-             | jq -r '.fields[] | select(.name=="Status")')
+             | jq -r '.fields[] | select(.name=="Status")') \
+             || die "could not read the field list of project ${PROJECT_NUMBER} (auth, network, or scope)"
 [ -n "$FIELD_JSON" ] || die "could not resolve the Status field on project ${PROJECT_NUMBER}"
 
 FIELD_ID=$(printf '%s' "$FIELD_JSON" | jq -r '.id // empty')
@@ -102,7 +111,8 @@ fi
 # Add. `item-add` is idempotent server-side (an existing item is returned, not
 # duplicated), and prints nothing useful off-TTY, so ask for the id explicitly.
 ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
-            --url "$ISSUE_URL" --format json 2>/dev/null | jq -r '.id // empty')
+            --url "$ISSUE_URL" --format json 2>/dev/null | jq -r '.id // empty') \
+            || die "item-add failed for ${ISSUE_URL} (auth, network, or scope)"
 [ -n "$ITEM_ID" ] || die "item-add returned no item id for ${ISSUE_URL}"
 
 gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" \
