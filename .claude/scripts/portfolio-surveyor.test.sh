@@ -447,4 +447,11 @@ expect_classifier_error \
   "${ksail_files}" \
   'not-json'
 
+# Multi-lane claim visibility (monorepo#2300): Cursor cloud and Codex siblings claim under
+# cursor/* and codex/*; a surveyor that only greps ^claude/ cannot see those pre-PR claims.
+grep -Fq "grep -E '^(claude|cursor|codex)/'" "${surveyor}" ||
+  fail "surveyor claim-branch scan does not cover claude/, cursor/, and codex/ prefixes"
+grep -Fq '(claude|cursor|codex)/*-<issue>' "${surveyor}" ||
+  fail "surveyor CLAIMED matching does not name all three lane prefixes"
+
 echo "portfolio surveyor contract: all assertions passed"

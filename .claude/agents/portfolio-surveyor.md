@@ -44,13 +44,16 @@ public and private — no per-repo loop needed to enumerate):
    on its own merits. Without these logins the orchestrator selects the oldest issue blind to live
    claims and re-opens the duplicate-build race the protocol exists to close.
 2b. **Claim branches (one call per repo that has assigned-but-PR-less issues):**
-   `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep '^claude/'` — report any
-   `claude/*` branch that ends in `-<issue>`, ends in a **takeover suffix** (`-<issue>-2`, `-3`, …),
-   OR whose normalised stem matches an open issue's
+   `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep -E '^(claude|cursor|codex)/'` —
+   report any `claude/*`, `cursor/*`, or `codex/*` branch that ends in `-<issue>`, ends in a
+   **takeover suffix** (`-<issue>-2`, `-3`, …), OR whose normalised stem matches an open issue's
    title (strip `war-`/area prefixes and hyphens, and normalise `our`→`or` spelling) — legacy claims
    predate the issue-number template and would otherwise be invisible during rollout — for an open
    issue with **no** open PR, as
-   `CLAIMED <repo>#<issue> (branch, no PR)`. This is the only pre-PR claim signal that exists: before
+   `CLAIMED <repo>#<issue> (branch, no PR)`. All three Daily AI Engineer lanes claim under their own
+   prefix (`claude/` local Claude Code, `cursor/` Cursor cloud, `codex/` ChatGPT/Codex sibling); a
+   survey that only greps `^claude/` is blind to the other two and recreates the duplicate-build race
+   the claim protocol exists to prevent. This is the only pre-PR claim signal that exists: before
    a PR there is no body to grep, so the issue number in the branch name is what makes the claim
    discoverable. Keep it bounded — skip the call for repos with no assigned-and-PR-less issues.
 3. **Short-circuit dependency automation, then deepen only actionable candidates.** An org-search PR
@@ -433,8 +436,9 @@ Digest rules:
   own native-memory cadence cursors (`last_worked`, `weekly`, docs/roadmap) — **you do not read
   memory**, only live GitHub.
 - **Emit a `CLAIMED` row only when BOTH a `devantler` assignment and a matching claim branch exist**
-  (and no open PR). Match `claude/*-<issue>`, a takeover branch (`claude/*-<issue>-2`, `-3`, …), or a
-  legacy normalised stem. An assignment to **anyone but `devantler`** is not a claim at all, and a
+  (and no open PR). Match `(claude|cursor|codex)/*-<issue>`, a takeover branch
+  (`(claude|cursor|codex)/*-<issue>-2`, `-3`, …), or a legacy normalised stem under any of those three
+  prefixes. An assignment to **anyone but `devantler`** is not a claim at all, and a
   `devantler` assignment with **no** branch is not a live claim under the contract's *Claim
   protocol*, so reporting either as one would let a bare assignee park an issue — exactly what "a bare
   assignee does not reserve an issue" forbids. Report that case as an ordinary open issue (mention
