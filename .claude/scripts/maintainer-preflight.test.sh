@@ -38,8 +38,27 @@ grep -Fq 'classify the saved login as indeterminate' "${run_loop}" ||
 grep -Fq 'authentication verification unavailable' "${run_loop}" ||
   fail "missing the unavailable host-verification classification"
 
-grep -Fq 'Only an explicit credential rejection from that host-level check proves the saved login invalid.' "${run_loop}" ||
+grep -Fq 'Only an explicit credential rejection' "${run_loop}" ||
   fail "missing the host-confirmed invalid classification"
+
+grep -Fq 'GitHub service degraded' "${run_loop}" ||
+  fail "missing the REST 5xx / service-degraded classification"
+
+grep -Fq "gh api graphql -f query='{viewer{login}}'" "${run_loop}" ||
+  fail "missing the authenticated GraphQL viewer.login fallback"
+
+grep -Fq 'HTTP 401/403' "${run_loop}" ||
+  fail "missing the explicit 401/403 authentication-rejection criterion"
+
+grep -Fq 'A REST 5xx with a successful GraphQL' "${run_loop}" ||
+  fail "missing the REST-503-plus-GraphQL-success regression rule"
+
+grep -Fq 'recommend' "${run_loop}" && grep -Fq 'gh auth login' "${run_loop}" ||
+  fail "missing the gh-auth-login-only-on-confirmed-rejection handoff rule"
+
+# The handoff must be gated on confirmed rejection — not on every auth-status failure.
+grep -Fq 'and **only then** recommend' "${run_loop}" ||
+  fail "missing the confirmed-rejection gate before recommending gh auth login"
 
 grep -Fq 'record only these gate classifications in durable memory' "${run_loop}" ||
   fail "missing the credential-safe memory rule"
