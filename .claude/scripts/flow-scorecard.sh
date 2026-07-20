@@ -279,7 +279,7 @@ fi
 # ── Merged agent-PR mix (substantive vs supporting) ──────────────
 if want mix; then
   echo ""
-  echo "── Merged agent-PR mix, window ${WINDOW_DAYS}d (claude/* + codex/* head branches) ──"
+  echo "── Merged agent-PR mix, window ${WINDOW_DAYS}d (claude/* + codex/* + cursor/* head branches) ──"
   prs=$(load_array FLOW_PRS_JSON bash -c '
     set -o pipefail
     q="org:devantler-tech is:pr is:merged merged:>='"$CUTOFF_DATE"'"
@@ -298,7 +298,7 @@ if want mix; then
   else
     printf '%s' "$prs" | jq -r --arg now "$NOW_UTC" --argjson d "$WINDOW_DAYS" '
       (($now|fromdateiso8601) - ($d*86400)) as $cut
-      | map(select((.headRefName // "") | test("^(claude|codex)/"))
+      | map(select((.headRefName // "") | test("^(claude|codex|cursor)/"))
             # Branch names are contributor-controlled, so a fork PR can name
             # itself claude/* — a cross-repository head is never agent work.
             | select(.isCrossRepository != true)

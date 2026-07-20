@@ -1047,7 +1047,7 @@ if want outcomes; then
     # only the monorepo scored the definition work and ignored the products.
     # Repos come from the submodule list, so the set follows the portfolio map
     # instead of being hard-coded here and going stale.
-    echo "  AGENT-authored merged PRs since ${SINCE_ISO} (claude/* + codex/* branches):"
+    echo "  AGENT-authored merged PRs since ${SINCE_ISO} (claude/* + codex/* + cursor/* branches):"
     # Portable extraction: BSD sed rejects the non-greedy `+?` a single-pass
     # regex would need, so strip in stages instead of relying on a GNU-only form.
     REPOS=$(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.url$' 2>/dev/null \
@@ -1067,7 +1067,7 @@ if want outcomes; then
       # cannot discriminate, because the agent commits as the maintainer.
       if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt,headRefName \
             --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")
-                       | select(.headRefName | test(\"^(claude|codex)/\"))] | length" 2>/dev/null); then
+                       | select(.headRefName | test(\"^(claude|codex|cursor)/\"))] | length" 2>/dev/null); then
         printf '    %-42s QUERY FAILED (auth/rate-limit/network)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
       fi
       case "$c" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; APIFAIL=$((APIFAIL+1)); continue ;; esac

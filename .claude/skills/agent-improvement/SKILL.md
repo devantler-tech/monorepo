@@ -42,9 +42,20 @@ is not present — **stop and report**, change nothing. You never improve what y
 The script is read-only and covers reliability, efficiency, safety, cross-instance, drift and
 outcomes. Supplement it with:
 
-- **Both memory stores** — Claude: `~/.claude/projects/<slug>/memory/`; Codex:
+- **Both local memory stores** — Claude: `~/.claude/projects/<slug>/memory/`; Codex:
   `$CODEX_HOME/automations/daily-ai-engineer/memory.md`. Read for *what the agents believe*; compare
   against live state to find **stale beliefs**, which are a leading cause of wrong action.
+- **The Cursor cloud instance, via its GitHub artifacts — it has NO local corpus.** It runs in a
+  cloud sandbox, so there are no session files, no tool-error signatures, and no memory file to read;
+  the telemetry script is structurally blind to it. Its **substitute evidence** is what it leaves on
+  GitHub: `cursor/*` branches, its PRs and their review histories, `agent-claim/<issue>` refs it won
+  or lost, and comments authored as `cursor`. That is a genuinely weaker signal — it shows outcomes
+  but not process, so reliability and safety findings that need a transcript **cannot** be derived
+  for this instance. Say so explicitly in the scorecard rather than reporting its rows as clean; a
+  metric that cannot see an instance must never be read as evidence that instance is behaving.
+  Its deployed prompt is not local either — diff the automation against
+  [`.claude/loaders/cursor-daily-ai-engineer.md`](../../loaders/cursor-daily-ai-engineer.md), which is
+  its source of truth, and treat drift as a finding for the maintainer to re-paste.
 - **Recent run reports** — what each run claimed it shipped, versus what GitHub shows merged.
 - **The loaders** — the Claude scheduled task's `SKILL.md` and the Codex `automation.toml`, against
   the constitution.
