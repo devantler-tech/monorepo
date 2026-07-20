@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Per-tick branch hygiene: delete spent claude/* branches locally and on the remote.
 #
+# Usage: branch-cleanup.sh <repo_path> <slug> <manifest> [apply|dry-run]
+#   apply   (default) — record each deletion to the manifest, then delete
+#   dry-run — report what would be deleted; write NOTHING to the manifest
+# Any other MODE value exits non-zero (typos must not silently mean "don't delete"
+# and must not pollute the restore ledger — monorepo#2252 / #2255).
+#
 # SAFETY CONTRACT (fail-closed — every ambiguity resolves to KEEP, every
 # infrastructure failure ABORTS the phase that depends on it):
 #   KEEP  - any branch that is the head of an OPEN PR       (deleting it would CLOSE the PR)
@@ -16,12 +22,20 @@
 #           concurrent session moves between evidence-gathering and deletion is rejected, and the
 #           open-PR keep-set is re-fetched immediately before the delete loop.
 #
-# Every deletion is recorded (branch -> sha) to the manifest BEFORE the delete, and the write is
-# verified — no restore record, no deletion.
+# In apply mode every deletion is recorded (branch -> sha) to the manifest BEFORE the delete, and
+# the write is verified — no restore record, no deletion. dry-run never touches the manifest.
 set -uo pipefail
 
 REPO_PATH="$1"; SLUG="$2"; MANIFEST="$3"; MODE="${4:-apply}"
 errors=0
+
+case "$MODE" in
+  apply|dry-run) ;;
+  *)
+    echo "$SLUG: ABORT — MODE must be 'apply' or 'dry-run' (got '$MODE')" >&2
+    exit 1
+    ;;
+esac
 
 cd "$REPO_PATH" || exit 1
 
@@ -150,8 +164,10 @@ while IFS= read -r b; do
      { [ "$st" != "MERGED" ] && [ "$st" != "CLOSED" ] || [ "$ev_sha" != "$sha" ]; }; then
     candidates=$((candidates+1)); l_keep=$((l_keep+1)); continue
   fi
-  manifest_write "$(printf '%s\tlocal\t%s\t%s' "$SLUG" "$b" "$sha")"
   if [ "$MODE" = "apply" ]; then
+    # Record BEFORE delete (and only in apply): dry-run must leave the
+    # restore ledger byte-identical (monorepo#2252).
+    manifest_write "$(printf '%s\tlocal\t%s\t%s' "$SLUG" "$b" "$sha")"
     # update-ref -d BYPASSES the checked-out-branch refusal `git branch -D`
     # has, so re-check the live worktree list right before deleting — a
     # concurrent session may have checked the branch out since the keep-set
@@ -198,8 +214,10 @@ while IFS= read -r rb; do
     # current ref carries commits no PR accounts for. Keep it.
     r_keep=$((r_keep+1)); continue
   fi
-  manifest_write "$(printf '%s\tremote\t%s\t%s\t%s' "$SLUG" "$b" "$sha" "$st")"
   if [ "$MODE" = "apply" ]; then
+    # Record BEFORE delete (and only in apply): dry-run must leave the
+    # restore ledger byte-identical (monorepo#2252).
+    manifest_write "$(printf '%s\tremote\t%s\t%s\t%s' "$SLUG" "$b" "$sha" "$st")"
     # Final per-branch TOCTOU guard: a PR can open between the loop-level
     # keep-set refresh and this very deletion. Fail closed on query failure.
     # RESIDUAL RISK (accepted, no server-side conditional delete exists): a PR
