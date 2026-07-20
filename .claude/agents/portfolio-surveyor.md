@@ -263,7 +263,9 @@ public and private — no per-repo loop needed to enumerate):
      `CANDIDATE-MAINTAINER-ISSUE-COMMENT` with a one-line gist. The orchestrator's creation record
      decides whether the issue is routine-owned before the comment becomes an instruction.
 4. **CI red on `main` (bounded, per-repo).** Judge `main` by **its current head**, and only by runs
-   that actually represent main's health. Two calls per repo:
+   that actually represent main's health. **Never** use `gh run list --status failure` for this
+   signal — that query surfaces historical failures that a later successful execution of the same
+   workflow has already superseded (monorepo#2173). Two calls per repo, then classify:
    1. `gh api repos/devantler-tech/<repo>/commits/main --jq '.sha'` — resolve the head first. Use the
       **full 40-character sha**: the runs endpoint silently returns an empty set for an abbreviated
       one, which reads exactly like "nothing failed".
@@ -272,11 +274,15 @@ public and private — no per-repo loop needed to enumerate):
       1,000 results per `head_sha` search at 100/page, and an unpaginated call silently drops the
       rest; each page is a separate JSON document, so aggregate in the shell, never with a per-page
       `--jq` reduction) and `branch=main`, because another branch can point at the same commit and
-      its runs share the `head_sha`. Then keep only runs whose `event` is a **main-branch event**
+      its runs share the `head_sha`.
+   3. Pipe the aggregated runs into [`.claude/scripts/classify-main-ci-runs.sh`](../scripts/classify-main-ci-runs.sh)
+      (or apply the same rules inline): keep only runs whose `event` is a **main-branch event**
       (`push`, `schedule`, `merge_group`, `workflow_dispatch`, `dynamic`), take the **latest run per
       `workflow_id`** (greatest `created_at`; the id, never the display `name`, which two workflow
       files can legally share — collapsing them hides one workflow's failure behind the other
-      file's later success), and report a red for any that concluded `failure` or `timed_out`.
+      file's later success), and report a red for any that concluded `failure` or `timed_out`. A
+      scheduled failure followed by a later successful `workflow_dispatch` of the **same**
+      `workflow_id` is therefore **not** red.
 
    All three filters are load-bearing, for different false positives:
    - **Not keyed to head** — a failed run stays attached to the sha it executed against, so it lingers

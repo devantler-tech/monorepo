@@ -4,6 +4,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 classifier="${repo_root}/.claude/scripts/release-bot-exemption.sh"
+main_ci_classifier="${repo_root}/.claude/scripts/classify-main-ci-runs.sh"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
@@ -18,8 +19,21 @@ fail() {
 }
 
 [[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
+[[ -x "${main_ci_classifier}" ]] || fail "main CI classifier is missing or not executable"
 grep -Fq '.claude/scripts/release-bot-exemption.sh' "${surveyor}" ||
   fail "surveyor does not delegate exemption decisions to the exact classifier"
+grep -Fq '.claude/scripts/classify-main-ci-runs.sh' "${surveyor}" ||
+  fail "surveyor does not delegate main-CI classification to classify-main-ci-runs.sh"
+grep -Fq 'head_sha=<full-sha>&branch=main' "${surveyor}" ||
+  fail "surveyor does not key main CI to the current head_sha + branch=main"
+grep -Fq 'classify-main-ci-runs.sh' "${maintenance_skill}" ||
+  fail "portfolio-maintenance skill does not point at classify-main-ci-runs.sh for main CI"
+if grep -Fq 'gh run list --branch main --status failure' "${maintenance_skill}"; then
+  fail "portfolio-maintenance skill still teaches gh run list --status failure for main CI"
+fi
+if grep -Fq 'gh run list --branch main --status failure' "${surveyor}"; then
+  fail "surveyor still teaches gh run list --status failure for main CI"
+fi
 grep -Fq 'ksail-bot[bot]' "${surveyor}" ||
   fail "surveyor does not recognize the exact KSail App identity returned by search"
 grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
@@ -446,5 +460,51 @@ expect_classifier_error \
   "${ksail_head}" \
   "${ksail_files}" \
   'not-json'
+
+# --- main CI classifier (monorepo#2173): failure then success is not a live fire ---
+expect_main_ci_reds() {
+  local name="$1"
+  local runs_json="$2"
+  local expected="$3"
+  local got
+  got="$("${main_ci_classifier}" <<<"${runs_json}")" || fail "main CI classifier errored: ${name}"
+  [[ "${got}" == "${expected}" ]] || fail "main CI classifier mismatch for ${name}
+expected:
+${expected}
+got:
+${got}"
+}
+
+expect_main_ci_reds \
+  "scheduled failure superseded by later workflow_dispatch success" \
+  '[
+    {"workflow_id":11,"event":"schedule","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"},
+    {"workflow_id":11,"event":"workflow_dispatch","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/ok","name":"Template Sync"}
+  ]' \
+  ""
+
+expect_main_ci_reds \
+  "newest relevant execution still failed" \
+  '[
+    {"workflow_id":11,"event":"schedule","conclusion":"success","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/ok","name":"Template Sync"},
+    {"workflow_id":11,"event":"push","conclusion":"failure","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"}
+  ]' \
+  $'11\tfailure\thttps://example.test/fail\tTemplate Sync'
+
+expect_main_ci_reds \
+  "pull_request failures at the same sha are not main health" \
+  '[
+    {"workflow_id":12,"event":"pull_request","conclusion":"failure","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/pr","name":"CI"}
+  ]' \
+  ""
+
+expect_main_ci_reds \
+  "independent workflows stay independent" \
+  '[
+    {"workflow_id":11,"event":"schedule","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/a-fail","name":"Template Sync"},
+    {"workflow_id":11,"event":"workflow_dispatch","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/a-ok","name":"Template Sync"},
+    {"workflow_id":99,"event":"push","conclusion":"timed_out","created_at":"2026-07-14T10:00:00Z","html_url":"https://example.test/b-to","name":"CI"}
+  ]' \
+  $'99\ttimed_out\thttps://example.test/b-to\tCI'
 
 echo "portfolio surveyor contract: all assertions passed"

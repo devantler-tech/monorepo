@@ -91,8 +91,11 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   pulled for those few candidates, not for every PR in every repo); the read-only surveyor always
   reports `devantler` PRs as ownership-unverified, and the orchestrator's creation record decides
   which are actually its own before any action;
-- checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure
-  --limit 3` each;
+- checks **CI red on `main`** per repo by resolving main's current head sha, listing runs for that
+  `head_sha` + `branch=main` (paginated), and classifying with
+  [`.claude/scripts/classify-main-ci-runs.sh`](../../scripts/classify-main-ci-runs.sh) — latest run
+  per `workflow_id` among main-branch events only; **never** `gh run list --status failure`, which
+  reports superseded historical failures as live fires (monorepo#2173);
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
   broad author-based search, because scheduled discovery must not expose professional-work repos;
 - flags untriaged issues/PRs, stale actionable PRs (>14d), `roadmap`-ready issues, and products with
