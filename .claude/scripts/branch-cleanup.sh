@@ -5,7 +5,8 @@
 # infrastructure failure ABORTS the phase that depends on it):
 #   KEEP  - any branch that is the head of an OPEN PR       (deleting it would CLOSE the PR)
 #   KEEP  - any branch checked out by a worktree            (git refuses anyway; we skip explicitly)
-#   KEEP  - the default branch, and anything not claude/*   (never touch codex/* = the sibling's lane)
+#   KEEP  - the default branch, and anything not claude/*   (never touch codex/* or cursor/* = the
+#           siblings' lanes)
 #   LOCAL - delete when not in KEEP (squash-merge means `-d` can't see merges, so `-D` + manifest)
 #   REMOTE- delete ONLY with positive evidence: an associated MERGED/CLOSED PR whose recorded head
 #           SHA equals the branch's CURRENT SHA (same incarnation — a re-pushed branch invalidates
