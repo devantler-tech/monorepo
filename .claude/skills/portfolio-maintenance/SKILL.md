@@ -130,14 +130,18 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   green-review state** — so a run can
   **drain all five**, not just threads. **(e) green review:** nothing may be self-promoted without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
-  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>`
+  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>`
   (`self@<sha>` = the last-resort agent self-review on an **own** PR when both lanes are down —
-  contract *Autonomy → Fallback — agent self-review*; never on a bot-authored PR). **`none` carries
+  contract *Autonomy → Fallback — agent self-review*; never on a bot-authored PR).
+  **`not-requested@<abbrev-head>`** means both lanes' review-output counts are zero after a two-surface
+  check — request a **first** review; it is never outage evidence.
+  **`none` carries
   its evidence** — the review-output artifact counts the surveyor actually saw, **per lane**, and the abbreviated
-  head it matched — so a real absence is distinguishable from a filter miss; a bare `none` is an
+  head it matched — so a real absence-of-green is distinguishable from a filter miss; a bare `none` is an
   unverifiable claim, and the suffix is scoped to `green_review` only (never `rd=none`, which is
   GitHub's unrelated `reviewDecision`). Non-zero counts beside `none` are normal when the artifacts
-  are **stale** (at a non-head SHA) — that is a re-request signal, not a contradiction.
+  are **stale** (at a non-head SHA) — that is a re-request signal, not a contradiction. Do **not** emit
+  `none` with all-zero counts; that state is `not-requested`.
   Fetch `headRefOid` while deepening every actionable own/trusted PR. A CodeRabbit `APPROVED` review counts only
   when its REST `commit_id` equals that head; report an older approval as stale, and a current-head
   CodeRabbit review carrying findings as `cr-findings@<sha>`. For Codex, sweep

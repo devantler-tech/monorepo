@@ -636,6 +636,11 @@ result at the current head — self-promotion is forbidden before that. Request 
   its own review skills (`/review`, `/code-review`, `/security-review`) rather than leaving the draft
   stuck. This is a **last resort, never a shortcut**: an available lane is always preferred, a
   self-review never pre-empts one, and the two-lane failure must be **evidenced in the run report**.
+  **Admissible evidence is a direct per-PR check of both surfaces only** (review objects *and* issue
+  comments — Codex's green is an issue COMMENT with `**Reviewed commit:** <sha>`, not a review
+  object): never declare a lane unavailable from an aggregate digest field, a portfolio-wide "no
+  greens" summary, or a surveyor's `green_review=none` / `not-requested` row alone. `not-requested`
+  means request a first review; it is ordinary post-auto-review-disabled state, not an outage.
   **A CodeRabbit rolling-quota shell that states a short window (`Next review available in: N
   minutes`) is NOT an unavailable lane** — it is the wait-and-retrigger case: schedule the
   retrigger in the background and carry on;

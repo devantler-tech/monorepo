@@ -150,7 +150,7 @@ public and private — no per-repo loop needed to enumerate):
      their review state as `green_review=exempt-release-bot` **and their pre-merge state as
      `premerge=exempt-release-bot`** — never classify them NEEDS-FIX for lacking a review OR a
      pre-merge summary (their (a)/(b)/(c) hygiene still counts). Report
-     `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>`. The
+     `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>`. The
      evidence suffix belongs to `green_review` ONLY — never decorate `rd=none`, which is GitHub's
      unrelated `reviewDecision`.
      `self@<sha>` is the **last-resort agent self-review** (contract *Autonomy → Fallback — agent
@@ -177,12 +177,16 @@ public and private — no per-repo loop needed to enumerate):
      result for an older head as `codex-stale@<sha>`. If the latest current-head Codex review posts
      findings instead of the clean-pass marker, report `codex-findings@<sha>` plus its comment/review
      URL or unresolved connector-thread count and classify the PR **NEEDS-FIX**; never hide that surface as `none` or immediately
-     request another review. `none` means no actual green/finding review output exists. **NEITHER
+     request another review. **Distinguish never-requested from requested-but-absent:** when both
+     lanes' review-output counts are zero (`cr:rev=0,cmt=0` and `codex:rev=0,cmt=0`) after checking
+     **both** surfaces at the abbreviated head, emit `not-requested@<abbrev-head>` — not `none`.
+     `none(cr:rev=<n>,cmt=<n>; …)` is reserved for PRs that *do* carry review-output artifacts (stale
+     greens, findings, prior reviews) but no current-head green. **NEITHER
      reviewer auto-reviews anything anymore (maintainer disabled auto-review on both CodeRabbit and
      Copilot code review, 2026-07-12)** — every review exists only because the orchestrator requested
-     it, so a `none`/`*-stale` on any actionable own/trusted PR signals the orchestrator to
-     (re-)request one (its
-     one-tool-at-a-time, rate-limit-aware discipline — the surveyor only reports the state).
+     it, so `not-requested` signals a **first** review request and `none`/`*-stale` signals a
+     **(re-)request** (its one-tool-at-a-time, rate-limit-aware discipline — the surveyor only reports
+     the state). Neither token is outage evidence.
    - **(d) CodeRabbit pre-merge checks per open actionable own/trusted PR — a SEPARATE surface the maintainer
      gates promotion and merge on** (he will NOT promote a draft whose pre-merge checks aren't green —
      maintainer direction 2026-07-06). CodeRabbit publishes pre-merge state in either a full
@@ -373,20 +377,27 @@ an error, or an app failure on a PR, emit a neutral factual row
 stated. State what the reviewer said; never characterise it as an outage, a lane being down, or
 grounds for any fallback.
 
-A row of `none`/`*-stale` across many PRs is **not** outage evidence: the
-overwhelmingly more common causes are a green staled by a push, a request that was silently dropped,
-and — because Codex's clean pass is an issue COMMENT with no `commit_id`, and its findings are a
-review OBJECT — a surface you looked at with the wrong key. Before emitting `none` for any row,
-confirm you checked **both** surfaces at the **abbreviated** head sha; `none` means you found no
-review output of any kind, not that you found none matching your filter.
+A row of `not-requested` / `none` / `*-stale` across many PRs is **not** outage evidence: the
+overwhelmingly more common causes are a review that was never requested (auto-review is off), a green
+staled by a push, a request that was silently dropped, and — because Codex's clean pass is an issue
+COMMENT with no `commit_id`, and its findings are a review OBJECT — a surface you looked at with the
+wrong key. Before emitting `not-requested` or `none` for any row, confirm you checked **both**
+surfaces at the **abbreviated** head sha; emit `not-requested` only when both lanes' review-output
+counts are zero, and `none` only when review output exists but none matches the current head.
+
+**Zero review-output on both surfaces is `not-requested`, not `none`.** After checking both surfaces
+at the abbreviated head, if `cr:rev=0,cmt=0` **and** `codex:rev=0,cmt=0`, emit
+`not-requested@<abbrev-head>` — that is the never-requested state (request a first review). Do **not**
+emit `none(cr:rev=0,cmt=0; …)` for that case: collapsing never-requested into `none` is how a digest
+once looked like a portfolio-wide outage (#2244).
 
 **`none` must CARRY ITS EVIDENCE, or the rule above is satisfiable by asserting it.** Report it as
 `none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)` — the count of `chatgpt-codex-connector`/`coderabbitai` review
 objects and issue comments you actually saw on that PR, and the abbreviated head you matched against.
-`none(cr:rev=0,cmt=0; codex:rev=0,cmt=0 @a1b2c3d4e5)` is a checkable claim; a bare `none` is an assertion the orchestrator
-cannot distinguish from the filter miss this rule exists to prevent. **A bare `none` is never
-emittable** — where this document says "`none`" in prose it names the *state*; the *token* you emit
-always carries the suffix.
+At least one of those four counts must be **non-zero** (otherwise the state is `not-requested`). A bare
+`none` is an assertion the orchestrator cannot distinguish from the filter miss this rule exists to
+prevent. **A bare `none` is never emittable** — where this document says "`none`" in prose it names
+the *state*; the *token* you emit always carries the suffix.
 
 **Count REVIEW OUTPUT only.** `rev=` counts review objects; `cmt=` counts comments carrying actual
 review output (a `Codex Review:` clean-pass marker). A CodeRabbit walkthrough summary, a
@@ -416,8 +427,8 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]> → AUTOMATION-OWNED (NO-ACTION)
-- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
-- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|exempt-release-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…> (orchestrator applies creation-record test before action; NOT asserted mine)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)

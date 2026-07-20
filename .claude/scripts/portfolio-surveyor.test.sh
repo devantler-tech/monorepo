@@ -42,6 +42,14 @@ grep -Fq 'do **not** call' "${surveyor}" ||
   fail "surveyor still permits heavy dependency-PR deepening"
 grep -Fq 'count it against' "${surveyor}" ||
   fail "surveyor may still turn dependency automation into operate work"
+grep -Fq '**Reviewed commit:**' "${surveyor}" ||
+  fail "surveyor does not teach Codex comment-form greens (#2244 AC1)"
+grep -Fq 'not-requested@' "${surveyor}" ||
+  fail "surveyor does not distinguish not-requested from none (#2244 AC2)"
+grep -Fq 'not-requested@' "${maintenance_skill}" ||
+  fail "portfolio-maintenance skill omits not-requested green_review state (#2244)"
+grep -Fq 'Admissible evidence is a direct per-PR check of both surfaces only' "${constitution}" ||
+  fail "constitution fallback does not require per-PR two-surface evidence (#2244 AC3)"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'automation-owned dependency PRs' "${monorepo_skill}" ||
