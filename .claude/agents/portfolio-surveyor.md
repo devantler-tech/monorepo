@@ -169,15 +169,26 @@ public and private — no per-repo loop needed to enumerate):
      review URL and unresolved-thread/finding count and classify the PR **NEEDS-FIX**, exactly like
      the Codex case below; never hide it as `none` or signal another request while findings sit
      unaddressed. For Codex,
-     sweep paginated `issues/<n>/comments` **and** `pulls/<n>/reviews`/review threads for the latest
+     sweep paginated `issues/<n>/comments` **and** `pulls/<n>/reviews`/review threads for
      actual `chatgpt-codex-connector` review output (not an arbitrary command/setup reply), extract
      `**Reviewed commit:** <sha>`, and report
      `codex@<sha>` only when its clean-pass body contains
      `Codex Review: Didn't find any major issues` and that sha equals `headRefOid`. Report a clean
-     result for an older head as `codex-stale@<sha>`. If the latest current-head Codex review posts
+     result for an older head as `codex-stale@<sha>`. If a Codex review **at the current head** posts
      findings instead of the clean-pass marker, report `codex-findings@<sha>` plus its comment/review
      URL or unresolved connector-thread count and classify the PR **NEEDS-FIX**; never hide that surface as `none` or immediately
-     request another review. `none` means no actual green/finding review output exists. **NEITHER
+     request another review. `none` means no actual green/finding review output exists.
+     🔴 **HEAD-MATCH DECIDES FIRST — never rank the two surfaces by recency.** Codex's outcome shapes
+     live on different surfaces with different timestamp fields: findings are a review **object**
+     (`submitted_at`, carries `commit_id`), a clean pass is an issue **COMMENT** (`created_at`,
+     carries `**Reviewed commit:**` and **no `commit_id` at all**). "The latest output" is therefore
+     undefined across them, so resolve by **sha, not by time**: check both surfaces for `headRefOid`
+     first, and a clean pass naming the head wins **even when a findings review object exists at an
+     older sha** — that object is superseded history, not an open finding. Only findings **at head**
+     yield `codex-findings`. Measured 2026-07-20 (monorepo#2308): reporting the older object instead
+     mislabelled four green drafts (`ksail`#6267/#6279, `agent-plugins`#72, `platform`#2635) as
+     NEEDS-FIX, each pushing the orchestrator to re-request a review it already held — on a
+     per-account quota contended by ~7 parallel sessions. **NEITHER
      reviewer auto-reviews anything anymore (maintainer disabled auto-review on both CodeRabbit and
      Copilot code review, 2026-07-12)** — every review exists only because the orchestrator requested
      it, so a `none`/`*-stale` on any actionable own/trusted PR signals the orchestrator to
