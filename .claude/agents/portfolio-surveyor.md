@@ -188,7 +188,13 @@ public and private — no per-repo loop needed to enumerate):
      yield `codex-findings`. Measured 2026-07-20 (monorepo#2308): reporting the older object instead
      mislabelled four green drafts (`ksail`#6267/#6279, `agent-plugins`#72, `platform`#2635) as
      NEEDS-FIX, each pushing the orchestrator to re-request a review it already held — on a
-     per-account quota contended by ~7 parallel sessions. **NEITHER
+     per-account quota contended by ~7 parallel sessions.
+     ⚠️ **Extract that sha tolerantly, or head-match cannot fire at all.** The marker is written
+     ``**Reviewed commit:** `<sha>` `` — the sha is **backtick-wrapped** and **abbreviated to 10
+     chars**, not the full 40. A pattern expecting hex immediately after the colon matches nothing
+     and yields "no reviewed commit", which is indistinguishable from a genuinely absent marker and
+     silently drops every row to `none(…)`. Skip the backticks and compare on the **abbreviated
+     prefix** of `headRefOid`, never on a full-40 equality. **NEITHER
      reviewer auto-reviews anything anymore (maintainer disabled auto-review on both CodeRabbit and
      Copilot code review, 2026-07-12)** — every review exists only because the orchestrator requested
      it, so a `none`/`*-stale` on any actionable own/trusted PR signals the orchestrator to
