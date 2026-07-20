@@ -1944,3 +1944,31 @@ performance, security, and reliability. The `self-improvement` skill is the proc
   high-value or security/reliability fix); minimal, reversible changes; one concern per PR; don't
   churn. A run with nothing worth changing proposes nothing — but it still banks its daily 1% learning
   (capture is not proposing; see *The 1% rule* above).
+
+## Cursor Cloud specific instructions
+
+Scope note for Cloud Agents: in a fresh cloud checkout the **only buildable product is the
+`docs/` Astro Starlight site** (devantler.tech). Every entry in the *Portfolio map* is a Git
+submodule wired over SSH (`git@github.com:` in `.gitmodules`), and cloud VMs have no SSH key, so
+`submodule-init.sh` / `git submodule update` cannot populate them — those products can't be built
+or run here. `docs/` lives in this repo (not a submodule), so it always works.
+
+- **Toolchain:** Node 22 + npm (already on the VM). Standard site commands live in `docs/README.md`
+  and `.github/workflows/ci.yaml` — don't duplicate them. In short: work from `docs/`, `npm run dev`
+  (dev server at `http://localhost:4321/`, no base path), `npm run build` (what CI validates).
+- **The dependency-refresh update script only installs `docs/` deps.** Starting the dev server,
+  building, and running tests are NOT in it — run them yourself.
+- **Search is disabled under `npm run dev`.** Starlight builds the Pagefind search index only during
+  `npm run build`, so the dev-server search box shows "Search is only available in production
+  builds". To exercise search, run `npm run build` then `npm run preview`.
+- **`npm run build` is the effective lint/validate step** — it runs `starlight-links-validator`
+  (internal-link check) and builds the Pagefind index; there is no separate `lint` script.
+- **Automated tests are bash self-tests**, not a JS test runner: `.claude/scripts/*.test.sh` and
+  `docs/scripts/check-active-projects-drift.test.sh` (these are the suites CI runs). Known
+  pre-existing failure unrelated to the site: `agent-telemetry.test.sh` fails one case
+  ("JWT flagged AND redacted", 114/115 pass) — a fixture/detector mismatch in an internal
+  maintenance script, not an environment problem.
+- **`drift-check-active-projects` cannot fully run in cloud.** It greps the checked-out
+  `github/devantler-tech/github-actions/actions` submodule; CI rewrites that submodule's URL to
+  public HTTPS before init, but the cloud VM's SSH-only `.gitmodules` means it stays empty here.
+  Its self-test (`check-active-projects-drift.test.sh`) still runs (self-contained fixtures).
