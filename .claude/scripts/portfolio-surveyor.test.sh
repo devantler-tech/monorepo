@@ -900,6 +900,22 @@ grep -Fq 'Do not gate this scan on assignees' "${surveyor}" ||
 grep -Fq 'none(cursor-lane)' "${surveyor}" ||
   fail "surveyor CLAIMED digest does not allow cursor-lane branch-only claims"
 
+# Claim-protocol P2s (#2250) — contract + echo sites must stay in sync.
+grep -Fq 'Resolve the claim ref from the issue number' "${constitution}" ||
+  fail "constitution missing issue-number claim-ref resolution (#2250)"
+grep -Fq 'branch you actually pushed' "${constitution}" ||
+  fail "constitution missing takeover tip verification (#2250)"
+grep -Fq 'foreign `owner/repo#<issue>`' "${constitution}" ||
+  fail "constitution missing same-repo PR-body claim filter (#2250)"
+grep -Fq 'branch you actually pushed' "${maintenance_skill}" ||
+  fail "portfolio-maintenance missing takeover tip echo (#2250)"
+grep -Fq 'foreign `owner/repo#N`' "${product_engineering_skill}" ||
+  fail "product-engineering missing same-repo body-ref echo (#2250)"
+grep -Fq 'foreign `owner/repo#<issue>`' "${surveyor}" ||
+  fail "surveyor missing same-repo PR-body claim filter (#2250)"
+grep -Fq '…-<issue>-2' "${monorepo_skill}" ||
+  fail "monorepo card missing takeover branch echo (#2250)"
+
 # monorepo#2482 — every agent instance reviews as `devantler`, so an `rd=` rule keyed on the login
 # alone reports a sibling instance's own superseded CHANGES_REQUESTED as a permanent human gate and
 # parks a finished PR. Measured live on monorepo#2432: a disclosed agent review blocked the PR for

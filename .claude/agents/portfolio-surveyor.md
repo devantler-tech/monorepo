@@ -647,18 +647,22 @@ Digest rules:
 - **Emit a `CLAIMED` row when a matching claim branch exists and there is no open PR**, under one of
   two shapes. Match `(claude|cursor|codex)/*-<issue>`, a takeover branch
   (`(claude|cursor|codex)/*-<issue>-2`, `-3`, …), or a legacy normalised stem under any of those three
-  prefixes. **(1) `claude/*` / `codex/*`:** require BOTH a `devantler` assignment and the matching
-  branch — an assignment to **anyone but `devantler`** is not a claim, and a `devantler` assignment
-  with **no** branch is not a live claim under the contract's *Claim protocol*, so reporting either
-  as one would let a bare assignee park an issue. **(2) `cursor/*`:** the matching branch alone is
-  enough — `app/cursor` cannot assign (403), so a Cursor-lane claim is branch-only until the draft
-  PR opens; requiring an assignee would make every cloud-lane claim invisible (monorepo#2300). Report
-  that shape as `CLAIMED … assignee=none(cursor-lane), claim-branch=<name>`. A bare `devantler`
-  assignee with no branch is still an ordinary open issue (mention `assignees=<n>` if useful), never
-  skip reason (e). The orchestrator times the ~2h lease from the issue's newest `assigned` timeline
-  event when one exists; for a cursor-lane branch-only claim, time from the branch tip's push
-  (or treat it as live until a PR appears / the tip goes stale). An assignee is an **instance**
-  claim, never the maintainer.
+  prefixes — resolve the claim ref from the **issue number**, never an assumed exact stem (contract
+  *Claim protocol* rule 4). When deciding "no open PR", a body hit on `"#<issue>"` counts only if it
+  references **this** repo's issue (`Fixes`/`Closes`/`Resolves #<issue>`, `<o>/<r>#<issue>`, or a bare
+  `#<issue>` that is not solely a foreign `owner/repo#<issue>`). **(1) `claude/*` / `codex/*`:**
+  require BOTH a `devantler` assignment and the matching branch — an assignment to **anyone but
+  `devantler`** is not a claim, and a `devantler` assignment with **no** branch is not a live claim
+  under the contract's *Claim protocol*, so reporting either as one would let a bare assignee park an
+  issue. **(2) `cursor/*`:** the matching branch alone is enough — `app/cursor` cannot assign (403),
+  so a Cursor-lane claim is branch-only until the draft PR opens; requiring an assignee would make
+  every cloud-lane claim invisible (monorepo#2300). Report that shape as `CLAIMED …
+  assignee=none(cursor-lane), claim-branch=<name>`. A bare `devantler` assignee with no branch is
+  still an ordinary open issue (mention `assignees=<n>` if useful), never skip reason (e). The
+  orchestrator times the ~2h lease from the issue's newest `assigned` timeline event when one
+  exists; for a cursor-lane branch-only claim, time from the branch tip's push (or treat it as live
+  until a PR appears / the tip goes stale). An assignee is an **instance** claim, never the
+  maintainer.
 - **Never assert ownership of a `devantler` PR.** Routine-own vs maintainer-interactive is the
   orchestrator's creation-record call, not yours — report CI state + `headRefName` + disclosure as DATA
   and tag it `OWNERSHIP-UNVERIFIED`, never `MERGE-READY`/"own". (Bot-trusted authors have no ambiguity.)
