@@ -43,7 +43,7 @@ public and private — no per-repo loop needed to enumerate):
    ordinary open issues, noting the assignee so the orchestrator can respect a human's in-progress work
    on its own merits. Without these logins the orchestrator selects the oldest issue blind to live
    claims and re-opens the duplicate-build race the protocol exists to close.
-2b. **Claim branches (one call per repo that has assigned-but-PR-less issues):**
+2b. **Claim branches (one call per repo that has PR-less open issues):**
    `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep -E '^(claude|cursor|codex)/'` —
    report any `claude/*`, `cursor/*`, or `codex/*` branch that ends in `-<issue>`, ends in a
    **takeover suffix** (`-<issue>-2`, `-3`, …), OR whose normalised stem matches an open issue's
@@ -53,9 +53,12 @@ public and private — no per-repo loop needed to enumerate):
    `CLAIMED <repo>#<issue> (branch, no PR)`. All three Daily AI Engineer lanes claim under their own
    prefix (`claude/` local Claude Code, `cursor/` Cursor cloud, `codex/` ChatGPT/Codex sibling); a
    survey that only greps `^claude/` is blind to the other two and recreates the duplicate-build race
-   the claim protocol exists to prevent. This is the only pre-PR claim signal that exists: before
+   the claim protocol exists to prevent. **Do not gate this scan on assignees:** `app/cursor` cannot
+   assign (403), so a Cursor-lane claim is branch-only until its draft PR opens — an
+   assigned-but-PR-less gate would skip every `cursor/*` claim. Keep it bounded — skip the call for
+   repos with no open PR-less issues at all. This is the only pre-PR claim signal that exists: before
    a PR there is no body to grep, so the issue number in the branch name is what makes the claim
-   discoverable. Keep it bounded — skip the call for repos with no assigned-and-PR-less issues.
+   discoverable.
 3. **Short-circuit dependency automation, then deepen only actionable candidates.** An org-search PR
    whose author is the exact `renovate[bot]` or `dependabot[bot]` identity is an automation-owned
    dependency PR. Emit only `AUTOMATION-OWNED (NO-ACTION)` from the cheap search row; do **not** call
@@ -428,22 +431,28 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
-- <repo> #<n> "<title>" — CLAIMED: assignee=devantler, claim-branch=<name>, no open PR
+- <repo> #<n> "<title>" — CLAIMED: assignee=devantler|none(cursor-lane), claim-branch=<name>, no open PR
 ```
 
 Digest rules:
 - **Classify, don't decide.** Surface signals; the **orchestrator** selects the work and overlays its
   own native-memory cadence cursors (`last_worked`, `weekly`, docs/roadmap) — **you do not read
   memory**, only live GitHub.
-- **Emit a `CLAIMED` row only when BOTH a `devantler` assignment and a matching claim branch exist**
-  (and no open PR). Match `(claude|cursor|codex)/*-<issue>`, a takeover branch
+- **Emit a `CLAIMED` row when a matching claim branch exists and there is no open PR**, under one of
+  two shapes. Match `(claude|cursor|codex)/*-<issue>`, a takeover branch
   (`(claude|cursor|codex)/*-<issue>-2`, `-3`, …), or a legacy normalised stem under any of those three
-  prefixes. An assignment to **anyone but `devantler`** is not a claim at all, and a
-  `devantler` assignment with **no** branch is not a live claim under the contract's *Claim
-  protocol*, so reporting either as one would let a bare assignee park an issue — exactly what "a bare
-  assignee does not reserve an issue" forbids. Report that case as an ordinary open issue (mention
-  `assignees=<n>` if useful), never as skip reason (e). The orchestrator times the ~2h lease from the
-  issue's newest `assigned` timeline event; an assignee is an **instance** claim, never the maintainer.
+  prefixes. **(1) `claude/*` / `codex/*`:** require BOTH a `devantler` assignment and the matching
+  branch — an assignment to **anyone but `devantler`** is not a claim, and a `devantler` assignment
+  with **no** branch is not a live claim under the contract's *Claim protocol*, so reporting either
+  as one would let a bare assignee park an issue. **(2) `cursor/*`:** the matching branch alone is
+  enough — `app/cursor` cannot assign (403), so a Cursor-lane claim is branch-only until the draft
+  PR opens; requiring an assignee would make every cloud-lane claim invisible (monorepo#2300). Report
+  that shape as `CLAIMED … assignee=none(cursor-lane), claim-branch=<name>`. A bare `devantler`
+  assignee with no branch is still an ordinary open issue (mention `assignees=<n>` if useful), never
+  skip reason (e). The orchestrator times the ~2h lease from the issue's newest `assigned` timeline
+  event when one exists; for a cursor-lane branch-only claim, time from the branch tip's push
+  (or treat it as live until a PR appears / the tip goes stale). An assignee is an **instance**
+  claim, never the maintainer.
 - **Never assert ownership of a `devantler` PR.** Routine-own vs maintainer-interactive is the
   orchestrator's creation-record call, not yours — report CI state + `headRefName` + disclosure as DATA
   and tag it `OWNERSHIP-UNVERIFIED`, never `MERGE-READY`/"own". (Bot-trusted authors have no ambiguity.)

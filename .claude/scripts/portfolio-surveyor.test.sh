@@ -449,9 +449,15 @@ expect_classifier_error \
 
 # Multi-lane claim visibility (monorepo#2300): Cursor cloud and Codex siblings claim under
 # cursor/* and codex/*; a surveyor that only greps ^claude/ cannot see those pre-PR claims.
+# The scan must also NOT be gated on assignees — app/cursor cannot assign, so a Cursor claim
+# is branch-only until its draft PR opens.
 grep -Fq "grep -E '^(claude|cursor|codex)/'" "${surveyor}" ||
   fail "surveyor claim-branch scan does not cover claude/, cursor/, and codex/ prefixes"
 grep -Fq '(claude|cursor|codex)/*-<issue>' "${surveyor}" ||
   fail "surveyor CLAIMED matching does not name all three lane prefixes"
+grep -Fq 'Do not gate this scan on assignees' "${surveyor}" ||
+  fail "surveyor claim-branch scan is still gated on assignees (hides cursor/* claims)"
+grep -Fq 'none(cursor-lane)' "${surveyor}" ||
+  fail "surveyor CLAIMED digest does not allow cursor-lane branch-only claims"
 
 echo "portfolio surveyor contract: all assertions passed"
