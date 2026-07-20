@@ -130,8 +130,8 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   green-review state** — so a run can
   **drain all five**, not just threads. **(e) green review:** nothing may be self-promoted without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
-  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>`
-  (`self@<sha>` = the last-resort agent self-review on an **own** PR when both lanes are down —
+  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>`
+  (`self@<sha>` = the last-resort agent self-review on an **own** PR when ALL THREE lanes are down —
   contract *Autonomy → Fallback — agent self-review*; never on a bot-authored PR). **`none` carries
   its evidence** — the review-output artifact counts the surveyor actually saw, **per lane**, and the abbreviated
   head it matched — so a real absence is distinguishable from a filter miss; a bare `none` is an
