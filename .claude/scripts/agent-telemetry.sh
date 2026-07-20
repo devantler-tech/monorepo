@@ -694,7 +694,12 @@ if want efficiency; then
     #   next    — sleep whose NEXT command polls remote: the UNCHAINED form the
     #             hook cannot block and monorepo#2262 targets
     #   none    — no remote poll adjacent: a local timer, contract-permitted
-    REMOTE_RE='(^|[^[:alnum:]_./-])(gh|curl|wget|kubectl|flux|talosctl|argocd|helm)([[:space:]]|$)'
+    # An absolute path is still the same tool, so `/usr/bin/gh` must match; only
+    # a word character or a dash before the name means it is a DIFFERENT command
+    # (`mygh`, `re-gh`). `git` counts only for its network-touching subcommands —
+    # a bare `git status` is local and would otherwise make every sleep near any
+    # git call look like remote polling.
+    REMOTE_RE='(^|[^[:alnum:]_-])(gh|curl|wget|kubectl|flux|talosctl|argocd|helm|az|aws|docker[[:space:]]+(pull|push)|git[[:space:]]+(ls-remote|fetch|push|pull|clone))([[:space:]]|$)'
     # Strip the class tag but KEEP boundaries: \003 marks a command's first line,
     # \004 a file boundary. class_lines deliberately strips both, because the
     # sleep regex is anchored at line start and a marker would break it.
@@ -729,25 +734,45 @@ if want efficiency; then
       # a different unit from the launch-mode split above — the two could never
       # sum to the same total, and the drift guard would fire forever on a
       # difference that was never a defect. Both splits now count the same thing.
-      function classify(   irem) {
+      # ORDER MATTERS WITHIN A COMMAND. Testing the whole command for a remote
+      # tool scored `gh pr view 1; sleep 30` as a chained busy-wait even though
+      # the poll happened BEFORE the sleep — that sleep is waiting on something
+      # else, and its real follower may be in the next tool call. So each
+      # sleeping line asks only: does a remote poll occur AT OR AFTER me?
+      function remote_after(i,   j, m, tail) {
+        # Same line, to the RIGHT of the sleep token only.
+        if (match(lines[i], sre)) {
+          tail = substr(lines[i], RSTART + RLENGTH)
+          if (tail ~ rre) return 1
+        }
+        for (j = i + 1; j <= nlines; j++) if (lines[j] ~ rre) return 1
+        return 0
+      }
+      # A pending sleep is resolved by the FIRST remote poll in the next command,
+      # wherever it sits in that command — position only constrains the command
+      # the sleep itself belongs to, which it has already left.
+      # (No apostrophes in this awk program: it is single-quoted, and one would
+      #  end the quote and break the whole script far from here.)
+      function classify(   i, irem) {
         if (!started) return
         irem = (buf ~ rre)
         # Resolve sleeps left pending by the PREVIOUS command first: they slept
-        # without a remote poll of their own, so this command decides the bucket.
+        # without a remote poll after them, so this command decides the bucket.
         if (pending) {
-          if (irem) { n_next += pending; if (pcls=="FG") fg_rem += pending }
+          if (irem) { n_next += pending; if (pcls=="FG") { fg_rem += pending; fg_next += pending } }
           else        n_none += pending
           pending = 0
         }
-        if (nsleep) {
-          n_tot += nsleep
-          if (irem) { n_same += nsleep; if (cls=="FG") fg_rem += nsleep }
-          else      { pending = nsleep; pcls = cls }
+        for (i = 1; i <= nlines; i++) {
+          if (lines[i] !~ sre) continue
+          n_tot++
+          if (remote_after(i)) { n_same++; if (cls=="FG") fg_rem++ }
+          else                 { pending++; pcls = cls }
         }
-        nsleep = 0; buf = ""; started = 0
+        nlines = 0; buf = ""; started = 0
       }
       function resolve() { if (pending) { n_none += pending; pending = 0 } }
-      function addline(s) { buf = buf " " s; if (s ~ sre) nsleep++ }
+      function addline(s) { buf = buf " " s; lines[++nlines] = s }
       # A pending sleep at a file boundary has no next command in ITS session.
       /^\004$/ { classify(); resolve(); next }
       /^\003/  { classify()
@@ -756,11 +781,11 @@ if want efficiency; then
                  started = 1; addline(substr($0, i+1)); next }
                  { if (started) addline($0) }
       END { classify(); resolve()
-            printf "%d %d %d %d %d", n_tot, n_same, n_next, n_none, fg_rem }')
-    WT_TOT=${WT%% *};  WT_REST=${WT#* }
-    WT_SAME=${WT_REST%% *}; WT_REST=${WT_REST#* }
-    WT_NEXT=${WT_REST%% *}; WT_REST=${WT_REST#* }
-    WT_NONE=${WT_REST%% *}; WT_FGREM=${WT_REST##* }
+            printf "%d %d %d %d %d %d", n_tot, n_same, n_next, n_none, fg_rem, fg_next }')
+    # `read`, not `set --`: the latter would clobber the script's positional
+    # parameters. (A here-string is a bash/zsh extension — fine under this
+    # file's bash shebang, and never to be copied into a /bin/sh script.)
+    read -r WT_TOT WT_SAME WT_NEXT WT_NONE WT_FGREM WT_FGNEXT <<< "$WT"
     # The total is the SUM of the classes, not a separate scan. That makes
     # class-vs-total drift impossible instead of detectable — and a drift
     # warning over a sum would be a vacuous guard, which is worse than none.
@@ -795,6 +820,11 @@ if want efficiency; then
     echo "    ├ remote poll, next command .. ${WT_NEXT}   [busy-wait, UNCHAINED]"
     echo "    └ no remote poll adjacent .... ${WT_NONE}   [local timer — PERMITTED]"
     echo "  ⇒ FOREGROUND ∧ remote-adjacent . ${WT_FGREM}   [THE BUSY-WAIT VIOLATION]"
+    # The aggregate remote-next bucket mixes in compliant BACKGROUND watchers and
+    # unattributed Codex sleeps, so it moves when neither the rule nor foreground
+    # behaviour changed. Only this foreground-only figure tests the unchained-wait
+    # tightening — trend THIS, never the aggregate.
+    echo "      of which UNCHAINED (fg) ... ${WT_FGNEXT}   [tests the #2262 rule]"
     if [ "$SF_COUNT" -gt 0 ]; then
       echo "    per-session (Claude, n=${SF_COUNT}): $(awk -v a="$WT_FGREM" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← the metric to trend"
     fi
@@ -808,9 +838,12 @@ if want efficiency; then
     echo "          the busy-wait the latency discipline forbids; 'next command'"
     echo "          is the unchained form the PreToolUse hook cannot see, which"
     echo "          is what monorepo#2262 tightened the constitution against."
-    echo "          STATED GAP: adjacency is a heuristic, not intent — a sleep"
-    echo "          followed by an unrelated gh call scores 'next'. It bounds"
-    echo "          the busy-wait count from ABOVE; treat it as a ceiling."
+    echo "          STATED GAP: adjacency is a heuristic, not intent, and it is"
+    echo "          NOT a bound in either direction. It OVER-counts when a sleep"
+    echo "          is followed by an unrelated remote call, and UNDER-counts"
+    echo "          when the wait uses a tool outside the recognised set (a"
+    echo "          custom script, an SDK, a curl-less HTTP client). Read it as"
+    echo "          an estimate to investigate, never as a census or a ceiling."
     echo "    NOTE: this splits LAUNCH MODE, which is NOT a compliance verdict."
     echo "          run_in_background says how Bash started the command, never"
     echo "          why the sleep exists. The contract permits a FOREGROUND bare"

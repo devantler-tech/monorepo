@@ -1308,7 +1308,64 @@ if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 0'; then
   ok "a heredoc BODY does not inflate the wait-target count"
 else bad "a heredoc BODY does not inflate the wait-target count" "$(printf '%s' "$OUT" | grep -E 'remote poll')"; fi
 
-check "the adjacency heuristic states it is a ceiling" "$OUT" "treat it as a ceiling"
+# The heuristic is imprecise in BOTH directions, so claiming it bounds the count
+# from above was itself a false claim: a wait performed through a tool outside
+# the recognised set is scored as a permitted local timer and UNDER-counts.
+check "the heuristic is not claimed as a bound in either direction" "$OUT" "NOT a bound in either direction"
+check "the under-count direction is stated too" "$OUT" "UNDER-counts"
+
+# Order within a command matters: a poll BEFORE a sleep is not what that sleep is
+# waiting on, and treating it as chained also hides the unchained case.
+mkdir -p "$FIX/wtorder"
+cat > "$FIX/wtorder/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"o1","name":"Bash","input":{"command":"gh pr view 1; sleep 30"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtorder" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 0'; then
+  ok "a poll BEFORE the sleep is not counted as a chained busy-wait"
+else bad "a poll BEFORE the sleep is not counted as a chained busy-wait" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# A remote wait through a path-qualified binary or a network git subcommand is
+# still a remote wait; scoring it "permitted local timer" understates violations.
+mkdir -p "$FIX/wtalias"
+cat > "$FIX/wtalias/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash","input":{"command":"sleep 30 && /usr/bin/gh pr view 1"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a2","name":"Bash","input":{"command":"sleep 20 && git ls-remote origin"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtalias" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 2'; then
+  ok "a path-qualified gh and a network git subcommand both count as remote"
+else bad "a path-qualified gh and a network git subcommand both count as remote" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# ...but a LOCAL git subcommand must not, or every sleep near any git call reads
+# as remote polling.
+mkdir -p "$FIX/wtgitlocal"
+cat > "$FIX/wtgitlocal/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"g1","name":"Bash","input":{"command":"git status; sleep 15; git status"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtgitlocal" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+  ok "a LOCAL git subcommand does not count as a remote poll"
+else bad "a LOCAL git subcommand does not count as a remote poll" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# The aggregate remote-next bucket mixes in compliant background watchers, so it
+# cannot test a foreground rule. Only the foreground-only figure can.
+mkdir -p "$FIX/wtfgnext"
+cat > "$FIX/wtfgnext/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q1","name":"Bash","input":{"command":"sleep 45","run_in_background":true}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q2","name":"Bash","input":{"command":"gh pr view 12"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtfgnext" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, next command \.+ 1'; then
+  ok "a BACKGROUND unchained sleep still counts in the aggregate next bucket"
+else bad "a BACKGROUND unchained sleep still counts in the aggregate next bucket" "$(printf '%s' "$OUT" | grep -E 'remote poll')"; fi
+if printf '%s' "$OUT" | grep -qE 'of which UNCHAINED \(fg\) \.+ 0'; then
+  ok "...but is EXCLUDED from the foreground-only figure that tests the rule"
+else bad "...but is EXCLUDED from the foreground-only figure that tests the rule" "$(printf '%s' "$OUT" | grep -E 'UNCHAINED')"; fi
 
 # An UNTERMINATED heredoc must not swallow the NEXT command. The stripper is a
 # state machine, so without a per-command reset one malformed command silently
