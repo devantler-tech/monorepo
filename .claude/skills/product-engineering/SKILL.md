@@ -144,7 +144,10 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    assignment is a claim, and only it expires:** an issue assigned to a **human collaborator** (or
    `Copilot`) is someone else's work-in-progress — respect it and pick a different issue. **Claim the lane before you build** (self-assign + push
    the branch **with the issue number in its name**, then harden), check open PRs / remote `claude/*`
-   branches / assignees by **issue number rather than literal branch name**, and on a lost race
+   branches / assignees by **issue number rather than literal branch name**, resolve the claim ref
+   from that number (base or `…-<issue>-k` takeover — verify the tip of the branch you actually
+   pushed), and treat a PR-body `#N` as this-repo only when it is not solely a foreign `owner/repo#N`
+   (contract *Claim protocol*). On a lost race
    **abandon** — then diff your build against the winner's and post only findings you have verified:
    execute the probe against a **trusted/routine-owned** winner's branch, but for an
    **external-contributor** winner it is **static review only** (the trust gate is not relaxed by a

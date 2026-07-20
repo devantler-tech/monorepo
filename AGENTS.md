@@ -301,9 +301,13 @@ touch of an unconfirmed repo:
    American, the issue's title British, so each session derived a different stem from a different part
    of the same issue and neither's exact-name scan could see the other. Grepping open PR *bodies* for
    the **`#<issue>` reference — with the hash, not the bare digits** — is spelling-proof:
-   `gh pr list -R <o>/<r> --state open --search '"#<issue>" in:body'`. A bare number matches any body
-   that merely contains it (a benchmark count, a date, another repo's issue number), which would hide
-   the oldest actionable issue behind an unrelated PR.
+   `gh pr list -R <o>/<r> --state open --search '"#<issue>" in:body'`. `-R` scopes the *PR list* to
+   this repo, but a body can still name a **foreign** issue as `other-owner/other-repo#<issue>` — that
+   is not a claim on *this* repo's issue. Keep a hit only when the body references **this** repo's
+   issue: a `Fixes`/`Closes`/`Resolves #<issue>`, an explicit `<o>/<r>#<issue>`, or a bare `#<issue>`
+   that is **not** solely a foreign `owner/repo#<issue>`. A bare digit match (no hash) still matches
+   benchmark counts and dates and must never be used — that would hide the oldest actionable issue
+   behind an unrelated PR.
 2. **Claim before you build, not after.** The moment you select an issue, (a) self-assign it —
    **if `devantler` is already assigned (a stale bare assignment from an abandoned run), remove and
    re-add**, because the add is a no-op for an existing assignee and would leave your lease carrying
@@ -346,7 +350,9 @@ touch of an unconfirmed repo:
    commits**, do not reuse that name: the deterministic name collides, and pushing onto it either gets
    rejected or silently builds on abandoned work. Start a fresh branch
    (`claude/<area>-<desc>-<issue>-2`) and leave theirs alone — it is another instance's work, and the
-   branch-cleanup sweep reaps it once it is provably stale. Never force-push over it. This time-boxing is what keeps the rule compatible with
+   branch-cleanup sweep reaps it once it is provably stale. Never force-push over it. **Race
+   verification (rule 4) must `ls-remote` that takeover name** — the branch you actually pushed —
+   never the abandoned `…-<issue>` base claim ref. This time-boxing is what keeps the rule compatible with
    *"a bare assignee does not reserve an issue"* above: a claim is a short lease, not a lock.
 4. **Re-verify immediately before the first push, and make that push DECIDE the race.** The residual
    window is seconds wide but real (that is exactly how #88 and #96 were lost). Two instances picking
@@ -356,8 +362,18 @@ touch of an unconfirmed repo:
    - Put a **real commit** on the claim branch (the first substantive change, or an empty
      `git commit --allow-empty -m "chore: claim #<issue>"`), never a bare pointer at the base commit —
      otherwise both pushes are trivially fast-forwards and neither is refused.
-   - Push **without force**, then **verify the remote tip is yours**:
-     `git ls-remote origin <lane>/<area>-<desc>-<issue>` must return **your** sha. **Compare the tip —
+   - Push **without force**, then **verify the remote tip of the branch you actually pushed** is
+     yours (for a fresh claim that is `<lane>/<area>-<desc>-<issue>`; for a takeover it is the
+     `…-<issue>-2` / `-3` / … name you just created — never re-check the abandoned base claim name).
+     **Resolve the claim ref from the issue number**, not an assumed exact stem — takeover suffixes
+     and legacy stems both exist:
+     ```sh
+     # This lane's claim ref(s) for issue N (base or -<n>-k takeover):
+     git ls-remote --heads origin \
+       | awk -v lane="<lane>" -v n="<issue>" \
+           '$2 ~ "^refs/heads/" lane "/.+" && $2 ~ "-" n "(-[0-9]+)?$" {print $1, $2}'
+     ```
+     Your just-pushed tip must appear there as **your** sha. **Compare the tip —
      never judge the race by the push's exit status**, and never through a pipe: `git push … | tail`
      reports `tail`'s status, so a *rejected* push reads as exit 0 (reproduced 2026-07-20). If the tip
      is someone else's, **you lost the race** — stand down under rule 5 rather than force-pushing over

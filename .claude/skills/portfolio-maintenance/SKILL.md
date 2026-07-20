@@ -422,9 +422,12 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    you select — and if `devantler` is ALREADY assigned (a stale bare assignment from an abandoned run),
    **remove then re-add**, since adding an existing assignee is a no-op that would leave your lease
    carrying the old timestamp. **The push decides the race:** put a real commit on the claim branch
-   (never a bare base pointer), push without force, then confirm `git ls-remote` shows YOUR sha — two
-   instances derive the same branch name, so a rejected push or someone else's tip means you lost;
-   stand down rather than force over them. Check open PRs, remote
+   (never a bare base pointer), push without force, then confirm `git ls-remote` shows YOUR sha on
+   **the branch you actually pushed** — resolve that ref from the **issue number** (base
+   `…-<issue>` or a `…-<issue>-k` takeover), never an assumed exact stem (contract *Claim protocol*
+   rule 4). Two instances derive the same branch name, so a rejected push or someone else's tip means
+   you lost; stand down rather than force over them. Check open PRs (same-repo body refs only — drop
+   hits whose only `#<issue>` is a foreign `owner/repo#<issue>`), remote
    `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
    (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
    itself. If it **already has an

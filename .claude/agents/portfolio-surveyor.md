@@ -434,7 +434,11 @@ Digest rules:
   memory**, only live GitHub.
 - **Emit a `CLAIMED` row only when BOTH a `devantler` assignment and a matching claim branch exist**
   (and no open PR). Match `claude/*-<issue>`, a takeover branch (`claude/*-<issue>-2`, `-3`, …), or a
-  legacy normalised stem. An assignment to **anyone but `devantler`** is not a claim at all, and a
+  legacy normalised stem — resolve the claim ref from the **issue number**, never an assumed exact
+  stem (contract *Claim protocol* rule 4). When deciding "no open PR", a body hit on `"#<issue>"`
+  counts only if it references **this** repo's issue (`Fixes`/`Closes`/`Resolves #<issue>`,
+  `<o>/<r>#<issue>`, or a bare `#<issue>` that is not solely a foreign `owner/repo#<issue>`). An
+  assignment to **anyone but `devantler`** is not a claim at all, and a
   `devantler` assignment with **no** branch is not a live claim under the contract's *Claim
   protocol*, so reporting either as one would let a bare assignee park an issue — exactly what "a bare
   assignee does not reserve an issue" forbids. Report that case as an ordinary open issue (mention
