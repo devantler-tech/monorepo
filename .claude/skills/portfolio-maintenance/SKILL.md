@@ -20,10 +20,14 @@ card.
 1. **The contract is already in context** — `AGENTS.md` is loaded via the project's `CLAUDE.md`
    (`@AGENTS.md` shim). Follow it; **don't re-read it** (a redundant read just burns ~6–7K tokens).
    Only if it is somehow *not* already in your context should you read it once.
-2. **Working checkout:** `cd /Users/homelab-mac-mini/git-personal/monorepo` (this deployment's primary
-   checkout — the scheduled task runs on a fixed machine; adjust the path if relocated); confirm
-   (`test -d docs && test -f .gitmodules`); `gh auth status --active --hostname github.com` shows
-   `devantler`. **Sync the definition:**
+2. **Working checkout — use YOUR deployment's, not a hard-coded one.** The machine-local instances
+   run from the fixed checkout `cd /Users/homelab-mac-mini/git-personal/monorepo` (adjust if
+   relocated). A **cloud instance has no such path** and must use its sandbox's checkout root
+   instead — hard-coding the Mac path would make a conforming cloud run `cd` into nothing and stop
+   before doing any work. Whichever applies, verify you are in the right tree the same way: confirm
+   (`test -d docs && test -f .gitmodules`); `gh auth status --active --hostname github.com` shows the
+   expected identity (`devantler` locally; the cloud lane authenticates as its own App — see its
+   loader). **Sync the definition:**
    this checkout carries permanent submodule-pointer drift, so don't gate on a fully clean tree — if
    `main` is behind `origin/main` and the only dirt is submodule pointers, fast-forward with
    `git fetch origin main && git merge --ff-only origin/main` (it never checks out submodule contents;

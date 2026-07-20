@@ -47,12 +47,16 @@ outcomes. Supplement it with:
   against live state to find **stale beliefs**, which are a leading cause of wrong action.
 - **The Cursor cloud instance, via its GitHub artifacts — it has NO local corpus.** It runs in a
   cloud sandbox, so there are no session files, no tool-error signatures, and no memory file to read;
-  the telemetry script is structurally blind to it. Its **substitute evidence** is what it leaves on
-  GitHub: `cursor/*` branches, its PRs and their review histories, `agent-claim/<issue>` refs it won
-  or lost, and comments authored as `cursor`. That is a genuinely weaker signal — it shows outcomes
-  but not process, so reliability and safety findings that need a transcript **cannot** be derived
-  for this instance. Say so explicitly in the scorecard rather than reporting its rows as clean; a
-  metric that cannot see an instance must never be read as evidence that instance is behaving.
+  the telemetry script is structurally blind to it. Its **substitute evidence is narrow, and only
+  these survive a normal run**: its `cursor/*` branches, the PRs from them and their review
+  histories, and issues it filed (recognisable by the `<!-- needs-board -->` marker). **Do not look
+  for claim refs or `cursor`-authored comments** — commenting is 403 for that identity, so those are
+  structurally absent rather than merely rare.
+  **What this cannot measure, and must be reported as unmeasured rather than clean:** reliability (no
+  tool-error signatures), efficiency (no timings), safety (no transcript), and — most importantly —
+  **coordination**, because a *lost* race leaves this instance no artifact at all. Its visible output
+  is therefore biased toward runs that succeeded; absence of a recorded failure is not evidence there
+  was none. A metric that cannot see an instance must never be read as that instance behaving.
   Its deployed prompt is not local either — diff the automation against
   [`.claude/loaders/cursor-daily-ai-engineer.md`](../../loaders/cursor-daily-ai-engineer.md), which is
   its source of truth, and treat drift as a finding for the maintainer to re-paste.

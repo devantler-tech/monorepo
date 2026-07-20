@@ -351,41 +351,26 @@ touch of an unconfirmed repo:
    window is seconds wide but real (that is exactly how #88 and #96 were lost). Two instances picking
    the same issue derive the *same* deterministic claim ref, so a bare re-check is not enough —
    both would see "no ref" and both would then believe they claimed it. Settle it on the push:
-   - **The claim ref is LANE-NEUTRAL: `agent-claim/<issue>`.** This is what makes the push decide
-     anything. Each instance writes its *work* in its own namespace (`claude/*`, `codex/*`,
-     `cursor/*` — see *Execution model*), and two different names both push successfully, so a
-     lane-specific branch **cannot** arbitrate: both instances would "win" and both would build. The
-     arbitration therefore happens on one ref every instance derives identically from the issue
-     number alone, **before** the lane-specific work branch is created.
-   - Put a **real commit** on the claim ref, and make it **UNIQUE**: every instance commits under the
-     same `devantler` identity, so a fixed message on a shared base within the same second produces a
-     byte-identical commit — **same tree, same parent, same author, same timestamp, same SHA**. Both
-     pushes then succeed (the second is a no-op fast-forward), both instances verify the tip as
-     "theirs", and the arbitration silently fails in exactly the close race it exists for. Include a
-     **nonce**: `git commit --allow-empty -m "chore: claim #<issue> ($(uuidgen))"`. Never a bare
-     pointer at the base commit either — that makes both pushes trivial fast-forwards and neither is
-     refused.
+   - Put a **real commit** on the claim branch (the first substantive change, or an empty
+     `git commit --allow-empty -m "chore: claim #<issue>"`), never a bare pointer at the base commit —
+     otherwise both pushes are trivially fast-forwards and neither is refused.
    - Push **without force**, then **verify the remote tip is yours**:
-     `git ls-remote origin agent-claim/<issue>` must return **your** sha. **Compare the tip — never
-     judge the race by the push's exit status**, and never through a pipe: `git push … | tail` reports
-     `tail`'s status, so a *rejected* push reads as exit 0 (reproduced 2026-07-20). If the tip is
-     someone else's, **you lost the race** — stand down under rule 5 rather than force-pushing over
-     them. Never `--force`/`--force-with-lease` a claim ref: that is how a "won" race silently
+     `git ls-remote origin <lane>/<area>-<desc>-<issue>` must return **your** sha. **Compare the tip —
+     never judge the race by the push's exit status**, and never through a pipe: `git push … | tail`
+     reports `tail`'s status, so a *rejected* push reads as exit 0 (reproduced 2026-07-20). If the tip
+     is someone else's, **you lost the race** — stand down under rule 5 rather than force-pushing over
+     them. Never `--force`/`--force-with-lease` a claim branch: that is how a "won" race silently
      destroys the winner's work.
-   - **RETIRE the ref — a claim ref that is never deleted is a permanent lock.** The ref is not a PR
-     head and no branch sweep enumerates it, so an instance that crashes between claiming and opening
-     its PR would otherwise leave a ref that rejects every future push, and every later instance would
-     dutifully stand down: **one interrupted run makes the issue unworkable forever**. So:
-     - **Delete it as soon as your PR is open** — `git push origin --delete agent-claim/<issue>`. The
-       PR body's `#<issue>` reference is the durable claim signal from that point on, so the ref has
-       done its job.
-     - **A stale claim ref may be retired by anyone**, on the same evidence that lets you take over a
-       stale assignment: **no open PR references `#<issue>`** *and* the ref's tip commit is older than
-       the ~2h lease. Then `--delete` it and push your own claim; the delete is the *only* sanctioned
-       mutation of another instance's claim ref, it requires both conditions, and it is never a
-       force-push over live work. Deleting first also preserves arbitration — after the delete, the
-       first push creates the ref and any competing push is rejected as before.
-   - Only after you hold the claim ref, create `<lane>/<area>-<desc>-<issue>` and work there.
+   - ⚠️ **KNOWN HOLE — this arbitration only works WITHIN one lane, not across lanes.** It depends on
+     both instances deriving the *same* ref so one push is refused, but each instance writes its own
+     namespace (`claude/*`, `codex/*`, `cursor/*`), so two *different* instances racing one issue both
+     push successfully and both believe they won. This is **pre-existing, not new** — `codex/*` has
+     been in live use alongside `claude/*` for some time (measured 2026-07-20: 17 such PRs on ksail,
+     3 on world-at-ruin), so cross-lane races have never actually been arbitrated. A lane-neutral
+     claim ref fixes it, and the design plus its proofs are worked out in
+     [monorepo#2302](https://github.com/devantler-tech/monorepo/issues/2302); until that lands, rely
+     on the signals in rules 1–3 (open PRs, remote branches, assignees) and accept that a genuinely
+     simultaneous cross-lane selection can still duplicate.
 5. **On a lost race, ABANDON.** Never duplicate the work, never force-push onto a sibling's branch,
    never open a competing PR. Then **use the loss**: two independent implementations of one spec are
    a free **differential-testing oracle**. Diff yours against the winner's and post **only findings
@@ -1038,6 +1023,17 @@ Two mechanics make this a standing duty rather than something automation handles
   ```
   It is idempotent for an issue already on the board, and **refuses a private repo's issue** — project
   5 is public, so that is a maintainer decision, never an agent default.
+- **Board the cloud instance's issues — it cannot board its own.** `app/cursor` gets 403 on Projects,
+  so every issue it files is necessarily unboarded. Each local run sweeps for them **by author**,
+  which is what makes the cloud lane's findings real work rather than something nobody consumes:
+  ```sh
+  gh search issues --owner devantler-tech --state open --author app/cursor --json repository,number,url
+  ```
+  Board each hit (`board-add.sh`, idempotent). **Match on the author, never a body marker** — a
+  free-text search for a marker string returns unrelated issues that merely mention it (verified:
+  a `needs-board` text search matched monorepo#2237, which does not contain the marker at all).
+  This is a **workaround for a missing permission**, not a permanent design — it disappears if
+  [#2297](https://github.com/devantler-tech/monorepo/issues/2297) grants Projects access.
 
 When bulk-operating on issues or board items, **serialize and pace** — GitHub's secondary limits allow
 roughly **80 content-generating requests/minute and 500/hour**, and both sub-issue endpoints carry an

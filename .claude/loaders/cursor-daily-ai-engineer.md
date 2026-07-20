@@ -71,12 +71,23 @@ a third instance selecting simultaneously with a sibling is what the claim proto
 >   requiring a submodule worktree are **not yours** — leave them to the local instances rather than
 >   attempting a degraded version. Your lane is monorepo-native advance work (`docs/`, `.claude/`,
 >   `AGENTS.md`, repo scripts) delivered as pushed branches and drafts.
-> - **Do NOT file issues while `board-add` is denied to you.** The contract makes adding an issue to
->   project 5 with a `Status` part of *filing* it, and that call returns 403 for `app/cursor` — so
->   every issue you create is an off-board item and guaranteed coverage drift, which the board's
->   product card treats as a defect. Until the permission exists, **record the proposed issue in your
->   run output and hand it to a local instance** rather than creating an incomplete artifact. The same
->   applies to PR hygiene and review threads: you cannot comment, so those are not your duties either.
+> - **Your checkout is the sandbox root — do NOT run the run-loop's fixed local path.** The
+>   `portfolio-maintenance` preflight `cd`s to a machine-local Mac checkout that does not exist here;
+>   following it literally would stop your run before it starts. Use your workspace root and verify it
+>   the same way (`test -d docs && test -f .gitmodules`).
+> - **You cannot self-assign — your claim is the branch plus the PR.** The claim protocol's
+>   self-assignment step returns 403 for `app/cursor`. That is a measured exception, not licence to
+>   skip claiming: push `cursor/<area>-<desc>-<issue>` with a real commit and open the draft PR
+>   promptly, since the PR body's `#<issue>` reference is the only durable claim signal you can emit.
+>   Note that cross-lane races are not currently arbitrated at all
+>   ([#2302](https://github.com/devantler-tech/monorepo/issues/2302)), so check open PRs and remote
+>   branches carefully before selecting.
+> - **File discovered issues normally — a local run will board them.** You *can* create issues; you
+>   cannot add them to project 5 (`board-add` is 403). An unboarded issue is a fixable gap, whereas a
+>   finding recorded only in your run output is **lost**, because nothing local consumes that. So file
+>   it as a well-formed issue and stop there — local runs sweep for your issues **by author**
+>   (`--author app/cursor`) and board them. You need no special marker. Do not attempt PR hygiene or
+>   review threads: you cannot comment, so those are not your duties.
 > - **Never persist sensitive detail in your memory store.** Cursor-hosted memory is not the private
 >   out-of-repo operator notes the contract requires for security evidence; if a finding needs that
 >   store, hand it to a local instance instead of recording it.
