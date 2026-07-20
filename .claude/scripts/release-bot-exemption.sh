@@ -119,6 +119,12 @@ matches_homebrew_provenance() {
 # World at Ruin's cask PRs come from its own CD workflow rather than GoReleaser, so they are a
 # single tap-token commit whose message is the normalized title. Named explicitly by maintainer
 # direction 2026-07-18 as a programmed release path.
+#
+# KNOWN LIMIT (#2291): this arm cannot detect a hand-amended commit. The tap token commits under the
+# maintainer's own Git identity, so `git commit --amend --no-edit` preserves every field checked
+# here while the cask body changes, and the PR stays exempt. The GoReleaser arm above is not
+# exposed to this, because an amend there replaces the `goreleaserbot` identity and breaks the
+# match. Closing it needs commit-signature provenance, which this schema does not carry.
 matches_war_cask_provenance() {
   local version="$1"
 
