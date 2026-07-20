@@ -20,6 +20,7 @@ jobs:
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
+      branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
@@ -77,6 +78,12 @@ jobs:
             safe-clone:
               - '.claude/scripts/safe-clone.sh'
               - '.claude/scripts/safe-clone.test.sh'
+            branch-cleanup:
+              - '.claude/scripts/branch-cleanup.sh'
+              - '.claude/scripts/branch-cleanup.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             submodule-init:
               - '.claude/scripts/submodule-init.sh'
               - '.claude/scripts/submodule-init.test.sh'
@@ -282,6 +289,28 @@ jobs:
       - name: Self-test the safe-clone guard
         run: bash .claude/scripts/safe-clone.test.sh
 
+  test-branch-cleanup:
+    name: Test branch cleanup
+    needs: changes
+    if: needs.changes.outputs.branch-cleanup == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # Hermetic bare-origin fixture + stubbed `gh` — no network, no token.
+      # Pins open-PR survival and SHA-matched MERGED reaping for cursor/*
+      # (monorepo#2298), plus the codex-namespace refusal.
+      - name: Self-test branch-cleanup namespaces
+        run: bash .claude/scripts/branch-cleanup.test.sh
+
   test-submodule-init:
     needs: changes
     if: needs.changes.outputs.submodule-init == 'true'
@@ -376,6 +405,7 @@ jobs:
       - test-board-add
       - test-flow-scorecard
       - test-safe-clone
+      - test-branch-cleanup
       - test-submodule-init
       - test-maintainer-preflight
       - test-memory-hygiene
@@ -395,6 +425,7 @@ jobs:
             ${{ needs.test-board-add.result }}
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
+            ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
