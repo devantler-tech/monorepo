@@ -63,10 +63,13 @@ chmod +x "$tmp/bin/gh"
 export PATH="$tmp/bin:$PATH"
 
 # Build a clone with a local bare origin so `git fetch` / `git push` stay offline.
+# CI runners have no default git identity — set one on the work clone before any commit.
 bare="$tmp/origin.git"
 work="$tmp/work"
 git init --bare --quiet "$bare"
 git clone --quiet "$bare" "$work"
+git -C "$work" config user.email "branch-cleanup-test@example.com"
+git -C "$work" config user.name "branch-cleanup-test"
 git -C "$work" checkout -b main
 git -C "$work" commit --allow-empty -m "main" >/dev/null
 git -C "$work" push -u origin main >/dev/null
