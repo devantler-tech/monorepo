@@ -126,9 +126,10 @@ public and private — no per-repo loop needed to enumerate):
    - **(e) Green-review state per open actionable own/trusted PR — no actionable own/trusted PR is promotion- or
      merge-ready without ≥1 green review on top of green CI** (maintainer direction 2026-07-11).
      This includes drafts and promoted PRs from humans and actionable trusted bots — EXCEPT trusted
-     **programmed release-bot PRs** (GoReleaser Homebrew-tap cask PRs, KSail release bumps;
-     maintainer direction 2026-07-13, ksail#6095): apply this exemption **only** when the checked-in
-     exact classifier exits 0:
+     **programmed release-bot PRs** (Homebrew-tap cask PRs — GoReleaser's for `ksail`/`ksail-desktop`
+     and World at Ruin's CD-generated ones on `goreleaser/world-at-ruin`, maintainer direction
+     2026-07-18 — plus KSail release bumps; maintainer direction 2026-07-13, ksail#6095): apply this
+     exemption **only** when the checked-in exact classifier exits 0:
      `.claude/scripts/release-bot-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "$headRefOid" "$files_json" "$commits_json"`.
      Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the exact API author login.
      Encode all paths from the deepening query as one compact JSON string array in `files_json`. Fetch
