@@ -348,8 +348,18 @@ commands_in() {
 # doc containing `sleep 60` is not busy-waiting — the text is data it emits, not
 # a command it runs. Counting it inflated the very metric used to argue the
 # agent busy-waits (and this suite's own fixtures do exactly that).
+# $1, when set, is a line-start marker that RESETS heredoc state: a new command
+# can never continue the previous command's heredoc. The per-class callers feed
+# one class at a time, so an unterminated heredoc there swallows only that
+# class's later lines; the wait-target caller feeds every class interleaved in
+# one stream, where the same unterminated heredoc swallowed commands wholesale
+# and made the two passes disagree by 37% on a 7-day corpus (634 vs 1001) while
+# reconciling exactly on a 1-day one. Parameterised rather than duplicated —
+# two hand-maintained copies of this stripper is how detector parity broke six
+# times on the redactor.
 strip_heredocs() {
-  awk '
+  awk -v resetmark="${1:-}" '
+    resetmark != "" && index($0, resetmark) == 1 { inhd = 0 }
     {
       line = $0
       if (inhd) { if (line ~ ("^[[:space:]]*" tag "[[:space:]]*$")) { inhd = 0 }; next }
@@ -615,8 +625,15 @@ if want efficiency; then
     # counts drift apart and stop summing — the exact failure that broke
     # redactor parity six times.
     SLEEP_RE='(^|[;&|(]|&&|\|\||[[:space:]](do|then|else)[[:space:]])[[:space:]]*sleep[[:space:]]+["'"'"']?[$0-9{]'
+    # Heredoc state is reset at each COMMAND boundary here too, exactly as the
+    # wait-target pass does it. Without the marker an unterminated heredoc in one
+    # command swallowed every LATER command in the same class — so this counter
+    # was silently UNDER-counting before the two passes were cross-checked
+    # (7-day corpus: 1001 with leakage vs 1272 without). The marker is stripped
+    # again before matching, because the sleep regex is anchored at line start
+    # and a leading marker would stop `sleep …` from matching at all.
     count_sleeps() {
-      strip_heredocs | grep -cE "$SLEEP_RE" || true
+      strip_heredocs $'\003' | tr -d '\003' | grep -cE "$SLEEP_RE" || true
     }
     # The corpus is LIVE: the sibling instance writes transcripts while we read.
     # Scanning once per class could observe a different corpus each time, so a
@@ -649,9 +666,11 @@ if want efficiency; then
     # anchored sleep regex and the heredoc stripper both depend on. A command's
     # FIRST line carries a "*" after the class, so command boundaries survive
     # the tagging without a second traversal.
+    # A command's first line keeps a \003 marker so the heredoc stripper can
+    # reset its state per command; count_sleeps removes it before matching.
     class_lines() { printf '%s\n' "$TAGGED" | awk -v c="$1" '
         index($0, "\001" c "\002")==1  { print substr($0, length(c)+3); next }
-        index($0, "\001" c "*\002")==1 { print substr($0, length(c)+4) }'; }
+        index($0, "\001" c "*\002")==1 { print "\003" substr($0, length(c)+4) }'; }
     SLEEP_FG=$(class_lines FG | count_sleeps)
     SLEEP_BG=$(class_lines BG | count_sleeps)
     SLEEP_CX=$(class_lines CX | count_sleeps)
@@ -703,7 +722,7 @@ if want efficiency; then
     # the string over verbatim, which is what keeps ONE regex definition usable
     # by both grep -E and awk instead of forcing a second, drifting copy.
     export SLEEP_RE REMOTE_RE
-    WT=$(boundary_lines | strip_heredocs | awk '
+    WT=$(boundary_lines | strip_heredocs $'\003' | awk '
       BEGIN { sre = ENVIRON["SLEEP_RE"]; rre = ENVIRON["REMOTE_RE"] }
       # UNIT: a sleeping LINE, exactly as count_sleeps counts it (grep -c counts
       # matching lines). Counting sleeping COMMANDS instead would make this split

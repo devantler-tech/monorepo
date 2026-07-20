@@ -1310,6 +1310,25 @@ else bad "a heredoc BODY does not inflate the wait-target count" "$(printf '%s' 
 
 check "the adjacency heuristic states it is a ceiling" "$OUT" "treat it as a ceiling"
 
+# An UNTERMINATED heredoc must not swallow the NEXT command. The stripper is a
+# state machine, so without a per-command reset one malformed command silently
+# deletes every later one from the count — a 22% undercount on a 7-day corpus,
+# invisible on a 1-day one because the two passes happened to lose the same
+# lines. Both passes now reset at the command boundary.
+mkdir -p "$FIX/wthdleak"
+cat > "$FIX/wthdleak/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"k1","name":"Bash","input":{"command":"cat > f.sh <<'NEVERCLOSED'\nbody line"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"k2","name":"Bash","input":{"command":"sleep 30 && gh pr checks 4"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wthdleak" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'explicit sleep/poll calls \.+ 1'; then
+  ok "an unterminated heredoc does not swallow the NEXT command's sleep"
+else bad "an unterminated heredoc does not swallow the NEXT command's sleep" "$(printf '%s' "$OUT" | grep -E 'explicit sleep|remote poll')"; fi
+if printf '%s' "$OUT" | grep -qE 'wait-target total'; then
+  bad "both passes stay reconciled across a heredoc leak" "$(printf '%s' "$OUT" | grep -E 'wait-target total')"
+else ok "both passes stay reconciled across a heredoc leak"; fi
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"
