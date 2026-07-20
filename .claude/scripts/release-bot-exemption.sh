@@ -71,6 +71,11 @@ matches_ksail_provenance() {
     }]' <<<"${commits_json}" >/dev/null
 }
 
+# GoReleaser's tap path (ksail, ksail-desktop). The branch is evergreen, so one open PR can
+# accumulate several release cycles, each a GoReleaser cask commit optionally followed by the tap's
+# `brew style --fix` autocorrect commit. Every commit must match one of those two identities — an
+# agent or human adaptation commit anywhere in the list takes the PR off its programmed path and
+# makes it review-bearing again, per the constitution's carve-out.
 matches_homebrew_provenance() {
   local component="$1"
   local version="$2"
@@ -81,36 +86,61 @@ matches_homebrew_provenance() {
     --arg version "${version}" \
     '
       def goreleaser_commit:
-        {
-          author_login: "goreleaserbot",
-          author_name: "goreleaserbot",
-          author_email: "bot@goreleaser.com",
-          committer_login: "goreleaserbot",
-          committer_name: "goreleaserbot",
-          committer_email: "bot@goreleaser.com",
-          message: "Brew cask update for \($component) version \($version)"
-        };
+        .author_login == "goreleaserbot" and
+        .author_name == "goreleaserbot" and
+        .author_email == "bot@goreleaser.com" and
+        .committer_login == "goreleaserbot" and
+        .committer_name == "goreleaserbot" and
+        .committer_email == "bot@goreleaser.com" and
+        (.message | test("^Brew cask update for \($component) version v[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"));
       def autocorrect_commit:
-        {
-          author_login: "devantler",
-          author_name: "devantler",
-          author_email: "26203420+devantler@users.noreply.github.com",
-          committer_login: "",
-          committer_name: "generator-bot",
-          committer_email: "generator-bot@users.noreply.github.com",
-          message: "style: autocorrect Casks (brew style --fix)"
-        };
-      (
-        length == 1 and
-        .[0].sha == $head and
-        (.[0] | del(.sha)) == goreleaser_commit
-      ) or (
-        length == 2 and
-        .[0].sha != $head and
-        (.[0] | del(.sha)) == goreleaser_commit and
-        .[1] == (autocorrect_commit + {sha: $head})
-      )
+        .author_login == "" and
+        .author_name == "generator-bot" and
+        .author_email == "generator-bot@users.noreply.github.com" and
+        .committer_login == "" and
+        .committer_name == "generator-bot" and
+        .committer_email == "generator-bot@users.noreply.github.com" and
+        .message == "style: autocorrect Casks (brew style --fix)";
+      length > 0 and
+      (.[0] | goreleaser_commit) and
+      (.[-1].sha == $head) and
+      all(.[]; goreleaser_commit or autocorrect_commit) and
+      # The title version must name one of the release cycles actually present, so a stale or
+      # hand-edited title cannot smuggle an arbitrary version past the gate. It is deliberately NOT
+      # pinned to the LATEST cycle: on a real multi-cycle PR (tap#1225) the title stayed at the
+      # first cycle v7.176.0 while a later commit shipped v7.176.1, so requiring the newest would
+      # reject a genuine release.
+      any(.[];
+        goreleaser_commit and
+        .message == "Brew cask update for \($component) version \($version)")
     ' <<<"${commits_json}" >/dev/null
+}
+
+# World at Ruin's cask PRs come from its own CD workflow rather than GoReleaser, so they are a
+# single tap-token commit whose message is the normalized title. Named explicitly by maintainer
+# direction 2026-07-18 as a programmed release path.
+#
+# KNOWN LIMIT (#2291): this arm cannot detect a hand-amended commit. The tap token commits under the
+# maintainer's own Git identity, so `git commit --amend --no-edit` preserves every field checked
+# here while the cask body changes, and the PR stays exempt. The GoReleaser arm above is not
+# exposed to this, because an amend there replaces the `goreleaserbot` identity and breaks the
+# match. Closing it needs commit-signature provenance, which this schema does not carry.
+matches_war_cask_provenance() {
+  local version="$1"
+
+  jq -e \
+    --arg head "${head}" \
+    --arg version "${version}" \
+    '. == [{
+      sha: $head,
+      author_login: "devantler",
+      author_name: "Nikolai Emil Damm",
+      author_email: "ned@devantler.tech",
+      committer_login: "devantler",
+      committer_name: "Nikolai Emil Damm",
+      committer_email: "ned@devantler.tech",
+      message: "chore(cask): update world-at-ruin to \($version)"
+    }]' <<<"${commits_json}" >/dev/null
 }
 
 if [[ "${repo}" == "ksail" &&
@@ -139,6 +169,10 @@ if [[ "${repo}" == "homebrew-tap" && "${author}" == "devantler" ]]; then
     component="ksail-desktop"
     expected_file="Casks/ksail-desktop.rb"
     ;;
+  goreleaser/world-at-ruin)
+    component="world-at-ruin"
+    expected_file="Casks/world-at-ruin.rb"
+    ;;
   *)
     exit 1
     ;;
@@ -158,10 +192,12 @@ if [[ "${repo}" == "homebrew-tap" && "${author}" == "devantler" ]]; then
     ;;
   esac
 
-  if is_semver "${version}" &&
-    matches_exact_files "${expected_file}" &&
-    matches_homebrew_provenance "${component}" "${version}"; then
-    exit 0
+  if is_semver "${version}" && matches_exact_files "${expected_file}"; then
+    if [[ "${component}" == "world-at-ruin" ]]; then
+      matches_war_cask_provenance "${version}" && exit 0
+    else
+      matches_homebrew_provenance "${component}" "${version}" && exit 0
+    fi
   fi
 fi
 

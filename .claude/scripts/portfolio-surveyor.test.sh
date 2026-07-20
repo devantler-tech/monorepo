@@ -125,15 +125,36 @@ homebrew_commits_json() {
       },
       {
         sha: $head_sha,
-        author_login: "devantler",
-        author_name: "devantler",
-        author_email: "26203420+devantler@users.noreply.github.com",
+        author_login: "",
+        author_name: "generator-bot",
+        author_email: "generator-bot@users.noreply.github.com",
         committer_login: "",
         committer_name: "generator-bot",
         committer_email: "generator-bot@users.noreply.github.com",
         message: "style: autocorrect Casks (brew style --fix)"
       }
     ]'
+}
+
+# Measured from homebrew-tap #1238/#1241/#1242: World at Ruin's cask PRs come from its own CD
+# workflow rather than GoReleaser, so they are a single tap-token commit.
+war_cask_commits_json() {
+  local version="$1"
+  local head_sha="$2"
+
+  jq -cn \
+    --arg version "${version}" \
+    --arg head_sha "${head_sha}" \
+    '[{
+      sha: $head_sha,
+      author_login: "devantler",
+      author_name: "Nikolai Emil Damm",
+      author_email: "ned@devantler.tech",
+      committer_login: "devantler",
+      committer_name: "Nikolai Emil Damm",
+      committer_email: "ned@devantler.tech",
+      message: "chore(cask): update world-at-ruin to \($version)"
+    }]'
 }
 
 ksail_head="8fdc117e5892a57a82781fc3a4806ef1f21873af"
@@ -161,6 +182,48 @@ desktop_cask_commits="$(homebrew_commits_json \
   "v7.172.2" \
   "5ebaed25a8e3c92f38f2c8c6f938186ebca7ffa5" \
   "${desktop_cask_head}")"
+war_cask_head="9c1a4f2be1e7c5a0d3f8b6120e4a7d59c8b3f012"
+war_cask_commits="$(war_cask_commits_json "v0.36.0" "${war_cask_head}")"
+
+# Measured from homebrew-tap #1225: the tap's release branches are evergreen, so one open PR can
+# carry several GoReleaser/autocorrect cycles before it is merged.
+multi_cycle_cask_head="4d2e7a1c93b8f605e2a7c4d81f36b9075ea2c318"
+multi_cycle_cask_commits="$(jq -cn \
+  --arg head "${multi_cycle_cask_head}" \
+  '[
+    {sha: "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
+     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
+     message: "Brew cask update for ksail version v7.176.0"},
+    {sha: "2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e",
+     author_login: "", author_name: "generator-bot", author_email: "generator-bot@users.noreply.github.com",
+     committer_login: "", committer_name: "generator-bot", committer_email: "generator-bot@users.noreply.github.com",
+     message: "style: autocorrect Casks (brew style --fix)"},
+    {sha: "3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f",
+     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
+     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
+     message: "Brew cask update for ksail version v7.176.1"},
+    {sha: $head,
+     author_login: "", author_name: "generator-bot", author_email: "generator-bot@users.noreply.github.com",
+     committer_login: "", committer_name: "generator-bot", committer_email: "generator-bot@users.noreply.github.com",
+     message: "style: autocorrect Casks (brew style --fix)"}
+  ]')"
+
+# An agent adaptation commit takes a cask PR off its programmed path and makes it review-bearing.
+adapted_cask_head="7f6e5d4c3b2a19087f6e5d4c3b2a19087f6e5d4c"
+adapted_cask_commits="$(jq -cn \
+  --arg head "${adapted_cask_head}" \
+  '[
+    {sha: "8a7b6c5d4e3f2109a8b7c6d5e4f3210a9b8c7d6e",
+     author_login: "goreleaserbot", author_name: "goreleaserbot", author_email: "bot@goreleaser.com",
+     committer_login: "goreleaserbot", committer_name: "goreleaserbot", committer_email: "bot@goreleaser.com",
+     message: "Brew cask update for ksail version v7.176.4"},
+    {sha: $head,
+     author_login: "devantler", author_name: "Nikolai Emil Damm", author_email: "ned@devantler.tech",
+     committer_login: "devantler", committer_name: "Nikolai Emil Damm", committer_email: "ned@devantler.tech",
+     message: "fix(cask): correct the sha256 by hand"}
+  ]')"
+
 default_title_cask_head="5a5792bb83bd6b8469f10cd7e00abfe75c7f36be"
 default_title_cask_commits="$(homebrew_commits_json \
   "ksail" \
@@ -244,6 +307,56 @@ expect_exempt \
   '["Casks/ksail.rb"]' \
   "${default_title_cask_commits}"
 
+expect_exempt \
+  "World at Ruin CD cask" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/world-at-ruin" \
+  "chore(cask): update world-at-ruin to v0.36.0" \
+  "${war_cask_head}" \
+  '["Casks/world-at-ruin.rb"]' \
+  "${war_cask_commits}"
+
+expect_exempt \
+  "GoReleaser cask carrying several release cycles" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "chore(cask): update ksail to v7.176.1" \
+  "${multi_cycle_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${multi_cycle_cask_commits}"
+
+expect_review_gated \
+  "cask PR carrying a hand adaptation commit" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "chore(cask): update ksail to v7.176.4" \
+  "${adapted_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${adapted_cask_commits}"
+
+expect_review_gated \
+  "World at Ruin cask claiming the wrong version in its commit" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/world-at-ruin" \
+  "chore(cask): update world-at-ruin to v0.37.0" \
+  "${war_cask_head}" \
+  '["Casks/world-at-ruin.rb"]' \
+  "${war_cask_commits}"
+
+
+expect_review_gated \
+  "cask title claiming a version no release cycle shipped" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "chore(cask): update ksail to v999.0.0" \
+  "${multi_cycle_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${multi_cycle_cask_commits}"
 expect_not_release_exempt \
   "Platform Renovate KSail bump" \
   "platform" \
