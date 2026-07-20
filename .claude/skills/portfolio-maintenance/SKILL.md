@@ -32,8 +32,18 @@ card.
    `main` is behind `origin/main` and the only dirt is submodule pointers, fast-forward with
    `git fetch origin main && git merge --ff-only origin/main` (it never checks out submodule contents;
    `--ff-only` refuses anything that isn't a clean fast-forward).
-   When `gh auth status --active --hostname github.com` reports an invalid credential or authenticates
-   an active account other than `devantler`, retry once as
+   **Your EXPECTED IDENTITY depends on the deployment — match it exactly, never widen it.** For the
+   machine-local instances it is **`devantler`**. For a cloud instance it is that deployment's own App
+   identity (**`app/cursor`** for the Cursor Automation — see its loader). Substitute your own below;
+   an account that is neither `devantler` nor your deployment's stated App identity is always a hard
+   stop, so this stays an exact-match check rather than "any authenticated account".
+   **The token-clearing ladder that follows is MACHINE-LOCAL ONLY** — it exists for the macOS keychain
+   saved-login case, and a cloud instance's App token *is* its credential, so unsetting
+   `GH_TOKEN`/`GITHUB_TOKEN` there would break the auth it depends on. A cloud instance simply
+   verifies its expected App identity once and proceeds.
+
+   On a machine-local instance: when `gh auth status --active --hostname github.com` reports an
+   invalid credential or authenticates an active account other than `devantler`, retry once as
    `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --active --hostname github.com` to clear both
    environment-token sources and test the active saved login for the host this portfolio uses. Accept either
    probe only when it authenticates `devantler`. In a runtime that sandboxes macOS keychain access, if that

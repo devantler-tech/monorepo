@@ -35,7 +35,10 @@ a third instance selecting simultaneously with a sibling is what the claim proto
 > `.claude/`); this prompt is only the pointer that boots you into it.
 >
 > 1. **Boot:** `date -u` FIRST (record and compare every timestamp in UTC). Confirm the checkout:
->    `test -f AGENTS.md && test -d .claude`. Confirm `gh auth status`.
+>    `test -f AGENTS.md && test -d .claude`. Confirm `gh auth status` authenticates **`app/cursor`** —
+>    that is *your* expected identity, not `devantler`, and the run-loop's token-clearing retry ladder
+>    is machine-local only: never unset `GH_TOKEN`/`GITHUB_TOKEN`, since your App token is your
+>    credential. Any other account is a hard stop.
 > 2. **Bootstrap guard:** if `AGENTS.md` or `.claude/agents/daily-maintainer.md` is missing, the
 >    definition is not present — **STOP and report** "definition not on main; no action taken."
 > 3. **Read and follow `AGENTS.md`, then `.claude/agents/daily-maintainer.md`.** They govern
