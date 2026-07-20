@@ -17,10 +17,13 @@ fix it at the root, reversibly, with evidence → prove next run that the metric
 
 ```sh
 date -u                                   # the harness clock is local; record everything in UTC
-cd ~/git-personal/monorepo
+cd ~/git-personal/monorepo                # READ-ONLY: the shared checkout, for reading the definition
 test -f AGENTS.md && test -d .claude      # the constitution is present
 git fetch origin main && git merge --ff-only origin/main   # analyse current definition, not a stale one
 ```
+
+⚠️ **That `cd` is for READING only — it is the shared main checkout every other session uses.** Do
+not branch, edit or commit in it; step 4 gets its own worktree before the first edit.
 
 Read your native memory — yesterday's scorecard, open hypotheses, changes awaiting verification.
 Memory is **your own prior notes**: trustworthy as a starting point, but stale by default. Verify
@@ -149,6 +152,27 @@ For each candidate, ask in order:
 ## 4. Act
 
 Fix the top item — occasionally a small batch **within one area**. One concern per artifact.
+
+**Work in a per-run worktree — never the shared checkout.** `AGENTS.md` → *Execution model* mandates
+this for any repo touched, and it binds you too: pre-flight left you sitting in
+`~/git-personal/monorepo`, the tree every parallel session shares, so the first edit lands there
+unless you move first. Do this **before the first edit**, not before the commit:
+
+```sh
+git -C ~/git-personal/monorepo worktree add \
+  .claude/worktrees/improver-<runid> -b claude/<area>-<desc>-<issue>
+```
+
+If the harness already placed you in a per-session worktree, that one counts — **confirm** it with
+`git rev-parse --show-toplevel` (it must return the worktree's own path, not the shared checkout or a
+`.git/modules/<name>` gitdir) and branch inside it, rather than nesting a second one.
+
+Then edit **through the worktree path** — a path into the main checkout writes to the shared tree no
+matter which branch you think you are on. Remove any worktree **you** created and sweep the branch at
+end of run per the branch-hygiene rule; leave a harness-provided one alone. *(Measured 2026-07-20: a full run branched, edited and committed in the
+shared checkout, holding its HEAD on a run branch for ~2h until a parallel session moved it back;
+nothing was lost only because everything was already pushed —
+[#2294](https://github.com/devantler-tech/monorepo/issues/2294).)*
 
 **Route by surface:**
 
