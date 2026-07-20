@@ -636,6 +636,10 @@ result at the current head — self-promotion is forbidden before that. Request 
   its own review skills (`/review`, `/code-review`, `/security-review`) rather than leaving the draft
   stuck. This is a **last resort, never a shortcut**: an available lane is always preferred, a
   self-review never pre-empts one, and the two-lane failure must be **evidenced in the run report**.
+  ⚠️ **Not the same thing as the pre-submission self-review** in *GitHub artifact conventions*, which
+  runs before every review request whatever the lanes are doing. That one is routine hygiene and
+  **satisfies nothing** — having done it never counts toward this fallback, which alone substitutes
+  for a bot review and carries the posted-Review and two-lane-evidence requirements below.
   **A CodeRabbit rolling-quota shell that states a short window (`Next review available in: N
   minutes`) is NOT an unavailable lane** — it is the wait-and-retrigger case: schedule the
   retrigger in the background and carry on;
@@ -1747,6 +1751,33 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   open drafts/issues there autonomously, as before.**
 - **Validate before every PR** with the repo's command (in its `AGENTS.md` `## Maintenance`); never
   open a PR that breaks build/validation.
+- **SELF-REVIEW YOUR OWN DIFF BEFORE YOU REQUEST A REVIEW ON IT** (maintainer direction 2026-07-20:
+  *"It is generally a good idea to self-review before submitting PRs. I would like this to be the norm
+  … untill clean. I expect this to reduce the rounds needed from external review agents."*). Run your
+  runtime's **correctness** review over the change and its **quality/simplification** pass, and fix
+  what they find, before the review request goes out. For Claude Code those are **`/review`** and
+  **`/simplify`**; add **`/security-review`** when the diff touches auth, secrets, tokens,
+  permissions, network policy, or workflow triggers. The sibling runtimes use their own equivalents —
+  the *rule* is runtime-neutral, the command names are not. (This is why the pre-submission set
+  includes `/simplify` and the *Fallback* set below does not: `/simplify` is a quality pass that
+  explicitly does **not** hunt bugs, so it sharpens your own diff but could never stand in for a
+  reviewer.)
+  **Bound the loop the way the lint rule is bounded** (*Latency discipline*): take the **full** finding
+  list in one pass, fix **all** of it, re-verify **once**. "Until clean" means no finding left that you
+  judge real — not an open-ended convergence on taste, which a judgement-based pass never reaches.
+  **Trivial/mechanical changes are exempt** — a typo, a dead link, a stale pin, a gitlink bump: don't
+  spend two review passes on a one-line fix the contract elsewhere deliberately fast-paths.
+  **Order it against the long pole:** where CI is slow (ksail ≈22 min), push the draft first so the
+  bake starts, self-review *during* it, and fold both sets of findings into one follow-up push. The
+  gate is the **review request**, not the first push.
+  **On later pushes, re-run it when the push adds anything a reviewer did not ask for.** A pure
+  review-fix push — implementing exactly what a thread named, on a diff already self-reviewed — does
+  not need a fresh pass; anything beyond that does.
+  **It does NOT replace the external review** — the green-review gate in *Autonomy* is unchanged, and
+  a clean self-pass is never a reason to skip requesting one; it is also **not** the last-resort
+  *Fallback — agent self-review* (that one substitutes for a bot review and carries its own evidence
+  requirements). Hold your own diff to the bar you would hold a bot's finding to, and never wave one
+  through because it is yours.
 - **Verify it actually WORKS — behaviourally, not by reasoning (before AND after merge).** Passing
   static validation (schema/build/lint/kubeconform) proves a change is well-*formed*, **not** that it
   *works*; "it's a released capability / it should work" is gut-trust, not evidence. Before you claim a

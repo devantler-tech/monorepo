@@ -22,6 +22,7 @@ jobs:
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
+      self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
@@ -89,6 +90,12 @@ jobs:
             maintainer-preflight:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/maintainer-preflight.test.sh'
+            self-review-contract:
+              - 'AGENTS.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/product-engineering/SKILL.md'
+              - '.claude/scripts/self-review-contract.test.sh'
+              - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
               - '.claude/agents/daily-maintainer.md'
@@ -348,6 +355,21 @@ jobs:
       - name: Verify the product value contract
         run: bash .claude/scripts/product-value-contract.test.sh
 
+  test-self-review-contract:
+    name: Test self-review contract
+    needs: changes
+    if: needs.changes.outputs.self-review-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify the self-review contract
+        run: bash .claude/scripts/self-review-contract.test.sh
+
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
     needs: changes
@@ -379,6 +401,7 @@ jobs:
       - test-submodule-init
       - test-maintainer-preflight
       - test-memory-hygiene
+      - test-self-review-contract
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
@@ -398,5 +421,6 @@ jobs:
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
+            ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}

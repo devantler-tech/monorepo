@@ -523,8 +523,13 @@ For each selected product:
    `grep -nE 'FAIL|error|Error|warning' /tmp/val.log`); read more from the file only when a failure
    needs it. For **read-heavy investigation** (locating code across many files or understanding a
    subsystem before changing it), delegate to a subagent (the built-in **`Explore`** type) that
-   returns just the conclusion — keep the edits and `gh pr create` in your own loop. Open a **draft**
-   PR (Conventional-Commit title, AI-disclosure line, labels; `Fixes #N` when it closes an issue).
+   returns just the conclusion — keep the edits and `gh pr create` in your own loop. **Self-review the
+   diff (`/review` + `/simplify`, plus `/security-review` where it applies) and fix what they find
+   before the review request goes out** — that is the contract's *GitHub artifact conventions →
+   SELF-REVIEW YOUR OWN DIFF* rule, including its trivial-change exemption and its one-pass bound;
+   follow it, don't re-derive it here.
+   Open a **draft** PR (Conventional-Commit title, AI-disclosure line, labels; `Fixes #N` when it
+   closes an issue).
    Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff. External-repository work
    is forbidden unless the current interactive conversation first clears the professional-work
    boundary for that named repo; creating an upstream artifact then still needs ask-tool approval.
