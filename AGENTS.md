@@ -143,8 +143,9 @@ edited in place; the Cursor automation lives **server-side with no local file or
 source of truth is version-controlled at
 [`.claude/loaders/cursor-daily-ai-engineer.md`](.claude/loaders/cursor-daily-ai-engineer.md) and
 re-pasted into the Automations UI on change. **Each instance owns its own branch namespace** —
-`claude/*`, `codex/*`, `cursor/*` — which is what keeps ownership, claim matching, and the per-tick
-branch sweep from crossing lanes.
+`claude/*`, `codex/*`, `cursor/*` — which is what keeps draft ownership and the per-tick branch sweep
+from crossing lanes. It is also why claim arbitration does **not** work across lanes today: see the
+cross-lane limit in *Claim protocol* rule 4.
 
 Everything below is the **shared engineering contract** every product follows. A submodule's own
 `AGENTS.md` references it; repo-specific rules in a submodule card win for that repo.
@@ -349,8 +350,9 @@ touch of an unconfirmed repo:
    *"a bare assignee does not reserve an issue"* above: a claim is a short lease, not a lock.
 4. **Re-verify immediately before the first push, and make that push DECIDE the race.** The residual
    window is seconds wide but real (that is exactly how #88 and #96 were lost). Two instances picking
-   the same issue derive the *same* deterministic claim ref, so a bare re-check is not enough —
-   both would see "no ref" and both would then believe they claimed it. Settle it on the push:
+   the same issue **within one lane** derive the *same* deterministic branch name, so a bare re-check
+   is not enough — both would see "no branch" and both would then believe they claimed it. Settle it
+   on the push (but see the cross-lane limit below, which this does **not** cover):
    - Put a **real commit** on the claim branch (the first substantive change, or an empty
      `git commit --allow-empty -m "chore: claim #<issue>"`), never a bare pointer at the base commit —
      otherwise both pushes are trivially fast-forwards and neither is refused.
