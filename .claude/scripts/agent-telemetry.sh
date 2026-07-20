@@ -820,20 +820,60 @@ if want efficiency; then
       # every sleep scored as a poll. Measured on a 1-day corpus, the loose form
       # reclassified 131 sleeps (~46% of all of them) — implausible on its face,
       # and the reason this asks for the enclosing do...done instead.
-      function in_loop(i,   j, before, after) {
-        for (j = 1; j <= i; j++) before = before " " lines[j]
-        for (j = i; j <= nlines; j++) after = after " " lines[j]
+      # The ENCLOSING loop region for sleeping line i, or "" when it is not in a
+      # loop. Returning the region rather than a boolean is the point: the poll
+      # must be searched INSIDE the loop, not across the whole command, or
+      # `gh pr view 1; while c; do sleep 30; done` is scored a loop-wrapped
+      # busy-wait even though that gh sits outside the loop and the back-edge
+      # never revisits it.
+      #
+      # The region starts at the LAST loop KEYWORD at or before the sleep — not
+      # at the `do`. That distinction is load-bearing: in the canonical busy-wait
+      # `while ! gh pr checks 7; do sleep 30; done` the poll lives in the loop
+      # CONDITION, which the back-edge re-executes, so a body-only region would
+      # miss exactly the shape this rule exists to catch. Taking the LAST keyword
+      # before and the FIRST `done` after yields the innermost enclosing loop,
+      # which is what nesting requires.
+      # The split is at the OFFSET OF THE SLEEP WITHIN ITS LINE, not at the line
+      # boundary. Splitting per line looks equivalent and is not: a whole loop
+      # routinely sits on ONE line, so line-granular halves both contain the
+      # entire command and carry no information about where the sleep sits. That
+      # error attributed an earlier, already-exited loop to a later sleep.
+      # (No apostrophes anywhere in this awk program — it is single-quoted, and
+      #  one ends the quote and breaks the script hundreds of lines away.)
+      function loop_region(i,   j, before, after, p, off, q, seg) {
+        for (j = 1; j < i; j++) before = before " " lines[j]
+        if (match(lines[i], sre)) {
+          before = before " " substr(lines[i], 1, RSTART + RLENGTH - 1)
+          after  = substr(lines[i], RSTART + RLENGTH)
+        } else { before = before " " lines[i] }
+        for (j = i + 1; j <= nlines; j++) after = after " " lines[j]
         before = exec_text(before); after = exec_text(after)
-        return (before ~ lre && before ~ /(^|[[:space:];])do([[:space:]]|$)/ \
-                && after ~ /(^|[[:space:];])done([[:space:]]|$)/)
+        # LAST loop keyword at or before the sleep = the innermost enclosing loop.
+        p = 0; off = 0; seg = before
+        while (match(seg, lre)) {
+          p = off + RSTART
+          off = off + RSTART + RLENGTH - 1
+          seg = substr(seg, RSTART + RLENGTH)
+        }
+        if (p <= 0) return ""
+        # ...and it must actually still be open: a `done` between that keyword
+        # and the sleep means the loop already closed, so the sleep is not in it.
+        seg = substr(before, p)
+        if (seg ~ /(^|[[:space:];])done([[:space:]]|$)/) return ""
+        if (!match(after, /(^|[[:space:];])done([[:space:]]|$)/)) return ""
+        q = RSTART + RLENGTH - 1
+        return seg " " substr(after, 1, q)
       }
-      function remote_after(i,   j, tail) {
+      function remote_after(i,   j, tail, rgn) {
         # A LOOP re-enters its own body, so a poll before the sleep still runs
         # after it. Order is a property of straight-line code only; inside a loop
         # body the poll is reachable again and the forward-scan rule stops
         # holding — which is what makes `while ! gh pr checks 7; do sleep 30;
         # done`, the canonical busy-wait, read as permitted without this.
-        if (in_loop(i) && is_remote(buf)) return 1
+        # Search the enclosing loop REGION, never the whole command.
+        rgn = loop_region(i)
+        if (rgn != "" && is_remote(rgn)) return 1
         # Same line, to the RIGHT of the sleep token only.
         if (match(lines[i], sre)) {
           tail = substr(lines[i], RSTART + RLENGTH)
@@ -961,7 +1001,7 @@ if want efficiency; then
     echo "          the UNCHAINED figure has been materially corrected TWICE by"
     echo "          review, each time after being declared the trustworthy basis"
     echo "          for the monorepo#2262 experiment — 12 -> 78 (poll ORDER within"
-    echo "          a command was ignored), then 81 -> 22 (loop BACK-EDGES were"
+    echo "          a command was ignored), then 81 -> 30 (loop BACK-EDGES were"
     echo "          filed as unchained or as permitted local timers). Treat the"
     echo "          current number as the best available estimate, not a settled"
     echo "          one, and re-derive a baseline after any classifier change."

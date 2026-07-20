@@ -1518,6 +1518,44 @@ if printf '%s' "$OUT" | grep -qE 'explicit sleep/poll calls \.+ 1' \
   ok "...without counting the denied command as a launch"
 else bad "...without counting the denied command as a launch" "$(printf '%s' "$OUT" | grep -E 'explicit sleep|wait-target total')"; fi
 
+# The back-edge rule must scope the poll search to the ENCLOSING LOOP, not the
+# whole command: a poll sequenced BEFORE an unrelated loop is never revisited by
+# that loop, so attributing it to the sleep inside is a false violation.
+mkdir -p "$FIX/wtloopscope"
+cat > "$FIX/wtloopscope/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q1","name":"Bash","input":{"command":"gh pr view 1; while [ ! -f /tmp/f ]; do sleep 30; done"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtloopscope" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+  ok "a poll OUTSIDE the loop is not attributed to a sleep inside it"
+else bad "a poll OUTSIDE the loop is not attributed to a sleep inside it" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# ...and the counter-case that a body-only region would break: in the canonical
+# busy-wait the poll sits in the loop CONDITION, which the back-edge re-executes.
+# Scoping the region to `do`...`done` would silently stop counting it.
+mkdir -p "$FIX/wtloopcond"
+cat > "$FIX/wtloopcond/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q2","name":"Bash","input":{"command":"while ! gh pr checks 7; do sleep 30; done"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtloopcond" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
+  ok "...but a poll in the loop CONDITION still counts (back-edge revisits it)"
+else bad "...but a poll in the loop CONDITION still counts (back-edge revisits it)" "$(printf '%s' "$OUT" | grep -E 'remote poll|FOREGROUND')"; fi
+
+# Sequential loops: the region must be the INNERMOST enclosing one, so a poll in
+# an earlier, already-exited loop is not attributed to a later loop's sleep.
+mkdir -p "$FIX/wtloopseq"
+cat > "$FIX/wtloopseq/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q3","name":"Bash","input":{"command":"for f in a b; do gh pr view 1; done; while [ ! -f /tmp/f ]; do sleep 30; done"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtloopseq" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+  ok "a poll in an EARLIER sequential loop is not attributed to a later one"
+else bad "a poll in an EARLIER sequential loop is not attributed to a later one" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
 # Non-executed text: a comment mentioning a tool is not a poll. Left unstripped,
 # the corpus could fabricate the very violations this metric reports.
 mkdir -p "$FIX/wtcomment"
