@@ -1409,6 +1409,127 @@ if printf '%s' "$OUT" | grep -qE 'wait-target total'; then
   bad "both passes stay reconciled across a heredoc leak" "$(printf '%s' "$OUT" | grep -E 'wait-target total')"
 else ok "both passes stay reconciled across a heredoc leak"; fi
 
+# ── wait target: EXECUTED REMOTE INTENT ───────────────────────────────────────
+# Five ways textual adjacency diverged from what the sleep was actually waiting
+# on. Each is a real classification error found by review on a suite that was
+# 134/134 green, so each gets a fixture whose ONLY correct answer requires the
+# fix — and, where the fix could pass by over-narrowing, a counter-fixture that
+# fails if it does.
+
+# A loop BACK-EDGE: the poll sits textually before the sleep but runs again after
+# it. This is the canonical busy-wait and a forward-only scan calls it permitted.
+mkdir -p "$FIX/wtloop"
+cat > "$FIX/wtloop/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"l1","name":"Bash","input":{"command":"while ! gh pr checks 7; do sleep 30; done"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtloop" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
+  ok "a loop-wrapped poll AFTER the sleep counts (back-edge)"
+else bad "a loop-wrapped poll AFTER the sleep counts (back-edge)" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote|FOREGROUND')"; fi
+
+# ...but the back-edge rule must not swallow straight-line code: without a loop,
+# a poll before the sleep is still NOT adjacent (the round-1 finding this PR
+# already fixed). This fails if the loop rule is written as "any poll in buf".
+mkdir -p "$FIX/wtnoloop"
+cat > "$FIX/wtnoloop/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"n1","name":"Bash","input":{"command":"gh pr view 1; sleep 30"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtnoloop" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+  ok "...but a straight-line poll before the sleep is still not adjacent"
+else bad "...but a straight-line poll before the sleep is still not adjacent" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# A readiness probe against a LOCAL endpoint is the contract-PERMITTED case, and
+# curl/wget are how it is written. Counting them unconditionally reported the
+# permitted shape as the violation.
+mkdir -p "$FIX/wtlocalcurl"
+cat > "$FIX/wtlocalcurl/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{"command":"sleep 2; curl -sf localhost:8080/health"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtlocalcurl" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+  ok "a curl at a LOOPBACK address is a permitted local timer"
+else bad "a curl at a LOOPBACK address is a permitted local timer" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# ...and the counter-case: dropping curl/wget from the remote set entirely would
+# also pass the test above. A real remote fetch must still count.
+mkdir -p "$FIX/wtremotecurl"
+cat > "$FIX/wtremotecurl/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"Bash","input":{"command":"sleep 2; curl -sf https://api.github.com/repos/o/r"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtremotecurl" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 1'; then
+  ok "...but a curl at a REMOTE host still counts"
+else bad "...but a curl at a REMOTE host still counts" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# Shell-level detachment is a compliant way to arm a watcher; run_in_background
+# cannot see it, so the tool flag alone reported the compliant shape as the
+# violation.
+# NOTE the fixture shape: a `sh -c 'sleep …'` watcher is NOT usable here, because
+# SLEEP_RE only recognises `sleep` at a line start or after a shell separator and
+# a quote is neither — such a sleep is invisible to the counter entirely. That is
+# a PRE-EXISTING limit of the sleep regex, not of this classifier, and it is why
+# the detached form under test is the trailing-`&` one.
+mkdir -p "$FIX/wtdetach"
+cat > "$FIX/wtdetach/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d1","name":"Bash","input":{"command":"sleep 30 && gh pr checks 7 &"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtdetach" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 1' \
+   && printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 0'; then
+  ok "a shell-DETACHED watcher is remote-adjacent but NOT a foreground violation"
+else bad "a shell-DETACHED watcher is remote-adjacent but NOT a foreground violation" "$(printf '%s' "$OUT" | grep -E 'remote poll|FOREGROUND')"; fi
+
+# ...and `&&` must not read as a trailing `&`, or every chained busy-wait would
+# be excused as detached — the loosening this rule most easily becomes.
+mkdir -p "$FIX/wtandand"
+cat > "$FIX/wtandand/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d2","name":"Bash","input":{"command":"sleep 30 && gh pr checks 7"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtandand" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
+  ok "...but a trailing && is not detachment"
+else bad "...but a trailing && is not detachment" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
+
+# A DENIED poll never ran, so it is not a launch — but it still marks what the
+# sleep was waiting for. Deleting it outright let the sleep read as permitted.
+mkdir -p "$FIX/wtdenied"
+cat > "$FIX/wtdenied/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p1","name":"Bash","input":{"command":"sleep 30"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p2","name":"Bash","input":{"command":"gh pr checks 7"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"p2","is_error":true,"content":"Claude requested permissions to use Bash, but you haven't granted it yet."}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtdenied" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, next command \.+ 1'; then
+  ok "a DENIED poll still marks the sleep before it as remote-adjacent"
+else bad "a DENIED poll still marks the sleep before it as remote-adjacent" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# ...and the denied command must NOT re-enter the launch counts, or the two
+# passes stop reconciling and the drift warning fires.
+if printf '%s' "$OUT" | grep -qE 'explicit sleep/poll calls \.+ 1' \
+   && ! printf '%s' "$OUT" | grep -qE 'wait-target total'; then
+  ok "...without counting the denied command as a launch"
+else bad "...without counting the denied command as a launch" "$(printf '%s' "$OUT" | grep -E 'explicit sleep|wait-target total')"; fi
+
+# Non-executed text: a comment mentioning a tool is not a poll. Left unstripped,
+# the corpus could fabricate the very violations this metric reports.
+mkdir -p "$FIX/wtcomment"
+cat > "$FIX/wtcomment/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"sleep 5 # check with gh pr view later"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtcomment" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+  ok "a tool named in a COMMENT is not a poll"
+else bad "a tool named in a COMMENT is not a poll" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"

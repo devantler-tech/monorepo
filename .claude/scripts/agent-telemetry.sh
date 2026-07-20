@@ -291,9 +291,20 @@ tagged_commands_in() {
     .. | objects
     | (
         (select(.type=="tool_use")
-         | ((if .input?.run_in_background == true then "BG" else "FG" end)) as $c
          | (.id? // "") as $i
-         | select($i == "" or (($errs | index($i)) | not))
+         # A DENIED call never ran, so it must not be counted as a launch — but
+         # deleting it outright destroys the ADJACENCY it defines. An executed
+         # `sleep 30` followed by a permission-denied `gh pr checks` was waiting
+         # to poll a remote system; drop the poll and that sleep either reads as
+         # a permitted local timer or, worse, binds to some later unrelated
+         # command and manufactures an adjacency that never happened. So denied
+         # commands are tagged DN: the wait-target pass reads them as boundaries
+         # and as remote-poll evidence, while every launch-mode count ignores
+         # them (class_lines only ever asks for FG/BG/CX), which keeps the
+         # class-sum invariant true by construction rather than by luck.
+         | ((if ($i != "" and (($errs | index($i)) != null)) then "DN"
+             elif .input?.run_in_background == true then "BG"
+             else "FG" end)) as $c
          | (.input?.command? // empty) | select(type=="string") | select(length>0)
          | split("\n") | to_entries
          | map("\u0001" + $c + (if .key==0 then "*" else "" end) + "\u0002" + .value)
@@ -707,7 +718,27 @@ if want efficiency; then
     # (`mygh`, `re-gh`). `git` counts only for its network-touching subcommands —
     # a bare `git status` is local and would otherwise make every sleep near any
     # git call look like remote polling.
-    REMOTE_RE='(^|[^[:alnum:]_-])(gh|curl|wget|kubectl|flux|talosctl|argocd|helm|az|aws|docker[[:space:]]+(pull|push)|git[[:space:]]+(ls-remote|fetch|push|pull|clone))([[:space:]]|$)'
+    REMOTE_RE='(^|[^[:alnum:]_-])(gh|kubectl|flux|talosctl|argocd|helm|az|aws|docker[[:space:]]+(pull|push)|git[[:space:]]+(ls-remote|fetch|push|pull|clone))([[:space:]]|$)'
+    # `curl`/`wget` are the one AMBIGUOUS pair: they are the standard way to poll
+    # a remote endpoint AND the standard way to wait for a locally started server
+    # to come up — which the contract explicitly permits. Counting them
+    # unconditionally classified `sleep 2; curl localhost:8080/health` as a
+    # violation, i.e. exactly the permitted case, so they are matched separately
+    # and only count when the target is not a loopback address.
+    FETCH_RE='(^|[^[:alnum:]_-])(curl|wget)([[:space:]]|$)'
+    LOCALHOST_RE='(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1)'
+    # Shell-level detachment. `nohup … &`, `setsid`, or a trailing `&` returns the
+    # tool call immediately, so the agent is NOT foreground-blocked — that is a
+    # compliant way to arm a watcher, and the `run_in_background` flag alone
+    # cannot see it. A trailing `&` must not match `&&`: the negative lookbehind
+    # is spelled as "not an ampersand before it" because POSIX ERE has none.
+    DETACH_RE='(^|[[:space:]])(nohup|setsid|disown)([[:space:]]|$)|([^&]|^)&[[:space:]]*$'
+    # A loop BACK-EDGE makes a poll that sits textually BEFORE the sleep run
+    # again AFTER it: `while ! gh pr checks 7; do sleep 30; done` is the canonical
+    # busy-wait, yet a strictly forward scan sees no remote tool after the sleep
+    # and reports it permitted. When a sleeping command is a loop, the whole
+    # command body is reachable from the sleep, so order stops applying.
+    LOOP_RE='(^|[[:space:];])(while|until|for)([[:space:]]|$)'
     # Strip the class tag but KEEP boundaries: \003 marks a command's first line,
     # \004 a file boundary. class_lines deliberately strips both, because the
     # sleep regex is anchored at line start and a marker would break it.
@@ -734,9 +765,45 @@ if want efficiency; then
     # rejects outright ("illegal primary in regular expression"). ENVIRON hands
     # the string over verbatim, which is what keeps ONE regex definition usable
     # by both grep -E and awk instead of forcing a second, drifting copy.
-    export SLEEP_RE REMOTE_RE
+    export SLEEP_RE REMOTE_RE FETCH_RE LOCALHOST_RE DETACH_RE LOOP_RE
     WT=$(boundary_lines | strip_heredocs $'\003\004' | awk '
-      BEGIN { sre = ENVIRON["SLEEP_RE"]; rre = ENVIRON["REMOTE_RE"] }
+      BEGIN { sre = ENVIRON["SLEEP_RE"]; rre = ENVIRON["REMOTE_RE"]
+              fre = ENVIRON["FETCH_RE"]; lhre = ENVIRON["LOCALHOST_RE"]
+              dre = ENVIRON["DETACH_RE"]; lre = ENVIRON["LOOP_RE"] }
+      # Only EXECUTED text can be a poll. A shell comment or a quoted literal
+      # that merely mentions a tool (`sleep 5 # check gh later`, or this suite
+      # generating its own fixtures) is data, not a command — and counting it let
+      # the corpus fabricate the very violations this metric reports.
+      #
+      # Quote-stripping has a HARD EXCEPTION, and it is the whole reason this is
+      # not a one-line gsub: `sh -c "sleep 30 && gh pr checks"` carries a REAL
+      # command inside quotes, and it is the standard shape for arming a detached
+      # watcher. Blanking every quoted body would erase that poll and report the
+      # compliant watcher as a permitted local timer — trading a small
+      # over-count for a large under-count on exactly the shape the detachment
+      # rule above exists to recognise. So a command passing `-c` to a shell
+      # keeps its quoted text; everything else has literals blanked.
+      # Residual gap, stated rather than papered over: a tool named inside a
+      # quoted literal in a `-c` command still counts.
+      function exec_text(s) {
+        if (s !~ /-c[[:space:]]*["\047]/) {
+          gsub(/"[^"]*"/, "\"\"", s)
+          gsub(/\047[^\047]*\047/, "\047\047", s)
+        }
+        sub(/(^|[[:space:]])#.*$/, "", s)
+        return s
+      }
+      # A remote poll is a recognised remote tool, or a fetch whose target is not
+      # loopback. The fetch test reads the WHOLE command for a loopback token
+      # rather than parsing the URL: a readiness probe names its local target in
+      # the same command, and mis-reading one as remote would report the
+      # explicitly PERMITTED case as a violation.
+      function is_remote(s,   e) {
+        e = exec_text(s)
+        if (e ~ rre) return 1
+        if (e ~ fre && e !~ lhre) return 1
+        return 0
+      }
       # UNIT: a sleeping LINE, exactly as count_sleeps counts it (grep -c counts
       # matching lines). Counting sleeping COMMANDS instead would make this split
       # a different unit from the launch-mode split above — the two could never
@@ -747,13 +814,32 @@ if want efficiency; then
       # the poll happened BEFORE the sleep — that sleep is waiting on something
       # else, and its real follower may be in the next tool call. So each
       # sleeping line asks only: does a remote poll occur AT OR AFTER me?
-      function remote_after(i,   j, m, tail) {
+      # Is the sleeping line i actually INSIDE a loop BODY? Testing only whether
+      # the command mentions a loop keyword is far too loose: a long command that
+      # iterates files somewhere and separately calls gh and sleeps would have
+      # every sleep scored as a poll. Measured on a 1-day corpus, the loose form
+      # reclassified 131 sleeps (~46% of all of them) — implausible on its face,
+      # and the reason this asks for the enclosing do...done instead.
+      function in_loop(i,   j, before, after) {
+        for (j = 1; j <= i; j++) before = before " " lines[j]
+        for (j = i; j <= nlines; j++) after = after " " lines[j]
+        before = exec_text(before); after = exec_text(after)
+        return (before ~ lre && before ~ /(^|[[:space:];])do([[:space:]]|$)/ \
+                && after ~ /(^|[[:space:];])done([[:space:]]|$)/)
+      }
+      function remote_after(i,   j, tail) {
+        # A LOOP re-enters its own body, so a poll before the sleep still runs
+        # after it. Order is a property of straight-line code only; inside a loop
+        # body the poll is reachable again and the forward-scan rule stops
+        # holding — which is what makes `while ! gh pr checks 7; do sleep 30;
+        # done`, the canonical busy-wait, read as permitted without this.
+        if (in_loop(i) && is_remote(buf)) return 1
         # Same line, to the RIGHT of the sleep token only.
         if (match(lines[i], sre)) {
           tail = substr(lines[i], RSTART + RLENGTH)
-          if (tail ~ rre) return 1
+          if (is_remote(tail)) return 1
         }
-        for (j = i + 1; j <= nlines; j++) if (lines[j] ~ rre) return 1
+        for (j = i + 1; j <= nlines; j++) if (is_remote(lines[j])) return 1
         return 0
       }
       # A pending sleep is resolved by the FIRST remote poll in the next command,
@@ -761,21 +847,40 @@ if want efficiency; then
       # the sleep itself belongs to, which it has already left.
       # (No apostrophes in this awk program: it is single-quoted, and one would
       #  end the quote and break the whole script far from here.)
-      function classify(   i, irem) {
+      # EFFECTIVE class, not the launch flag. A watcher detached inside an
+      # otherwise synchronous call (`nohup sh -c "sleep 30 && gh pr checks 7" &`)
+      # returns immediately, so the agent never blocks — it is the compliant
+      # watcher, and scoring it FOREGROUND would report the contract-following
+      # behaviour as the violation. `run_in_background` cannot see shell-level
+      # detachment, so the command text has to.
+      function eff_cls(   e) {
+        if (cls != "FG") return cls
+        e = exec_text(buf)
+        return (e ~ dre) ? "BG" : "FG"
+      }
+      function classify(   i, irem, ec) {
         if (!started) return
-        irem = (buf ~ rre)
+        irem = is_remote(buf)
+        ec = eff_cls()
         # Resolve sleeps left pending by the PREVIOUS command first: they slept
         # without a remote poll after them, so this command decides the bucket.
+        # A DENIED command still counts here: the sleep before it was waiting to
+        # make that call, and the intent is what this metric measures.
         if (pending) {
           if (irem) { n_next += pending; if (pcls=="FG") { fg_rem += pending; fg_next += pending } }
           else        n_none += pending
           pending = 0
         }
+        # A denied command never RAN, so its own sleeps are not launches and must
+        # not enter the totals — that is what keeps the wait-target total equal
+        # to the launch-mode sum, which class_lines derives from FG/BG/CX only.
+        # It still served as a boundary and as remote evidence above.
+        if (cls == "DN") { nlines = 0; buf = ""; started = 0; return }
         for (i = 1; i <= nlines; i++) {
           if (lines[i] !~ sre) continue
           n_tot++
-          if (remote_after(i)) { n_same++; if (cls=="FG") fg_rem++ }
-          else                 { pending++; pcls = cls }
+          if (remote_after(i)) { n_same++; if (ec=="FG") fg_rem++ }
+          else                 { pending++; pcls = ec }
         }
         nlines = 0; buf = ""; started = 0
       }
@@ -852,6 +957,20 @@ if want efficiency; then
     echo "          when the wait uses a tool outside the recognised set (a"
     echo "          custom script, an SDK, a curl-less HTTP client). Read it as"
     echo "          an estimate to investigate, never as a census or a ceiling."
+    echo "          REVISION HISTORY, because it bears on how far to trust this:"
+    echo "          the UNCHAINED figure has been materially corrected TWICE by"
+    echo "          review, each time after being declared the trustworthy basis"
+    echo "          for the monorepo#2262 experiment — 12 -> 78 (poll ORDER within"
+    echo "          a command was ignored), then 81 -> 22 (loop BACK-EDGES were"
+    echo "          filed as unchained or as permitted local timers). Treat the"
+    echo "          current number as the best available estimate, not a settled"
+    echo "          one, and re-derive a baseline after any classifier change."
+    echo "          KNOWN RESIDUAL GAPS: a sleep inside a quoted -c command"
+    echo "          (sh -c 'sleep 30 && gh ...') is invisible to SLEEP_RE, which"
+    echo "          only recognises sleep at a line start or after a separator;"
+    echo "          loop-body detection is a do...done heuristic, not a parse;"
+    echo "          and a tool named in a quoted literal inside a -c command"
+    echo "          still counts, because blanking it would erase real watchers."
     echo "    NOTE: this splits LAUNCH MODE, which is NOT a compliance verdict."
     echo "          run_in_background says how Bash started the command, never"
     echo "          why the sleep exists. The contract permits a FOREGROUND bare"
