@@ -85,7 +85,10 @@ contributing set fits the read bound, directly GET every object whose payload co
 use a trusted aggregate endpoint already verified against direct samples. When neither a payload-
 complete source nor complete inventory coverage can be established safely,
 **report the cluster-wide result as unavailable or partial** and name the missing proof. Never
-extrapolate cluster-wide findings from the liveness sample.
+extrapolate cluster-wide findings from the liveness sample. Bounded proof failure is per-surface:
+**posture, CVE, and runtime each report unavailable or partial** instead of inventing a numeric value.
+Every confirmed partial coverage gap must also appear in `deltas_needing_action` so the orchestrator
+turns the blind spot into tracked remediation.
 
 - **Posture** (config scan) — `configurationscansummaries` / `workloadconfigurationscansummaries`
   (per-namespace scores + failed controls). **Broken if** scores are `0.00` across frameworks,
@@ -94,9 +97,11 @@ extrapolate cluster-wide findings from the liveness sample.
   **separate** static scan in a healthy CLI context — **a green CI gate does NOT prove the in-cluster
   scan works.**
 - **CVE** (kubevuln) — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests`. Liveness requires
-  **Grype matches or scanner version metadata with coherent summaries** (`spec.metadata.tool.version`
-  or the `kubescape.io/tool-version` annotation) across the direct samples. A genuinely zero-match
-  image is healthy when version evidence, summary refs, and zero counters agree. A blank
+  **(Grype matches or scanner version metadata) with coherent paired summaries**
+  (`spec.metadata.tool.version` or the `kubescape.io/tool-version` annotation) across the direct
+  samples. A genuinely zero-match image is healthy when version evidence, summary refs, and zero
+  counters agree; positive manifest matches with an empty or disagreeing summary are partial, not
+  healthy. A blank
   `spec.metadata.tool.name` alone is an upstream representation quirk, not an outage.
   **Broken if** direct manifests carry neither matches nor scanner-version evidence and summaries are
   empty (both `.all` and `.relevant`) — check kubevuln logs for `ScanCP … partial` (the relevancy path

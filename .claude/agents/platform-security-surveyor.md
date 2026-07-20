@@ -34,7 +34,10 @@ bounded metadata LISTs. A missing or stale pair is a coverage gap, not zero find
 directly GET every object whose payload contributes; otherwise use a trusted aggregate endpoint already
 verified against direct samples. When neither a payload-complete source nor complete inventory coverage fits the bound,
 **report the cluster-wide result as unavailable or partial** and name the missing proof; never
-extrapolate from the liveness sample.
+extrapolate from the liveness sample. Bounded proof failure is per-surface:
+**posture, CVE, and runtime each report unavailable or partial** instead of inventing a numeric value.
+Every confirmed partial coverage gap must also appear in `deltas_needing_action` so the orchestrator
+cannot miss a scanner blind spot.
 And the standing trap this agent exists to catch: **an empty/zero reading almost always means the
 scanner is BROKEN, not that the cluster is clean** — a broken scanner and a compliant cluster read
 identically, so every surface check is **liveness first, values second**.
@@ -48,10 +51,11 @@ identically, so every surface check is **liveness first, values second**.
 2. **CVE (kubevuln)** — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests` (+ `openvulnerabilityexchangecontainers`
    for VEX). Liveness: directly GET both named `vulnerabilitymanifests` and their corresponding
    `vulnerabilitymanifestsummaries` for 2–3 workloads.
-   Accept **Grype matches or scanner version metadata with coherent summaries**
+   Accept **(Grype matches or scanner version metadata) with coherent paired summaries**
    (`spec.metadata.tool.version` or `kubescape.io/tool-version`) across the sample. A genuinely zero-
-   match image is healthy when version evidence, summary refs, and
-   zero counters agree. Do not require `spec.metadata.tool.name`; healthy current objects leave it blank.
+   match image is healthy when version evidence, summary refs, and zero counters agree. Positive
+   manifest matches with an empty or disagreeing summary are partial, not healthy. Do not require
+   `spec.metadata.tool.name`; healthy current objects leave it blank.
    On suspicion, check kubevuln logs for `ScanCP … partial`. Then: critical/high counts (all vs relevant),
    notable new reachable CVEs vs baseline, VEX doc count, collected only from the direct-object/verified-
    aggregate rule above.
@@ -66,10 +70,10 @@ identically, so every surface check is **liveness first, values second**.
 ```
 ## Security digest — <UTC date> (baseline: <the baseline date/state the orchestrator gave you>)
 scanners_alive: posture=<yes|BROKEN:why> cve=<yes|BROKEN:why> runtime=<yes|INVISIBLE:why>
-posture: score <x> vs baseline <y> — top failed: <C-xxxx name (n)>, …
-coverage: cve=<complete|PARTIAL: n current containers lack fresh paired results>
+posture: score <x|unavailable:why> vs baseline <y> — top failed: <C-xxxx name (n)>, …
+coverage: posture=<complete|PARTIAL:why> cve=<complete|PARTIAL: n current containers lack fresh paired results> runtime=<complete|PARTIAL:why>
 cve: crit/high all=<a>/<b>|<unavailable:why> relevant=<c>/<d>|<unavailable:why> — new reachable: <cve id → workload>, … ; vex_docs=<n>
-runtime: <n> new detections — routing=<routed-to-X|stdout-only>
+runtime: <n|unavailable:why> new detections — routing=<routed-to-X|stdout-only>
 ci_gate: threshold=<n> (in-cluster agrees|DIVERGES: <how>)
 deltas_needing_action:
 - <one line per confirmed off-baseline finding or broken scanner, worst first>
@@ -78,4 +82,5 @@ Digest rules: **classify, don't decide** — the orchestrator turns confirmed de
 issues under the epic (platform#2447) or a hotfix; you never file, comment, or fix. A broken/invisible
 scanner is itself a `deltas_needing_action` line (worst class of finding). If the context/credentials
 are unavailable, say so in one line and stop — never guess from stale data. A partial coverage set or
-missing payload-complete aggregate is also explicit `unavailable`/`partial` evidence, never a zero.
+missing payload-complete aggregate is also explicit `unavailable`/`partial` evidence, never a zero,
+and every confirmed partial coverage gap is repeated in `deltas_needing_action`.

@@ -30,14 +30,20 @@ for security_definition in "${platform_card}" "${platform_security_surveyor}"; d
   # shellcheck disable=SC2016
   grep -Fq 'both named `vulnerabilitymanifests` and their corresponding' "${security_definition}" ||
     fail "${security_definition#"${repo_root}/"} does not require direct reads of both CVE object types"
-  grep -Fq 'Grype matches or scanner version metadata with coherent summaries' "${security_definition}" ||
-    fail "${security_definition#"${repo_root}/"} can treat Kubescape's blank tool.name as a scanner outage"
+  grep -Fq '(Grype matches or scanner version metadata) with coherent paired summaries' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can accept manifest matches paired with an incoherent CVE summary"
   grep -Fq 'LIST metadata for coverage and freshness' "${security_definition}" ||
     fail "${security_definition#"${repo_root}/"} does not define a bounded use for Kubescape LISTs"
   grep -Fq 'current workload/container inventory' "${security_definition}" ||
     fail "${security_definition#"${repo_root}/"} can miss workloads with no vulnerability result object"
   grep -Fq 'report the cluster-wide result as unavailable or partial' "${security_definition}" ||
     fail "${security_definition#"${repo_root}/"} can overclaim cluster-wide findings when bounded proof is unavailable"
+  grep -Fq 'posture, CVE, and runtime each report unavailable or partial' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} does not represent bounded proof failures for every Kubescape surface"
+  # Literal Markdown code spans; command substitution is intentionally disabled.
+  # shellcheck disable=SC2016
+  grep -Fq 'Every confirmed partial coverage gap must also appear in `deltas_needing_action`' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can report a scanner blind spot without making it actionable"
 done
 
 [[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
