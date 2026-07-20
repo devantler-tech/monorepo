@@ -92,9 +92,11 @@ violation is the **cross**: a **foreground** sleep **adjacent to a remote poll**
 remote poll is the compliant watcher the contract mandates, and a foreground sleep with no remote
 poll near it is a permitted local timer. Measured 2026-07-20 (48 Claude sessions): 162 foreground
 sleeps, but only **129** were remote-adjacent — the launch-mode rate overstated violations by ~26%.
-Baseline **2.40/session** (115/48, 2026-07-20). The **unchained** form the PreToolUse hook cannot see
+Baseline **1.95/session** (507 over 260 Claude sessions, 7-day, 2026-07-20; the 1-day window reads
+2.40 — always state which). The **unchained** form the PreToolUse hook cannot see
 is what tests whether a constitution tightening worked — but trend the **foreground-only** figure
-(`of which UNCHAINED (fg)`, baseline **78**), never the aggregate `remote_next`, which also contains
+(`of which UNCHAINED (fg)`, baseline **237 = 0.91/session** over the same 7-day window), never the
+aggregate `remote_next`, which also contains
 compliant background watchers and unattributed Codex sleeps and so moves when neither the rule nor
 foreground behaviour changed.
 
