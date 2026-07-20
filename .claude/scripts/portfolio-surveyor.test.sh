@@ -46,6 +46,13 @@ for security_definition in "${platform_card}" "${platform_security_surveyor}"; d
     fail "${security_definition#"${repo_root}/"} can report a scanner blind spot without making it actionable"
 done
 
+grep -Fq 'posture: score <x|unavailable:why>' "${platform_security_surveyor}" ||
+  fail "platform security digest cannot represent unavailable posture findings"
+grep -Fq 'coverage: posture=<complete|PARTIAL:why>' "${platform_security_surveyor}" ||
+  fail "platform security digest does not expose per-surface coverage"
+grep -Fq 'runtime: <n|unavailable:why> new detections' "${platform_security_surveyor}" ||
+  fail "platform security digest cannot represent unavailable runtime findings"
+
 [[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
 grep -Fq '.claude/scripts/release-bot-exemption.sh' "${surveyor}" ||
   fail "surveyor does not delegate exemption decisions to the exact classifier"
