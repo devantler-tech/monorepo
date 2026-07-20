@@ -18,6 +18,11 @@ are the recurring slice of that). The blog is a maintained public product: use p
 improve discovery, comprehension, adoption, and portfolio positioning through both new posts and
 material refreshes. Validate with the `docs` build before any PR.
 
+**Extraction epic [#2062](https://github.com/devantler-tech/monorepo/issues/2062):** before moving
+`docs/` into its own repo, read the checked-in coupling inventory
+[`extraction-coupling.md`](extraction-coupling.md) (delivery of [#2317](https://github.com/devantler-tech/monorepo/issues/2317))
+so site-owned paths are not confused with monorepo-brain paths (`AGENTS.md`, `.claude/`, submodules).
+
 ## Repo-specific conventions
 - **Branch** `claude/<area>-<desc>-<issue>` (the issue number makes a pre-PR claim matchable — see the contract's *Claim protocol*; issue-less hotfixes and trivial obvious fixes keep plain `claude/<area>-<desc>`). Submodule pointers often show as modified — **expected, not yours**; detect real dirtiness with `git status --porcelain --ignore-submodules=all`; never stage pointer bumps; never `git submodule update --remote`.
 - **Validate:** before any `docs/` PR, `[ -d docs/node_modules ] || (cd docs && npm ci)` then `cd docs && npm run build` (use `npm --prefix docs …`). Workflows → `actionlint`. Never edit auto-generated files / `*.lock.yml`.
