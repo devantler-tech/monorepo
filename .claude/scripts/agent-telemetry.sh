@@ -1063,10 +1063,15 @@ if want outcomes; then
       # maintainer, external-contributor, or dependency-bot merge must not move
       # it — otherwise a quiet week for the agents plus a busy week for Renovate
       # reads as agent productivity and can trigger a definition change.
-      # Both instances ship from claude/* and codex/* branches; author login
-      # cannot discriminate, because the agent commits as the maintainer.
-      if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt,headRefName \
+      # The instances ship from claude/*, codex/* and cursor/* branches; author
+      # login cannot discriminate, because the agent commits as the maintainer.
+      # Branch names are contributor-controlled, so a FORK PR can call its head
+      # cursor/* and be counted as agent output — which would corrupt the very
+      # totals used to justify changing the agents. Require a same-owner head,
+      # exactly as the flow scorecard's isCrossRepository check does.
+      if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt,headRefName,headRepositoryOwner \
             --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")
+                       | select((.headRepositoryOwner.login // \"\") == \"devantler-tech\")
                        | select(.headRefName | test(\"^(claude|codex|cursor)/\"))] | length" 2>/dev/null); then
         printf '    %-42s QUERY FAILED (auth/rate-limit/network)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
       fi

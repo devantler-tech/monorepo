@@ -357,17 +357,35 @@ touch of an unconfirmed repo:
      lane-specific branch **cannot** arbitrate: both instances would "win" and both would build. The
      arbitration therefore happens on one ref every instance derives identically from the issue
      number alone, **before** the lane-specific work branch is created.
-   - Put a **real commit** on the claim ref (the first substantive change, or an empty
-     `git commit --allow-empty -m "chore: claim #<issue>"`), never a bare pointer at the base commit —
-     otherwise both pushes are trivially fast-forwards and neither is refused.
+   - Put a **real commit** on the claim ref, and make it **UNIQUE**: every instance commits under the
+     same `devantler` identity, so a fixed message on a shared base within the same second produces a
+     byte-identical commit — **same tree, same parent, same author, same timestamp, same SHA**. Both
+     pushes then succeed (the second is a no-op fast-forward), both instances verify the tip as
+     "theirs", and the arbitration silently fails in exactly the close race it exists for. Include a
+     **nonce**: `git commit --allow-empty -m "chore: claim #<issue> ($(uuidgen))"`. Never a bare
+     pointer at the base commit either — that makes both pushes trivial fast-forwards and neither is
+     refused.
    - Push **without force**, then **verify the remote tip is yours**:
-     `git ls-remote origin agent-claim/<issue>` must return **your** sha. If the push is
-     rejected, or the tip is someone else's, **you lost the race** — stand down under rule 5 rather
-     than force-pushing over them. Never `--force`/`--force-with-lease` a claim ref: that is how a
-     "won" race silently destroys the winner's work.
-   - Only after you hold the claim ref, create `<lane>/<area>-<desc>-<issue>` and work there. The
-     claim ref is spent once your PR is open — the PR body's `#<issue>` reference is the durable
-     signal from that point on.
+     `git ls-remote origin agent-claim/<issue>` must return **your** sha. **Compare the tip — never
+     judge the race by the push's exit status**, and never through a pipe: `git push … | tail` reports
+     `tail`'s status, so a *rejected* push reads as exit 0 (reproduced 2026-07-20). If the tip is
+     someone else's, **you lost the race** — stand down under rule 5 rather than force-pushing over
+     them. Never `--force`/`--force-with-lease` a claim ref: that is how a "won" race silently
+     destroys the winner's work.
+   - **RETIRE the ref — a claim ref that is never deleted is a permanent lock.** The ref is not a PR
+     head and no branch sweep enumerates it, so an instance that crashes between claiming and opening
+     its PR would otherwise leave a ref that rejects every future push, and every later instance would
+     dutifully stand down: **one interrupted run makes the issue unworkable forever**. So:
+     - **Delete it as soon as your PR is open** — `git push origin --delete agent-claim/<issue>`. The
+       PR body's `#<issue>` reference is the durable claim signal from that point on, so the ref has
+       done its job.
+     - **A stale claim ref may be retired by anyone**, on the same evidence that lets you take over a
+       stale assignment: **no open PR references `#<issue>`** *and* the ref's tip commit is older than
+       the ~2h lease. Then `--delete` it and push your own claim; the delete is the *only* sanctioned
+       mutation of another instance's claim ref, it requires both conditions, and it is never a
+       force-push over live work. Deleting first also preserves arbitration — after the delete, the
+       first push creates the ref and any competing push is rejected as before.
+   - Only after you hold the claim ref, create `<lane>/<area>-<desc>-<issue>` and work there.
 5. **On a lost race, ABANDON.** Never duplicate the work, never force-push onto a sibling's branch,
    never open a competing PR. Then **use the loss**: two independent implementations of one spec are
    a free **differential-testing oracle**. Diff yours against the winner's and post **only findings
