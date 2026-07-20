@@ -177,9 +177,12 @@ public and private — no per-repo loop needed to enumerate):
      carries an **abbreviated** sha (10 characters in every sighting so far), so "matches" means
      `headRefOid` **starts with** the extracted sha — never string equality against the full
      40-character oid, which no abbreviated marker can ever satisfy and which would therefore
-     mis-report every green Codex review as stale. Require at least the 10-character prefix
-     (below); anything shorter, or a prefix `headRefOid` does not begin with, resolves to `none`.
-     Report a clean
+     mis-report every green Codex review as stale. Require at least the 10-character prefix (below).
+     A well-formed marker of at least 10 characters that `headRefOid` does **not** start with is a
+     review of an older head — report it `codex-stale@<sha>`, never `none`: a real review exists and
+     collapsing it to `none` both loses that fact and reads as "no reviewer has looked at this",
+     which is what drives a needless re-request. `none` is reserved for a marker that is **absent,
+     malformed, or shorter than 10 characters** — i.e. no usable review output at all. Report a clean
      result for an older head as `codex-stale@<sha>`. If a Codex review **at the current head** posts
      findings instead of the clean-pass marker, report `codex-findings@<sha>` plus its comment/review
      URL or unresolved connector-thread count and classify the PR **NEEDS-FIX**; never hide that surface as `none` or immediately

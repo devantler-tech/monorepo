@@ -43,6 +43,12 @@ grep -Fq 'starts with** the extracted sha' "${surveyor}" ||
 if grep -Fq "any major issues\` and that sha equals \`headRefOid\`" "${surveyor}"; then
   fail "surveyor compares the abbreviated Codex marker to headRefOid by equality — never satisfiable"
 fi
+# A non-matching but well-formed marker is a review of an OLDER head, not an absent review.
+# Collapsing it to `none` hides a real artifact and provokes a needless re-request.
+grep -Fq 'report it `codex-stale@<sha>`, never `none`' "${surveyor}" ||
+  fail "surveyor may report a well-formed non-matching Codex marker as none instead of codex-stale"
+grep -Fq 'absent,' "${surveyor}" ||
+  fail "surveyor does not reserve none for an absent/malformed/too-short marker"
 grep -Fq 'AUTOMATION-OWNED (NO-ACTION)' "${surveyor}" ||
   fail "surveyor does not short-circuit dependency-bot PRs as no-action"
 grep -Fq 'renovate[bot]' "${surveyor}" ||
