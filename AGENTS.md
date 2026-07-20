@@ -1720,9 +1720,11 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   disambiguator above). Never pretend to be human.
 
 ### Cadence & focus
-**Each instance is dispatched every 2 hours; the instances stagger, so the portfolio is swept about
-every half hour** (the deployment loader owns the exact cadence — Claude Code on even hours, the
-ChatGPT/Codex sibling on uneven, the Cursor cloud instance at `:30` past uneven). That interval is the
+**Each instance is dispatched every 2 hours; the instances stagger, so the portfolio is swept every
+30–60 minutes** (the deployment loader owns the exact cadence — Claude Code on even hours, the
+ChatGPT/Codex sibling on uneven, the Cursor cloud instance at `:30` past uneven; the gaps are
+deliberately uneven — 60/30/30 within each 2-hour cycle — because no even 3-way split exists without
+moving the two working loaders). That interval is the
 gap **between runs, not a per-run time
 budget** — and it is the *instance's* own gap that bounds a carry-forward, so a run that defers a
 watch item to "the next tick" is deferring it ~2 hours, not one. Each run: **hotfix any breakage**, then **sweep every

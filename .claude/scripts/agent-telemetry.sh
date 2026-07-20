@@ -922,8 +922,15 @@ if want safety; then
 fi
 
 # ── 4. CROSS-INSTANCE (A2A) ───────────────────────────────────────────────────
-# The two instances share repos, branches and PRs. Collisions are the failure
+# The instances share repos, branches and PRs. Collisions are the failure
 # mode: duplicate artifacts, two-writer races, clobbered pushes.
+#
+# THREE instances now write to that shared queue (Claude, Codex, Cursor), but only
+# the two machine-local ones leave session files here. The Cursor instance runs in
+# a cloud sandbox, so it contributes NO corpus at all — every metric below covers
+# two of three writers, and the third is the newest and least-proven. Adding a
+# writer raises collisions, so the section that measures them must not read as
+# complete while it is structurally blind to one.
 if want a2a; then
   echo
   echo "── CROSS-INSTANCE / A2A ─────────────────────────────────────────"
@@ -932,6 +939,7 @@ if want a2a; then
   # cross-instance scorecard reported professional sessions it must not see.
   echo "  codex sessions in window ... ${CX_COUNT}  (scope-filtered)"
   echo "  claude sessions in window .. ${SF_COUNT}"
+  echo "  cursor sessions in window .. n/a  (cloud instance — leaves no local corpus)"
   # Collisions are inherently a CROSS-instance metric, so reading only the Claude
   # corpus was self-defeating: a race the Codex instance hit — the sibling half of
   # the very interaction being measured — was invisible. Structural (tool results),
@@ -949,6 +957,11 @@ if want a2a; then
     echo "          error flag (verified). Its side of a two-writer race is therefore"
     echo "          NOT counted — which understates precisely the cross-instance"
     echo "          coordination this section exists to measure. Unmeasured, not zero."
+    echo "          The Cursor instance is invisible here for a second, stronger"
+    echo "          reason: it runs in the cloud and leaves no local corpus, so its"
+    echo "          side of every collision is unreadable by this tool. Read these"
+    echo "          counts as a FLOOR across two of three writers — never a total,"
+    echo "          and never as evidence that adding the third writer was free."
   fi
   if command -v sqlite3 >/dev/null 2>&1 && [ -f "$CODEX_HOME/logs_2.sqlite" ]; then
     CUT=$(( $(date +%s) - SINCE_DAYS*86400 ))
