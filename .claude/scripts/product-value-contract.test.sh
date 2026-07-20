@@ -99,4 +99,18 @@ grep -Fq '      - changes' "${workflow}" ||
 grep -Fq '${{ needs.changes.result }}' "${workflow}" ||
   fail "required aggregate does not evaluate path-detection failures"
 
+# Monorepo product-card label allowlist (#2260) — must match live taxonomy names.
+labels_line="$(grep -E '^\- \*\*Labels\*\*' "${site_card}" || true)"
+[[ -n "${labels_line}" ]] || fail "site card missing Labels allowlist line"
+grep -Fq '`github_actions`' <<<"${labels_line}" ||
+  fail "site card Labels allowlist missing live github_actions (#2260)"
+grep -Fq '`roadmap`' <<<"${labels_line}" ||
+  fail "site card Labels allowlist missing live roadmap (#2260)"
+if grep -Eq '`ci`' <<<"${labels_line}"; then
+  fail "site card Labels allowlist still lists nonexistent ci (#2260)"
+fi
+if grep -Fq '`agentic-workflows`' <<<"${labels_line}"; then
+  fail "site card Labels allowlist still lists nonexistent agentic-workflows (#2260)"
+fi
+
 echo "product value contract: all assertions passed"
