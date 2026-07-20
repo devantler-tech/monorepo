@@ -43,14 +43,22 @@ card.
    If only the host-level saved-login check succeeds, run every subsequent `gh` command through that
    approved host-level execution path.
    Clearing the injected tokens does not make a sandboxed macOS Keychain readable.
-   Only an explicit credential rejection from that host-level check proves the saved login invalid.
-   If the host-level check instead authenticates a different account, hard-block as `wrong GitHub identity`
-   without describing the credential as invalid.
-   If the host-level check cannot run or fails
-   for a transport reason, hard-block as `authentication verification unavailable` instead of instructing
-   the maintainer to replace a credential that was never tested. Keep the injected-token result, saved-login
-   result, and `git fetch` result as separate gates, because repository reachability cannot prove GitHub API
-   identity (and vice versa); record only these gate classifications in durable memory, never credential output.
+   **Distinguish authentication rejection from GitHub service degradation** (monorepo#2206): a REST
+   `/user` (or `gh auth status`) probe that returns HTTP 5xx, HTML, or other non-JSON service noise is
+   **not** proof the credential is bad — classify that outcome as `GitHub service degraded` and run a
+   bounded authenticated GraphQL fallback
+   `env -u GH_TOKEN -u GITHUB_TOKEN gh api graphql -f query='{viewer{login}}'` (same cleared-env /
+   host-level path as the REST probe). Accept the identity when GraphQL returns `devantler`.
+   Only an explicit credential rejection from that host-level check proves the saved login invalid —
+   meaning HTTP 401/403, or `gh` reporting the token rejected / not logged in — and **only then** recommend
+   `gh auth login`. A REST 5xx with a successful GraphQL `viewer.login` must never be
+   reported as an invalid saved login. If the host-level check instead authenticates a different
+   account, hard-block as `wrong GitHub identity` without describing the credential as invalid.
+   If the host-level check cannot run or fails for a transport reason (and the GraphQL fallback is
+   likewise unreachable), hard-block as `authentication verification unavailable` instead of
+   instructing the maintainer to replace a credential that was never tested. Keep the injected-token
+   result, saved-login result, and `git fetch` result as separate gates, because repository
+   reachability cannot prove GitHub API identity (and vice versa); record only these gate classifications in durable memory, never credential output.
 3. **Check the memory store fits in one read — BEFORE you read it.** A file past the Read cap is
    **truncated silently**: the run continues on a partial cursor with no signal that carry-forwards,
    stand-down notes, or `HANDS-OFF` records beyond the cut are missing (the 2026-06-05 blinding;
