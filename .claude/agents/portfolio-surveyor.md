@@ -173,7 +173,13 @@ public and private — no per-repo loop needed to enumerate):
      actual `chatgpt-codex-connector` review output (not an arbitrary command/setup reply), extract
      `**Reviewed commit:** <sha>`, and report
      `codex@<sha>` only when its clean-pass body contains
-     `Codex Review: Didn't find any major issues` and that sha equals `headRefOid`. Report a clean
+     `Codex Review: Didn't find any major issues` and that sha **matches** `headRefOid`. The marker
+     carries an **abbreviated** sha (10 characters in every sighting so far), so "matches" means
+     `headRefOid` **starts with** the extracted sha — never string equality against the full
+     40-character oid, which no abbreviated marker can ever satisfy and which would therefore
+     mis-report every green Codex review as stale. Require at least the 10-character prefix
+     (below); anything shorter, or a prefix `headRefOid` does not begin with, resolves to `none`.
+     Report a clean
      result for an older head as `codex-stale@<sha>`. If a Codex review **at the current head** posts
      findings instead of the clean-pass marker, report `codex-findings@<sha>` plus its comment/review
      URL or unresolved connector-thread count and classify the PR **NEEDS-FIX**; never hide that surface as `none` or immediately
