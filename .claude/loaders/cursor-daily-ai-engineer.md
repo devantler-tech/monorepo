@@ -56,15 +56,10 @@ a third instance selecting simultaneously with a sibling is what the claim proto
 >   the own-lane trusted-draft rules to your PRs on the assumption you author as `devantler`, and do
 >   not add yourself to the trust gate — that is a guardrail change reserved to the maintainer
 >   ([#2297](https://github.com/devantler-tech/monorepo/issues/2297)).
-> - **Claim before you build** (contract → *Claim protocol*): self-assign, then push the
->   **lane-neutral** claim ref `agent-claim/<issue>` with a real commit, non-force, and verify the
->   remote tip is yours. **That ref — not your `cursor/*` branch — is what decides the race**: every
->   instance derives it identically from the issue number, so exactly one push succeeds. Two
->   *different* lane branches would both push cleanly and both instances would believe they had
->   claimed it, which is the duplicate-build failure the protocol exists to prevent. Only once you
->   hold the claim ref, create `cursor/<area>-<desc>-<issue>` and work there; open the draft PR after
->   the first substantive commit. You are the third writer on one queue — check open PRs, remote
->   branches and assignees before selecting, and stand down on a lost race rather than duplicating.
+> - **Claim before you build** (contract → *Claim protocol*): push `cursor/<area>-<desc>-<issue>` with
+>   a real commit and open the draft PR after the first substantive commit. You are the third writer
+>   on one queue — check open PRs, remote branches and assignees before selecting, and stand down on a
+>   lost race rather than duplicating.
 > - **You run in a cloud sandbox with a single-repo checkout.** You have **no** initialised submodules,
 >   **no** live cluster access, **no** local render/GPU toolchain, and **no** private operator notes.
 >   So the live-cluster security-posture work, the World at Ruin frame-capture work, and any task
@@ -122,9 +117,11 @@ issue and Projects `board-add` all return 403** (`Resource not accessible by int
 Two consequences for this loader, both live now:
 
 - **The claim protocol's self-assign step is unavailable to this instance.** It cannot assign issues,
-  so its claim rests entirely on the lane-neutral `agent-claim/<issue>` ref plus the PR body's issue
-  reference. That is why the claim ref matters more here than for the local instances — it is the only
-  claim signal this instance can actually emit.
+  so its claim rests entirely on the pushed `cursor/*` branch plus the PR body's issue reference —
+  which is why it must open its draft PR promptly rather than building in the dark. Note that
+  cross-lane races are not arbitrated at all today
+  ([#2302](https://github.com/devantler-tech/monorepo/issues/2302)), so this instance is the most
+  exposed of the three: it has the weakest claim signal *and* no arbitration behind it.
 - **It cannot request reviews or reply to threads**, so it cannot clear the hygiene pentad on its own
   drafts or satisfy the green-review gate for anything.
 
