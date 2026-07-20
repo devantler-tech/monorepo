@@ -922,8 +922,16 @@ if want safety; then
 fi
 
 # ── 4. CROSS-INSTANCE (A2A) ───────────────────────────────────────────────────
-# The two instances share repos, branches and PRs. Collisions are the failure
+# The instances share repos, branches and PRs. Collisions are the failure
 # mode: duplicate artifacts, two-writer races, clobbered pushes.
+#
+# THREE instances now write to that shared queue (Claude, Codex, Cursor), and the
+# COLLISION counts below see exactly ONE of them. Session counts cover the two
+# machine-local instances; the collision metrics are Claude-only, because they read
+# errored tool results and Codex records carry no error flag. Cursor contributes no
+# corpus at all. So the denominator differs per row — do not read "three instances"
+# and assume three are measured. Adding a writer raises collisions, so the section
+# that measures them must not read as complete while blind to two of the three.
 if want a2a; then
   echo
   echo "── CROSS-INSTANCE / A2A ─────────────────────────────────────────"
@@ -932,6 +940,7 @@ if want a2a; then
   # cross-instance scorecard reported professional sessions it must not see.
   echo "  codex sessions in window ... ${CX_COUNT}  (scope-filtered)"
   echo "  claude sessions in window .. ${SF_COUNT}"
+  echo "  cursor sessions in window .. n/a  (cloud instance — leaves no local corpus)"
   # Collisions are inherently a CROSS-instance metric, so reading only the Claude
   # corpus was self-defeating: a race the Codex instance hit — the sibling half of
   # the very interaction being measured — was invisible. Structural (tool results),
@@ -949,6 +958,11 @@ if want a2a; then
     echo "          error flag (verified). Its side of a two-writer race is therefore"
     echo "          NOT counted — which understates precisely the cross-instance"
     echo "          coordination this section exists to measure. Unmeasured, not zero."
+    echo "          The Cursor instance is invisible here for a second, stronger"
+    echo "          reason: it runs in the cloud and leaves no local corpus, so its"
+    echo "          side of every collision is unreadable by this tool. So these"
+    echo "          collision counts observe ONE writer of three — a hard floor,"
+    echo "          never a total, and never evidence the third writer was free."
   fi
   if command -v sqlite3 >/dev/null 2>&1 && [ -f "$CODEX_HOME/logs_2.sqlite" ]; then
     CUT=$(( $(date +%s) - SINCE_DAYS*86400 ))
@@ -1034,7 +1048,7 @@ if want outcomes; then
     # only the monorepo scored the definition work and ignored the products.
     # Repos come from the submodule list, so the set follows the portfolio map
     # instead of being hard-coded here and going stale.
-    echo "  AGENT-authored merged PRs since ${SINCE_ISO} (claude/* + codex/* branches):"
+    echo "  AGENT-authored merged PRs since ${SINCE_ISO} (claude/* + codex/* + cursor/* branches):"
     # Portable extraction: BSD sed rejects the non-greedy `+?` a single-pass
     # regex would need, so strip in stages instead of relying on a GNU-only form.
     REPOS=$(git -C "$MONOREPO" config --file .gitmodules --get-regexp '\.url$' 2>/dev/null \
@@ -1050,11 +1064,16 @@ if want outcomes; then
       # maintainer, external-contributor, or dependency-bot merge must not move
       # it — otherwise a quiet week for the agents plus a busy week for Renovate
       # reads as agent productivity and can trigger a definition change.
-      # Both instances ship from claude/* and codex/* branches; author login
-      # cannot discriminate, because the agent commits as the maintainer.
-      if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt,headRefName \
+      # The instances ship from claude/*, codex/* and cursor/* branches; author
+      # login cannot discriminate, because the agent commits as the maintainer.
+      # Branch names are contributor-controlled, so a FORK PR can call its head
+      # cursor/* and be counted as agent output — which would corrupt the very
+      # totals used to justify changing the agents. Require a same-owner head,
+      # exactly as the flow scorecard's isCrossRepository check does.
+      if ! c=$(gh pr list --repo "$r" --state merged --limit 300 --json mergedAt,headRefName,headRepositoryOwner \
             --jq "[.[] | select(.mergedAt >= \"${SINCE_ISO}\")
-                       | select(.headRefName | test(\"^(claude|codex)/\"))] | length" 2>/dev/null); then
+                       | select((.headRepositoryOwner.login // \"\") == \"devantler-tech\")
+                       | select(.headRefName | test(\"^(claude|codex|cursor)/\"))] | length" 2>/dev/null); then
         printf '    %-42s QUERY FAILED (auth/rate-limit/network)\n' "$r"; APIFAIL=$((APIFAIL+1)); continue
       fi
       case "$c" in ''|*[!0-9]*) printf '    %-42s UNPARSEABLE RESULT\n' "$r"; APIFAIL=$((APIFAIL+1)); continue ;; esac

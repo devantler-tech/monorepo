@@ -20,16 +20,30 @@ card.
 1. **The contract is already in context** — `AGENTS.md` is loaded via the project's `CLAUDE.md`
    (`@AGENTS.md` shim). Follow it; **don't re-read it** (a redundant read just burns ~6–7K tokens).
    Only if it is somehow *not* already in your context should you read it once.
-2. **Working checkout:** `cd /Users/homelab-mac-mini/git-personal/monorepo` (this deployment's primary
-   checkout — the scheduled task runs on a fixed machine; adjust the path if relocated); confirm
-   (`test -d docs && test -f .gitmodules`); `gh auth status --active --hostname github.com` shows
-   `devantler`. **Sync the definition:**
+2. **Working checkout — use YOUR deployment's, not a hard-coded one.** The machine-local instances
+   run from the fixed checkout `cd /Users/homelab-mac-mini/git-personal/monorepo` (adjust if
+   relocated). A **cloud instance has no such path** and must use its sandbox's checkout root
+   instead — hard-coding the Mac path would make a conforming cloud run `cd` into nothing and stop
+   before doing any work. Whichever applies, verify you are in the right tree the same way: confirm
+   (`test -d docs && test -f .gitmodules`); `gh auth status --active --hostname github.com` shows the
+   expected identity (`devantler` locally; the cloud lane authenticates as its own App — see its
+   loader). **Sync the definition:**
    this checkout carries permanent submodule-pointer drift, so don't gate on a fully clean tree — if
    `main` is behind `origin/main` and the only dirt is submodule pointers, fast-forward with
    `git fetch origin main && git merge --ff-only origin/main` (it never checks out submodule contents;
    `--ff-only` refuses anything that isn't a clean fast-forward).
-   When `gh auth status --active --hostname github.com` reports an invalid credential or authenticates
-   an active account other than `devantler`, retry once as
+   **Your EXPECTED IDENTITY depends on the deployment — match it exactly, never widen it.** For the
+   machine-local instances it is **`devantler`**. For a cloud instance it is that deployment's own App
+   identity (**`app/cursor`** for the Cursor Automation — see its loader). Substitute your own below;
+   an account that is neither `devantler` nor your deployment's stated App identity is always a hard
+   stop, so this stays an exact-match check rather than "any authenticated account".
+   **The token-clearing ladder that follows is MACHINE-LOCAL ONLY** — it exists for the macOS keychain
+   saved-login case, and a cloud instance's App token *is* its credential, so unsetting
+   `GH_TOKEN`/`GITHUB_TOKEN` there would break the auth it depends on. A cloud instance simply
+   verifies its expected App identity once and proceeds.
+
+   On a machine-local instance: when `gh auth status --active --hostname github.com` reports an
+   invalid credential or authenticates an active account other than `devantler`, retry once as
    `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --active --hostname github.com` to clear both
    environment-token sources and test the active saved login for the host this portfolio uses. Accept either
    probe only when it authenticates `devantler`. In a runtime that sandboxes macOS keychain access, if that
@@ -469,7 +483,10 @@ A second run the same day → more selective, dedupe vs the earlier run.
 
 ## 3. Act (per selected product, via a per-run worktree)
 For each selected product:
-1. **Isolate:** `cd /Users/homelab-mac-mini/git-personal/monorepo`. Populate an empty submodule with
+1. **Isolate:** `cd` to **your deployment's checkout** — the fixed
+   `/Users/homelab-mac-mini/git-personal/monorepo` for the machine-local instances, the sandbox root
+   for a cloud one (same rule as the preflight in step 2; do not hard-code the Mac path here either).
+   Populate an empty submodule with
    the fail-closed wrapper — **never a bare `git submodule update --init`**, which is precisely what
    re-introduces the shared `core.worktree` (reproduced 2026-07-14: absent before the command, present
    after; observed 8× across runs — ksail ×4, go-template, homebrew-tap, `.github-public`,
@@ -479,9 +496,12 @@ For each selected product:
    .claude/scripts/submodule-init.sh <path>   # init at the pinned commit + repair + probe (fail-closed)
    ```
 
-   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>`
-   (issue-less hotfixes and trivial obvious fixes keep plain `claude/<area>-<desc>` — they go straight
-   to a PR, so no claim window applies) and work
+   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b <lane>/<area>-<desc>-<issue>`,
+   where **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*` (see
+   *Execution model*). Never write a sibling's lane: it breaks draft ownership, and a `claude/*`
+   branch from another instance would be swept by the Claude tick's cleanup.
+   (Issue-less hotfixes and trivial obvious fixes keep plain `<lane>/<area>-<desc>` — they go straight
+   to a PR, so no claim window applies.) Work
    **in that worktree**. A stray `core.worktree` makes the worktree resolve back into
    `.git/modules/<name>`, silently collapsing every parallel session into one physical tree — so on any
    submodule you did **not** initialise through the wrapper (a tree someone else populated), **probe

@@ -42,9 +42,30 @@ is not present — **stop and report**, change nothing. You never improve what y
 The script is read-only and covers reliability, efficiency, safety, cross-instance, drift and
 outcomes. Supplement it with:
 
-- **Both memory stores** — Claude: `~/.claude/projects/<slug>/memory/`; Codex:
+- **Both local memory stores** — Claude: `~/.claude/projects/<slug>/memory/`; Codex:
   `$CODEX_HOME/automations/daily-ai-engineer/memory.md`. Read for *what the agents believe*; compare
   against live state to find **stale beliefs**, which are a leading cause of wrong action.
+- **The Cursor cloud instance, via its GitHub artifacts — it has NO local corpus.** It runs in a
+  cloud sandbox, so there are no session files, no tool-error signatures, and no memory file to read;
+  the telemetry script is structurally blind to it. Its **substitute evidence is narrow, and only
+  these survive a normal run**: its `cursor/*` branches, the PRs from them and their review
+  histories, and issues it filed — found **by author**, never by a body marker:
+  `gh search issues --owner devantler-tech --author app/cursor --limit 300 --sort created --order asc`
+  (`--limit` matters — `gh search` defaults to 30, which would silently truncate the evidence set).
+  **Do not look for claim refs or
+  `cursor`-authored comments** — commenting is 403 for that identity, so those are structurally
+  absent rather than merely rare.
+  **What this cannot measure, and must be reported as unmeasured rather than clean:** reliability (no
+  tool-error signatures), efficiency (no timings), safety (no transcript), and — most importantly —
+  **coordination**, because a *lost* race leaves this instance no artifact at all. Its visible output
+  is therefore biased toward runs that succeeded; absence of a recorded failure is not evidence there
+  was none. A metric that cannot see an instance must never be read as that instance behaving.
+  **Its deployed prompt is UNMEASURABLE — do not pretend otherwise.** It lives server-side with no
+  file and no CLI, so there is nothing to diff against
+  [`.claude/loaders/cursor-daily-ai-engineer.md`](../../loaders/cursor-daily-ai-engineer.md); comparing
+  that file to itself proves nothing about the UI copy. Record deployed-prompt drift for this instance
+  as **unmeasured**, and treat any behaviour inconsistent with the loader as the only available
+  (indirect) evidence that the pasted text has drifted.
 - **Recent run reports** — what each run claimed it shipped, versus what GitHub shows merged.
 - **The loaders** — the Claude scheduled task's `SKILL.md` and the Codex `automation.toml`, against
   the constitution.
