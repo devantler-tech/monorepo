@@ -1180,6 +1180,120 @@ if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1' && printf '%s' "$OUT"
   ok "command text cannot forge a class tag"
 else bad "command text cannot forge a class tag" "$(printf '%s' "$OUT" | grep -E 'foreground|background')"; fi
 
+# ── 6b. wait target (WHAT the sleep waits on) ────────────────────────────────
+echo
+echo "sleep classification (wait target: remote vs local)"
+
+# The launch-mode split says HOW a sleep started and cannot say whether it
+# violated anything. The contract's line is the WAIT TARGET: polling a remote
+# system is the forbidden busy-wait; bounding a local process the agent itself
+# started is explicitly permitted. These two fixtures differ ONLY in that.
+mkdir -p "$FIX/wtremote"
+cat > "$FIX/wtremote/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"r1","name":"Bash","input":{"command":"sleep 30 && gh pr checks 7"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtremote" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 1'; then
+  ok "a sleep chained to a remote poll is scored remote-adjacent"
+else bad "a sleep chained to a remote poll is scored remote-adjacent" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# The PERMITTED case. If this ever scored as remote, the metric would condemn
+# exactly the behaviour AGENTS.md allows (a bare sleep bounding a local process).
+mkdir -p "$FIX/wtlocal"
+cat > "$FIX/wtlocal/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"l1","name":"Bash","input":{"command":"godot --headless --render out.png & sleep 20; kill %1"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtlocal" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+  ok "a sleep bounding a local process is scored PERMITTED, not a violation"
+else bad "a sleep bounding a local process is scored PERMITTED, not a violation" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# The UNCHAINED form: the PreToolUse hook blocks `sleep N && poll`, and sessions
+# adapt by splitting it across two tool calls. Same busy-wait, invisible to the
+# hook — this is the shape monorepo#2262 tightened the constitution against, and
+# a same-command-only classifier scores it as permitted.
+mkdir -p "$FIX/wtnext"
+cat > "$FIX/wtnext/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"n1","name":"Bash","input":{"command":"sleep 45"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"n2","name":"Bash","input":{"command":"gh pr view 12 --json state"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtnext" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, next command \.+ 1'; then
+  ok "an UNCHAINED sleep-then-poll is caught across two tool calls"
+else bad "an UNCHAINED sleep-then-poll is caught across two tool calls" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# Adjacency must not reach ACROSS transcripts. Without the file sentinel, the
+# last command of one session pairs with the first of the next, manufacturing a
+# correlation that never happened in either.
+mkdir -p "$FIX/wtcross"
+cat > "$FIX/wtcross/a.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"Bash","input":{"command":"sleep 45"}}]}}
+EOF
+cat > "$FIX/wtcross/b.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c2","name":"Bash","input":{"command":"gh pr view 3"}}]}}
+EOF
+# Transcripts are walked NEWEST-FIRST, so the sleeping session must be the newer
+# file for it to be followed by the polling one. Without pinning these mtimes the
+# order is whatever the filesystem reports, the sleep lands last with nothing
+# after it, and the assertion below passes no matter what the sentinel does —
+# it was VACUOUS until an ablation proved it could not go red.
+touch -t 202607200101 "$FIX/wtcross/b.jsonl"
+touch -t 202607200202 "$FIX/wtcross/a.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtcross" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, next command \.+ 0'; then
+  ok "adjacency does NOT cross a transcript boundary"
+else bad "adjacency does NOT cross a transcript boundary" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
+# THE metric: only the CROSS of the two dimensions is a verdict. A backgrounded
+# sleep polling a remote system is the compliant watcher the contract mandates;
+# scoring it as a violation is what made the old foreground count unusable.
+mkdir -p "$FIX/wtcross2"
+cat > "$FIX/wtcross2/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"sleep 300 && gh pr checks 1","run_in_background":true}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtcross2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 0'; then
+  ok "a BACKGROUND remote poll is NOT counted as the busy-wait violation"
+else bad "a BACKGROUND remote poll is NOT counted as the busy-wait violation" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtremote" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
+  ok "a FOREGROUND remote poll IS counted as the busy-wait violation"
+else bad "a FOREGROUND remote poll IS counted as the busy-wait violation" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
+
+# Both splits must count the SAME unit (a sleeping LINE, as grep -c counts it).
+# Counting sleeping COMMANDS instead made the totals differ by 100 on the live
+# corpus and fired the drift warning on a difference that was never a defect.
+mkdir -p "$FIX/wtsum"
+cat > "$FIX/wtsum/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"s1","name":"Bash","input":{"command":"sleep 5\nsleep 6\ngh pr view 1"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"s2","name":"Bash","input":{"command":"godot --render & sleep 9; kill %1"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtsum" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'wait-target total'; then
+  bad "wait-target buckets sum to the launch-mode total" "$(printf '%s' "$OUT" | grep -E 'wait-target total|remote poll|no remote')"
+else ok "wait-target buckets sum to the launch-mode total"; fi
+
+# A heredoc that WRITES `sleep 30 && gh ...` into a fixture is emitting data, not
+# waiting on anything. The shared stripper must run before wait-target grouping.
+mkdir -p "$FIX/wthd"
+cat > "$FIX/wthd/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"h1","name":"Bash","input":{"command":"cat > f.sh <<'XX'\nsleep 30 && gh pr checks 1\nXX"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wthd" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 0'; then
+  ok "a heredoc BODY does not inflate the wait-target count"
+else bad "a heredoc BODY does not inflate the wait-target count" "$(printf '%s' "$OUT" | grep -E 'remote poll')"; fi
+
+check "the adjacency heuristic states it is a ceiling" "$OUT" "treat it as a ceiling"
+
 # ── 7. robustness ─────────────────────────────────────────────────────────────
 echo
 echo "robustness"

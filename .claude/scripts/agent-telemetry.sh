@@ -295,18 +295,24 @@ tagged_commands_in() {
          | (.id? // "") as $i
          | select($i == "" or (($errs | index($i)) | not))
          | (.input?.command? // empty) | select(type=="string") | select(length>0)
-         | split("\n") | map("\u0001" + $c + "\u0002" + .) | .[]),
+         | split("\n") | to_entries
+         | map("\u0001" + $c + (if .key==0 then "*" else "" end) + "\u0002" + .value)
+         | .[]),
         (select(.type=="function_call")
          | (.arguments? // empty)
          | (try (fromjson | (.command? // .cmd? // empty)) catch empty)
          | select(type=="string") | select(length>0)
-         | split("\n") | map("\u0001CX\u0002" + .) | .[]),
+         | split("\n") | to_entries
+         | map("\u0001CX" + (if .key==0 then "*" else "" end) + "\u0002" + .value)
+         | .[]),
         (select(.type=="custom_tool_call")
          | .input? // empty | select(type=="string")
          | [scan("cmd:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")] | .[]? | .[0]?
          | select(type=="string") | select(length>0)
          | gsub("\\\\n"; "\n") | gsub("\\\\t"; " ") | gsub("\\\\\""; "\"")
-         | split("\n") | map("\u0001CX\u0002" + .) | .[])
+         | split("\n") | to_entries
+         | map("\u0001CX" + (if .key==0 then "*" else "" end) + "\u0002" + .value)
+         | .[])
       )
   ' "$f" 2>/dev/null
 }
@@ -604,12 +610,13 @@ if want efficiency; then
     # STRUCTURAL, not a text grep: only commands the agent actually ran count.
     # A grep would let untrusted prose that merely mentions `sleep 60` fabricate
     # a busy-wait pattern, and this metric is evidence for definition changes.
-    # ONE definition of "this command sleeps", shared by the total and every
-    # class count below. Duplicating the regex is how the two would drift apart
-    # and stop summing.
+    # ONE definition of "this command sleeps", shared by the total, every launch
+    # class, AND the wait-target split below. Duplicating the regex is how two
+    # counts drift apart and stop summing — the exact failure that broke
+    # redactor parity six times.
+    SLEEP_RE='(^|[;&|(]|&&|\|\||[[:space:]](do|then|else)[[:space:]])[[:space:]]*sleep[[:space:]]+["'"'"']?[$0-9{]'
     count_sleeps() {
-      strip_heredocs \
-        | grep -cE '(^|[;&|(]|&&|\|\||[[:space:]](do|then|else)[[:space:]])[[:space:]]*sleep[[:space:]]+["'"'"']?[$0-9{]' || true
+      strip_heredocs | grep -cE "$SLEEP_RE" || true
     }
     # The corpus is LIVE: the sibling instance writes transcripts while we read.
     # Scanning once per class could observe a different corpus each time, so a
@@ -628,15 +635,113 @@ if want efficiency; then
     # a single pass is inherently self-consistent, needs no snapshot, and cannot
     # leave anything on disk to clean up.
     TAGGED=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
-             | while IFS= read -r f; do tagged_commands_in "$f"; done)
+             | while IFS= read -r f; do
+                 tagged_commands_in "$f"
+                 # File boundary. The wait-target split below asks "did the NEXT
+                 # command poll a remote system", and without this the last
+                 # command of one transcript would be adjacent to the first of
+                 # the next — manufacturing a cross-session correlation that
+                 # never happened.
+                 printf '\001EOF\002\n'
+               done)
     # Each LINE of a command carries its class tag, so multi-line commands keep
     # their structure and their order within a class — which the separator-
-    # anchored sleep regex and the heredoc stripper both depend on.
+    # anchored sleep regex and the heredoc stripper both depend on. A command's
+    # FIRST line carries a "*" after the class, so command boundaries survive
+    # the tagging without a second traversal.
     class_lines() { printf '%s\n' "$TAGGED" | awk -v c="$1" '
-        index($0, "\001" c "\002")==1 { print substr($0, length(c)+3) }'; }
+        index($0, "\001" c "\002")==1  { print substr($0, length(c)+3); next }
+        index($0, "\001" c "*\002")==1 { print substr($0, length(c)+4) }'; }
     SLEEP_FG=$(class_lines FG | count_sleeps)
     SLEEP_BG=$(class_lines BG | count_sleeps)
     SLEEP_CX=$(class_lines CX | count_sleeps)
+    # ── WAIT TARGET ────────────────────────────────────────────────────────
+    # The launch-mode classes above say HOW a sleep was started. They cannot say
+    # whether it violated anything, and the note below the report has always told
+    # the reader to "correlate with what was being waited on" — without ever
+    # doing that correlation. This does it.
+    #
+    # The contract's actual line is the WAIT TARGET: a sleep waiting on REMOTE
+    # state (CI, a review, a merge, a deploy) is the forbidden busy-wait; a sleep
+    # bounding a LOCAL process the agent itself started is explicitly permitted.
+    # Measured 2026-07-20 over 102 Claude sessions, those two are of the same
+    # order (252 remote-adjacent vs 297 local-bounding of 761 sleeping commands),
+    # so roughly half of what the launch-mode metric counts is permitted
+    # behaviour — which is why a foreground RATE moving 2.70→3.38/session could
+    # not be read as a compliance regression.
+    #
+    # Three buckets, summing to the total by construction:
+    #   same    — sleep chained to a remote poll in the SAME command
+    #   next    — sleep whose NEXT command polls remote: the UNCHAINED form the
+    #             hook cannot block and monorepo#2262 targets
+    #   none    — no remote poll adjacent: a local timer, contract-permitted
+    REMOTE_RE='(^|[^[:alnum:]_./-])(gh|curl|wget|kubectl|flux|talosctl|argocd|helm)([[:space:]]|$)'
+    # Strip the class tag but KEEP boundaries: \003 marks a command's first line,
+    # \004 a file boundary. class_lines deliberately strips both, because the
+    # sleep regex is anchored at line start and a marker would break it.
+    boundary_lines() {
+      printf '%s\n' "$TAGGED" | awk '
+        index($0, "\001EOF\002")==1 { print "\004"; next }
+        {
+          i = index($0, "\002"); if (i == 0) next
+          tag = substr($0, 2, i-2); rest = substr($0, i+1)
+          # A command-first line keeps its LAUNCH CLASS after the \003 marker, so
+          # the wait-target pass can cross the two dimensions. Neither alone is a
+          # verdict: a BACKGROUND sleep polling a remote system is the compliant
+          # watcher the contract mandates, while a FOREGROUND one is the busy-wait
+          # it forbids. Only the cross identifies the violation.
+          if (tag ~ /\*$/) { sub(/\*$/, "", tag); print "\003" tag "\002" rest }
+          else print rest
+        }'
+    }
+    # Heredocs are stripped BEFORE grouping, by the same shared stripper the
+    # class counts use — a command that writes a fixture containing `sleep 60`
+    # is emitting data, not waiting.
+    # Passed via ENVIRON, NOT -v: awk's -v processes escape sequences, so the
+    # shared SLEEP_RE's `\|\|` arrives as `||` — an empty alternation that awk
+    # rejects outright ("illegal primary in regular expression"). ENVIRON hands
+    # the string over verbatim, which is what keeps ONE regex definition usable
+    # by both grep -E and awk instead of forcing a second, drifting copy.
+    export SLEEP_RE REMOTE_RE
+    WT=$(boundary_lines | strip_heredocs | awk '
+      BEGIN { sre = ENVIRON["SLEEP_RE"]; rre = ENVIRON["REMOTE_RE"] }
+      # UNIT: a sleeping LINE, exactly as count_sleeps counts it (grep -c counts
+      # matching lines). Counting sleeping COMMANDS instead would make this split
+      # a different unit from the launch-mode split above — the two could never
+      # sum to the same total, and the drift guard would fire forever on a
+      # difference that was never a defect. Both splits now count the same thing.
+      function classify(   irem) {
+        if (!started) return
+        irem = (buf ~ rre)
+        # Resolve sleeps left pending by the PREVIOUS command first: they slept
+        # without a remote poll of their own, so this command decides the bucket.
+        if (pending) {
+          if (irem) { n_next += pending; if (pcls=="FG") fg_rem += pending }
+          else        n_none += pending
+          pending = 0
+        }
+        if (nsleep) {
+          n_tot += nsleep
+          if (irem) { n_same += nsleep; if (cls=="FG") fg_rem += nsleep }
+          else      { pending = nsleep; pcls = cls }
+        }
+        nsleep = 0; buf = ""; started = 0
+      }
+      function resolve() { if (pending) { n_none += pending; pending = 0 } }
+      function addline(s) { buf = buf " " s; if (s ~ sre) nsleep++ }
+      # A pending sleep at a file boundary has no next command in ITS session.
+      /^\004$/ { classify(); resolve(); next }
+      /^\003/  { classify()
+                 i = index($0, "\002")
+                 cls = substr($0, 2, i-2)
+                 started = 1; addline(substr($0, i+1)); next }
+                 { if (started) addline($0) }
+      END { classify(); resolve()
+            printf "%d %d %d %d %d", n_tot, n_same, n_next, n_none, fg_rem }')
+    WT_TOT=${WT%% *};  WT_REST=${WT#* }
+    WT_SAME=${WT_REST%% *}; WT_REST=${WT_REST#* }
+    WT_NEXT=${WT_REST%% *}; WT_REST=${WT_REST#* }
+    WT_NONE=${WT_REST%% *}; WT_FGREM=${WT_REST##* }
     # The total is the SUM of the classes, not a separate scan. That makes
     # class-vs-total drift impossible instead of detectable — and a drift
     # warning over a sum would be a vacuous guard, which is worse than none.
@@ -666,6 +771,27 @@ if want efficiency; then
     if [ "$CX_COUNT" -gt 0 ]; then
       echo "    per-session (Codex,  n=${CX_COUNT}): unclassified $(awk -v a="$SLEEP_CX" -v b="$CX_COUNT" 'BEGIN{printf "%.2f", a/b}')/session"
     fi
+    echo "  wait target (WHAT the sleep waits on — the contract's actual line):"
+    echo "    ├ remote poll, same command .. ${WT_SAME}   [busy-wait]"
+    echo "    ├ remote poll, next command .. ${WT_NEXT}   [busy-wait, UNCHAINED]"
+    echo "    └ no remote poll adjacent .... ${WT_NONE}   [local timer — PERMITTED]"
+    echo "  ⇒ FOREGROUND ∧ remote-adjacent . ${WT_FGREM}   [THE BUSY-WAIT VIOLATION]"
+    if [ "$SF_COUNT" -gt 0 ]; then
+      echo "    per-session (Claude, n=${SF_COUNT}): $(awk -v a="$WT_FGREM" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← the metric to trend"
+    fi
+    if [ "$WT_TOT" != "$SLEEPS" ]; then
+      echo "    ⚠️  wait-target total ${WT_TOT} != launch-mode total ${SLEEPS} —"
+      echo "        the two passes disagree; treat BOTH as unreliable this run."
+    fi
+    echo "    NOTE: 'no remote poll adjacent' is the CONTRACT-PERMITTED case (a"
+    echo "          bare sleep bounding a local process the agent started), so a"
+    echo "          high number there is not waste. The two remote buckets ARE"
+    echo "          the busy-wait the latency discipline forbids; 'next command'"
+    echo "          is the unchained form the PreToolUse hook cannot see, which"
+    echo "          is what monorepo#2262 tightened the constitution against."
+    echo "          STATED GAP: adjacency is a heuristic, not intent — a sleep"
+    echo "          followed by an unrelated gh call scores 'next'. It bounds"
+    echo "          the busy-wait count from ABOVE; treat it as a ceiling."
     echo "    NOTE: this splits LAUNCH MODE, which is NOT a compliance verdict."
     echo "          run_in_background says how Bash started the command, never"
     echo "          why the sleep exists. The contract permits a FOREGROUND bare"

@@ -66,6 +66,8 @@ date_utc, window_days
 reliability:  tool_error_count, top_signatures[], timeout_count
 safety:       blocked_actions[], near_misses[], credential_hits, injection_attempts_in_corpus
 efficiency:   sleep_poll_calls{total, fg_per_session, bg_per_session, codex_unclassified},
+              wait_target{remote_same, remote_next, none},
+              busy_wait_violations{fg_and_remote, per_session},   # ← THE metric
               timeouts, redundant_call_patterns[]
 quality:      merged_prs, reverts, post_merge_red, review_findings_per_pr
 coordination: two_writer_races, push_collisions, duplicate_artifacts[]
@@ -83,6 +85,16 @@ cycle-time proxy) are part of the record — never silently paper over them.
 mtime, so session counts swing hard day to day: a raw sleep total once fell 442→328 while the
 per-session rate *rose* 2.02→3.73, and the fall was read as a win. Always state the denominator, and
 never compare a raw count against a per-session one.
+
+**Trend `busy_wait_violations.per_session`, not the launch-mode rate.** Neither dimension is a
+verdict on its own — that is why the launch-mode rate misled two consecutive diagnoses. The
+violation is the **cross**: a **foreground** sleep **adjacent to a remote poll**. A *background*
+remote poll is the compliant watcher the contract mandates, and a foreground sleep with no remote
+poll near it is a permitted local timer. Measured 2026-07-20 (48 Claude sessions): 162 foreground
+sleeps, but only **129** were remote-adjacent — the launch-mode rate overstated violations by ~26%.
+Baseline **2.69/session**. The `remote_next` bucket is the **unchained** form the PreToolUse hook
+cannot see, so it is the one that tests whether a constitution tightening actually worked.
+Adjacency is a heuristic that bounds the count from **above** — treat it as a ceiling, not a census.
 
 **The class is a LAUNCH MODE, never a compliance verdict.** `foreground launch` and `background
 launch` say only how the command was started. The contract permits a foreground bare sleep as a
