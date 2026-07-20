@@ -1266,6 +1266,22 @@ if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
   ok "a FOREGROUND remote poll IS counted as the busy-wait violation"
 else bad "a FOREGROUND remote poll IS counted as the busy-wait violation" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
 
+# In the UNCHAINED form the two halves are separate tool calls with their own
+# launch modes. The violation belongs to the SLEEP's class, not the poll's: a
+# foreground sleep is a foreground block even when the poll that follows it was
+# backgrounded. Attributing it to the poll would silently exonerate exactly the
+# case this bucket exists to catch.
+mkdir -p "$FIX/wtpendcls"
+cat > "$FIX/wtpendcls/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p1","name":"Bash","input":{"command":"sleep 45"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p2","name":"Bash","input":{"command":"gh pr view 12","run_in_background":true}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtpendcls" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
+  ok "an unchained violation is attributed to the SLEEP's class, not the poll's"
+else bad "an unchained violation is attributed to the SLEEP's class, not the poll's" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND|remote poll')"; fi
+
 # Both splits must count the SAME unit (a sleeping LINE, as grep -c counts it).
 # Counting sleeping COMMANDS instead made the totals differ by 100 on the live
 # corpus and fired the drift warning on a difference that was never a defect.
