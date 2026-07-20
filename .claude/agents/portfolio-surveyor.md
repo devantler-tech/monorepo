@@ -189,6 +189,14 @@ public and private — no per-repo loop needed to enumerate):
      mislabelled four green drafts (`ksail`#6267/#6279, `agent-plugins`#72, `platform`#2635) as
      NEEDS-FIX, each pushing the orchestrator to re-request a review it already held — on a
      per-account quota contended by ~7 parallel sessions.
+     **Same-sha tie-break: FINDINGS WIN — report `codex-findings@<sha>`.** Head-match alone does not
+     decide when Codex is re-run **without a push** (a refuted finding re-requested at the same
+     commit), because then a findings object **and** a clean-pass comment can both name `headRefOid`
+     — and "which is newer" is exactly the cross-surface comparison the rule above forbids. Left
+     undefined, traversal order would pick the row, so the same PR could report `codex@<sha>` on one
+     run and `codex-findings@<sha>` on the next. Fail closed: at equal sha the findings row wins and
+     the PR is **NEEDS-FIX**. The cost is one redundant fix-or-refute pass; the alternative is
+     promoting past an open finding, which the whole pentad exists to prevent.
      ⚠️ **Extract that sha tolerantly, or head-match cannot fire at all.** The marker is written
      ``**Reviewed commit:** `<sha>` `` — the sha is **backtick-wrapped** and **abbreviated to 10
      chars**, not the full 40. A pattern expecting hex immediately after the colon matches nothing

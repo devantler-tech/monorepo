@@ -32,6 +32,10 @@ grep -Fq 'Do not inspect commit provenance' "${constitution}" ||
   fail "constitution may reclassify dependency-bot PRs after human commits"
 grep -Fq 'arm auto-merge, or merge them' "${constitution}" ||
   fail "constitution does not leave dependency-bot merging to repository automation"
+grep -Fq 'HEAD-MATCH DECIDES FIRST' "${surveyor}" ||
+  fail "surveyor may rank the two Codex outcome surfaces by recency instead of by head sha"
+grep -Fq 'Same-sha tie-break: FINDINGS WIN' "${surveyor}" ||
+  fail "surveyor leaves two Codex artifacts at the same head undecided — traversal order picks the row"
 grep -Fq 'AUTOMATION-OWNED (NO-ACTION)' "${surveyor}" ||
   fail "surveyor does not short-circuit dependency-bot PRs as no-action"
 grep -Fq 'renovate[bot]' "${surveyor}" ||
