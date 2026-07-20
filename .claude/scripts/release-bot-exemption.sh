@@ -78,10 +78,12 @@ matches_ksail_provenance() {
 # makes it review-bearing again, per the constitution's carve-out.
 matches_homebrew_provenance() {
   local component="$1"
+  local version="$2"
 
   jq -e \
     --arg head "${head}" \
     --arg component "${component}" \
+    --arg version "${version}" \
     '
       def goreleaser_commit:
         .author_login == "goreleaserbot" and
@@ -102,7 +104,15 @@ matches_homebrew_provenance() {
       length > 0 and
       (.[0] | goreleaser_commit) and
       (.[-1].sha == $head) and
-      all(.[]; goreleaser_commit or autocorrect_commit)
+      all(.[]; goreleaser_commit or autocorrect_commit) and
+      # The title version must name one of the release cycles actually present, so a stale or
+      # hand-edited title cannot smuggle an arbitrary version past the gate. It is deliberately NOT
+      # pinned to the LATEST cycle: on a real multi-cycle PR (tap#1225) the title stayed at the
+      # first cycle v7.176.0 while a later commit shipped v7.176.1, so requiring the newest would
+      # reject a genuine release.
+      any(.[];
+        goreleaser_commit and
+        .message == "Brew cask update for \($component) version \($version)")
     ' <<<"${commits_json}" >/dev/null
 }
 
@@ -180,7 +190,7 @@ if [[ "${repo}" == "homebrew-tap" && "${author}" == "devantler" ]]; then
     if [[ "${component}" == "world-at-ruin" ]]; then
       matches_war_cask_provenance "${version}" && exit 0
     else
-      matches_homebrew_provenance "${component}" && exit 0
+      matches_homebrew_provenance "${component}" "${version}" && exit 0
     fi
   fi
 fi

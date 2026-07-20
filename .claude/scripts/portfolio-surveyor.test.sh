@@ -347,6 +347,16 @@ expect_review_gated \
   '["Casks/world-at-ruin.rb"]' \
   "${war_cask_commits}"
 
+
+expect_review_gated \
+  "cask title claiming a version no release cycle shipped" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/ksail" \
+  "chore(cask): update ksail to v999.0.0" \
+  "${multi_cycle_cask_head}" \
+  '["Casks/ksail.rb"]' \
+  "${multi_cycle_cask_commits}"
 expect_not_release_exempt \
   "Platform Renovate KSail bump" \
   "platform" \
