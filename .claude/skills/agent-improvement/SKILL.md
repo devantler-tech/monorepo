@@ -49,17 +49,21 @@ outcomes. Supplement it with:
   cloud sandbox, so there are no session files, no tool-error signatures, and no memory file to read;
   the telemetry script is structurally blind to it. Its **substitute evidence is narrow, and only
   these survive a normal run**: its `cursor/*` branches, the PRs from them and their review
-  histories, and issues it filed (recognisable by the `<!-- needs-board -->` marker). **Do not look
-  for claim refs or `cursor`-authored comments** — commenting is 403 for that identity, so those are
-  structurally absent rather than merely rare.
+  histories, and issues it filed — found **by author**, never by a body marker:
+  `gh search issues --owner devantler-tech --author app/cursor`. **Do not look for claim refs or
+  `cursor`-authored comments** — commenting is 403 for that identity, so those are structurally
+  absent rather than merely rare.
   **What this cannot measure, and must be reported as unmeasured rather than clean:** reliability (no
   tool-error signatures), efficiency (no timings), safety (no transcript), and — most importantly —
   **coordination**, because a *lost* race leaves this instance no artifact at all. Its visible output
   is therefore biased toward runs that succeeded; absence of a recorded failure is not evidence there
   was none. A metric that cannot see an instance must never be read as that instance behaving.
-  Its deployed prompt is not local either — diff the automation against
-  [`.claude/loaders/cursor-daily-ai-engineer.md`](../../loaders/cursor-daily-ai-engineer.md), which is
-  its source of truth, and treat drift as a finding for the maintainer to re-paste.
+  **Its deployed prompt is UNMEASURABLE — do not pretend otherwise.** It lives server-side with no
+  file and no CLI, so there is nothing to diff against
+  [`.claude/loaders/cursor-daily-ai-engineer.md`](../../loaders/cursor-daily-ai-engineer.md); comparing
+  that file to itself proves nothing about the UI copy. Record deployed-prompt drift for this instance
+  as **unmeasured**, and treat any behaviour inconsistent with the loader as the only available
+  (indirect) evidence that the pasted text has drifted.
 - **Recent run reports** — what each run claimed it shipped, versus what GitHub shows merged.
 - **The loaders** — the Claude scheduled task's `SKILL.md` and the Codex `automation.toml`, against
   the constitution.

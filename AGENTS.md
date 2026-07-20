@@ -371,8 +371,12 @@ touch of an unconfirmed repo:
      3 on world-at-ruin), so cross-lane races have never actually been arbitrated. A lane-neutral
      claim ref fixes it, and the design plus its proofs are worked out in
      [monorepo#2302](https://github.com/devantler-tech/monorepo/issues/2302); until that lands, rely
-     on the signals in rules 1–3 (open PRs, remote branches, assignees) and accept that a genuinely
-     simultaneous cross-lane selection can still duplicate.
+     on the signals in rules 1–3 (open PRs, remote branches, assignees) and accept that a cross-lane
+     selection can still duplicate. **Worse for the cloud lane:** the surveyor's pre-PR branch scan
+     greps `claude/*` only *and* is gated on repos having an **assigned** PR-less issue — and
+     `app/cursor` cannot assign — so that instance's only pre-PR claim signal is currently invisible
+     to local runs, well beyond a simultaneous window. Check `cursor/*` branches by hand when
+     selecting until [monorepo#2300](https://github.com/devantler-tech/monorepo/issues/2300) lands.
 5. **On a lost race, ABANDON.** Never duplicate the work, never force-push onto a sibling's branch,
    never open a competing PR. Then **use the loss**: two independent implementations of one spec are
    a free **differential-testing oracle**. Diff yours against the winner's and post **only findings
@@ -449,7 +453,13 @@ draft yourself only when you genuinely know it is ready**, which means ALL THREE
 A PR missing any of the three **stays a draft**. **Self-promotion applies to ROUTINE-OWNED drafts
 only** — meaning drafts in **your own instance's namespace** (`claude/*`, `codex/*` or `cursor/*`,
 whichever *you* write; see *Execution model*), per the ownership disambiguator. Ownership is relative
-to the running instance, never hard-coded to one lane: another trusted author's draft —
+to the running instance, never hard-coded to one lane. **But namespace never overrides the trust
+gate, and today that bars the cloud lane specifically:** a PR authored by **`app/cursor`** is
+external-contributor work under the gate — never merged, built or run — so the Cursor instance must
+**not** self-promote or drive its own drafts, however clearly it owns the branch. Own-lane ownership
+is necessary for self-promotion, not sufficient; the author login still has to be trusted. That
+restriction lifts only if [#2297](https://github.com/devantler-tech/monorepo/issues/2297) grants that
+identity trust. Beyond that, another trusted author's draft —
 a bot's, or the maintainer's interactive one — may be parked deliberately, so it gets hygiene, never
 promotion (its owner or the maintainer promotes). After self-promotion, drive it to merge per *Merge
 policy*. The maintainer steers **after the fact**: his session direction and PR comments are
