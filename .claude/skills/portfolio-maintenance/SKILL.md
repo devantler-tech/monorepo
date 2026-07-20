@@ -215,7 +215,7 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   well-formed deferred follow-up issue (CR's own resolution allows a deferred link); resolve an **Out
   of Scope Changes** inconclusive by replying to `@coderabbitai` clarifying which hunks actually
   changed (its walkthrough often mis-reads pre-existing diff *context* as introduced change); then
-  re-trigger `@coderabbitai review` (+ disclosure line) so the check re-evaluates. Across hourly runs
+  re-trigger `@coderabbitai review` (+ disclosure line) so the check re-evaluates. Across successive runs
   older PRs accumulate red checks, threads, and conflicts the live watcher (alive only in the
   *spawning* session) never sees; the survey must catch them (contract *Autonomy → Watch the PRs you
   spawn*). **Externally-gated / parked PRs are IN the sweep** — a merge gate excuses the merge, never
@@ -226,7 +226,7 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still queued").
 
 **Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the
-product's `weekly`/live cursor in memory — NOT every hourly run), also spawn the read-only
+product's `weekly`/live cursor in memory — NOT every scheduled run), also spawn the read-only
 [`platform-security-surveyor`](../../agents/platform-security-surveyor.md) with the current baseline
 (last recorded posture score / CVE counts / routing state from memory). It runs the bounded
 `kubectl --context admin@prod` pass over the three Kubescape surfaces **liveness-first** — a broken

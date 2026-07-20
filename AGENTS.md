@@ -491,7 +491,7 @@ base** (update-branch, or a local
 merge of the base when GitHub can't auto-update), **green CodeRabbit pre-merge checks** (see the
 *pre-merge checks* paragraph below), and **≥1 green review at the current head** (see the
 *green-review gate* paragraph below). A watcher only covers a PR while its *spawning*
-session is alive; across hourly runs older PRs accumulate red checks, threads, and conflicts that
+session is alive; across successive runs older PRs accumulate red checks, threads, and conflicts that
 otherwise sit for days (a recurring miss the maintainer flagged — twice: open CodeRabbit threads
 2026-06-29, then the full dashboard of red/conflicted/unresolved PRs 2026-07-01).
 **Review-BODY findings count toward (b) even though no thread exists for them — and that means EVERY
