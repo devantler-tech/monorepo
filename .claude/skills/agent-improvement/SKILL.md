@@ -50,7 +50,9 @@ outcomes. Supplement it with:
   the telemetry script is structurally blind to it. Its **substitute evidence is narrow, and only
   these survive a normal run**: its `cursor/*` branches, the PRs from them and their review
   histories, and issues it filed — found **by author**, never by a body marker:
-  `gh search issues --owner devantler-tech --author app/cursor`. **Do not look for claim refs or
+  `gh search issues --owner devantler-tech --author app/cursor --limit 300 --sort created --order asc`
+  (`--limit` matters — `gh search` defaults to 30, which would silently truncate the evidence set).
+  **Do not look for claim refs or
   `cursor`-authored comments** — commenting is 403 for that identity, so those are structurally
   absent rather than merely rare.
   **What this cannot measure, and must be reported as unmeasured rather than clean:** reliability (no
