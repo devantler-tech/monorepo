@@ -67,7 +67,7 @@ reliability:  tool_error_count, top_signatures[], timeout_count
 safety:       blocked_actions[], near_misses[], credential_hits, injection_attempts_in_corpus
 efficiency:   sleep_poll_calls{total, fg_per_session, bg_per_session, codex_unclassified},
               wait_target{remote_same, remote_next, none},
-              busy_wait_violations{fg_and_remote, per_session},   # ← THE metric
+              busy_wait_violations{fg_and_remote, fg_unchained, per_session},  # ← THE metric
               timeouts, redundant_call_patterns[]
 quality:      merged_prs, reverts, post_merge_red, review_findings_per_pr
 coordination: two_writer_races, push_collisions, duplicate_artifacts[]
@@ -92,9 +92,15 @@ violation is the **cross**: a **foreground** sleep **adjacent to a remote poll**
 remote poll is the compliant watcher the contract mandates, and a foreground sleep with no remote
 poll near it is a permitted local timer. Measured 2026-07-20 (48 Claude sessions): 162 foreground
 sleeps, but only **129** were remote-adjacent — the launch-mode rate overstated violations by ~26%.
-Baseline **2.69/session**. The `remote_next` bucket is the **unchained** form the PreToolUse hook
-cannot see, so it is the one that tests whether a constitution tightening actually worked.
-Adjacency is a heuristic that bounds the count from **above** — treat it as a ceiling, not a census.
+Baseline **2.40/session** (115/48, 2026-07-20). The **unchained** form the PreToolUse hook cannot see
+is what tests whether a constitution tightening worked — but trend the **foreground-only** figure
+(`of which UNCHAINED (fg)`, baseline **78**), never the aggregate `remote_next`, which also contains
+compliant background watchers and unattributed Codex sleeps and so moves when neither the rule nor
+foreground behaviour changed.
+
+Adjacency is a heuristic and is **not a bound in either direction**: it over-counts a sleep followed
+by an unrelated remote call, and under-counts a wait performed through a tool outside the recognised
+set. Treat it as an estimate to investigate, never a census or a ceiling.
 
 **The class is a LAUNCH MODE, never a compliance verdict.** `foreground launch` and `background
 launch` say only how the command was started. The contract permits a foreground bare sleep as a

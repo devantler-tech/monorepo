@@ -1266,6 +1266,29 @@ if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
   ok "a FOREGROUND remote poll IS counted as the busy-wait violation"
 else bad "a FOREGROUND remote poll IS counted as the busy-wait violation" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
 
+# An unterminated heredoc at the END of a transcript must not swallow the file
+# separator: if it does, the pending sleep survives into the NEXT transcript and
+# gets resolved by an unrelated session's first command — the cross-session
+# correlation the separator exists to prevent, reintroduced through the stripper.
+mkdir -p "$FIX/wthdsep"
+# The SLEEPING command must itself open the unterminated heredoc and be LAST in
+# its transcript. Any later command in the same file would resolve the pending
+# sleep before the separator was ever consulted, which is what made an earlier
+# version of this test pass with the fix ablated.
+cat > "$FIX/wthdsep/a.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"z1","name":"Bash","input":{"command":"sleep 45\ncat > f <<'NEVERCLOSED'\nbody"}}]}}
+EOF
+cat > "$FIX/wthdsep/b.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"z3","name":"Bash","input":{"command":"gh pr view 3"}}]}}
+EOF
+touch -t 202607200101 "$FIX/wthdsep/b.jsonl"
+touch -t 202607200202 "$FIX/wthdsep/a.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wthdsep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if printf '%s' "$OUT" | grep -qE 'remote poll, next command \.+ 0'; then
+  ok "an unterminated heredoc cannot swallow the transcript separator"
+else bad "an unterminated heredoc cannot swallow the transcript separator" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
+
 # In the UNCHAINED form the two halves are separate tool calls with their own
 # launch modes. The violation belongs to the SLEEP's class, not the poll's: a
 # foreground sleep is a foreground block even when the poll that follows it was

@@ -359,7 +359,15 @@ commands_in() {
 # times on the redactor.
 strip_heredocs() {
   awk -v resetmark="${1:-}" '
-    resetmark != "" && index($0, resetmark) == 1 { inhd = 0 }
+    # resetmark is a SET of line-start marker characters, not one string: the
+    # wait-target stream carries BOTH a command marker and a transcript
+    # separator, and an unterminated heredoc at the end of one transcript would
+    # otherwise swallow the separator and defer the pending-sleep resolution
+    # into the NEXT transcript — reintroducing exactly the cross-session
+    # correlation the separator exists to prevent.
+    # length($0) guards the empty line: index(s, "") returns 1 in awk, which
+    # would reset the state machine on every blank line inside a heredoc body.
+    resetmark != "" && length($0) > 0 && index(resetmark, substr($0,1,1)) > 0 { inhd = 0 }
     {
       line = $0
       if (inhd) { if (line ~ ("^[[:space:]]*" tag "[[:space:]]*$")) { inhd = 0 }; next }
@@ -727,7 +735,7 @@ if want efficiency; then
     # the string over verbatim, which is what keeps ONE regex definition usable
     # by both grep -E and awk instead of forcing a second, drifting copy.
     export SLEEP_RE REMOTE_RE
-    WT=$(boundary_lines | strip_heredocs $'\003' | awk '
+    WT=$(boundary_lines | strip_heredocs $'\003\004' | awk '
       BEGIN { sre = ENVIRON["SLEEP_RE"]; rre = ENVIRON["REMOTE_RE"] }
       # UNIT: a sleeping LINE, exactly as count_sleeps counts it (grep -c counts
       # matching lines). Counting sleeping COMMANDS instead would make this split
