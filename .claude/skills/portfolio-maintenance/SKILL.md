@@ -483,7 +483,10 @@ A second run the same day → more selective, dedupe vs the earlier run.
 
 ## 3. Act (per selected product, via a per-run worktree)
 For each selected product:
-1. **Isolate:** `cd /Users/homelab-mac-mini/git-personal/monorepo`. Populate an empty submodule with
+1. **Isolate:** `cd` to **your deployment's checkout** — the fixed
+   `/Users/homelab-mac-mini/git-personal/monorepo` for the machine-local instances, the sandbox root
+   for a cloud one (same rule as the preflight in step 2; do not hard-code the Mac path here either).
+   Populate an empty submodule with
    the fail-closed wrapper — **never a bare `git submodule update --init`**, which is precisely what
    re-introduces the shared `core.worktree` (reproduced 2026-07-14: absent before the command, present
    after; observed 8× across runs — ksail ×4, go-template, homebrew-tap, `.github-public`,
@@ -493,9 +496,12 @@ For each selected product:
    .claude/scripts/submodule-init.sh <path>   # init at the pinned commit + repair + probe (fail-closed)
    ```
 
-   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>`
-   (issue-less hotfixes and trivial obvious fixes keep plain `claude/<area>-<desc>` — they go straight
-   to a PR, so no claim window applies) and work
+   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b <lane>/<area>-<desc>-<issue>`,
+   where **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*` (see
+   *Execution model*). Never write a sibling's lane: it breaks draft ownership, and a `claude/*`
+   branch from another instance would be swept by the Claude tick's cleanup.
+   (Issue-less hotfixes and trivial obvious fixes keep plain `<lane>/<area>-<desc>` — they go straight
+   to a PR, so no claim window applies.) Work
    **in that worktree**. A stray `core.worktree` makes the worktree resolve back into
    `.git/modules/<name>`, silently collapsing every parallel session into one physical tree — so on any
    submodule you did **not** initialise through the wrapper (a tree someone else populated), **probe
