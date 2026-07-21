@@ -106,6 +106,12 @@ grep -Fq '`green_review` as `none`, NOT as findings' "${surveyor}" ||
   fail "surveyor may route a failed Bugbot run to the findings state instead of to no-review"
 grep -Fq 'bugbot-error@<sha>' "${surveyor}" ||
   fail "surveyor has no state for a Bugbot run that never happened"
+# That state tells the surveyor to emit a LANE-SIGNAL row, so the lane and reason enums must admit
+# one. The grammar is written out twice, and BOTH sites are asserted: a producer without its schema
+# means the outage is never reported at all, which is the failure this change exists to prevent.
+# shellcheck disable=SC2016
+[ "$(grep -Fc 'lane_signal=<coderabbit|codex|bugbot>:<rate-limit|usage-limit|error>' "${surveyor}")" -eq 2 ] ||
+  fail "surveyor's LANE-SIGNAL grammar does not admit a bugbot usage-limit row at both definition sites"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq '| `output.title` |' "${constitution}" ||
