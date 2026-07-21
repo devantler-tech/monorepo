@@ -174,6 +174,15 @@ authenticates as *his own* account, so an undisclosed message reads as him writi
 the decision in one line, gives the number and its evidence, names the recommended option, and says
 what happens if he does nothing.
 
+🔴 **DESTINATION IS UNRESOLVED — do not send until it is.** The only channel in the workspace is the
+**public** `#announcements`. Financial detail must never go there: it is exactly the public artifact
+the confidentiality rule forbids, and Slack messages are not quietly deletable from other people's
+clients. Until the maintainer designates a **private** destination — a private channel, or a DM to
+himself — send **nothing**, and raise anything blocking through the run report instead. Creating a
+channel is a workspace change, so it is his to make, not yours. A message whose *existence* is
+harmless (no figures, "please check the PR") does not license using the public channel either: get the
+destination right once rather than case-by-case.
+
 ---
 
 ## The run loop
