@@ -218,9 +218,15 @@ public and private — no per-repo loop needed to enumerate):
      green (monorepo#2308/#2309). Sweep `repos/<o>/<r>/commits/<headRefOid>/check-runs`, filter to the
      Bugbot check (name matching `bugbot`/`cursor`, case-insensitive), and report
      **`bugbot@<sha>`** when its `conclusion` is `success` at the current head. Bugbot's
-     **`neutral`** conclusion is its FINDINGS state (it deliberately does not fail the merge, so
-     `neutral` must never be read as a pass) — report `bugbot-findings@<sha>` plus the check's
-     `details_url` and classify the PR **NEEDS-FIX**. A success at an older head is
+     **`neutral`** conclusion is TWO states and `conclusion` alone cannot separate them, so **read
+     `output.title` as well**: `neutral` + `Bugbot Review` is its FINDINGS state (it deliberately
+     does not fail the merge, so `neutral` must never be read as a pass) — report
+     `bugbot-findings@<sha>` plus the check's `details_url` and classify the PR **NEEDS-FIX**;
+     `neutral` + `Error` (`output.summary` reads `Bugbot run failed`) means **the review never ran** —
+     report `bugbot-error@<sha>` and a `LANE-SIGNAL … bugbot:error` row, and treat the PR's
+     `green_review` as `none`, NOT as findings. Never report a failed run as findings: it is
+     lane-failure evidence, and a run that reads it as "findings" will chase comments that do not
+     exist while a lane outage goes unreported. A success at an older head is
      `bugbot-stale@<sha>`. ⚠️ **Match Bugbot on the CHECK-RUN only, never on the `cursor[bot]` login**
      — that same login is also our untrusted Cursor Automation instance authoring PRs, so a
      login-keyed match would let that instance appear to green its own work (contract *Trust gate →

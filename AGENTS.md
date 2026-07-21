@@ -575,7 +575,7 @@ surface — check the right surface per lane or a perfectly good green reads as 
 | Lane | Clean/green artifact | Findings artifact | Key to match |
 |---|---|---|---|
 | **Codex** (`chatgpt-codex-connector[bot]`) | **issue COMMENT** — `Codex Review: Didn't find any major issues` + `**Reviewed commit:** <sha>` (10-char, no `commit_id` field) | review object, `state: COMMENTED`, inline threads | comment body sha vs `headRefOid[0:10]` |
-| **Cursor Bugbot** (`cursor[bot]`) | **CHECK-RUN named `Cursor Bugbot`** (app slug `cursor`), `conclusion: success` — *no review object, no comment* | same check-run with **`conclusion: neutral`**, findings as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments` | check-run at `commits/<headRefOid>/check-runs` |
+| **Cursor Bugbot** (`cursor[bot]`) | **CHECK-RUN named `Cursor Bugbot`** (app slug `cursor`), `conclusion: success` — *no review object, no comment* | same check-run with **`conclusion: neutral` AND `output.title: "Bugbot Review"`**, findings as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments` | check-run at `commits/<headRefOid>/check-runs` |
 | **CodeRabbit** (`coderabbitai[bot]`) | review object, `state: APPROVED` | review object with body finding sections | REST `commit_id` == head |
 
 ⚠️ **Bugbot's green is a status check, NOT a review object and NOT a comment** — a gate or survey that
@@ -583,8 +583,32 @@ sweeps only `pulls/<n>/reviews` and `issues/<n>/comments` is **structurally blin
 report `green_review=none` on an already-green PR. This is the same blind-spot class the surveyor hit
 with Codex's comment-shaped green (monorepo#2308/#2309); do not repeat it for the third lane. Match a
 Bugbot green on `repos/<o>/<r>/commits/<head>/check-runs`, filtered to the Bugbot check name, with
-`conclusion == "success"`. Its `neutral` conclusion is the **findings** state, not a green — and
-`neutral` does not fail a merge, so it must never be read as "nothing to fix".
+`conclusion == "success"`.
+
+🔴 **`neutral` is TWO different states, and `conclusion` alone cannot tell them apart — read
+`output.title` as well.** Measured 2026-07-21 over 60 review requests:
+
+| `conclusion` | `output.title` | What it means | What to do |
+|---|---|---|---|
+| `success` | `Bugbot Review` | green at that commit | satisfies the gate |
+| `neutral` | `Bugbot Review` | a real review that **found issues** | fix-or-refute the inline `cursor[bot]` comments |
+| `neutral` | `Error` | **the review never ran** — `output.summary` reads `Bugbot run failed` | re-request (paced); count as lane-failure evidence |
+
+Anything else: **fail closed** — treat it as no review, never as a green. `neutral` does not fail a
+merge in either case, so it must never be read as "nothing to fix"; but reading the `Error` shape as
+"findings" is the worse error of the two, because `Error` is exactly the *lane unavailable* evidence
+the fallback ladder is built on. Misfiled as findings, a lane-wide outage becomes invisible: the run
+neither falls back to CodeRabbit nor qualifies for the last-resort self-review, and the draft simply
+parks. A failed run is distinguishable at a glance — it carries **zero** inline comments and **no**
+review object, and completes in seconds.
+
+⚠️ **Pace a batch of review requests — the lane has a throughput ceiling.** In the same measurement,
+25 consecutive requests returned real reviews and **every request after that returned `Error`**, all
+within a few minutes. So a sweep that fires a review request at every never-reviewed draft in one
+pass will burn the tail of the batch against a lane that has stopped serving, and — worse — will
+record 30-odd PRs as "reviewed" when none of them were. When requesting across many drafts, space
+the requests out and **re-read each check-run's `output.title` afterwards** rather than trusting that
+the request was served.
 
 Sweep all three surfaces, and **verify the reviewed sha against the PR head** — a green from any
 reviewer on a stale commit is not a green; re-secure it after pushes. A current-head result carrying

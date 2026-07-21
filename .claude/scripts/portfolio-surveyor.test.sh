@@ -96,6 +96,20 @@ grep -Fq 'report it `codex-stale@<sha>`, never `none`' "${surveyor}" ||
   fail "surveyor may report a well-formed non-matching Codex marker as none instead of codex-stale"
 grep -Fq 'absent,' "${surveyor}" ||
   fail "surveyor does not reserve none for an absent/malformed/too-short marker"
+# Cursor Bugbot publishes BOTH "I found issues" and "I failed to run" as `conclusion: neutral`;
+# only `output.title` separates them (measured 2026-07-21: 25 real reviews, then 34 consecutive
+# `Error` runs). A rule keyed on `conclusion` alone reports a dead lane as a findings row, which
+# hides the outage from the fallback ladder and sends the run hunting for comments that do not exist.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq 'output.title' "${surveyor}" ||
+  fail "surveyor separates Bugbot's two neutral states on conclusion alone — a failed run reads as findings"
+grep -Fq 'bugbot-error@<sha>' "${surveyor}" ||
+  fail "surveyor has no state for a Bugbot run that never happened"
+grep -Fq 'Bugbot run failed' "${constitution}" ||
+  fail "constitution does not name the marker that identifies a Bugbot run which never happened"
+grep -Fq 'throughput ceiling' "${constitution}" ||
+  fail "constitution does not warn that a batch of review requests exhausts the Bugbot lane"
 grep -Fq 'AUTOMATION-OWNED (NO-ACTION)' "${surveyor}" ||
   fail "surveyor does not short-circuit dependency-bot PRs as no-action"
 grep -Fq 'renovate[bot]' "${surveyor}" ||
