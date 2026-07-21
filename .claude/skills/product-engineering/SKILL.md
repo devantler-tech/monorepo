@@ -124,7 +124,10 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    under-specified to begin, (d) a delivered experiment is waiting for its named future measurement
    date — once that date arrives, measuring it is actionable — or (e) another instance holds a **live
    claim** (assigned **and** branched, within ~2h, no PR yet; contract *Claim protocol*), the only
-   skip reason that expires on its own. **Size, difficulty, a `roadmap`/`enhancement`/
+   skip reason that expires on its own. **`type:"Spike"` is not a skip and not a delivery-PR:** when
+   it is the oldest actionable issue, record the decision on the Spike and file its follow-up issues —
+   that pair is the floor artifact; do not open a delivery PR (#2267; contract *Issue hierarchy →
+   Spike*). **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
    when the oldest issue is large, **decompose it into a small first child and ship that increment**
    (`Fixes #child`; add `Part of #experiment` when the parent stays open) so the big thing advances

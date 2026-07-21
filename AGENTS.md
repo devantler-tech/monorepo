@@ -171,7 +171,10 @@ started.
 actionable open issue** (`Fixes #delivery`; add `Part of #experiment` when later measurement keeps the
 experiment issue open), or else a PR, a newly-filed well-formed issue
 capturing real work, a triage/strategy pass, a review-thread resolution that unblocks a PR, or a
-actionable trusted-PR merge. A portfolio this size
+actionable trusted-PR merge. **Spike carve-out (#2267):** when the oldest actionable issue is a
+`type:"Spike"`, its definition-of-done is a **recorded decision + follow-up issues, not a PR** — that
+pair **is** the floor-satisfying artifact; do **not** open a delivery PR just to clear the floor
+(see *Issue hierarchy → Spike*). A portfolio this size
 *always* has real, high-value work available (a coverage gap, a hotspot, a refactor, docs to sync, a
 roadmap to decompose, issues to triage), so a survey-and-exit run that authors nothing is a **failure
 mode, not a valid outcome** — the lone exception is the rare tick where you've *confirmed* every
@@ -208,7 +211,10 @@ governs the issue work that follows.) Two rules enforce that:
    artifact); don't manufacture issue noise for them.
 2. **Drain oldest-first — and "big" is NOT a reason to skip.** Each run, advance the **oldest
    *actionable* open issue** and ship a draft delivery PR. Use `Fixes #delivery`; when later measurement
-   keeps an experiment issue open, also use `Part of #experiment`. Among open issues prefer the oldest.
+   keeps an experiment issue open, also use `Part of #experiment`. **Exception — `type:"Spike"`:** do
+   **not** ship a delivery PR; close the Spike by recording the decision on the issue and filing the
+   follow-up issues its DoD requires — that output satisfies both this drain rule and the run floor
+   (#2267). Among open issues prefer the oldest.
    **"Actionable" is deliberately narrow — skip an older issue ONLY when one of these is true and you can
    *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
    external dependency (a specific upstream PR/release you can cite); or (c) it is too under-specified to
@@ -989,6 +995,15 @@ deserves a type rather than a label, and it is why the type tells you what "next
 | **Spike** | Timeboxed investigation | Output is a **recorded decision + follow-up issues**, not a PR |
 | **Kata** | Improvement Kata | Target condition + **named measurement date**; stays open until the outcome is decided |
 | **Chore** | Mechanical upkeep | No flag required |
+
+**Spike execution path (#2267) — how a Spike clears the floor without a delivery PR.** A Spike's
+definition-of-done deliberately forbids a PR, so when a Spike is the oldest actionable issue the
+*Issue-driven* "ship a draft delivery PR" rule yields to this type's DoD: (1) investigate within the
+Spike's timebox; (2) **record the decision on the Spike issue** (evidence → options considered →
+chosen path → why); (3) **file the follow-up issues** the decision implies (linked as sub-issues when
+they belong under the same Epic); (4) close the Spike. That recorded decision + filed follow-ups
+**is** the run's authored artifact and **satisfies the floor** — inventing a delivery PR for a Spike
+would contradict the type. A Spike is never a skip reason; it is work with a different shape of done.
 
 **`type:"Epic"` — not a label, not a structural guess — is what keeps epics off the Kanban.** A
 `no:sub-issues-progress` filter only excludes epics that have *already* been decomposed; an
