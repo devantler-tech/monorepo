@@ -96,6 +96,32 @@ grep -Fq 'report it `codex-stale@<sha>`, never `none`' "${surveyor}" ||
   fail "surveyor may report a well-formed non-matching Codex marker as none instead of codex-stale"
 grep -Fq 'absent,' "${surveyor}" ||
   fail "surveyor does not reserve none for an absent/malformed/too-short marker"
+# Cursor Bugbot publishes BOTH "I found issues" and "I failed to run" as `conclusion: neutral`;
+# only `output.title` separates them (measured 2026-07-21: 25 real reviews, then 34 consecutive
+# `Error` runs). A rule keyed on `conclusion` alone reports a dead lane as a findings row, which
+# hides the outage from the fallback ladder and sends the run hunting for comments that do not exist.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '`green_review` as `none`, NOT as findings' "${surveyor}" ||
+  fail "surveyor may route a failed Bugbot run to the findings state instead of to no-review"
+grep -Fq 'bugbot-error@<sha>' "${surveyor}" ||
+  fail "surveyor has no state for a Bugbot run that never happened"
+# That state tells the surveyor to emit a LANE-SIGNAL row, so the lane and reason enums must admit
+# one. The grammar is written out twice, and BOTH sites are asserted: a producer without its schema
+# means the outage is never reported at all, which is the failure this change exists to prevent.
+# shellcheck disable=SC2016
+[ "$(grep -Fc 'lane_signal=<coderabbit|codex|bugbot>:<rate-limit|usage-limit|error>' "${surveyor}")" -eq 2 ] ||
+  fail "surveyor's LANE-SIGNAL grammar does not admit a bugbot usage-limit row at both definition sites"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '| `output.title` |' "${constitution}" ||
+  fail "constitution does not name the field that separates Bugbot's two neutral states"
+grep -Fq 'Bugbot run failed' "${constitution}" ||
+  fail "constitution does not name the marker that identifies a Bugbot run which never happened"
+grep -Fq 'usage limit reached' "${constitution}" ||
+  fail "constitution does not name the comment that identifies an exhausted Bugbot spend limit"
+grep -Fq 'NOT retryable' "${constitution}" ||
+  fail "constitution may send a run retrying a Bugbot usage limit that only the maintainer can lift"
 grep -Fq 'AUTOMATION-OWNED (NO-ACTION)' "${surveyor}" ||
   fail "surveyor does not short-circuit dependency-bot PRs as no-action"
 grep -Fq 'renovate[bot]' "${surveyor}" ||
