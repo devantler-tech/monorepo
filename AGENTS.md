@@ -441,7 +441,7 @@ draft yourself only when you genuinely know it is ready**, which means ALL THREE
    the lane-choice consequence, not a gap — CodeRabbit's pre-merge evaluator only runs when CodeRabbit
    reviews, and forcing a second lane per PR would break the one-tool-at-a-time discipline.
 2. **Reviewed** — ≥1 green Codex, Cursor Bugbot or CodeRabbit review at the current head — or,
-   when ALL THREE lanes are unavailable, a clean current-head **agent self-review** posted per *Fallback — agent self-review*
+   when no lane will deliver at that head — unavailable, OR rate/billing limited — a clean current-head **local review round** posted per *Local review round*
    (the green-review gate, unchanged in strength — now a self-enforced promotion precondition).
 3. **Tried and evaluated as a user** — you **exercised the real behaviour and observed the effect**
    with the cheapest method that actually observes it (ran the command, loaded the page, ran the
@@ -622,9 +622,9 @@ Sweep all three surfaces, and **verify the reviewed sha against the PR head** �
 reviewer on a stale commit is not a green; re-secure it after pushes. A current-head result carrying
 findings from any lane is a **NEEDS-FIX** surface the survey must report with its link/count; it is
 never collapsed to "no review" followed by another review request. A **fourth satisfier exists only
-as a last resort** when **all three** lanes are genuinely unavailable — the agent's own posted
-self-review (see *Fallback — agent self-review* in the request discipline below); it is never a way
-around requesting a real reviewer, and a throttle with a stated window in any lane never unlocks it.
+when no lane will deliver at that head** — unavailable, or rate/billing limited — the agent's own posted
+local review round (see *Local review round* in the request discipline below); it is never a way
+around requesting a reviewer that is actually serving.
 **Carve-out — Renovate/Dependabot dependency PRs are AUTOMATION-OWNED and need NO agent action**
 (maintainer direction 2026-07-16). Match only the exact app identities: org-search/REST surfaces expose
 `renovate[bot]` and `dependabot[bot]`; deeper GraphQL surfaces may expose `app/renovate` and
@@ -701,26 +701,50 @@ result at the current head — self-promotion is forbidden before that. Request 
   wait-and-retrigger, and skipping down the ladder to dodge a stated window wastes the higher lane's
   quality. Conversely, a lane whose quota needs a *maintainer purchase* (no window at all) is
   genuinely unavailable — surface that to him rather than retrying it every tick.
-- **Fallback — agent self-review, ONLY when ALL THREE lanes are unavailable** (maintainer direction
-  2026-07-18; widened from two lanes to three on 2026-07-20 when Cursor Bugbot was added). When
-  Codex, Cursor Bugbot *and* CodeRabbit have **each** been tried and demonstrably failed to deliver a
-  review at the current head — no artifact after a generous window, the app erroring/uninstalled on
-  the repo, or a rate-limit response with **no** stated retry window (or one so long the draft would
-  sit idle for hours) — the agent may review the PR **itself** using
-  its own review skills (`/review`, `/code-review`, `/security-review`) rather than leaving the draft
-  stuck. This is a **last resort, never a shortcut**: an available lane is always preferred, a
-  self-review never pre-empts one, and the **three**-lane failure must be **evidenced in the run
-  report**. Adding a third lane makes this fallback correspondingly *rarer* — it is now reachable
-  only when the whole reviewer fleet is down, so treat reaching for it as a strong signal you have
-  mis-read a throttle somewhere up the ladder.
+- **Local review round — when every lane is unavailable OR rate/billing limited** (maintainer
+  direction 2026-07-18, widened to three lanes 2026-07-20, and widened again in an interactive
+  session **2026-07-21**: *"We likely need to allow local review rounds when external review
+  providers are rate or billing limited, such that we are not blocked by it."*). When Codex, Cursor
+  Bugbot *and* CodeRabbit have **each** been tried and none of them will deliver a usable review at
+  the current head, the agent reviews the PR **itself** using its own review skills (`/review`,
+  `/code-review`, `/security-review`) rather than leaving a finished change parked.
+
+  **A lane counts as not-delivering when any of these holds**, and the first three are the
+  provider-quota cases the 2026-07-21 direction added:
+  - a **rate limit**, *including one that states a retry window* — the window makes it predictable,
+    not delivered, and waiting on it is what the direction removes as a blocker;
+  - a **usage or spend limit** (Bugbot's `usage limit reached`, Codex out of credits) — no window at
+    all, and only the maintainer can lift it;
+  - the lane **completes but structurally emits no artifact that satisfies the gate** — CodeRabbit
+    never `APPROVE`s a clean PR, so on a finding-free diff its review is indistinguishable from no
+    review however many times it runs;
+  - no artifact after a generous window, or the app erroring/uninstalled on the repo.
+
+  **A provider's quota state is never what blocks a finished PR.** That is the whole point of the
+  widening: an external service's billing plan and rolling quota are *its* constraints, not a
+  judgement about our change. **This governs the review artifact AND the commit status** — a
+  `CodeRabbit / failure — Review rate limit exceeded` status reports service state, not a verdict, so
+  a PR that is otherwise pentad-clear is **not** held out of merge by it. Read that status as
+  `provider-quota`, exclude it when judging mergeability, and say so in the readiness comment
+  (the underlying defect is [#2344](https://github.com/devantler-tech/monorepo/issues/2344)). **No
+  other failing status is ever excluded** — this carve-out is exactly the review provider's own
+  quota signal on its own context, never a red CI check, never a required check, never a finding.
+
+  **What does NOT relax — the bar, only the trigger.** A local review is held to the same standard as
+  a bot lane (correctness, security, the repo's `## Review guidelines`), it is posted as a real
+  GitHub Review with resolvable threads, and it satisfies the gate only when it is **clean at a sha
+  equal to the current head**. Going easy on your own diff defeats the entire gate. Prefer a lane
+  that *is* serving: if a higher-priority lane will deliver within the run, use it — the local round
+  is what keeps a *throttle* from parking finished work, not a way to skip review. Record the
+  per-lane state that justified it in the run report.
   ⚠️ **Not the same thing as the pre-submission self-review** in *GitHub artifact conventions*, which
   runs before every review request whatever the lanes are doing. That one is routine hygiene and
-  **satisfies nothing** — having done it never counts toward this fallback, which alone substitutes
-  for a bot review and carries the posted-Review and three-lane-evidence requirements below.
-  **A CodeRabbit rolling-quota shell that states a short window (`Next review available in: N
-  minutes`) is NOT an unavailable lane** — it is the wait-and-retrigger case: schedule the
-  retrigger in the background and carry on;
-  never let a throttle shortcut you into self-reviewing.
+  **satisfies nothing** — having done it never counts toward this fallback, which alone
+  substitutes for a bot review and carries the posted-Review and per-lane-evidence requirements below.
+  **Wait-and-retrigger is still preferred when the wait is short and the run is staying alive** — a
+  CodeRabbit shell stating `Next review available in: N minutes` is worth scheduling a background
+  retrigger for. What changed is that it is no longer *mandatory* to wait: if the window would park
+  the work past the end of the run, review locally and move on.
   **Judge lane success or failure by a REAL review artifact at head, never by the tool's ack.**
   CodeRabbit's `@coderabbitai review` reply says *"✅ Action performed — Review finished"* even when
   the review never started; the *following* comment carries the truth. **SUCCESS is what requires a
@@ -845,9 +869,18 @@ For every other actionable trusted-author PR, the merge itself is
 `gh pr view <n> --json number,isDraft,author,headRefOid,mergeStateStatus,statusCheckRollup` immediately
 before merging. It must show `isDraft:false`, a trusted author, owner `devantler-tech`, and
 `mergeStateStatus:CLEAN`; the pentad must show zero review findings, green pre-merge checks, and a
-a green review from any lane (Codex, Cursor Bugbot, CodeRabbit) — or a qualifying clean **agent self-review** under *Fallback — agent
-self-review*, which is available on own PRs only — whose commit SHA equals that same `headRefOid`. That is **sufficient
-evidence** — then run the merge. `CLEAN` is authoritative for required checks: don't re-derive required
+a green review from any lane (Codex, Cursor Bugbot, CodeRabbit) — or a qualifying clean **local
+review round** under *Local review round*, which is available on own PRs only — whose commit SHA
+equals that same `headRefOid`. That is **sufficient
+evidence** — then run the merge. **Two documented exceptions to `CLEAN`, and only these two:**
+(a) a `mergeStateStatus` that says `UNSTABLE`/`BLOCKED` while **every** check-run and status on the
+head is `success`/`skipped` is simply **stale** — GitHub recomputes it lazily (measured on
+`actions#661`: 120/120 green, UNSTABLE, and `PUT /pulls/<n>/merge` succeeded first try), so re-read
+it once and then let the merge API be the authority, since it enforces every real rule and refuses
+cleanly if one applies; and (b) the **review provider's own quota status** — a
+`CodeRabbit / failure — Review rate limit exceeded` context — which reports service state rather
+than a verdict and is excluded per *Local review round*. Anything else non-green is a real blocker.
+Otherwise `CLEAN` is authoritative for required checks: don't re-derive required
 checks from the rollup, don't re-fetch branch protection on every merge (it's confirmed **once per
 repo per session**), and don't bundle the evidence and the merge into one chained command. Driving a
 promoted, CLEAN, trusted-author PR to merge is the **expected, mandated** behaviour, not a risk to
@@ -1893,7 +1926,7 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   not need a fresh pass; anything beyond that does.
   **It does NOT replace the external review** — the green-review gate in *Autonomy* is unchanged, and
   a clean self-pass is never a reason to skip requesting one; it is also **not** the last-resort
-  *Fallback — agent self-review* (that one substitutes for a bot review and carries its own evidence
+  *Local review round* (that one substitutes for a bot review and carries its own evidence
   requirements). Hold your own diff to the bar you would hold a bot's finding to, and never wave one
   through because it is yours.
 - **Verify it actually WORKS — behaviourally, not by reasoning (before AND after merge).** Passing
@@ -1939,8 +1972,8 @@ non-trivial finds as issues (see *Issue-driven*).
 outranks starting new work. Each run, before opening any **new** draft, first drive **every own
 in-flight PR** to its terminal state: clear its hygiene pentad (green CI + all CodeRabbit/bot threads
 resolved + green CodeRabbit pre-merge checks + not conflicting with main + ≥1 green review from
-Codex, Cursor Bugbot or CodeRabbit — or, when all three lanes are down, a qualifying agent self-review, which likewise
-makes an unposted pre-merge summary a non-gap; see *Fallback — agent self-review*), complete the
+Codex, Cursor Bugbot or CodeRabbit — or, when no lane will deliver, a qualifying local review round, which likewise
+makes an unposted pre-merge summary a non-gap; see *Local review round*), complete the
 user-evaluation condition, **self-promote, and merge it** (per
 *Merge policy*) — or leave it a draft with the missing readiness condition or external blocker
 explicitly named. Only once your own open PRs are each either **merged or named-blocker-parked** do
