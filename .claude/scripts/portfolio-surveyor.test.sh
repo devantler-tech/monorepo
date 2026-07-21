@@ -102,10 +102,14 @@ grep -Fq 'absent,' "${surveyor}" ||
 # hides the outage from the fallback ladder and sends the run hunting for comments that do not exist.
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
-grep -Fq 'output.title' "${surveyor}" ||
-  fail "surveyor separates Bugbot's two neutral states on conclusion alone — a failed run reads as findings"
+grep -Fq '`green_review` as `none`, NOT as findings' "${surveyor}" ||
+  fail "surveyor may route a failed Bugbot run to the findings state instead of to no-review"
 grep -Fq 'bugbot-error@<sha>' "${surveyor}" ||
   fail "surveyor has no state for a Bugbot run that never happened"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '| `output.title` |' "${constitution}" ||
+  fail "constitution does not name the field that separates Bugbot's two neutral states"
 grep -Fq 'Bugbot run failed' "${constitution}" ||
   fail "constitution does not name the marker that identifies a Bugbot run which never happened"
 grep -Fq 'throughput ceiling' "${constitution}" ||
