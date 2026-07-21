@@ -54,7 +54,10 @@ identically, so every surface check is **liveness first, values second**.
    Accept **(Grype matches or scanner version metadata) with coherent paired summaries**
    (`spec.metadata.tool.version` or `kubescape.io/tool-version`) across the sample. A genuinely zero-
    match image is healthy when version evidence, summary refs, and zero counters agree. Positive
-   manifest matches with an empty or disagreeing summary are partial, not healthy. Do not require
+   manifest matches with an empty or disagreeing summary are partial, not healthy — and *partial has a
+   place to go*: report `scanners_alive: cve=PARTIAL:<why>`, `coverage: cve=PARTIAL:<why>`, and a
+   `deltas_needing_action` line naming the incoherent pair. Without that routing the only states are
+   `yes` and `BROKEN`, so an incoherent pair reads as a healthy scanner. Do not require
    `spec.metadata.tool.name`; healthy current objects leave it blank.
    On suspicion, check kubevuln logs for `ScanCP … partial`. Then: critical/high counts (all vs relevant),
    notable new reachable CVEs vs baseline, VEX doc count, collected only from the direct-object/verified-
@@ -69,7 +72,7 @@ identically, so every surface check is **liveness first, values second**.
 ## Return — one compact digest (target < ~600 tokens), this exact shape
 ```
 ## Security digest — <UTC date> (baseline: <the baseline date/state the orchestrator gave you>)
-scanners_alive: posture=<yes|BROKEN:why> cve=<yes|BROKEN:why> runtime=<yes|INVISIBLE:why>
+scanners_alive: posture=<yes|PARTIAL:why|BROKEN:why> cve=<yes|PARTIAL:why|BROKEN:why> runtime=<yes|PARTIAL:why|INVISIBLE:why>
 posture: score <x|unavailable:why> vs baseline <y> — top failed: <C-xxxx name (n)>, …
 coverage: posture=<complete|PARTIAL:why> cve=<complete|PARTIAL: n current containers lack fresh paired results> runtime=<complete|PARTIAL:why>
 cve: crit/high all=<a>/<b>|<unavailable:why> relevant=<c>/<d>|<unavailable:why> — new reachable: <cve id → workload>, … ; vex_docs=<n>
@@ -83,4 +86,7 @@ issues under the epic (platform#2447) or a hotfix; you never file, comment, or f
 scanner is itself a `deltas_needing_action` line (worst class of finding). If the context/credentials
 are unavailable, say so in one line and stop — never guess from stale data. A partial coverage set or
 missing payload-complete aggregate is also explicit `unavailable`/`partial` evidence, never a zero,
-and every confirmed partial coverage gap is repeated in `deltas_needing_action`.
+and every confirmed partial coverage gap is repeated in `deltas_needing_action`. A surface whose
+evidence is incoherent rather than absent — a positive manifest paired with an empty or disagreeing
+summary — is `PARTIAL`, never `yes`: `yes` asserts the surface is proven, and there is no state
+between `yes` and `BROKEN` unless this one is used.

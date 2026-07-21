@@ -50,8 +50,17 @@ grep -Fq 'posture: score <x|unavailable:why>' "${platform_security_surveyor}" ||
   fail "platform security digest cannot represent unavailable posture findings"
 grep -Fq 'coverage: posture=<complete|PARTIAL:why>' "${platform_security_surveyor}" ||
   fail "platform security digest does not expose per-surface coverage"
+grep -Fq 'cve: crit/high all=<a>/<b>|<unavailable:why>' "${platform_security_surveyor}" ||
+  fail "platform security digest cannot represent unavailable CVE findings"
 grep -Fq 'runtime: <n|unavailable:why> new detections' "${platform_security_surveyor}" ||
   fail "platform security digest cannot represent unavailable runtime findings"
+# An incoherent CVE pair is neither proven nor absent. Without a PARTIAL state the
+# only choices are `yes` and `BROKEN`, so the digest reports a healthy scanner over
+# evidence the prose has already called not-healthy.
+grep -Fq 'cve=<yes|PARTIAL:why|BROKEN:why>' "${platform_security_surveyor}" ||
+  fail "platform security digest has no PARTIAL state, so incoherent CVE evidence reads as a live scanner"
+grep -Fq 'report `scanners_alive: cve=PARTIAL:<why>`' "${platform_security_surveyor}" ||
+  fail "platform security surveyor does not route an incoherent CVE pair to the PARTIAL state"
 
 [[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
 grep -Fq '.claude/scripts/release-bot-exemption.sh' "${surveyor}" ||
