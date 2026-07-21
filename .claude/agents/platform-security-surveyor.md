@@ -27,6 +27,17 @@ acts on it, not a human); return the digest and nothing else.
 all-zero severities and empty VEX/matches even when the real objects are full — you MUST `kubectl get
 <crd> <name> -n <ns> -o json` **by name** (sample 2–3 objects per surface) before concluding anything
 about data quality. An all-zero LIST is a *display artifact*, not a finding.
+Use **LIST metadata for coverage and freshness** only: reconcile result names, identity labels,
+manifest/summary pairs, and timestamps against the **current workload/container inventory** with
+bounded metadata LISTs. A missing or stale pair is a coverage gap, not zero findings. Sampling proves
+**liveness only**. If the contributing set fits the ~dozen-read bound,
+directly GET every object whose payload contributes; otherwise use a trusted aggregate endpoint already
+verified against direct samples. When neither a payload-complete source nor complete inventory coverage fits the bound,
+**report the cluster-wide result as unavailable or partial** and name the missing proof; never
+extrapolate from the liveness sample. Bounded proof failure is per-surface:
+**posture, CVE, and runtime each report unavailable or partial** instead of inventing a numeric value.
+Every confirmed partial coverage gap must also appear in `deltas_needing_action` so the orchestrator
+cannot miss a scanner blind spot.
 And the standing trap this agent exists to catch: **an empty/zero reading almost always means the
 scanner is BROKEN, not that the cluster is clean** — a broken scanner and a compliant cluster read
 identically, so every surface check is **liveness first, values second**.
@@ -38,9 +49,19 @@ identically, so every surface check is **liveness first, values second**.
    --tail=50` for scan aborts. Then: framework scores + the top failed controls (id, name, failing
    count) vs baseline.
 2. **CVE (kubevuln)** — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests` (+ `openvulnerabilityexchangecontainers`
-   for VEX). Liveness: GET 2–3 summaries by name — real grype `matches`/`tool.name` present, `.all`
-   and `.relevant` populated; on suspicion, kubevuln logs for `ScanCP … partial`. Then: critical/high
-   counts (all vs relevant), notable new reachable CVEs vs baseline, VEX doc count.
+   for VEX). Liveness: directly GET both named `vulnerabilitymanifests` and their corresponding
+   `vulnerabilitymanifestsummaries` for 2–3 workloads.
+   Accept **(Grype matches or scanner version metadata) with coherent paired summaries**
+   (`spec.metadata.tool.version` or `kubescape.io/tool-version`) across the sample. A genuinely zero-
+   match image is healthy when version evidence, summary refs, and zero counters agree. Positive
+   manifest matches with an empty or disagreeing summary are partial, not healthy — and *partial has a
+   place to go*: report `scanners_alive: cve=PARTIAL:<why>`, `coverage: cve=PARTIAL:<why>`, and a
+   `deltas_needing_action` line naming the incoherent pair. Without that routing the only states are
+   `yes` and `BROKEN`, so an incoherent pair reads as a healthy scanner. Do not require
+   `spec.metadata.tool.name`; healthy current objects leave it blank.
+   On suspicion, check kubevuln logs for `ScanCP … partial`. Then: critical/high counts (all vs relevant),
+   notable new reachable CVEs vs baseline, VEX doc count, collected only from the direct-object/verified-
+   aggregate rule above.
 3. **Runtime (node-agent)** — `applicationprofiles`, `networkneighborhoods`, alert routing. Liveness:
    profiles present and not all `partial`; routing **visible, not stdout-only** (exporter config /
    `alertManagerExporterUrls` / Prometheus exporter state, and whether alerts reach the routed sink —
@@ -51,10 +72,11 @@ identically, so every surface check is **liveness first, values second**.
 ## Return — one compact digest (target < ~600 tokens), this exact shape
 ```
 ## Security digest — <UTC date> (baseline: <the baseline date/state the orchestrator gave you>)
-scanners_alive: posture=<yes|BROKEN:why> cve=<yes|BROKEN:why> runtime=<yes|INVISIBLE:why>
-posture: score <x> vs baseline <y> — top failed: <C-xxxx name (n)>, …
-cve: crit/high all=<a>/<b> relevant=<c>/<d> — new reachable: <cve id → workload>, … ; vex_docs=<n>
-runtime: <n> new detections — routing=<routed-to-X|stdout-only>
+scanners_alive: posture=<yes|PARTIAL:why|BROKEN:why> cve=<yes|PARTIAL:why|BROKEN:why> runtime=<yes|PARTIAL:why|INVISIBLE:why>
+posture: score <x|unavailable:why> vs baseline <y> — top failed: <C-xxxx name (n)>, …
+coverage: posture=<complete|PARTIAL:why> cve=<complete|PARTIAL: n current containers lack fresh paired results> runtime=<complete|PARTIAL:why>
+cve: crit/high all=<a>/<b>|<unavailable:why> relevant=<c>/<d>|<unavailable:why> — new reachable: <cve id → workload>, … ; vex_docs=<n>
+runtime: <n|unavailable:why> new detections — routing=<routed-to-X|stdout-only>
 ci_gate: threshold=<n> (in-cluster agrees|DIVERGES: <how>)
 deltas_needing_action:
 - <one line per confirmed off-baseline finding or broken scanner, worst first>
@@ -62,4 +84,9 @@ deltas_needing_action:
 Digest rules: **classify, don't decide** — the orchestrator turns confirmed deltas into `security`
 issues under the epic (platform#2447) or a hotfix; you never file, comment, or fix. A broken/invisible
 scanner is itself a `deltas_needing_action` line (worst class of finding). If the context/credentials
-are unavailable, say so in one line and stop — never guess from stale data.
+are unavailable, say so in one line and stop — never guess from stale data. A partial coverage set or
+missing payload-complete aggregate is also explicit `unavailable`/`partial` evidence, never a zero,
+and every confirmed partial coverage gap is repeated in `deltas_needing_action`. A surface whose
+evidence is incoherent rather than absent — a positive manifest paired with an empty or disagreeing
+summary — is `PARTIAL`, never `yes`: `yes` asserts the surface is proven, and there is no state
+between `yes` and `BROKEN` unless this one is used.

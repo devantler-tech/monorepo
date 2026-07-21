@@ -11,11 +11,56 @@ monorepo_skill="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
 product_engineering_skill="${repo_root}/.claude/skills/product-engineering/SKILL.md"
 agent_skills_card="${repo_root}/.claude/skills/products/agent-skills/SKILL.md"
 ksail_card="${repo_root}/.claude/skills/products/ksail/SKILL.md"
+platform_card="${repo_root}/.claude/skills/products/platform/SKILL.md"
+platform_security_surveyor="${repo_root}/.claude/agents/platform-security-surveyor.md"
 
 fail() {
   echo "portfolio surveyor contract: FAIL — $*" >&2
   exit 1
 }
+
+for security_definition in "${platform_card}" "${platform_security_surveyor}"; do
+  grep -Fq 'Kubescape CR LISTs return spec-stripped skeletons.' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can mistake a Kubescape LIST skeleton for empty scanner output"
+  grep -Fq 'sample 2–3 objects per surface' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} does not require direct per-object Kubescape payload checks"
+  grep -Fq 'directly GET every object whose payload contributes' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can extrapolate cluster-wide findings from a liveness sample"
+  # Literal Markdown code spans; command substitution is intentionally disabled.
+  # shellcheck disable=SC2016
+  grep -Fq 'both named `vulnerabilitymanifests` and their corresponding' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} does not require direct reads of both CVE object types"
+  grep -Fq '(Grype matches or scanner version metadata) with coherent paired summaries' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can accept manifest matches paired with an incoherent CVE summary"
+  grep -Fq 'LIST metadata for coverage and freshness' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} does not define a bounded use for Kubescape LISTs"
+  grep -Fq 'current workload/container inventory' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can miss workloads with no vulnerability result object"
+  grep -Fq 'report the cluster-wide result as unavailable or partial' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can overclaim cluster-wide findings when bounded proof is unavailable"
+  grep -Fq 'posture, CVE, and runtime each report unavailable or partial' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} does not represent bounded proof failures for every Kubescape surface"
+  # Literal Markdown code spans; command substitution is intentionally disabled.
+  # shellcheck disable=SC2016
+  grep -Fq 'Every confirmed partial coverage gap must also appear in `deltas_needing_action`' "${security_definition}" ||
+    fail "${security_definition#"${repo_root}/"} can report a scanner blind spot without making it actionable"
+done
+
+grep -Fq 'posture: score <x|unavailable:why>' "${platform_security_surveyor}" ||
+  fail "platform security digest cannot represent unavailable posture findings"
+grep -Fq 'coverage: posture=<complete|PARTIAL:why>' "${platform_security_surveyor}" ||
+  fail "platform security digest does not expose per-surface coverage"
+grep -Fq 'cve: crit/high all=<a>/<b>|<unavailable:why>' "${platform_security_surveyor}" ||
+  fail "platform security digest cannot represent unavailable CVE findings"
+grep -Fq 'runtime: <n|unavailable:why> new detections' "${platform_security_surveyor}" ||
+  fail "platform security digest cannot represent unavailable runtime findings"
+# An incoherent CVE pair is neither proven nor absent. Without a PARTIAL state the
+# only choices are `yes` and `BROKEN`, so the digest reports a healthy scanner over
+# evidence the prose has already called not-healthy.
+grep -Fq 'cve=<yes|PARTIAL:why|BROKEN:why>' "${platform_security_surveyor}" ||
+  fail "platform security digest has no PARTIAL state, so incoherent CVE evidence reads as a live scanner"
+grep -Fq 'report `scanners_alive: cve=PARTIAL:<why>`' "${platform_security_surveyor}" ||
+  fail "platform security surveyor does not route an incoherent CVE pair to the PARTIAL state"
 
 [[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
 grep -Fq '.claude/scripts/release-bot-exemption.sh' "${surveyor}" ||
