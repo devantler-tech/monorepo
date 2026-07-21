@@ -1838,10 +1838,14 @@ The init command is *required* to populate a submodule, so **initialising and re
 operation, never two**:
 
 ```sh
-.claude/scripts/submodule-init.sh <path>     # init at the pinned commit + repair + probe (fail-closed)
+.claude/scripts/submodule-init.sh <path>            # init at the pinned commit + repair + probe (fail-closed)
+.claude/scripts/submodule-init.sh --advance <path>  # after a pin-bump pull: move a populated checkout to HEAD's gitlink
 ```
 
-Use it instead of a bare `git submodule update --init <path>` (never `--remote`). If you do run a bare
+Use it instead of a bare `git submodule update --init <path>` (never `--remote`), and use `--advance`
+instead of `git submodule update -- <path>` when a pin bump has landed and the checkout is still on
+the old commit — plain `update` rewrites shared `core.worktree`. `--advance` refuses a dirty tree or
+a checkout ahead of the pin. If you do run a bare
 init — or inherit a tree someone else initialised — **probe before you trust it**: confirm
 `git -C <wt> rev-parse --show-toplevel` returns the worktree's **own** path, not a `.git/modules/<name>`
 path, and repair it in place before editing anything. The diagnosis, the regression watch, and the
