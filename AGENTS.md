@@ -734,10 +734,15 @@ result at the current head — self-promotion is forbidden before that. Request 
   higher one has demonstrably stalled or failed. Track which lanes are currently serving (rate-limit
   shells, unserved requests, stall times) and record the evidence in native memory, so a lane's
   standing stays measured rather than assumed.
-- **Fall back down the ladder only after the current lane demonstrably stalled or failed** (no review
-  artifact at head after a generous window, an app erroring/uninstalled on the repo, or a rate-limit
-  response with **no** stated retry window) — note the fallback and why, so the preference stays
-  evidence-based. **A throttle that states a short window is NOT a failed lane**: it is
+- **Fall back down the ladder once the current lane has demonstrably stalled, failed, OR delivered
+  everything it is going to deliver** (no review artifact at head after a generous window, an app
+  erroring/uninstalled on the repo, a rate-limit response with **no** stated retry window, or — lane
+  1's ordinary case — **a completed, finding-free CodeRabbit pass that produced no `APPROVED` review
+  object**) — note the fallback and why, so the preference stays evidence-based. That last case is
+  **not** a lane failure and **not** a re-request trigger: CodeRabbit did its job, the gate simply
+  cannot be closed by an artifact it does not emit, so **advance to Codex for the gate and leave
+  CodeRabbit alone** (re-requesting it only burns wall-clock on an approval it will never issue).
+  **A throttle that states a short window is NOT a failed lane**: it is
   wait-and-retrigger, and skipping down the ladder to dodge a stated window wastes the higher lane's
   quality. Conversely, a lane whose quota needs a *maintainer purchase* (no window at all) is
   genuinely unavailable — surface that to him rather than retrying it every tick.
