@@ -196,6 +196,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			output.line("  These will TRUNCATE at run start and silently hide carry-forwards.")
 			output.line("  Memory is a multi-writer surface: re-read immediately before writing and")
 			output.line("  prefer a non-clobbering append over a whole-file rewrite.")
+			output.line("  If a rewrite is required, use memory-rewrite.sh (never sed+mv into the live file).")
 		}
 		return output.exitCode(1)
 	}
