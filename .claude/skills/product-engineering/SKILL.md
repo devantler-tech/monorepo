@@ -131,7 +131,9 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    others that is not a deferral: such an issue is **never actionable at all**, never becomes so, and
    is never selected, worked, or closed (Renovate's Dependency Dashboard is the standing example).
    ⚠️ (f) matches the **author**, never the `automation` **label** — see the next sentence.
-   **Size, difficulty, a `roadmap`/`enhancement`/
+   **`type:"Spike"` is not a skip and not a delivery-PR:** when it is the oldest actionable issue,
+   record the decision on the Spike and file its follow-up issues — that pair is the floor artifact;
+   do not open a delivery PR (#2267; contract *Issue hierarchy → Spike*). **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
    when the oldest issue is large, **decompose it into a small first child and ship that increment**
    (`Fixes #child`; add `Part of #experiment` when the parent stays open) so the big thing advances
