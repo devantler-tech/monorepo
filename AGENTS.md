@@ -1625,6 +1625,21 @@ slug only for `gh` commands). **Submodule worktree isolation breaks whenever a s
 initialised** — a stray shared `core.worktree` makes `git worktree add` resolve back into the main
 checkout, silently collapsing every parallel session into one physical tree.
 
+**A fresh worktree is a fresh COPY — `Read` a file THERE before your first edit of it.** Reading a file
+in the main checkout does **not** count as having read the worktree's copy: it is a different file on
+disk and the read record does not carry across, so the edit is refused with *"File has not been read
+yet"* and the run pays a wasted round-trip. Knowing a file's contents is not the same as having read it
+*where you are about to edit it*. That is the observed behaviour and the whole of it — the exact key
+the runtime tracks is **not** established, so do not reason from an assumed one. Measured
+2026-07-14→21 on the Claude instance (the only lane whose tool errors are attributable — the sibling
+runtimes record no error flag, so this is scoped to that lane rather than asserted for all three):
+**134 such refusals, 73 of them under this monorepo; 126 were on a path never read in that session,
+and 102 of those — 81% — were inside a `.claude/worktrees/` path.** The repeat targets are exactly the
+files an agent is surest it already knows: `AGENTS.md`, `SKILL.md`, `MEMORY.md`, `ci.yaml`,
+`kustomization.yaml`. It is the single largest tool-error signature in both the 1-day and 7-day
+windows. So after `worktree add`, the first touch of each file is a `Read` at the **worktree** path —
+and the same applies to `Write` over a file that already exists there.
+
 **`git submodule update --init <path>` is what (re-)introduces it** — reproduced 2026-07-14 on a
 submodule that was verified fixed: the key was absent before the command and present after. This is why
 "the fix does not stay fixed" (`applications/ksail` regressed 2026-07-14, silently colliding three live
