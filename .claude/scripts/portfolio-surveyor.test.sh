@@ -511,4 +511,15 @@ expect_classifier_error \
   "${ksail_files}" \
   'not-json'
 
+# Advance digest must be type-aware (#2264) — Spike/Kata/Chore have no type-label.
+grep -Fq 'type:<Type>' "${surveyor}" ||
+  fail "Advance digest schema has no type-aware ready-work row (#2264)"
+grep -Fq 'FUTURE-MEASURE' "${surveyor}" ||
+  fail "Advance digest schema has no separate future-dated Kata row (#2264)"
+grep -Fq 'NO Epic yet' "${surveyor}" ||
+  fail "strategy-review candidate row still keys on roadmap label instead of Epic type (#2264)"
+if grep -Fq 'roadmap-ready → #<n> "<title>" (<label>)' "${surveyor}"; then
+  fail "Advance digest still requires a type-label on ready-work rows (#2264)"
+fi
+
 echo "portfolio surveyor contract: all assertions passed"
