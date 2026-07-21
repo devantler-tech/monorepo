@@ -211,12 +211,13 @@ governs the issue work that follows.) Two rules enforce that:
    keeps an experiment issue open, also use `Part of #experiment`. Among open issues prefer the oldest.
    **"Actionable" is deliberately narrow — skip an older issue ONLY when one of these is true and you can
    *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
-   external dependency (a specific upstream PR/release you can cite); or (c) it is too under-specified to
-   even begin; or (d) a delivered experiment is awaiting its **named, future measurement date**, which
-   is recorded on the issue and has not elapsed. Once that date arrives, measuring and recording the
-   decision is actionable work; or (e) another instance holds a **live claim** on it — assigned **and**
-   branched, within the ~2h window, no PR yet (see *Claim protocol*). (e) is the only skip reason that
-   expires on its own: once the window lapses with no PR, the issue is fair game again.
+   external dependency (a specific upstream PR/release you can cite) — see *External-blocker
+   verification* below; or (c) it is too under-specified to even begin; or (d) a delivered experiment is
+   awaiting its **named, future measurement date**, which is recorded on the issue and has not elapsed.
+   Once that date arrives, measuring and recording the decision is actionable work; or (e) another
+   instance holds a **live claim** on it — assigned **and** branched, within the ~2h window, no PR yet
+   (see *Claim protocol*). (e) is the only skip reason that expires on its own: once the window lapses
+   with no PR, the issue is fair game again.
    **Size, difficulty, architectural weight, a
    `roadmap`/`enhancement`/`security`/`performance`/`repo-assist`/`automation` label, or a vague
    "maintainer-hot" feel are NOT valid skip reasons.** A large or hard issue **is the work, not an excuse
@@ -226,6 +227,20 @@ governs the issue work that follows.) Two rules enforce that:
    issue as "blocked"/"gated", **re-verify the blocker against live state** (memory's "gated" notes go
    stale) and **name the concrete blocker in the report**; an
    unverifiable or merely-inherited "gated" is not a skip.
+   **External-blocker verification (skip clause (b) — monorepo#2243).** An unattended run must
+   live-verify an external blocker *without* inspecting a third-party repository (that stays behind
+   the *Professional-work repository boundary*). Use public **non-repository** channels only — the
+   same class *Enhancement work → Continuous upstream research* already permits: release feeds,
+   changelogs, package registries, and module proxies. Never open the upstream repo page, tree,
+   issue, or API to confirm the blocker. Give every externally-blocked issue a **structured blocker
+   line** in its body (and keep the `blocked` label on) so the next tick verifies in O(1) instead of
+   rediscovering the channel:
+   `**Blocker:** <upstream-ref> | verify via <non-repo channel> | next-check <YYYY-MM-DD>`
+   Example: `**Blocker:** opencost#3710 | verify via GitHub Releases feed for opencost/opencost | next-check 2026-08-01`.
+   When the next-check date arrives, re-check that channel; if the upstream has shipped, remove the
+   `blocked` label and the blocker line and resume oldest-first. If it has not, advance the next-check
+   date and move on. An issue that only *says* "waiting on upstream" with no blocker line is
+   under-specified for (b) — add the line (or unblock) rather than skipping forever on prose alone.
    **A "maintainer decision" is NOT a skip reason — don't block yourself on it.** The maintainer does
    **not** want to make issue-level decisions, and a passive "gated / awaiting-maintainer / needs a
    decision" note in a report or memory *never reaches him* — that passive parking **is** the
