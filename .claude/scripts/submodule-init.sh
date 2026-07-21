@@ -12,13 +12,19 @@
 #
 # Usage:
 #   .claude/scripts/submodule-init.sh <submodule-path> [<submodule-path>...]
-#   .claude/scripts/submodule-init.sh --all      # init + repair + probe every submodule (first clone)
-#   .claude/scripts/submodule-init.sh --check    # non-destructive probe of every initialised submodule
+#   .claude/scripts/submodule-init.sh --all           # init + repair + probe every submodule (first clone)
+#   .claude/scripts/submodule-init.sh --check         # non-destructive probe of every initialised submodule
+#   .claude/scripts/submodule-init.sh --advance <path>  # move a populated checkout to HEAD's recorded pin
 #
 # `--check` never modifies submodule content, tracked files, or other sessions' worktrees, but it is
 # NOT strictly read-only: to prove isolation empirically it adds and then removes a throwaway,
 # uniquely-named probe worktree (and prunes its own admin entry). That empirical add/remove is the
 # whole point — it catches a dangling `core.worktree` a config read alone would miss.
+#
+# `--advance` is the isolation-safe way to follow a pin bump after `git pull` on the superproject.
+# Plain `git submodule update` (with or without `--init`) rewrites shared `core.worktree`; this mode
+# checks out the recorded gitlink directly, then repair + probe. It refuses a dirty tree or a
+# checkout that is ahead of the pin, so it cannot discard uncommitted or unpushed work.
 set -euo pipefail
 
 die() {
@@ -216,7 +222,61 @@ init_repair_probe() {
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
 }
 
-[ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check'
+# Move an already-populated submodule checkout to the gitlink recorded at the superproject's HEAD.
+# Never uses `git submodule update` — that command writes shared `core.worktree` (see header).
+advance() {
+  local path=${1%/}
+  is_registered_submodule "$path" ||
+    die "'$path' is not a registered submodule (see .gitmodules) — refusing to advance"
+
+  is_populated "$path" ||
+    die "'$path' is not checked out here — run submodule-init.sh $path to populate it first"
+
+  if [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]; then
+    die "'$path' has a dirty working tree — commit, stash, or discard local changes before advancing"
+  fi
+
+  local target head ahead
+  # Superproject HEAD's gitlink for this path — the pin a pin-bump PR just moved.
+  target=$(git rev-parse "HEAD:$path" 2>/dev/null) ||
+    die "no gitlink recorded for '$path' at HEAD"
+  head=$(git -C "$path" rev-parse HEAD) ||
+    die "could not read HEAD of '$path'"
+
+  if [ "$head" = "$target" ]; then
+    warn "$path — already at recorded pin $target; repairing isolation only"
+    repair "$path"
+    probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
+    return 0
+  fi
+
+  # Ensure the pin object exists locally (a fresh pin bump may not have been fetched into the
+  # submodule yet). Prefer fetching the exact SHA; fall back to a plain fetch.
+  if ! git -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null; then
+    git -C "$path" fetch --quiet origin "$target" 2>/dev/null ||
+      git -C "$path" fetch --quiet origin 2>/dev/null ||
+      true
+    git -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null ||
+      die "recorded pin $target for '$path' is not available locally — fetch the submodule remote first"
+  fi
+
+  # Refuse when the checkout has commits that are not reachable from the new pin: advancing would
+  # detach past them and look like a silent discard. Dirty trees are already refused above.
+  ahead=$(git -C "$path" rev-list --count "${target}..HEAD" 2>/dev/null) ||
+    die "could not compare '$path' HEAD to recorded pin $target"
+  if [ "$ahead" -gt 0 ]; then
+    die "'$path' is $ahead commit(s) ahead of the recorded pin — push or otherwise preserve that work before advancing"
+  fi
+
+  # Detach onto the recorded pin without `git submodule update` (which rewrites shared core.worktree).
+  git -C "$path" checkout --quiet --detach "$target" ||
+    die "failed to check out recorded pin $target in '$path'"
+  repair "$path"
+  probe "$path" || die "advance left '$path' unisolated — do not edit it"
+  printf 'submodule-init: %s — advanced to %s\n' "$path" "$target"
+}
+
+[ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check | --advance <path>'
 
 case "$1" in
   # NON-DESTRUCTIVE probe (see the header note): never touches content or other sessions' trees, but
@@ -230,6 +290,10 @@ case "$1" in
     ;;
   --all)
     while read -r path; do init_repair_probe "$path"; done < <(all_paths)
+    ;;
+  --advance)
+    [ $# -eq 2 ] || die 'usage: submodule-init.sh --advance <submodule-path>'
+    advance "$2"
     ;;
   *)
     for path in "$@"; do init_repair_probe "$path"; done

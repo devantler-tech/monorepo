@@ -142,6 +142,66 @@ report "linked worktree: submodule gitdir lives under the worktree admin dir" \
 out="$(cd "$c5/super-wt" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "linked worktree: --check passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 
+# 6. --advance: move a populated checkout to a newer recorded pin WITHOUT
+#    `git submodule update` (which rewrites shared core.worktree). Hermetic
+#    fixture: bump the gitlink in the index while leaving the working tree on
+#    the old SHA, then advance and assert HEAD + isolation.
+c6="$tmp/c6"
+mk_super "$c6"
+(
+  cd "$c6/remote-sub"
+  echo next >file.txt
+  git add file.txt
+  git commit -q -m next
+)
+new_sha="$(git -C "$c6/remote-sub" rev-parse HEAD)"
+old_sha="$(git -C "$c6/super/sub" rev-parse HEAD)"
+(
+  cd "$c6/super"
+  # Record the new pin in the superproject without moving the working tree.
+  git update-index --cacheinfo "160000,$new_sha,sub"
+  git commit -q -m "bump sub"
+)
+report "advance fixture: working tree still on old pin before --advance" \
+  "$([[ "$(git -C "$c6/super/sub" rev-parse HEAD)" == "$old_sha" ]] && echo yes || echo no)"
+# Make the new object reachable in the submodule (file:// remote).
+git -C "$c6/super/sub" fetch -q origin
+out="$(cd "$c6/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+report "advance: checkout moved to the recorded pin" \
+  "$([[ "$(git -C "$c6/super/sub" rev-parse HEAD)" == "$new_sha" ]] && echo yes || echo no)"
+report "advance: does not leave a shared core.worktree" \
+  "$([[ -z "$(git config -f "$c6/super/.git/modules/sub/config" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)"
+out="$(cd "$c6/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "advance: --check passes afterwards" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+
+# 7. --advance refuses a dirty working tree.
+c7="$tmp/c7"
+mk_super "$c7"
+echo dirty >>"$c7/super/sub/file.txt"
+out="$(cd "$c7/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance dirty: exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+report "advance dirty: names the dirty-tree refusal" \
+  "$(grep -q 'dirty working tree' <<<"$out" && echo yes || echo no)" "$out"
+
+# 8. --advance refuses a checkout that is ahead of the recorded pin.
+c8="$tmp/c8"
+mk_super "$c8"
+pin="$(git -C "$c8/super/sub" rev-parse HEAD)"
+(
+  cd "$c8/super/sub"
+  echo local >extra.txt
+  git add extra.txt
+  git commit -q -m local-ahead
+)
+# Superproject gitlink still points at the old pin; checkout is one commit ahead.
+report "advance ahead fixture: gitlink still at old pin" \
+  "$([[ "$(git -C "$c8/super" rev-parse HEAD:sub)" == "$pin" ]] && echo yes || echo no)"
+out="$(cd "$c8/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance ahead: exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+report "advance ahead: names the ahead-of-pin refusal" \
+  "$(grep -q 'ahead of the recorded pin' <<<"$out" && echo yes || echo no)" "$out"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1
