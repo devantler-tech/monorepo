@@ -29,6 +29,7 @@ jobs:
       board-add: ${{ steps.filter.outputs.board-add }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
+      worktree-claim: ${{ steps.filter.outputs.worktree-claim }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -66,6 +67,12 @@ jobs:
             board-add:
               - '.claude/scripts/board-add.sh'
               - '.claude/scripts/board-add.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            worktree-claim:
+              - '.claude/scripts/worktree-claim.sh'
+              - '.claude/scripts/worktree-claim.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -249,6 +256,28 @@ jobs:
       - name: Self-test board-add
         run: bash .claude/scripts/board-add.test.sh
 
+  test-worktree-claim:
+    name: Test worktree claim
+    needs: changes
+    if: needs.changes.outputs.worktree-claim == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # Hermetic throwaway git repo + worktrees — no network. Both OSes because
+      # daily runs are on macOS while CI defaults to Linux, and date(1) parsing
+      # of the marker's ISO timestamp is the portability pin (#2284).
+      - name: Self-test worktree-claim
+        run: bash .claude/scripts/worktree-claim.test.sh
+
   test-flow-scorecard:
     name: Test flow scorecard
     needs: changes
@@ -398,6 +427,7 @@ jobs:
       - drift-check-active-projects
       - test-agent-telemetry
       - test-board-add
+      - test-worktree-claim
       - test-flow-scorecard
       - test-safe-clone
       - test-submodule-init
@@ -418,6 +448,7 @@ jobs:
             ${{ needs.drift-check-active-projects.result }}
             ${{ needs.test-agent-telemetry.result }}
             ${{ needs.test-board-add.result }}
+            ${{ needs.test-worktree-claim.result }}
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-submodule-init.result }}
