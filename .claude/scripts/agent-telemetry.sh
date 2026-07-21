@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-telemetry.sh — mine operational evidence about the autonomous Daily AI Engineer
+# agent-telemetry.sh — mine operational evidence about the autonomous Agentic Engineer
 # instances (Claude Code + ChatGPT/Codex) and emit ONE compact scorecard.
 #
 # Read-only. Never writes to any agent store, repo, or GitHub. Safe to run at any time.

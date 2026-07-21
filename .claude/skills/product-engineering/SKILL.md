@@ -1,6 +1,6 @@
 ---
 name: product-engineering
-description: The ADVANCE playbook for the Daily AI Engineer (the products' primary engineer) — how to move a devantler-tech product forward once it's healthy: product strategy & roadmaps, issue triage & decomposition, planning & implementing issues, test coverage, benchmarking & performance, and refactoring & code quality. Use after the operate ladder is satisfied and you're picking proactive enhancement work.
+description: The ADVANCE playbook for the Agentic Engineer (the products' primary engineer) — how to move a devantler-tech product forward once it's healthy: product strategy & roadmaps, issue triage & decomposition, planning & implementing issues, test coverage, benchmarking & performance, refactoring & code quality, and security hardening that never taxes developer experience. Use after the operate ladder is satisfied and you're picking proactive enhancement work.
 ---
 
 # Product engineering — moving products forward
@@ -10,8 +10,10 @@ loop live in [`portfolio-maintenance`](../portfolio-maintenance/SKILL.md); the b
 the monorepo [`AGENTS.md`](../../../AGENTS.md) (*Mandate*, *Product strategy & roadmaps*, *Enhancement
 work*, the trust gate and all guardrails). Read those first — this skill is the how-to, not the rules.
 
-You are the **primary engineer**: own each product's direction, quality, and growth, not just its
-uptime. Every kind of work below ships under the **same discipline** — per-run worktree, validate
+You are the **primary engineer**: own each product's direction, quality, growth **and security
+posture**, not just its uptime — and harden on the standing principle that **good developer experience
+is easy *and* secure** (contract → *Security hardening without a DevEx tax*; §10 below is the how-to).
+Every kind of work below ships under the **same discipline** — per-run worktree, validate
 (build + tests), root-cause, **draft PR** with the AI-disclosure line, one concern per PR, never weaken
 a safety/security guardrail, never hand-edit generated files. Match each repo's existing conventions
 and load its product card + `AGENTS.md ## Maintenance` for validate commands, protected files, labels,
@@ -338,9 +340,26 @@ maintainer direction 2026-07-05):
   Dedupe against existing issues before filing; a research pass that files nothing new still updates
   the cursor and notes what was checked.
 
-## 10. Security & compliance posture
+## 10. Security & compliance posture — hardening without a DevEx tax
 Treat live security findings as first-class advance work, with the same evidence discipline as
-coverage and performance (contract → *Enhancement work → Security posture*).
+coverage and performance (contract → *Enhancement work → Security posture*). Hardening is **not** a
+separate queue you visit when the others are empty — it is a property of the work you are already
+doing, held to the contract's **two-sided test** (*Security hardening without a DevEx tax*).
+- **Answer both sides in the PR body.** (1) What class of failure is now impossible, caught, or
+  contained — never "improves security"; and (2) what the everyday path cost, which must come out **as
+  easy or easier** than before. A change that raises the floor *and* the friction is a draft, not a
+  delivery — reshape it until the secure way is also the shortest way. State both deltas even when one
+  is "unchanged".
+- **Never reduce friction by removing a control.** "Nobody understood the check, so I dropped it" and
+  "the gate was slow, so I made it non-blocking" are security decisions wearing a DevEx costume. Fix a
+  genuinely wrong control at its root, or scope it explicitly through the fix-vs-except ladder below —
+  never by quietly widening it. (This contract's own guardrails are out of scope entirely: loosening
+  one is reserved to the maintainer.)
+- **Reach for the paved road first** — secure defaults, so *doing nothing* is safe; encode the rule in
+  a template/policy/shared action so every product inherits it instead of reading prose; make each
+  check **fail with the fix** (name the exact command or edit that resolves it); prefer fast local or
+  early-CI feedback over a late heavyweight gate; automate rotation/provisioning/scanning rather than
+  documenting them on a checklist someone has to remember.
 - **Ingest, liveness-first.** Findings come from the product's live scanners (platform: the three
   Kubescape surfaces via the read-only
   [`platform-security-surveyor`](../../agents/platform-security-surveyor.md); other products: their

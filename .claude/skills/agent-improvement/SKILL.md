@@ -1,6 +1,6 @@
 ---
 name: agent-improvement
-description: The daily run procedure for the agent-improver meta-engineer — gather operational telemetry from both deployed Daily AI Engineer instances (Claude Code + ChatGPT/Codex), score them on reliability, safety, efficiency, quality, coordination and currency, diagnose root causes from measured patterns, ship the highest-value fix with its evidence and a reversible audit trail, then verify the targeted metric actually moved. Use on the daily schedule or when asked to improve the autonomous agents themselves.
+description: The daily run procedure for the agent-improver meta-engineer — gather operational telemetry from both deployed Agentic Engineer instances (Claude Code + ChatGPT/Codex), score them on reliability, safety, efficiency, quality, coordination, currency and the engineer's security-hardening mandate, diagnose root causes from measured patterns, ship the highest-value fix with its evidence and a reversible audit trail, then verify the targeted metric actually moved. Use on the daily schedule or when asked to improve the autonomous agents themselves.
 ---
 
 # Agent-improvement run loop
@@ -99,11 +99,25 @@ currency:     loader_drift[], stale_memory[], unused_capabilities[]
 flow:         wip_per_status[], over_limit_columns[], closed_in_window,
               lifetime_median_days (PROXY), oldest_substantive_age_days_per_repo[],
               substantive_share_pct
+hardening:    hardening_prs{total, both_deltas_stated, security_only, devex_only},
+              control_removals_suspected[]   # friction DOWN and security floor DOWN
 ```
 
 The `flow` row is the Kanban Kata's measurement surface ([monorepo#2271](https://github.com/devantler-tech/monorepo/issues/2271)):
 it comes from `flow-scorecard.sh`, and its stated gaps (UI-only column limits, lifetime as a
 cycle-time proxy) are part of the record — never silently paper over them.
+
+**The `hardening` row scores the engineer's new mandate** (contract → *Security hardening without a
+DevEx tax*, maintainer direction 2026-07-21; agent definition → *The engineer's scope now includes
+hardening*). Read two things from it. `both_deltas_stated` should track `total`: a hardening PR is
+expected to name what the security floor gained **and** what the everyday path cost, so a gap between
+those two numbers is the measurable early warning that half the mandate is being skipped — which half
+is told by `security_only` vs `devex_only`. `control_removals_suspected` is the Safety-side signature:
+a change whose friction fell **and** whose security floor fell. Verify the floor directly rather than
+reading the PR body, because the framing is identical for a paved road and for a silent regression —
+that identity is precisely why this needs its own count instead of a judgement call.
+**None of this applies to your own enforcement layer**, which stays on the rule-3 loosening bar; a
+guard that merely annoys is not evidence for removing it.
 
 **Record sleeps as RATES, split by class — a raw total is not a rate.** The window selects files by
 mtime, so session counts swing hard day to day: a raw sleep total once fell 442→328 while the
