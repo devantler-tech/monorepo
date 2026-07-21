@@ -30,8 +30,9 @@ Same work, fewer tokens.
 > (these ship with the Claude Code `engineering` plugin — they are *not* defined in this repo; if a
 > given skill isn't installed, just apply the same reasoning yourself): `engineering:architecture` (ADRs)
 > and `engineering:system-design` for non-trivial design; `engineering:testing-strategy` for test plans;
-> `engineering:tech-debt` to prioritise refactors; `engineering:code-review` to self-review a diff
-> before opening the PR; `engineering:debug` for a stubborn bug.
+> `engineering:tech-debt` to prioritise refactors; `engineering:debug` for a stubborn bug. (For the
+> mandatory pre-submission self-review, use `/review` + `/simplify` per step 4 below —
+> `engineering:code-review` is a fine substitute where those aren't installed.)
 
 ## 1. Strategy & roadmaps
 The roadmap of record is **GitHub Issues** (Issues are enabled on every repo) — never a file.
@@ -165,7 +166,11 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    the docs the change touches in the same PR** (help/generated reference, README, `AGENTS.md`, the
    relevant site page) — docs are part of the change too; re-run, never hand-edit, any doc generator.
 3. **Validate** (the card's build + test command) — never open a PR that breaks build/validation.
-4. Open a **draft PR**: Conventional-Commit title (`feat:`/`fix:`/`refactor:`/`perf:`/`test:`/`docs:`),
+4. **Self-review your own diff** — `/review` + `/simplify` (plus `/security-review` for
+   auth/secrets/permissions/workflow-trigger changes), fixing findings at the root cause before the
+   review request goes out. Contract *GitHub artifact conventions → SELF-REVIEW YOUR OWN DIFF* carries
+   the exemption for trivial changes and the one-pass bound — follow it, don't re-derive it here.
+5. Open a **draft PR**: Conventional-Commit title (`feat:`/`fix:`/`refactor:`/`perf:`/`test:`/`docs:`),
    AI-disclosure line, labels, and **`Fixes #N`** for the delivery issue. When measuring the outcome
    requires a later window, keep the experiment issue open and add **`Part of #N`** for it instead of
    closing it from the delivery PR. Body = PM-level why & what only (the org template — zero
