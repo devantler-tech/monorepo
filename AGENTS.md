@@ -742,6 +742,10 @@ result at the current head — self-promotion is forbidden before that. Request 
   **not** a lane failure and **not** a re-request trigger: CodeRabbit did its job, the gate simply
   cannot be closed by an artifact it does not emit, so **advance to Codex for the gate and leave
   CodeRabbit alone** (re-requesting it only burns wall-clock on an approval it will never issue).
+  ⚠️ **"Leave it alone" is scoped to the GREEN-REVIEW gate only** — it never overrides the
+  *pre-merge checks* rule above, which still mandates a `@coderabbitai review` re-trigger after you
+  fix or clarify a failed check. That re-trigger chases a **pre-merge re-evaluation**, not an
+  approval, so it is neither futile nor barred here.
   **A throttle that states a short window is NOT a failed lane**: it is
   wait-and-retrigger, and skipping down the ladder to dodge a stated window wastes the higher lane's
   quality. Conversely, a lane whose quota needs a *maintainer purchase* (no window at all) is

@@ -79,6 +79,11 @@ grep -Fq 'advance to Codex for the gate and leave' "${constitution}" ||
   fail "a structurally artifact-less CodeRabbit pass is not routed onward to Codex"
 grep -Fq 'a valid reason to continue to Codex, and never a re-request trigger' "${maintenance_skill}" ||
   fail "the run loop does not treat a clean artifact-less CodeRabbit pass as grounds to advance rather than re-request"
+# ...and "leave CodeRabbit alone" must not swallow the pre-merge-checks re-trigger the contract
+# mandates elsewhere. Two rules that disagree about whether to re-request CodeRabbit would recreate,
+# on the pre-merge surface, exactly the strict-reader deadlock the three guards above just removed.
+grep -Fq 'scoped to the GREEN-REVIEW gate only' "${constitution}" ||
+  fail "leaving CodeRabbit alone is unscoped, so it now contradicts the mandated pre-merge re-trigger"
 
 grep -Fq 'Self-review the' "${maintenance_skill}" ||
   fail "portfolio-maintenance run loop does not self-review the diff before requesting review"
