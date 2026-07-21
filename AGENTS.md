@@ -1276,6 +1276,17 @@ steps, tooling, generators, test harnesses, and one-off helpers. Concretely:
   such migrations are real `refactor:` advance work.
 - Existing Python found anywhere in the portfolio is a **migration target**: capture an issue and
   replace it with bash/Go on the normal oldest-first cadence.
+- **CARVE-OUT — an embedded interpreter that admits only Python is NOT a migration target.** The ban
+  targets scripting *we choose to write*, where bash or Go is genuinely available. When a host tool
+  exposes its API solely to its own bundled Python — Blender's `bpy`, and the same shape in Godot
+  editor plugins, GDB, and similar — the language is dictated by the tool, not chosen by us, and
+  "migrating" it would delete the capability rather than port it. Recognise the class by the
+  **invocation** (`blender --background --python …`), never by the file extension. The live instance
+  is `world-at-ruin`'s `tools/artgen/{humanoid_kit,creature_kit}/bake.py`, which that repo's
+  `AGENTS.md` already sanctions and whose CodeQL `python` language exists for exactly this reason.
+  **Do not file migration issues against this class** — an inventory sweep re-derived it twice and
+  filed one anyway (world-at-ruin#331, closed 2026-07-20); if a sweep surfaces such a file, record it
+  as sanctioned and move on.
 
 ### Trust gate — who may be auto-driven / pushed-to / have branch code run
 **Trusted (match the GitHub login EXACTLY — never a substring):** `devantler`, `ksail-bot`,
