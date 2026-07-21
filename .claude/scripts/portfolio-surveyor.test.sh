@@ -26,7 +26,9 @@ grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
   fail "surveyor does not fetch complete current-head commit provenance"
 grep -Fq 'AUTOMATION-OWNED and need NO agent action' "${constitution}" ||
   fail "constitution does not exempt Renovate/Dependabot dependency PRs from agent action"
-grep -Fq 'Never request CodeRabbit/Codex review' "${constitution}" ||
+# Lane-agnostic on purpose: the reviewer roster grows (Codex, Cursor Bugbot, CodeRabbit, …), so
+# assert the PROHIBITION, not the roster — naming lanes here breaks this test on every lane change.
+grep -Fq 'Never request a review from any lane' "${constitution}" ||
   fail "constitution does not explicitly forbid dependency-bot review requests"
 grep -Fq 'Do not inspect commit provenance' "${constitution}" ||
   fail "constitution may reclassify dependency-bot PRs after human commits"
