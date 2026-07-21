@@ -12,8 +12,8 @@
 #      would put two agent review passes in front of a typo fix);
 #   3. it is bounded to one pass + one re-verify (a judgement-based pass has no fixed point, so
 #      "until clean" without a bound contradicts Latency discipline);
-#   4. it is disambiguated, in BOTH directions, from `Local review round` — the substitute-for-a-bot-lane
-#      SUBSTITUTE for a bot review. Conflating them would let routine hygiene satisfy the
+#   4. it is disambiguated, in BOTH directions, from `Local review round` — the mechanism that
+#      SUBSTITUTES for a bot review. Conflating them would let routine hygiene satisfy the
 #      green-review gate, which is the one failure mode here that silently lowers the quality bar.
 # Plus: both run-loop skills carry the step, since a skill is meant to be followable on its own.
 
