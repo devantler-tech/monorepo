@@ -362,7 +362,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    not be self-promoted — rooted in direction 2026-07-06), and **secure ≥1 green review at the
    current head** — auto-review is disabled on ALL THREE reviewers, so requesting (and re-requesting after
    every push) is your duty; the full request discipline (one tool at a time by live rate-limit
-   state, evidence-based fallback DOWN the Codex > Cursor Bugbot > CodeRabbit ladder, the **last-resort
+   state, evidence-based fallback DOWN the CodeRabbit > Codex > Cursor Bugbot ladder, the **last-resort
    local review round** when no lane will deliver at that head — unavailable, OR rate/billing limited — reviewed with your own review skills and posted as a **real GitHub Review
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
    verdict line) so the sibling agent can see and act on it, incremental re-reviews,
