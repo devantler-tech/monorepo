@@ -5,7 +5,11 @@
 # from a measurement instead of an impression. Raw JSON never reaches the
 # agent's context; only the digest does.
 #
-# Usage: finops-snapshot.sh [--window 3d] [--context admin@prod] [--top N] [--no-port-forward]
+# Usage: finops-snapshot.sh [--window 3d] [--context admin@prod] [--top N]
+#                           [--port 19003] [--no-port-forward]
+#
+# --window takes OpenCost's own units and ONLY those: d(ays), h(ours),
+# m(inutes). `30m` is thirty MINUTES, as the API reads it.
 #
 # READ-ONLY by construction: it GETs the OpenCost API and `kubectl get`s. It
 # never applies, patches, scales or deletes. The only side effect is a
@@ -37,12 +41,21 @@ while [ $# -gt 0 ]; do
     --top)     [ $# -ge 2 ] || die "--top needs a value"; TOP="$2"; shift 2 ;;
     --port)    [ $# -ge 2 ] || die "--port needs a value"; PORT="$2"; shift 2 ;;
     --no-port-forward) PF=0; shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    # Print the whole header block, not a hard-coded line range: the range was
+    # already stale once, silently truncating --help when the header grew.
+    -h|--help) sed -n '2,/^[^#]/p' "$0" | sed '$d'; exit 0 ;;
     *) die "unknown argument: $1 (see --help)" ;;
   esac
 done
 
-case "$WINDOW" in ''|*[!0-9dhwm]*) die "--window must look like 3d / 24h / 1w (got: $WINDOW)" ;; esac
+# Units are exactly OpenCost's documented set — d(ays), h(ours), m(inutes). The
+# set is deliberately NOT wider than the API's: a unit the API rejects would come
+# back as an empty payload, but a unit the API accepts and this script scales
+# DIFFERENTLY is far worse — it prints a confident, wrong number. `w` used to be
+# accepted here and scaled as weeks; OpenCost does not document it, so it is out.
+case "$WINDOW" in ''|*[!0-9dhm]*) die "--window must look like 3d / 24h / 30m — OpenCost units are d/h/m only (got: $WINDOW)" ;; esac
+case "$WINDOW" in *[0-9]) die "--window needs a unit suffix: d, h or m (got: $WINDOW)" ;; esac
+case "$WINDOW" in [dhm]*) die "--window needs a number before the unit (got: $WINDOW)" ;; esac
 case "$TOP" in ''|*[!0-9]*) die "--top must be a positive integer (got: $TOP)" ;; esac
 
 command -v kubectl >/dev/null 2>&1 || die "kubectl not found"
@@ -50,16 +63,23 @@ command -v jq      >/dev/null 2>&1 || die "jq not found"
 command -v curl    >/dev/null 2>&1 || die "curl not found"
 
 # Days in the window, for the /month projection. Pure shell arithmetic on the
-# suffix; awk only for the fractional hour case.
-WNUM="${WINDOW%[dhwm]}"; WSUF="${WINDOW##*[0-9]}"
+# suffix; awk only for the fractional cases.
+#
+# 🔴 `m` IS MINUTES, NOT MONTHS — it must mean here exactly what it means to the
+#    API, because the suffix is forwarded to OpenCost verbatim while the scale
+#    factor is computed here. Any disagreement between the two silently multiplies
+#    every projected figure by the ratio of the two readings: `30m` read as months
+#    scaled a 30-MINUTE sample as if it were 900 days, understating /mo by ~43000x.
+#    A wrong number that looks clean is this script's stated worst output.
+WNUM="${WINDOW%[dhm]}"; WSUF="${WINDOW##*[0-9]}"
 case "$WSUF" in
   d) DAYS="$WNUM" ;;
-  w) DAYS=$(awk -v n="$WNUM" 'BEGIN{printf "%.6f", n*7}') ;;
-  m) DAYS=$(awk -v n="$WNUM" 'BEGIN{printf "%.6f", n*30}') ;;
   h) DAYS=$(awk -v n="$WNUM" 'BEGIN{printf "%.6f", n/24}') ;;
-  *) DAYS="$WNUM" ;;
+  m) DAYS=$(awk -v n="$WNUM" 'BEGIN{printf "%.6f", n/1440}') ;;
+  *) die "unhandled --window unit '${WSUF}' — refusing to project from an unknown scale" ;;
 esac
 SCALE=$(awk -v d="$DAYS" 'BEGIN{ if (d>0) printf "%.6f", 30/d; else print 0 }')
+[ "$SCALE" = "0" ] && die "--window ${WINDOW} yielded a zero scale factor — refusing to print 0.00/mo from a broken window"
 
 PF_PID=""
 cleanup() { [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null; return 0; }
