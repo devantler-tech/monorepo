@@ -419,7 +419,7 @@ paginate) and say so, rather than surveying a partial list.
 **Report per-PR state; never diagnose a portfolio-level condition from it.** You are a reporter, and
 several of the states you emit look alarming in aggregate without being so. Specifically: **never
 conclude that a review lane is down, stalled, rate-limited, or outaged, and never suggest the
-*Fallback — agent self-review* precondition is met** — that inference is the orchestrator's alone,
+*Local review round* precondition is met** — that inference is the orchestrator's alone,
 it requires per-lane evidence you do not gather, and acting on it wrongly means self-reviewing PRs a
 reviewer already covered.
 

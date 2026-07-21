@@ -132,7 +132,7 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
   `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>`
   (`self@<sha>` = the last-resort agent self-review on an **own** PR when ALL THREE lanes are down —
-  contract *Autonomy → Fallback — agent self-review*; never on a bot-authored PR). **`none` carries
+  contract *Autonomy → Local review round*; never on a bot-authored PR). **`none` carries
   its evidence** — the review-output artifact counts the surveyor actually saw, **per lane**, and the abbreviated
   head it matched — so a real absence is distinguishable from a filter miss; a bare `none` is an
   unverifiable claim, and the suffix is scoped to `green_review` only (never `rd=none`, which is
@@ -363,7 +363,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    current head** — auto-review is disabled on ALL THREE reviewers, so requesting (and re-requesting after
    every push) is your duty; the full request discipline (one tool at a time by live rate-limit
    state, evidence-based fallback DOWN the Codex > Cursor Bugbot > CodeRabbit ladder, the **last-resort
-   agent self-review** when ALL THREE lanes are unavailable — reviewed with your own review skills and posted as a **real GitHub Review
+   local review round** when no lane will deliver at that head — unavailable, OR rate/billing limited — reviewed with your own review skills and posted as a **real GitHub Review
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
    verdict line) so the sibling agent can see and act on it, incremental re-reviews,
    green-while-draft as the promotion precondition, the **automation-owned dependency-PR no-action carve-out**, and the trusted programmed
