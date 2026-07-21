@@ -1625,11 +1625,12 @@ slug only for `gh` commands). **Submodule worktree isolation breaks whenever a s
 initialised** — a stray shared `core.worktree` makes `git worktree add` resolve back into the main
 checkout, silently collapsing every parallel session into one physical tree.
 
-**A fresh worktree is a fresh PATH — `Read` a file THERE before your first edit of it.** Read-tracking
-is keyed on the **absolute path**, so every file in a newly-created worktree counts as unread even when
-you read the same file in the main checkout minutes earlier — the edit is refused with *"File has not
-been read yet"* and the run pays a wasted round-trip. Knowing a file's contents is not the same as
-having read it *at the path you are editing*; the path, not the filename, is the identity. Measured
+**A fresh worktree is a fresh COPY — `Read` a file THERE before your first edit of it.** Reading a file
+in the main checkout does **not** count as having read the worktree's copy: it is a different file on
+disk and the read record does not carry across, so the edit is refused with *"File has not been read
+yet"* and the run pays a wasted round-trip. Knowing a file's contents is not the same as having read it
+*where you are about to edit it*. That is the observed behaviour and the whole of it — the exact key
+the runtime tracks is **not** established, so do not reason from an assumed one. Measured
 2026-07-14→21 on the Claude instance (the only lane whose tool errors are attributable — the sibling
 runtimes record no error flag, so this is scoped to that lane rather than asserted for all three):
 **134 such refusals, 73 of them under this monorepo; 126 were on a path never read in that session,
