@@ -376,10 +376,12 @@ public and private — no per-repo loop needed to enumerate):
    makes it not-yet-actionable, and listing it as ready work makes runs either re-skip it every tick or
    measure before the agreed date. Report future-dated Katas separately, with their date.
    Flag repos with **no open
-   `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
+   `type:"Epic"` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
    repos outside the map (`.github`, `maintenance`, `fleet-gitops`, `aws`)
    are never strategy-review candidates, however empty their issue lists.
+   Report those as `NO Epic yet` in the Advance digest — never as a missing-`roadmap`-label signal
+   (#2264).
 6. **Stop at the portfolio boundary.** Do not add cross-organisation discovery, even for PRs authored
    by `devantler`. The orchestrator cannot authorise an external repository from survey metadata; only
    the maintainer can clear that boundary in a current interactive conversation.
@@ -473,8 +475,9 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
 
 ### Advance
-- <repo>: roadmap-ready → #<n> "<title>" (<label>)
-- <repo>: NO roadmap yet → strategy-review candidate
+- <repo>: ready → #<n> "<title>" (type:<Type>)
+- <repo>: NO Epic yet → strategy-review candidate
+- <repo> #<n> "<title>" (type:Kata) — FUTURE-MEASURE @<YYYY-MM-DD>
 - <repo> #<n> "<title>" — CLAIMED: assignee=devantler, claim-branch=<name>, no open PR
 ```
 
@@ -482,6 +485,18 @@ Digest rules:
 - **Classify, don't decide.** Surface signals; the **orchestrator** selects the work and overlays its
   own native-memory cadence cursors (`last_worked`, `weekly`, docs/roadmap) — **you do not read
   memory**, only live GitHub.
+- **Advance rows are type-aware — never invent a label.** Ready work is reported as
+  `ready → #<n> "<title>" (type:<Type>)` using the Issue Type from the type sweep (`Epic`, `Feature`,
+  `Bug`, `Security`, `Performance`, `Refactor`, `Docs`, `Spike`, `Kata`, `Chore`). Type-only work
+  (`Spike` / `Kata` / `Chore`) has no companion type-label, so a `(<label>)` suffix would force the
+  surveyor to invent one or drop the row — both wrong (#2264). Keep `roadmap` / `enhancement` / …
+  labels out of this shape; they are legacy cross-checks at most.
+- **Future-dated Katas are not ready work.** Emit them only as
+  `FUTURE-MEASURE @<YYYY-MM-DD>` (the named measurement date on the issue), never as a `ready` row —
+  contract skip reason (d). When the date has elapsed, the same issue becomes an ordinary `ready`
+  `type:Kata` row.
+- **`NO Epic yet` keys on `type:"Epic"`, not the `roadmap` label.** A product with open Epics but no
+  `roadmap` label is stocked; a product with neither is the strategy-review candidate.
 - **Emit a `CLAIMED` row only when BOTH a `devantler` assignment and a matching claim branch exist**
   (and no open PR). Match `claude/*-<issue>`, a takeover branch (`claude/*-<issue>-2`, `-3`, …), or a
   legacy normalised stem. An assignment to **anyone but `devantler`** is not a claim at all, and a
