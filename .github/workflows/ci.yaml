@@ -29,6 +29,7 @@ jobs:
       board-add: ${{ steps.filter.outputs.board-add }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
+      memory-rewrite: ${{ steps.filter.outputs.memory-rewrite }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -86,6 +87,10 @@ jobs:
               - '.claude/scripts/memory-hygiene.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            memory-rewrite:
+              - '.claude/scripts/memory-rewrite.sh'
+              - '.claude/scripts/memory-rewrite.test.sh'
               - '.github/workflows/ci.yaml'
             maintainer-preflight:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
@@ -342,6 +347,21 @@ jobs:
       - name: Verify the memory hygiene guard
         run: bash .claude/scripts/memory-hygiene.test.sh
 
+  test-memory-rewrite:
+    name: Test memory rewrite guard
+    needs: changes
+    if: needs.changes.outputs.memory-rewrite == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify the memory rewrite guard
+        run: bash .claude/scripts/memory-rewrite.test.sh
+
   test-product-value-contract:
     name: Test product value contract
     needs: changes
@@ -403,6 +423,7 @@ jobs:
       - test-submodule-init
       - test-maintainer-preflight
       - test-memory-hygiene
+      - test-memory-rewrite
       - test-self-review-contract
       - test-portfolio-surveyor-contract
       - test-product-value-contract
@@ -423,6 +444,7 @@ jobs:
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
+            ${{ needs.test-memory-rewrite.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}
