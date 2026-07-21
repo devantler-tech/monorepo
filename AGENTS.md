@@ -592,7 +592,7 @@ Bugbot green on `repos/<o>/<r>/commits/<head>/check-runs`, filtered to the Bugbo
 |---|---|---|---|
 | `success` | `Bugbot Review` | green at that commit | satisfies the gate |
 | `neutral` | `Bugbot Review` | a real review that **found issues** | fix-or-refute the inline `cursor[bot]` comments |
-| `neutral` | `Error` | **the review never ran** — `output.summary` reads `Bugbot run failed` | re-request (paced); count as lane-failure evidence |
+| `neutral` | `Error` | **the review never ran** — `output.summary` reads `Bugbot run failed` | read the `cursor[bot]` comment for the cause before retrying; count as lane-failure evidence |
 
 Anything else: **fail closed** — treat it as no review, never as a green. `neutral` does not fail a
 merge in either case, so it must never be read as "nothing to fix"; but reading the `Error` shape as
@@ -602,13 +602,21 @@ neither falls back to CodeRabbit nor qualifies for the last-resort self-review, 
 parks. A failed run is distinguishable at a glance — it carries **zero** inline comments and **no**
 review object, and completes in seconds.
 
-⚠️ **Pace a batch of review requests — the lane has a throughput ceiling.** In the same measurement,
-25 consecutive requests returned real reviews and **every request after that returned `Error`**, all
-within a few minutes. So a sweep that fires a review request at every never-reviewed draft in one
-pass will burn the tail of the batch against a lane that has stopped serving, and — worse — will
-record 30-odd PRs as "reviewed" when none of them were. When requesting across many drafts, space
-the requests out and **re-read each check-run's `output.title` afterwards** rather than trusting that
-the request was served.
+⚠️ **Bugbot is METERED against Cursor spend, so a batch of review requests can exhaust the lane
+outright — and the failure is NOT retryable.** In the same measurement, 25 consecutive requests
+returned real reviews and **every request after that returned `Error`**. The cause is not visible on
+the check-run: alongside it Bugbot posts a **`cursor[bot]` comment** reading
+`Bugbot couldn't run - usage limit reached`, explaining that Bugbot counts against Cursor usage for
+the account and that **an admin must raise the limit in the Cursor dashboard**. So:
+
+- **Always read that comment before retrying.** A usage-limit `Error` states **no retry window**, which
+  by the ladder's own rule makes the lane *genuinely unavailable* — retrying it on a timer is pure
+  waste, and re-requesting across 30 drafts posts 60 comments that cannot succeed. Surface the spend
+  limit to the maintainer instead; only he can lift it.
+- **Do not sweep review requests across a large batch of drafts in one pass.** It converts a shared,
+  budgeted resource into a burst, and the tail of the batch is recorded as "reviewed" when none of it
+  was. Request against the drafts a run is actually going to finish, and **re-read each check-run's
+  `output.title` afterwards** rather than trusting that the request was served.
 
 Sweep all three surfaces, and **verify the reviewed sha against the PR head** — a green from any
 reviewer on a stale commit is not a green; re-secure it after pushes. A current-head result carrying

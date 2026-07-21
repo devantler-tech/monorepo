@@ -112,8 +112,10 @@ grep -Fq '| `output.title` |' "${constitution}" ||
   fail "constitution does not name the field that separates Bugbot's two neutral states"
 grep -Fq 'Bugbot run failed' "${constitution}" ||
   fail "constitution does not name the marker that identifies a Bugbot run which never happened"
-grep -Fq 'throughput ceiling' "${constitution}" ||
-  fail "constitution does not warn that a batch of review requests exhausts the Bugbot lane"
+grep -Fq 'usage limit reached' "${constitution}" ||
+  fail "constitution does not name the comment that identifies an exhausted Bugbot spend limit"
+grep -Fq 'NOT retryable' "${constitution}" ||
+  fail "constitution may send a run retrying a Bugbot usage limit that only the maintainer can lift"
 grep -Fq 'AUTOMATION-OWNED (NO-ACTION)' "${surveyor}" ||
   fail "surveyor does not short-circuit dependency-bot PRs as no-action"
 grep -Fq 'renovate[bot]' "${surveyor}" ||
