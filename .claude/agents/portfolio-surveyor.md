@@ -169,15 +169,49 @@ public and private — no per-repo loop needed to enumerate):
      review URL and unresolved-thread/finding count and classify the PR **NEEDS-FIX**, exactly like
      the Codex case below; never hide it as `none` or signal another request while findings sit
      unaddressed. For Codex,
-     sweep paginated `issues/<n>/comments` **and** `pulls/<n>/reviews`/review threads for the latest
+     sweep paginated `issues/<n>/comments` **and** `pulls/<n>/reviews`/review threads for
      actual `chatgpt-codex-connector` review output (not an arbitrary command/setup reply), extract
      `**Reviewed commit:** <sha>`, and report
      `codex@<sha>` only when its clean-pass body contains
-     `Codex Review: Didn't find any major issues` and that sha equals `headRefOid`. Report a clean
-     result for an older head as `codex-stale@<sha>`. If the latest current-head Codex review posts
+     `Codex Review: Didn't find any major issues` and that sha **matches** `headRefOid`. The marker
+     carries an **abbreviated** sha (10 characters in every sighting so far), so "matches" means
+     `headRefOid` **starts with** the extracted sha — never string equality against the full
+     40-character oid, which no abbreviated marker can ever satisfy and which would therefore
+     mis-report every green Codex review as stale. Require at least the 10-character prefix (below).
+     A well-formed marker of at least 10 characters that `headRefOid` does **not** start with is a
+     review of an older head — report it `codex-stale@<sha>`, never `none`: a real review exists and
+     collapsing it to `none` both loses that fact and reads as "no reviewer has looked at this",
+     which is what drives a needless re-request. `none` is reserved for a marker that is **absent,
+     malformed, or shorter than 10 characters** — i.e. no usable review output at all. Report a clean
+     result for an older head as `codex-stale@<sha>`. If a Codex review **at the current head** posts
      findings instead of the clean-pass marker, report `codex-findings@<sha>` plus its comment/review
      URL or unresolved connector-thread count and classify the PR **NEEDS-FIX**; never hide that surface as `none` or immediately
      request another review.
+     🔴 **HEAD-MATCH DECIDES FIRST — never rank the two surfaces by recency.** Codex's outcome shapes
+     live on different surfaces with different timestamp fields: findings are a review **object**
+     (`submitted_at`, carries `commit_id`), a clean pass is an issue **COMMENT** (`created_at`,
+     carries `**Reviewed commit:**` and **no `commit_id` at all**). "The latest output" is therefore
+     undefined across them, so resolve by **sha, not by time**: check both surfaces for `headRefOid`
+     first, and a clean pass naming the head wins **even when a findings review object exists at an
+     older sha** — that object is superseded history, not an open finding. Only findings **at head**
+     yield `codex-findings`. Measured 2026-07-20 (monorepo#2308): reporting the older object instead
+     mislabelled four green drafts (`ksail`#6267/#6279, `agent-plugins`#72, `platform`#2635) as
+     NEEDS-FIX, each pushing the orchestrator to re-request a review it already held — on a
+     per-account quota contended by ~7 parallel sessions.
+     **Same-sha tie-break: FINDINGS WIN — report `codex-findings@<sha>`.** Head-match alone does not
+     decide when Codex is re-run **without a push** (a refuted finding re-requested at the same
+     commit), because then a findings object **and** a clean-pass comment can both name `headRefOid`
+     — and "which is newer" is exactly the cross-surface comparison the rule above forbids. Left
+     undefined, traversal order would pick the row, so the same PR could report `codex@<sha>` on one
+     run and `codex-findings@<sha>` on the next. Fail closed: at equal sha the findings row wins and
+     the PR is **NEEDS-FIX**. The cost is one redundant fix-or-refute pass; the alternative is
+     promoting past an open finding, which the whole pentad exists to prevent.
+     ⚠️ **Extract that sha tolerantly, or head-match cannot fire at all.** The marker is written
+     ``**Reviewed commit:** `<sha>` `` — the sha is **backtick-wrapped** and **abbreviated to 10
+     chars**, not the full 40. A pattern expecting hex immediately after the colon matches nothing
+     and yields "no reviewed commit", which is indistinguishable from a genuinely absent marker and
+     silently drops every row to `none(…)`. Skip the backticks and compare on the **abbreviated
+     prefix** of `headRefOid`, never on a full-40 equality.
      🔴 **For Cursor Bugbot the green lives on a THIRD surface — a CHECK-RUN, not a review and not a
      comment.** Sweeping only reviews and comments is **structurally blind** to it and would report
      `green_review=none` on an already-green PR — the same defect class as the Codex comment-shaped
