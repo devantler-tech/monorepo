@@ -179,13 +179,15 @@ this for any repo touched, and it binds you too: pre-flight left you sitting in
 unless you move first. Do this **before the first edit**, not before the commit:
 
 ```sh
-git -C ~/git-personal/monorepo worktree add \
-  .claude/worktrees/improver-<runid> -b claude/<area>-<desc>-<issue>
+.claude/scripts/worktree-claim.sh add ~/git-personal/monorepo \
+  .claude/worktrees/improver-<runid> claude/<area>-<desc>-<issue> improver-<runid>
 ```
 
 If the harness already placed you in a per-session worktree, that one counts — **confirm** it with
 `git rev-parse --show-toplevel` (it must return the worktree's own path, not the shared checkout or a
-`.git/modules/<name>` gitdir) and branch inside it, rather than nesting a second one.
+`.git/modules/<name>` gitdir) and branch inside it, rather than nesting a second one. Before editing
+a worktree you did not create, `.claude/scripts/worktree-claim.sh check <wt> <session-slug>` — exit 3
+means a live foreign claim (#2284).
 
 Then edit **through the worktree path** — a path into the main checkout writes to the shared tree no
 matter which branch you think you are on. Remove any worktree **you** created and sweep the branch at

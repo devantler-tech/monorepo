@@ -1613,17 +1613,28 @@ hijacked run *could* do.
 
 ### Execution model — per-run worktrees
 Each run works in **throwaway git worktrees**, never a shared main checkout, so it can't collide with
-the maintainer's parallel sessions. For each repo touched:
-`git -C <repo_path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>`
-(the trailing issue number is what makes a pre-PR claim matchable — see *Claim protocol*; for the
-legitimate **issue-less** flows the contract allows, a hotfix or a trivial obvious fix, there is no
-number to append, so use plain `claude/<area>-<desc>` — those go straight to a PR, so the PR body is
-the discoverable signal and no claim window applies), work there,
-open the PR, then `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local
-filesystem path such as `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the
-slug only for `gh` commands). **Submodule worktree isolation breaks whenever a submodule is
-initialised** — a stray shared `core.worktree` makes `git worktree add` resolve back into the main
-checkout, silently collapsing every parallel session into one physical tree.
+the maintainer's parallel sessions. For each repo touched, create the worktree **through the claim
+helper** (not a bare `git worktree add`) so the directory carries an ownership marker:
+
+```sh
+.claude/scripts/worktree-claim.sh add <repo_path> .claude/worktrees/maint-<runid> \
+  <lane>/<area>-<desc>-<issue> <session-slug>
+```
+
+(`<lane>` is YOUR instance's namespace — `claude/*`, `codex/*` or `cursor/*`; the trailing issue
+number is what makes a pre-PR claim matchable — see *Claim protocol*; for the legitimate
+**issue-less** flows the contract allows, a hotfix or a trivial obvious fix, there is no number to
+append, so use plain `<lane>/<area>-<desc>` — those go straight to a PR, so the PR body is the
+discoverable signal and no claim window applies.) Work there, open the PR, then
+`git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local filesystem path such as
+`applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the slug only for `gh`
+commands). **Before editing any worktree this session did not create**, run
+`.claude/scripts/worktree-claim.sh check <wt> <session-slug>`: exit 3 means a **live foreign claim**
+(marker owner ≠ you, `created_at` within ~2h — the same window as an issue claim) → stand down and
+pick another lane; exit 0 means free, yours, or expired. A stale marker must not park a worktree
+permanently (#2284). **Submodule worktree isolation breaks whenever a submodule is initialised** — a
+stray shared `core.worktree` makes `git worktree add` resolve back into the main checkout, silently
+collapsing every parallel session into one physical tree.
 
 **A fresh worktree is a fresh COPY — `Read` a file THERE before your first edit of it.** Reading a file
 in the main checkout does **not** count as having read the worktree's copy: it is a different file on
@@ -1704,7 +1715,11 @@ on the same theme; a fresh sibling push or disclosed reply means that lane is ow
 verify against the NEW head and prefer contributing to the existing artifact over duplicating it;
 (2) **fetch immediately before every push** to a shared branch and integrate with a **merge, never a
 force-push**; (3) on generated-file conflicts, take the incoming side and **re-run the generator**
-(`checkout --theirs` + regenerate) rather than hand-merging generated output.
+(`checkout --theirs` + regenerate) rather than hand-merging generated output. **A
+`File has been modified since read` (or equivalent) tool error on a path inside a per-run worktree
+is a collision signal, not editor noise** (#2284): re-diff before assuming it is your own churn, and
+**never** `git checkout` / overwrite the contended path — that destroys uncommitted work belonging
+to another instance. Prefer standing down and picking a different lane over writing through.
 
 **Temporary clones go through the safe-clone primitive — credentials never live in remote URLs.**
 Every autonomous temporary clone uses [`safe-clone.sh`](.claude/scripts/safe-clone.sh)
