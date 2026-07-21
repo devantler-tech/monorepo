@@ -132,6 +132,20 @@ grep -Fq 'do **not** call' "${surveyor}" ||
   fail "surveyor still permits heavy dependency-PR deepening"
 grep -Fq 'count it against' "${surveyor}" ||
   fail "surveyor may still turn dependency automation into operate work"
+# Board coverage (#2326): a single unpaginated page counted 237 while totalCount was 4487.
+# The digest must carry an explicit measured|unknown grammar, forbid emitting a count from one
+# page, and prefer unknown under budget pressure — otherwise every survey re-improvises the metric
+# and a truncated census looks complete.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq 'board_coverage=<measured:' "${surveyor}" ||
+  fail "surveyor digest has no board_coverage measured|unknown grammar"
+grep -Fq 'never emit a count from a single page' "${surveyor}" ||
+  fail "surveyor may still emit a board-coverage count from a single-page read"
+grep -Fq 'board_coverage=unknown' "${surveyor}" ||
+  fail "surveyor has no unknown token for a truncated or budget-limited board census"
+grep -Fq 'prefer `unknown` over a partial number' "${surveyor}" ||
+  fail "surveyor does not prefer unknown over a partial board-coverage number under budget pressure"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'automation-owned dependency PRs' "${monorepo_skill}" ||
