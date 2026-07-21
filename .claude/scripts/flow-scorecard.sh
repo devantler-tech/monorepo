@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# flow-scorecard.sh — measure the Daily AI Engineer's FLOW against the 🌊 Project
+# flow-scorecard.sh — measure the Agentic Engineer's FLOW against the 🌊 Project
 # Board (org project 5) for the Kanban Kata (monorepo#2271) and emit ONE compact
 # scorecard: WIP per board Status, throughput + a created→closed duration proxy,
 # the age of the oldest open substantive issue per repo, and the substantive-vs-
