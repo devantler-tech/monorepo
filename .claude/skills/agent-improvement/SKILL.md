@@ -116,6 +116,10 @@ is told by `security_only` vs `devex_only`. `control_removals_suspected` is the 
 a change whose friction fell **and** whose security floor fell. Verify the floor directly rather than
 reading the PR body, because the framing is identical for a paved road and for a silent regression —
 that identity is precisely why this needs its own count instead of a judgement call.
+**Source — no script emits this row yet**, unlike `flow`: derive it by hand from the window's merged
+PRs, reading each security-relevant body for the two deltas. Say so when you record it, and treat
+folding it into `agent-telemetry.sh` as a candidate improvement rather than a prerequisite for
+scoring — an unscriptable row is still a row you fill, not one you skip.
 **None of this applies to your own enforcement layer**, which stays on the rule-3 loosening bar; a
 guard that merely annoys is not evidence for removing it.
 
