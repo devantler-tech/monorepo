@@ -124,6 +124,23 @@ Its definition lives here as standard primitives:
   *Durable memory* below). Roadmaps are **GitHub Issues** (`roadmap`-labelled epics + milestones), not
   a file; no version-controlled status board, no bespoke `state.json`.
 
+### The FinOps engineer — the money side of the same portfolio
+A separate scheduled agent, [`.claude/agents/finops-engineer.md`](.claude/agents/finops-engineer.md),
+owns **spend**: it raises value per unit cost across the platform and the tooling around it, while a
+declared, versioned **lifestyle floor**
+([`.claude/finops/lifestyle-floor.md`](.claude/finops/lifestyle-floor.md)) names the outcomes that are
+never traded for money. Its run loop is [`.claude/skills/finops/`](.claude/skills/finops/SKILL.md) and
+its evidence layer is the read-only
+[`.claude/scripts/finops-snapshot.sh`](.claude/scripts/finops-snapshot.sh).
+
+Three properties make it safe to run unattended, and they are **not** negotiable by the agent itself:
+it **never moves money** (it prepares decisions; the maintainer executes them), it **gives no
+personalised investment advice** (engineering economics only — rent vs own, tier, provider, payback),
+and **private financial data never reaches a public artifact**. It reaches the maintainer on **Slack
+only when he must act**, never with status. The **Agent Improver improves it too**, on its own
+parameters — calibration, floor integrity, signal discipline, honesty, confidentiality, coverage —
+deliberately *not* on how much it saves.
+
 ### Design principles — native to Claude, portable by default
 Two rules shape *how* the assistant is built:
 1. **Stay native to first-class Claude capabilities** — use the **memory tool** for durable memory,
