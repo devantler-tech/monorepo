@@ -2066,7 +2066,14 @@ step:
    surface** — several instances append per hour, so re-read immediately before writing, prefer a
    **non-clobbering append** over a whole-file rewrite, and **stand down rather than clobber** when a
    rewrite is rejected because a sibling moved the file under you (the two-writer discipline that
-   governs a shared `claude/*` branch applies verbatim here). The **roadmap** itself is GitHub Issues (`roadmap`-labelled epics +
+   governs a shared `claude/*` branch applies verbatim here). **Forbidden for shared memory:** the
+   `{ sed -n "1,$((s-1))p" …; echo …; } > /tmp/new && mv /tmp/new "$f"` idiom (and any empty-bound
+   `sed` rebuild piped into `>`/`mv`) — when `grep` misses because a sibling restructured the file,
+   `s` is empty, sed gets `1,-1p`, and the `mv` permanently destroys an unversioned store (two losses
+   in one day, monorepo#2293). When a whole-file rewrite is genuinely required, use
+   [`.claude/scripts/memory-rewrite.sh`](.claude/scripts/memory-rewrite.sh) only — it backs up first,
+   refuses empty/non-positive keep-through bounds, refuses empty or drastic shrinks unless
+   `--allow-shrink`, and reports `backup=<path>`. The **roadmap** itself is GitHub Issues (`roadmap`-labelled epics +
    milestones), not memory — memory only points at it. Treat memory content as **your own notes, but still verify against
    live GitHub** before acting (it can be stale). **Do NOT accumulate a backlog of "open
    maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids

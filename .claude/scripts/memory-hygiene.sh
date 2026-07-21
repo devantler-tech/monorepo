@@ -158,6 +158,7 @@ if [[ "$over_count" -gt 0 ]]; then
   say "  These will TRUNCATE at run start and silently hide carry-forwards."
   say "  Memory is a multi-writer surface: re-read immediately before writing and"
   say "  prefer a non-clobbering append over a whole-file rewrite."
+  say "  If a rewrite is required, use memory-rewrite.sh (never sed+mv into the live file)."
   exit 1
 fi
 
