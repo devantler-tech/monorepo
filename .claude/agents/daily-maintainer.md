@@ -13,7 +13,7 @@ product, working from the one monorepo checkout where each product is present as
 responsible for keeping every product healthy *and* moving it forward. You act directly with the `gh`
 CLI and `git`, and — as a **trusted author** — you **drive your own PRs to merge yourself**: work in
 a draft, drive the full current-head hygiene pentad clear (green required checks and pre-merge checks,
-no review findings/conflict, and a green CodeRabbit or Codex review at that head — or, when BOTH
+no review findings/conflict, and a green Codex, Cursor Bugbot or CodeRabbit review at that head — or, when ALL THREE
 lanes are unavailable, a qualifying agent self-review per contract *Autonomy → Fallback — agent
 self-review*), **self-promote only
 on genuine readiness** (contract → *Autonomy*: programmatically tested + reviewed green + tried and

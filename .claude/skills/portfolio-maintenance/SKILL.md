@@ -130,8 +130,8 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   green-review state** — so a run can
   **drain all five**, not just threads. **(e) green review:** nothing may be self-promoted without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
-  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|self@<sha>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n> @<abbrev-head>)>`
-  (`self@<sha>` = the last-resort agent self-review on an **own** PR when both lanes are down —
+  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>`
+  (`self@<sha>` = the last-resort agent self-review on an **own** PR when ALL THREE lanes are down —
   contract *Autonomy → Fallback — agent self-review*; never on a bot-authored PR). **`none` carries
   its evidence** — the review-output artifact counts the surveyor actually saw, **per lane**, and the abbreviated
   head it matched — so a real absence is distinguishable from a filter miss; a bare `none` is an
@@ -144,9 +144,15 @@ accumulate in *its* throwaway context, not yours; you receive only the digest. T
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual
   `chatgpt-codex-connector` review output, extract `**Reviewed commit:** <sha>`, and accept its
   clean-pass marker only at the current head.
-  Report a current-head non-green output from either reviewer as `*-findings@<sha>` with a link/count
+  🔴 **For Cursor Bugbot the artifact is a CHECK-RUN named `Cursor Bugbot` (app slug `cursor`) — not a
+  review object and not an issue comment.** Sweep `repos/<o>/<r>/commits/<headRefOid>/check-runs`:
+  `conclusion: success` → `bugbot@<sha>`; **`conclusion: neutral` → `bugbot-findings@<sha>`** (its
+  findings land as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments`, so count those,
+  not issue comments). `neutral` deliberately does NOT fail the merge — never read it as a pass. A
+  reviews+comments-only sweep is structurally blind to this lane.
+  Report a current-head non-green output from ANY reviewer as `*-findings@<sha>` with a link/count
   and **NEEDS-FIX** before considering another review request; reserve `none` for no actual review
-  output. Count all unresolved review threads across all pages, regardless of author.
+  output on any of the three surfaces. Count all unresolved review threads across all pages, regardless of author.
   Query threads per PR via GraphQL
   `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}` and
   report `unresolved=<n>`. **Paginate `reviewThreads` (follow
@@ -354,10 +360,10 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
    force-push), **green the CodeRabbit pre-merge checks** (a draft with failed pre-merge checks may
    not be self-promoted — rooted in direction 2026-07-06), and **secure ≥1 green review at the
-   current head** — auto-review is disabled on both reviewers, so requesting (and re-requesting after
+   current head** — auto-review is disabled on ALL THREE reviewers, so requesting (and re-requesting after
    every push) is your duty; the full request discipline (one tool at a time by live rate-limit
-   state, evidence-based fallback to the other lane, the **last-resort agent self-review** when BOTH
-   lanes are unavailable — reviewed with your own review skills and posted as a **real GitHub Review
+   state, evidence-based fallback DOWN the Codex > Cursor Bugbot > CodeRabbit ladder, the **last-resort
+   agent self-review** when ALL THREE lanes are unavailable — reviewed with your own review skills and posted as a **real GitHub Review
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
    verdict line) so the sibling agent can see and act on it, incremental re-reviews,
    green-while-draft as the promotion precondition, the **automation-owned dependency-PR no-action carve-out**, and the trusted programmed

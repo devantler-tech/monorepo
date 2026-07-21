@@ -130,7 +130,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: "npm"
@@ -154,7 +154,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: "npm"
@@ -178,7 +178,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: "npm"
@@ -407,7 +407,7 @@ jobs:
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/actions/aggregate-job-checks@47f0d9b632581a613963a2d25c243713f24c32a0 # v10.1.0
+        uses: devantler-tech/actions/aggregate-job-checks@5c284fdf432754a697710c336fc2c26bc99868bb # v10.2.0
         with:
           job-results: >-
             ${{ needs.changes.result }}
