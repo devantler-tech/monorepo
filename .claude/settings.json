@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "devantler-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "devantler-tech/agent-plugins"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "automated-ai-engineer@devantler-plugins": true
+  }
+}

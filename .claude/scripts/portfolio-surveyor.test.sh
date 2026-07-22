@@ -13,6 +13,8 @@ agent_skills_card="${repo_root}/.claude/skills/products/agent-skills/SKILL.md"
 ksail_card="${repo_root}/.claude/skills/products/ksail/SKILL.md"
 platform_card="${repo_root}/.claude/skills/products/platform/SKILL.md"
 platform_security_surveyor="${repo_root}/.claude/agents/platform-security-surveyor.md"
+cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
+ci_workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
   echo "portfolio surveyor contract: FAIL — $*" >&2
@@ -71,6 +73,28 @@ grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
   fail "surveyor does not fetch complete current-head commit provenance"
 grep -Fq 'AUTOMATION-OWNED and need NO agent action' "${constitution}" ||
   fail "constitution does not exempt Renovate/Dependabot dependency PRs from agent action"
+grep -Fq '`cursor[bot]` on REST surfaces' "${constitution}" ||
+  fail "constitution does not map the REST surface for the trusted app/cursor author"
+grep -Fq 'Cursor Automation is a trusted PR author' "${constitution}" ||
+  fail "constitution does not trust the maintainer-authorized Cursor Automation author"
+grep -Fq 'For `app/cursor`, the acting local sibling' "${constitution}" ||
+  fail "merge policy still tells the permission-limited Cursor App to arm its own merge"
+grep -Fq "The machine-local agents' **own** PRs" "${constitution}" ||
+  fail "self-promotion rule still ambiguously includes the permission-limited Cursor cloud lane"
+grep -Fq '`cursor[bot]` — **exact' "${surveyor}" ||
+  fail "reference surveyor does not deepen PRs authored by the trusted Cursor Automation App"
+grep -Fq 'siblings may build, run, review,' "${cursor_loader}" ||
+  fail "Cursor loader still prevents trusted sibling instances from driving Cursor-authored PRs"
+grep -Fq 'and drive your PRs' "${cursor_loader}" ||
+  fail "Cursor loader does not authorize the sibling handoff through merge"
+grep -Fq -- "- '.claude/loaders/cursor-daily-ai-engineer.md'" "${ci_workflow}" ||
+  fail "Cursor loader changes do not trigger the portfolio surveyor contract job"
+if grep -Fq '`app/cursor` is **not** in the contract' "${cursor_loader}"; then
+  fail "Cursor loader still classifies its trusted App identity as external"
+fi
+if grep -Fq '**`app/cursor` is NOT a trusted PR AUTHOR' "${constitution}"; then
+  fail "constitution still classifies the maintainer-authorized Cursor App as an external author"
+fi
 # Lane-agnostic on purpose: the reviewer roster grows (Codex, Cursor Bugbot, CodeRabbit, …), so
 # assert the PROHIBITION, not the roster — naming lanes here breaks this test on every lane change.
 grep -Fq 'Never request a review from any lane' "${constitution}" ||
@@ -147,6 +171,13 @@ grep -Fq 'count it against' "${surveyor}" ||
   fail "surveyor may still turn dependency automation into operate work"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
+grep -Fq 'Compatibility overlay' "${maintenance_skill}" ||
+  fail "plugin surveyor can run without the hardened local behavior before digest parity"
+grep -Fq 'read and follow the local' "${maintenance_skill}" ||
+  fail "plugin surveyor is not explicitly required to load the local compatibility overlay"
+if grep -Fq '**Do not load** the local reference copy' "${maintenance_skill}"; then
+  fail "run loop forbids the compatibility overlay even though plugin digest parity is not proven"
+fi
 grep -Fq 'automation-owned dependency PRs' "${monorepo_skill}" ||
   fail "monorepo product card still treats dependency PRs as agent work"
 grep -Fq 'automation-owned dependency PRs' "${product_engineering_skill}" ||
