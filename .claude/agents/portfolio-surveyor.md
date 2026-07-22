@@ -86,7 +86,7 @@ public and private — no per-repo loop needed to enumerate):
    heavy fields one PR at a time:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,reviewThreads,headRefName,headRefOid,author,body,files`
    — do **not** pull `statusCheckRollup` for every PR in every repo. When the current-head pentad is
-   clear (CLEAN + required checks/pre-merge green + zero threads/body findings + a current-head green
+   clear (CLEAN + required checks + no applicable current-head pre-merge findings + zero threads/body findings + a current-head green
    review), classify trusted-bot **non-drafts** as **MERGE-READY** and trusted-bot **drafts** as
    **REVIEW-READY**; otherwise **NEEDS-FIX** and name the gate. A `devantler` PR always follows the
    ownership-unverified rule below first.
@@ -117,7 +117,7 @@ public and private — no per-repo loop needed to enumerate):
      failing checks, (b) unresolved
      review threads — including `coderabbitai`, `copilot-pull-request-reviewer[bot]`, and
      `chatgpt-codex-connector[bot]` — **plus CodeRabbit review-BODY finding count**, (c) `mergeStateStatus`
-     conflicts, (d) **failed CodeRabbit pre-merge checks** (see below), (e) **green-review state**
+     conflicts, (d) **applicable current-head CodeRabbit pre-merge findings** (see below), (e) **green-review state**
      (see below). Count all unresolved review threads across all pages, regardless of author. Query
      `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}` and
      paginate until `hasNextPage` is false. For (b)'s body surface: CodeRabbit emits non-inline
@@ -142,9 +142,11 @@ public and private — no per-repo loop needed to enumerate):
      so the orchestrator re-verifies against the head instead of treating it as open, and when the PR
      has a later disclosed resolution reply for a finding, note it. A PR is review-ready only when
      current-head body findings AND unresolved threads are 0, checks are green, it
-     is not CONFLICTING, its pre-merge checks are green (below), and it carries ≥1 green review (below).
+     is not CONFLICTING, it has no applicable current-head CodeRabbit pre-merge findings (below), and
+     it carries ≥1 green review (below).
    - **(e) Green-review state per open actionable own/trusted PR — no actionable own/trusted PR is promotion- or
-     merge-ready without ≥1 green review on top of green CI** (maintainer direction 2026-07-11).
+     merge-ready without ≥1 green review on top of green CI; a successful current-head review from any one provider completes the review gate**
+     (maintainer direction 2026-07-11, clarified 2026-07-22).
      This includes drafts and promoted PRs from humans and actionable trusted bots — EXCEPT trusted
      **programmed release-bot PRs** (Homebrew-tap cask PRs — GoReleaser's for `ksail`/`ksail-desktop`
      and World at Ruin's CD-generated ones on `goreleaser/world-at-ruin`, maintainer direction
@@ -260,9 +262,12 @@ public and private — no per-repo loop needed to enumerate):
      it, so a `none`/`*-stale` on any actionable own/trusted PR signals the orchestrator to
      (re-)request one (its
      one-tool-at-a-time, priority-ordered, rate-limit-aware discipline — the surveyor only reports the state).
-   - **(d) CodeRabbit pre-merge checks per open actionable own/trusted PR — a SEPARATE surface the maintainer
-     gates promotion and merge on** (he will NOT promote a draft whose pre-merge checks aren't green —
-     maintainer direction 2026-07-06). CodeRabbit publishes pre-merge state in either a full
+   - **(d) CodeRabbit pre-merge findings per open actionable own/trusted PR — a SEPARATE surface that
+     applies only when CodeRabbit reviewed the current head, never a mandatory second provider after
+     Codex or Cursor succeeds.** A current-head failed/inconclusive result blocks promotion and sends
+     the orchestrator through fix/push/restart; absent output is `not-required` when another provider
+     supplied the successful current-head review (maintainer directions 2026-07-06 and 2026-07-22).
+     CodeRabbit publishes pre-merge state in either a full
      `## Pre-merge checks` section (Title / Description / **Linked Issues** / **Out of Scope Changes** /
      Docstring-Coverage, each ✅/❌/❓) or a compact collapsed summary such as
      `<summary>🚥 Pre-merge checks | ✅ 5</summary>`. Both are orthogonal to CI, threads, and
@@ -281,16 +286,18 @@ public and private — no per-repo loop needed to enumerate):
      count and no positive `❌`, `❓`, or `⚠️` counter; mixed results such as `✅ 4 | ❌ 1` are failed.
      A full summary is green only when every listed check is explicitly passed and no
      error/inconclusive result appears — absence of a failed heading alone is insufficient. Report
-     exactly `premerge=<green|failed:<names>|failed:unnamed|inconclusive|not-posted|exempt-lanes-down>`:
+     exactly `premerge=<green|failed:<names>|failed:unnamed|inconclusive|not-posted|not-required|exempt-lanes-down>`:
      `inconclusive` means a recognized but non-green/unparseable summary; `not-posted` means no
-     supported marker. Always fail closed. Any non-green value makes the PR **NEEDS-FIX** even when
-     checks/threads/body_findings are clean — with ONE exception: report
+     supported marker. Always fail closed on a result at the current head. A current-head
+     failed/inconclusive value makes the PR **NEEDS-FIX** even when checks/threads/body_findings are
+     clean. Report `not-required` when CodeRabbit did not review the current head and another provider
+     supplied `green_review`; an older CodeRabbit summary is historical and cannot override that
+     current-head success. For the all-lanes-down fallback, report
      **`exempt-lanes-down`** when no summary was posted *because CodeRabbit demonstrably did not
      review* and the PR carries a qualifying `green_review=self@<sha>` (contract *Autonomy → Fallback
      — agent self-review*). CodeRabbit's evaluator only runs when CodeRabbit reviews, so this is the
-     same lane-choice consequence already tolerated for a Codex-lane green — not a licence to soften
-     the surface: a **posted** non-green/inconclusive summary still fails closed and is NEEDS-FIX, and
-     `not-posted` without a qualifying self-review stays NEEDS-FIX as before.
+     same lane-choice consequence as `not-required` — not a licence to soften a current-head posted
+     non-green/inconclusive summary, which still fails closed and is NEEDS-FIX.
    - **Candidate maintainer comments on `devantler` PRs (incl. drafts, AND recently-MERGED ones) —
      disclosure- and ownership-gated.** Under self-promotion-on-genuine-readiness the maintainer's
      post-merge PR comment is a primary steering channel, and an open-PR-only sweep would never
@@ -499,8 +506,8 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]> → AUTOMATION-OWNED (NO-ACTION)
-- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
-- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|not-required|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|not-required|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…> (orchestrator applies creation-record test before action; NOT asserted mine)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
