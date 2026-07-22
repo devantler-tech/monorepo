@@ -205,9 +205,10 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   *No silent caps* rule as the thread query; `gh api --slurp` is rejected alongside `--jq`, so slurp
   the concatenated pages with `jq -s` and flatten via `.[][]`); the acting
   run verifies each against current code, fixes-or-refutes, and **replies on the PR as the
-  resolution record** (no thread exists to resolve). On an unchanged SHA, a later disclosed reply
-  that links the finding and records specific reasoning clears it as `body_findings=0-resolved@<sha>`;
-  a generic comment does not. **(d) CodeRabbit pre-merge findings are a
+  resolution record** (no thread exists to resolve). On an unchanged SHA, a later reply from exact
+  author `devantler` carrying the structural disclosure clears it as
+  `body_findings=0-resolved@<sha>` only when it links the finding and records specific reasoning; a
+  generic or externally-authored comment does not. **(d) CodeRabbit pre-merge findings are a
   separate surface only when CodeRabbit reviews the current head, not a mandatory second provider
   after Codex or Cursor succeeds.** A current-head failed/inconclusive result blocks promotion and
   requires fix/push/restart (directions 2026-07-06 and 2026-07-22); CodeRabbit publishes either
@@ -377,8 +378,8 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    just the one you
    just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**,
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
-   force-push), **clear any current-head CodeRabbit pre-merge findings when CodeRabbit is the active
-   provider** (another provider's success makes unposted output `not-required`), and **secure ≥1 green review at the
+   force-push), **clear any current-head CodeRabbit pre-merge findings when CodeRabbit reviewed that
+   head** (when its review never ran, another provider's success makes unposted output `not-required`), and **secure ≥1 green review at the
    current head** — auto-review is disabled on ALL THREE reviewers, so requesting (and re-requesting after
    every push) is your duty; the full request discipline (**one provider request at a time**, in
    CodeRabbit > Codex > Cursor Bugbot order, and **stop on its first successful current-head review**;

@@ -36,10 +36,14 @@ grep -Fq 'premerge=not-posted` remains **NEEDS-FIX** when CodeRabbit reviewed th
   fail "surveyor can promote before delayed CodeRabbit pre-merge output arrives"
 grep -Fq 'body_findings=0-resolved@<sha>' "${surveyor}" ||
   fail "surveyor cannot clear a same-head CodeRabbit body finding after a recorded refutation"
+grep -Fq 'same-SHA Codex clean supersedes findings only after all finding threads are resolved and a later re-request produces the clean marker' "${surveyor}" ||
+  fail "a successful same-head Codex retry cannot terminate the loop"
+grep -Fq 'Pre-merge output is required only when CodeRabbit reviewed the current head' "${constitution}" ||
+  fail "pre-merge applicability incorrectly expires when the loop advances beyond CodeRabbit"
+grep -Fq 'author exactly `devantler` and carry the structural disclosure prefix' "${constitution}" ||
+  fail "an external account can spoof a same-head body-finding resolution record"
 grep -Fq 'Only one provider request may be active at a time' "${constitution}" ||
   fail "constitution does not forbid concurrent provider requests"
-grep -Fq 'Pre-merge output is required only when CodeRabbit is the provider currently serving the review loop' "${constitution}" ||
-  fail "constitution still makes CodeRabbit pre-merge output mandatory after another provider succeeds"
 
 # The two maintained Claude entry points must remain independently followable without recreating the
 # superseded multi-provider interpretation.
