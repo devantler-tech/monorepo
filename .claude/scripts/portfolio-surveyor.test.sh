@@ -13,6 +13,7 @@ agent_skills_card="${repo_root}/.claude/skills/products/agent-skills/SKILL.md"
 ksail_card="${repo_root}/.claude/skills/products/ksail/SKILL.md"
 platform_card="${repo_root}/.claude/skills/products/platform/SKILL.md"
 platform_security_surveyor="${repo_root}/.claude/agents/platform-security-surveyor.md"
+cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
 
 fail() {
   echo "portfolio surveyor contract: FAIL — $*" >&2
@@ -71,6 +72,22 @@ grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
   fail "surveyor does not fetch complete current-head commit provenance"
 grep -Fq 'AUTOMATION-OWNED and need NO agent action' "${constitution}" ||
   fail "constitution does not exempt Renovate/Dependabot dependency PRs from agent action"
+grep -Fq '`cursor[bot]` on REST surfaces' "${constitution}" ||
+  fail "constitution does not map the REST surface for the trusted app/cursor author"
+grep -Fq 'Cursor Automation is a trusted PR author' "${constitution}" ||
+  fail "constitution does not trust the maintainer-authorized Cursor Automation author"
+grep -Fq '`cursor[bot]` — **exact' "${surveyor}" ||
+  fail "reference surveyor does not deepen PRs authored by the trusted Cursor Automation App"
+grep -Fq 'siblings may build, run, review,' "${cursor_loader}" ||
+  fail "Cursor loader still prevents trusted sibling instances from driving Cursor-authored PRs"
+grep -Fq 'and drive your PRs' "${cursor_loader}" ||
+  fail "Cursor loader does not authorize the sibling handoff through merge"
+if grep -Fq '`app/cursor` is **not** in the contract' "${cursor_loader}"; then
+  fail "Cursor loader still classifies its trusted App identity as external"
+fi
+if grep -Fq '**`app/cursor` is NOT a trusted PR AUTHOR' "${constitution}"; then
+  fail "constitution still classifies the maintainer-authorized Cursor App as an external author"
+fi
 # Lane-agnostic on purpose: the reviewer roster grows (Codex, Cursor Bugbot, CodeRabbit, …), so
 # assert the PROHIBITION, not the roster — naming lanes here breaks this test on every lane change.
 grep -Fq 'Never request a review from any lane' "${constitution}" ||

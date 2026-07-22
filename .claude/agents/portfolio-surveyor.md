@@ -62,8 +62,9 @@ public and private — no per-repo loop needed to enumerate):
    Other API surfaces may render the same actors as `app/renovate` or `app/dependabot`; do not
    use search's unreliable `is_bot` field, a title, or a branch pattern as the classifier.
    For the *few* remaining open **`devantler`-authored or actionable trusted-bot PRs — drafts and
-   non-drafts —** (`devantler`, `ksail-bot[bot]`, `github-actions[bot]`, `coderabbitai[bot]` — **exact
-   login match, never a substring**; `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the
+   non-drafts —** (`devantler`, `ksail-bot[bot]`, `github-actions[bot]`, `coderabbitai[bot]`,
+   `cursor[bot]` — **exact login match, never a substring**; `cursor[bot]` is trusted here only on the PR-author surface;
+   `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the
    heavy fields one PR at a time:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,reviewThreads,headRefName,headRefOid,author,body,files`
    — do **not** pull `statusCheckRollup` for every PR in every repo. When the current-head pentad is
@@ -89,7 +90,7 @@ public and private — no per-repo loop needed to enumerate):
      **Never label a `devantler` PR `MERGE-READY` or "own"**; the orchestrator applies its creation-record
      test and decides whether any action is allowed. (Actionable bot-trusted authors — `app/ksail-bot`
      (reported as `ksail-bot[bot]` on the search surface),
-     `github-actions[bot]`, `coderabbitai[bot]` — carry no such
+     `github-actions[bot]`, `coderabbitai[bot]`, `cursor[bot]` — carry no such
      ambiguity: classify green drafts `REVIEW-READY`, green non-drafts `MERGE-READY`, and every
      non-green pentad `NEEDS-FIX`.)
    - **Hygiene pentad per open actionable `devantler` candidate/trusted-bot PR — including drafts and
@@ -231,7 +232,7 @@ public and private — no per-repo loop needed to enumerate):
      lane-failure evidence, and a run that reads it as "findings" will chase comments that do not
      exist while a lane outage goes unreported. A success at an older head is
      `bugbot-stale@<sha>`. ⚠️ **Match Bugbot on the CHECK-RUN only, never on the `cursor[bot]` login**
-     — that same login is also our untrusted Cursor Automation instance authoring PRs, so a
+     — that same login is also our trusted Cursor Automation instance authoring PRs, so a
      login-keyed match would let that instance appear to green its own work (contract *Trust gate →
      Cursor Bugbot has reviewer-only standing*). A `cursor[bot]` approval, comment or review object is
      **never** a green.
