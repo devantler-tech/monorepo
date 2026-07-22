@@ -108,6 +108,7 @@ jobs:
               - 'AGENTS.md'
               - '.claude/agents/daily-maintainer.md'
               - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/review-provider-loop-contract.test.sh'
               - '.github/workflows/ci.yaml'

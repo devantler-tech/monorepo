@@ -98,6 +98,8 @@ grep -Fq 'stop after the first provider succeeds' "${daily_maintainer}" ||
 # The contract must be a required PR check, including when its own workflow wiring changes.
 grep -Fq 'review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}' "${workflow}" ||
   fail "CI does not export the review-provider contract change filter"
+grep -Fq '.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md' "${workflow}" ||
+  fail "parity-checklist changes do not trigger the review-provider contract check"
 grep -Fq 'test-review-provider-loop-contract:' "${workflow}" ||
   fail "CI does not define the review-provider contract test job"
 grep -Fq 'run: bash .claude/scripts/review-provider-loop-contract.test.sh' "${workflow}" ||
