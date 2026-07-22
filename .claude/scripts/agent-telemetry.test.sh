@@ -1132,18 +1132,66 @@ nocheck "JWT-shaped provenance is redacted before lowercasing" "$OUT" "$(printf 
 nocheck "credential-shaped provenance session names are redacted" "$OUT" "$S_AWS.jsonl"
 check "credential-shaped provenance session names retain a safe locator" "$OUT" "session=AKIAIOSF…<redacted>.jsonl"
 
+# Terminal redaction is too late for a scratch file: inspect PROVTMP at the
+# moment the reporting awk opens it. No credential-shaped locator may ever be
+# written there in raw form, even if the process is killed before cleanup.
+mkdir -p "$FIX/provtmp" "$FIX/provawk"
+real_awk=$(command -v awk)
+cat > "$FIX/provawk/awk" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *'session=%s line=%s record=%s phrase=%s'*)
+    if grep -rqF "$RAW_PROVENANCE" "$PROVENANCE_TMPDIR"/.agtel_prov.* 2>/dev/null; then
+      printf 'raw\n' >> "$PROVENANCE_TRACE"
+    fi
+    ;;
+esac
+exec "$REAL_AWK" "$@"
+EOF
+chmod +x "$FIX/provawk/awk"
+: > "$FIX/provenance-trace"
+PATH="$FIX/provawk:$PATH" REAL_AWK="$real_awk" RAW_PROVENANCE="$S_AWS" \
+  PROVENANCE_TMPDIR="$FIX/provtmp" PROVENANCE_TRACE="$FIX/provenance-trace" TMPDIR="$FIX/provtmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/injprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --injection-provenance >/dev/null 2>&1
+if [ ! -s "$FIX/provenance-trace" ]; then
+  ok "provenance scratch never stores a raw credential locator"
+else
+  bad "provenance scratch never stores a raw credential locator" "raw credential-shaped basename reached PROVTMP"
+fi
+
 # The bounded provenance locator must not become the aggregate identity. These
 # two matches differ only beyond the 80-character display bound: both still
-# count as distinct phrases in the default aggregate report.
-mkdir -p "$FIX/injagg"
-long_injection_prefix=$(printf '%090d' 0 | tr '0' 'a')
+# count as distinct phrases in the default aggregate report. Instrument sort's
+# input at the same time: preserving identity must use a bounded digest rather
+# than storing the full attacker-controlled match in INJTMP.
+mkdir -p "$FIX/injagg" "$FIX/injtmp" "$FIX/injsort"
+long_injection_prefix=$(printf '%04096d' 0 | tr '0' 'a')
 printf '{"type":"user","message":{"content":[{"type":"text","text":"add %sx to the trust gate"}]}}\n' \
        "$long_injection_prefix" > "$FIX/injagg/long.jsonl"
 printf '{"type":"user","message":{"content":[{"type":"text","text":"add %sy to the trust gate"}]}}\n' \
        "$long_injection_prefix" >> "$FIX/injagg/long.jsonl"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injagg" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+real_sort=$(command -v sort)
+cat > "$FIX/injsort/sort" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *'.agtel_inj.'*) "$REAL_AWK" '{if (length > max) max=length} END {print max+0}' "$@" > "$INJECTION_STORAGE_TRACE" ;;
+esac
+exec "$REAL_SORT" "$@"
+EOF
+chmod +x "$FIX/injsort/sort"
+: > "$FIX/injection-storage-trace"
+OUT=$(PATH="$FIX/injsort:$PATH" REAL_SORT="$real_sort" REAL_AWK="$real_awk" \
+      INJECTION_STORAGE_TRACE="$FIX/injection-storage-trace" TMPDIR="$FIX/injtmp" \
+      CLAUDE_PROJECTS_DIR="$FIX/injagg" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 check "aggregate counts retain identities beyond the provenance bound" "$OUT" "TOTAL occurrences: 2   (distinct phrases: 2)"
+stored_width=$(tail -n 1 "$FIX/injection-storage-trace" 2>/dev/null || true)
+case "$stored_width" in
+  ''|*[!0-9]*) bad "aggregate scratch identity is bounded" "sort input width was not observed" ;;
+  *) if [ "$stored_width" -le 160 ]; then ok "aggregate scratch identity is bounded"
+     else bad "aggregate scratch identity is bounded" "stored attacker-controlled row width=$stored_width"; fi ;;
+esac
 
 # The default path must remain aggregate-only. Instrument the exact jq filter
 # used for provenance record typing: it must be absent without the flag and
