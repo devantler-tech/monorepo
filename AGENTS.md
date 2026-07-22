@@ -942,8 +942,9 @@ current-head hygiene pentad clear — green required checks, zero unresolved thr
 conflict, green CodeRabbit pre-merge checks, and a current-head green review — gets driven to merge:
 resolve findings, root-cause-fix failing required checks, set a
 Conventional-Commit title, then **merge with the command that matches the author** —
-- an actionable **single-author App** (`github-actions`/`ksail-bot`/`app/cursor`) may arm pre-CLEAN
-  auto-merge only after the review/pre-merge/current-head parts of that pentad are clear:
+- an actionable **single-author App** (`github-actions`/`ksail-bot`/`app/cursor`) uses pre-CLEAN
+  auto-merge only after the review/pre-merge/current-head parts of that pentad are clear.
+  For `app/cursor`, the acting local sibling performs this mutation because the cloud App cannot:
   `gh pr merge <n> --auto --squash`; for **trusted programmed release-bot PRs** (tap cask PRs, KSail
   release bumps — the carve-out above) the review and pre-merge parts are intentionally absent and
   are NOT required — their required checks, zero threads, and no-conflict state alone gate the
@@ -1011,15 +1012,16 @@ directly — each swept PR reports `rd=<reviewDecision>` with the CHANGES_REQUES
 SHA and classifies the otherwise-clear **CodeRabbit-authored** case `STALE-CR-DISMISSAL` — so a run
 acts on the digest without re-deriving it.
 
-The agent instances' **own** PRs are trusted-author PRs (authored as `devantler` from `claude/*` or
-`codex/*`, or as `app/cursor` from `cursor/*` — see trust gate), so the **same path applies to them**:
-work in a draft, drive the hygiene pentad clear
+The machine-local agents' **own** PRs are trusted-author PRs (authored as `devantler` from
+`claude/*` or `codex/*` — see trust gate), so the **same path applies to them**: work in a draft,
+drive the hygiene pentad clear
 (root-cause-fix failing CI, resolve review threads — never sit on a red/unresolved/stale-review
 draft), **self-promote once the three genuine-readiness conditions hold** (*Autonomy*: programmatically
 tested + green review at head + tried-and-evaluated-as-a-user), then drive it to merge like any
 trusted-author PR after a fresh current-head pentad check (`devantler` uses bare
-`gh pr merge <n> --squash`; Cursor App PRs use the single-author-bot path above). The permission-limited
-Cursor lane hands promotion and merge to a local sibling as defined in *Autonomy*.
+`gh pr merge <n> --squash`). Cursor Automation PRs are also trusted and require the same hygiene and
+readiness proof, but the cloud instance leaves them draft; the local sibling defined in *Autonomy*
+performs promotion and the single-author-App merge path above.
 **Definition/self-improvement PRs take this same path** — maintainer direction 2026-07-18
 retired the separate promotion gate they used to keep (see *Self-improvement*). Self-merge means the
 **normal** path only — never `--admin` or any branch-protection bypass. **Never merge

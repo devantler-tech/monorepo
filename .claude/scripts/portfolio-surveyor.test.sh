@@ -76,6 +76,10 @@ grep -Fq '`cursor[bot]` on REST surfaces' "${constitution}" ||
   fail "constitution does not map the REST surface for the trusted app/cursor author"
 grep -Fq 'Cursor Automation is a trusted PR author' "${constitution}" ||
   fail "constitution does not trust the maintainer-authorized Cursor Automation author"
+grep -Fq 'For `app/cursor`, the acting local sibling' "${constitution}" ||
+  fail "merge policy still tells the permission-limited Cursor App to arm its own merge"
+grep -Fq "The machine-local agents' **own** PRs" "${constitution}" ||
+  fail "self-promotion rule still ambiguously includes the permission-limited Cursor cloud lane"
 grep -Fq '`cursor[bot]` — **exact' "${surveyor}" ||
   fail "reference surveyor does not deepen PRs authored by the trusted Cursor Automation App"
 grep -Fq 'siblings may build, run, review,' "${cursor_loader}" ||
