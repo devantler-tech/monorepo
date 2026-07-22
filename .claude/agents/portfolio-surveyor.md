@@ -201,7 +201,9 @@ public and private — no per-repo loop needed to enumerate):
      (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after the
      authenticated request and naming `headRefOid`, only when its threads, review-body sections, and
      explicit ancillary problem count are all zero. **Never count an auto-generated command reply, acknowledgement, quota notice, or service shell as a review completion**; reject the summary too when
-     its body says the review did not run. Report an older completion as `cr-stale@<sha>`. A
+     its body says the review did not run. The qualifying review object `submitted_at` must be later than the latest authenticated CodeRabbit request marker for that head, just as the summary's
+     `updated_at` must be later; this prevents a same-SHA retry from reusing its original review.
+     Report an older completion as `cr-stale@<sha>`. A
      **current-head CodeRabbit review that carries findings** (a `COMMENTED`/`CHANGES_REQUESTED`
      review with unresolved threads or actionable comments) is `cr-findings@<sha>` — report its
      review URL and unresolved-thread/finding count and classify the PR **NEEDS-FIX**, exactly like
@@ -282,7 +284,9 @@ public and private — no per-repo loop needed to enumerate):
      Independently report `review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>` from separate
      authenticated `<!-- review-reservation-head: <full sha> provider=<cr|codex|bugbot> -->` comments.
      Among concurrent current-head reservations, select the oldest `created_at`, then lowest comment
-     id; report it only until its provider request appears or the short reservation window expires.
+     id. **A winning request supersedes every reservation for that provider/head election**, not only
+     the linked winner; report no losing reservation after that request marker or its later outcome.
+     Before a request exists, report the winner only until the short reservation window expires.
      Also report `review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>` by scanning authenticated
      `<!-- review-request-head: <full sha> provider=<lane> reservation=<comment-id> -->` markers,
      reactions/acks, and later substantive artifacts. For a Bugbot marker, **pair it with the next exact-author bare `@cursor review` trigger while ignoring interleaved comments** from other authors and
@@ -297,8 +301,9 @@ public and private — no per-repo loop needed to enumerate):
      one-tool-at-a-time, priority-ordered, rate-limit-aware discipline — the surveyor only reports the state).
      Persist provider progression independently as
      `review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>` when the latest
-     completed current-head provider produced no gate-satisfying success and no finding. Derive it
-     from the authenticated request plus its later substantive completion artifact; a later run uses
+     current-head provider produced no gate-satisfying success and no finding. Derive it from the
+     authenticated request plus either its later substantive completion artifact or an authenticated
+     disclosed `<!-- review-progress-head: <full sha> provider=<lane> outcome=no-gate request=<comment-id> reason=<no-reaction-expired|ack-expired|uninstalled|service-failure> -->` marker posted only after the applicable bounded window or concrete unavailability evidence. A later run uses
      it to resume at the next lane rather than re-requesting that provider. A success, finding, or
      newer head supersedes this progress state.
    - **Candidate maintainer comments on `devantler` PRs (incl. drafts, AND recently-MERGED ones) —

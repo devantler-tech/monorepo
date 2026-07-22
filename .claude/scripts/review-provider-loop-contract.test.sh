@@ -57,10 +57,14 @@ grep -Fq 'oldest `created_at`, then lowest comment id' "${constitution}" ||
   fail "concurrent review reservations have no deterministic winner"
 grep -Fq 'review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>' "${surveyor}" ||
   fail "surveyor does not expose the pre-trigger reservation to sibling instances"
+grep -Fq 'A winning request supersedes every reservation for that provider/head election' "${surveyor}" ||
+  fail "losing reservations can revive after the winning request completes"
 grep -Fq 'pair it with the next exact-author bare `@cursor review` trigger while ignoring interleaved comments' "${surveyor}" ||
   fail "Cursor request markers break when another comment lands before the bare trigger"
 grep -Fq 'review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>' "${surveyor}" ||
   fail "a completed provider outcome without a green artifact is not durable across runs"
+grep -Fq 'review-progress-head: <full sha> provider=<lane> outcome=no-gate' "${surveyor}" ||
+  fail "silent provider expiry cannot persist progression across runs"
 grep -Fq 'CodeRabbit is first and foremost a review provider' "${constitution}" ||
   fail "constitution still treats CodeRabbit primarily as a pre-merge evaluator"
 grep -Fq 'a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`' "${constitution}" ||
@@ -69,6 +73,8 @@ grep -Fq 'auto-generated summary comment' "${surveyor}" ||
   fail "CodeRabbit success has no recognizable substantive completion artifact"
 grep -Fq 'Never count an auto-generated command reply, acknowledgement, quota notice, or service shell as a review completion' "${surveyor}" ||
   fail "CodeRabbit acknowledgement can be mistaken for a successful review"
+grep -Fq 'review object `submitted_at` must be later than the latest authenticated CodeRabbit request marker' "${surveyor}" ||
+  fail "an old same-head CodeRabbit review can satisfy a later retry"
 grep -Fq 'Missing or delayed pre-merge output never blocks promotion' "${constitution}" ||
   fail "absent ancillary CodeRabbit output can still block a reviewed PR"
 grep -Fq 'fold it into `body_findings`' "${surveyor}" ||

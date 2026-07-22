@@ -42,8 +42,9 @@ plugin carries them (or an explicit, tested subset):
    never a separate readiness state.
 4. **Green-review surfaces for three lanes** — a finding-free CodeRabbit completion without requiring `APPROVED`, Codex comment-shaped green, and **Cursor Bugbot check-run** (`success` vs
    `neutral`+title disambiguation).
-5. **Sequential review coordination state** — authenticated two-phase reservation, pending request,
-   completed no-gate progression, and deterministic same-SHA retry supersession.
+5. **Sequential review coordination state** — authenticated two-phase reservation with losing-claim
+   supersession, pending request, artifact-backed or evidenced-expiry no-gate progression, post-request
+   result binding, and deterministic same-SHA retry supersession.
 6. **Multi-lane claim-branch scan** — `claude/*`, `codex/*`, and `cursor/*` (issue-number /
    takeover-suffix / normalised-stem match), not `claude/*` alone.
 7. **Board-claim token / Projects coverage** signals and fail-closed truncation handling.

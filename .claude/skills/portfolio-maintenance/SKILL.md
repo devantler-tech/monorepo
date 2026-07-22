@@ -152,7 +152,8 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   are **stale** (at a non-head SHA) — that is a re-request signal, not a contradiction.
   Fetch `headRefOid` while deepening every actionable own/trusted PR. A finding-free CodeRabbit
   review completion counts as `cr@<sha>` even without `APPROVED`: bind a review object by REST
-  `commit_id`, or bind its substantive auto-generated summary comment to the authenticated
+  `commit_id` **and require `submitted_at` after the latest authenticated request for that head**, or
+  bind its substantive auto-generated summary comment to the authenticated
   current-head request by `updated_at` plus an explicit head reference, then require zero CodeRabbit
   threads, body findings, and explicit ancillary problems. Never count an auto-generated command
   reply/acknowledgement, quota notice, service shell, or summary saying the review did not run.
@@ -372,8 +373,10 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    lowest comment id win before posting the provider request marker (each request marker names its
    provider and winning reservation id; pair Cursor's marker to the next exact-author bare trigger,
    ignoring interleaved other-author and reservation-only comments); accept markers only from exact author `devantler`
-   with the structural agent disclosure; persist a completed no-gate provider outcome so the next
-   run advances rather than repeats it;
+   with the structural agent disclosure; the winning request supersedes every losing reservation in
+   that provider/head election; persist a completed no-gate outcome, or an authenticated
+   `review-progress-head` marker after evidenced silent expiry, so the next run advances rather than
+   repeats the provider;
    findings require a fix-or-refute and restart from CodeRabbit, with a push only
    when files changed; service failure advances to the next lane) — plus the **last-resort
    local review round** when no lane will deliver at that head — unavailable, OR rate/billing limited — reviewed with your own review skills and posted as a **real GitHub Review
