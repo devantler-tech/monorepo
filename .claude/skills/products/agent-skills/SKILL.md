@@ -12,8 +12,8 @@ The shared **agent-extension** libraries — the agentic counterpart to the CI b
   Read its `## Maintenance` in <https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md> (create
   that section if missing — align it with the others).
 - `devantler-tech/agent-plugins` — tool-neutral marketplace at submodule path `libraries/agent-plugins`.
-  This monorepo consumes `automated-ai-engineer@devantler-plugins` via
-  [`.claude/settings.json`](../../../settings.json) (see monorepo#2363 / #2387). Keep plugins
+  This monorepo consumes `agentic-engineering@devantler-plugins` via
+  [`.claude/settings.json`](../../../settings.json) (see monorepo#2363 / #2403). Keep plugins
   additive & backward-compatible; generic role improvements land here so every consumer inherits them.
 
 **These are shared libraries — design for reuse, not for one product.** Keep them **generic and

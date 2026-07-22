@@ -8,6 +8,6 @@
     }
   },
   "enabledPlugins": {
-    "automated-ai-engineer@devantler-plugins": true
+    "agentic-engineering@devantler-plugins": true
   }
 }

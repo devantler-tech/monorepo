@@ -93,9 +93,9 @@ card.
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
 
 ## 1. Survey (delegate to a read-only subagent — keep the JSON out of your context)
-**Spawn the `portfolio-surveyor` agent from the installed `automated-ai-engineer` plugin**
+**Spawn the `portfolio-surveyor` agent from the installed `agentic-engineering` plugin**
 (declared in [`.claude/settings.json`](../../settings.json) as
-`automated-ai-engineer@devantler-plugins`) — read-only — to run the whole portfolio survey and
+`agentic-engineering@devantler-plugins`) — read-only — to run the whole portfolio survey and
 return **one compact digest** — so the ~40 calls of raw `gh` JSON accumulate in *its* throwaway
 context, not yours; you receive only the digest. **Compatibility overlay — required until digest
 parity:** the spawn prompt must tell the plugin agent to read and follow the local
@@ -103,7 +103,7 @@ parity:** the spawn prompt must tell the plugin agent to read and follow the loc
 GitHub. The plugin supplies the agent entry point; the local file preserves the deployment-hardened
 procedure and output grammar that agent-plugins#78 has not upstreamed yet. Remove this overlay only
 after a side-by-side run proves parity against the checklist in
-[`.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md`](../../plugin-consumption/automated-ai-engineer-surveyor-diff.md)).
+[`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](../../plugin-consumption/agentic-engineering-surveyor-diff.md)).
 Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*Portfolio map*,
 *Trust gate*, *Cadence*, *Memory*, *Maintainer channels*). The surveyor:
 - enumerates org-wide in two calls (`gh search prs/issues --owner devantler-tech --state open …`)

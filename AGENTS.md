@@ -179,13 +179,14 @@ re-pasted into the Automations UI on change. **Each instance owns its own branch
 from crossing lanes. It is also why claim arbitration does **not** work across lanes today: see the
 cross-lane limit in *Claim protocol* rule 4.
 
-### Automated AI Engineer plugin contract
-This deployment **consumes** the `automated-ai-engineer` plugin from
+### Agentic engineering plugin contract
+This deployment **consumes** the `agentic-engineering` plugin from
 [`devantler-tech/agent-plugins`](https://github.com/devantler-tech/agent-plugins) — declared in
 [`.claude/settings.json`](.claude/settings.json) (`extraKnownMarketplaces` +
-`enabledPlugins: automated-ai-engineer@devantler-plugins`). The plugin carries the generic **role**;
-this file supplies the deployment **configuration**. Plugin agents and skills fail closed unless
-these named contract sections resolve:
+`enabledPlugins: agentic-engineering@devantler-plugins`). The plugin carries the generic **role**
+(entrypoint `automated-ai-engineer`; also `portfolio-surveyor` and `agent-improver`); this file
+supplies the deployment **configuration**. Plugin agents and skills fail closed unless these named
+contract sections resolve:
 
 | Contract section (plugin name) | Where it lives in this file |
 |---|---|
@@ -195,11 +196,16 @@ these named contract sections resolve:
 | **Memory** | [Durable memory](#durable-memory--your-native-memory--the-run-report) |
 | **Maintainer channels** | [Maintainer channels](#maintainer-channels) |
 
+`agent-improver` additionally requires **Agent definition locations** and **Authority model** — those
+named sections are not yet present here, so that role stays fail-closed until a follow-up adds them.
+Provider-neutral desired state for onboarding lives at
+[`.claude/plugin-consumption/agentic-engineering.desired-state.json`](.claude/plugin-consumption/agentic-engineering.desired-state.json).
+
 The run loop sources the `portfolio-surveyor` agent entry point from the plugin and, until digest
 parity, requires that subagent to read the local `.claude/agents/portfolio-surveyor.md` as a
 compatibility overlay. The overlay preserves the deployment-hardened procedure and output grammar
 that the generic plugin does not carry yet; remove it only after the side-by-side checklist in
-[`.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md`](.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md)
+[`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md)
 passes.
 
 ### Maintainer channels
