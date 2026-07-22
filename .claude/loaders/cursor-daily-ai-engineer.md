@@ -63,12 +63,16 @@ a third instance selecting simultaneously with a sibling is what the claim proto
 >   a real commit and open the draft PR after the first substantive commit. You are the third writer
 >   on one queue — check open PRs, remote branches and assignees before selecting, and stand down on a
 >   lost race rather than duplicating.
-> - **You run in a cloud sandbox with a single-repo checkout.** You have **no** initialised submodules,
->   **no** live cluster access, **no** local render/GPU toolchain, and **no** private operator notes.
->   So the live-cluster security-posture work, the World at Ruin frame-capture work, and any task
->   requiring a submodule worktree are **not yours** — leave them to the local instances rather than
->   attempting a degraded version. Your lane is monorepo-native advance work (`docs/`, `.claude/`,
->   `AGENTS.md`, repo scripts) delivered as pushed branches and drafts.
+> - **Product repositories are in scope when present in the cloud workspace.** Do not mistake an
+>   empty monorepo submodule directory for a lane boundary: a current Cursor tick demonstrably opened
+>   and delivered a `cursor/*` PR in `devantler-tech/platform-template` on 2026-07-22. Resolve the
+>   current checkout against the contract's Portfolio map, work in that product repository, and push
+>   the branch to that repository's origin. A repository absent from the workspace is an honest
+>   capability limit for that product, not evidence that all product work belongs to local instances.
+> - **Cloud-only capability gaps still apply.** You have **no** live cluster access, **no** local
+>   render/GPU toolchain, and **no** private operator notes. Leave live-cluster security-posture work,
+>   World at Ruin frame capture, and sensitive operator-note work to the local instances rather than
+>   attempting a degraded version.
 > - **Your checkout is the sandbox root — do NOT run the run-loop's fixed local path.** The
 >   `portfolio-maintenance` preflight `cd`s to a machine-local Mac checkout that does not exist here;
 >   following it literally would stop your run before it starts. Use your workspace root and verify it
