@@ -1150,10 +1150,12 @@ if want safety; then
     # (`api_key=\"…\"`), so a raw grep sees a backslash where the value should
     # begin and misses it — while redact(), which runs on decoded output, masks
     # it. Same detector/redactor drift, new disguise. Structurally parsed
-    # base64 image data URLs are excluded: they are encoded binary, and random
-    # `/` or `+` boundaries in image bytes manufacture high-signal token shapes. A
-    # malformed line is still scanned whole because its field boundaries cannot
-    # be established safely.
+    # base64 image data URLs are excluded only in the measured Codex storage
+    # shape: a complete `input_image.image_url` value. They are encoded binary,
+    # and random `/` or `+` boundaries in image bytes manufacture high-signal
+    # token shapes. Requiring a full base64 data URL keeps trailing ordinary text
+    # visible, and a malformed line is still scanned whole because its field
+    # boundaries cannot be established safely.
     # Per-SHAPE counts, never one redacted bucket. The first live run printed a
     # single line `871 <redacted-key-material>` — every shape collapsed into one
     # opaque number that needed an hour of ad-hoc probing to triage (verdict: 89%
@@ -1203,18 +1205,44 @@ if want safety; then
       #     only ever reaches a high-signal row by passing a FULL shape regex,
       #     while not splitting silently drops a real second credential.
       jq -Rr '
+        def image_payload_entry($parent):
+          if (($parent.type? // "") == "input_image"
+              and .key == "image_url"
+              and (.value | type) == "string")
+          then (.value | test("^data:image/[^,]*;base64,[A-Za-z0-9+/]*={0,2}$"; "i"))
+          else false
+          end;
+
+        def decoded_strings:
+          if type == "object" then
+            . as $parent
+            | (
+                keys_unsorted[],
+                (to_entries[]
+                 # Preserve the key/value association only where the generic
+                 # credential regex needs it; duplicating every large text
+                 # field as `key=value` would double the scan volume.
+                 | select((.key | test("(secret|token|password|passwd|api[_-]?key)"; "i"))
+                          and ((.value | type) == "string")
+                          and (image_payload_entry($parent) | not))
+                 | "\(.key)=\(.value)"),
+                (to_entries[]
+                 | select(image_payload_entry($parent) | not)
+                 | .value
+                 | decoded_strings)
+              )
+          elif type == "array" then .[] | decoded_strings
+          elif type == "string" then .
+          else empty
+          end;
+
         select(length > 0) as $raw
         | try (
-            $raw | fromjson | ..
-            | if type == "object" then keys_unsorted[]
-              elif type == "string" then .
-              else empty
-              end
-            | select(test("^data:image/[^,]*;base64,"; "i") | not)
+            $raw | fromjson | decoded_strings
           ) catch $raw
       ' "$f" 2>/dev/null \
         | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
-        | grep -hoEi "$CRED_TABLE_RE" 2>/dev/null \
+        | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
         | tr ';&|' '\n' | grep -v '^$' \
         | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
         -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
