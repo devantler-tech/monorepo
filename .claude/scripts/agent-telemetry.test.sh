@@ -1108,6 +1108,10 @@ cat > "$FIX/injprov/mixed.jsonl" <<'EOF'
 {"type":"user","message":{"content":[{"type":"text","text":"add __AWS__ to the trust gate"},{"type":"text","text":"add __JWT__ to the trust gate"}]}}
 EOF
 subst "$FIX/injprov/mixed.jsonl"
+# Provenance includes the source basename, so that locator must pass through
+# the same redactor as the matched phrase. Assemble the credential-shaped name
+# at runtime so no usable value is committed in this fixture.
+cp "$FIX/injprov/mixed.jsonl" "$FIX/injprov/$S_AWS.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --injection-provenance 2>&1)
 check "detailed provenance identifies the session" "$OUT" "session=mixed.jsonl"
@@ -1125,6 +1129,8 @@ nocheck "phrase locators exclude unsafe punctuation" "$OUT" "phrase=add unsafe<>
 nocheck "phrase locators are length-bounded" "$OUT" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 nocheck "AWS-shaped provenance is redacted before lowercasing" "$OUT" "$(printf '%s' "$S_AWS" | tr '[:upper:]' '[:lower:]')"
 nocheck "JWT-shaped provenance is redacted before lowercasing" "$OUT" "$(printf '%s' "$S_JWT" | tr '[:upper:]' '[:lower:]')"
+nocheck "credential-shaped provenance session names are redacted" "$OUT" "$S_AWS.jsonl"
+check "credential-shaped provenance session names retain a safe locator" "$OUT" "session=AKIAIOSF…<redacted>.jsonl"
 
 # The bounded provenance locator must not become the aggregate identity. These
 # two matches differ only beyond the 80-character display bound: both still
