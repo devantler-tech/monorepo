@@ -62,13 +62,30 @@ a third instance selecting simultaneously with a sibling is what the claim proto
 > - **Claim before you build** (contract → *Claim protocol*): push `cursor/<area>-<desc>-<issue>` with
 >   a real commit and open the draft PR after the first substantive commit. You are the third writer
 >   on one queue — check open PRs, remote branches and assignees before selecting, and stand down on a
->   lost race rather than duplicating.
-> - **You run in a cloud sandbox with a single-repo checkout.** You have **no** initialised submodules,
->   **no** live cluster access, **no** local render/GPU toolchain, and **no** private operator notes.
->   So the live-cluster security-posture work, the World at Ruin frame-capture work, and any task
->   requiring a submodule worktree are **not yours** — leave them to the local instances rather than
->   attempting a degraded version. Your lane is monorepo-native advance work (`docs/`, `.claude/`,
->   `AGENTS.md`, repo scripts) delivered as pushed branches and drafts.
+>   lost race rather than duplicating. Put the issue number in the branch name on the **product
+>   repo's** remote when the work lives there (not only on monorepo).
+> - **Product submodules are in scope — init them on demand.** Boot leaves submodule directories empty
+>   (`git submodule status` shows `-`), but that is a **checkout state**, not a lane boundary
+>   (measured 2026-07-22 on this same environment: `.claude/scripts/submodule-init.sh <path>`
+>   populates the product; `git push` to that product remote succeeds). When the oldest actionable
+>   issue is on ksail / platform / world-at-ruin / actions / …, **enter that submodule**, work
+>   there, and push `cursor/<area>-<desc>-<issue>` to **its** origin — do not skip product work
+>   just because the superproject booted with empty submodule dirs. Prefer a sibling multi-repo
+>   checkout of the same product if the environment already cloned one; otherwise init the
+>   portfolio-map path from `AGENTS.md`. Never bump the monorepo gitlink as a substitute for a
+>   product PR.
+> - **Opening a product-repo draft PR needs that repo in the Cursor environment's `repos` list.**
+>   `gh pr create` is 403 for `app/cursor`; Cursor's `ManagePullRequest` only targets environment
+>   member repos (a submodule push alone is not enough — measured: after `SetActiveBranch` on a
+>   ksail submodule path, MPR still looked for the branch on monorepo). Until product repos are
+>   added to the environment ([#2394](https://github.com/devantler-tech/monorepo/issues/2394)),
+>   you can still init/investigate/file issues on them, and you can push claim branches, but deliver
+>   **opened** drafts only on repos MPR can target (today: monorepo; after #2394: the expanded set).
+>   Do not leave orphaned product branches without either an opened draft or a well-formed product
+>   issue that names the ready `cursor/*` branch for a local instance to open.
+> - **Still not yours (real capability gaps):** live-cluster security-posture work, World at Ruin
+>   frame-capture / GPU tooling, and anything that needs the private out-of-repo operator notes —
+>   leave those to the local instances.
 > - **Your checkout is the sandbox root — do NOT run the run-loop's fixed local path.** The
 >   `portfolio-maintenance` preflight `cd`s to a machine-local Mac checkout that does not exist here;
 >   following it literally would stop your run before it starts. Use your workspace root and verify it
@@ -135,3 +152,25 @@ Resolving this is a **maintainer decision** — widen the App's scopes and give 
 `devantler`, or narrow this loader's mandate to push-plus-draft and hand the rest to the local
 instances. Tracked in [#2297](https://github.com/devantler-tech/monorepo/issues/2297). Until it is
 decided, treat the operate mandate above as aspirational for this lane.
+
+## Submodule / product-repo scope — measured 2026-07-22
+
+⚠️ **An earlier revision of this loader told the instance it had "no initialised submodules" and that
+product worktrees were "not yours". That was wrong as a lane boundary** and is why automation ticks
+only opened monorepo PRs. Corrected facts (same cloud environment the automation uses):
+
+| Capability | Result |
+|---|---|
+| Boot submodule state | empty dirs (`git submodule status` → `-`) — Cursor clones with `--recurse-submodules=no` |
+| `.claude/scripts/submodule-init.sh applications/ksail` | succeeds; checkout populated |
+| `git push` to a product remote (`devantler-tech/ksail` `cursor/*`) | succeeds |
+| `gh pr create` as `app/cursor` | **403** |
+| `ManagePullRequest` after `SetActiveBranch` on a submodule path | still targets **monorepo** member repos only |
+
+**Instructional fix (this file + `#2395`):** product submodules are in scope; init on demand; do not
+skip portfolio issues because dirs started empty.
+
+**Environment fix (maintainer, `#2394`):** add product repos to the Cursor environment's `repos`
+list (multi-repo) so `ManagePullRequest` can open drafts on them. `repositoryDependencies` in
+`.cursor/environment.json` widens token scope for clones; it does **not** by itself make MPR target
+those remotes — the dashboard `repos` membership does.

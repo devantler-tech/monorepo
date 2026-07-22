@@ -1,0 +1,25 @@
+{
+  "name": "devantler-tech",
+  "install": ".claude/scripts/cloud-install.sh",
+  "repositoryDependencies": [
+    "github.com/devantler-tech/ksail",
+    "github.com/devantler-tech/platform",
+    "github.com/devantler-tech/world-at-ruin",
+    "github.com/devantler-tech/actions",
+    "github.com/devantler-tech/homebrew-tap",
+    "github.com/devantler-tech/agent-skills",
+    "github.com/devantler-tech/agent-plugins",
+    "github.com/devantler-tech/kyverno-policies",
+    "github.com/devantler-tech/provider-upjet-unifi",
+    "github.com/devantler-tech/go-template",
+    "github.com/devantler-tech/dotnet-template",
+    "github.com/devantler-tech/gitops-tenant-template",
+    "github.com/devantler-tech/platform-template",
+    "github.com/devantler-tech/unifi",
+    "github.com/devantler-tech/fleet-gitops",
+    "github.com/devantler-tech/maintenance",
+    "github.com/devantler-tech/.github",
+    "github.com/devantler-tech/wedding-app",
+    "github.com/devantler-tech/ascoachingogvaner"
+  ]
+}
