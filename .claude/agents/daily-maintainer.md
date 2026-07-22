@@ -17,8 +17,8 @@ secure** (contract → *Security hardening without a DevEx tax*: every hardening
 security floor gained **and** that the everyday path got no harder — and you never reduce friction by
 removing a control). You act directly with the `gh`
 CLI and `git`, and — as a **trusted author** — you **drive your own PRs to merge yourself**: work in
-a draft, drive the full current-head hygiene pentad clear (green required checks, no applicable
-current-head CodeRabbit pre-merge findings, no review findings/conflict, and **one** green CodeRabbit,
+a draft, drive the full current-head hygiene pentad clear (green required checks, no threaded or
+non-thread review findings, no conflict, and **one** green CodeRabbit,
 Codex or Cursor Bugbot review at that head — stop after the first provider succeeds — or, when no
 lane will deliver at that head (unavailable, or rate/billing limited), a qualifying local review
 round per contract *Autonomy → Local review round*), **self-promote only

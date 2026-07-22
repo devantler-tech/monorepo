@@ -134,10 +134,11 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
 - surfaces **the full hygiene pentad for EVERY open actionable own/trusted PR, explicitly excluding
   automation-owned dependency PRs — (a) failing checks, (b)
   every unresolved review thread regardless of author (including CodeRabbit `coderabbitai`,
-  `copilot-pull-request-reviewer[bot]`, and `chatgpt-codex-connector[bot]`) *plus review-body finding
-  count*, (c)
+  `copilot-pull-request-reviewer[bot]`, and `chatgpt-codex-connector[bot]`), (c) non-thread review
+  findings, including CodeRabbit review-body findings and concrete ancillary problems it explicitly
+  reports while selected for the current head, (d)
   `mergeable`/`mergeStateStatus` (CONFLICTING/DIRTY =
-  needs a rebase/update-branch), (d) applicable current-head CodeRabbit *pre-merge findings* (see below), (e) the
+  needs a rebase/update-branch), and (e) the
   green-review state** — so a run can
   **drain all five**, not just threads. **(e) green review:** nothing may be self-promoted without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
@@ -149,9 +150,12 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   unverifiable claim, and the suffix is scoped to `green_review` only (never `rd=none`, which is
   GitHub's unrelated `reviewDecision`). Non-zero counts beside `none` are normal when the artifacts
   are **stale** (at a non-head SHA) — that is a re-request signal, not a contradiction.
-  Fetch `headRefOid` while deepening every actionable own/trusted PR. A CodeRabbit `APPROVED` review counts only
-  when its REST `commit_id` equals that head; report an older approval as stale, and a current-head
-  CodeRabbit review carrying findings as `cr-findings@<sha>`. For Codex, sweep
+  Fetch `headRefOid` while deepening every actionable own/trusted PR. A finding-free CodeRabbit
+  review completion counts as `cr@<sha>` even without `APPROVED`: bind a review object by REST
+  `commit_id`, or bind a bot completion comment to the authenticated current-head request and absence
+  of a newer head, then require zero CodeRabbit threads, body findings, and explicit ancillary
+  problems. Report an older completion as stale, and a current-head CodeRabbit review carrying
+  findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual
   `chatgpt-codex-connector` review output, extract `**Reviewed commit:** <sha>`, and accept its
   clean-pass marker only at the current head.
@@ -210,39 +214,10 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   `body_findings=0-resolved@<sha>` only when it links the finding and records specific reasoning; a
   generic or externally-authored comment does not. An identical repeated same-head finding
   fingerprint (category + path/range + normalized text) remains resolved; a new/changed fingerprint
-  reopens it. **(d) CodeRabbit pre-merge findings are a
-  separate surface only when CodeRabbit reviews the current head, not a mandatory second provider
-  after Codex or Cursor succeeds.** A current-head failed/inconclusive result blocks promotion and
-  requires fix/push/restart (directions 2026-07-06 and 2026-07-22); CodeRabbit publishes either
-  a full `## Pre-merge checks` section (Title / Description / **Linked Issues** / **Out of Scope
-  Changes** / Docstring-Coverage, each ✅/❌/❓) or a compact collapsed summary such as
-  `<summary>🚥 Pre-merge checks | ✅ 5</summary>`, orthogonal to (a)/(b)/(c) — a PR green on all three
-  can still fail here. Fetch comments with pagination, filter to `coderabbitai[bot]`, require
-  CodeRabbit's stable auto-generated-summary marker
-  `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`, then sort by `updated_at`
-  (CodeRabbit **edits the summary comment in place** on re-review — `created_at` order returns a
-  stale verdict) and keep the **newest actual summary containing either supported marker**
-  (`## Pre-merge checks` or
-  `<summary>🚥 Pre-merge checks |`), not the newest arbitrary bot reply. When
-  `<!-- pre_merge_checks_walkthrough_start -->` / `_end` boundaries exist, parse only that region so
-  echoed marker text elsewhere cannot spoof the result; accept the legacy heading fallback only in an
-  auto-generated summary/walkthrough comment. Surface names under `### ❌ Failed checks (N` whenever
-  present, regardless of the outer shape. A compact summary is green
-  **only** with a positive `✅` count and no positive `❌`, `❓`, or `⚠️` counter; mixed results such as
-  `✅ 4 | ❌ 1` are failed. A full summary is green only when every listed check is explicitly passed
-  and no error/inconclusive result appears; the absence of a failed heading is insufficient. Report
-  exactly `premerge=<green|failed:names|failed:unnamed|inconclusive|not-posted|not-required|provider-stalled|exempt-lanes-down>`: `inconclusive` means a
-  recognized but non-green/unparseable summary, while `not-posted` means no supported marker. Always
-  fail closed on a result at the current head; `not-posted` remains NEEDS-FIX after CodeRabbit
-  actually reviewed that head until its summary arrives. A finding-free actual review whose summary
-  exceeds the generous measured window becomes `provider-stalled`; with a current-head external
-  success it is clear, while a late summary supersedes it. Use `not-required` when CodeRabbit did not review that
-  head and another external provider supplied the successful review; use `exempt-lanes-down` only
-  for the qualifying local fallback.
-  Resolve a **Linked Issues** fail by implementing the missing AC **or** filing + referencing a
-  well-formed deferred follow-up issue (CR's own resolution allows a deferred link); resolve an **Out
-  of Scope Changes** inconclusive by replying to `@coderabbitai` clarifying which hunks actually
-  changed (its walkthrough often mis-reads pre-existing diff *context* as introduced change); then
+  reopens it. CodeRabbit is first and foremost a reviewer. Do not wait for, parse, or persist its
+  ancillary pre-merge evaluator as a readiness state. Missing or delayed output never blocks. Only
+  an explicit concrete problem CodeRabbit reports while selected for the current head counts; fold
+  it into the non-thread `body_findings` count, fix or refute it, then
   push when files changed, then restart the ordered provider loop at CodeRabbit; a pure refutation
   restarts at the same head without an empty commit. Across hourly runs
   older PRs accumulate red checks, threads, and conflicts the live watcher (alive only in the
@@ -362,14 +337,14 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    run.** Across all `devantler-tech` repos, drive every **actionable trusted-author** PR to merge per
    the contract (clear the current-head pentad, then merge with the **command that matches the author**:
    actionable bots may arm `--auto`
-   once review and applicable current-head pre-merge finding surfaces are clear, while your own/`devantler` PRs merge directly
+   once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
    with bare `gh pr merge <n> --squash` once CLEAN and self-promoted on genuine readiness; incl. majors;
    definition PRs on that same path). External repos are outside scheduled scope;
    an interactive task must first clear the professional-work boundary for the specifically named repo.
    Never run or merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony**:
    combine the already-collected current-head pentad with one fresh `gh pr view <n>` showing the same
    `headRefOid`, `isDraft:false`, trusted author, and `CLEAN`; merge only when the pentad also has zero
-   findings, no applicable current-head CodeRabbit pre-merge findings, and a green review at that
+   findings and a green review at that
    head. A refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
    variant-evidence retries. **On merge-queue repos, root-cause a stall/kick-out before re-queuing**
@@ -382,16 +357,17 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    just the one you
    just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**,
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
-   force-push), **clear any current-head CodeRabbit pre-merge findings when CodeRabbit reviewed that
-   head** (when its review never ran, another provider's success makes unposted output `not-required`), and **secure ≥1 green review at the
+   force-push), **clear every threaded and non-thread review finding**, and **secure ≥1 green review at the
    current head** — auto-review is disabled on ALL THREE reviewers, so requesting (and re-requesting after
    every push) is your duty; the full request discipline (**one provider request at a time**, in
    CodeRabbit > Codex > Cursor Bugbot order, and **stop on its first successful current-head review**;
    a reaction emoji earns a generous bounded wait for the substantive response, while no reaction
-   means inspect or retry promptly; every trigger carries a repository-visible current-head marker
-   (Cursor's goes in its preceding disclosure comment), accepts it only from exact author
-   `devantler` with the structural agent disclosure, and immediately before requesting the run
-   re-reads those markers/reactions/artifacts so a sibling's pending request cannot be duplicated;
+   means inspect or retry promptly; before every trigger post a separate disclosed current-head
+   reservation marker, re-read authenticated reservations, and let the oldest `created_at` then
+   lowest comment id win before posting the provider request marker (Cursor's request marker goes in
+   its immediately preceding disclosure comment); accept markers only from exact author `devantler`
+   with the structural agent disclosure; persist a completed no-gate provider outcome so the next
+   run advances rather than repeats it;
    findings require a fix-or-refute and restart from CodeRabbit, with a push only
    when files changed; service failure advances to the next lane) — plus the **last-resort
    local review round** when no lane will deliver at that head — unavailable, OR rate/billing limited — reviewed with your own review skills and posted as a **real GitHub Review
@@ -408,7 +384,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    genuinely-blocked-only — contract *Issue-driven → attention channels*)). **A merge-gated or parked PR is NOT
    exempt** (maintainer direction 2026-07-01): the
    gate excuses the *merge*, never red CI / open threads / conflicts / applicable current-head
-   pre-merge findings — those
+   review findings — those
    rot on the dashboard. **`coderabbitai[bot]`-authored
    PRs are in this sweep** (fix their CI or close with reasoning — never leave them red for days).
    Never auto-drive or merge external PRs.

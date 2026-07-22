@@ -32,21 +32,15 @@ grep -Fq 'A refutation that changes no file restarts at the same head; never cre
   fail "constitution forces a meaningless push before restarting after a refuted finding"
 grep -Fq 'A reaction earns a generous bounded wait, not an infinite lease' "${constitution}" ||
   fail "an acknowledged provider can stall the review loop forever"
-grep -Fq 'premerge=not-posted` remains **NEEDS-FIX** when CodeRabbit reviewed the current head' "${surveyor}" ||
-  fail "surveyor can promote before delayed CodeRabbit pre-merge output arrives"
 grep -Fq 'body_findings=0-resolved@<sha>' "${surveyor}" ||
   fail "surveyor cannot clear a same-head CodeRabbit body finding after a recorded refutation"
 grep -Fq 'same-SHA Codex clean supersedes findings only after all finding threads are resolved and a later re-request produces the clean marker' "${surveyor}" ||
   fail "a successful same-head Codex retry cannot terminate the loop"
-grep -Fq 'Pre-merge output is required only when CodeRabbit reviewed the current head' "${constitution}" ||
-  fail "pre-merge applicability incorrectly expires when the loop advances beyond CodeRabbit"
 grep -Fq 'author exactly `devantler` and carry the structural disclosure prefix' "${constitution}" ||
   fail "an external account can spoof a same-head body-finding resolution record"
 grep -Fq 'An identical repeated same-SHA CodeRabbit finding preserves its authenticated resolution record' "${constitution}" ||
   fail "an unchanged CodeRabbit false positive can reopen forever"
-grep -Fq 'premerge=provider-stalled' "${surveyor}" ||
-  fail "missing CodeRabbit pre-merge output can block a PR forever"
-grep -Fq 'Immediately before every provider request, re-read the repository-visible current-head request markers' "${constitution}" ||
+grep -Fq 'Immediately before every provider request, re-read the repository-visible current-head reservation' "${constitution}" ||
   fail "overlapping instances can open concurrent provider lanes"
 grep -Fq 'review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>' "${surveyor}" ||
   fail "surveyor does not expose an in-flight provider request to sibling instances"
@@ -54,6 +48,27 @@ grep -Fq 'A request marker is authoritative only from exact author `devantler` w
   fail "an external comment can spoof an in-flight provider request"
 grep -Fq 'Only one provider request may be active at a time' "${constitution}" ||
   fail "constitution does not forbid concurrent provider requests"
+grep -Fq 'post a separate disclosed reservation marker before any provider trigger' "${constitution}" ||
+  fail "provider selection is still vulnerable to a check-then-trigger race"
+grep -Fq 'oldest `created_at`, then lowest comment id' "${constitution}" ||
+  fail "concurrent review reservations have no deterministic winner"
+grep -Fq 'review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>' "${surveyor}" ||
+  fail "surveyor does not expose the pre-trigger reservation to sibling instances"
+grep -Fq 'review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>' "${surveyor}" ||
+  fail "a completed provider outcome without a green artifact is not durable across runs"
+grep -Fq 'CodeRabbit is first and foremost a review provider' "${constitution}" ||
+  fail "constitution still treats CodeRabbit primarily as a pre-merge evaluator"
+grep -Fq 'a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`' "${constitution}" ||
+  fail "a successful CodeRabbit review still cannot satisfy the review gate"
+grep -Fq 'Missing or delayed pre-merge output never blocks promotion' "${constitution}" ||
+  fail "absent ancillary CodeRabbit output can still block a reviewed PR"
+grep -Fq 'fold it into `body_findings`' "${surveyor}" ||
+  fail "an explicit CodeRabbit pre-merge problem is not preserved as a review finding"
+for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}" "${daily_maintainer}"; do
+  if grep -Fq 'premerge=' "${contract_file}"; then
+    fail "standalone CodeRabbit pre-merge readiness state remains in ${contract_file}"
+  fi
+done
 
 # The two maintained Claude entry points must remain independently followable without recreating the
 # superseded multi-provider interpretation.
