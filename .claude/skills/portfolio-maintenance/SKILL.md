@@ -427,15 +427,19 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    **Only the agent account's assignment is a claim, and only it expires:** an issue assigned to a
    **human collaborator** (or `Copilot`) is someone else's work-in-progress — respect it and pick a
    different issue, never take it over on this window. **Claim
-   before you build:** self-assign + push the branch **with the issue number in its name** the moment
-   you select — and if `devantler` is ALREADY assigned (a stale bare assignment from an abandoned run),
-   **remove then re-add**, since adding an existing assignee is a no-op that would leave your lease
-   carrying the old timestamp. **The push decides the race:** put a real commit on the claim branch
-   (never a bare base pointer), push without force, then confirm `git ls-remote` shows YOUR sha — two
-   instances derive the same branch name, so a rejected push or someone else's tip means you lost;
-   stand down rather than force over them. Check open PRs, remote
-   `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
-   (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
+   before you build — lane-neutral tip FIRST:** acquire `agent-claim/<issue>` via
+   `.claude/scripts/agent-claim.sh acquire <issue>` (cross-lane race; LOST → stand down), then
+   self-assign when your identity can (and if `devantler` is ALREADY assigned, **remove then
+   re-add**, since adding an existing assignee is a no-op that would leave your lease carrying the
+   old timestamp), then push the lane work branch **with the issue number in its name**. **The
+   shared tip decides the race:** the helper writes a nonced commit, pushes without force, and
+   verifies `git ls-remote` shows YOUR sha — never judge by the push's exit status or through a
+   pipe (`push | tail` reports `tail`'s 0 on a rejection). Retire the tip when the draft PR opens
+   (`agent-claim.sh retire <issue>`); a tip with no open PR past the ~2h lease may be taken over
+   with `--takeover` only after confirming no open `#<issue>` PR. Check open PRs, remote
+   `agent-claim/<issue>` tips, lane work branches (`claude/*`/`codex/*`/`cursor/*`) AND assignees by
+   **issue number, never literal branch name**. A live claim (shared tip in-window, or assigned +
+   branched in-window, no PR) is skip reason **(e)** — the only one that expires by
    itself. If it **already has an
    actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
    automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and

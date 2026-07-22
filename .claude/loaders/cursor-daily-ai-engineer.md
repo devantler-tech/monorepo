@@ -73,13 +73,13 @@ a third instance selecting simultaneously with a sibling is what the claim proto
 >   `portfolio-maintenance` preflight `cd`s to a machine-local Mac checkout that does not exist here;
 >   following it literally would stop your run before it starts. Use your workspace root and verify it
 >   the same way (`test -d docs && test -f .gitmodules`).
-> - **You cannot self-assign — your claim is the branch plus the PR.** The claim protocol's
->   self-assignment step returns 403 for `app/cursor`. That is a measured exception, not licence to
->   skip claiming: push `cursor/<area>-<desc>-<issue>` with a real commit and open the draft PR
->   promptly, since the PR body's `#<issue>` reference is the only durable claim signal you can emit.
->   Note that cross-lane races are not currently arbitrated at all
->   ([#2302](https://github.com/devantler-tech/monorepo/issues/2302)), so check open PRs and remote
->   branches carefully before selecting.
+> - **You cannot self-assign — acquire `agent-claim/<issue>` then push the lane branch.** The claim
+>   protocol's self-assignment step returns 403 for `app/cursor`. That is a measured exception, not
+>   licence to skip claiming: acquire the lane-neutral tip with
+>   `.claude/scripts/agent-claim.sh acquire <issue>` (this is your cross-lane signal — siblings can
+>   see it without an assignee), push `cursor/<area>-<desc>-<issue>` with a real commit, and open the
+>   draft PR promptly so you can `agent-claim.sh retire <issue>`. The PR body's `#<issue>` reference
+>   remains the durable post-PR signal.
 > - **File discovered issues normally — a local run will board them.** You *can* create issues; you
 >   cannot add them to project 5 (`board-add` is 403). An unboarded issue is a fixable gap, whereas a
 >   finding recorded only in your run output is **lost**, because nothing local consumes that. So file
@@ -123,11 +123,11 @@ issue and Projects `board-add` all return 403** (`Resource not accessible by int
 Two consequences for this loader, both live now:
 
 - **The claim protocol's self-assign step is unavailable to this instance.** It cannot assign issues,
-  so its claim rests entirely on the pushed `cursor/*` branch plus the PR body's issue reference —
-  which is why it must open its draft PR promptly rather than building in the dark. Note that
-  cross-lane races are not arbitrated at all today
-  ([#2302](https://github.com/devantler-tech/monorepo/issues/2302)), so this instance is the most
-  exposed of the three: it has the weakest claim signal *and* no arbitration behind it.
+  so its claim rests on the lane-neutral `agent-claim/<issue>` tip (via `agent-claim.sh`) plus the
+  pushed `cursor/*` branch plus the PR body's issue reference — which is why it must open its draft
+  PR promptly and retire the tip. Cross-lane arbitration is the shared tip
+  ([#2302](https://github.com/devantler-tech/monorepo/issues/2302)); assignment remains a local-lane
+  lease signal only.
 - **It cannot request reviews or reply to threads**, so it cannot clear the hygiene pentad on its own
   drafts or satisfy the green-review gate for anything.
 
