@@ -124,6 +124,19 @@ grep -Fq 'NOT retryable' "${constitution}" ||
   fail "constitution may send a run retrying a Bugbot usage limit that only the maintainer can lift"
 grep -Fq 'AUTOMATION-OWNED (NO-ACTION)' "${surveyor}" ||
   fail "surveyor does not short-circuit dependency-bot PRs as no-action"
+# #2365 — instrument GraphQL/core remaining at survey start+end before any optimisation. Without
+# the budget line a tick that starts exhausted discovers blindness only through failed commands
+# (and `gh pr checks` exits 1, indistinguishable from red CI). Pin the probe, the digest shape,
+# and the EXHAUSTED_AT_START annotation so a later edit cannot silently drop attribution.
+# shellcheck disable=SC2016
+grep -Fq 'gh api rate_limit --jq' "${surveyor}" ||
+  fail "surveyor does not sample gh api rate_limit at survey start/end"
+grep -Fq 'budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>' "${surveyor}" ||
+  fail "surveyor digest template is missing the fixed-shape budget line"
+grep -Fq 'EXHAUSTED_AT_START' "${surveyor}" ||
+  fail "surveyor has no EXHAUSTED_AT_START marker for a tick that opens with graphql.remaining=0"
+grep -Fq 'Always emit the `budget:` line' "${surveyor}" ||
+  fail "surveyor digest rules do not require the budget line on every digest"
 grep -Fq 'renovate[bot]' "${surveyor}" ||
   fail "surveyor does not bind no-action to the exact Renovate identity"
 grep -Fq 'dependabot[bot]' "${surveyor}" ||

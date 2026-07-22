@@ -27,6 +27,18 @@ acts on it, not a human); return the digest and nothing else.
 Enumerate across ALL repos in one shot (an org-wide search naturally covers every repo the token sees,
 public and private — no per-repo loop needed to enumerate):
 
+0. **Budget sample (start + end) — before any other GitHub read, and again immediately before you
+   emit the digest:**
+   `gh api rate_limit --jq '{graphql:.resources.graphql,core:.resources.core,search:.resources.search}'`
+   Record `remaining`/`limit` for **graphql** and **core** at both samples (search is optional
+   context). The `rate_limit` endpoint does **not** spend the GraphQL or core budgets — it is the
+   cheap attribution instrument for [#2365](https://github.com/devantler-tech/monorepo/issues/2365).
+   Emit both samples as the digest `budget:` line (shape below). If **graphql.remaining is 0 at the
+   start sample**, still emit the line and mark it `EXHAUSTED_AT_START` so the orchestrator knows the
+   tick is about to run blind *before* a failed command discovers it — do not invent numbers; if the
+   probe itself fails, emit `budget: unavailable:<one-word reason>` once and continue fail-closed on
+   later query errors as usual.
+
 1. **Open PRs (org-wide, one call):**
    `gh search prs --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
 2. **Open issues (org-wide, one call) — include `assignees`, they are a CLAIM signal:**
@@ -468,6 +480,8 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 ```
 ## Survey digest — <UTC date>
 nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken
+budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
+# or, when the probe fails: budget: unavailable:<reason>
 
 ### Operate
 - CANDIDATE-MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator applies creation record; instruction only when routine-owned
@@ -491,6 +505,10 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 ```
 
 Digest rules:
+- **Always emit the `budget:` line** (start→end remaining for graphql and core). It is additive —
+  never remove or reshape any other digest field to make room for it. An `EXHAUSTED_AT_START` suffix
+  is the only allowed annotation when graphql remaining was 0 on the opening sample; the
+  orchestrator treats that as "this tick may run blind", not as a fire.
 - **Classify, don't decide.** Surface signals; the **orchestrator** selects the work and overlays its
   own native-memory cadence cursors (`last_worked`, `weekly`, docs/roadmap) — **you do not read
   memory**, only live GitHub.
