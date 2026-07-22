@@ -90,8 +90,8 @@ the release App.
 
 ## Follow-ups
 
-Filed as implementation children (linked under #2269):
+Filed as implementation children (linked under #2269; blocked by #2270 until this Spike merges):
 
-1. Migrate plain semantic-release repos to release-please (changelog + version PR).
-2. KSail: in-repo CHANGELOG without breaking GoReleaser / `feat!` majors.
-3. World at Ruin: in-repo CHANGELOG preserving draft-release → CD publish order.
+1. [#2382](https://github.com/devantler-tech/monorepo/issues/2382) — migrate plain semantic-release repos to release-please.
+2. [#2383](https://github.com/devantler-tech/monorepo/issues/2383) — KSail: in-repo CHANGELOG without breaking GoReleaser / `feat!` majors.
+3. [#2384](https://github.com/devantler-tech/monorepo/issues/2384) — World at Ruin: in-repo CHANGELOG preserving draft-release → CD publish order.
