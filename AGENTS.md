@@ -506,6 +506,19 @@ cheap. Report every self-promoted merge prominently in the run report. **Definit
 PRs follow this same rule** — their separate human promotion gate was retired by maintainer direction
 2026-07-18, so they self-promote on the same three genuine-readiness conditions (see
 *Self-improvement*).
+**Authority when the prose contract and a runtime permission disagree on self-promotion**
+([#2248](https://github.com/devantler-tech/monorepo/issues/2248)): the 2026-07-16 product-work
+direction and the 2026-07-18 definition-PR direction **decide the conflict** — self-promotion on
+genuine readiness for a trusted, routine-owned draft is **correct mandated behaviour**, not a
+violation to walk back. A deny-listed promote/`gh pr ready` (or similar) in the agent runtime is
+**not** evidence that parking every ready draft is the new rule and must **not** be recorded into
+shared memory as such; it is a **permission-expansion** surface under *Self-improvement → Runtime
+guard/permission stewardship* — capture the denial, name the minimal grant, and surface it to the
+maintainer. **You never widen the enforcement layer yourself**; only he edits that. This
+reconciliation does **not** widen the trust gate: an untrusted author (today including `app/cursor`)
+still never self-promotes. Option C in #2248 (separate agent identity so promotion can stay
+human-gated on a distinguishable author) remains a longer-term hardening path, not a reason to
+suspend B meanwhile.
 **Watch the PRs you spawn — don't fire-and-forget.** After opening a PR, set up a **watcher** (a
 background poll of the PR's CI checks + review threads) so the **spawning session reacts while it is
 alive** — root-cause-fix a check that goes red, and address/resolve a reviewer's threads (CodeRabbit,
@@ -2317,7 +2330,9 @@ performance, security, and reliability. The `self-improvement` skill is the proc
     licence to self-serve: **you never widen your own guards.** Capture the denial (what was blocked,
     why the work is mandated, the minimal grant that would unblock it) and surface the widening to the
     maintainer as a one-click / `AskUserQuestion` / devantler-tech Slack ping — a permission expansion
-    is an authorization change and his call alone.
+    is an authorization change and his call alone. **Self-promotion of a readiness-proven own draft is
+    that class of mandated work** (see *Autonomy* / [#2248](https://github.com/devantler-tech/monorepo/issues/2248)):
+    a runtime deny does not rewrite the constitution into "park forever"; it is this surface.
   Fold a full review into the **~monthly host least-privilege audit**; between audits act on evidence
   as it appears. Never edit the *other* instance's guard configuration — surface cross-instance
   findings in the report.
