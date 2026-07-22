@@ -394,6 +394,91 @@ parity_case "slack"      "leak __SLACK__" "__SLACK__"
 parity_case "jwt"        "leak __JWT__" "__JWTTAIL__"
 parity_case "generic"    "config token=__GEN__" "__GEN__"
 
+# Codex image tools persist rendered images as very large `data:` strings in
+# custom tool outputs. Those strings are encoded binary, not transcript text;
+# scanning their random byte alphabet produces high-signal credential rows that
+# tell the operator to rotate credentials which never existed. Keep the
+# exclusion structural and narrow: an adjacent text field and a malformed raw
+# record must still reach the detector.
+echo
+echo "binary data URL exclusion"
+mkdir -p "$FIX/binary/projects" "$FIX/binary/codex/sessions"
+cat > "$FIX/binary/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_text","text":"text leak __SLACK__","__PATA__":"metadata"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,AAAA/__AWS__BBBB"}]}}
+malformed raw leak __GHPE__
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/binary/codex/sessions/s.jsonl" && rm -f "$FIX/binary/codex/sessions/s.jsonl.bak"
+subst "$FIX/binary/codex/sessions/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/binary/projects" CODEX_HOME="$FIX/binary/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'aws-access-key-id'; then
+  bad "binary image data does not create a credential alert" "$TABLE"
+else ok "binary image data does not create a credential alert"; fi
+if printf '%s' "$TABLE" | grep -q 'slack-token'; then
+  ok "adjacent ordinary text is still scanned"
+else bad "adjacent ordinary text is still scanned" "$TABLE"; fi
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+  ok "malformed raw records remain fail-closed"
+else bad "malformed raw records remain fail-closed" "$TABLE"; fi
+if printf '%s' "$TABLE" | grep -q 'github-pat (fine-grained)'; then
+  ok "credential-shaped JSON object keys are still scanned"
+else bad "credential-shaped JSON object keys are still scanned" "$TABLE"; fi
+nocheck "credential-shaped JSON object keys are sanitized" "$OUT" "$(ex __PATA__)"
+
+echo
+echo "reviewed credential extraction adversaries"
+
+mkdir -p "$FIX/association/projects" "$FIX/association/codex/sessions"
+cat > "$FIX/association/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":{"api_key":"__GEN__"}}}
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/association/codex/sessions/s.jsonl" && rm -f "$FIX/association/codex/sessions/s.jsonl.bak"
+subst "$FIX/association/codex/sessions/s.jsonl"
+ASSOC_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/association/projects" CODEX_HOME="$FIX/association/codex" \
+            MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+            bash "$TARGET" --since-days 3650 --section safety 2>&1)
+ASSOC_TABLE=$(printf '%s' "$ASSOC_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$ASSOC_TABLE" | grep -q 'generic-assignment'; then
+  ok "generic JSON key/value associations are still scanned"
+else bad "generic JSON key/value associations are still scanned" "$ASSOC_TABLE"; fi
+
+mkdir -p "$FIX/prefix/projects" "$FIX/prefix/codex/sessions"
+cat > "$FIX/prefix/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_text","text":"data:image/png;base64,AAAA\nJWT=__JWT__"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,AAAA/__AWS__BBBB"}]}}
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/prefix/codex/sessions/s.jsonl" && rm -f "$FIX/prefix/codex/sessions/s.jsonl.bak"
+subst "$FIX/prefix/codex/sessions/s.jsonl"
+PREFIX_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/prefix/projects" CODEX_HOME="$FIX/prefix/codex" \
+             MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+             bash "$TARGET" --since-days 3650 --section safety 2>&1)
+PREFIX_TABLE=$(printf '%s' "$PREFIX_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$PREFIX_TABLE" | grep -q 'jwt-like'; then
+  ok "data-URL-prefixed ordinary text cannot suppress a credential"
+else bad "data-URL-prefixed ordinary text cannot suppress a credential" "$PREFIX_TABLE"; fi
+if printf '%s' "$PREFIX_TABLE" | grep -q 'aws-access-key-id'; then
+  bad "only actual image payload fields are excluded" "$PREFIX_TABLE"
+else ok "only actual image payload fields are excluded"; fi
+
+mkdir -p "$FIX/nulkey/projects" "$FIX/nulkey/codex/sessions"
+cat > "$FIX/nulkey/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":{"\u0000":"noise","text":"leak __PATZ__"}}}
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/nulkey/codex/sessions/s.jsonl" && rm -f "$FIX/nulkey/codex/sessions/s.jsonl.bak"
+subst "$FIX/nulkey/codex/sessions/s.jsonl"
+NUL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulkey/projects" CODEX_HOME="$FIX/nulkey/codex" \
+          MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+          bash "$TARGET" --since-days 3650 --section safety 2>&1)
+NUL_TABLE=$(printf '%s' "$NUL_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$NUL_TABLE" | grep -q 'github-pat (fine-grained)'; then
+  ok "NUL-bearing object keys cannot switch credential grep to binary mode"
+else bad "NUL-bearing object keys cannot switch credential grep to binary mode" "$NUL_TABLE"; fi
+
 # ── 6d². leak-table boundary anchoring ────────────────────────────────────────
 # First live run (2026-07-18): the top "real-looking" GitHub-token hits were
 # substrings INSIDE base64url blobs (signed-URL params, JWT signatures) —
