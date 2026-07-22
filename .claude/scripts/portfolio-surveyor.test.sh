@@ -14,6 +14,7 @@ ksail_card="${repo_root}/.claude/skills/products/ksail/SKILL.md"
 platform_card="${repo_root}/.claude/skills/products/platform/SKILL.md"
 platform_security_surveyor="${repo_root}/.claude/agents/platform-security-surveyor.md"
 cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
+ci_workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
   echo "portfolio surveyor contract: FAIL — $*" >&2
@@ -86,6 +87,8 @@ grep -Fq 'siblings may build, run, review,' "${cursor_loader}" ||
   fail "Cursor loader still prevents trusted sibling instances from driving Cursor-authored PRs"
 grep -Fq 'and drive your PRs' "${cursor_loader}" ||
   fail "Cursor loader does not authorize the sibling handoff through merge"
+grep -Fq -- "- '.claude/loaders/cursor-daily-ai-engineer.md'" "${ci_workflow}" ||
+  fail "Cursor loader changes do not trigger the portfolio surveyor contract job"
 if grep -Fq '`app/cursor` is **not** in the contract' "${cursor_loader}"; then
   fail "Cursor loader still classifies its trusted App identity as external"
 fi
