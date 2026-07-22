@@ -185,17 +185,19 @@ INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (y
 # scorecard's existing count remains fail-closed and unchanged.
 emit_injection_hits() {
   local f="$1" session line raw record phrase
-  session=$(basename "$f" | tr -cd 'A-Za-z0-9._-')
+  session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
   grep -niE "$INJ_PHRASE_RE" "$f" 2>/dev/null \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
+        line=$(printf '%s' "$line" | cut -c1-12)
         record=$(printf '%s' "$raw" | jq -r '.type // "malformed"' 2>/dev/null \
-                 | tr -cd 'A-Za-z0-9_-')
+                 | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
         [ -n "$record" ] || record=malformed
         printf '%s' "$raw" | grep -hoiE "$INJ_PHRASE_RE" | tr 'A-Z' 'a-z' \
           | while IFS= read -r phrase || [ -n "$phrase" ]; do
+              phrase=$(printf '%s' "$phrase" | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)
               [ -n "$phrase" ] || continue
               printf '%s\t%s\t%s\t%s\n' "$session" "$line" "$record" "$phrase"
             done
