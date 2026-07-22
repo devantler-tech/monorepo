@@ -164,7 +164,10 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   `conclusion: success` → `bugbot@<sha>`; **`conclusion: neutral` → `bugbot-findings@<sha>`** (its
   findings land as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments`, so count those,
   not issue comments). `neutral` deliberately does NOT fail the merge — never read it as a pass. A
-  reviews+comments-only sweep is structurally blind to this lane.
+  reviews+comments-only sweep is structurally blind to this lane. On a same-SHA refutation retry,
+  findings win unless all finding threads have later disclosed resolution replies and are resolved,
+  a later authenticated Bugbot request marker is paired to its bare trigger, and a successful
+  check-run starts after that trigger; choose newest `started_at`, then highest check-run id.
   Report a current-head non-green output from ANY reviewer as `*-findings@<sha>` with a link/count
   and **NEEDS-FIX** before considering another review request; reserve `none` for no actual review
   output on any of the three surfaces. Count all unresolved review threads across all pages, regardless of author.
@@ -364,8 +367,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    a reaction emoji earns a generous bounded wait for the substantive response, while no reaction
    means inspect or retry promptly; before every trigger post a separate disclosed current-head
    reservation marker, re-read authenticated reservations, and let the oldest `created_at` then
-   lowest comment id win before posting the provider request marker (Cursor's request marker goes in
-   its immediately preceding disclosure comment); accept markers only from exact author `devantler`
+   lowest comment id win before posting the provider request marker (each request marker names its
+   provider and winning reservation id; pair Cursor's marker to the next exact-author bare trigger,
+   ignoring interleaved other-author and reservation-only comments); accept markers only from exact author `devantler`
    with the structural agent disclosure; persist a completed no-gate provider outcome so the next
    run advances rather than repeats it;
    findings require a fix-or-refute and restart from CodeRabbit, with a push only

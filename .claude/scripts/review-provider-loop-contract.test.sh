@@ -36,6 +36,8 @@ grep -Fq 'body_findings=0-resolved@<sha>' "${surveyor}" ||
   fail "surveyor cannot clear a same-head CodeRabbit body finding after a recorded refutation"
 grep -Fq 'same-SHA Codex clean supersedes findings only after all finding threads are resolved and a later re-request produces the clean marker' "${surveyor}" ||
   fail "a successful same-head Codex retry cannot terminate the loop"
+grep -Fq 'same-SHA Bugbot success supersedes findings only after all finding threads are resolved and a later authenticated re-request produces that check' "${surveyor}" ||
+  fail "Bugbot retries have no deterministic same-head supersession rule"
 grep -Fq 'author exactly `devantler` and carry the structural disclosure prefix' "${constitution}" ||
   fail "an external account can spoof a same-head body-finding resolution record"
 grep -Fq 'An identical repeated same-SHA CodeRabbit finding preserves its authenticated resolution record' "${constitution}" ||
@@ -54,6 +56,8 @@ grep -Fq 'oldest `created_at`, then lowest comment id' "${constitution}" ||
   fail "concurrent review reservations have no deterministic winner"
 grep -Fq 'review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>' "${surveyor}" ||
   fail "surveyor does not expose the pre-trigger reservation to sibling instances"
+grep -Fq 'pair it with the next exact-author bare `@cursor review` trigger while ignoring interleaved comments' "${surveyor}" ||
+  fail "Cursor request markers break when another comment lands before the bare trigger"
 grep -Fq 'review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>' "${surveyor}" ||
   fail "a completed provider outcome without a green artifact is not durable across runs"
 grep -Fq 'CodeRabbit is first and foremost a review provider' "${constitution}" ||
