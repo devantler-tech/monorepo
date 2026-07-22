@@ -405,7 +405,7 @@ echo "binary data URL exclusion"
 mkdir -p "$FIX/binary/projects" "$FIX/binary/codex/sessions"
 cat > "$FIX/binary/codex/sessions/s.jsonl" <<'EOF'
 {"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
-{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_text","text":"text leak __SLACK__"},{"type":"image","image_url":"data:image/png;base64,AAAA/__AWS__BBBB"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_text","text":"text leak __SLACK__","__PATA__":"metadata"},{"type":"image","image_url":"data:image/png;base64,AAAA/__AWS__BBBB"}]}}
 malformed raw leak __GHPE__
 EOF
 sed -i.bak "s|__FIX__|$FIX|g" "$FIX/binary/codex/sessions/s.jsonl" && rm -f "$FIX/binary/codex/sessions/s.jsonl.bak"
@@ -423,6 +423,10 @@ else bad "adjacent ordinary text is still scanned" "$TABLE"; fi
 if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
   ok "malformed raw records remain fail-closed"
 else bad "malformed raw records remain fail-closed" "$TABLE"; fi
+if printf '%s' "$TABLE" | grep -q 'github-pat (fine-grained)'; then
+  ok "credential-shaped JSON object keys are still scanned"
+else bad "credential-shaped JSON object keys are still scanned" "$TABLE"; fi
+nocheck "credential-shaped JSON object keys are sanitized" "$OUT" "$(ex __PATA__)"
 
 # ── 6d². leak-table boundary anchoring ────────────────────────────────────────
 # First live run (2026-07-18): the top "real-looking" GitHub-token hits were

@@ -1205,7 +1205,11 @@ if want safety; then
       jq -Rr '
         select(length > 0) as $raw
         | try (
-            $raw | fromjson | .. | strings
+            $raw | fromjson | ..
+            | if type == "object" then keys_unsorted[]
+              elif type == "string" then .
+              else empty
+              end
             | select(test("^data:image/[^,]*;base64,"; "i") | not)
           ) catch $raw
       ' "$f" 2>/dev/null \
