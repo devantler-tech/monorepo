@@ -235,7 +235,8 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   well-formed deferred follow-up issue (CR's own resolution allows a deferred link); resolve an **Out
   of Scope Changes** inconclusive by replying to `@coderabbitai` clarifying which hunks actually
   changed (its walkthrough often mis-reads pre-existing diff *context* as introduced change); then
-  push and restart the ordered provider loop at CodeRabbit. Across hourly runs
+  push when files changed, then restart the ordered provider loop at CodeRabbit; a pure refutation
+  restarts at the same head without an empty commit. Across hourly runs
   older PRs accumulate red checks, threads, and conflicts the live watcher (alive only in the
   *spawning* session) never sees; the survey must catch them (contract *Autonomy → Watch the PRs you
   spawn*). **Externally-gated / parked PRs are IN the sweep** — a merge gate excuses the merge, never
@@ -379,8 +380,8 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    every push) is your duty; the full request discipline (**one provider request at a time**, in
    CodeRabbit > Codex > Cursor Bugbot order, and **stop on its first successful current-head review**;
    a reaction emoji means wait patiently for the substantive response, no reaction means inspect or
-   retry promptly; findings require a fix/push and restart from CodeRabbit; service failure advances
-   to the next lane) — plus the **last-resort
+   retry promptly; findings require a fix-or-refute and restart from CodeRabbit, with a push only
+   when files changed; service failure advances to the next lane) — plus the **last-resort
    local review round** when no lane will deliver at that head — unavailable, OR rate/billing limited — reviewed with your own review skills and posted as a **real GitHub Review
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
    verdict line) so the sibling agent can see and act on it, incremental re-reviews,

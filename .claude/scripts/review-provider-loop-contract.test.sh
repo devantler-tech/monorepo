@@ -26,8 +26,10 @@ grep -Fq 'never request a second provider after the first success' "${constituti
   fail "constitution permits redundant reviews after the gate is already satisfied"
 grep -Fq 'A provider reaction emoji on the trigger is positive in-flight evidence' "${constitution}" ||
   fail "constitution does not distinguish an acknowledged request from a silent trigger"
-grep -Fq 'fix or refute every reported issue, push the correction, and restart at CodeRabbit' "${constitution}" ||
+grep -Fq 'fix or refute every reported issue, then restart at CodeRabbit' "${constitution}" ||
   fail "constitution does not restart the ordered loop after review findings"
+grep -Fq 'A refutation that changes no file restarts at the same head; never create an empty commit' "${constitution}" ||
+  fail "constitution forces a meaningless push before restarting after a refuted finding"
 grep -Fq 'Only one provider request may be active at a time' "${constitution}" ||
   fail "constitution does not forbid concurrent provider requests"
 grep -Fq 'Pre-merge output is required only when CodeRabbit is the provider currently serving the review loop' "${constitution}" ||
