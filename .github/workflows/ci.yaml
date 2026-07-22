@@ -24,6 +24,7 @@ jobs:
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
+      review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
@@ -102,6 +103,14 @@ jobs:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/scripts/self-review-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            review-provider-loop-contract:
+              - 'AGENTS.md'
+              - '.claude/agents/daily-maintainer.md'
+              - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/scripts/review-provider-loop-contract.test.sh'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
@@ -402,6 +411,21 @@ jobs:
       - name: Verify the self-review contract
         run: bash .claude/scripts/self-review-contract.test.sh
 
+  test-review-provider-loop-contract:
+    name: Test review-provider loop contract
+    needs: changes
+    if: needs.changes.outputs.review-provider-loop-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify the review-provider loop contract
+        run: bash .claude/scripts/review-provider-loop-contract.test.sh
+
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
     needs: changes
@@ -435,6 +459,7 @@ jobs:
       - test-maintainer-preflight
       - test-memory-hygiene
       - test-self-review-contract
+      - test-review-provider-loop-contract
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
@@ -456,5 +481,6 @@ jobs:
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
             ${{ needs.test-self-review-contract.result }}
+            ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}

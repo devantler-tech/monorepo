@@ -37,16 +37,20 @@ plugin carries them (or an explicit, tested subset):
    `AUTOMATION-OWNED (NO-ACTION)` line; no pentad deepen.
 2. **`OWNERSHIP-UNVERIFIED` framing** for every `devantler`-authored PR (routine vs interactive
    ambiguity; branch + disclosure hints only).
-3. **Full hygiene pentad** including CodeRabbit review-body finding sections and pre-merge summary
-   parsing (compact + full shapes; fail-closed states).
-4. **Green-review surfaces for three lanes** — CodeRabbit `APPROVED` review, Codex comment-shaped
-   green, **Cursor Bugbot check-run** (`success` vs `neutral`+title disambiguation).
-5. **Multi-lane claim-branch scan** — `claude/*`, `codex/*`, and `cursor/*` (issue-number /
+3. **Full hygiene pentad** including threaded and non-thread findings; CodeRabbit's ancillary
+   evaluator contributes only concrete problems it explicitly reports during its selected review,
+   never a separate readiness state.
+4. **Green-review surfaces for three lanes** — a finding-free CodeRabbit completion without requiring `APPROVED`, Codex comment-shaped green, and **Cursor Bugbot check-run** (`success` vs
+   `neutral`+title disambiguation).
+5. **Sequential review coordination state** — authenticated two-phase reservation with losing-claim
+   supersession, pending request, monotonic artifact-backed or evidenced-expiry no-gate progression,
+   post-request result binding, and cross-provider deterministic same-SHA retry supersession.
+6. **Multi-lane claim-branch scan** — `claude/*`, `codex/*`, and `cursor/*` (issue-number /
    takeover-suffix / normalised-stem match), not `claude/*` alone.
-6. **Board-claim token / Projects coverage** signals and fail-closed truncation handling.
-7. **GraphQL/core budget line** at survey start/end (monorepo#2365).
-8. **Release-bot review/pre-merge exemption** classification.
-9. **Lane-signal** reporting for provider quota (e.g. Bugbot usage-limit) without treating it as a
+7. **Board-claim token / Projects coverage** signals and fail-closed truncation handling.
+8. **GraphQL/core budget line** at survey start/end (monorepo#2365).
+9. **Release-bot review exemption** classification.
+10. **Lane-signal** reporting for provider quota (e.g. Bugbot usage-limit) without treating it as a
    code verdict.
 
 ## Equivalence status (this slice)
