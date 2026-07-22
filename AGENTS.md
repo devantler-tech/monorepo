@@ -425,6 +425,15 @@ touch of an unconfirmed repo:
    reasoned from the diff rather than executed. Likewise, a review you obtained on your own losing PR
    **audits the winner too**: re-check its findings against `main` before discarding them (that is how
    the merged armour guard's membership-vs-mapping gap was found).
+6. **Board-only claims need a unique token — assignment+branch cannot cover them.** Path-less
+   project-board mutations have no branch to push, so the claim is a **comment**. Every instance
+   still comments as `devantler`, and the disclosure line alone cannot tell siblings apart
+   (monorepo#2265). Every board-only claim comment MUST carry the greppable token
+   `` `board-claim:<lane>` `` where `<lane>` is exactly `claude`, `codex`, or `cursor`. An instance
+   matches **its own** claim by that token; a different lane's unreplied claim younger than ~2h
+   (timed from the comment's `created_at`) is a live sibling claim — stand down. Reply to your own claim comment when finished (or when abandoning); an unreplied claim older than the lease is
+   abandoned and may be taken over. Full procedure lives in the `portfolio-maintenance` skill's
+   project-board Act step.
 
 **A live claim is a temporary skip — the one addition to the skip test.** *Drain oldest-first* lists
 when an older issue may be passed over; a **live claim** (assigned **and** branched, inside the ~2h

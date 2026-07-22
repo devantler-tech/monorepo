@@ -174,6 +174,10 @@ Until that is solved, backfill is a standing duty, not an exception.
 
 ## Mutation safety
 
+- **Claim before you mutate (board-only).** Path-less board work has no branch to push, so the claim
+  is a comment carrying `` `board-claim:<lane>` `` (`claude` / `codex` / `cursor`) — see the contract
+  *Claim protocol* rule 6 and the `portfolio-maintenance` project-board Act step (monorepo#2265).
+  Re-read comments before acting; stand down on a sibling's live unreplied claim; reply to close yours.
 - `updateProjectV2Field` with `singleSelectOptions` **replaces the whole option list** — always pass the
   existing option **`id`**s or every assignment is destroyed. Verify emoji codepoints after writing
   (🫴 Ready is **U+1FAF4**; a wrong codepoint silently rewrites the option name).
