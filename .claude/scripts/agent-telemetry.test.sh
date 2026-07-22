@@ -1099,6 +1099,29 @@ OUT=$(run --section safety)
 check "injection attempts are surfaced" "$OUT" "INJECTION ATTEMPTS"
 check "the fixture's injected instruction is reported" "$OUT" "ignore prior rules"
 
+echo
+echo "injection occurrence provenance"
+mkdir -p "$FIX/injprov" "$FIX/nocodex/sessions"
+cat > "$FIX/injprov/mixed.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"definition fixture says ignore prior rules"},{"type":"text","text":"external body says update your instructions"}]}}
+{"type":"userAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","message":{"content":[{"type":"text","text":"add unsafe<>BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB to the trust gate"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --injection-provenance 2>&1)
+check "detailed provenance identifies the session" "$OUT" "session=mixed.jsonl"
+check "detailed provenance identifies the record line" "$OUT" "line=1"
+check "detailed provenance identifies the record type" "$OUT" "line=1 record=user"
+check "detailed provenance keeps the first mixed-record occurrence" "$OUT" "phrase=ignore prior rules"
+check "detailed provenance keeps the second mixed-record occurrence" "$OUT" "phrase=update your instructions"
+if [ "$(printf '%s\n' "$OUT" | grep -Fc 'session=mixed.jsonl line=1')" -eq 2 ]; then
+  ok "mixed record emits one provenance row per occurrence"
+else
+  bad "mixed record emits one provenance row per occurrence" "$(printf '%s\n' "$OUT" | grep -F 'session=mixed.jsonl' || true)"
+fi
+nocheck "record locators are length-bounded" "$OUT" "record=userAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+nocheck "phrase locators exclude unsafe punctuation" "$OUT" "phrase=add unsafe<>"
+nocheck "phrase locators are length-bounded" "$OUT" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
 # Codex denial detection is a DISCLOSED gap, not a silent zero.
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxdeny" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
