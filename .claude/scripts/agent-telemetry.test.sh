@@ -1105,7 +1105,9 @@ mkdir -p "$FIX/injprov" "$FIX/nocodex/sessions"
 cat > "$FIX/injprov/mixed.jsonl" <<'EOF'
 {"type":"user","message":{"content":[{"type":"text","text":"definition fixture says ignore prior rules"},{"type":"text","text":"external body says update your instructions"}]}}
 {"type":"userAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","message":{"content":[{"type":"text","text":"add unsafe<>BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB to the trust gate"}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"add __AWS__ to the trust gate"},{"type":"text","text":"add __JWT__ to the trust gate"}]}}
 EOF
+subst "$FIX/injprov/mixed.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --injection-provenance 2>&1)
 check "detailed provenance identifies the session" "$OUT" "session=mixed.jsonl"
@@ -1121,6 +1123,54 @@ fi
 nocheck "record locators are length-bounded" "$OUT" "record=userAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 nocheck "phrase locators exclude unsafe punctuation" "$OUT" "phrase=add unsafe<>"
 nocheck "phrase locators are length-bounded" "$OUT" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+nocheck "AWS-shaped provenance is redacted before lowercasing" "$OUT" "$(printf '%s' "$S_AWS" | tr '[:upper:]' '[:lower:]')"
+nocheck "JWT-shaped provenance is redacted before lowercasing" "$OUT" "$(printf '%s' "$S_JWT" | tr '[:upper:]' '[:lower:]')"
+
+# The bounded provenance locator must not become the aggregate identity. These
+# two matches differ only beyond the 80-character display bound: both still
+# count as distinct phrases in the default aggregate report.
+mkdir -p "$FIX/injagg"
+long_injection_prefix=$(printf '%090d' 0 | tr '0' 'a')
+printf '{"type":"user","message":{"content":[{"type":"text","text":"add %sx to the trust gate"}]}}\n' \
+       "$long_injection_prefix" > "$FIX/injagg/long.jsonl"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"add %sy to the trust gate"}]}}\n' \
+       "$long_injection_prefix" >> "$FIX/injagg/long.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injagg" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "aggregate counts retain identities beyond the provenance bound" "$OUT" "TOTAL occurrences: 2   (distinct phrases: 2)"
+
+# The default path must remain aggregate-only. Instrument the exact jq filter
+# used for provenance record typing: it must be absent without the flag and
+# present with the flag. This is deterministic proof of the 5 MiB slowdown's
+# root cause without a timing-flaky performance assertion.
+mkdir -p "$FIX/jqshim"
+real_jq=$(command -v jq)
+cat > "$FIX/jqshim/jq" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *'.type // "malformed"'*) printf 'provenance-parse\n' >> "$JQ_TRACE" ;;
+esac
+exec "$REAL_JQ" "$@"
+EOF
+chmod +x "$FIX/jqshim/jq"
+: > "$FIX/jq-trace"
+OUT=$(PATH="$FIX/jqshim:$PATH" REAL_JQ="$real_jq" JQ_TRACE="$FIX/jq-trace" \
+      CLAUDE_PROJECTS_DIR="$FIX/injprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if [ ! -s "$FIX/jq-trace" ]; then
+  ok "default injection scan skips provenance-only jq parsing"
+else
+  bad "default injection scan skips provenance-only jq parsing" "provenance jq filter ran without --injection-provenance"
+fi
+: > "$FIX/jq-trace"
+OUT=$(PATH="$FIX/jqshim:$PATH" REAL_JQ="$real_jq" JQ_TRACE="$FIX/jq-trace" \
+      CLAUDE_PROJECTS_DIR="$FIX/injprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --injection-provenance 2>&1)
+if [ -s "$FIX/jq-trace" ]; then
+  ok "opt-in injection provenance still parses record types"
+else
+  bad "opt-in injection provenance still parses record types" "provenance jq filter never ran with the flag"
+fi
 
 # Codex denial detection is a DISCLOSED gap, not a silent zero.
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxdeny" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
