@@ -87,6 +87,11 @@ grep -Fq 'siblings may build, run, review,' "${cursor_loader}" ||
   fail "Cursor loader still prevents trusted sibling instances from driving Cursor-authored PRs"
 grep -Fq 'and drive your PRs' "${cursor_loader}" ||
   fail "Cursor loader does not authorize the sibling handoff through merge"
+grep -Fq 'Product repositories are in scope' "${cursor_loader}" ||
+  fail "Cursor loader still treats its empty boot checkout as a product-repository boundary"
+if grep -Fq 'any task requiring a submodule worktree are **not yours**' "${cursor_loader}"; then
+  fail "Cursor loader still forbids product work that the cloud lane demonstrably delivers"
+fi
 grep -Fq -- "- '.claude/loaders/cursor-daily-ai-engineer.md'" "${ci_workflow}" ||
   fail "Cursor loader changes do not trigger the portfolio surveyor contract job"
 if grep -Fq '`app/cursor` is **not** in the contract' "${cursor_loader}"; then
