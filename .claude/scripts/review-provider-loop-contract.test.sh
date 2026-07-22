@@ -30,6 +30,12 @@ grep -Fq 'fix or refute every reported issue, then restart at CodeRabbit' "${con
   fail "constitution does not restart the ordered loop after review findings"
 grep -Fq 'A refutation that changes no file restarts at the same head; never create an empty commit' "${constitution}" ||
   fail "constitution forces a meaningless push before restarting after a refuted finding"
+grep -Fq 'A reaction earns a generous bounded wait, not an infinite lease' "${constitution}" ||
+  fail "an acknowledged provider can stall the review loop forever"
+grep -Fq 'premerge=not-posted` remains **NEEDS-FIX** when CodeRabbit reviewed the current head' "${surveyor}" ||
+  fail "surveyor can promote before delayed CodeRabbit pre-merge output arrives"
+grep -Fq 'body_findings=0-resolved@<sha>' "${surveyor}" ||
+  fail "surveyor cannot clear a same-head CodeRabbit body finding after a recorded refutation"
 grep -Fq 'Only one provider request may be active at a time' "${constitution}" ||
   fail "constitution does not forbid concurrent provider requests"
 grep -Fq 'Pre-merge output is required only when CodeRabbit is the provider currently serving the review loop' "${constitution}" ||

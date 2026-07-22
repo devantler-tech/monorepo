@@ -139,9 +139,12 @@ public and private — no per-repo loop needed to enumerate):
      From that single newest review, extract each matching section's numeric `(N)` excluding `🔇`, and report
      `body_findings=<n>@<sha>` where `<sha>` is that review's `commit_id`. When `<sha>` differs from
      the current `headRefOid`, the count is historical — report it as `body_findings=<n>-stale@<sha>`
-     so the orchestrator re-verifies against the head instead of treating it as open, and when the PR
-     has a later disclosed resolution reply for a finding, note it. A PR is review-ready only when
-     current-head body findings AND unresolved threads are 0, checks are green, it
+     so the orchestrator re-verifies against the head instead of treating it as open. A same-head
+     finding is cleared as `body_findings=0-resolved@<sha>` only when a later disclosed resolution
+     reply links that finding/review and records specific fix-or-refute reasoning, with no later
+     finding-bearing CodeRabbit review; a generic status/readiness comment cannot clear it. A PR is review-ready only when
+     current-head body findings (including a qualifying `body_findings=0-resolved@<sha>` record) AND
+     unresolved threads are 0, checks are green, it
      is not CONFLICTING, it has no applicable current-head CodeRabbit pre-merge findings (below), and
      it carries ≥1 green review (below).
    - **(e) Green-review state per open actionable own/trusted PR — no actionable own/trusted PR is promotion- or
@@ -290,7 +293,10 @@ public and private — no per-repo loop needed to enumerate):
      `inconclusive` means a recognized but non-green/unparseable summary; `not-posted` means no
      supported marker. Always fail closed on a result at the current head. A current-head
      failed/inconclusive value makes the PR **NEEDS-FIX** even when checks/threads/body_findings are
-     clean. Report `not-required` when CodeRabbit did not review the current head and another provider
+     clean. `premerge=not-posted` remains **NEEDS-FIX** when CodeRabbit reviewed the current head;
+     do not promote while its summary may still arrive. A provider response explicitly saying the
+     review did not run (rate/app/service failure) does not count as a CodeRabbit review. Report
+     `not-required` when CodeRabbit did not review the current head and another provider
      supplied `green_review`; an older CodeRabbit summary is historical and cannot override that
      current-head success. For the all-lanes-down fallback, report
      **`exempt-lanes-down`** when no summary was posted *because CodeRabbit demonstrably did not
@@ -506,8 +512,8 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]> → AUTOMATION-OWNED (NO-ACTION)
-- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|not-required|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
-- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|not-required|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|not-required|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|not-required|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…> (orchestrator applies creation-record test before action; NOT asserted mine)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
