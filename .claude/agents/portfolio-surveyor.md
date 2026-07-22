@@ -203,6 +203,7 @@ public and private — no per-repo loop needed to enumerate):
      explicit ancillary problem count are all zero. **Never count an auto-generated command reply, acknowledgement, quota notice, or service shell as a review completion**; reject the summary too when
      its body says the review did not run. The qualifying review object `submitted_at` must be later than the latest authenticated CodeRabbit request marker for that head, just as the summary's
      `updated_at` must be later; this prevents a same-SHA retry from reusing its original review.
+     An authenticated fingerprint-matching **`body_findings=0-resolved@<sha>` counts as zero for CodeRabbit success** even when the identical section is repeated in the later review.
      Report an older completion as `cr-stale@<sha>`. A
      **current-head CodeRabbit review that carries findings** (a `COMMENTED`/`CHANGES_REQUESTED`
      review with unresolved threads or actionable comments) is `cr-findings@<sha>` — report its
@@ -246,6 +247,11 @@ public and private — no per-repo loop needed to enumerate):
      re-request. This orders both outcomes around one concrete trigger without comparing review
      `submitted_at` to comment `created_at`. If any condition is missing, findings still win and the
      PR remains **NEEDS-FIX**.
+     **Cross-provider restart completion:** after every finding from any lane has a later authenticated
+     fix/refutation reply and every associated thread is resolved, an authenticated restart at
+     CodeRabbit begins a new sequence. **A later successful provider in the authenticated restarted sequence clears those resolved findings** at the same head, even when it is not the provider that
+     originally reported them; stop at that success rather than requesting the original provider
+     redundantly. Unresolved or unrecorded findings still win.
      ⚠️ **Extract that sha tolerantly, or head-match cannot fire at all.** The marker is written
      ``**Reviewed commit:** `<sha>` `` — the sha is **backtick-wrapped** and **abbreviated to 10
      chars**, not the full 40. A pattern expecting hex immediately after the colon matches nothing
@@ -305,7 +311,9 @@ public and private — no per-repo loop needed to enumerate):
      authenticated request plus either its later substantive completion artifact or an authenticated
      disclosed `<!-- review-progress-head: <full sha> provider=<lane> outcome=no-gate request=<comment-id> reason=<no-reaction-expired|ack-expired|uninstalled|service-failure> -->` marker posted only after the applicable bounded window or concrete unavailability evidence. A later run uses
      it to resume at the next lane rather than re-requesting that provider. A success, finding, or
-     newer head supersedes this progress state.
+     newer head supersedes this progress state. **`review_progress` is the furthest completed lane by provider order, never the latest artifact by time**: rank CodeRabbit before Codex before Bugbot and
+     take the maximum completed lane for this head, so a delayed higher-priority response cannot move
+     the cursor backward.
    - **Candidate maintainer comments on `devantler` PRs (incl. drafts, AND recently-MERGED ones) —
      disclosure- and ownership-gated.** Under self-promotion-on-genuine-readiness the maintainer's
      post-merge PR comment is a primary steering channel, and an open-PR-only sweep would never

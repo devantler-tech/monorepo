@@ -157,6 +157,8 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   current-head request by `updated_at` plus an explicit head reference, then require zero CodeRabbit
   threads, body findings, and explicit ancillary problems. Never count an auto-generated command
   reply/acknowledgement, quota notice, service shell, or summary saying the review did not run.
+  Treat an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` as zero when the
+  identical section repeats.
   Report an older completion as stale, and a current-head CodeRabbit review carrying
   findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual
@@ -376,9 +378,12 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    with the structural agent disclosure; the winning request supersedes every losing reservation in
    that provider/head election; persist a completed no-gate outcome, or an authenticated
    `review-progress-head` marker after evidenced silent expiry, so the next run advances rather than
-   repeats the provider;
+   repeats the provider; calculate that cursor as the furthest completed lane by provider order,
+   never by latest response time;
    findings require a fix-or-refute and restart from CodeRabbit, with a push only
-   when files changed; service failure advances to the next lane) — plus the **last-resort
+   when files changed; after authenticated resolution, the first successful provider in that
+   restarted sequence clears those earlier findings without a redundant same-provider request;
+   service failure advances to the next lane) — plus the **last-resort
    local review round** when no lane will deliver at that head — unavailable, OR rate/billing limited — reviewed with your own review skills and posted as a **real GitHub Review
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
    verdict line) so the sibling agent can see and act on it, incremental re-reviews,

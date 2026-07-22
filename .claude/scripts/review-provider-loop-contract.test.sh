@@ -35,10 +35,14 @@ grep -Fq 'A reaction earns a generous bounded wait, not an infinite lease' "${co
   fail "an acknowledged provider can stall the review loop forever"
 grep -Fq 'body_findings=0-resolved@<sha>' "${surveyor}" ||
   fail "surveyor cannot clear a same-head CodeRabbit body finding after a recorded refutation"
+grep -Fq '`body_findings=0-resolved@<sha>` counts as zero for CodeRabbit success' "${surveyor}" ||
+  fail "a resolved repeated CodeRabbit finding can trap the provider loop"
 grep -Fq 'same-SHA Codex clean supersedes findings only after all finding threads are resolved and a later re-request produces the clean marker' "${surveyor}" ||
   fail "a successful same-head Codex retry cannot terminate the loop"
 grep -Fq 'same-SHA Bugbot success supersedes findings only after all finding threads are resolved and a later authenticated re-request produces that check' "${surveyor}" ||
   fail "Bugbot retries have no deterministic same-head supersession rule"
+grep -Fq 'A later successful provider in the authenticated restarted sequence clears those resolved findings' "${surveyor}" ||
+  fail "a successful restarted provider cannot clear resolved findings from another lane"
 grep -Fq 'author exactly `devantler` and carry the structural disclosure prefix' "${constitution}" ||
   fail "an external account can spoof a same-head body-finding resolution record"
 grep -Fq 'An identical repeated same-SHA CodeRabbit finding preserves its authenticated resolution record' "${constitution}" ||
@@ -65,6 +69,8 @@ grep -Fq 'review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<
   fail "a completed provider outcome without a green artifact is not durable across runs"
 grep -Fq 'review-progress-head: <full sha> provider=<lane> outcome=no-gate' "${surveyor}" ||
   fail "silent provider expiry cannot persist progression across runs"
+grep -Fq '`review_progress` is the furthest completed lane by provider order, never the latest artifact by time' "${surveyor}" ||
+  fail "a delayed provider response can move review progression backward"
 grep -Fq 'CodeRabbit is first and foremost a review provider' "${constitution}" ||
   fail "constitution still treats CodeRabbit primarily as a pre-merge evaluator"
 grep -Fq 'a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`' "${constitution}" ||

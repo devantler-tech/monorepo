@@ -642,7 +642,7 @@ green reads as "no review". Rows are in lane-priority order:**
 | **Codex** (`chatgpt-codex-connector[bot]`) | **issue COMMENT** — `Codex Review: Didn't find any major issues` + `**Reviewed commit:** <sha>` (10-char, no `commit_id` field) | review object, `state: COMMENTED`, inline threads | comment body sha vs `headRefOid[0:10]` |
 | **Cursor Bugbot** (`cursor[bot]`) | **CHECK-RUN named `Cursor Bugbot`** (app slug `cursor`), `conclusion: success` — *no review object, no comment* | same check-run with **`conclusion: neutral` AND `output.title: "Bugbot Review"`**, findings as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments` | check-run at `commits/<headRefOid>/check-runs` |
 
-**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request and naming the head. Reject auto-generated command replies/acknowledgements and any summary carrying a rate-limit, quota, or service marker saying the review did not run. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; any finding or stale completion is not green.
+**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request and naming the head. Reject auto-generated command replies/acknowledgements and any summary carrying a rate-limit, quota, or service marker saying the review did not run. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
 
 ⚠️ **Bugbot's green is a status check, NOT a review object and NOT a comment** — a gate or survey that
 sweeps only `pulls/<n>/reviews` and `issues/<n>/comments` is **structurally blind** to it and will
@@ -820,7 +820,10 @@ result at the current head — self-promotion is forbidden before that. Request 
   same-head finding threads need later authenticated disclosed resolution replies and must be
   resolved; then a later authenticated Bugbot request marker paired to its bare trigger must precede
   the successful check-run. Select that later run deterministically by `started_at`, then check-run
-  id; otherwise the earlier neutral finding run continues to win. When the provider reports only a
+  id; otherwise the earlier neutral finding run continues to win. For either lane, a later successful
+  provider in the authenticated CodeRabbit-first restarted sequence also clears the earlier
+  provider's resolved same-head findings; stop at that first success instead of requesting the
+  original provider redundantly. When the provider reports only a
   quota/app/service failure, or completes without a gate-satisfying artifact, there is no code issue
   to fix: advance to the next provider in order, still one at a time. This distinction permits
   rate/token optimization without weakening the requirement for one successful current-head review.
@@ -830,7 +833,9 @@ result at the current head — self-promotion is forbidden before that. Request 
   uninstalled app, or silent failure), post an authenticated disclosed
   `<!-- review-progress-head: <sha> provider=<lane> outcome=no-gate request=<comment-id> reason=<reason> -->`
   marker only after the bounded window or concrete unavailability evidence; that repository-visible
-  record persists progression across runs.
+  record persists progression across runs. Compute progress as the furthest completed lane in
+  CodeRabbit → Codex → Bugbot order, never the latest artifact timestamp, so a delayed earlier-lane
+  response cannot move the cursor backward. A finding, success, or newer head supersedes the cursor.
 - **Local review round — when every lane is unavailable OR rate/billing limited** (maintainer
   direction 2026-07-18, widened to three lanes 2026-07-20, and widened again in an interactive
   session **2026-07-21**: *"We likely need to allow local review rounds when external review
