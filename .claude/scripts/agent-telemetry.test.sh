@@ -394,6 +394,36 @@ parity_case "slack"      "leak __SLACK__" "__SLACK__"
 parity_case "jwt"        "leak __JWT__" "__JWTTAIL__"
 parity_case "generic"    "config token=__GEN__" "__GEN__"
 
+# Codex image tools persist rendered images as very large `data:` strings in
+# custom tool outputs. Those strings are encoded binary, not transcript text;
+# scanning their random byte alphabet produces high-signal credential rows that
+# tell the operator to rotate credentials which never existed. Keep the
+# exclusion structural and narrow: an adjacent text field and a malformed raw
+# record must still reach the detector.
+echo
+echo "binary data URL exclusion"
+mkdir -p "$FIX/binary/projects" "$FIX/binary/codex/sessions"
+cat > "$FIX/binary/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_text","text":"text leak __SLACK__"},{"type":"image","image_url":"data:image/png;base64,AAAA/__AWS__BBBB"}]}}
+malformed raw leak __GHPE__
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/binary/codex/sessions/s.jsonl" && rm -f "$FIX/binary/codex/sessions/s.jsonl.bak"
+subst "$FIX/binary/codex/sessions/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/binary/projects" CODEX_HOME="$FIX/binary/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'aws-access-key-id'; then
+  bad "binary image data does not create a credential alert" "$TABLE"
+else ok "binary image data does not create a credential alert"; fi
+if printf '%s' "$TABLE" | grep -q 'slack-token'; then
+  ok "adjacent ordinary text is still scanned"
+else bad "adjacent ordinary text is still scanned" "$TABLE"; fi
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+  ok "malformed raw records remain fail-closed"
+else bad "malformed raw records remain fail-closed" "$TABLE"; fi
+
 # ── 6d². leak-table boundary anchoring ────────────────────────────────────────
 # First live run (2026-07-18): the top "real-looking" GitHub-token hits were
 # substrings INSIDE base64url blobs (signed-URL params, JWT signatures) —
