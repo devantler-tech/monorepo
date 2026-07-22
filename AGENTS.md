@@ -1803,15 +1803,29 @@ hijacked run *could* do.
 
 ### Execution model — per-run worktrees
 Each run works in **throwaway git worktrees**, never a shared main checkout, so it can't collide with
-the maintainer's parallel sessions. For each repo touched:
-`git -C <repo_path> worktree add .claude/worktrees/maint-<runid> -b claude/<area>-<desc>-<issue>`
-(the trailing issue number is what makes a pre-PR claim matchable — see *Claim protocol*; for the
-legitimate **issue-less** flows the contract allows, a hotfix or a trivial obvious fix, there is no
-number to append, so use plain `claude/<area>-<desc>` — those go straight to a PR, so the PR body is
-the discoverable signal and no claim window applies), work there,
-open the PR, then `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local
-filesystem path such as `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the
-slug only for `gh` commands). **Submodule worktree isolation breaks whenever a submodule is
+the maintainer's parallel sessions. For each repo touched, create the worktree through the harness
+wrapper so it shares the branch-operation lock with local cleanup (monorepo#2209):
+
+```sh
+.claude/scripts/worktree-add.sh <repo_path> .claude/worktrees/maint-<runid> \
+  -b <lane>/<area>-<desc>-<issue>
+```
+
+(`<lane>` is your instance's namespace — `claude`, `codex`, or `cursor`. The trailing issue number is
+what makes a pre-PR claim matchable — see *Claim protocol*; for the legitimate **issue-less** flows
+the contract allows, a hotfix or a trivial obvious fix, there is no number to append, so use plain
+`<lane>/<area>-<desc>` — those go straight to a PR, so the PR body is the discoverable signal and no
+claim window applies.) Work there, open the PR, then remove through the matching wrapper:
+
+```sh
+.claude/scripts/worktree-remove.sh <repo_path> .claude/worktrees/maint-<runid>
+```
+
+(`<repo_path>` is a local filesystem path such as `applications/ksail` — `git -C` takes a path, not an
+`<owner/repo>` slug; use the slug only for `gh` commands.) Prefer these wrappers over a bare
+`git worktree add`/`remove` for agent per-run trees: both take the same portable directory lock as
+[`branch-cleanup.sh`](.claude/scripts/branch-cleanup.sh), so a concurrent local branch deletion cannot
+overlap a checkout. **Submodule worktree isolation breaks whenever a submodule is
 initialised** — a stray shared `core.worktree` makes `git worktree add` resolve back into the main
 checkout, silently collapsing every parallel session into one physical tree.
 
@@ -1858,10 +1872,16 @@ a task explicitly calls for it. Leave every checkout/worktree clean when done.
 (maintainer direction 2026-07-16: *"You never clean up old branches locally or on the remote. I expect
 you to always clean up and switch back to the default branch after a tick."*). Left unswept, every run's
 worktree branch survives it: the first sweep found **~1,140 spent branches** (monorepo alone had **589**
-local; `.github` had **35** stale remote). **Remove your own per-run worktree FIRST, then run**
+local; `.github` had **35** stale remote). **Remove your own per-run worktree FIRST** (via
+[`worktree-remove.sh`](.claude/scripts/worktree-remove.sh)), **then run**
 [`.claude/scripts/branch-cleanup.sh <repo_path> <slug> <manifest>`](.claude/scripts/branch-cleanup.sh)
 for each repo touched — a branch still checked out by your own worktree sits in the keep-set, so a
-sweep run before the worktree removal silently spares the very branch the tick just spent.
+sweep run before the worktree removal silently spares the very branch the tick just spent. Apply-mode
+cleanup holds the shared branch-operation lock
+([`branch-op-lock.sh`](.claude/scripts/branch-op-lock.sh)) for the whole pass so it cannot overlap a
+harness worktree create/remove; dry-run skips the lock. Stale-lock recovery is same-host dead PID or
+age ≥ 600s — if a live holder is wedged past that, confirm no agent holds it and `rm -rf` the lock
+directory under the repo's `git-common-dir`.
 
 **🔴 Deleting a remote branch CLOSES its open PR — so the keep-set is the whole safety property:**
 - **KEEP:** the head of an **OPEN PR**; any branch **checked out by a worktree**; the default branch;

@@ -505,7 +505,14 @@ For each selected product:
    .claude/scripts/submodule-init.sh <path>   # init at the pinned commit + repair + probe (fail-closed)
    ```
 
-   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b <lane>/<area>-<desc>-<issue>`,
+   Then create the per-run worktree through the harness wrapper (monorepo#2209 — shares the
+   branch-operation lock with local cleanup):
+
+   ```sh
+   .claude/scripts/worktree-add.sh <path> .claude/worktrees/maint-<runid> \
+     -b <lane>/<area>-<desc>-<issue>
+   ```
+
    where **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*` (see
    *Execution model*). Never write a sibling's lane: it breaks draft ownership, and a `claude/*`
    branch from another instance would be swept by the Claude tick's cleanup.
@@ -542,15 +549,16 @@ For each selected product:
    Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff. External-repository work
    is forbidden unless the current interactive conversation first clears the professional-work
    boundary for that named repo; creating an upstream artifact then still needs ask-tool approval.
-4. **Clean up:** `git -C <path> worktree remove .claude/worktrees/maint-<runid>` (and prune). Leave
+4. **Clean up:** `.claude/scripts/worktree-remove.sh <path> .claude/worktrees/maint-<runid>` (and prune). Leave
    no worktree or dirty state behind. **Then reap spent branches EVERY run** (contract *End-of-tick
    branch hygiene*): with the worktree already removed (a branch still checked out sits in the keep-set),
    run [`.claude/scripts/branch-cleanup.sh <repo_path> <slug> <manifest>`](../../scripts/branch-cleanup.sh)
    for each repo touched. It restores the default-branch checkout and deletes only spent `claude/*`
    branches — KEEPING open-PR heads, worktree-checked-out branches, and the maintainer's interactive
    random-slug branches, and deleting a remote branch only on MERGED/CLOSED PR evidence (a restore
-   manifest is written before each delete). This step is what makes the *reap EVERY run* duty actually
-   run in a scheduled tick — the paragraph alone does not.
+   manifest is written before each delete). Apply mode holds the shared branch-operation lock with
+   worktree-add/remove so local deletion cannot overlap a concurrent checkout. This step is what makes
+   the *reap EVERY run* duty actually run in a scheduled tick — the paragraph alone does not.
 
 ## 4. Always: update native memory + one consolidated report
 - **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
