@@ -638,11 +638,11 @@ green reads as "no review". Rows are in lane-priority order:**
 
 | Lane | Clean/green artifact | Findings artifact | Key to match |
 |---|---|---|---|
-| **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head, or a bot completion comment ordered after the authenticated request marker and before any newer head |
+| **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head, or the auto-generated summary comment updated after the authenticated request, naming the head, and carrying no rate-limit/service marker |
 | **Codex** (`chatgpt-codex-connector[bot]`) | **issue COMMENT** — `Codex Review: Didn't find any major issues` + `**Reviewed commit:** <sha>` (10-char, no `commit_id` field) | review object, `state: COMMENTED`, inline threads | comment body sha vs `headRefOid[0:10]` |
 | **Cursor Bugbot** (`cursor[bot]`) | **CHECK-RUN named `Cursor Bugbot`** (app slug `cursor`), `conclusion: success` — *no review object, no comment* | same check-run with **`conclusion: neutral` AND `output.title: "Bugbot Review"`**, findings as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments` | check-run at `commits/<headRefOid>/check-runs` |
 
-**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object or its bot-authored completion comment after the authenticated current-head request, but only after checking all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review. A stale completion, a quota/service response saying no review ran, or any unresolved finding is not green.
+**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after the authenticated current-head request and naming that head. Reject auto-generated command replies/acknowledgements and any summary carrying a rate-limit, quota, or service marker saying the review did not run. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; any finding or stale completion is not green.
 
 ⚠️ **Bugbot's green is a status check, NOT a review object and NOT a comment** — a gate or survey that
 sweeps only `pulls/<n>/reviews` and `issues/<n>/comments` is **structurally blind** to it and will
@@ -839,9 +839,9 @@ result at the current head — self-promotion is forbidden before that. Request 
     not delivered, and waiting on it is what the direction removes as a blocker;
   - a **usage or spend limit** (Bugbot's `usage limit reached`, Codex out of credits) — no window at
     all, and only the maintainer can lift it;
-  - the lane **completes but structurally emits no artifact that satisfies the gate** — CodeRabbit
-    never `APPROVE`s a clean PR, so on a finding-free diff its review is indistinguishable from no
-    review however many times it runs;
+  - the lane **completes but structurally emits no recognizable substantive artifact that satisfies
+    the gate** — an ordinary finding-free CodeRabbit review object or auto-generated summary does
+    satisfy it without `APPROVED`; an acknowledgement/service shell alone does not;
   - no artifact after a generous window, or the app erroring/uninstalled on the repo.
 
   **A provider's quota state is never what blocks a finished PR.** That is the whole point of the

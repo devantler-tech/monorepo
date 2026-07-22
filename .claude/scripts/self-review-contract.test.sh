@@ -56,7 +56,7 @@ grep -Fq '*including one that states a retry window*' "${constitution}" ||
   fail "a rate limit with a stated window no longer admits a local review round, so a throttle can park finished work"
 grep -Fq 'usage or spend limit' "${constitution}" ||
   fail "constitution does not admit a spend-exhausted lane as not-delivering"
-grep -Fq 'structurally emits no artifact that satisfies the gate' "${constitution}" ||
+grep -Fq 'structurally emits no recognizable substantive artifact that satisfies' "${constitution}" ||
   fail "a lane that reviews but never emits a gate-satisfying artifact is not recognised as not-delivering"
 # The carve-out has to stay narrow, or it becomes a licence to merge past any red signal.
 grep -Fq 'never a red CI check, never a required check, never a finding' "${constitution}" ||

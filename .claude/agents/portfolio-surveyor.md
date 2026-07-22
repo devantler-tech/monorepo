@@ -197,9 +197,11 @@ public and private — no per-repo loop needed to enumerate):
      still applies its creation-record test before acting on any `devantler` row.
      Fetch `headRefOid` while deepening the PR. Report `cr@<sha>` for a finding-free CodeRabbit
      review completion at the current head even without `APPROVED`: accept a current-head review
-     object, or a bot completion comment created after the authenticated current-head request and
-     before any newer head, only when its threads, review-body sections, and explicit ancillary
-     problem count are all zero. Report an older completion as `cr-stale@<sha>`. A
+     object, or CodeRabbit's substantive auto-generated summary comment
+     (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after the
+     authenticated request and naming `headRefOid`, only when its threads, review-body sections, and
+     explicit ancillary problem count are all zero. **Never count an auto-generated command reply, acknowledgement, quota notice, or service shell as a review completion**; reject the summary too when
+     its body says the review did not run. Report an older completion as `cr-stale@<sha>`. A
      **current-head CodeRabbit review that carries findings** (a `COMMENTED`/`CHANGES_REQUESTED`
      review with unresolved threads or actionable comments) is `cr-findings@<sha>` — report its
      review URL and unresolved-thread/finding count and classify the PR **NEEDS-FIX**, exactly like

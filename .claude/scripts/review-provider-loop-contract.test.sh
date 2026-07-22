@@ -11,6 +11,7 @@ constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 daily_maintainer="${repo_root}/.claude/agents/daily-maintainer.md"
+parity_checklist="${repo_root}/.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md"
 workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
@@ -64,6 +65,10 @@ grep -Fq 'CodeRabbit is first and foremost a review provider' "${constitution}" 
   fail "constitution still treats CodeRabbit primarily as a pre-merge evaluator"
 grep -Fq 'a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`' "${constitution}" ||
   fail "a successful CodeRabbit review still cannot satisfy the review gate"
+grep -Fq 'auto-generated summary comment' "${surveyor}" ||
+  fail "CodeRabbit success has no recognizable substantive completion artifact"
+grep -Fq 'Never count an auto-generated command reply, acknowledgement, quota notice, or service shell as a review completion' "${surveyor}" ||
+  fail "CodeRabbit acknowledgement can be mistaken for a successful review"
 grep -Fq 'Missing or delayed pre-merge output never blocks promotion' "${constitution}" ||
   fail "absent ancillary CodeRabbit output can still block a reviewed PR"
 grep -Fq 'fold it into `body_findings`' "${surveyor}" ||
@@ -73,6 +78,11 @@ for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}" "${d
     fail "standalone CodeRabbit pre-merge readiness state remains in ${contract_file}"
   fi
 done
+if grep -Fq 'pre-merge summary parsing' "${parity_checklist}"; then
+  fail "plugin-parity checklist can reintroduce the removed pre-merge gate"
+fi
+grep -Fq 'finding-free CodeRabbit completion without requiring `APPROVED`' "${parity_checklist}" ||
+  fail "plugin-parity checklist does not recognize CodeRabbit review completions"
 
 # The two maintained Claude entry points must remain independently followable without recreating the
 # superseded multi-provider interpretation.

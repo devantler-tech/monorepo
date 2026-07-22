@@ -152,9 +152,11 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   are **stale** (at a non-head SHA) — that is a re-request signal, not a contradiction.
   Fetch `headRefOid` while deepening every actionable own/trusted PR. A finding-free CodeRabbit
   review completion counts as `cr@<sha>` even without `APPROVED`: bind a review object by REST
-  `commit_id`, or bind a bot completion comment to the authenticated current-head request and absence
-  of a newer head, then require zero CodeRabbit threads, body findings, and explicit ancillary
-  problems. Report an older completion as stale, and a current-head CodeRabbit review carrying
+  `commit_id`, or bind its substantive auto-generated summary comment to the authenticated
+  current-head request by `updated_at` plus an explicit head reference, then require zero CodeRabbit
+  threads, body findings, and explicit ancillary problems. Never count an auto-generated command
+  reply/acknowledgement, quota notice, service shell, or summary saying the review did not run.
+  Report an older completion as stale, and a current-head CodeRabbit review carrying
   findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual
   `chatgpt-codex-connector` review output, extract `**Reviewed commit:** <sha>`, and accept its
