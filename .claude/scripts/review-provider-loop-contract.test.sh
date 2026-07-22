@@ -42,6 +42,16 @@ grep -Fq 'Pre-merge output is required only when CodeRabbit reviewed the current
   fail "pre-merge applicability incorrectly expires when the loop advances beyond CodeRabbit"
 grep -Fq 'author exactly `devantler` and carry the structural disclosure prefix' "${constitution}" ||
   fail "an external account can spoof a same-head body-finding resolution record"
+grep -Fq 'An identical repeated same-SHA CodeRabbit finding preserves its authenticated resolution record' "${constitution}" ||
+  fail "an unchanged CodeRabbit false positive can reopen forever"
+grep -Fq 'premerge=provider-stalled' "${surveyor}" ||
+  fail "missing CodeRabbit pre-merge output can block a PR forever"
+grep -Fq 'Immediately before every provider request, re-read the repository-visible current-head request markers' "${constitution}" ||
+  fail "overlapping instances can open concurrent provider lanes"
+grep -Fq 'review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>' "${surveyor}" ||
+  fail "surveyor does not expose an in-flight provider request to sibling instances"
+grep -Fq 'A request marker is authoritative only from exact author `devantler` with the structural disclosure' "${constitution}" ||
+  fail "an external comment can spoof an in-flight provider request"
 grep -Fq 'Only one provider request may be active at a time' "${constitution}" ||
   fail "constitution does not forbid concurrent provider requests"
 

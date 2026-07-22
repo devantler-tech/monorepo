@@ -208,7 +208,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   resolution record** (no thread exists to resolve). On an unchanged SHA, a later reply from exact
   author `devantler` carrying the structural disclosure clears it as
   `body_findings=0-resolved@<sha>` only when it links the finding and records specific reasoning; a
-  generic or externally-authored comment does not. **(d) CodeRabbit pre-merge findings are a
+  generic or externally-authored comment does not. An identical repeated same-head finding
+  fingerprint (category + path/range + normalized text) remains resolved; a new/changed fingerprint
+  reopens it. **(d) CodeRabbit pre-merge findings are a
   separate surface only when CodeRabbit reviews the current head, not a mandatory second provider
   after Codex or Cursor succeeds.** A current-head failed/inconclusive result blocks promotion and
   requires fix/push/restart (directions 2026-07-06 and 2026-07-22); CodeRabbit publishes either
@@ -229,10 +231,12 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   **only** with a positive `✅` count and no positive `❌`, `❓`, or `⚠️` counter; mixed results such as
   `✅ 4 | ❌ 1` are failed. A full summary is green only when every listed check is explicitly passed
   and no error/inconclusive result appears; the absence of a failed heading is insufficient. Report
-  exactly `premerge=<green|failed:names|failed:unnamed|inconclusive|not-posted|not-required|exempt-lanes-down>`: `inconclusive` means a
+  exactly `premerge=<green|failed:names|failed:unnamed|inconclusive|not-posted|not-required|provider-stalled|exempt-lanes-down>`: `inconclusive` means a
   recognized but non-green/unparseable summary, while `not-posted` means no supported marker. Always
   fail closed on a result at the current head; `not-posted` remains NEEDS-FIX after CodeRabbit
-  actually reviewed that head until its summary arrives. Use `not-required` when CodeRabbit did not review that
+  actually reviewed that head until its summary arrives. A finding-free actual review whose summary
+  exceeds the generous measured window becomes `provider-stalled`; with a current-head external
+  success it is clear, while a late summary supersedes it. Use `not-required` when CodeRabbit did not review that
   head and another external provider supplied the successful review; use `exempt-lanes-down` only
   for the qualifying local fallback.
   Resolve a **Linked Issues** fail by implementing the missing AC **or** filing + referencing a
@@ -384,7 +388,11 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    every push) is your duty; the full request discipline (**one provider request at a time**, in
    CodeRabbit > Codex > Cursor Bugbot order, and **stop on its first successful current-head review**;
    a reaction emoji earns a generous bounded wait for the substantive response, while no reaction
-   means inspect or retry promptly; findings require a fix-or-refute and restart from CodeRabbit, with a push only
+   means inspect or retry promptly; every trigger carries a repository-visible current-head marker
+   (Cursor's goes in its preceding disclosure comment), accepts it only from exact author
+   `devantler` with the structural agent disclosure, and immediately before requesting the run
+   re-reads those markers/reactions/artifacts so a sibling's pending request cannot be duplicated;
+   findings require a fix-or-refute and restart from CodeRabbit, with a push only
    when files changed; service failure advances to the next lane) — plus the **last-resort
    local review round** when no lane will deliver at that head — unavailable, OR rate/billing limited — reviewed with your own review skills and posted as a **real GitHub Review
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
