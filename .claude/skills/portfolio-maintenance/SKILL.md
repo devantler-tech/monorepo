@@ -97,9 +97,12 @@ card.
 (declared in [`.claude/settings.json`](../../settings.json) as
 `automated-ai-engineer@devantler-plugins`) — read-only — to run the whole portfolio survey and
 return **one compact digest** — so the ~40 calls of raw `gh` JSON accumulate in *its* throwaway
-context, not yours; you receive only the digest. **Do not load** the local reference copy at
-[`.claude/agents/portfolio-surveyor.md`](../../agents/portfolio-surveyor.md); it stays on disk as a
-parity reference until digest parity is proven (see
+context, not yours; you receive only the digest. **Compatibility overlay — required until digest
+parity:** the spawn prompt must tell the plugin agent to read and follow the local
+[`.claude/agents/portfolio-surveyor.md`](../../agents/portfolio-surveyor.md) before it queries
+GitHub. The plugin supplies the agent entry point; the local file preserves the deployment-hardened
+procedure and output grammar that agent-plugins#78 has not upstreamed yet. Remove this overlay only
+after a side-by-side run proves parity against the checklist in
 [`.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md`](../../plugin-consumption/automated-ai-engineer-surveyor-diff.md)).
 Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*Portfolio map*,
 *Trust gate*, *Cadence*, *Memory*, *Maintainer channels*). The surveyor:

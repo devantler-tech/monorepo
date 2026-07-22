@@ -195,9 +195,12 @@ these named contract sections resolve:
 | **Memory** | [Durable memory](#durable-memory--your-native-memory--the-run-report) |
 | **Maintainer channels** | [Maintainer channels](#maintainer-channels) |
 
-The run loop sources `portfolio-surveyor` from the plugin (local
-`.claude/agents/portfolio-surveyor.md` is a reference copy only until digest parity — see
-[`.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md`](.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md)).
+The run loop sources the `portfolio-surveyor` agent entry point from the plugin and, until digest
+parity, requires that subagent to read the local `.claude/agents/portfolio-surveyor.md` as a
+compatibility overlay. The overlay preserves the deployment-hardened procedure and output grammar
+that the generic plugin does not carry yet; remove it only after the side-by-side checklist in
+[`.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md`](.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md)
+passes.
 
 ### Maintainer channels
 Three channels actually get the maintainer's attention, and all are *active* (never a silent

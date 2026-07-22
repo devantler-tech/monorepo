@@ -151,6 +151,13 @@ grep -Fq 'count it against' "${surveyor}" ||
   fail "surveyor may still turn dependency automation into operate work"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
+grep -Fq 'Compatibility overlay' "${maintenance_skill}" ||
+  fail "plugin surveyor can run without the hardened local behavior before digest parity"
+grep -Fq 'read and follow the local' "${maintenance_skill}" ||
+  fail "plugin surveyor is not explicitly required to load the local compatibility overlay"
+if grep -Fq '**Do not load** the local reference copy' "${maintenance_skill}"; then
+  fail "run loop forbids the compatibility overlay even though plugin digest parity is not proven"
+fi
 grep -Fq 'automation-owned dependency PRs' "${monorepo_skill}" ||
   fail "monorepo product card still treats dependency PRs as agent work"
 grep -Fq 'automation-owned dependency PRs' "${product_engineering_skill}" ||
