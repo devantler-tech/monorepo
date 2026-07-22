@@ -15,6 +15,10 @@
 #   CAS   - every remote delete uses --force-with-lease pinned to the evidence SHA, so a branch a
 #           concurrent session moves between evidence-gathering and deletion is rejected, and the
 #           open-PR keep-set is re-fetched immediately before the delete loop.
+#   LOCK  - the whole apply pass holds the shared branch-operation lock
+#           (`.claude/scripts/branch-op-lock.sh`, monorepo#2209) so a concurrent
+#           harness `worktree-add` / `worktree-remove` cannot overlap local
+#           deletion. Dry-run (`MODE!=apply`) skips the lock — it deletes nothing.
 #
 # Every deletion is recorded (branch -> sha) to the manifest BEFORE the delete, and the write is
 # verified — no restore record, no deletion.
@@ -23,7 +27,20 @@ set -uo pipefail
 REPO_PATH="$1"; SLUG="$2"; MANIFEST="$3"; MODE="${4:-apply}"
 errors=0
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=branch-op-lock.sh
+source "$SCRIPT_DIR/branch-op-lock.sh"
+
 cd "$REPO_PATH" || exit 1
+# Resolve to an absolute path so lock release still works if a later step cds.
+REPO_PATH=$(pwd)
+LOCK_HELD=0
+release_branch_op_lock() {
+  if [ "$LOCK_HELD" = 1 ]; then
+    branch_op_lock_release "$REPO_PATH" || true
+    LOCK_HELD=0
+  fi
+}
 
 # DEFAULT reads the LOCAL origin/HEAD (set at clone) and needs no fresh fetch,
 # so the checkout-restoration path can be armed BEFORE fetching.
@@ -56,8 +73,9 @@ sw=""
 # Arm restoration BEFORE the fetch (superseded by the tmpfile trap below once it
 # is installed): an attached claude/* checkout whose fetch then fails must still
 # be returned to the default branch, or it stays worktree-protected on the next
-# sweep and defeats the end-of-tick return-and-reap guarantee.
-trap 'return_to_default' EXIT
+# sweep and defeats the end-of-tick return-and-reap guarantee. Always release
+# the branch-op lock on the way out when we hold it.
+trap 'release_branch_op_lock; return_to_default' EXIT
 return_to_default
 
 # Stale refs make every later judgement wrong — abort the whole run on fetch
@@ -65,6 +83,16 @@ return_to_default
 if ! git fetch origin --prune -q 2>/dev/null; then
   echo "$SLUG: ABORT — git fetch failed; refusing to act on stale refs" >&2
   exit 1
+fi
+
+# Serialise against harness worktree create/remove (monorepo#2209). Dry-run
+# skips the lock so a stuck holder cannot block a report-only sweep.
+if [ "$MODE" = "apply" ]; then
+  if ! branch_op_lock_acquire "$REPO_PATH" >/dev/null; then
+    echo "$SLUG: ABORT — branch-operation lock unavailable; refusing local deletion without serialisation" >&2
+    exit 1
+  fi
+  LOCK_HELD=1
 fi
 
 # Verified manifest write: no restore record, no deletion.
@@ -89,7 +117,7 @@ fetch_open_heads() {
 
 # --- KEEP set -------------------------------------------------------------
 keep=$(mktemp); prs=$(mktemp); keep2=$(mktemp)
-trap 'rm -f "$keep" "$prs" "$keep2"; return_to_default' EXIT
+trap 'rm -f "$keep" "$prs" "$keep2"; release_branch_op_lock; return_to_default' EXIT
 # Capture the worktree enumeration SEPARATELY and ABORT on failure: the REMOTE
 # delete loop trusts this one snapshot for its worktree KEEP rule (the local loop
 # re-checks per branch, the remote loop does not), so a silently-empty list here
