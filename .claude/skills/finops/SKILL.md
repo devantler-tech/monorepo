@@ -136,6 +136,15 @@ is fine; his balances, transactions and totals never appear in a public artifact
 draft-PR discipline: validate, RED/GREEN where there is a testable claim, one concern per PR, and the
 PM-level body shape (*Why* → *What* → issue link).
 
+**Own the engineering work through delivery.** After selecting an implementable change, check for an
+existing PR or live claim, claim the issue and push the role's unique branch, then implement rather
+than handing the finding off. Keep the draft current, fix or refute every review finding, resolve all
+threads, secure a qualifying review at the exact current head, self-promote only on genuine readiness,
+and drive the reviewed head to merge using the owning repository's declared mechanics. An issue or
+draft is an intermediate checkpoint, not the output, unless a named external dependency or missing
+authority blocks implementation. A financial action is missing authority; it does not block any
+separable engineering PR.
+
 **The Slack ask has a fixed shape**, because a message he must act on should never need a second
 message to clarify:
 
