@@ -38,6 +38,20 @@ if grep -Fq 'problem → proposed direction → rough size' "${contract}"; then
   fail "canonical contract still permits evidence-free enhancement issues"
 fi
 
+for documentation_contract in "${contract}" "${engineering}"; do
+  # Literal Markdown; backticks must not execute shell command substitution.
+  # shellcheck disable=SC2016
+  grep -Fq 'every ADR lives under **`docs/adr/`**' "${documentation_contract}" ||
+    fail "${documentation_contract} does not make docs/adr the exclusive ADR location"
+  grep -Fq 'DESCRIBE THE AS-IS, NEVER THE JOURNEY' "${documentation_contract}" ||
+    fail "${documentation_contract} does not require present-state documentation"
+done
+if git -C "${repo_root}" ls-files |
+  grep -Ei '(^|/)(adr|adrs)(/|$)' |
+  grep -Eiv '^docs/adr/'; then
+  fail "tracked ADRs remain outside docs/adr"
+fi
+
 grep -Fq 'evidence-led' "${agent}" ||
   fail "daily maintainer summary does not route evidence-led selection"
 grep -Fq 'Value & evidence loop' "${engineering}" ||

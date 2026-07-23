@@ -156,8 +156,9 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    exists, drive *that* one instead of duplicating — a non-draft to merge, a **routine-owned draft**
    to genuine readiness → self-promotion → merge (contract *Autonomy*); leave
    automation-owned dependency PRs to repository automation, other authors' drafts to their owners,
-   and external PRs per the trust gate. For
-   a big design, write/extend an ADR or system-design note first and link it.
+   and external PRs per the trust gate. For a big design, write/extend an ADR or system-design note
+   first and link it. In a repository that uses ADRs, every ADR lives under **`docs/adr/`**; do not
+   create or keep ADRs in another folder. Repositories without ADRs do not need to introduce them.
 2. Isolate a worktree, implement at the **root cause**, and **write tests** that pin the new behaviour
    and its edge cases (tests are part of the change, not optional). **Build a new non-trivial feature
    behind a flag, default-off, and test both states** (see the contract's *Feature-flag-first
@@ -221,6 +222,10 @@ Treat docs as part of the product — keep them **in sync** with what ships and 
   inaccuracies and stale examples, fill a missing how-to/quickstart/troubleshooting entry, tighten
   clarity and onboarding flow, repair dead links and broken samples, align terminology. Verify
   examples actually run; build-verify the site (the monorepo card's `docs` build) before the PR.
+- **DESCRIBE THE AS-IS, NEVER THE JOURNEY.** Documentation, code comments, and resource descriptions
+  state the current behaviour, architecture, constraints, and rationale directly. Do not narrate
+  prior states, migrations, before/after comparisons, or origin stories. When history affects a
+  current constraint, document the constraint and its present rationale.
 - **Voice (every user-facing doc).** Write in the `jargon-free-voice` register — concise, and for
   humans rather than machines (maintainer direction 2026-07-18; contract → *Enhancement work →
   Documentation*). In practice:
