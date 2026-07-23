@@ -137,7 +137,7 @@ jobs:
               - '.claude/skills/products/monorepo/SKILL.md'
               - '.claude/skills/products/platform/SKILL.md'
               - '.claude/scripts/portfolio-surveyor.test.sh'
-              - '.claude/scripts/release-bot-exemption.sh'
+              - '.claude/scripts/programmed-bot-review-exemption.sh'
               - '.github/workflows/ci.yaml'
             product-value:
               - 'AGENTS.md'
