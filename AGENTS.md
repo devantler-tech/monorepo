@@ -263,6 +263,29 @@ fails closed for that change, not for the whole role: continue with other author
 changes land upstream before the consumer follows. Version-controlled work is not complete at a
 recommendation or draft — the Agent Improver owns it through the repository's review and merge policy.
 
+### Writer namespaces
+
+This deployment allocates branch ownership to the **provider runtime instance**, not to each role
+schedule inside that runtime. The `agent-improver` and `finops-engineer` schedules intentionally share their provider instance
+and therefore its existing writer namespace:
+
+| Provider runtime instance | Recorded namespace | Scheduled roles allowed to write |
+|---|---|---|
+| Claude machine-local | `claude/*` | Agentic Engineer, Agent Improver, FinOps Engineer |
+| Codex machine-local | `codex/*` | Agentic Engineer, Agent Improver, FinOps Engineer |
+| Cursor cloud | `cursor/*` | Agentic Engineer only |
+
+The machine-local role schedules are modes of the same authenticated writer, checkout discipline,
+claim protocol, draft ownership, and cleanup lane; they are not independent writers merely because
+they have different cadences. Before any claim or push, a role must inspect every branch and open PR
+in its shared provider lane, and it must treat work left by another role in that lane as its own
+in-flight work rather than opening a duplicate. This explicit sharing is the consumer's resolution of
+the plugin's `branchNamespacePolicy`; enabling a role does not invent an unrecorded fourth lane.
+
+Agent Improver and FinOps schedules for Cursor remain undeployed and read-only until this table,
+the reviewed Cursor loader, cadence, memory, and runtime permission boundary all record their writer
+mapping. A generic plugin schedule entry is not deployment authority by itself.
+
 ### Delivery ownership — finding to fix
 
 Discovery and measurement are read-only. Once the Agentic Engineer, Agent Improver, or FinOps Engineer

@@ -41,6 +41,20 @@ grep -Fq 'FULL SYMMETRIC AUTHORITY' "${constitution}" ||
   fail "consumer does not preserve the maintainer-granted symmetric authority"
 grep -Fq 'An issue, recommendation, or draft PR is not completion' "${constitution}" ||
   fail "consumer permits a write-capable role to stop before merge"
+grep -Fq '### Writer namespaces' "${constitution}" ||
+  fail "consumer does not record namespaces for its scheduled writers"
+# Backticks are literal Markdown, not command substitution.
+# shellcheck disable=SC2016
+grep -Fq 'The `agent-improver` and `finops-engineer` schedules intentionally share their provider instance' \
+  "${constitution}" ||
+  fail "consumer does not declare the intentional provider-lane sharing model"
+# shellcheck disable=SC2016
+for writer_namespace in '`claude/*`' '`codex/*`' '`cursor/*`'; do
+  grep -Fq "${writer_namespace}" "${constitution}" ||
+    fail "consumer does not record writer namespace ${writer_namespace}"
+done
+grep -Fq 'remain undeployed and read-only' "${constitution}" ||
+  fail "consumer does not fail closed for unmapped Cursor role schedules"
 
 grep -Fq '## Delivery ownership — finding to fix' "${finops_agent}" ||
   fail "FinOps agent has no finding-to-fix delivery handoff"
