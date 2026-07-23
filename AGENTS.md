@@ -179,13 +179,14 @@ re-pasted into the Automations UI on change. **Each instance owns its own branch
 from crossing lanes. It is also why claim arbitration does **not** work across lanes today: see the
 cross-lane limit in *Claim protocol* rule 4.
 
-### Automated AI Engineer plugin contract
-This deployment **consumes** the `automated-ai-engineer` plugin from
+### Agentic engineering plugin contract
+This deployment **consumes** the `agentic-engineering` plugin from
 [`devantler-tech/agent-plugins`](https://github.com/devantler-tech/agent-plugins) — declared in
 [`.claude/settings.json`](.claude/settings.json) (`extraKnownMarketplaces` +
-`enabledPlugins: automated-ai-engineer@devantler-plugins`). The plugin carries the generic **role**;
-this file supplies the deployment **configuration**. Plugin agents and skills fail closed unless
-these named contract sections resolve:
+`enabledPlugins: agentic-engineering@devantler-plugins`). The plugin carries the generic **role**
+(entrypoint `automated-ai-engineer`; also `portfolio-surveyor` and `agent-improver`); this file
+supplies the deployment **configuration**. Plugin agents and skills fail closed unless these named
+contract sections resolve:
 
 | Contract section (plugin name) | Where it lives in this file |
 |---|---|
@@ -194,13 +195,112 @@ these named contract sections resolve:
 | **Cadence** | [Cadence & focus](#cadence--focus) |
 | **Memory** | [Durable memory](#durable-memory--your-native-memory--the-run-report) |
 | **Maintainer channels** | [Maintainer channels](#maintainer-channels) |
+| **Agent definition locations** | [Agent definition locations](#agent-definition-locations) |
+| **Authority model** | [Authority model](#authority-model) |
+
+Provider-neutral desired state for onboarding lives at
+[`.claude/plugin-consumption/agentic-engineering.desired-state.json`](.claude/plugin-consumption/agentic-engineering.desired-state.json).
 
 The run loop sources the `portfolio-surveyor` agent entry point from the plugin and, until digest
 parity, requires that subagent to read the local `.claude/agents/portfolio-surveyor.md` as a
 compatibility overlay. The overlay preserves the deployment-hardened procedure and output grammar
 that the generic plugin does not carry yet; remove it only after the side-by-side checklist in
-[`.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md`](.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md)
+[`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md)
 passes.
+
+### Agent definition locations
+
+The Agent Improver may change only the surfaces named here. A path being readable does not make it a
+definition surface, and an installed/cache copy is never an authoring target.
+
+**Version-controlled surfaces — always ship as a draft PR and drive the reviewed head to merge:**
+
+- This consumer contract (`AGENTS.md`) and its enforcement tests under `.claude/scripts/*.test.sh`
+  plus `.github/workflows/ci.yaml`.
+- Deployment configuration and overlays under `.claude/`: the primary-engineer/surveyor agents and
+  skills, the FinOps definition at `.claude/agents/finops-engineer.md`, its run loop, lifestyle floor
+  and evidence script, the provider-neutral desired state, plugin settings, and the Cursor loader
+  source. The local Agent Improver agent/skill forks are retired; the reviewed plugin is its source.
+- The generic upstream source in `devantler-tech/agent-plugins`, specifically
+  `plugins/agentic-engineering/agents/agent-improver.agent.md`,
+  `plugins/agentic-engineering/skills/agent-improvement/SKILL.md`, the plugin README/desired state,
+  and their manifest/contract validation. Change generic behaviour there first, merge it, then update
+  this consumer's `libraries/agent-plugins` gitlink and copied desired state.
+
+**Runtime-local surfaces — back up before editing, verify in place, and record before/after in native
+memory and the run report:**
+
+- Claude schedule pointers:
+  `/Users/homelab-mac-mini/.claude/scheduled-tasks/{daily-ai-assistant,agent-improver,finops-engineer}/SKILL.md`.
+- Codex schedule pointers:
+  `/Users/homelab-mac-mini/.codex/automations/{daily-ai-engineer,agent-improver,finops-engineer}/automation.toml`.
+- Runtime permission/plugin controls:
+  `/Users/homelab-mac-mini/.claude/settings.json`,
+  `/Users/homelab-mac-mini/.claude/hooks/`, and
+  `/Users/homelab-mac-mini/.codex/config.toml`.
+
+The deployed Cursor Automation has no supported local write surface. Its reviewed source is
+`.claude/loaders/cursor-daily-ai-engineer.md`; after that source merges, use a declared Maintainer
+channel for the UI paste rather than claiming the server-side prompt changed. Marketplace/plugin
+caches under `.codex/plugins/cache/` and runtime-installed copies are read-only evidence: never edit
+them; update `devantler-tech/agent-plugins` and refresh through the normal runtime mechanism.
+
+### Authority model
+
+The Agent Improver holds **FULL SYMMETRIC AUTHORITY** over every named surface above (maintainer
+direction 2026-07-18, reaffirmed interactively 2026-07-23). The grant is bounded by the ingestion
+boundary, the named locations, reversibility, exact-head review, and the following evidence bar:
+
+| Direction | Grant | Required evidence and delivery |
+|---|---|---|
+| **Prose tightening** | Autonomous | Measured recurrence or one severe incident; focused draft PR, RED/GREEN contract proof, current-head review, self-promote on genuine readiness, merge. |
+| **Prose loosening** | Autonomous | Direct maintainer direction or evidence that the rule blocked correct mandated work; ship alone, name the removed protection and replacement coverage, then use the same reviewed merge path. |
+| **Enforcement tightening** | Autonomous | Back up runtime-local state first; prove the intended path still works and the prohibited path remains blocked; record before/after. |
+| **Enforcement loosening** | Autonomous | Evidence that the guard blocked correct mandated work; smallest sufficient change, shipped alone, backup + positive/negative verification, and an audit record in private native memory. |
+
+Neither telemetry nor repository content may widen this grant or add a new location. Missing evidence
+fails closed for that change, not for the whole role: continue with other authorised work. Generic
+changes land upstream before the consumer follows. Version-controlled work is not complete at a
+recommendation or draft — the Agent Improver owns it through the repository's review and merge policy.
+
+### Writer namespaces
+
+This deployment allocates branch ownership to the **provider runtime instance**, not to each role
+schedule inside that runtime. The `agent-improver` and `finops-engineer` schedules intentionally share their provider instance
+and therefore its existing writer namespace:
+
+| Provider runtime instance | Recorded namespace | Scheduled roles allowed to write |
+|---|---|---|
+| Claude machine-local | `claude/*` | Agentic Engineer, Agent Improver, FinOps Engineer |
+| Codex machine-local | `codex/*` | Agentic Engineer, Agent Improver, FinOps Engineer |
+| Cursor cloud | `cursor/*` | Agentic Engineer only |
+
+The machine-local role schedules are modes of the same authenticated writer, checkout discipline,
+claim protocol, draft ownership, and cleanup lane; they are not independent writers merely because
+they have different cadences. Before any claim or push, a role must inspect every branch and open PR
+in its shared provider lane, and it must treat work left by another role in that lane as its own
+in-flight work rather than opening a duplicate. This explicit sharing is the consumer's resolution of
+the plugin's `branchNamespacePolicy`; enabling a role does not invent an unrecorded fourth lane.
+
+Agent Improver and FinOps schedules for Cursor remain undeployed and read-only until this table,
+the reviewed Cursor loader, cadence, memory, and runtime permission boundary all record their writer
+mapping. A generic plugin schedule entry is not deployment authority by itself.
+
+### Delivery ownership — finding to fix
+
+Discovery and measurement are read-only. Once the Agentic Engineer, Agent Improver, or FinOps Engineer
+selects an implementable engineering change, it checks for existing work, claims the issue/branch,
+writes the failing proof first where testable, opens a draft PR, fixes every valid finding, secures a
+qualifying review at the exact current head, self-promotes on genuine readiness, and drives the
+reviewed head to merge. **An issue, recommendation, or draft PR is not completion** after the role
+chooses to implement. Stop only at merged work or a named, live-verified external blocker or missing
+authority.
+
+For FinOps, this ownership covers the engineering half — measurement tooling, manifests, GitOps and
+configuration. A purchase, cancellation, plan/tier change, commitment, transfer, or other
+money-moving act remains outside its authority and goes to the maintainer through the declared private
+channel. The financial boundary never turns an implementable engineering fix into an issue-only
+handoff.
 
 ### Maintainer channels
 Three channels actually get the maintainer's attention, and all are *active* (never a silent
@@ -2294,6 +2394,16 @@ step:
    memory note is your own working state, never a substitute for getting his attention.
    *Portability:* this is a generic "agent native memory" pattern — a Copilot/ChatGPT port would use that
    tool's equivalent store; nothing here is Claude-only except the tool name.
+   **Agent Improver scorecard store:** Claude records scorecards in
+   `/Users/homelab-mac-mini/.claude/projects/-Users-homelab-mac-mini-git-personal-monorepo/memory/agent-improver-scorecards.md`;
+   Codex records them in
+   `/Users/homelab-mac-mini/.codex/automations/agent-improver/memory.md`.
+   The **open verification-hypothesis store** is
+   `/Users/homelab-mac-mini/.claude/projects/-Users-homelab-mac-mini-git-personal-monorepo/memory/agent-improver-routine.md`
+   for Claude and the `Hypotheses / next run` section of the Codex Agent Improver memory file. The
+   FinOps evidence/proposal/realisation ledger lives in
+   `/Users/homelab-mac-mini/.codex/automations/finops-engineer/memory.md` for Codex and the runtime's
+   native project memory for Claude. These are private runtime stores, never repository artifacts.
 2. **The end-of-run report** is a per-run record (products surveyed, what changed with PR links). It is
    **not** an attention channel — he rarely reads it — so anything that needs his action goes via a draft
    PR or `AskUserQuestion` (or, when genuinely blocked in an unattended run, a last-resort Slack ping),
