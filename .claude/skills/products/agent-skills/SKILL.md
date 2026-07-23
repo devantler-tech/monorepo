@@ -26,7 +26,9 @@ put product-specific logic here.
 inherits it, then migrate consumers. Triage/label issues, drive actionable trusted-author PRs to merge,
 leave automation-owned dependency PRs alone, and keep dependency automation & docs current.
 Programmed `chore(deps): update agent skills` PRs are the no-review exception defined in the root
-contract: let required CI and auto-merge decide them, and never spend a review lane on them.
+contract only when `.claude/scripts/programmed-bot-review-exemption.sh` classification succeeds:
+let required CI and auto-merge decide accepted exemptions, and never spend a review lane on them.
+Route classifier failures, non-matching PRs, and lookalikes through the normal review process.
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a pointer
 by design.

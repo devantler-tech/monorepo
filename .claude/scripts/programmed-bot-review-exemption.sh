@@ -83,7 +83,7 @@ matches_agent_skills_provenance() {
       .author_login == "github-merge-queue[bot]" and
       .author_name == "github-merge-queue" and
       .author_email == "118344674+github-merge-queue@users.noreply.github.com";
-    length > 0 and
+    length == 1 and
     all(.[];
       (app_authored or merge_queue_authored) and
       .committer_login == "github-actions[bot]" and

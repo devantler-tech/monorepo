@@ -200,6 +200,8 @@ grep -Fq 'automation-owned dependency PRs' "${agent_skills_card}" ||
   fail "agent-skills product card still treats dependency PRs as agent work"
 grep -Fq 'never spend a review lane on them' "${agent_skills_card}" ||
   fail "agent-skills product card still requires review for programmed updater PRs"
+grep -Fq 'classification succeeds' "${agent_skills_card}" ||
+  fail "agent-skills product card can skip review without a successful classifier result"
 grep -Fq 'automation-owned dependency PRs' "${ksail_card}" ||
   fail "KSail product card still treats dependency PRs as agent work"
 if grep -Fq 'Bot PRs are first-priority work, not background noise' "${constitution}"; then
@@ -405,6 +407,30 @@ agent_plugins_skills_commits="$(jq -cn --arg head "${agent_plugins_skills_head}"
   committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
   message: "chore(deps): update agent skills"
 }]')"
+
+multi_agent_skills_head="6666666666666666666666666666666666666666"
+multi_agent_skills_commits="$(jq -cn --arg head "${multi_agent_skills_head}" '[
+  {
+    sha: "7777777777777777777777777777777777777777",
+    author_login: "devantler",
+    author_name: "devantler",
+    author_email: "26203420+devantler@users.noreply.github.com",
+    committer_login: "github-actions[bot]",
+    committer_name: "github-actions[bot]",
+    committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+    message: "chore(deps): update agent skills"
+  },
+  {
+    sha: $head,
+    author_login: "github-merge-queue[bot]",
+    author_name: "github-merge-queue",
+    author_email: "118344674+github-merge-queue@users.noreply.github.com",
+    committer_login: "github-actions[bot]",
+    committer_name: "github-actions[bot]",
+    committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+    message: "chore(deps): update agent skills"
+  }
+]')"
 
 platform_skills_head="d668b9d0f52c22473abc75a7d7457505e3624cc6"
 platform_skills_files='[".agents/skills/gitops-cluster-debug/SKILL.md",".agents/skills/gitops-knowledge/SKILL.md"]'
@@ -628,6 +654,16 @@ expect_review_gated \
   "${adapted_agent_skills_head}" \
   "${agent_plugins_skills_files}" \
   "${adapted_agent_skills_commits}"
+
+expect_review_gated \
+  "agent-skills updater carrying two otherwise compliant commits" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${multi_agent_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${multi_agent_skills_commits}"
 
 expect_review_gated \
   "agent-skills updater shape in an unapproved repository" \
