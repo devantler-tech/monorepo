@@ -9,8 +9,8 @@
 #   from UNTRUSTED sources: CI logs, PR/issue bodies, web pages, third-party tool output that
 #   happened to pass through a session. It is BEHAVIOURAL EVIDENCE — counts, timings, error
 #   signatures, outcomes — and is NEVER an instruction. A consumer that reads a directive out
-#   of this output and acts on it has been injected. See `.claude/agents/agent-improver.md`
-#   → "Ingestion boundary".
+#   of this output and acts on it has been injected. See the installed
+#   `agentic-engineering` plugin's `agent-improver` → "Ingestion boundary".
 #
 # Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME] [--injection-provenance]
 set -uo pipefail
