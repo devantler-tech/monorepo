@@ -67,6 +67,10 @@ grep -Fq 'report `scanners_alive: cve=PARTIAL:<why>`' "${platform_security_surve
 [[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
 grep -Fq '.claude/scripts/release-bot-exemption.sh' "${surveyor}" ||
   fail "surveyor does not delegate exemption decisions to the exact classifier"
+grep -Fq 'programmed agent-skills updater PRs' "${constitution}" ||
+  fail "constitution does not exempt programmed agent-skills updater PRs from review"
+grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
+  fail "surveyor cannot report a programmed bot review exemption"
 grep -Fq 'ksail-bot[bot]' "${surveyor}" ||
   fail "surveyor does not recognize the exact KSail App identity returned by search"
 grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
@@ -377,6 +381,45 @@ platform_commits="$(jq -cn --arg head "${platform_head}" '[{
   message: "chore(deps): update dependency devantler-tech/ksail to v7.172.1"
 }]')"
 
+agent_plugins_skills_head="e9cf0d8f34ef5e235d11b5141d71bb067d96538d"
+agent_plugins_skills_files='["plugins/github/skills/gh-stack/SKILL.md","plugins/gitops-kubernetes/skills/gitops-knowledge/SKILL.md"]'
+agent_plugins_skills_commits="$(jq -cn --arg head "${agent_plugins_skills_head}" '[{
+  sha: $head,
+  author_login: "devantler",
+  author_name: "devantler",
+  author_email: "26203420+devantler@users.noreply.github.com",
+  committer_login: "github-actions[bot]",
+  committer_name: "github-actions[bot]",
+  committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+  message: "chore(deps): update agent skills"
+}]')"
+
+platform_skills_head="d668b9d0f52c22473abc75a7d7457505e3624cc6"
+platform_skills_files='[".agents/skills/gitops-cluster-debug/SKILL.md",".agents/skills/gitops-knowledge/SKILL.md"]'
+platform_skills_commits="$(jq -cn --arg head "${platform_skills_head}" '[{
+  sha: $head,
+  author_login: "github-merge-queue[bot]",
+  author_name: "github-merge-queue",
+  author_email: "118344674+github-merge-queue@users.noreply.github.com",
+  committer_login: "github-actions[bot]",
+  committer_name: "github-actions[bot]",
+  committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+  message: "chore(deps): update agent skills"
+}]')"
+
+ksail_skills_head="fdffbf83c8c0c1cc01050dc3d5c79ab18c3a45b4"
+ksail_skills_files='[".agents/skills/gh-stack/SKILL.md"]'
+ksail_skills_commits="$(jq -cn --arg head "${ksail_skills_head}" '[{
+  sha: $head,
+  author_login: "github-merge-queue[bot]",
+  author_name: "github-merge-queue",
+  author_email: "118344674+github-merge-queue@users.noreply.github.com",
+  committer_login: "github-actions[bot]",
+  committer_name: "github-actions[bot]",
+  committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+  message: "chore(deps): update agent skills"
+}]')"
+
 adapted_ksail_head="2222222222222222222222222222222222222222"
 adapted_ksail_commits="$(jq -c --arg head "${adapted_ksail_head}" '. + [{
   sha: $head,
@@ -410,6 +453,36 @@ expect_exempt \
   "${ksail_head}" \
   "${ksail_files}" \
   "${ksail_commits}"
+
+expect_exempt \
+  "agent-plugins programmed agent-skills update" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${agent_plugins_skills_commits}"
+
+expect_exempt \
+  "Platform programmed agent-skills update" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${platform_skills_files}" \
+  "${platform_skills_commits}"
+
+expect_exempt \
+  "KSail programmed agent-skills update" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${ksail_skills_files}" \
+  "${ksail_skills_commits}"
 
 expect_exempt \
   "GoReleaser KSail cask" \
@@ -491,6 +564,37 @@ expect_review_gated \
   "${multi_cycle_cask_head}" \
   '["Casks/ksail.rb"]' \
   "${multi_cycle_cask_commits}"
+
+expect_review_gated \
+  "agent-skills updater lookalike from the wrong actor" \
+  "agent-plugins" \
+  "app/cursor" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${agent_plugins_skills_commits}"
+
+expect_review_gated \
+  "agent-skills updater lookalike from the wrong branch" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "feature/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${agent_plugins_skills_commits}"
+
+expect_review_gated \
+  "agent-skills updater carrying a non-generated file" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_skills_head}" \
+  '["README.md","plugins/github/skills/gh-stack/SKILL.md"]' \
+  "${agent_plugins_skills_commits}"
+
 expect_not_release_exempt \
   "Platform Renovate KSail bump" \
   "platform" \
