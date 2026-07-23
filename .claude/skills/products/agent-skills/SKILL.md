@@ -25,6 +25,8 @@ put product-specific logic here.
 §7): when a generic skill/convention has emerged across 2+ products, extract it here so every product
 inherits it, then migrate consumers. Triage/label issues, drive actionable trusted-author PRs to merge,
 leave automation-owned dependency PRs alone, and keep dependency automation & docs current.
+Programmed `chore(deps): update agent skills` PRs are the no-review exception defined in the root
+contract: let required CI and auto-merge decide them, and never spend a review lane on them.
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a pointer
 by design.

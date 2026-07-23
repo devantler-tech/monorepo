@@ -50,6 +50,49 @@ matches_exact_files() {
     <<<"${files_json}" >/dev/null
 }
 
+# The shared update-agent-skills workflow creates one recurring PR shape in each current consumer.
+# Bind the exemption to generated skill roots and workflow commit provenance; branch/title alone are
+# only candidate signals and never sufficient to skip review.
+matches_agent_skills_files() {
+  local path_pattern
+
+  case "${repo}" in
+  agent-plugins)
+    path_pattern='^plugins/[^/]+/skills/[^/]+/.+'
+    ;;
+  ksail | platform)
+    path_pattern='^\.agents/skills/[^/]+/.+'
+    ;;
+  *)
+    return 1
+    ;;
+  esac
+
+  jq -e --arg pattern "${path_pattern}" \
+    'length > 0 and all(.[]; test($pattern))' \
+    <<<"${files_json}" >/dev/null
+}
+
+matches_agent_skills_provenance() {
+  jq -e '
+    def app_authored:
+      .author_login == "devantler" and
+      .author_name == "devantler" and
+      .author_email == "26203420+devantler@users.noreply.github.com";
+    def merge_queue_authored:
+      .author_login == "github-merge-queue[bot]" and
+      .author_name == "github-merge-queue" and
+      .author_email == "118344674+github-merge-queue@users.noreply.github.com";
+    length > 0 and
+    all(.[];
+      (app_authored or merge_queue_authored) and
+      .committer_login == "github-actions[bot]" and
+      .committer_name == "github-actions[bot]" and
+      .committer_email == "41898282+github-actions[bot]@users.noreply.github.com" and
+      .message == "chore(deps): update agent skills")
+  ' <<<"${commits_json}" >/dev/null
+}
+
 is_semver() {
   [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
 }
@@ -142,6 +185,26 @@ matches_war_cask_provenance() {
       message: "chore(cask): update world-at-ruin to \($version)"
     }]' <<<"${commits_json}" >/dev/null
 }
+
+if [[ "${branch}" == "deps/agent-skills-update" &&
+  "${title}" == "chore(deps): update agent skills" ]]; then
+  expected_author=""
+  case "${repo}" in
+  agent-plugins | platform)
+    expected_author="app/botantler-1"
+    ;;
+  ksail)
+    expected_author="app/ksail-bot"
+    ;;
+  esac
+
+  if [[ -n "${expected_author}" &&
+    "${author}" == "${expected_author}" ]] &&
+    matches_agent_skills_files &&
+    matches_agent_skills_provenance; then
+    exit 0
+  fi
+fi
 
 if [[ "${repo}" == "ksail" &&
   "${author}" == "app/ksail-bot" &&

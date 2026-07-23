@@ -49,7 +49,8 @@ plugin carries them (or an explicit, tested subset):
    takeover-suffix / normalised-stem match), not `claude/*` alone.
 7. **Board-claim token / Projects coverage** signals and fail-closed truncation handling.
 8. **GraphQL/core budget line** at survey start/end (monorepo#2365).
-9. **Release-bot review exemption** classification.
+9. **Programmed-bot review exemption** classification, including generated agent-skills updater PRs
+   and release PRs without weakening the normal bot review gate.
 10. **Lane-signal** reporting for provider quota (e.g. Bugbot usage-limit) without treating it as a
    code verdict.
 

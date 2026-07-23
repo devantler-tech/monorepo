@@ -3,7 +3,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-classifier="${repo_root}/.claude/scripts/release-bot-exemption.sh"
+classifier="${repo_root}/.claude/scripts/programmed-bot-review-exemption.sh"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
@@ -64,13 +64,21 @@ grep -Fq 'cve=<yes|PARTIAL:why|BROKEN:why>' "${platform_security_surveyor}" ||
 grep -Fq 'report `scanners_alive: cve=PARTIAL:<why>`' "${platform_security_surveyor}" ||
   fail "platform security surveyor does not route an incoherent CVE pair to the PARTIAL state"
 
-[[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
-grep -Fq '.claude/scripts/release-bot-exemption.sh' "${surveyor}" ||
+[[ -x "${classifier}" ]] || fail "programmed-bot exemption classifier is missing or not executable"
+grep -Fq '.claude/scripts/programmed-bot-review-exemption.sh' "${surveyor}" ||
   fail "surveyor does not delegate exemption decisions to the exact classifier"
 grep -Fq 'programmed agent-skills updater PRs' "${constitution}" ||
   fail "constitution does not exempt programmed agent-skills updater PRs from review"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs' "${constitution}" ||
+  fail "constitution either misses botantler updater PRs or trusts the App globally"
 grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
   fail "surveyor cannot report a programmed bot review exemption"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier' "${surveyor}" ||
+  fail "surveyor either misses botantler updater PRs or trusts the App outside the programmed path"
 grep -Fq 'ksail-bot[bot]' "${surveyor}" ||
   fail "surveyor does not recognize the exact KSail App identity returned by search"
 grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
@@ -175,6 +183,8 @@ grep -Fq 'count it against' "${surveyor}" ||
   fail "surveyor may still turn dependency automation into operate work"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
+grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||
+  fail "portfolio-maintenance skill still review-gates programmed agent-skills updater PRs"
 grep -Fq 'Compatibility overlay' "${maintenance_skill}" ||
   fail "plugin surveyor can run without the hardened local behavior before digest parity"
 grep -Fq 'read and follow the local' "${maintenance_skill}" ||
@@ -188,6 +198,8 @@ grep -Fq 'automation-owned dependency PRs' "${product_engineering_skill}" ||
   fail "product-engineering skill still treats dependency PRs as agent work"
 grep -Fq 'automation-owned dependency PRs' "${agent_skills_card}" ||
   fail "agent-skills product card still treats dependency PRs as agent work"
+grep -Fq 'never spend a review lane on them' "${agent_skills_card}" ||
+  fail "agent-skills product card still requires review for programmed updater PRs"
 grep -Fq 'automation-owned dependency PRs' "${ksail_card}" ||
   fail "KSail product card still treats dependency PRs as agent work"
 if grep -Fq 'Bot PRs are first-priority work, not background noise' "${constitution}"; then
@@ -420,6 +432,18 @@ ksail_skills_commits="$(jq -cn --arg head "${ksail_skills_head}" '[{
   message: "chore(deps): update agent skills"
 }]')"
 
+adapted_agent_skills_head="5555555555555555555555555555555555555555"
+adapted_agent_skills_commits="$(jq -c --arg head "${adapted_agent_skills_head}" '. + [{
+  sha: $head,
+  author_login: "devantler",
+  author_name: "Nikolai Emil Damm",
+  author_email: "26203420+devantler@users.noreply.github.com",
+  committer_login: "devantler",
+  committer_name: "Nikolai Emil Damm",
+  committer_email: "26203420+devantler@users.noreply.github.com",
+  message: "fix: adapt generated skill update"
+}]' <<<"${agent_plugins_skills_commits}")"
+
 adapted_ksail_head="2222222222222222222222222222222222222222"
 adapted_ksail_commits="$(jq -c --arg head "${adapted_ksail_head}" '. + [{
   sha: $head,
@@ -593,6 +617,26 @@ expect_review_gated \
   "chore(deps): update agent skills" \
   "${agent_plugins_skills_head}" \
   '["README.md","plugins/github/skills/gh-stack/SKILL.md"]' \
+  "${agent_plugins_skills_commits}"
+
+expect_review_gated \
+  "agent-skills updater carrying a human adaptation commit" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${adapted_agent_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${adapted_agent_skills_commits}"
+
+expect_review_gated \
+  "agent-skills updater shape in an unapproved repository" \
+  "agent-skills" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_skills_head}" \
+  "${agent_plugins_skills_files}" \
   "${agent_plugins_skills_commits}"
 
 expect_not_release_exempt \
