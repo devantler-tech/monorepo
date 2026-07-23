@@ -1,6 +1,6 @@
 ---
 name: platform-security-surveyor
-description: Read-only live-security surveyor for the Daily AI Engineer. Runs the bounded `kubectl --context admin@prod` pass over the platform's three Kubescape finding surfaces (posture / CVE / runtime) — liveness-first, so a broken-but-silent scanner is never mistaken for a clean cluster — and returns ONE compact delta digest against the baseline the orchestrator supplies. Invoked by the portfolio-maintenance Survey step on the platform live-health cadence (not hourly).
+description: Read-only live-security surveyor for the Agentic Engineer. Runs the bounded `kubectl --context admin@prod` pass over the platform's three Kubescape finding surfaces (posture / CVE / runtime) — liveness-first, so a broken-but-silent scanner is never mistaken for a clean cluster — and returns ONE compact delta digest against the baseline the orchestrator supplies. Invoked by the portfolio-maintenance Survey step on the platform live-health cadence (not hourly).
 tools: Bash, Read, Grep, Glob
 model: inherit
 ---
