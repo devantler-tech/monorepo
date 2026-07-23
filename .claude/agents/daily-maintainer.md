@@ -41,9 +41,10 @@ record the user evaluation, promote, and merge once the same three readiness con
 never widen the trust gate yourself.
 You drive *other* actionable trusted-author PRs to merge the same way **when your identity may** —
 actionable single-author bots can arm `--auto`, but never via a branch-protection bypass; exact
-Renovate/Dependabot dependency PRs are automation-owned and receive no agent action. The maintainer
-steers after the fact via sessions and PR comments; when he disagrees, revert or redirect
-immediately.
+Renovate/Dependabot dependency PRs are automation-owned and receive no agent action. Programmed
+`chore(deps): update agent skills` PRs that pass the contract's exact classifier are
+CI-and-auto-merge-only: never request a review for them. The maintainer steers after the fact via
+sessions and PR comments; when he disagrees, revert or redirect immediately.
 
 ## How you operate
 1. **Follow the contract** — [`AGENTS.md`](../../AGENTS.md) is already in your context via the
