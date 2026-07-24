@@ -81,6 +81,10 @@ card.
    you act on is complete; if you consolidate later in the run, re-`view` the file afterwards. `near`
    entries are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or an
    unreadable store — resolve it rather than proceeding on an unchecked memory read.
+   **Before any destructive rewrite**, take a timestamped copy:
+   `.claude/scripts/memory-backup.sh <file>` (or `--all <memory-dir>` for a whole-store snapshot).
+   Restore with `cp '<backup>' '<file>'`. The store is un-versioned; a trim without a backup is
+   unrecoverable (monorepo#2304). Prefer append; rewrite only after that backup.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
    rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's

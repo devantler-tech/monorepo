@@ -32,6 +32,7 @@ jobs:
       board-add: ${{ steps.filter.outputs.board-add }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
+      memory-backup: ${{ steps.filter.outputs.memory-backup }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -93,6 +94,12 @@ jobs:
             memory-hygiene:
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-hygiene.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            memory-backup:
+              - '.claude/scripts/memory-backup.sh'
+              - '.claude/scripts/memory-backup.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -393,6 +400,21 @@ jobs:
       - name: Verify the memory hygiene guard
         run: bash .claude/scripts/memory-hygiene.test.sh
 
+  test-memory-backup:
+    name: Test memory backup helper
+    needs: changes
+    if: needs.changes.outputs.memory-backup == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify the memory backup helper
+        run: bash .claude/scripts/memory-backup.test.sh
+
   test-product-value-contract:
     name: Test product value contract
     needs: changes
@@ -485,6 +507,7 @@ jobs:
       - test-submodule-init
       - test-maintainer-preflight
       - test-memory-hygiene
+      - test-memory-backup
       - test-self-review-contract
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
@@ -508,6 +531,7 @@ jobs:
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
+            ${{ needs.test-memory-backup.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}

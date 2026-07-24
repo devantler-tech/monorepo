@@ -2377,7 +2377,12 @@ step:
    to a run that already read it successfully, which is why it was breached four times (82KB 07-01,
    83KB 07-12, 122KB 07-16, 74KB 07-18). Pre-flight runs
    [`.claude/scripts/memory-hygiene.sh`](.claude/scripts/memory-hygiene.sh) (read-only); a non-zero exit
-   makes consolidating the named file **that tick's mandated hygiene item**. **Memory is a MULTI-WRITER
+   makes consolidating the named file **that tick's mandated hygiene item**. **Before any destructive
+   consolidate/rewrite**, run [`.claude/scripts/memory-backup.sh`](.claude/scripts/memory-backup.sh)
+   `<file>` (or `--all <memory-dir>` for a whole-store snapshot under `.memory-backups/`); restore with
+   `cp '<backup>' '<file>'` — the store is un-versioned and outside git, so a trim without a backup is a
+   one-way delete (monorepo#2304). Prefer append; rewrite only when consolidating **after** that backup.
+   **Memory is a MULTI-WRITER
    surface** — several instances append per hour, so re-read immediately before writing, prefer a
    **non-clobbering append** over a whole-file rewrite, and **stand down rather than clobber** when a
    rewrite is rejected because a sibling moved the file under you (the two-writer discipline that

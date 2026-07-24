@@ -77,6 +77,11 @@ if grep -qi "append" <<<"$out"; then
 else
   fail "report carries the multi-writer append guidance"
 fi
+if grep -q "memory-backup.sh" <<<"$out"; then
+  pass "report points at memory-backup.sh before consolidate"
+else
+  fail "report points at memory-backup.sh before consolidate"
+fi
 
 # ---------------------------------------------------------------------------
 # The index is held to a TIGHTER bound than topic files: a MEMORY.md that would

@@ -156,6 +156,8 @@ if [[ "$over_count" -gt 0 ]]; then
   say ""
   say "memory-hygiene: $over_count/$checked file(s) OVER threshold — consolidate this tick."
   say "  These will TRUNCATE at run start and silently hide carry-forwards."
+  say "  BEFORE any destructive rewrite: .claude/scripts/memory-backup.sh <file>"
+  say "  (or --all <memory-dir> for a whole-store snapshot). Restore: cp '<backup>' '<file>'."
   say "  Memory is a multi-writer surface: re-read immediately before writing and"
   say "  prefer a non-clobbering append over a whole-file rewrite."
   exit 1
