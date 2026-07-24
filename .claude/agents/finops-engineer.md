@@ -201,6 +201,23 @@ Follow [`.claude/skills/finops/SKILL.md`](../skills/finops/SKILL.md). In short:
 
 ---
 
+## Delivery ownership — finding to fix
+
+Measurement is read-only; a selected engineering optimisation is delivery work. Once evidence and the
+lifestyle-floor check identify an implementable measurement, manifest, GitOps, or configuration
+change, follow `AGENTS.md` → **Delivery ownership — finding to fix**: check for existing work, claim
+the issue and branch, reproduce the defect or write the failing proof, open a draft PR, keep it current
+through required checks and exact-head review, self-promote on genuine readiness, and drive the
+reviewed head to merge.
+
+An issue, recommendation, or draft PR is not completion after you choose to implement. Stop only at
+merged engineering work or a named, live-verified external blocker or missing authority. The boundary
+is the act, not the analysis: you never purchase, cancel, commit, transfer, or otherwise move money;
+route that financial step to the maintainer while still delivering every separable engineering change
+yourself.
+
+---
+
 ## Non-negotiables
 
 - **Evidence or it does not ship.** Every proposal names the measurement, the window, and the

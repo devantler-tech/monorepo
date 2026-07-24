@@ -3,7 +3,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-classifier="${repo_root}/.claude/scripts/release-bot-exemption.sh"
+classifier="${repo_root}/.claude/scripts/programmed-bot-review-exemption.sh"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
@@ -13,6 +13,8 @@ agent_skills_card="${repo_root}/.claude/skills/products/agent-skills/SKILL.md"
 ksail_card="${repo_root}/.claude/skills/products/ksail/SKILL.md"
 platform_card="${repo_root}/.claude/skills/products/platform/SKILL.md"
 platform_security_surveyor="${repo_root}/.claude/agents/platform-security-surveyor.md"
+cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
+ci_workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
   echo "portfolio surveyor contract: FAIL — $*" >&2
@@ -62,15 +64,49 @@ grep -Fq 'cve=<yes|PARTIAL:why|BROKEN:why>' "${platform_security_surveyor}" ||
 grep -Fq 'report `scanners_alive: cve=PARTIAL:<why>`' "${platform_security_surveyor}" ||
   fail "platform security surveyor does not route an incoherent CVE pair to the PARTIAL state"
 
-[[ -x "${classifier}" ]] || fail "release-bot exemption classifier is missing or not executable"
-grep -Fq '.claude/scripts/release-bot-exemption.sh' "${surveyor}" ||
+[[ -x "${classifier}" ]] || fail "programmed-bot exemption classifier is missing or not executable"
+grep -Fq '.claude/scripts/programmed-bot-review-exemption.sh' "${surveyor}" ||
   fail "surveyor does not delegate exemption decisions to the exact classifier"
+grep -Fq 'programmed agent-skills updater PRs' "${constitution}" ||
+  fail "constitution does not exempt programmed agent-skills updater PRs from review"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs' "${constitution}" ||
+  fail "constitution either misses botantler updater PRs or trusts the App globally"
+grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
+  fail "surveyor cannot report a programmed bot review exemption"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier' "${surveyor}" ||
+  fail "surveyor either misses botantler updater PRs or trusts the App outside the programmed path"
 grep -Fq 'ksail-bot[bot]' "${surveyor}" ||
   fail "surveyor does not recognize the exact KSail App identity returned by search"
 grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
   fail "surveyor does not fetch complete current-head commit provenance"
 grep -Fq 'AUTOMATION-OWNED and need NO agent action' "${constitution}" ||
   fail "constitution does not exempt Renovate/Dependabot dependency PRs from agent action"
+grep -Fq '`cursor[bot]` on REST surfaces' "${constitution}" ||
+  fail "constitution does not map the REST surface for the trusted app/cursor author"
+grep -Fq 'Cursor Automation is a trusted PR author' "${constitution}" ||
+  fail "constitution does not trust the maintainer-authorized Cursor Automation author"
+grep -Fq 'For `app/cursor`, the acting local sibling' "${constitution}" ||
+  fail "merge policy still tells the permission-limited Cursor App to arm its own merge"
+grep -Fq "The machine-local agents' **own** PRs" "${constitution}" ||
+  fail "self-promotion rule still ambiguously includes the permission-limited Cursor cloud lane"
+grep -Fq '`cursor[bot]` — **exact' "${surveyor}" ||
+  fail "reference surveyor does not deepen PRs authored by the trusted Cursor Automation App"
+grep -Fq 'siblings may build, run, review,' "${cursor_loader}" ||
+  fail "Cursor loader still prevents trusted sibling instances from driving Cursor-authored PRs"
+grep -Fq 'and drive your PRs' "${cursor_loader}" ||
+  fail "Cursor loader does not authorize the sibling handoff through merge"
+grep -Fq -- "- '.claude/loaders/cursor-daily-ai-engineer.md'" "${ci_workflow}" ||
+  fail "Cursor loader changes do not trigger the portfolio surveyor contract job"
+if grep -Fq '`app/cursor` is **not** in the contract' "${cursor_loader}"; then
+  fail "Cursor loader still classifies its trusted App identity as external"
+fi
+if grep -Fq '**`app/cursor` is NOT a trusted PR AUTHOR' "${constitution}"; then
+  fail "constitution still classifies the maintainer-authorized Cursor App as an external author"
+fi
 # Lane-agnostic on purpose: the reviewer roster grows (Codex, Cursor Bugbot, CodeRabbit, …), so
 # assert the PROHIBITION, not the roster — naming lanes here breaks this test on every lane change.
 grep -Fq 'Never request a review from any lane' "${constitution}" ||
@@ -124,6 +160,19 @@ grep -Fq 'NOT retryable' "${constitution}" ||
   fail "constitution may send a run retrying a Bugbot usage limit that only the maintainer can lift"
 grep -Fq 'AUTOMATION-OWNED (NO-ACTION)' "${surveyor}" ||
   fail "surveyor does not short-circuit dependency-bot PRs as no-action"
+# #2365 — instrument GraphQL/core remaining at survey start+end before any optimisation. Without
+# the budget line a tick that starts exhausted discovers blindness only through failed commands
+# (and `gh pr checks` exits 1, indistinguishable from red CI). Pin the probe, the digest shape,
+# and the EXHAUSTED_AT_START annotation so a later edit cannot silently drop attribution.
+# shellcheck disable=SC2016
+grep -Fq 'gh api rate_limit --jq' "${surveyor}" ||
+  fail "surveyor does not sample gh api rate_limit at survey start/end"
+grep -Fq 'budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>' "${surveyor}" ||
+  fail "surveyor digest template is missing the fixed-shape budget line"
+grep -Fq 'EXHAUSTED_AT_START' "${surveyor}" ||
+  fail "surveyor has no EXHAUSTED_AT_START marker for a tick that opens with graphql.remaining=0"
+grep -Fq 'Always emit the `budget:` line' "${surveyor}" ||
+  fail "surveyor digest rules do not require the budget line on every digest"
 grep -Fq 'renovate[bot]' "${surveyor}" ||
   fail "surveyor does not bind no-action to the exact Renovate identity"
 grep -Fq 'dependabot[bot]' "${surveyor}" ||
@@ -134,12 +183,25 @@ grep -Fq 'count it against' "${surveyor}" ||
   fail "surveyor may still turn dependency automation into operate work"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
+grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||
+  fail "portfolio-maintenance skill still review-gates programmed agent-skills updater PRs"
+grep -Fq 'Compatibility overlay' "${maintenance_skill}" ||
+  fail "plugin surveyor can run without the hardened local behavior before digest parity"
+grep -Fq 'read and follow the local' "${maintenance_skill}" ||
+  fail "plugin surveyor is not explicitly required to load the local compatibility overlay"
+if grep -Fq '**Do not load** the local reference copy' "${maintenance_skill}"; then
+  fail "run loop forbids the compatibility overlay even though plugin digest parity is not proven"
+fi
 grep -Fq 'automation-owned dependency PRs' "${monorepo_skill}" ||
   fail "monorepo product card still treats dependency PRs as agent work"
 grep -Fq 'automation-owned dependency PRs' "${product_engineering_skill}" ||
   fail "product-engineering skill still treats dependency PRs as agent work"
 grep -Fq 'automation-owned dependency PRs' "${agent_skills_card}" ||
   fail "agent-skills product card still treats dependency PRs as agent work"
+grep -Fq 'never spend a review lane on them' "${agent_skills_card}" ||
+  fail "agent-skills product card still requires review for programmed updater PRs"
+grep -Fq 'classification succeeds' "${agent_skills_card}" ||
+  fail "agent-skills product card can skip review without a successful classifier result"
 grep -Fq 'automation-owned dependency PRs' "${ksail_card}" ||
   fail "KSail product card still treats dependency PRs as agent work"
 if grep -Fq 'Bot PRs are first-priority work, not background noise' "${constitution}"; then
@@ -333,6 +395,81 @@ platform_commits="$(jq -cn --arg head "${platform_head}" '[{
   message: "chore(deps): update dependency devantler-tech/ksail to v7.172.1"
 }]')"
 
+agent_plugins_skills_head="e9cf0d8f34ef5e235d11b5141d71bb067d96538d"
+agent_plugins_skills_files='["plugins/github/skills/gh-stack/SKILL.md","plugins/gitops-kubernetes/skills/gitops-knowledge/SKILL.md"]'
+agent_plugins_skills_commits="$(jq -cn --arg head "${agent_plugins_skills_head}" '[{
+  sha: $head,
+  author_login: "devantler",
+  author_name: "devantler",
+  author_email: "26203420+devantler@users.noreply.github.com",
+  committer_login: "github-actions[bot]",
+  committer_name: "github-actions[bot]",
+  committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+  message: "chore(deps): update agent skills"
+}]')"
+
+multi_agent_skills_head="6666666666666666666666666666666666666666"
+multi_agent_skills_commits="$(jq -cn --arg head "${multi_agent_skills_head}" '[
+  {
+    sha: "7777777777777777777777777777777777777777",
+    author_login: "devantler",
+    author_name: "devantler",
+    author_email: "26203420+devantler@users.noreply.github.com",
+    committer_login: "github-actions[bot]",
+    committer_name: "github-actions[bot]",
+    committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+    message: "chore(deps): update agent skills"
+  },
+  {
+    sha: $head,
+    author_login: "github-merge-queue[bot]",
+    author_name: "github-merge-queue",
+    author_email: "118344674+github-merge-queue@users.noreply.github.com",
+    committer_login: "github-actions[bot]",
+    committer_name: "github-actions[bot]",
+    committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+    message: "chore(deps): update agent skills"
+  }
+]')"
+
+platform_skills_head="d668b9d0f52c22473abc75a7d7457505e3624cc6"
+platform_skills_files='[".agents/skills/gitops-cluster-debug/SKILL.md",".agents/skills/gitops-knowledge/SKILL.md"]'
+platform_skills_commits="$(jq -cn --arg head "${platform_skills_head}" '[{
+  sha: $head,
+  author_login: "github-merge-queue[bot]",
+  author_name: "github-merge-queue",
+  author_email: "118344674+github-merge-queue@users.noreply.github.com",
+  committer_login: "github-actions[bot]",
+  committer_name: "github-actions[bot]",
+  committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+  message: "chore(deps): update agent skills"
+}]')"
+
+ksail_skills_head="fdffbf83c8c0c1cc01050dc3d5c79ab18c3a45b4"
+ksail_skills_files='[".agents/skills/gh-stack/SKILL.md"]'
+ksail_skills_commits="$(jq -cn --arg head "${ksail_skills_head}" '[{
+  sha: $head,
+  author_login: "github-merge-queue[bot]",
+  author_name: "github-merge-queue",
+  author_email: "118344674+github-merge-queue@users.noreply.github.com",
+  committer_login: "github-actions[bot]",
+  committer_name: "github-actions[bot]",
+  committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+  message: "chore(deps): update agent skills"
+}]')"
+
+adapted_agent_skills_head="5555555555555555555555555555555555555555"
+adapted_agent_skills_commits="$(jq -c --arg head "${adapted_agent_skills_head}" '. + [{
+  sha: $head,
+  author_login: "devantler",
+  author_name: "Nikolai Emil Damm",
+  author_email: "26203420+devantler@users.noreply.github.com",
+  committer_login: "devantler",
+  committer_name: "Nikolai Emil Damm",
+  committer_email: "26203420+devantler@users.noreply.github.com",
+  message: "fix: adapt generated skill update"
+}]' <<<"${agent_plugins_skills_commits}")"
+
 adapted_ksail_head="2222222222222222222222222222222222222222"
 adapted_ksail_commits="$(jq -c --arg head "${adapted_ksail_head}" '. + [{
   sha: $head,
@@ -366,6 +503,36 @@ expect_exempt \
   "${ksail_head}" \
   "${ksail_files}" \
   "${ksail_commits}"
+
+expect_exempt \
+  "agent-plugins programmed agent-skills update" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${agent_plugins_skills_commits}"
+
+expect_exempt \
+  "Platform programmed agent-skills update" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${platform_skills_files}" \
+  "${platform_skills_commits}"
+
+expect_exempt \
+  "KSail programmed agent-skills update" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${ksail_skills_files}" \
+  "${ksail_skills_commits}"
 
 expect_exempt \
   "GoReleaser KSail cask" \
@@ -447,6 +614,67 @@ expect_review_gated \
   "${multi_cycle_cask_head}" \
   '["Casks/ksail.rb"]' \
   "${multi_cycle_cask_commits}"
+
+expect_review_gated \
+  "agent-skills updater lookalike from the wrong actor" \
+  "agent-plugins" \
+  "app/cursor" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${agent_plugins_skills_commits}"
+
+expect_review_gated \
+  "agent-skills updater lookalike from the wrong branch" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "feature/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${agent_plugins_skills_commits}"
+
+expect_review_gated \
+  "agent-skills updater carrying a non-generated file" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_skills_head}" \
+  '["README.md","plugins/github/skills/gh-stack/SKILL.md"]' \
+  "${agent_plugins_skills_commits}"
+
+expect_review_gated \
+  "agent-skills updater carrying a human adaptation commit" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${adapted_agent_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${adapted_agent_skills_commits}"
+
+expect_review_gated \
+  "agent-skills updater carrying two otherwise compliant commits" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${multi_agent_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${multi_agent_skills_commits}"
+
+expect_review_gated \
+  "agent-skills updater shape in an unapproved repository" \
+  "agent-skills" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_skills_head}" \
+  "${agent_plugins_skills_files}" \
+  "${agent_plugins_skills_commits}"
+
 expect_not_release_exempt \
   "Platform Renovate KSail bump" \
   "platform" \
@@ -536,5 +764,18 @@ expect_classifier_error \
   "${ksail_head}" \
   "${ksail_files}" \
   'not-json'
+
+# Multi-lane claim visibility (monorepo#2300): Cursor cloud and Codex siblings claim under
+# cursor/* and codex/*; a surveyor that only greps ^claude/ cannot see those pre-PR claims.
+# The scan must also NOT be gated on assignees — app/cursor cannot assign, so a Cursor claim
+# is branch-only until its draft PR opens.
+grep -Fq "grep -E '^(claude|cursor|codex)/'" "${surveyor}" ||
+  fail "surveyor claim-branch scan does not cover claude/, cursor/, and codex/ prefixes"
+grep -Fq '(claude|cursor|codex)/*-<issue>' "${surveyor}" ||
+  fail "surveyor CLAIMED matching does not name all three lane prefixes"
+grep -Fq 'Do not gate this scan on assignees' "${surveyor}" ||
+  fail "surveyor claim-branch scan is still gated on assignees (hides cursor/* claims)"
+grep -Fq 'none(cursor-lane)' "${surveyor}" ||
+  fail "surveyor CLAIMED digest does not allow cursor-lane branch-only claims"
 
 echo "portfolio surveyor contract: all assertions passed"
