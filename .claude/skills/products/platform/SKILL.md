@@ -71,17 +71,42 @@ The recurring trap, learned the hard way (2026-07-04, all three surfaces were si
 empty/zero reading almost always means the scanner is broken, not that the cluster is clean** — a broken
 scanner and a compliant cluster look identical, so **check liveness first, every time**:
 
+**Probe rule that overrides reflex:** **Kubescape CR LISTs return spec-stripped skeletons.** Use a
+cluster-wide LIST only as **LIST metadata for coverage and freshness**: select object names, timestamps,
+and identity labels; all-zero severities, empty matches, or empty VEX payloads in that response are
+display artifacts, not findings. For CVE coverage, reconcile the result identities and manifest/summary
+pairs against the **current workload/container inventory** before making any cluster-wide claim; an
+absent or stale result is a coverage gap, not zero findings. Before judging payload quality,
+`kubectl get <crd> <name> -n <ns> -o json` by name and **sample 2–3 objects per surface**. For CVE
+liveness, directly GET both named `vulnerabilitymanifests` and their corresponding
+`vulnerabilitymanifestsummaries`, then cross-check scanner freshness and logs. Never declare the
+scanner broken or the cluster clean from a LIST projection. Sampling proves **liveness only**. If the
+contributing set fits the read bound, directly GET every object whose payload contributes; otherwise
+use a trusted aggregate endpoint already verified against direct samples. When neither a payload-
+complete source nor complete inventory coverage can be established safely,
+**report the cluster-wide result as unavailable or partial** and name the missing proof. Never
+extrapolate cluster-wide findings from the liveness sample. Bounded proof failure is per-surface:
+**posture, CVE, and runtime each report unavailable or partial** instead of inventing a numeric value.
+Every confirmed partial coverage gap must also appear in `deltas_needing_action` so the orchestrator
+turns the blind spot into tracked remediation.
+
 - **Posture** (config scan) — `configurationscansummaries` / `workloadconfigurationscansummaries`
   (per-namespace scores + failed controls). **Broken if** scores are `0.00` across frameworks,
   `controls: null` en masse, or objects are days stale — check the `kubescape` scanner pod logs for scan
   aborts. Note: the CI gate (`ksail workload scan --framework nsa --compliance-threshold N`) is a
   **separate** static scan in a healthy CLI context — **a green CI gate does NOT prove the in-cluster
   scan works.**
-- **CVE** (kubevuln) — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests`. **Broken if**
-  manifests carry no grype `matches` / no `tool.name` and summaries are empty (both `.all` and
-  `.relevant`) — check kubevuln logs for `ScanCP … partial` (the relevancy path aborting on partial
-  ApplicationProfiles). Prioritise by relevancy × severity × fixability; emit VEX to suppress
-  non-reachable CVEs.
+- **CVE** (kubevuln) — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests`. Liveness requires
+  **(Grype matches or scanner version metadata) with coherent paired summaries**
+  (`spec.metadata.tool.version` or the `kubescape.io/tool-version` annotation) across the direct
+  samples. A genuinely zero-match image is healthy when version evidence, summary refs, and zero
+  counters agree; positive manifest matches with an empty or disagreeing summary are partial, not
+  healthy. A blank
+  `spec.metadata.tool.name` alone is an upstream representation quirk, not an outage.
+  **Broken if** direct manifests carry neither matches nor scanner-version evidence and summaries are
+  empty (both `.all` and `.relevant`) — check kubevuln logs for `ScanCP … partial` (the relevancy path
+  aborting on partial ApplicationProfiles). Prioritise by relevancy × severity × fixability; emit VEX
+  to suppress non-reachable CVEs.
 - **Runtime** (node-agent) — `applicationprofiles`, `networkneighborhoods`, and the
   `node_agent_alert_counter` metric. **Invisible if** the exporters are stdout-only
   (`alertManagerExporterUrls: []`, `prometheusExporterEnabled: false`). Route **natively to Coroot**
