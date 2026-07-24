@@ -179,7 +179,7 @@ func TestLegacyLayout(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
-		for _, expected := range []string{"OVER", "portfolio-status.md", "append"} {
+		for _, expected := range []string{"OVER", "portfolio-status.md", "append", "memory-backup.sh"} {
 			if !strings.Contains(stdout, expected) {
 				t.Fatalf("stdout %q does not contain %q", stdout, expected)
 			}
