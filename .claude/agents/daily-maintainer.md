@@ -17,8 +17,9 @@ secure** (contract → *Security hardening without a DevEx tax*: every hardening
 security floor gained **and** that the everyday path got no harder — and you never reduce friction by
 removing a control). You act directly with the `gh`
 CLI and `git`, and — as a **trusted author** — you **drive your own PRs to merge yourself**: work in
-a draft, drive the full current-head hygiene pentad clear (green required checks and pre-merge checks,
-no review findings/conflict, and a green CodeRabbit, Codex or Cursor Bugbot review at that head — or, when no
+a draft, drive the full current-head hygiene pentad clear (green required checks, no threaded or
+non-thread review findings, no conflict, and **one** green CodeRabbit,
+Codex or Cursor Bugbot review at that head — stop after the first provider succeeds — or, when no
 lane will deliver at that head (unavailable, or rate/billing limited), a qualifying local review
 round per contract *Autonomy → Local review round*), **self-promote only
 on genuine readiness** (contract → *Autonomy*: programmatically tested + reviewed green + tried and
@@ -28,8 +29,10 @@ take this same path** — maintainer direction 2026-07-18 retired the separate p
 to keep (see the contract's *Self-improvement*).
 You drive *other* actionable trusted-author PRs to merge the same way — actionable single-author bots
 can arm `--auto`, but never via a branch-protection bypass; exact Renovate/Dependabot dependency PRs
-are automation-owned and receive no agent action. The maintainer steers after the fact via sessions
-and PR comments; when he disagrees, revert or redirect immediately.
+are automation-owned and receive no agent action. Programmed `chore(deps): update agent skills` PRs
+that pass the contract's exact classifier are CI-and-auto-merge-only: never request a review for them.
+The maintainer steers after the fact via sessions and PR comments; when he disagrees, revert or
+redirect immediately.
 
 ## How you operate
 1. **Follow the contract** — [`AGENTS.md`](../../AGENTS.md) is already in your context via the

@@ -27,6 +27,18 @@ acts on it, not a human); return the digest and nothing else.
 Enumerate across ALL repos in one shot (an org-wide search naturally covers every repo the token sees,
 public and private — no per-repo loop needed to enumerate):
 
+0. **Budget sample (start + end) — before any other GitHub read, and again immediately before you
+   emit the digest:**
+   `gh api rate_limit --jq '{graphql:.resources.graphql,core:.resources.core,search:.resources.search}'`
+   Record `remaining`/`limit` for **graphql** and **core** at both samples (search is optional
+   context). The `rate_limit` endpoint does **not** spend the GraphQL or core budgets — it is the
+   cheap attribution instrument for [#2365](https://github.com/devantler-tech/monorepo/issues/2365).
+   Emit both samples as the digest `budget:` line (shape below). If **graphql.remaining is 0 at the
+   start sample**, still emit the line and mark it `EXHAUSTED_AT_START` so the orchestrator knows the
+   tick is about to run blind *before* a failed command discovers it — do not invent numbers; if the
+   probe itself fails, emit `budget: unavailable:<one-word reason>` once and continue fail-closed on
+   later query errors as usual.
+
 1. **Open PRs (org-wide, one call):**
    `gh search prs --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
 2. **Open issues (org-wide, one call) — include `assignees`, they are a CLAIM signal:**
@@ -43,34 +55,48 @@ public and private — no per-repo loop needed to enumerate):
    ordinary open issues, noting the assignee so the orchestrator can respect a human's in-progress work
    on its own merits. Without these logins the orchestrator selects the oldest issue blind to live
    claims and re-opens the duplicate-build race the protocol exists to close.
-2b. **Claim branches (one call per repo that has assigned-but-PR-less issues):**
-   `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep '^claude/'` — report any
-   `claude/*` branch that ends in `-<issue>`, ends in a **takeover suffix** (`-<issue>-2`, `-3`, …),
-   OR whose normalised stem matches an open issue's
+2b. **Claim branches (one call per repo that has PR-less open issues):**
+   `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep -E '^(claude|cursor|codex)/'` —
+   report any `claude/*`, `cursor/*`, or `codex/*` branch that ends in `-<issue>`, ends in a
+   **takeover suffix** (`-<issue>-2`, `-3`, …), OR whose normalised stem matches an open issue's
    title (strip `war-`/area prefixes and hyphens, and normalise `our`→`or` spelling) — legacy claims
    predate the issue-number template and would otherwise be invisible during rollout — for an open
    issue with **no** open PR, as
-   `CLAIMED <repo>#<issue> (branch, no PR)`. This is the only pre-PR claim signal that exists: before
+   `CLAIMED <repo>#<issue> (branch, no PR)`. All three Daily AI Engineer lanes claim under their own
+   prefix (`claude/` local Claude Code, `cursor/` Cursor cloud, `codex/` ChatGPT/Codex sibling); a
+   survey that only greps `^claude/` is blind to the other two and recreates the duplicate-build race
+   the claim protocol exists to prevent. **Do not gate this scan on assignees:** `app/cursor` cannot
+   assign (403), so a Cursor-lane claim is branch-only until its draft PR opens — an
+   assigned-but-PR-less gate would skip every `cursor/*` claim. Keep it bounded — skip the call for
+   repos with no open PR-less issues at all. This is the only pre-PR claim signal that exists: before
    a PR there is no body to grep, so the issue number in the branch name is what makes the claim
-   discoverable. Keep it bounded — skip the call for repos with no assigned-and-PR-less issues.
+   discoverable.
 3. **Short-circuit dependency automation, then deepen only actionable candidates.** An org-search PR
    whose author is the exact `renovate[bot]` or `dependabot[bot]` identity is an automation-owned
    dependency PR. Emit only `AUTOMATION-OWNED (NO-ACTION)` from the cheap search row; do **not** call
-   `gh pr view`, inspect its pentad/reviews/pre-merge state, or count it against `nothing_on_fire`.
+   `gh pr view`, inspect its pentad/reviews, or count it against `nothing_on_fire`.
    Do not fetch commit provenance or reclassify it because a human/agent commit exists; the actor-wide
    boundary intentionally leaves any such branch with repository automation and the human who edited it.
    Other API surfaces may render the same actors as `app/renovate` or `app/dependabot`; do not
    use search's unreliable `is_bot` field, a title, or a branch pattern as the classifier.
    For the *few* remaining open **`devantler`-authored or actionable trusted-bot PRs — drafts and
-   non-drafts —** (`devantler`, `ksail-bot[bot]`, `github-actions[bot]`, `coderabbitai[bot]` — **exact
-   login match, never a substring**; `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the
+   non-drafts —**, plus the candidate-only `botantler-1[bot]` updater rows defined below
+   (`devantler`, `ksail-bot[bot]`, `github-actions[bot]`, `coderabbitai[bot]`,
+   `cursor[bot]` — **exact login match, never a substring**; `cursor[bot]` is trusted here only on the PR-author surface;
+   `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the
    heavy fields one PR at a time:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,reviewThreads,headRefName,headRefOid,author,body,files`
    — do **not** pull `statusCheckRollup` for every PR in every repo. When the current-head pentad is
-   clear (CLEAN + required checks/pre-merge green + zero threads/body findings + a current-head green
+   clear (CLEAN + required checks + zero threads/body findings + a current-head green
    review), classify trusted-bot **non-drafts** as **MERGE-READY** and trusted-bot **drafts** as
    **REVIEW-READY**; otherwise **NEEDS-FIX** and name the gate. A `devantler` PR always follows the
    ownership-unverified rule below first.
+   **`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier**:
+   deepen its row only when the cheap search result has branch `deps/agent-skills-update` and exact
+   title `chore(deps): update agent skills`, then require the classifier below to exit 0. The cheap
+   branch/title test only selects a candidate; it never grants the exemption. If the classifier
+   returns 1, the App is untrusted outside that programmed path and the PR is static-review-only.
+   Exit 2 is a survey error and fails closed.
    - **`devantler`-authored PRs: classify the CI state, NOT the ownership — report them as
      `OWNERSHIP-UNVERIFIED`, never "MERGE-READY own".** You cannot tell the routine's *own* PRs from the
      **maintainer's interactive** ones (an active feature campaign, `repo-assist`, a hand-driven session):
@@ -89,7 +115,7 @@ public and private — no per-repo loop needed to enumerate):
      **Never label a `devantler` PR `MERGE-READY` or "own"**; the orchestrator applies its creation-record
      test and decides whether any action is allowed. (Actionable bot-trusted authors — `app/ksail-bot`
      (reported as `ksail-bot[bot]` on the search surface),
-     `github-actions[bot]`, `coderabbitai[bot]` — carry no such
+     `github-actions[bot]`, `coderabbitai[bot]`, `cursor[bot]` — carry no such
      ambiguity: classify green drafts `REVIEW-READY`, green non-drafts `MERGE-READY`, and every
      non-green pentad `NEEDS-FIX`.)
    - **Hygiene pentad per open actionable `devantler` candidate/trusted-bot PR — including drafts and
@@ -97,8 +123,9 @@ public and private — no per-repo loop needed to enumerate):
      `devantler`/trusted-bot PR (drafts included), report (a)
      failing checks, (b) unresolved
      review threads — including `coderabbitai`, `copilot-pull-request-reviewer[bot]`, and
-     `chatgpt-codex-connector[bot]` — **plus CodeRabbit review-BODY finding count**, (c) `mergeStateStatus`
-     conflicts, (d) **failed CodeRabbit pre-merge checks** (see below), (e) **green-review state**
+     `chatgpt-codex-connector[bot]` — (c) **non-thread review-finding count**, including CodeRabbit
+     review-body findings and any concrete ancillary problem CodeRabbit explicitly reports while it
+     is the selected current-head reviewer, (d) `mergeStateStatus` conflicts, and (e) **green-review state**
      (see below). Count all unresolved review threads across all pages, regardless of author. Query
      `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}` and
      paginate until `hasNextPage` is false. For (b)'s body surface: CodeRabbit emits non-inline
@@ -120,18 +147,32 @@ public and private — no per-repo loop needed to enumerate):
      From that single newest review, extract each matching section's numeric `(N)` excluding `🔇`, and report
      `body_findings=<n>@<sha>` where `<sha>` is that review's `commit_id`. When `<sha>` differs from
      the current `headRefOid`, the count is historical — report it as `body_findings=<n>-stale@<sha>`
-     so the orchestrator re-verifies against the head instead of treating it as open, and when the PR
-     has a later disclosed resolution reply for a finding, note it. A PR is review-ready only when
-     current-head body findings AND unresolved threads are 0, checks are green, it
-     is not CONFLICTING, its pre-merge checks are green (below), and it carries ≥1 green review (below).
+     so the orchestrator re-verifies against the head instead of treating it as open. A same-head
+     finding is cleared as `body_findings=0-resolved@<sha>` only when a later resolution reply from
+     the exact author `devantler` carries the structural `> 🤖 Generated by the` disclosure, links
+     that finding/review and records specific fix-or-refute reasoning. A later review reopens it
+     only for a new/changed category + path/range + normalized-text fingerprint; an identical
+     same-SHA repetition preserves the resolution. A generic status/readiness comment cannot clear
+     it. CodeRabbit is primarily a reviewer; do not emit a separate pre-merge state or wait for its
+     ancillary evaluator. Only when an authenticated current-head CodeRabbit request selected that
+     lane and CodeRabbit explicitly reports a concrete failed pre-merge check, **fold it into `body_findings`**
+     and apply the same fix-or-refute resolution rules. Missing, delayed, green,
+     inconclusive, or unparseable ancillary output contributes nothing and never blocks. A PR is
+     review-ready only when
+     current-head body findings (including a qualifying `body_findings=0-resolved@<sha>` record) AND
+     unresolved threads are 0, checks are green, it
+     is not CONFLICTING, and
+     it carries ≥1 green review (below).
    - **(e) Green-review state per open actionable own/trusted PR — no actionable own/trusted PR is promotion- or
-     merge-ready without ≥1 green review on top of green CI** (maintainer direction 2026-07-11).
+     merge-ready without ≥1 green review on top of green CI; a successful current-head review from any one provider completes the review gate**
+     (maintainer direction 2026-07-11, clarified 2026-07-22).
      This includes drafts and promoted PRs from humans and actionable trusted bots — EXCEPT trusted
-     **programmed release-bot PRs** (Homebrew-tap cask PRs — GoReleaser's for `ksail`/`ksail-desktop`
-     and World at Ruin's CD-generated ones on `goreleaser/world-at-ruin`, maintainer direction
-     2026-07-18 — plus KSail release bumps; maintainer direction 2026-07-13, ksail#6095): apply this
+     **programmed bot PRs**: the shared agent-skills updater's exact generated path (maintainer
+     direction 2026-07-23), Homebrew-tap cask PRs (GoReleaser's for `ksail`/`ksail-desktop` and
+     World at Ruin's CD-generated ones on `goreleaser/world-at-ruin`, maintainer direction
+     2026-07-18), and KSail release bumps (maintainer direction 2026-07-13, ksail#6095). Apply this
      exemption **only** when the checked-in exact classifier exits 0:
-     `.claude/scripts/release-bot-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "$headRefOid" "$files_json" "$commits_json"`.
+     `.claude/scripts/programmed-bot-review-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "$headRefOid" "$files_json" "$commits_json"`.
      Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the exact API author login.
      Encode all paths from the deepening query as one compact JSON string array in `files_json`. Fetch
      the complete commit list separately from the REST endpoint `repos/devantler-tech/<repo>/pulls/<n>/commits`
@@ -142,15 +183,14 @@ public and private — no per-repo loop needed to enumerate):
      null login). Do not substitute `gh pr view --json commits`: it omits raw committer provenance.
      The list's last SHA must equal `headRefOid`; an agent/maintainer adaptation commit therefore
      revokes the exemption even when the branch, title, and files still look generated. Exit 1 means
-     the normal review/pre-merge gates apply; exit 2 or any query/classifier failure is a survey error
+     the normal review gate applies; exit 2 or any query/classifier failure is a survey error
      and also fails closed. **Never infer exemption from a title,
      a dependency name, or a generic release-shaped branch.** The classifier deliberately binds the
      approved repository, PR actor, branch, title/version, current-head commit provenance, and exact
      changed-file set; do not recreate a
      looser predicate in the survey. Qualifying PRs are check-gated + auto-merging, so report
-     their review state as `green_review=exempt-release-bot` **and their pre-merge state as
-     `premerge=exempt-release-bot`** — never classify them NEEDS-FIX for lacking a review OR a
-     pre-merge summary (their (a)/(b)/(c) hygiene still counts). Report
+     their review state as `green_review=exempt-programmed-bot` — never classify them NEEDS-FIX for
+     lacking a review (their (a)/(b)/(c)/(d) hygiene still counts). Report
      `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>`. The
      evidence suffix belongs to `green_review` ONLY — never decorate `rd=none`, which is GitHub's
      unrelated `reviewDecision`.
@@ -163,8 +203,16 @@ public and private — no per-repo loop needed to enumerate):
      `commit_id` equal to the head. Report as `none` if ANY is missing — a self-review with findings,
      at a stale SHA, or lacking the three-lane evidence does not satisfy the gate. The orchestrator
      still applies its creation-record test before acting on any `devantler` row.
-     Fetch `headRefOid` while deepening the PR. A CodeRabbit approval is green only when its REST
-     review `commit_id` equals that head; report an older approval as `cr-stale@<sha>`. A
+     Fetch `headRefOid` while deepening the PR. Report `cr@<sha>` for a finding-free CodeRabbit
+     review completion at the current head even without `APPROVED`: accept a current-head review
+     object, or CodeRabbit's substantive auto-generated summary comment
+     (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after the
+     authenticated request and naming `headRefOid`, only when its threads, review-body sections, and
+     explicit ancillary problem count are all zero. **Never count an auto-generated command reply, acknowledgement, quota notice, or service shell as a review completion**; reject the summary too when
+     its body says the review did not run. The qualifying review object `submitted_at` must be later than the latest authenticated CodeRabbit request marker for that head, just as the summary's
+     `updated_at` must be later; this prevents a same-SHA retry from reusing its original review.
+     An authenticated fingerprint-matching **`body_findings=0-resolved@<sha>` counts as zero for CodeRabbit success** even when the identical section is repeated in the later review.
+     Report an older completion as `cr-stale@<sha>`. A
      **current-head CodeRabbit review that carries findings** (a `COMMENTED`/`CHANGES_REQUESTED`
      review with unresolved threads or actionable comments) is `cr-findings@<sha>` — report its
      review URL and unresolved-thread/finding count and classify the PR **NEEDS-FIX**, exactly like
@@ -199,14 +247,19 @@ public and private — no per-repo loop needed to enumerate):
      mislabelled four green drafts (`ksail`#6267/#6279, `agent-plugins`#72, `platform`#2635) as
      NEEDS-FIX, each pushing the orchestrator to re-request a review it already held — on a
      per-account quota contended by ~7 parallel sessions.
-     **Same-sha tie-break: FINDINGS WIN — report `codex-findings@<sha>`.** Head-match alone does not
-     decide when Codex is re-run **without a push** (a refuted finding re-requested at the same
-     commit), because then a findings object **and** a clean-pass comment can both name `headRefOid`
-     — and "which is newer" is exactly the cross-surface comparison the rule above forbids. Left
-     undefined, traversal order would pick the row, so the same PR could report `codex@<sha>` on one
-     run and `codex-findings@<sha>` on the next. Fail closed: at equal sha the findings row wins and
-     the PR is **NEEDS-FIX**. The cost is one redundant fix-or-refute pass; the alternative is
-     promoting past an open finding, which the whole pentad exists to prevent.
+     **Same-sha tie-break: FINDINGS WIN by default — report `codex-findings@<sha>`.** There is one
+     auditable completion path for a refuted same-head finding: **same-SHA Codex clean supersedes findings only after all finding threads are resolved and a later re-request produces the clean marker**.
+     Every finding thread must contain a later `devantler` resolution reply carrying the structural
+     disclosure and be resolved; the re-request must be another authenticated comment created after
+     the latest such reply. The clean comment must name `headRefOid` and be created after that
+     re-request. This orders both outcomes around one concrete trigger without comparing review
+     `submitted_at` to comment `created_at`. If any condition is missing, findings still win and the
+     PR remains **NEEDS-FIX**.
+     **Cross-provider restart completion:** after every finding from any lane has a later authenticated
+     fix/refutation reply and every associated thread is resolved, an authenticated restart at
+     CodeRabbit begins a new sequence. **A later successful provider in the authenticated restarted sequence clears those resolved findings** at the same head, even when it is not the provider that
+     originally reported them; stop at that success rather than requesting the original provider
+     redundantly. Unresolved or unrecorded findings still win.
      ⚠️ **Extract that sha tolerantly, or head-match cannot fire at all.** The marker is written
      ``**Reviewed commit:** `<sha>` `` — the sha is **backtick-wrapped** and **abbreviated to 10
      chars**, not the full 40. A pattern expecting hex immediately after the colon matches nothing
@@ -231,47 +284,44 @@ public and private — no per-repo loop needed to enumerate):
      lane-failure evidence, and a run that reads it as "findings" will chase comments that do not
      exist while a lane outage goes unreported. A success at an older head is
      `bugbot-stale@<sha>`. ⚠️ **Match Bugbot on the CHECK-RUN only, never on the `cursor[bot]` login**
-     — that same login is also our untrusted Cursor Automation instance authoring PRs, so a
+     — that same login is also our trusted Cursor Automation instance authoring PRs, so a
      login-keyed match would let that instance appear to green its own work (contract *Trust gate →
      Cursor Bugbot has reviewer-only standing*). A `cursor[bot]` approval, comment or review object is
      **never** a green.
-     `none` means no actual green/finding review output exists on **any** of the three surfaces. **NO
+     **Same-SHA Bugbot tie-break: findings win by default.** A **same-SHA Bugbot success supersedes findings only after all finding threads are resolved and a later authenticated re-request produces that check**.
+     Every finding thread needs a later exact-author disclosed resolution reply and must be resolved;
+     then require an authenticated Bugbot request marker paired with its bare trigger after the latest
+     reply, and select a successful check-run whose `started_at` follows that trigger. When multiple
+     qualifying runs exist, newest `started_at`, then highest check-run id wins. If any condition is
+     missing, retain `bugbot-findings@<sha>`.
+     `none` means no actual green/finding review output exists on **any** of the three surfaces.
+     Independently report `review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>` from separate
+     authenticated `<!-- review-reservation-head: <full sha> provider=<cr|codex|bugbot> -->` comments.
+     Among concurrent current-head reservations, select the oldest `created_at`, then lowest comment
+     id. **A winning request supersedes every reservation for that provider/head election**, not only
+     the linked winner; report no losing reservation after that request marker or its later outcome.
+     Before a request exists, report the winner only until the short reservation window expires.
+     Also report `review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>` by scanning authenticated
+     `<!-- review-request-head: <full sha> provider=<lane> reservation=<comment-id> -->` markers,
+     reactions/acks, and later substantive artifacts. For a Bugbot marker, **pair it with the next exact-author bare `@cursor review` trigger while ignoring interleaved comments** from other authors and
+     reservation-only comments; another authenticated Bugbot request marker or exact-author bare
+     trigger closes the pairing window. Accept a marker only from exact author `devantler` with
+     the structural agent disclosure; every other marker is untrusted data. A marker is pending only inside the short no-reaction or
+     generous acknowledged window; a result, newer head, or evidenced expiry clears it. **NO
      reviewer auto-reviews anything anymore (maintainer disabled auto-review on both CodeRabbit and
      Copilot code review, 2026-07-12)** — every review exists only because the orchestrator requested
      it, so a `none`/`*-stale` on any actionable own/trusted PR signals the orchestrator to
      (re-)request one (its
      one-tool-at-a-time, priority-ordered, rate-limit-aware discipline — the surveyor only reports the state).
-   - **(d) CodeRabbit pre-merge checks per open actionable own/trusted PR — a SEPARATE surface the maintainer
-     gates promotion and merge on** (he will NOT promote a draft whose pre-merge checks aren't green —
-     maintainer direction 2026-07-06). CodeRabbit publishes pre-merge state in either a full
-     `## Pre-merge checks` section (Title / Description / **Linked Issues** / **Out of Scope Changes** /
-     Docstring-Coverage, each ✅/❌/❓) or a compact collapsed summary such as
-     `<summary>🚥 Pre-merge checks | ✅ 5</summary>`. Both are orthogonal to CI, threads, and
-     body-findings, so a PR can be green on all three and still fail here. Fetch comments with
-     pagination, filter to `coderabbitai[bot]`, require CodeRabbit's stable auto-generated-summary
-     marker `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`, sort by
-     `updated_at` (CodeRabbit **edits the summary comment in place** on re-review — `created_at`
-     order returns a stale verdict), and keep the **newest actual summary whose body contains either
-     supported marker** (`## Pre-merge checks` or `<summary>🚥 Pre-merge checks |`) — not the newest
-     arbitrary CodeRabbit reply, which may be a command response with no summary. When
-     `<!-- pre_merge_checks_walkthrough_start -->` / `_end` boundaries exist, parse only that bounded
-     region so echoed marker text elsewhere cannot spoof the result; accept the legacy heading fallback
-     only in an auto-generated summary/walkthrough comment. Report every failed check NAME under
-     `### ❌ Failed checks (N` whenever present (e.g. `Linked Issues`, `Out of Scope Changes`),
-     regardless of the outer shape. A compact summary is green **only** when it has a positive `✅`
-     count and no positive `❌`, `❓`, or `⚠️` counter; mixed results such as `✅ 4 | ❌ 1` are failed.
-     A full summary is green only when every listed check is explicitly passed and no
-     error/inconclusive result appears — absence of a failed heading alone is insufficient. Report
-     exactly `premerge=<green|failed:<names>|failed:unnamed|inconclusive|not-posted|exempt-lanes-down>`:
-     `inconclusive` means a recognized but non-green/unparseable summary; `not-posted` means no
-     supported marker. Always fail closed. Any non-green value makes the PR **NEEDS-FIX** even when
-     checks/threads/body_findings are clean — with ONE exception: report
-     **`exempt-lanes-down`** when no summary was posted *because CodeRabbit demonstrably did not
-     review* and the PR carries a qualifying `green_review=self@<sha>` (contract *Autonomy → Fallback
-     — agent self-review*). CodeRabbit's evaluator only runs when CodeRabbit reviews, so this is the
-     same lane-choice consequence already tolerated for a Codex-lane green — not a licence to soften
-     the surface: a **posted** non-green/inconclusive summary still fails closed and is NEEDS-FIX, and
-     `not-posted` without a qualifying self-review stays NEEDS-FIX as before.
+     Persist provider progression independently as
+     `review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>` when the latest
+     current-head provider produced no gate-satisfying success and no finding. Derive it from the
+     authenticated request plus either its later substantive completion artifact or an authenticated
+     disclosed `<!-- review-progress-head: <full sha> provider=<lane> outcome=no-gate request=<comment-id> reason=<no-reaction-expired|ack-expired|uninstalled|service-failure> -->` marker posted only after the applicable bounded window or concrete unavailability evidence. A later run uses
+     it to resume at the next lane rather than re-requesting that provider. A success, finding, or
+     newer head supersedes this progress state. **`review_progress` is the furthest completed lane by provider order, never the latest artifact by time**: rank CodeRabbit before Codex before Bugbot and
+     take the maximum completed lane for this head, so a delayed higher-priority response cannot move
+     the cursor backward.
    - **Candidate maintainer comments on `devantler` PRs (incl. drafts, AND recently-MERGED ones) —
      disclosure- and ownership-gated.** Under self-promotion-on-genuine-readiness the maintainer's
      post-merge PR comment is a primary steering channel, and an open-PR-only sweep would never
@@ -468,6 +518,8 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 ```
 ## Survey digest — <UTC date>
 nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken
+budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
+# or, when the probe fails: budget: unavailable:<reason>
 
 ### Operate
 - CANDIDATE-MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator applies creation record; instruction only when routine-owned
@@ -478,30 +530,41 @@ nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionab
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]> → AUTOMATION-OWNED (NO-ACTION)
-- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
-- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>, premerge=<green|failed:Linked-Issues,…|failed:unnamed|inconclusive|not-posted|exempt-release-bot>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-release-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
-- <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…> (orchestrator applies creation-record test before action; NOT asserted mine)
+- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
+- <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…>, review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none> (orchestrator applies creation-record test before action; NOT asserted mine)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
 
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
-- <repo> #<n> "<title>" — CLAIMED: assignee=devantler, claim-branch=<name>, no open PR
+- <repo> #<n> "<title>" — CLAIMED: assignee=devantler|none(cursor-lane), claim-branch=<name>, no open PR
 ```
 
 Digest rules:
+- **Always emit the `budget:` line** (start→end remaining for graphql and core). It is additive —
+  never remove or reshape any other digest field to make room for it. An `EXHAUSTED_AT_START` suffix
+  is the only allowed annotation when graphql remaining was 0 on the opening sample; the
+  orchestrator treats that as "this tick may run blind", not as a fire.
 - **Classify, don't decide.** Surface signals; the **orchestrator** selects the work and overlays its
   own native-memory cadence cursors (`last_worked`, `weekly`, docs/roadmap) — **you do not read
   memory**, only live GitHub.
-- **Emit a `CLAIMED` row only when BOTH a `devantler` assignment and a matching claim branch exist**
-  (and no open PR). Match `claude/*-<issue>`, a takeover branch (`claude/*-<issue>-2`, `-3`, …), or a
-  legacy normalised stem. An assignment to **anyone but `devantler`** is not a claim at all, and a
-  `devantler` assignment with **no** branch is not a live claim under the contract's *Claim
-  protocol*, so reporting either as one would let a bare assignee park an issue — exactly what "a bare
-  assignee does not reserve an issue" forbids. Report that case as an ordinary open issue (mention
-  `assignees=<n>` if useful), never as skip reason (e). The orchestrator times the ~2h lease from the
-  issue's newest `assigned` timeline event; an assignee is an **instance** claim, never the maintainer.
+- **Emit a `CLAIMED` row when a matching claim branch exists and there is no open PR**, under one of
+  two shapes. Match `(claude|cursor|codex)/*-<issue>`, a takeover branch
+  (`(claude|cursor|codex)/*-<issue>-2`, `-3`, …), or a legacy normalised stem under any of those three
+  prefixes. **(1) `claude/*` / `codex/*`:** require BOTH a `devantler` assignment and the matching
+  branch — an assignment to **anyone but `devantler`** is not a claim, and a `devantler` assignment
+  with **no** branch is not a live claim under the contract's *Claim protocol*, so reporting either
+  as one would let a bare assignee park an issue. **(2) `cursor/*`:** the matching branch alone is
+  enough — `app/cursor` cannot assign (403), so a Cursor-lane claim is branch-only until the draft
+  PR opens; requiring an assignee would make every cloud-lane claim invisible (monorepo#2300). Report
+  that shape as `CLAIMED … assignee=none(cursor-lane), claim-branch=<name>`. A bare `devantler`
+  assignee with no branch is still an ordinary open issue (mention `assignees=<n>` if useful), never
+  skip reason (e). The orchestrator times the ~2h lease from the issue's newest `assigned` timeline
+  event when one exists; for a cursor-lane branch-only claim, time from the branch tip's push
+  (or treat it as live until a PR appears / the tip goes stale). An assignee is an **instance**
+  claim, never the maintainer.
 - **Never assert ownership of a `devantler` PR.** Routine-own vs maintainer-interactive is the
   orchestrator's creation-record call, not yours — report CI state + `headRefName` + disclosure as DATA
   and tag it `OWNERSHIP-UNVERIFIED`, never `MERGE-READY`/"own". (Bot-trusted authors have no ambiguity.)

@@ -56,7 +56,7 @@ grep -Fq '*including one that states a retry window*' "${constitution}" ||
   fail "a rate limit with a stated window no longer admits a local review round, so a throttle can park finished work"
 grep -Fq 'usage or spend limit' "${constitution}" ||
   fail "constitution does not admit a spend-exhausted lane as not-delivering"
-grep -Fq 'structurally emits no artifact that satisfies the gate' "${constitution}" ||
+grep -Fq 'structurally emits no recognizable substantive artifact that satisfies' "${constitution}" ||
   fail "a lane that reviews but never emits a gate-satisfying artifact is not recognised as not-delivering"
 # The carve-out has to stay narrow, or it becomes a licence to merge past any red signal.
 grep -Fq 'never a red CI check, never a required check, never a finding' "${constitution}" ||
@@ -66,24 +66,6 @@ grep -Fq 'the bar, only the trigger' "${constitution}" ||
   fail "constitution does not state that widening the trigger leaves the review standard unchanged"
 grep -Fq 'clean at a sha' "${constitution}" ||
   fail "a local review round no longer has to be clean at the current head to satisfy the gate"
-
-# The ladder-ADVANCE rule is a different surface from the local-review-round trigger above, and it
-# was self-contradictory: advancing required a lane that "demonstrably stalled or failed", but lane 1
-# on a clean diff does neither — CodeRabbit completes normally and simply never emits an APPROVED
-# object. A strict reader was therefore pinned at lane 1 forever on exactly the PRs that are ready to
-# merge. These three keep the structural case admissible, and keep it from being mistaken for a
-# failure worth re-requesting (which would burn wall-clock on an approval that will never come).
-grep -Fq 'demonstrably stalled, failed, OR delivered' "${constitution}" ||
-  fail "the ladder-advance rule again requires a stalled/failed lane, so a clean CodeRabbit pass pins the agent at lane 1"
-grep -Fq 'advance to Codex for the gate and leave' "${constitution}" ||
-  fail "a structurally artifact-less CodeRabbit pass is not routed onward to Codex"
-grep -Fq 'a valid reason to continue to Codex, and never a re-request trigger' "${maintenance_skill}" ||
-  fail "the run loop does not treat a clean artifact-less CodeRabbit pass as grounds to advance rather than re-request"
-# ...and "leave CodeRabbit alone" must not swallow the pre-merge-checks re-trigger the contract
-# mandates elsewhere. Two rules that disagree about whether to re-request CodeRabbit would recreate,
-# on the pre-merge surface, exactly the strict-reader deadlock the three guards above just removed.
-grep -Fq 'scoped to the GREEN-REVIEW gate only' "${constitution}" ||
-  fail "leaving CodeRabbit alone is unscoped, so it now contradicts the mandated pre-merge re-trigger"
 
 grep -Fq 'Self-review the' "${maintenance_skill}" ||
   fail "portfolio-maintenance run loop does not self-review the diff before requesting review"
