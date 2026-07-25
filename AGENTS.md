@@ -166,9 +166,10 @@ Two rules shape *how* the engineer is built:
    primitives are thin Claude-native wrappers that point back to it.
 The **brain is version-controlled here** (this file + `.claude/`), so the self-improvement loop can keep
 improving it; the machine-local scheduled-task entry is only a **thin pointer** that hands off to it.
-This brain is deployed as **more than one agent instance** — currently the Claude Code scheduled task
-(even hours), the **sibling ChatGPT/Codex routine** (uneven hours), and the **Cursor Automation cloud
-instance** (`:30` past uneven hours) — each booted by its own routine/scheduler prompt. Those prompts
+This brain is deployed as **more than one agent instance** — currently the Claude Code scheduled task,
+the **sibling ChatGPT/Codex routine**, and the **Cursor Automation cloud instance** (`:30` past uneven
+hours); the per-hour split across the two machine-local lanes is the table in
+*Cadence & focus* — each booted by its own routine/scheduler prompt. Those prompts
 are part of the definition too: **each instance monitors and enhances its own dispatch prompt** (see
 *Self-improvement → Routine-prompt stewardship*). The first two are machine-local and their prompts are
 edited in place; the Cursor automation lives **server-side with no local file or CLI**, so its prompt's
@@ -184,7 +185,7 @@ This deployment **consumes** the `agentic-engineering` plugin from
 [`devantler-tech/agent-plugins`](https://github.com/devantler-tech/agent-plugins) — declared in
 [`.claude/settings.json`](.claude/settings.json) (`extraKnownMarketplaces` +
 `enabledPlugins: agentic-engineering@devantler-plugins`). The plugin carries the generic **role**
-(entrypoint `automated-ai-engineer`; also `portfolio-surveyor` and `agent-improver`); this file
+(entrypoint `agentic-engineer`; also `portfolio-surveyor` and `agent-improver`); this file
 supplies the deployment **configuration**. Plugin agents and skills fail closed unless these named
 contract sections resolve:
 
@@ -2272,14 +2273,44 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   be human.
 
 ### Cadence & focus
-**Each instance is dispatched every 2 hours; the instances stagger, so the portfolio is swept every
-30–60 minutes** (the deployment loader owns the exact cadence — Claude Code on even hours, the
-ChatGPT/Codex sibling on uneven, the Cursor cloud instance at `:30` past uneven; the gaps are
-deliberately uneven — 60/30/30 within each 2-hour cycle — because no even 3-way split exists without
-moving the two working loaders). That interval is the
-gap **between runs, not a per-run time
+**This table IS the deployment's dispatch schedule** — the concrete cadence the plugin's
+`cadenceFrom: AGENTS.md#Cadence` pointer resolves to (the plugin deliberately carries no fixed
+schedule; see *Agentic engineering plugin contract*). Times are the agent host's local time. The
+runtime-local scheduler entries are **thin pointers that must match this table**; when the two
+disagree, the scheduler is the defect — reconcile it there, per *Agent definition locations*.
+
+| Hour | Codex — `codex/*` | Claude — `claude/*` |
+|---|---|---|
+| 00:00 | Agentic Engineer | Agent Improver |
+| 02:00 | — | Agentic Engineer |
+| 04:00 | Agentic Engineer | — |
+| 06:00 | Agent Improver | Agentic Engineer |
+| 08:00 | Agentic Engineer | — |
+| 10:00 | — | Agentic Engineer |
+| 12:00 | Agentic Engineer | Agent Improver |
+| 14:00 | **Agentic Engineer** | **Agentic Engineer** |
+| 16:00 | — | Agentic Engineer |
+| 18:00 | Agent Improver | — |
+| 20:00 | Agentic Engineer | — |
+| 22:00 | — | Agentic Engineer |
+
+The **Cursor cloud instance** (`cursor/*`) is unchanged: Agentic Engineer at `:30` past uneven hours,
+scheduled server-side. The **FinOps Engineer** keeps its own separate daily schedule. The Agent
+Improver lands on a clean 6-hourly rotation across the two local lanes (00, 06, 12, 18).
+
+**Two properties of this table change how you plan a run.**
+⚠️ **14:00 dispatches BOTH local Agentic Engineer lanes simultaneously.** *Claim protocol* rule 4
+records that claim arbitration does **not** work across lanes — each instance writes its own
+namespace, so both pushes succeed and both believe they won. A simultaneous start is therefore the
+portfolio's highest duplicate-work risk. On a 14:00 run, scan `codex/*` **and** `claude/*` branches
+and open PRs before claiming, not just your own namespace.
+**18:00 is the longest Agentic Engineer gap:** 16:00 → 20:00 is four hours covered only by the Cursor
+lane's 17:30 and 19:30 runs, so a watch item deferred at 16:00 waits longer than a usual tick.
+
+**Each Agentic Engineer instance is dispatched every 2–6 hours** depending on its slot above. That
+interval is the gap **between runs, not a per-run time
 budget** — and it is the *instance's* own gap that bounds a carry-forward, so a run that defers a
-watch item to "the next tick" is deferring it ~2 hours, not one. Each run: **hotfix any breakage**, then **sweep every
+watch item to "the next tick" is deferring it hours, not minutes. Each run: **hotfix any breakage**, then **sweep every
 failing-CI / mergeable actionable trusted-author PR toward green and merge — first priority, across all
 repos, excluding automation-owned dependency PRs; PRs always come before issues**, then **work the issue
 backlog oldest-actionable-first**, capturing new
