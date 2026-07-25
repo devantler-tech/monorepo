@@ -133,27 +133,58 @@ Its definition lives here as standard primitives:
   taxes developer experience.
 - **Self-improvement skill:** [`.claude/skills/self-improvement/`](.claude/skills/self-improvement/SKILL.md)
   — how it improves its own definition over time (evidence-driven, guard-railed).
+- **Spend skill:** [`.claude/skills/finops/`](.claude/skills/finops/SKILL.md) — the cost-pass procedure
+  for the same engineer's *spend* mandate (see *Spend contract*), on the heavy-task cadence.
 - **Per-product skills:** [`.claude/skills/products/`](.claude/skills/products/) — thin cards that
   defer to each submodule's `AGENTS.md` `## Maintenance` section and name the product's roadmap home.
 - **Durable memory:** the runtime's **native persistent memory** + the end-of-run report (see
   *Durable memory* below). Roadmaps are **GitHub Issues** (`roadmap`-labelled epics + milestones), not
   a file; no version-controlled status board, no bespoke `state.json`.
 
-### The FinOps engineer — the money side of the same portfolio
-A separate scheduled agent, [`.claude/agents/finops-engineer.md`](.claude/agents/finops-engineer.md),
-owns **spend**: it raises value per unit cost across the platform and the tooling around it, while a
-declared, versioned **lifestyle floor**
-([`.claude/finops/lifestyle-floor.md`](.claude/finops/lifestyle-floor.md)) names the outcomes that are
-never traded for money. Its run loop is [`.claude/skills/finops/`](.claude/skills/finops/SKILL.md) and
-its evidence layer is the read-only
-[`.claude/scripts/finops-snapshot.sh`](.claude/scripts/finops-snapshot.sh).
+### Spend contract — the money side of the same portfolio
+**Spend is the Agentic Engineer's own mandate, not a separate agent's** (maintainer direction
+2026-07-25, superseding the standalone FinOps Engineer that used to live at
+`.claude/agents/finops-engineer.md`). Running cost is incurred by the code this engineer already owns,
+so a second scheduled writer over the same repositories only produced overlapping claim lanes and a
+duplicate copy of the delivery discipline — which is why the *Writer namespaces* table already had to
+record both roles sharing one provider instance. The generic mandate and its money boundaries now live
+in the plugin entrypoint's **Spend stewardship** section (upstream
+[ADR 0005](https://github.com/devantler-tech/agent-plugins/blob/main/docs/adr/0005-merge-spend-stewardship-into-the-engineer.md));
+this section supplies the deployment facts it resolves. **Absent or malformed, the engineer fails
+closed on the cost dimension only** — operate and advance work continue, spend analysis does not.
 
-Three properties make it safe to run unattended, and they are **not** negotiable by the agent itself:
-it **never moves money** (it prepares decisions; the maintainer executes them), it **gives no
+| What the plugin resolves here | This deployment's fact |
+|---|---|
+| **Protected-outcomes floor** | [`.claude/finops/lifestyle-floor.md`](.claude/finops/lifestyle-floor.md) — the declared, versioned list of outcomes never traded for money. **Changing it is the maintainer's call**, in a session or over the private channel; never the engineer's, and never inferred from a metric. |
+| **Run procedure for a cost pass** | [`.claude/skills/finops/`](.claude/skills/finops/SKILL.md) — measure → attribute → diagnose → floor-veto → act → verify → record. |
+| **Cost evidence source** | the read-only [`.claude/scripts/finops-snapshot.sh`](.claude/scripts/finops-snapshot.sh) (OpenCost attribution), plus Coroot's Prometheus for actual usage. The **provider billing API is NOT wired**, so every saving figure is *modelled*, never *realised*, and must say so. The run loop carries the full source-by-source state and its four known measurement defects. |
+| **Private decision channel** | the devantler-tech Slack, per *Maintainer channels* — 🔴 **and its destination is still UNRESOLVED**: the only channel in the workspace is the **public** `#announcements`, where financial detail must never go. Until the maintainer designates a private destination, send **nothing** — and route only **non-financial** blockers through the run report, never a financial decision, which is not produced at all while this reads UNRESOLVED (see *Activation gate*). |
+| **Cost-pass cadence** | per *Cadence & focus* — a heavy task, so roughly weekly, never every run, and always behind hotfixes and actionable trusted-author PRs. |
+| **Which lanes may run it** | **machine-local instances only** (`claude/*`, `codex/*`). The evidence script port-forwards OpenCost in the live cluster and the ledger is a private operator note, so the **Cursor cloud lane has neither half** and skips the cost pass explicitly rather than attempting a degraded version — it never quotes a figure it could not measure. |
+| **Private evidence store** | the out-of-repository ledger named under *Durable memory* — proposals, open asks, and projected-vs-realised. Absolute figures never enter a repo file. |
+
+**Activation gate — the decision-producing half is DEFAULT-OFF until the private channel resolves.**
+Spend stewardship ships latent, per *Feature-flag-first delivery*, and the gate is the **Private
+decision channel** row above rather than a config toggle:
+
+| Half of the mandate | State while the channel reads UNRESOLVED | Why |
+|---|---|---|
+| **Measurement & engineering** — wiring an evidence source, fixing the stale price table, an orphaned-volume cleanup | **ON** | ordinary engineering work with no financial output; blocking it would stall the very measurement the rest depends on |
+| **Decision-producing** — a financial ask, a spend proposal, a savings figure put to the maintainer | **OFF** | there is nowhere to send it, and parking it in a report is the passive self-blocking this contract forbids elsewhere |
+
+So while the channel is unresolved the cost pass runs steps 1–4 of its run loop and **stops before
+step 5's ask**: it may fix measurement, and it may **not** produce a financial decision. Resolving the
+channel is what flips the second half on — a maintainer act, never an agent one. **This is the tested
+both-states condition** for the feature-flag rule: the engineer must behave differently in each state,
+and the delivery-contract test pins the gate's presence.
+
+Three properties are **not negotiable by the engineer**, and merging the role changed none of them: it
+**never moves money** (it prepares the decision; the maintainer executes it), it **gives no
 personalised investment advice** (engineering economics only — rent vs own, tier, provider, payback),
-and **private financial data never reaches a public artifact**. It reaches the maintainer on **Slack
-only when he must act**, never with status. The **Agent Improver improves it too**, on its own
-parameters — calibration, floor integrity, signal discipline, honesty, confidentiality, coverage —
+and **private financial data never reaches a public artifact**. They are also stated in the plugin
+entrypoint; restating them here is deliberate, so retiring the standalone agent cannot read as
+retiring its limits. The **Agent Improver improves the spend dimension too**, on its
+own parameters — calibration, floor integrity, signal discipline, honesty, confidentiality, coverage —
 deliberately *not* on how much it saves.
 
 ### Design principles — native to Claude, portable by default
@@ -185,9 +216,17 @@ This deployment **consumes** the `agentic-engineering` plugin from
 [`devantler-tech/agent-plugins`](https://github.com/devantler-tech/agent-plugins) — declared in
 [`.claude/settings.json`](.claude/settings.json) (`extraKnownMarketplaces` +
 `enabledPlugins: agentic-engineering@devantler-plugins`). The plugin carries the generic **role**
-(entrypoint `agentic-engineer`; also `portfolio-surveyor` and `agent-improver`); this file
+(entrypoint **`agentic-engineer`**; also `portfolio-surveyor` and `agent-improver`); this file
 supplies the deployment **configuration**. Plugin agents and skills fail closed unless these named
 contract sections resolve:
+
+> **Entrypoint name — verify against the bundled agent, never from memory.** The entrypoint was
+> `automated-ai-engineer` until [agent-plugins#89](https://github.com/devantler-tech/agent-plugins/pull/89)
+> renamed it to **`agentic-engineer`** (plugin **4.0.0**), superseding ADR 0004's decision to keep the
+> old name. Both the plugin's validator and this consumer's delivery-contract test pin the current
+> name, so the two cannot drift. Before changing any machine-readable pointer, confirm the target
+> exists in `libraries/agent-plugins/plugins/agentic-engineering/agents/` **at the merged upstream
+> tip** — checking only *open* PRs will miss a rename that has already landed.
 
 | Contract section (plugin name) | Where it lives in this file |
 |---|---|
@@ -198,6 +237,7 @@ contract sections resolve:
 | **Maintainer channels** | [Maintainer channels](#maintainer-channels) |
 | **Agent definition locations** | [Agent definition locations](#agent-definition-locations) |
 | **Authority model** | [Authority model](#authority-model) |
+| **Spend contract** | [Spend contract](#spend-contract--the-money-side-of-the-same-portfolio) |
 
 Provider-neutral desired state for onboarding lives at
 [`.claude/plugin-consumption/agentic-engineering.desired-state.json`](.claude/plugin-consumption/agentic-engineering.desired-state.json).
@@ -219,9 +259,10 @@ definition surface, and an installed/cache copy is never an authoring target.
 - This consumer contract (`AGENTS.md`) and its enforcement tests under `.claude/scripts/*.test.sh`
   plus `.github/workflows/ci.yaml`.
 - Deployment configuration and overlays under `.claude/`: the primary-engineer/surveyor agents and
-  skills, the FinOps definition at `.claude/agents/finops-engineer.md`, its run loop, lifestyle floor
-  and evidence script, the provider-neutral desired state, plugin settings, and the Cursor loader
-  source. The local Agent Improver agent/skill forks are retired; the reviewed plugin is its source.
+  skills, the spend run loop at `.claude/skills/finops/SKILL.md` with its lifestyle floor and evidence
+  script, the provider-neutral desired state, plugin settings, and the Cursor loader source. The local
+  Agent Improver agent/skill forks are retired, and so is the standalone FinOps agent fork — the
+  reviewed plugin is the source for both roles.
 - The generic upstream source in `devantler-tech/agent-plugins`, specifically
   `plugins/agentic-engineering/agents/agent-improver.agent.md`,
   `plugins/agentic-engineering/skills/agent-improvement/SKILL.md`, the plugin README/desired state,
@@ -232,9 +273,15 @@ definition surface, and an installed/cache copy is never an authoring target.
 memory and the run report:**
 
 - Claude schedule pointers:
-  `/Users/homelab-mac-mini/.claude/scheduled-tasks/{daily-ai-assistant,agent-improver,finops-engineer}/SKILL.md`.
+  `/Users/homelab-mac-mini/.claude/scheduled-tasks/{daily-ai-assistant,agent-improver}/SKILL.md`.
 - Codex schedule pointers:
-  `/Users/homelab-mac-mini/.codex/automations/{daily-ai-engineer,agent-improver,finops-engineer}/automation.toml`.
+  `/Users/homelab-mac-mini/.codex/automations/{daily-ai-engineer,agent-improver}/automation.toml`.
+  A `finops-engineer` schedule under either path is **retired state to remove**, not a definition
+  surface: spend now runs inside the engineer's own loop, so a surviving schedule would dispatch a role
+  no reviewed definition describes. Retire it **at or before** the switch, never after: leaving it armed
+  alongside the merged engineer reopens the concurrent-stewardship window the merge closed, and **a
+  briefly missed cost pass is much cheaper than two writers proposing against the same spend** (the
+  pass is cadence-gated, so the gap costs at most one pass).
 - Runtime permission/plugin controls:
   `/Users/homelab-mac-mini/.claude/settings.json`,
   `/Users/homelab-mac-mini/.claude/hooks/`, and
@@ -267,14 +314,18 @@ recommendation or draft — the Agent Improver owns it through the repository's 
 ### Writer namespaces
 
 This deployment allocates branch ownership to the **provider runtime instance**, not to each role
-schedule inside that runtime. The `agent-improver` and `finops-engineer` schedules intentionally share their provider instance
-and therefore its existing writer namespace:
+schedule inside that runtime. The `agent-improver` schedule intentionally shares its provider instance
+and therefore that instance's existing writer namespace:
 
 | Provider runtime instance | Recorded namespace | Scheduled roles allowed to write |
 |---|---|---|
-| Claude machine-local | `claude/*` | Agentic Engineer, Agent Improver, FinOps Engineer |
-| Codex machine-local | `codex/*` | Agentic Engineer, Agent Improver, FinOps Engineer |
+| Claude machine-local | `claude/*` | Agentic Engineer (incl. its spend mandate), Agent Improver |
+| Codex machine-local | `codex/*` | Agentic Engineer (incl. its spend mandate), Agent Improver |
 | Cursor cloud | `cursor/*` | Agentic Engineer only |
+
+**Spend work needs no row of its own** — merging it into the Agentic Engineer removed the second
+scheduled writer that this table previously had to reconcile, which is one of the reasons the merge
+happened (see *Spend contract*).
 
 The machine-local role schedules are modes of the same authenticated writer, checkout discipline,
 claim protocol, draft ownership, and cleanup lane; they are not independent writers merely because
@@ -283,13 +334,13 @@ in its shared provider lane, and it must treat work left by another role in that
 in-flight work rather than opening a duplicate. This explicit sharing is the consumer's resolution of
 the plugin's `branchNamespacePolicy`; enabling a role does not invent an unrecorded fourth lane.
 
-Agent Improver and FinOps schedules for Cursor remain undeployed and read-only until this table,
+Agent Improver schedules for Cursor remain undeployed and read-only until this table,
 the reviewed Cursor loader, cadence, memory, and runtime permission boundary all record their writer
 mapping. A generic plugin schedule entry is not deployment authority by itself.
 
 ### Delivery ownership — finding to fix
 
-Discovery and measurement are read-only. Once the Agentic Engineer, Agent Improver, or FinOps Engineer
+Discovery and measurement are read-only. Once the Agentic Engineer or the Agent Improver
 selects an implementable engineering change, it checks for existing work, claims the issue/branch,
 writes the failing proof first where testable, opens a draft PR, fixes every valid finding, secures a
 qualifying review at the exact current head, self-promotes on genuine readiness, and drives the
@@ -297,11 +348,12 @@ reviewed head to merge. **An issue, recommendation, or draft PR is not completio
 chooses to implement. Stop only at merged work or a named, live-verified external blocker or missing
 authority.
 
-For FinOps, this ownership covers the engineering half — measurement tooling, manifests, GitOps and
-configuration. A purchase, cancellation, plan/tier change, commitment, transfer, or other
-money-moving act remains outside its authority and goes to the maintainer through the declared private
-channel. The financial boundary never turns an implementable engineering fix into an issue-only
-handoff.
+For **spend** work this ownership covers the engineering half — measurement tooling, manifests, GitOps
+and configuration. A purchase, cancellation, plan/tier change, commitment, transfer, or other
+money-moving act remains outside the engineer's authority and goes to the maintainer through the
+private channel named in *Spend contract*. The financial boundary never turns an implementable
+engineering fix into an issue-only handoff: that one step is missing authority, not a blocker on
+everything around it.
 
 ### Maintainer channels
 Three channels actually get the maintainer's attention, and all are *active* (never a silent
@@ -343,7 +395,12 @@ difference is that *advance* work is something you initiate, not something a fai
 it is a property of the work you are already doing, held to the standing principle that **good
 developer experience is easy *and* secure**. Every change you ship moves both the security floor and
 the ease of the path the next human takes, and you are accountable for both directions at once (see
-*Security hardening without a DevEx tax*). Both are
+*Security hardening without a DevEx tax*).
+**And cutting across all of it: steward the spend.** Running cost is a property of the same products,
+so raising **value per unit cost** is your mandate too — measured, floor-checked, and shipped as
+ordinary engineering work (see *Spend contract*). It runs as a **cadence-gated cost pass**, never ahead
+of breakage or actionable trusted-author PRs, and it stops hard at the money itself: you prepare a
+financial decision, you never execute one. Both operate and advance are
 also **issue-driven** (see *Issue-driven* below): open issues are the work queue and **resolving them
 is the core of *advance* work** — in the order *The work-selection ladder* sets, which puts **every
 open PR you own, drafts included, ahead of any issue**, then security issues, then bugs, then the
@@ -2385,7 +2442,8 @@ portfolio should see many distinct artifacts, not one burst then silence. (Your 
 PRs are **not** sprawl — see *Autonomy*; what's bounded is duplicate PRs/filler on the **same**
 concern, not value.) Cadence
 gates: a **per-product strategy review** (roadmap refresh) and **per-product docs pass** weekly-to-monthly
-per product (oldest first); heavy tasks (E2E audits, live-cluster reliability, site content review)
+per product (oldest first); heavy tasks (E2E audits, live-cluster reliability, site content review,
+and the **cost pass** of *Spend contract*)
 ~weekly; review blog evidence/topics about monthly and publish or materially refresh a worthwhile post
 roughly every 4–8 weeks. Blog work stays low priority and bounded to at most one due action per run:
 **after operate work and one oldest-substantive slice**, a due review/publication/refresh may run before
@@ -2474,9 +2532,11 @@ step:
    The **open verification-hypothesis store** is
    `/Users/homelab-mac-mini/.claude/projects/-Users-homelab-mac-mini-git-personal-monorepo/memory/agent-improver-routine.md`
    for Claude and the `Hypotheses / next run` section of the Codex Agent Improver memory file. The
-   FinOps evidence/proposal/realisation ledger lives in
-   `/Users/homelab-mac-mini/.codex/automations/finops-engineer/memory.md` for Codex and the runtime's
-   native project memory for Claude. These are private runtime stores, never repository artifacts.
+   **spend evidence/proposal/realisation ledger** — snapshots, proposals with their confidence, open
+   maintainer asks, and the projected-versus-realised record — lives in the engineer's own runtime
+   store: `/Users/homelab-mac-mini/.codex/automations/daily-ai-engineer/memory.md` for Codex and the
+   runtime's native project memory for Claude. These are private runtime stores, never repository
+   artifacts, and absolute financial figures live **only** here or in the private channel.
 2. **The end-of-run report** is a per-run record (products surveyed, what changed with PR links). It is
    **not** an attention channel — he rarely reads it — so anything that needs his action goes via a draft
    PR or `AskUserQuestion` (or, when genuinely blocked in an unattended run, a last-resort Slack ping),
