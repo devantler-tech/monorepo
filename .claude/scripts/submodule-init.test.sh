@@ -142,6 +142,18 @@ report "linked worktree: submodule gitdir lives under the worktree admin dir" \
 out="$(cd "$c5/super-wt" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "linked worktree: --check passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 
+# Cleanup is scoped to the probe's own admin entry (#2460), and `module_dir` resolves differently in
+# this layout (.git/worktrees/<wt>/modules/<path>) — so prove the scoped removal lands in the RIGHT
+# place here too, or repeated runs would silently accumulate entries the old repo-wide prune used to
+# sweep. Several runs, because a single one cannot show accumulation.
+for _ in 1 2 3; do (cd "$c5/super-wt" && "$helper" --check >/dev/null 2>&1) || true; done
+c5_mdir="$(cd "$c5/super-wt/sub" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+shopt -s nullglob
+c5_left=("$c5_mdir/worktrees"/probe-iso-*)
+shopt -u nullglob
+report "linked worktree: repeated --check leaves no probe admin entries (scoped cleanup)" \
+  "$([[ ${#c5_left[@]} -eq 0 ]] && echo yes || echo no)" "mdir=$c5_mdir leftover=${c5_left[*]:-none}"
+
 # 6. Path comparison is by filesystem IDENTITY, not by spelling (#2457). The live defect was a
 #    worktree recorded as `.Codex/…` and reported by git as `.codex/…` — one inode on a
 #    case-insensitive volume, string-compared unequal, reported as ISOLATION BROKEN on a tree that
@@ -203,12 +215,112 @@ else
   echo "SKIP: case-only comparison — filesystem is case-sensitive (covered by the symlink case above)"
 fi
 
-# NOTE — the emptiness guard above is deliberately covered at the HELPER level only. Driving it through
-# `--check` end-to-end does not work today, and not because the guard is wrong: `probe` runs
-# `git worktree prune` before `check_existing_worktrees`, so an unverifiable worktree's admin entry is
-# deleted before the sweep meant to flag it, and `--check` reports the submodule isolated. That is a
-# separate fail-open tracked in monorepo#2460 — asserting the end-to-end behaviour here would pin the
-# bug rather than the fix.
+# 7. #2460 — an UNVERIFIABLE linked worktree must fail --check CLOSED, and the check must not destroy
+#    the evidence it reads. `probe` used to run a repository-wide `git worktree prune` BEFORE
+#    `check_existing_worktrees`; prune drops the admin entry of any worktree that is missing OR merely
+#    unverifiable, so the sweep found nothing and reported `isolated ✓` on a colliding tree.
+#    The fixture makes the worktree UNSEARCHABLE (chmod 0400): `-d` still passes, so the entry is not
+#    skipped as "missing", while both `cd` and `git -C` fail — i.e. genuinely unverifiable.
+c7="$tmp/c7"
+mk_super "$c7"
+live_wt="$c7/live-wt"
+git -C "$c7/super/sub" worktree add -q --detach "$live_wt"
+wt_admin="$c7/super/.git/modules/sub/worktrees"
+chmod 0400 "$live_wt"
+# Restore permissions on exit so the EXIT trap's `rm -rf "$tmp"` can actually remove the fixture.
+trap 'chmod -R u+rwx "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
+
+# PRECONDITION: if the platform lets us read the dir anyway (running as root, or a filesystem that
+# ignores the mode), the case under test never arises and the assertions below would pass vacuously.
+if (cd "$live_wt") 2>/dev/null; then
+  echo "SKIP: #2460 end-to-end — this platform can still enter a 0400 directory (vacuous otherwise)"
+else
+  out="$(cd "$c7/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+  report "unverifiable worktree: --check exits non-zero (fails closed)" \
+    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+  report "unverifiable worktree: reports ISOLATION BROKEN and names it" \
+    "$(grep -q 'ISOLATION BROKEN' <<<"$out" && grep -q 'live-wt' <<<"$out" && echo yes || echo no)" "$out"
+  report "unverifiable worktree: never reports the submodule isolated" \
+    "$(grep -q 'sub — isolated' <<<"$out" && echo no || echo yes)" "$out"
+  # The evidence-destruction half: the sibling's admin entry must SURVIVE the check.
+  report "unverifiable worktree: the sibling's admin entry survives --check (not pruned)" \
+    "$([[ -e "$wt_admin/live-wt" ]] && echo yes || echo no)" "$(ls "$wt_admin" 2>&1)"
+fi
+
+# 8. NEGATIVE CONTROL for 7 — the fix must not simply disable cleanup. On a clean tree, --check still
+#    removes its OWN probe entry, leaving no `probe-iso-*` admin dir behind.
+c8="$tmp/c8"
+mk_super "$c8"
+out="$(cd "$c8/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "cleanup: clean tree still passes --check" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+# A fully-cleaned tree may leave no `worktrees` dir at all, so `find` on a missing path must not abort
+# the suite under `set -Eeuo pipefail` — glob instead, and count with no pipeline.
+shopt -s nullglob
+leftover_admin=("$c8/super/.git/modules/sub/worktrees"/probe-iso-*)
+leftover_tree=("$c8/super/sub"/probe-iso-*)
+shopt -u nullglob
+report "cleanup: --check removes its own probe admin entry (no probe-iso-* left)" \
+  "$([[ ${#leftover_admin[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${leftover_admin[*]:-none}"
+report "cleanup: --check leaves no probe worktree directory behind" \
+  "$([[ ${#leftover_tree[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${leftover_tree[*]:-none}"
+# POSITIVE precondition: the two assertions above are pure ABSENCE checks, so they also pass when the
+# helper never ran at all (a non-executable script leaves no probe dirs either). Pin that it ran.
+report "cleanup: the probe actually ran (guards the absence assertions above)" \
+  "$(grep -q 'sub — isolated' <<<"$out" && echo yes || echo no)" "$out"
+
+# 9. #2460 follow-up — the probe self-exclusion must match THIS probe's admin dir by IDENTITY, never
+#    by a path substring. Moving the sweep before cleanup promoted that filter from dead code into the
+#    sweep's only self-exclusion, so an over-broad match became a live fail-open: a genuinely
+#    unverifiable sibling whose path merely CONTAINS `/probe-iso-` was skipped and the submodule
+#    reported isolated ✓.
+c9="$tmp/c9"
+mk_super "$c9"
+mkdir -p "$c9/probe-iso-experiments"
+c9_wt="$c9/probe-iso-experiments/live-wt"
+git -C "$c9/super/sub" worktree add -q --detach "$c9_wt"
+chmod 0400 "$c9_wt"
+if (cd "$c9_wt") 2>/dev/null; then
+  echo "SKIP: #2460 self-exclusion — this platform can still enter a 0400 directory (vacuous otherwise)"
+else
+  out="$(cd "$c9/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+  report "probe self-exclusion: an unverifiable sibling under a 'probe-iso-*' PATH still fails --check" \
+    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+  report "probe self-exclusion: it is reported, not silently skipped" \
+    "$(grep -q 'ISOLATION BROKEN' <<<"$out" && echo yes || echo no)" "$out"
+fi
+
+# 10. The scoped removal must stand on its own. `worktree remove` normally deletes the admin entry, so
+#     with it succeeding the new scoped `rm` is unobservable and a mutation test cannot see it. Force
+#     `git worktree remove` to fail with a PATH shim, leaving the scoped rm as the only cleanup path.
+#     Also pins that a PRE-EXISTING sibling entry survives and still works — the harm that removing by
+#     NAME (rather than by resolved admin dir) would cause when git counter-appends on a collision.
+c10="$tmp/c10"
+mk_super "$c10"
+c10_sib="$c10/sibling-wt"
+git -C "$c10/super/sub" worktree add -q --detach "$c10_sib"
+shim="$tmp/shim"
+mkdir -p "$shim"
+real_git="$(command -v git)"
+cat >"$shim/git" <<EOF
+#!/usr/bin/env bash
+# Fail ONLY 'worktree remove'; everything else passes through untouched.
+for a in "\$@"; do [[ "\$a" == "remove" ]] && seen_remove=1; [[ "\$a" == "worktree" ]] && seen_wt=1; done
+if [[ -n "\${seen_wt:-}" && -n "\${seen_remove:-}" ]]; then exit 1; fi
+exec "$real_git" "\$@"
+EOF
+chmod +x "$shim/git"
+out="$(cd "$c10/super" && PATH="$shim:$PATH" "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "scoped cleanup: --check still passes when 'worktree remove' fails" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+shopt -s nullglob
+c10_left=("$c10/super/.git/modules/sub/worktrees"/probe-iso-*)
+shopt -u nullglob
+report "scoped cleanup: the scoped rm alone removes the probe entry (worktree remove failing)" \
+  "$([[ ${#c10_left[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${c10_left[*]:-none}"
+report "scoped cleanup: a pre-existing sibling worktree still exists afterwards" \
+  "$([[ -e "$c10/super/.git/modules/sub/worktrees/sibling-wt" ]] && echo yes || echo no)"
+report "scoped cleanup: that sibling worktree is still FUNCTIONAL (not just present)" \
+  "$(git -C "$c10_sib" rev-parse --show-toplevel >/dev/null 2>&1 && echo yes || echo no)"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
