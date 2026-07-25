@@ -142,6 +142,58 @@ report "linked worktree: submodule gitdir lives under the worktree admin dir" \
 out="$(cd "$c5/super-wt" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "linked worktree: --check passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 
+# 6. Path comparison is by filesystem IDENTITY, not by spelling (#2457). The live defect was a
+#    worktree recorded as `.Codex/…` and reported by git as `.codex/…` — one inode on a
+#    case-insensitive volume, string-compared unequal, reported as ISOLATION BROKEN on a tree that
+#    was fine. Case-folding is only reachable on a case-insensitive filesystem, so the portable proof
+#    uses a SYMLINK alias: two spellings, one inode. Under the old `[ "$got" != "$want" ]` the alias
+#    case fails; the negative controls below are what keep the fix from being a blanket "equal".
+c6="$tmp/c6"
+mk_super "$c6"
+# shellcheck source=/dev/null
+( cd "$c6/super" && . "$helper" ) 2>/dev/null || report "sourcing the helper for unit tests" "no" "could not source"
+
+real="$tmp/c6-real"
+mkdir -p "$real"
+alias_link="$tmp/c6-alias"
+ln -s "$real" "$alias_link"
+other="$tmp/c6-other"
+mkdir -p "$other"
+
+# Run each assertion in a subshell that sources the helper, so `same_dir` is the real implementation.
+same_dir_rc() (
+  cd "$c6/super" || exit 2
+  # shellcheck source=/dev/null
+  . "$helper" >/dev/null 2>&1
+  same_dir "$1" "$2"
+)
+
+same_dir_rc "$real" "$alias_link" && ok=yes || ok=no
+report "same_dir: two spellings of ONE directory compare equal (symlink alias)" "$ok" \
+  "real=$real alias=$alias_link"
+
+same_dir_rc "$real" "$other" && ok=no || ok=yes
+report "same_dir: genuinely different directories compare UNEQUAL (negative control)" "$ok" \
+  "real=$real other=$other"
+
+same_dir_rc "" "$real" && ok=no || ok=yes
+report "same_dir: fails closed on an empty path" "$ok"
+
+same_dir_rc "$real" "$tmp/c6-does-not-exist" && ok=no || ok=yes
+report "same_dir: fails closed on a non-existent path" "$ok"
+
+# The case variant that actually bit, end-to-end — only meaningful where the filesystem folds case,
+# so probe for that rather than assuming the platform.
+case_dir="$tmp/c6-CaseProbe"
+mkdir -p "$case_dir"
+if [[ -d "$tmp/c6-caseprobe" ]]; then
+  same_dir_rc "$case_dir" "$tmp/c6-caseprobe" && ok=yes || ok=no
+  report "same_dir: case-only difference compares equal on a case-insensitive filesystem" "$ok" \
+    "$case_dir vs $tmp/c6-caseprobe"
+else
+  echo "SKIP: case-only comparison — filesystem is case-sensitive (covered by the symlink case above)"
+fi
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

@@ -43,6 +43,19 @@ module_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/
 # the checkout the stray value points at — and repair would then pin the collision back in.
 module_tree() { (cd "$1" 2>/dev/null && pwd -P); }
 
+# Do two paths name the SAME directory? Compare filesystem IDENTITY (device+inode, via `-ef`), never
+# the spelling. `pwd -P` resolves symlinks but NOT case, so on a case-insensitive volume — APFS, the
+# default on the macOS agent host — one directory reached as `.Codex/…` and reported back by git as
+# `.codex/…` string-compares unequal while being the same inode. That produced a false ISOLATION
+# BROKEN on a correctly-isolated submodule, which is worse than merely noisy: it blocks edits to a
+# safe tree AND trains the reader to discount the warning that flags a real collision.
+# Fails closed — an empty or non-existent path is never "the same directory".
+same_dir() {
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  [ "$1" = "$2" ] && return 0
+  [ -e "$1" ] && [ -e "$2" ] && [ "$1" -ef "$2" ]
+}
+
 # An UNINITIALISED submodule is an empty directory. Distinguish that (legitimately skip) from a
 # populated one (must be checked) — see `probe`, where conflating the two was a fail-open.
 is_populated() {
@@ -59,7 +72,7 @@ resolves_to_itself() {
   abs=$(module_tree "$path") || return 1
   top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 1
   top=$(cd "$top" 2>/dev/null && pwd -P) || return 1
-  [ "$top" = "$abs" ]
+  same_dir "$top" "$abs"
 }
 
 # Verify every EXISTING linked worktree of this submodule resolves to its OWN physical path. The main
@@ -87,7 +100,7 @@ check_existing_worktrees() {
     got=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) || got=''
     [ -n "$got" ] && got=$(cd "$got" 2>/dev/null && pwd -P)
     want=$(cd "$wt" && pwd -P)
-    if [ "$got" != "$want" ]; then
+    if ! same_dir "$got" "$want"; then
       warn "$path — ISOLATION BROKEN: existing linked worktree '$wt' resolves to '${got:-<unresolvable>}', not its own path. A parallel session there is colliding — do not edit it."
       rc=1
     fi
@@ -158,7 +171,7 @@ probe() {
   if [ -z "$got" ]; then
     warn "$path — ISOLATION BROKEN: git cannot resolve a worktree created there (dangling core.worktree). Do not edit it."
     rc=1
-  elif [ "$got" != "$want" ]; then
+  elif ! same_dir "$got" "$want"; then
     warn "$path — ISOLATION BROKEN: a worktree there resolves to '$got', not its own path ('$want'). Do not edit it — parallel sessions would collide."
     rc=1
   fi
@@ -215,6 +228,13 @@ init_repair_probe() {
   fi
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
 }
+
+# Stop here when SOURCED, so the self-test can exercise the path-comparison helpers directly. The
+# case-only false positive `same_dir` fixes is only reachable on a case-insensitive volume, so an
+# end-to-end reproduction cannot run on the case-sensitive filesystem CI uses — unit-testing the
+# comparison itself is what gives that fix coverage on every platform. `return` outside a function
+# succeeds only in a sourced context, which is what makes this the standard sourced-vs-executed guard.
+(return 0 2>/dev/null) && return 0
 
 [ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check'
 
