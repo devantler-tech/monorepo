@@ -144,8 +144,11 @@ and do not park it in the run report either, because a decision nobody can recei
 self-blocking the contract forbids. Resolving the destination is a maintainer act and is what flips
 this half on (`AGENTS.md` → *Spend contract* → **Activation gate**).
 
-**PRs carry the engineering change and relative figures only** — "cuts this namespace's compute ~40%"
-is fine; his balances, transactions and totals never appear in a public artifact. Follow the normal
+**PRs carry the engineering change and relative figures only, and every figure states its strength** —
+"models a ~40% compute reduction for this namespace (OpenCost, 3d window)" is fine; the bare
+"cuts this namespace's compute ~40%" is **not**, because it reads as measured when the billing API is
+not wired and every saving figure here is *modelled*. His balances, transactions and totals never
+appear in a public artifact. Follow the normal
 draft-PR discipline: validate, RED/GREEN where there is a testable claim, one concern per PR, and the
 PM-level body shape (*Why* → *What* → issue link).
 
@@ -202,9 +205,13 @@ projected-vs-realised ledger, and findings deliberately **not** acted on with th
 runs need not re-derive the decision — especially floor vetoes).
 
 The report states: window and totals; what changed since last run; proposals shipped with links;
-decisions awaiting him; realised-vs-projected on anything verified; and the measurement gaps still
-open. **Financial detail goes to the private channel or the private operator notes — never a repo file or public
-artifact.**
+realised-vs-projected on anything verified; and the measurement gaps still open. **Financial detail
+goes to the private channel or the private operator notes — never a repo file or public artifact.**
+
+⚠️ **While the private channel is UNRESOLVED, the report carries no financial decision either** — not
+as a pending item, not as an "awaiting him" note. That half is off (step 5), so there is nothing to
+list; a decision parked where he does not read it is the passive self-blocking the contract forbids.
+Report the *measurement* work and the blocked state itself, never the decision.
 
 **Report honestly.** A run that found nothing worth changing says exactly that. There is enormous
 pressure on a cost agent to justify itself with a number every run; inventing one corrupts the

@@ -137,6 +137,11 @@ assert_prose "the cost pass runs steps 1–4 of its run loop and **stops before 
   "Spend contract does not tie the stop to the unresolved channel and the financial-ask boundary"
 assert_prose 'Resolving the channel is what flips the second half on — a maintainer act, never an agent one' \
   "Spend contract does not reserve activation to the maintainer"
+# The unresolved-channel state must read the same everywhere. This site previously said
+# "route anything blocking through the run report", which contradicted the gate by letting a
+# financial decision be parked in the report instead of not being produced at all.
+assert_prose 'route only **non-financial** blockers through the run report' \
+  "Spend contract lets a financial decision be parked in the run report while the channel is unresolved"
 
 for spend_source in "${finops_skill}" "${lifestyle_floor}" "${snapshot}"; do
   [ -f "${spend_source}" ] ||
