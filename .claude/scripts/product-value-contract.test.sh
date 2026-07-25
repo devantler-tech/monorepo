@@ -99,4 +99,15 @@ grep -Fq '      - changes' "${workflow}" ||
 grep -Fq '${{ needs.changes.result }}' "${workflow}" ||
   fail "required aggregate does not evaluate path-detection failures"
 
+# Egress mention neutralisation (#2312) — bots parse raw text; backticks do not inert a mention.
+grep -Fq 'No Markdown construct hides a mention from a bot' "${contract}" ||
+  fail "Egress does not state that Markdown cannot hide mentions from bots (#2312)"
+grep -Fq 'break the token' "${contract}" ||
+  fail "Egress does not require token-breaking to neutralise mentions (#2312)"
+grep -Fq 'zero-width space after' "${contract}" ||
+  fail "Egress lost the zero-width-space token-break example (#2312)"
+if grep -Fq 'wrap the span in backticks' "${contract}"; then
+  fail "Egress still offers backticks as mention neutralisation (#2312)"
+fi
+
 echo "product value contract: all assertions passed"

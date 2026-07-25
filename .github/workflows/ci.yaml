@@ -20,8 +20,12 @@ jobs:
       docs-deps: ${{ steps.filter.outputs.docs-deps }}
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
+      branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
+      self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
+      review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
+      agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
@@ -30,7 +34,7 @@ jobs:
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Detect changes
@@ -77,6 +81,12 @@ jobs:
             safe-clone:
               - '.claude/scripts/safe-clone.sh'
               - '.claude/scripts/safe-clone.test.sh'
+            branch-cleanup:
+              - '.claude/scripts/branch-cleanup.sh'
+              - '.claude/scripts/branch-cleanup.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             submodule-init:
               - '.claude/scripts/submodule-init.sh'
               - '.claude/scripts/submodule-init.test.sh'
@@ -89,17 +99,45 @@ jobs:
             maintainer-preflight:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/maintainer-preflight.test.sh'
+            self-review-contract:
+              - 'AGENTS.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/product-engineering/SKILL.md'
+              - '.claude/scripts/self-review-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            review-provider-loop-contract:
+              - 'AGENTS.md'
+              - '.claude/agents/daily-maintainer.md'
+              - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/scripts/review-provider-loop-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            agent-role-delivery-contract:
+              - 'AGENTS.md'
+              - '.claude/agents/agent-improver.md'
+              - '.claude/agents/finops-engineer.md'
+              - '.claude/plugin-consumption/agentic-engineering.desired-state.json'
+              - '.claude/settings.json'
+              - '.claude/skills/agent-improvement/**'
+              - '.claude/skills/finops/SKILL.md'
+              - '.claude/scripts/agent-role-delivery-contract.test.sh'
+              - 'libraries/agent-plugins'
+              - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
               - '.claude/agents/daily-maintainer.md'
               - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/agents/platform-security-surveyor.md'
+              - '.claude/loaders/cursor-daily-ai-engineer.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/skills/products/agent-skills/SKILL.md'
               - '.claude/skills/products/ksail/SKILL.md'
               - '.claude/skills/products/monorepo/SKILL.md'
+              - '.claude/skills/products/platform/SKILL.md'
               - '.claude/scripts/portfolio-surveyor.test.sh'
-              - '.claude/scripts/release-bot-exemption.sh'
+              - '.claude/scripts/programmed-bot-review-exemption.sh'
               - '.github/workflows/ci.yaml'
             product-value:
               - 'AGENTS.md'
@@ -119,11 +157,11 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: "npm"
@@ -143,11 +181,11 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: "npm"
@@ -167,11 +205,11 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: "npm"
@@ -208,7 +246,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Synthetic session/loader fixtures in an isolated temp HOME — the miner
@@ -231,7 +269,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Fixture-only run behind a stubbed `gh` on PATH — no network, no token,
@@ -253,7 +291,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Fixture-only run behind a poisoned `gh` shim — no network, no token.
@@ -274,13 +312,35 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Self-contained local fixtures (hermetic git config, synthetic secret
       # marker) — no network, no real credentials involved.
       - name: Self-test the safe-clone guard
         run: bash .claude/scripts/safe-clone.test.sh
+
+  test-branch-cleanup:
+    name: Test branch cleanup
+    needs: changes
+    if: needs.changes.outputs.branch-cleanup == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hermetic bare-origin fixture + stubbed `gh` — no network, no token.
+      # Pins open-PR survival and SHA-matched MERGED reaping for cursor/*
+      # (monorepo#2298), plus the codex-namespace refusal.
+      - name: Self-test branch-cleanup namespaces
+        run: bash .claude/scripts/branch-cleanup.test.sh
 
   test-submodule-init:
     needs: changes
@@ -294,7 +354,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Self-contained throwaway git fixtures (hermetic config, file:// submodules)
@@ -312,7 +372,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify the maintainer preflight contract
@@ -327,7 +387,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify the memory hygiene guard
@@ -342,11 +402,56 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify the product value contract
         run: bash .claude/scripts/product-value-contract.test.sh
+
+  test-self-review-contract:
+    name: Test self-review contract
+    needs: changes
+    if: needs.changes.outputs.self-review-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the self-review contract
+        run: bash .claude/scripts/self-review-contract.test.sh
+
+  test-review-provider-loop-contract:
+    name: Test review-provider loop contract
+    needs: changes
+    if: needs.changes.outputs.review-provider-loop-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the review-provider loop contract
+        run: bash .claude/scripts/review-provider-loop-contract.test.sh
+
+  test-agent-role-delivery-contract:
+    name: Test agent-role delivery contract
+    needs: changes
+    if: needs.changes.outputs.agent-role-delivery-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the agent-role delivery contract
+        run: bash .claude/scripts/agent-role-delivery-contract.test.sh
 
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
@@ -357,7 +462,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify the portfolio surveyor contract
@@ -376,15 +481,19 @@ jobs:
       - test-board-add
       - test-flow-scorecard
       - test-safe-clone
+      - test-branch-cleanup
       - test-submodule-init
       - test-maintainer-preflight
       - test-memory-hygiene
+      - test-self-review-contract
+      - test-review-provider-loop-contract
+      - test-agent-role-delivery-contract
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/actions/aggregate-job-checks@47f0d9b632581a613963a2d25c243713f24c32a0 # v10.1.0
+        uses: devantler-tech/actions/aggregate-job-checks@9705e47d7df0b556ec06786247297c0e5020e56d # v10.2.1
         with:
           job-results: >-
             ${{ needs.changes.result }}
@@ -395,8 +504,12 @@ jobs:
             ${{ needs.test-board-add.result }}
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
+            ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
+            ${{ needs.test-self-review-contract.result }}
+            ${{ needs.test-review-provider-loop-contract.result }}
+            ${{ needs.test-agent-role-delivery-contract.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}

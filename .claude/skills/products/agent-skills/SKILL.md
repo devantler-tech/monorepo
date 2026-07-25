@@ -12,7 +12,9 @@ canonical task menu lives in its own `AGENTS.md` `## Maintenance` (this card is 
 - `devantler-tech/agent-skills` — path `libraries/agent-skills` —
   <https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md>
 - `devantler-tech/agent-plugins` — path `libraries/agent-plugins` —
-  <https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md>
+  <https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md>. This monorepo consumes
+  `agentic-engineering@devantler-plugins` via [`.claude/settings.json`](../../../settings.json)
+  (see monorepo#2363 / #2403).
 
 **These are shared libraries — design for reuse, not for one product.** Keep them **generic and
 industry-standard** (the portability principle: a Claude→Copilot/ChatGPT switch should stay painless),
@@ -23,6 +25,10 @@ put product-specific logic here.
 §7): when a generic skill/convention has emerged across 2+ products, extract it here so every product
 inherits it, then migrate consumers. Triage/label issues, drive actionable trusted-author PRs to merge,
 leave automation-owned dependency PRs alone, and keep dependency automation & docs current.
+Programmed `chore(deps): update agent skills` PRs are the no-review exception defined in the root
+contract only when `.claude/scripts/programmed-bot-review-exemption.sh` classification succeeds:
+let required CI and auto-merge decide accepted exemptions, and never spend a review lane on them.
+Route classifier failures, non-matching PRs, and lookalikes through the normal review process.
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md).
 
