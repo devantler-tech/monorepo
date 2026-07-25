@@ -271,14 +271,23 @@ definition surface, and an installed/cache copy is never an authoring target.
     their manifest/contract validation. These carry **no** `metadata.github-repo`.
   - **`devantler-tech/agent-skills`** authors the bundled *skills*, including `agent-improvement/`.
     🔴 The copy at `plugins/agentic-engineering/skills/agent-improvement/SKILL.md` carries
-    `metadata.github-repo: …/agent-skills` and is re-pulled by the `update-agent-skills` workflow, so
-    editing it there is **silently reverted** — no conflict, no CI failure, no signal. It is a synced
-    artifact, **not** an authoring surface.
+    `metadata.github-repo: https://github.com/devantler-tech/agent-skills` and is re-pulled by the
+    `update-agent-skills` workflow, so editing it there is **silently reverted** — no conflict, no CI
+    failure, no signal. It is a synced artifact, **not** an authoring surface.
 
-  Verify with `grep -l "github-repo" plugins/*/skills/*/SKILL.md` (synced) versus
-  `grep -L "github-repo" plugins/*/agents/*.agent.md` (authored here). Change generic behaviour in the
-  **owning** repository first, merge it, then update this consumer's `libraries/agent-plugins` gitlink
-  and copied desired state.
+  Verify **from the monorepo root**, matching the key *and its value* — a bare `github-repo` test only
+  proves the file is synced from *somewhere*, not from the repo you are about to open a PR against:
+
+  ```sh
+  # synced — edit these upstream, in the repo the value names:
+  grep -l 'github-repo: https://github.com/devantler-tech/agent-skills' \
+    libraries/agent-plugins/plugins/*/skills/*/SKILL.md
+  # authored in agent-plugins — safe to edit there:
+  grep -L 'github-repo' libraries/agent-plugins/plugins/*/agents/*.agent.md
+  ```
+
+  Change generic behaviour in the **owning** repository first, merge it, then update this consumer's
+  `libraries/agent-plugins` gitlink and copied desired state.
 
 **Runtime-local surfaces — back up before editing, verify in place, and record before/after in native
 memory and the run report:**

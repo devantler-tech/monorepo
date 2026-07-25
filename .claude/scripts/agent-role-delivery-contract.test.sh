@@ -53,19 +53,31 @@ grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constit
 # The bundled SKILL.md is SYNCED from devantler-tech/agent-skills (it carries
 # metadata.github-repo and the update-agent-skills workflow re-pulls it), so an edit there
 # is silently reverted. The consumer listed it as an authoring surface until 2026-07-25,
-# which would route a generic fix into a file that discards it. Assert the correct owner is
-# named, and that the synced path is not presented as the place to change behaviour.
+# which would route a generic fix into a file that discards it.
+#
+# Both assertions name the bundled skill PATH. Generic fragments ("authors the bundled",
+# "not an authoring surface") could otherwise be satisfied by unrelated ownership prose
+# elsewhere in the contract, which would let the specific routing rule be deleted while the
+# guard stayed green.
+skill_path='plugins/agentic-engineering/skills/agent-improvement/SKILL.md'
 assert_prose "\`devantler-tech/agent-skills\`** authors the bundled" \
   "consumer does not name agent-skills as the owner of bundled skills"
-assert_prose "not** an authoring surface" \
+assert_prose "${skill_path}\` carries" \
+  "consumer does not name the bundled agent-improvement/SKILL.md as the synced copy"
+assert_prose "It is a synced artifact, **not** an authoring surface" \
   "consumer does not mark the synced SKILL.md copy as a non-authoring surface"
 
 # Provenance is a per-FILE question: the same plugin directory holds synced skills and
 # locally-authored agents, so a per-directory rule is wrong in one direction or the other.
+#
+# Match the github-repo KEY TOGETHER WITH ITS VALUE. A bare `grep -q github-repo` proves only
+# that the file is synced from SOMEWHERE — it would stay green if the upstream moved to a
+# different repository, which is exactly the case where the contract's routing text becomes
+# wrong and this guard is the only thing that would notice.
 bundled_skill="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/skills/agent-improvement/SKILL.md"
 if [ -f "${bundled_skill}" ]; then
-  grep -q 'github-repo' "${bundled_skill}" ||
-    fail "bundled agent-improvement/SKILL.md no longer carries sync provenance — re-check whether it is still synced before trusting the contract text"
+  grep -q 'github-repo: https://github.com/devantler-tech/agent-skills' "${bundled_skill}" ||
+    fail "bundled agent-improvement/SKILL.md no longer declares devantler-tech/agent-skills as its upstream — re-check the owning repository before trusting the contract text"
 fi
 
 # Every machine-readable entrypoint pointer must resolve to an agent the pinned plugin
