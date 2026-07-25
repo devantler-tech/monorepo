@@ -142,6 +142,74 @@ report "linked worktree: submodule gitdir lives under the worktree admin dir" \
 out="$(cd "$c5/super-wt" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "linked worktree: --check passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 
+# 6. Path comparison is by filesystem IDENTITY, not by spelling (#2457). The live defect was a
+#    worktree recorded as `.Codex/…` and reported by git as `.codex/…` — one inode on a
+#    case-insensitive volume, string-compared unequal, reported as ISOLATION BROKEN on a tree that
+#    was fine. Case-folding is only reachable on a case-insensitive filesystem, so the portable proof
+#    uses a SYMLINK alias: two spellings, one inode. Under the old `[ "$got" != "$want" ]` the alias
+#    case fails; the negative controls below are what keep the fix from being a blanket "equal".
+real="$tmp/c6-real"
+mkdir -p "$real"
+alias_link="$tmp/c6-alias"
+ln -s "$real" "$alias_link"
+other="$tmp/c6-other"
+mkdir -p "$other"
+
+# Sourcing must be side-effect-free (the guard sits above every top-level side effect), so it needs no
+# fixture repo and must not move or kill the caller's shell.
+same_dir_rc() (
+  # shellcheck source=/dev/null
+  . "$helper" >/dev/null 2>&1
+  same_dir "$1" "$2"
+)
+
+# PRECONDITION, not a nicety: `same_dir_rc` runs in a subshell, so if sourcing failed to define
+# `same_dir` at all, command-not-found exits non-zero and every "compare UNEQUAL" assertion below
+# would report PASS against nothing. Pin that the helper is really there first.
+# shellcheck source=/dev/null
+( . "$helper" >/dev/null 2>&1 && declare -f same_dir >/dev/null ) && ok=yes || ok=no
+report "same_dir: helper is defined when the script is sourced (guards the controls below)" "$ok"
+
+same_dir_rc "$real" "$alias_link" && ok=yes || ok=no
+report "same_dir: two spellings of ONE directory compare equal (symlink alias)" "$ok" \
+  "real=$real alias=$alias_link"
+
+same_dir_rc "$real" "$other" && ok=no || ok=yes
+report "same_dir: genuinely different directories compare UNEQUAL (negative control)" "$ok" \
+  "real=$real other=$other"
+
+same_dir_rc "" "$real" && ok=no || ok=yes
+report "same_dir: fails closed on one empty path" "$ok"
+
+# THE fail-open the emptiness guard exists for, and the only line in the diff that changes a reachable
+# outcome: `[ "" = "" ]` is TRUE, so without the guard two empty paths compare as "the same directory"
+# and an unverifiable worktree is reported isolated. The one-empty case above passes either way
+# (`[ -e "" ]` catches it), so it does NOT cover this.
+same_dir_rc "" "" && ok=no || ok=yes
+report "same_dir: fails closed when BOTH paths are empty (the pre-existing fail-open)" "$ok"
+
+same_dir_rc "$real" "$tmp/c6-does-not-exist" && ok=no || ok=yes
+report "same_dir: fails closed on a non-existent path" "$ok"
+
+# The case variant that actually bit, end-to-end — only meaningful where the filesystem folds case,
+# so probe for that rather than assuming the platform.
+case_dir="$tmp/c6-CaseProbe"
+mkdir -p "$case_dir"
+if [[ -d "$tmp/c6-caseprobe" ]]; then
+  same_dir_rc "$case_dir" "$tmp/c6-caseprobe" && ok=yes || ok=no
+  report "same_dir: case-only difference compares equal on a case-insensitive filesystem" "$ok" \
+    "$case_dir vs $tmp/c6-caseprobe"
+else
+  echo "SKIP: case-only comparison — filesystem is case-sensitive (covered by the symlink case above)"
+fi
+
+# NOTE — the emptiness guard above is deliberately covered at the HELPER level only. Driving it through
+# `--check` end-to-end does not work today, and not because the guard is wrong: `probe` runs
+# `git worktree prune` before `check_existing_worktrees`, so an unverifiable worktree's admin entry is
+# deleted before the sweep meant to flag it, and `--check` reports the submodule isolated. That is a
+# separate fail-open tracked in monorepo#2460 — asserting the end-to-end behaviour here would pin the
+# bug rather than the fix.
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

@@ -49,6 +49,24 @@ grep -Fq '### Authority model' "${constitution}" ||
   fail "consumer does not define Authority model"
 grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constitution}" ||
   fail "consumer does not name the upstream Agent Improver source"
+
+# The role's PROSE name is "Agentic Engineer"; the plugin's machine-readable entrypoint is
+# deliberately still `automated-ai-engineer` (upstream ADR 0004 rejected renaming it). #2454
+# renamed these references to a non-existent `agentic-engineer` agent, so pin every
+# machine-readable pointer to the name the plugin actually bundles.
+jq -e '
+  .spec.source.entrypoint == "automated-ai-engineer"
+  and (.spec.roles | has("automated-ai-engineer"))
+  and (.spec.roles | has("agentic-engineer") | not)
+  and .spec.runtime.scheduler.schedules["automated-ai-engineer"].definitionFrom
+      == "plugin:agentic-engineering/automated-ai-engineer"
+  and (.spec.runtime.scheduler.schedules | has("agentic-engineer") | not)
+' "${desired_state}" > /dev/null ||
+  fail "desired state must point at the bundled automated-ai-engineer entrypoint, not agentic-engineer"
+# Backticks are literal Markdown, not command substitution.
+# shellcheck disable=SC2016
+assert_prose 'entrypoint **`automated-ai-engineer`**' \
+  "consumer names a plugin entrypoint other than the bundled automated-ai-engineer"
 grep -Fq 'Agent Improver scorecard store' "${constitution}" ||
   fail "Memory does not name the Agent Improver scorecard store"
 grep -Fq 'open verification-hypothesis store' "${constitution}" ||

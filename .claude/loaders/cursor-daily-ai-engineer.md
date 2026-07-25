@@ -2,7 +2,8 @@
 
 The **third deployed instance** of the Agentic Engineer brain, running as a
 [Cursor Automation](https://cursor.com/docs/cloud-agent/automations) (cloud agent) alongside the two
-machine-local instances (Claude Code on even hours, ChatGPT/Codex on uneven).
+machine-local instances (Claude Code and ChatGPT/Codex, whose per-hour split is the table in
+`AGENTS.md` → *Cadence & focus*).
 
 Cursor Automations have **no local config file and no CLI** — they live server-side and are created in
 the Cursor Agents Window, at [cursor.com/automations](https://cursor.com/automations), or via Cursor's
@@ -22,11 +23,14 @@ this file and the deployed automation is a defect to fix here first.
 | Tools | `prComment` — add others only when a run demonstrably needs them |
 | Scope | **Private** automation (not team-scoped) — see *Identity* below |
 
-**Why that cron.** The local pair already covers every hour (Claude `0 */2`, Codex `0 1-23/2`), so
-there is no free hourly slot. `:30` past uneven hours leaves each instance its own 2-hour gap and puts
-Cursor 30 minutes *after* Codex, so a claim either sibling just pushed is already visible when Cursor
-selects its issue. Changing this is a one-field edit in the Automations UI — but keep the offset, since
-a third instance selecting simultaneously with a sibling is what the claim protocol exists to prevent.
+**Why that cron.** Both machine-local Agentic Engineer lanes now dispatch on **even** hours (see the
+*Cadence & focus* table), so `:30` past **uneven** hours puts Cursor squarely between them — never
+simultaneous with a sibling, and always ~90 minutes after the last local run, so a claim either sibling
+just pushed is already visible when Cursor selects its issue. It also covers the schedule's one local
+gap: with no local Agentic Engineer at 18:00, the 17:30 and 19:30 Cursor runs are what keep the
+16:00 → 20:00 stretch swept. Changing this is a one-field edit in the Automations UI — but keep the
+offset, since a third instance selecting simultaneously with a sibling is exactly what the claim
+protocol cannot arbitrate across lanes.
 
 ## Instructions (paste this into the automation's prompt)
 

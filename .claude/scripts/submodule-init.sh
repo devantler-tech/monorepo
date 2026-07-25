@@ -28,13 +28,6 @@ die() {
 
 warn() { printf 'submodule-init: %s\n' "$1" >&2; }
 
-# NEVER compute a submodule's gitdir — ask git. Run from a linked superproject worktree (the documented
-# execution model for agent runs), git puts each submodule's gitdir under
-# `.git/worktrees/<super-wt>/modules/<path>`, NOT under `.git/modules/<path>` — and that is where the
-# stray `core.worktree` lands too. Any assumed path is wrong exactly where this script matters most.
-super_root=$(git rev-parse --show-toplevel) || die 'not inside a git repository'
-cd "$super_root"
-
 # The gitdir git is ACTUALLY using for this submodule.
 module_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null; }
 
@@ -42,6 +35,34 @@ module_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/
 # `rev-parse --show-toplevel`: that is computed FROM `core.worktree`, so in the broken case it returns
 # the checkout the stray value points at — and repair would then pin the collision back in.
 module_tree() { (cd "$1" 2>/dev/null && pwd -P); }
+
+# Do two paths name the SAME directory? Compare filesystem IDENTITY (device+inode, via `-ef`), never
+# the spelling.
+#
+# Two independent reasons the spellings legitimately differ, and BOTH are load-bearing:
+#
+# 1. CASE, and this is shell-specific — measured, because the wrong shell hides it. Under **bash**
+#    (this script's shebang, 3.2.57 on the host) `pwd -P` resolves symlinks but does NOT fold case:
+#    `cd alpha/beta && pwd -P` prints the typed `alpha/beta`. Under **zsh** the same command prints
+#    the on-disk `Alpha/Beta`. So on a case-insensitive volume (APFS, the host default) a worktree
+#    recorded as `.Codex/…` stays `.Codex/…` here while git reports `.codex/…` — one inode, two
+#    strings, and the old `[ "$got" != "$want" ]` fired. Traced live on `libraries/agent-plugins`:
+#      got  = …/.codex/worktrees/agent-plugins-claude-desktop-83   (git, lowercase)
+#      want = …/.Codex/worktrees/agent-plugins-claude-desktop-83   (bash pwd -P, case preserved)
+#    Reproducing this in zsh shows both sides folded and NO mismatch — verify in bash, not the
+#    interactive shell.
+# 2. An unreadable worktree makes BOTH sides empty (`-d` passes, `cd` and `git -C` both fail), and
+#    `[ "" = "" ]` is TRUE — so without the emptiness guard below this returns "same directory" and
+#    `--check` reports an unverifiable worktree as isolated. That fail-open predates this helper.
+#
+# A false positive here is a safety regression, not just noise: it blocks edits to a safe tree AND
+# trains the reader to discount the warning that flags a real collision. So fail CLOSED — an empty or
+# non-existent path is never "the same directory".
+same_dir() {
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  [ "$1" = "$2" ] && return 0
+  [ -e "$1" ] && [ -e "$2" ] && [ "$1" -ef "$2" ]
+}
 
 # An UNINITIALISED submodule is an empty directory. Distinguish that (legitimately skip) from a
 # populated one (must be checked) — see `probe`, where conflating the two was a fail-open.
@@ -59,7 +80,7 @@ resolves_to_itself() {
   abs=$(module_tree "$path") || return 1
   top=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 1
   top=$(cd "$top" 2>/dev/null && pwd -P) || return 1
-  [ "$top" = "$abs" ]
+  same_dir "$top" "$abs"
 }
 
 # Verify every EXISTING linked worktree of this submodule resolves to its OWN physical path. The main
@@ -87,7 +108,7 @@ check_existing_worktrees() {
     got=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) || got=''
     [ -n "$got" ] && got=$(cd "$got" 2>/dev/null && pwd -P)
     want=$(cd "$wt" && pwd -P)
-    if [ "$got" != "$want" ]; then
+    if ! same_dir "$got" "$want"; then
       warn "$path — ISOLATION BROKEN: existing linked worktree '$wt' resolves to '${got:-<unresolvable>}', not its own path. A parallel session there is colliding — do not edit it."
       rc=1
     fi
@@ -158,7 +179,7 @@ probe() {
   if [ -z "$got" ]; then
     warn "$path — ISOLATION BROKEN: git cannot resolve a worktree created there (dangling core.worktree). Do not edit it."
     rc=1
-  elif [ "$got" != "$want" ]; then
+  elif ! same_dir "$got" "$want"; then
     warn "$path — ISOLATION BROKEN: a worktree there resolves to '$got', not its own path ('$want'). Do not edit it — parallel sessions would collide."
     rc=1
   fi
@@ -215,6 +236,27 @@ init_repair_probe() {
   fi
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
 }
+
+# Stop here when SOURCED, so the self-test can exercise the path-comparison helpers directly. The
+# case-only false positive `same_dir` fixes needs a case-insensitive volume, so an end-to-end
+# reproduction cannot run on the filesystem CI uses — unit-testing the comparison itself is what
+# gives the fix coverage on every platform.
+#
+# This sits ABOVE every top-level side effect below deliberately: sourcing must not `cd` the caller,
+# turn on `errexit`/`pipefail` in the caller's shell, or — from a non-git directory — `die` and take
+# the caller's shell down with it. Definitions above are all this needs to export.
+#
+# In bash, `(return 0 2>/dev/null)` succeeds only when the file is being sourced (the subshell is what
+# makes it work); executed, `return` outside a function fails. This idiom is bash-specific — fine
+# here, since the shebang pins bash and CI runs the tests under bash.
+(return 0 2>/dev/null) && return 0
+
+# NEVER compute a submodule's gitdir — ask git. Run from a linked superproject worktree (the documented
+# execution model for agent runs), git puts each submodule's gitdir under
+# `.git/worktrees/<super-wt>/modules/<path>`, NOT under `.git/modules/<path>` — and that is where the
+# stray `core.worktree` lands too. Any assumed path is wrong exactly where this script matters most.
+super_root=$(git rev-parse --show-toplevel) || die 'not inside a git repository'
+cd "$super_root"
 
 [ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check'
 
