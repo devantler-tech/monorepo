@@ -216,17 +216,17 @@ This deployment **consumes** the `agentic-engineering` plugin from
 [`devantler-tech/agent-plugins`](https://github.com/devantler-tech/agent-plugins) — declared in
 [`.claude/settings.json`](.claude/settings.json) (`extraKnownMarketplaces` +
 `enabledPlugins: agentic-engineering@devantler-plugins`). The plugin carries the generic **role**
-(entrypoint **`automated-ai-engineer`**; also `portfolio-surveyor` and `agent-improver`); this file
+(entrypoint **`agentic-engineer`**; also `portfolio-surveyor` and `agent-improver`); this file
 supplies the deployment **configuration**. Plugin agents and skills fail closed unless these named
 contract sections resolve:
 
-> ⚠️ **The entrypoint is `automated-ai-engineer`, not `agentic-engineer`.** *Agentic Engineer* is this
-> role's **prose name** (renamed 2026-07-21); the plugin's **machine-readable entrypoint deliberately
-> did not follow** — upstream ADR 0004 rejected renaming it, so no `agentic-engineer` agent exists in
-> the plugin and the manifest validator rejects any other entrypoint value. #2454 renamed this
-> reference and the desired state's `source.entrypoint`/role key to `agentic-engineer`, which pointed
-> them at nothing; repaired here. Keep the two names distinct: rename the prose freely, never the
-> entrypoint.
+> **Entrypoint name — verify against the bundled agent, never from memory.** The entrypoint was
+> `automated-ai-engineer` until [agent-plugins#89](https://github.com/devantler-tech/agent-plugins/pull/89)
+> renamed it to **`agentic-engineer`** (plugin **4.0.0**), superseding ADR 0004's decision to keep the
+> old name. Both the plugin's validator and this consumer's delivery-contract test pin the current
+> name, so the two cannot drift. Before changing any machine-readable pointer, confirm the target
+> exists in `libraries/agent-plugins/plugins/agentic-engineering/agents/` **at the merged upstream
+> tip** — checking only *open* PRs will miss a rename that has already landed.
 
 | Contract section (plugin name) | Where it lives in this file |
 |---|---|

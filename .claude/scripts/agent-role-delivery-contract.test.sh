@@ -50,23 +50,29 @@ grep -Fq '### Authority model' "${constitution}" ||
 grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constitution}" ||
   fail "consumer does not name the upstream Agent Improver source"
 
-# The role's PROSE name is "Agentic Engineer"; the plugin's machine-readable entrypoint is
-# deliberately still `automated-ai-engineer` (upstream ADR 0004 rejected renaming it). #2454
-# renamed these references to a non-existent `agentic-engineer` agent, so pin every
-# machine-readable pointer to the name the plugin actually bundles.
-jq -e '
-  .spec.source.entrypoint == "automated-ai-engineer"
-  and (.spec.roles | has("automated-ai-engineer"))
-  and (.spec.roles | has("agentic-engineer") | not)
-  and .spec.runtime.scheduler.schedules["automated-ai-engineer"].definitionFrom
-      == "plugin:agentic-engineering/automated-ai-engineer"
-  and (.spec.runtime.scheduler.schedules | has("agentic-engineer") | not)
+# Every machine-readable entrypoint pointer must resolve to an agent the pinned plugin
+# actually BUNDLES. Derived from the submodule rather than hard-coded, so the next upstream
+# rename cannot leave this consumer pointing at a file that no longer exists — which is
+# exactly what happened when the entrypoint moved automated-ai-engineer -> agentic-engineer
+# (agent-plugins#89, plugin 4.0.0) and the two sides were updated on different axes.
+plugin_agents="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/agents"
+entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
+if [ -d "${plugin_agents}" ]; then
+  [ -f "${plugin_agents}/${entrypoint}.agent.md" ] ||
+    fail "desired state entrypoint '${entrypoint}' does not resolve to a bundled agent in ${plugin_agents}"
+else
+  echo "agent-role delivery contract: NOTE — submodule not initialised; entrypoint resolution skipped" >&2
+fi
+jq -e --arg e "${entrypoint}" '
+  (.spec.roles | has($e))
+  and .spec.runtime.scheduler.schedules[$e].definitionFrom
+      == ("plugin:agentic-engineering/" + $e)
 ' "${desired_state}" > /dev/null ||
-  fail "desired state must point at the bundled automated-ai-engineer entrypoint, not agentic-engineer"
+  fail "desired state role and schedule keys must match its declared entrypoint '${entrypoint}'"
 # Backticks are literal Markdown, not command substitution.
 # shellcheck disable=SC2016
-assert_prose 'entrypoint **`automated-ai-engineer`**' \
-  "consumer names a plugin entrypoint other than the bundled automated-ai-engineer"
+assert_prose "entrypoint **\`${entrypoint}\`**" \
+  "consumer prose names an entrypoint other than the declared '${entrypoint}'"
 grep -Fq 'Agent Improver scorecard store' "${constitution}" ||
   fail "Memory does not name the Agent Improver scorecard store"
 grep -Fq 'open verification-hypothesis store' "${constitution}" ||
