@@ -74,11 +74,18 @@ assert_prose "It is a synced artifact, **not** an authoring surface" \
 # that the file is synced from SOMEWHERE — it would stay green if the upstream moved to a
 # different repository, which is exactly the case where the contract's routing text becomes
 # wrong and this guard is the only thing that would notice.
+# FAIL CLOSED on a missing file. A `[ -f ] &&` conditional would silently skip the whole
+# assertion if the pinned plugin revision renamed or dropped the skill — leaving AGENTS.md
+# routing edits through a path that no longer exists, with the contract test still green.
+#
+# ANCHOR THE VALUE'S END. An unanchored substring accepts any longer name with the same
+# prefix (`agent-skills-v2`), so it would miss exactly the ownership move it claims to
+# detect. Verified: the probe `…/agent-skills-v2` passes the unanchored form.
 bundled_skill="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/skills/agent-improvement/SKILL.md"
-if [ -f "${bundled_skill}" ]; then
-  grep -q 'github-repo: https://github.com/devantler-tech/agent-skills' "${bundled_skill}" ||
-    fail "bundled agent-improvement/SKILL.md no longer declares devantler-tech/agent-skills as its upstream — re-check the owning repository before trusting the contract text"
-fi
+[ -f "${bundled_skill}" ] ||
+  fail "bundled agent-improvement/SKILL.md is missing at the pinned plugin revision — AGENTS.md routes generic skill edits through this path, so its absence invalidates the contract text"
+grep -qE '^[[:space:]]*github-repo:[[:space:]]*https://github\.com/devantler-tech/agent-skills[[:space:]]*$' "${bundled_skill}" ||
+  fail "bundled agent-improvement/SKILL.md no longer declares exactly devantler-tech/agent-skills as its upstream — re-check the owning repository before trusting the contract text"
 
 # Every machine-readable entrypoint pointer must resolve to an agent the pinned plugin
 # actually BUNDLES. Derived from the submodule rather than hard-coded, so the next upstream

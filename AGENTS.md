@@ -286,8 +286,18 @@ definition surface, and an installed/cache copy is never an authoring target.
   grep -L 'github-repo' libraries/agent-plugins/plugins/*/agents/*.agent.md
   ```
 
-  Change generic behaviour in the **owning** repository first, merge it, then update this consumer's
-  `libraries/agent-plugins` gitlink and copied desired state.
+  Change generic behaviour in the **owning** repository first. The rollout then differs by owner, and
+  **the skills path has an extra hop that is easy to skip**:
+  - *Authored in `agent-plugins`* (agents, README, desired state): merge there, then bump this
+    consumer's `libraries/agent-plugins` gitlink.
+  - *Authored in `agent-skills`* (bundled skills): merge there, **then wait for `update-agent-skills`
+    to re-pull it into `agent-plugins` and for THAT generated PR to merge**, and only then bump the
+    gitlink. Bumping straight after the `agent-skills` merge pins a revision that still carries the
+    **old** skill — the change is real upstream and absent here, which reads as a completed rollout
+    while nothing has actually shipped to this deployment. Confirm by reading the skill's content at
+    the pinned revision, never by the upstream PR being merged.
+
+  Finally, update the copied desired state.
 
 **Runtime-local surfaces — back up before editing, verify in place, and record before/after in native
 memory and the run report:**
