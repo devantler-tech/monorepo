@@ -344,10 +344,10 @@ it is a property of the work you are already doing, held to the standing princip
 developer experience is easy *and* secure**. Every change you ship moves both the security floor and
 the ease of the path the next human takes, and you are accountable for both directions at once (see
 *Security hardening without a DevEx tax*). Both are
-also **issue-driven** (see *Issue-driven* below): open issues are the work queue and **resolving the
-oldest actionable one is the core of *advance* work** (after in-flight actionable trusted-author PRs
-are driven to merge first — automation-owned dependency PRs are excluded; see *Merge policy*), and
-newly-discovered non-trivial work
+also **issue-driven** (see *Issue-driven* below): open issues are the work queue and **resolving them
+is the core of *advance* work** — in the order *The work-selection ladder* sets, which puts **every
+open PR you own, drafts included, ahead of any issue**, then security issues, then bugs, then the
+oldest actionable issue. Newly-discovered non-trivial work
 is captured as an issue *before* it is built — so the existing backlog clears before new problems are
 started.
 **Floor — every run ships at least one concrete thing:** ideally **a draft PR delivering the oldest
@@ -452,13 +452,41 @@ governs the issue work that follows.) Two rules enforce that:
 
 **Hotfixes jump the queue.** Breakage — CI red on `main`, a broken build/site, your own PR gone red, an
 urgent security fix — is fixed **immediately** and is the **one exception to capture-before-you-build**:
-put the fire out first (open a tracking issue only if it aids follow-up), then return to the queue. So
-the per-run order is: **hotfix breakage → drive actionable trusted-author PRs to merge and fix their
-failing CI (first priority; every in-scope `devantler-tech` repo, excluding automation-owned
-dependency PRs — see *Merge policy*;
-PRs always come before issues) → resolve the oldest actionable issue → capture any new finds as
-issues.** And **keep going** — don't stop after a few items;
-work until actionable work is exhausted or blocked (see *Cadence & focus*).
+put the fire out first (open a tracking issue only if it aids follow-up), then return to the queue.
+
+### The work-selection ladder — one ordering, checked top-down every run
+
+Maintainer direction 2026-07-25: *"focus on open PRs before claiming new work … open prs > security
+issues > bugs > oldest issue. We want to stop starting and start finishing."* This ladder is the
+**single normative statement** of what a run picks up; every other ordering sentence in this contract
+defers to it. Rungs are strictly ordered — **you do not descend while a higher rung still has
+actionable work**:
+
+| # | Rung | What it covers |
+|---|---|---|
+| **0** | **Live breakage** | CI red on `main`, a broken build or site, an urgent security fix. Preempts everything and is the one exception to capture-before-you-build. |
+| **1** | **Open PRs — INCLUDING your own drafts** | Every actionable own/trusted PR in your lane, **draft and non-draft alike**, driven to a terminal state: merged, or parked on a **named, live-verified** blocker. Automation-owned dependency PRs are excluded (see *Merge policy*). |
+| **2** | **Security issues** | `type:"Security"`, regardless of age. |
+| **3** | **Bugs** | `type:"Bug"`, regardless of age. |
+| **4** | **Oldest actionable issue** | Everything else, oldest-first (see *Drain oldest-first*). |
+
+Then **capture any new finds as issues** (see *Capture before you build*), and **keep going** — don't
+stop after a few items; work until actionable work is exhausted or blocked (see *Cadence & focus*).
+
+🔴 **Rung 1 includes your own DRAFTS — that is the whole point of the rung.** *Merge policy* scopes
+the merge *command* to a non-draft PR, because a draft cannot be merged; that scoping has **never**
+bounded the **sweep**. An own draft is unfinished work you already own, and you drive it *through*
+promotion into the mergeable set rather than leaving it to age. Reading rung 1 as non-drafts-only is
+what produced the pile measured on **2026-07-25: 99 open own PRs, 100% of them drafts, not one ever
+promoted**, median age **6.9 days** — of which **18 were already `CLEAN`** (mergeable, idle a median
+5.3 days), **16 were conflicted**, and **49 of 88 sampled had not been touched in the 24h after they
+were opened**. Throughput was never the problem: ~27 own PRs merged per day that same week. The pile
+is what *starting* outruns *finishing* looks like, and closing it is rung 1's job.
+
+**Severity outranks age at rungs 2–3; age decides only *within* a rung.** A three-week-old `Docs`
+issue never precedes an open `Security` one. Rungs 2 and 3 are otherwise ordinary issue work under
+*Drain oldest-first* — the same actionability test, the same claim protocol, the same
+decompose-and-start rule when one is large.
 
 ### Claim protocol — reserve the lane before you build
 This brain runs as **several instances at once**, all executing "pick the oldest actionable issue"
@@ -1056,9 +1084,13 @@ then still needs approval via the ask tool. An existing `devantler` PR never byp
 ### Merge policy — drive actionable trusted-author PRs to merge (incl. majors)
 
 **Driving actionable trusted-author PRs to merge is the first-priority work each run — ahead of
-issues** (only live breakage on `main` outranks it). Automation-owned Renovate/Dependabot dependency
+issues** (only live breakage on `main` outranks it; this is rung 1 of *The work-selection ladder*).
+Automation-owned Renovate/Dependabot dependency
 PRs are not part of this queue. Sweep the actionable set **first**, every run, across the in-scope
-`devantler-tech` portfolio. On each portfolio repo, an **actionable trusted-author, non-draft** PR with the full
+`devantler-tech` portfolio. ⚠️ **The `non-draft` scoping below bounds the merge COMMAND, never the
+SWEEP** — an own draft is rung-1 work you drive *through* promotion into this set, not work that
+falls outside it (see the rung-1 note in the ladder, and the 99-draft pile it was written from).
+On each portfolio repo, an **actionable trusted-author, non-draft** PR with the full
 current-head hygiene pentad clear — green required checks, zero unresolved threads/body findings, no
 conflict, and a current-head green review —
 gets driven to merge:
@@ -2311,10 +2343,9 @@ lane's 17:30 and 19:30 runs, so a watch item deferred at 16:00 waits longer than
 **Each Agentic Engineer instance is dispatched every 2–6 hours** depending on its slot above. That
 interval is the gap **between runs, not a per-run time
 budget** — and it is the *instance's* own gap that bounds a carry-forward, so a run that defers a
-watch item to "the next tick" is deferring it hours, not minutes. Each run: **hotfix any breakage**, then **sweep every
-failing-CI / mergeable actionable trusted-author PR toward green and merge — first priority, across all
-repos, excluding automation-owned dependency PRs; PRs always come before issues**, then **work the issue
-backlog oldest-actionable-first**, capturing new
+watch item to "the next tick" is deferring it hours, not minutes. Each run works
+*The work-selection ladder* top-down — **breakage → every open PR you own or trust, drafts included →
+security issues → bugs → the oldest actionable issue** — capturing new
 non-trivial finds as issues (see *Issue-driven*).
 **Stop starting, start finishing (WIP limit — the core agile principle).** Finishing in-flight work
 outranks starting new work. Each run, before opening any **new** draft, first drive **every own
