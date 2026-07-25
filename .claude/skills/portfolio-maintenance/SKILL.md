@@ -370,13 +370,14 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    every push) is your duty; the full request discipline (**one provider request at a time**, in
    CodeRabbit > Codex > Cursor Bugbot order, and **stop on its first successful current-head review**;
    a reaction emoji earns a generous bounded wait for the substantive response, while no reaction
-   means inspect or retry promptly; before every trigger post a separate disclosed current-head
-   reservation marker, re-read authenticated reservations, and let the oldest `created_at` then
-   lowest comment id win before posting the provider request marker (each request marker names its
-   provider and winning reservation id; pair Cursor's marker to the next exact-author bare trigger,
-   ignoring interleaved other-author and reservation-only comments); accept markers only from exact author `devantler`
-   with the structural agent disclosure; the winning request supersedes every losing reservation in
-   that provider/head election; persist a completed no-gate outcome, or an authenticated
+   means inspect or retry promptly; put the current-head request marker in the **same comment as the
+   trigger**, re-reading the repository-visible current-head request markers immediately before
+   posting it (each marker names its provider; pair Cursor's marker to the next exact-author bare
+   trigger, ignoring interleaved other-author comments); accept markers only from exact author `devantler`
+   with the structural agent disclosure; **never post a separate pre-trigger reservation comment** —
+   that two-phase step was retired on measurement 2026-07-25, having posted a blank-rendering comment
+   1–2 seconds before its own trigger and closed zero races in 75 elections;
+   persist a completed no-gate outcome, or an authenticated
    `review-progress-head` marker after evidenced silent expiry, so the next run advances rather than
    repeats the provider; calculate that cursor as the furthest completed lane by provider order,
    never by latest response time;
