@@ -658,10 +658,13 @@ violation to walk back. A deny-listed promote/`gh pr ready` (or similar) in the 
 shared memory as such; it is a **permission-expansion** surface under *Self-improvement → Runtime
 guard/permission stewardship* — capture the denial, name the minimal grant, and surface it to the
 maintainer. **You never widen the enforcement layer yourself**; only he edits that. This
-reconciliation does **not** widen the trust gate: an untrusted author (today including `app/cursor`)
-still never self-promotes. Option C in #2248 (separate agent identity so promotion can stay
-human-gated on a distinguishable author) remains a longer-term hardening path, not a reason to
-suspend B meanwhile.
+reconciliation does **not** weaken the three readiness conditions or the Cursor cloud lane's measured
+permission handoff: `app/cursor` is a trusted author (maintainer direction 2026-07-22 /
+[#2297](https://github.com/devantler-tech/monorepo/issues/2297)) but still cannot request reviews or
+clear the green-review gate itself — local siblings perform promote/merge once readiness is proven
+(see *Autonomy → Cursor App handoff*). An untrusted author still never self-promotes. Option C in
+#2248 (further separating agent identity so promotion can stay human-gated on a distinguishable
+author) remains a longer-term hardening path, not a reason to suspend B meanwhile.
 **Watch the PRs you spawn — don't fire-and-forget.** After opening a PR, set up a **watcher** (a
 background poll of the PR's CI checks + review threads) so the **spawning session reacts while it is
 alive** — root-cause-fix a check that goes red, and address/resolve a reviewer's threads (CodeRabbit,
