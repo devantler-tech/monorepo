@@ -12,6 +12,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 constitution="${repo_root}/AGENTS.md"
 settings="${repo_root}/.claude/settings.json"
 desired_state="${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.json"
+engineer_agent="${repo_root}/.claude/agents/daily-maintainer.md"
 finops_skill="${repo_root}/.claude/skills/finops/SKILL.md"
 lifestyle_floor="${repo_root}/.claude/finops/lifestyle-floor.md"
 snapshot="${repo_root}/.claude/scripts/finops-snapshot.sh"
@@ -95,6 +96,16 @@ for spend_source in "${finops_skill}" "${lifestyle_floor}" "${snapshot}"; do
   [ -f "${spend_source}" ] ||
     fail "Spend contract names a source that does not exist: ${spend_source}"
 done
+
+# The deployed local actor must actually carry the merged mandate. Retiring the standalone
+# agent without teaching the surviving one to do spend work would silently drop the role.
+engineer_flat="$(tr '\n' ' ' < "${engineer_agent}" | tr -s '[:space:]' ' ')"
+case "${engineer_flat}" in
+  *'Steward the spend'*) ;;
+  *) fail "local engineer agent does not carry the merged spend mandate" ;;
+esac
+grep -Eq '^[[:space:]]*-[[:space:]]+finops[[:space:]]*$' "${engineer_agent}" ||
+  fail "local engineer agent does not load the finops cost-pass skill"
 grep -Fq 'drive the reviewed head to merge' "${finops_skill}" ||
   fail "spend run loop does not drive its engineering PR through merge"
 

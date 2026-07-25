@@ -115,6 +115,7 @@ jobs:
               - '.github/workflows/ci.yaml'
             agent-role-delivery-contract:
               - 'AGENTS.md'
+              - '.claude/agents/daily-maintainer.md'
               # The two retired agent forks stay listed deliberately: the test asserts they
               # do NOT exist, so re-adding either must trigger the job that rejects it.
               - '.claude/agents/agent-improver.md'
