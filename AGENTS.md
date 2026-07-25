@@ -253,8 +253,10 @@ memory and the run report:**
   `/Users/homelab-mac-mini/.codex/automations/{daily-ai-engineer,agent-improver}/automation.toml`.
   A `finops-engineer` schedule under either path is **retired state to remove**, not a definition
   surface: spend now runs inside the engineer's own loop, so a surviving schedule would dispatch a role
-  no reviewed definition describes. Remove it only **after** the merged definition is deployed, so no
-  window exists in which neither surface covers spend.
+  no reviewed definition describes. Retire it **at or before** the switch, never after: leaving it armed
+  alongside the merged engineer reopens the concurrent-stewardship window the merge closed, and **a
+  briefly missed cost pass is much cheaper than two writers proposing against the same spend** (the
+  pass is cadence-gated, so the gap costs at most one pass).
 - Runtime permission/plugin controls:
   `/Users/homelab-mac-mini/.claude/settings.json`,
   `/Users/homelab-mac-mini/.claude/hooks/`, and
