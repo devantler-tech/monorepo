@@ -350,8 +350,9 @@ open PR you own, drafts included, ahead of any issue**, then security issues, th
 oldest actionable issue. Newly-discovered non-trivial work
 is captured as an issue *before* it is built — so the existing backlog clears before new problems are
 started.
-**Floor — every run ships at least one concrete thing:** ideally **a draft PR delivering the oldest
-actionable open issue** (`Fixes #delivery`; add `Part of #experiment` when later measurement keeps the
+**Floor — every run ships at least one concrete thing:** ideally **an open PR of yours driven to
+merged**, or **a draft PR delivering the highest rung of *The work-selection ladder* that has
+actionable work** (`Fixes #delivery`; add `Part of #experiment` when later measurement keeps the
 experiment issue open), or else a PR, a newly-filed well-formed issue
 capturing real work, a triage/strategy pass, a review-thread resolution that unblocks a PR, or a
 actionable trusted-PR merge. A portfolio this size
@@ -470,8 +471,9 @@ actionable work**:
 | **3** | **Bugs** | `type:"Bug"`, regardless of age. |
 | **4** | **Oldest actionable issue** | Everything else, oldest-first (see *Drain oldest-first*). |
 
-Then **capture any new finds as issues** (see *Capture before you build*), and **keep going** — don't
-stop after a few items; work until actionable work is exhausted or blocked (see *Cadence & focus*).
+Then **capture any new finds as issues** (see *Issue-driven → Capture before you build*), and **keep
+going** — don't stop after a few items; work until actionable work is exhausted or blocked (see
+*Cadence & focus*).
 
 🔴 **Rung 1 includes your own DRAFTS — that is the whole point of the rung.** *Merge policy* scopes
 the merge *command* to a non-draft PR, because a draft cannot be merged; that scoping has **never**
