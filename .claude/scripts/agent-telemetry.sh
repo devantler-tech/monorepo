@@ -1195,8 +1195,10 @@ if want safety; then
     # transcript as tool output, and the NEXT run counts it again. Measured
     # 2026-07-25 on the live corpus: 453 occurrences, but only 11 records in 2
     # sessions, and 295 of them on ONE record holding a previous report. So the
-    # total tracks this tool's own activity; a real attempt adds a RECORD.
-    # NOTHING IS FILTERED HERE, deliberately. Classifying a record as
+    # total tracks this tool's own activity to a degree the total cannot show.
+    # CONCENTRATION IS CONTEXT, NEVER A CLASSIFIER. Flat record/session counts
+    # do NOT rule out a new hit: a real attempt can share an existing record —
+    # the same reason nothing is filtered here. Classifying a record as
     # self-referential can suppress a real hit that shares it, which is why
     # PR #2364 was closed. Disclosure keeps the count fail-closed and still
     # makes the echo visible.
@@ -1212,9 +1214,10 @@ if want safety; then
     inj_sessions=$(cut -f1 "$CONCTMP" | sort -u | grep -c . || true)
     inj_top=$(sort "$CONCTMP" | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
     echo "      across ${inj_records:-0} transcript records in ${inj_sessions:-0} sessions; largest single record: ${inj_top:-0}"
-    echo "      (a real attempt adds a RECORD; the occurrence total also rises when a"
-    echo "       previous telemetry report is re-counted by the NEXT run, so read"
-    echo "       records/sessions — not the total — as the attack signal)"
+    echo "      (concentration is CONTEXT, not a verdict. A rising total with flat"
+    echo "       records MAY be echo — a previous report re-counted by the NEXT run —"
+    echo "       but flat record/session counts do NOT rule out a new hit: a real"
+    echo "       attempt can share an existing record. Read both; classify neither.)"
     : > "$CONCTMP"
     # Group on the fixed-width digest plus bounded display. If display
     # truncation happens before identity is derived, distinct matches collapse.
@@ -1240,13 +1243,15 @@ if want safety; then
     echo "        as real, check it came from an issue/PR/CI body and NOT from the"
     echo "        definition text itself. A rising count with no new external source"
     echo "        means the docs were read, not that the deployment is under attack."
-    echo "        ⚠️  THE DOMINANT ECHO SOURCE IS THIS REPORT, NOT THE DOCS. Measured"
-    echo "        2026-07-25: 453 occurrences resolved to 11 records in 2 sessions,"
-    echo "        295 of them on ONE record — a previous run's telemetry output,"
-    echo "        which prints the phrase list above and is then re-counted here."
-    echo "        So the total is partly a function of how often THIS TOOL RAN."
-    echo "        Trend the record and session counts; a total that grows while"
-    echo "        records stay flat is echo, not an attack."
+    echo "        ⚠️  THE DOMINANT ECHO SOURCE IS THIS REPORT, NOT THE DOCS."
+    echo "        HISTORICAL CONTEXT — one measurement taken 2026-07-25, NOT this"
+    echo "        scan. THIS scan's own figures are the concentration line above."
+    echo "        Then: 453 occurrences resolved to 11 records in 2 sessions, 295"
+    echo "        of them on ONE record — a previous run's telemetry output, which"
+    echo "        prints the phrase list above and is then re-counted here. So the"
+    echo "        total is partly a function of how often THIS TOOL RAN. Trend the"
+    echo "        record and session counts — but flat records never CLEAR a hit,"
+    echo "        because a real attempt can share an existing record."
     echo
     echo "  credential-shaped strings reaching a transcript (distinct values, BY SHAPE):"
     echo "  [BOTH instances — this detector is format-agnostic, so it covers Codex too]"

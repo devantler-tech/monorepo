@@ -1215,6 +1215,15 @@ check "injection total is qualified by record concentration" "$OUT" \
       "across 2 transcript records in 2 sessions; largest single record: 2"
 check "injection concentration names echo as the measured amplifier" "$OUT" \
       "re-counted by the NEXT run"
+# Concentration must never become a filter. The two checks above would still
+# pass if a hit were dropped from the total, so pin the total itself: the
+# fixture produces exactly 3 occurrences, and any suppression lowers it.
+check "injection occurrences remain unfiltered" "$OUT" \
+      "TOTAL occurrences: 3"
+# Concentration is CONTEXT, not a classifier — the report must not tell a reader
+# that flat records clear a hit, since a real attempt can share a record.
+check "concentration does not claim flat records rule out a hit" "$OUT" \
+      "do NOT rule out a new hit"
 
 # NOTE: no "concentration adds no jq" assertion here. --section safety already
 # runs jq for the denial scan, so a blanket no-jq check asserts something false
