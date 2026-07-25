@@ -26,9 +26,18 @@ fail() {
 # Prose guards must survive re-wrapping: a boundary sentence that happens to break
 # across two lines is still present, so match against a whitespace-flattened copy
 # rather than letting a paragraph reflow read as a removed protection.
-constitution_flat="$(tr '\n' ' ' < "${constitution}" | tr -s '[:space:]' ' ')"
+flatten() { tr '\n' ' ' < "$1" | tr -s '[:space:]' ' '; }
+constitution_flat="$(flatten "${constitution}")"
+engineer_flat="$(flatten "${engineer_agent}")"
+
 assert_prose() {
   case "${constitution_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+assert_engineer_prose() {
+  case "${engineer_flat}" in
     *"$1"*) ;;
     *) fail "$2" ;;
   esac
@@ -99,11 +108,10 @@ done
 
 # The deployed local actor must actually carry the merged mandate. Retiring the standalone
 # agent without teaching the surviving one to do spend work would silently drop the role.
-engineer_flat="$(tr '\n' ' ' < "${engineer_agent}" | tr -s '[:space:]' ' ')"
-case "${engineer_flat}" in
-  *'Steward the spend'*) ;;
-  *) fail "local engineer agent does not carry the merged spend mandate" ;;
-esac
+assert_engineer_prose 'Steward the spend' \
+  "local engineer agent does not carry the merged spend mandate"
+assert_engineer_prose 'never move money' \
+  "local engineer agent does not carry the never-move-money boundary"
 grep -Eq '^[[:space:]]*-[[:space:]]+finops[[:space:]]*$' "${engineer_agent}" ||
   fail "local engineer agent does not load the finops cost-pass skill"
 grep -Fq 'drive the reviewed head to merge' "${finops_skill}" ||
