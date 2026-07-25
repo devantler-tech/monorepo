@@ -91,8 +91,13 @@ resolves_to_itself() {
 # leave one `$gitdir/worktrees/*` entry pinned at the shared checkout, and that session keeps colliding
 # while a fresh probe stays clean. `--check` is the trust gate for exactly this parallel-session case,
 # so it must enumerate the live worktrees too. Read-only: it only rev-parses other sessions' trees.
+# $2 (optional) is THIS probe's own admin dir, excluded by filesystem IDENTITY. It must be an exact
+# identity match, never a name pattern: an earlier version skipped any worktree whose PATH contained
+# the substring `/probe-iso-`, so a genuinely unverifiable sibling living under a directory merely
+# NAMED that way was silently skipped and the submodule reported isolated ✓ — the same fail-open class
+# as #2460, one level down. A sibling's admin entry is never excluded.
 check_existing_worktrees() {
-  local path=$1 rc=0 mdir wtadmin wt got want
+  local path=$1 skip_admin=${2:-} rc=0 mdir wtadmin wt got want
   # Iterate the LINKED-worktree admin dirs under the submodule gitdir directly, rather than
   # `git worktree list`: the submodule's MAIN checkout legitimately resolves to itself, and so does a
   # colliding linked worktree whose stray `core.worktree` points at the shared checkout — so
@@ -102,9 +107,12 @@ check_existing_worktrees() {
   [ -d "$mdir/worktrees" ] || return 0
   for wtadmin in "$mdir"/worktrees/*/; do
     [ -f "$wtadmin/gitdir" ] || continue
+    # Skip ONLY this probe's own admin dir, by identity — see the header note above.
+    if [ -n "$skip_admin" ] && [ -d "$skip_admin" ] && [ "${wtadmin%/}" -ef "$skip_admin" ]; then
+      continue
+    fi
     # The `gitdir` admin file points at the worktree's own `.git` file; its parent is the worktree.
     wt=$(dirname "$(cat "$wtadmin/gitdir" 2>/dev/null)")
-    case "$wt" in *"/probe-iso-"*) continue ;; esac
     # A pruned/missing worktree dir cannot host a live colliding session — skip it.
     [ -d "$wt" ] || continue
     got=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) || got=''
@@ -175,6 +183,15 @@ probe() {
     return 1
   fi
 
+  # Capture the probe's REAL admin dir up front. `git worktree add` does NOT guarantee the admin dir
+  # is named after the worktree: when `worktrees/<name>` already exists it counter-appends (adding
+  # `probe-iso-1-2` against an existing entry yields `probe-iso-1-21`, measured on git 2.55.0). Then
+  # `worktree remove` matches by PATH and drops the counter-appended one, so removing "$name" by name
+  # afterwards would delete a DIFFERENT — possibly live — worktree's entry, destroying exactly the
+  # sibling this scoping exists to protect. Resolve it, and remove that.
+  local probe_admin=''
+  probe_admin=$(git -C "$probe_dir" rev-parse --absolute-git-dir 2>/dev/null) || probe_admin=''
+
   # Resolve both sides to physical paths (/tmp vs /private/tmp, symlinked checkouts) before comparing.
   local got want rc=0
   got=$(git -C "$probe_dir" rev-parse --show-toplevel 2>/dev/null) || got=''
@@ -195,18 +212,21 @@ probe() {
   # evidence this sweep reads: "no linked worktrees to verify" and "a linked worktree that cannot be
   # verified" became indistinguishable, and the second was reported as isolated ✓ (#2460). The sweep
   # skips this probe's own `probe-iso-*` entry, so running it first is safe.
-  check_existing_worktrees "$path" || rc=1
+  check_existing_worktrees "$path" "$probe_admin" || rc=1
 
   # Clean up ONLY this probe's own entry. A repository-wide `git worktree prune` also deletes a
   # SIBLING session's admin entry whenever that session's tree is momentarily unreadable (restrictive
   # permissions, an unmounted volume, an in-flight chmod) — permanently breaking the parallel session
   # this script exists to protect. `worktree remove` already drops the admin entry on success; the
-  # scoped rm is the fallback for when it does not.
+  # scoped rm is the fallback for when it does not, and it targets the RESOLVED admin dir rather than
+  # a name that git may have counter-appended.
   git -C "$path" worktree remove --force "$name" >/dev/null 2>&1 || true
   rm -rf "$probe_dir"
-  local mdir
-  mdir=$(module_dir "$path") || mdir=''
-  [ -n "$mdir" ] && rm -rf "${mdir:?}/worktrees/${name:?}"
+  if [ -n "$probe_admin" ]; then
+    case "$probe_admin" in
+      */worktrees/*) rm -rf "${probe_admin:?}" ;;
+    esac
+  fi
 
   [ "$rc" -eq 0 ] && printf 'submodule-init: %s — isolated ✓\n' "$path"
   return "$rc"

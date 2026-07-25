@@ -263,6 +263,64 @@ report "cleanup: --check removes its own probe admin entry (no probe-iso-* left)
   "$([[ ${#leftover_admin[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${leftover_admin[*]:-none}"
 report "cleanup: --check leaves no probe worktree directory behind" \
   "$([[ ${#leftover_tree[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${leftover_tree[*]:-none}"
+# POSITIVE precondition: the two assertions above are pure ABSENCE checks, so they also pass when the
+# helper never ran at all (a non-executable script leaves no probe dirs either). Pin that it ran.
+report "cleanup: the probe actually ran (guards the absence assertions above)" \
+  "$(grep -q 'sub — isolated' <<<"$out" && echo yes || echo no)" "$out"
+
+# 9. #2460 follow-up — the probe self-exclusion must match THIS probe's admin dir by IDENTITY, never
+#    by a path substring. Moving the sweep before cleanup promoted that filter from dead code into the
+#    sweep's only self-exclusion, so an over-broad match became a live fail-open: a genuinely
+#    unverifiable sibling whose path merely CONTAINS `/probe-iso-` was skipped and the submodule
+#    reported isolated ✓.
+c9="$tmp/c9"
+mk_super "$c9"
+mkdir -p "$c9/probe-iso-experiments"
+c9_wt="$c9/probe-iso-experiments/live-wt"
+git -C "$c9/super/sub" worktree add -q --detach "$c9_wt"
+chmod 0400 "$c9_wt"
+if (cd "$c9_wt") 2>/dev/null; then
+  echo "SKIP: #2460 self-exclusion — this platform can still enter a 0400 directory (vacuous otherwise)"
+else
+  out="$(cd "$c9/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+  report "probe self-exclusion: an unverifiable sibling under a 'probe-iso-*' PATH still fails --check" \
+    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+  report "probe self-exclusion: it is reported, not silently skipped" \
+    "$(grep -q 'ISOLATION BROKEN' <<<"$out" && echo yes || echo no)" "$out"
+fi
+
+# 10. The scoped removal must stand on its own. `worktree remove` normally deletes the admin entry, so
+#     with it succeeding the new scoped `rm` is unobservable and a mutation test cannot see it. Force
+#     `git worktree remove` to fail with a PATH shim, leaving the scoped rm as the only cleanup path.
+#     Also pins that a PRE-EXISTING sibling entry survives and still works — the harm that removing by
+#     NAME (rather than by resolved admin dir) would cause when git counter-appends on a collision.
+c10="$tmp/c10"
+mk_super "$c10"
+c10_sib="$c10/sibling-wt"
+git -C "$c10/super/sub" worktree add -q --detach "$c10_sib"
+shim="$tmp/shim"
+mkdir -p "$shim"
+real_git="$(command -v git)"
+cat >"$shim/git" <<EOF
+#!/usr/bin/env bash
+# Fail ONLY 'worktree remove'; everything else passes through untouched.
+for a in "\$@"; do [[ "\$a" == "remove" ]] && seen_remove=1; [[ "\$a" == "worktree" ]] && seen_wt=1; done
+if [[ -n "\${seen_wt:-}" && -n "\${seen_remove:-}" ]]; then exit 1; fi
+exec "$real_git" "\$@"
+EOF
+chmod +x "$shim/git"
+out="$(cd "$c10/super" && PATH="$shim:$PATH" "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "scoped cleanup: --check still passes when 'worktree remove' fails" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+shopt -s nullglob
+c10_left=("$c10/super/.git/modules/sub/worktrees"/probe-iso-*)
+shopt -u nullglob
+report "scoped cleanup: the scoped rm alone removes the probe entry (worktree remove failing)" \
+  "$([[ ${#c10_left[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${c10_left[*]:-none}"
+report "scoped cleanup: a pre-existing sibling worktree still exists afterwards" \
+  "$([[ -e "$c10/super/.git/modules/sub/worktrees/sibling-wt" ]] && echo yes || echo no)"
+report "scoped cleanup: that sibling worktree is still FUNCTIONAL (not just present)" \
+  "$(git -C "$c10_sib" rev-parse --show-toplevel >/dev/null 2>&1 && echo yes || echo no)"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
