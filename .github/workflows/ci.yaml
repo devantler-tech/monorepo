@@ -115,12 +115,16 @@ jobs:
               - '.github/workflows/ci.yaml'
             agent-role-delivery-contract:
               - 'AGENTS.md'
+              # The two retired agent forks stay listed deliberately: the test asserts they
+              # do NOT exist, so re-adding either must trigger the job that rejects it.
               - '.claude/agents/agent-improver.md'
               - '.claude/agents/finops-engineer.md'
               - '.claude/plugin-consumption/agentic-engineering.desired-state.json'
               - '.claude/settings.json'
               - '.claude/skills/agent-improvement/**'
               - '.claude/skills/finops/SKILL.md'
+              - '.claude/finops/**'
+              - '.claude/scripts/finops-snapshot.sh'
               - '.claude/scripts/agent-role-delivery-contract.test.sh'
               - 'libraries/agent-plugins'
               - '.github/workflows/ci.yaml'

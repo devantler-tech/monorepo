@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 #
-# Guards the Agent Improver and FinOps writer contract: both roles must resolve
-# reviewed sources and own selected engineering work from finding through merge.
+# Guards the writer contract for the Agent Improver and for the Agentic Engineer's
+# merged spend mandate: each must resolve reviewed sources and own selected
+# engineering work from finding through merge. Spend is a dimension of the primary
+# engineer, NOT a second scheduled role, so this test also pins that merge shut —
+# a resurrected standalone FinOps agent, role, or schedule fails closed.
 
 set -euo pipefail
 
@@ -9,13 +12,25 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 constitution="${repo_root}/AGENTS.md"
 settings="${repo_root}/.claude/settings.json"
 desired_state="${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.json"
-finops_agent="${repo_root}/.claude/agents/finops-engineer.md"
 finops_skill="${repo_root}/.claude/skills/finops/SKILL.md"
+lifestyle_floor="${repo_root}/.claude/finops/lifestyle-floor.md"
+snapshot="${repo_root}/.claude/scripts/finops-snapshot.sh"
 workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
   echo "agent-role delivery contract: FAIL — $*" >&2
   exit 1
+}
+
+# Prose guards must survive re-wrapping: a boundary sentence that happens to break
+# across two lines is still present, so match against a whitespace-flattened copy
+# rather than letting a paragraph reflow read as a removed protection.
+constitution_flat="$(tr '\n' ' ' < "${constitution}" | tr -s '[:space:]' ' ')"
+assert_prose() {
+  case "${constitution_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
 }
 
 grep -Fq '### Agent definition locations' "${constitution}" ||
@@ -45,7 +60,7 @@ grep -Fq '### Writer namespaces' "${constitution}" ||
   fail "consumer does not record namespaces for its scheduled writers"
 # Backticks are literal Markdown, not command substitution.
 # shellcheck disable=SC2016
-grep -Fq 'The `agent-improver` and `finops-engineer` schedules intentionally share their provider instance' \
+grep -Fq 'The `agent-improver` schedule intentionally shares its provider instance' \
   "${constitution}" ||
   fail "consumer does not declare the intentional provider-lane sharing model"
 # shellcheck disable=SC2016
@@ -56,15 +71,39 @@ done
 grep -Fq 'remain undeployed and read-only' "${constitution}" ||
   fail "consumer does not fail closed for unmapped Cursor role schedules"
 
-grep -Fq '## Delivery ownership — finding to fix' "${finops_agent}" ||
-  fail "FinOps agent has no finding-to-fix delivery handoff"
+# --- The merged spend mandate -------------------------------------------------
+# Spend is a dimension of the Agentic Engineer. The consumer must supply the Spend
+# contract the plugin entrypoint resolves, and must keep the money boundary that
+# used to live in the standalone agent — merging a mandate into a larger definition
+# is exactly where a boundary gets quietly dropped by a later edit.
+grep -Fq '### Spend contract' "${constitution}" ||
+  fail "consumer does not define the Spend contract section the engineer resolves"
+grep -Fq '| **Spend contract** |' "${constitution}" ||
+  fail "plugin contract table does not map the Spend contract section"
+assert_prose 'never moves money' \
+  "Spend contract does not preserve the never-move-money boundary"
+assert_prose 'private financial data never reaches a public artifact' \
+  "Spend contract does not preserve the financial-confidentiality boundary"
+assert_prose 'no personalised investment advice' \
+  "Spend contract does not preserve the no-investment-advice boundary"
+assert_prose 'Protected-outcomes floor' \
+  "Spend contract does not name the protected-outcomes floor the cost pass vetoes against"
+assert_prose 'fails closed on the cost dimension only' \
+  "Spend contract does not fail closed on the cost dimension when its facts are missing"
+
+for spend_source in "${finops_skill}" "${lifestyle_floor}" "${snapshot}"; do
+  [ -f "${spend_source}" ] ||
+    fail "Spend contract names a source that does not exist: ${spend_source}"
+done
 grep -Fq 'drive the reviewed head to merge' "${finops_skill}" ||
-  fail "FinOps run loop does not drive its engineering PR through merge"
+  fail "spend run loop does not drive its engineering PR through merge"
 
 [ ! -e "${repo_root}/.claude/agents/agent-improver.md" ] ||
   fail "deployment-local Agent Improver fork still exists"
 [ ! -e "${repo_root}/.claude/skills/agent-improvement/SKILL.md" ] ||
   fail "deployment-local Agent Improver skill fork still exists"
+[ ! -e "${repo_root}/.claude/agents/finops-engineer.md" ] ||
+  fail "standalone FinOps agent still exists; spend is merged into the primary engineer"
 
 jq -e '
   .enabledPlugins == {"agentic-engineering@devantler-plugins": true}
@@ -77,6 +116,23 @@ jq -e '
   ) != null
 ' "${desired_state}" > /dev/null ||
   fail "provider-neutral desired state does not preserve delivery ownership"
+
+jq -e '
+  .spec.guardrails | index(
+    "Spend stewardship never moves money: prepare the financial decision, route it to the maintainer'"'"'s declared private channel, and keep private financial data out of every public artifact."
+  ) != null
+' "${desired_state}" > /dev/null ||
+  fail "provider-neutral desired state does not preserve the never-move-money boundary"
+
+# A resurrected standalone FinOps role or schedule would put a second scheduled writer
+# back over the repositories the engineer already owns — the exact shape the merge removed.
+jq -e '
+  (.spec.roles | has("finops-engineer") | not)
+  and (.spec.runtime.scheduler.schedules | has("finops-engineer") | not)
+  and (.spec.consumer | has("requiredWhenFinOpsEnabled") | not)
+  and (.spec.consumer.requiredWhenSpendStewardshipEnabled == ["Spend contract"])
+' "${desired_state}" > /dev/null ||
+  fail "desired state must resolve spend through the Spend contract, not a separate FinOps role"
 
 # GitHub expression tokens are literal workflow syntax, not shell expansions.
 # shellcheck disable=SC2016
