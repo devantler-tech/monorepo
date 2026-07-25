@@ -62,10 +62,30 @@ grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constit
 skill_path='plugins/agentic-engineering/skills/agent-improvement/SKILL.md'
 assert_prose "\`devantler-tech/agent-skills\`** authors the bundled" \
   "consumer does not name agent-skills as the owner of bundled skills"
-assert_prose "${skill_path}\` carries" \
+
+# The path, its provenance value and the non-authoring rule must appear in ONE paragraph.
+# Asserting them independently against the whole contract is a scope hole: the specific rule
+# could be deleted from this paragraph while a generic sentence elsewhere ("… not an
+# authoring surface", about some other synced artifact) kept the guard green — reopening the
+# misrouting regression this exists to block.
+skill_para="$(awk -v p="${skill_path}" '
+  index($0, p) { inpara = 1 }
+  inpara { if ($0 ~ /^[[:space:]]*$/) exit; print }
+' "${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' ')"
+[ -n "${skill_para}" ] ||
+  fail "consumer does not name the bundled agent-improvement/SKILL.md as the synced copy"
+assert_para() {
+  case "${skill_para}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+assert_para "${skill_path}\` carries" \
   "consumer does not name the bundled agent-improvement/SKILL.md as the synced copy"
-assert_prose "It is a synced artifact, **not** an authoring surface" \
-  "consumer does not mark the synced SKILL.md copy as a non-authoring surface"
+assert_para 'github-repo: https://github.com/devantler-tech/agent-skills' \
+  "the agent-improvement/SKILL.md paragraph does not name devantler-tech/agent-skills as its upstream"
+assert_para 'It is a synced artifact, **not** an authoring surface' \
+  "the agent-improvement/SKILL.md paragraph does not mark that copy a non-authoring surface"
 
 # Provenance is a per-FILE question: the same plugin directory holds synced skills and
 # locally-authored agents, so a per-directory rule is wrong in one direction or the other.
@@ -81,11 +101,24 @@ assert_prose "It is a synced artifact, **not** an authoring surface" \
 # ANCHOR THE VALUE'S END. An unanchored substring accepts any longer name with the same
 # prefix (`agent-skills-v2`), so it would miss exactly the ownership move it claims to
 # detect. Verified: the probe `…/agent-skills-v2` passes the unanchored form.
-bundled_skill="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/skills/agent-improvement/SKILL.md"
+# An UNINITIALISED submodule is a normal local state, not contract drift. Detect it first, or
+# a fresh checkout reports "the skill is missing upstream" and hides the actionable fix.
+plugin_root="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering"
+[ -d "${plugin_root}" ] ||
+  fail "libraries/agent-plugins is not initialised, so the bundled skill cannot be checked. Initialise it with
+       .claude/scripts/submodule-init.sh libraries/agent-plugins"
+
+bundled_skill="${plugin_root}/skills/agent-improvement/SKILL.md"
 [ -f "${bundled_skill}" ] ||
   fail "bundled agent-improvement/SKILL.md is missing at the pinned plugin revision — AGENTS.md routes generic skill edits through this path, so its absence invalidates the contract text"
-grep -qE '^[[:space:]]*github-repo:[[:space:]]*https://github\.com/devantler-tech/agent-skills[[:space:]]*$' "${bundled_skill}" ||
-  fail "bundled agent-improvement/SKILL.md no longer declares exactly devantler-tech/agent-skills as its upstream — re-check the owning repository before trusting the contract text"
+
+# Match inside the YAML FRONTMATTER only. Scanning the whole file would let the guard pass on
+# a documentation example or code block in the body while the real metadata field was removed
+# or repointed — the provenance would be gone and the guard would still claim to verify it.
+skill_frontmatter="$(awk 'NR==1 && $0=="---" { infm=1; next } infm && $0=="---" { exit } infm { print }' "${bundled_skill}")"
+printf '%s\n' "${skill_frontmatter}" |
+  grep -qE '^[[:space:]]*github-repo:[[:space:]]*https://github\.com/devantler-tech/agent-skills[[:space:]]*$' ||
+  fail "bundled agent-improvement/SKILL.md frontmatter no longer declares exactly devantler-tech/agent-skills as its upstream — re-check the owning repository before trusting the contract text"
 
 # Every machine-readable entrypoint pointer must resolve to an agent the pinned plugin
 # actually BUNDLES. Derived from the submodule rather than hard-coded, so the next upstream
