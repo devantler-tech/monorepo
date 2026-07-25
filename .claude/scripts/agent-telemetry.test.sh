@@ -394,6 +394,91 @@ parity_case "slack"      "leak __SLACK__" "__SLACK__"
 parity_case "jwt"        "leak __JWT__" "__JWTTAIL__"
 parity_case "generic"    "config token=__GEN__" "__GEN__"
 
+# Codex image tools persist rendered images as very large `data:` strings in
+# custom tool outputs. Those strings are encoded binary, not transcript text;
+# scanning their random byte alphabet produces high-signal credential rows that
+# tell the operator to rotate credentials which never existed. Keep the
+# exclusion structural and narrow: an adjacent text field and a malformed raw
+# record must still reach the detector.
+echo
+echo "binary data URL exclusion"
+mkdir -p "$FIX/binary/projects" "$FIX/binary/codex/sessions"
+cat > "$FIX/binary/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_text","text":"text leak __SLACK__","__PATA__":"metadata"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,AAAA/__AWS__BBBB"}]}}
+malformed raw leak __GHPE__
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/binary/codex/sessions/s.jsonl" && rm -f "$FIX/binary/codex/sessions/s.jsonl.bak"
+subst "$FIX/binary/codex/sessions/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/binary/projects" CODEX_HOME="$FIX/binary/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'aws-access-key-id'; then
+  bad "binary image data does not create a credential alert" "$TABLE"
+else ok "binary image data does not create a credential alert"; fi
+if printf '%s' "$TABLE" | grep -q 'slack-token'; then
+  ok "adjacent ordinary text is still scanned"
+else bad "adjacent ordinary text is still scanned" "$TABLE"; fi
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+  ok "malformed raw records remain fail-closed"
+else bad "malformed raw records remain fail-closed" "$TABLE"; fi
+if printf '%s' "$TABLE" | grep -q 'github-pat (fine-grained)'; then
+  ok "credential-shaped JSON object keys are still scanned"
+else bad "credential-shaped JSON object keys are still scanned" "$TABLE"; fi
+nocheck "credential-shaped JSON object keys are sanitized" "$OUT" "$(ex __PATA__)"
+
+echo
+echo "reviewed credential extraction adversaries"
+
+mkdir -p "$FIX/association/projects" "$FIX/association/codex/sessions"
+cat > "$FIX/association/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":{"api_key":"__GEN__"}}}
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/association/codex/sessions/s.jsonl" && rm -f "$FIX/association/codex/sessions/s.jsonl.bak"
+subst "$FIX/association/codex/sessions/s.jsonl"
+ASSOC_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/association/projects" CODEX_HOME="$FIX/association/codex" \
+            MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+            bash "$TARGET" --since-days 3650 --section safety 2>&1)
+ASSOC_TABLE=$(printf '%s' "$ASSOC_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$ASSOC_TABLE" | grep -q 'generic-assignment'; then
+  ok "generic JSON key/value associations are still scanned"
+else bad "generic JSON key/value associations are still scanned" "$ASSOC_TABLE"; fi
+
+mkdir -p "$FIX/prefix/projects" "$FIX/prefix/codex/sessions"
+cat > "$FIX/prefix/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_text","text":"data:image/png;base64,AAAA\nJWT=__JWT__"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,AAAA/__AWS__BBBB"}]}}
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/prefix/codex/sessions/s.jsonl" && rm -f "$FIX/prefix/codex/sessions/s.jsonl.bak"
+subst "$FIX/prefix/codex/sessions/s.jsonl"
+PREFIX_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/prefix/projects" CODEX_HOME="$FIX/prefix/codex" \
+             MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+             bash "$TARGET" --since-days 3650 --section safety 2>&1)
+PREFIX_TABLE=$(printf '%s' "$PREFIX_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$PREFIX_TABLE" | grep -q 'jwt-like'; then
+  ok "data-URL-prefixed ordinary text cannot suppress a credential"
+else bad "data-URL-prefixed ordinary text cannot suppress a credential" "$PREFIX_TABLE"; fi
+if printf '%s' "$PREFIX_TABLE" | grep -q 'aws-access-key-id'; then
+  bad "only actual image payload fields are excluded" "$PREFIX_TABLE"
+else ok "only actual image payload fields are excluded"; fi
+
+mkdir -p "$FIX/nulkey/projects" "$FIX/nulkey/codex/sessions"
+cat > "$FIX/nulkey/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":{"\u0000":"noise","text":"leak __PATZ__"}}}
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/nulkey/codex/sessions/s.jsonl" && rm -f "$FIX/nulkey/codex/sessions/s.jsonl.bak"
+subst "$FIX/nulkey/codex/sessions/s.jsonl"
+NUL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulkey/projects" CODEX_HOME="$FIX/nulkey/codex" \
+          MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+          bash "$TARGET" --since-days 3650 --section safety 2>&1)
+NUL_TABLE=$(printf '%s' "$NUL_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$NUL_TABLE" | grep -q 'github-pat (fine-grained)'; then
+  ok "NUL-bearing object keys cannot switch credential grep to binary mode"
+else bad "NUL-bearing object keys cannot switch credential grep to binary mode" "$NUL_TABLE"; fi
+
 # ── 6d². leak-table boundary anchoring ────────────────────────────────────────
 # First live run (2026-07-18): the top "real-looking" GitHub-token hits were
 # substrings INSIDE base64url blobs (signed-URL params, JWT signatures) —
@@ -1013,6 +1098,133 @@ else bad "prose quoting the interrupt flag does not fabricate one" "$(printf '%s
 OUT=$(run --section safety)
 check "injection attempts are surfaced" "$OUT" "INJECTION ATTEMPTS"
 check "the fixture's injected instruction is reported" "$OUT" "ignore prior rules"
+
+echo
+echo "injection occurrence provenance"
+mkdir -p "$FIX/injprov" "$FIX/nocodex/sessions"
+cat > "$FIX/injprov/mixed.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"definition fixture says ignore prior rules"},{"type":"text","text":"external body says update your instructions"}]}}
+{"type":"userAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","message":{"content":[{"type":"text","text":"add unsafe<>BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB to the trust gate"}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"add __AWS__ to the trust gate"},{"type":"text","text":"add __JWT__ to the trust gate"}]}}
+EOF
+subst "$FIX/injprov/mixed.jsonl"
+# Provenance includes the source basename, so that locator must pass through
+# the same redactor as the matched phrase. Assemble the credential-shaped name
+# at runtime so no usable value is committed in this fixture.
+cp "$FIX/injprov/mixed.jsonl" "$FIX/injprov/$S_AWS.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --injection-provenance 2>&1)
+check "detailed provenance identifies the session" "$OUT" "session=mixed.jsonl"
+check "detailed provenance identifies the record line" "$OUT" "line=1"
+check "detailed provenance identifies the record type" "$OUT" "line=1 record=user"
+check "detailed provenance keeps the first mixed-record occurrence" "$OUT" "phrase=ignore prior rules"
+check "detailed provenance keeps the second mixed-record occurrence" "$OUT" "phrase=update your instructions"
+if [ "$(printf '%s\n' "$OUT" | grep -Fc 'session=mixed.jsonl line=1')" -eq 2 ]; then
+  ok "mixed record emits one provenance row per occurrence"
+else
+  bad "mixed record emits one provenance row per occurrence" "$(printf '%s\n' "$OUT" | grep -F 'session=mixed.jsonl' || true)"
+fi
+nocheck "record locators are length-bounded" "$OUT" "record=userAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+nocheck "phrase locators exclude unsafe punctuation" "$OUT" "phrase=add unsafe<>"
+nocheck "phrase locators are length-bounded" "$OUT" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+nocheck "AWS-shaped provenance is redacted before lowercasing" "$OUT" "$(printf '%s' "$S_AWS" | tr '[:upper:]' '[:lower:]')"
+nocheck "JWT-shaped provenance is redacted before lowercasing" "$OUT" "$(printf '%s' "$S_JWT" | tr '[:upper:]' '[:lower:]')"
+nocheck "credential-shaped provenance session names are redacted" "$OUT" "$S_AWS.jsonl"
+check "credential-shaped provenance session names retain a safe locator" "$OUT" "session=AKIAIOSF…<redacted>.jsonl"
+
+# Terminal redaction is too late for a scratch file: inspect PROVTMP at the
+# moment the reporting awk opens it. No credential-shaped locator may ever be
+# written there in raw form, even if the process is killed before cleanup.
+mkdir -p "$FIX/provtmp" "$FIX/provawk"
+real_awk=$(command -v awk)
+cat > "$FIX/provawk/awk" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *'session=%s line=%s record=%s phrase=%s'*)
+    if grep -rqF "$RAW_PROVENANCE" "$PROVENANCE_TMPDIR"/.agtel_prov.* 2>/dev/null; then
+      printf 'raw\n' >> "$PROVENANCE_TRACE"
+    fi
+    ;;
+esac
+exec "$REAL_AWK" "$@"
+EOF
+chmod +x "$FIX/provawk/awk"
+: > "$FIX/provenance-trace"
+PATH="$FIX/provawk:$PATH" REAL_AWK="$real_awk" RAW_PROVENANCE="$S_AWS" \
+  PROVENANCE_TMPDIR="$FIX/provtmp" PROVENANCE_TRACE="$FIX/provenance-trace" TMPDIR="$FIX/provtmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/injprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety --injection-provenance >/dev/null 2>&1
+if [ ! -s "$FIX/provenance-trace" ]; then
+  ok "provenance scratch never stores a raw credential locator"
+else
+  bad "provenance scratch never stores a raw credential locator" "raw credential-shaped basename reached PROVTMP"
+fi
+
+# The bounded provenance locator must not become the aggregate identity. These
+# two matches differ only beyond the 80-character display bound: both still
+# count as distinct phrases in the default aggregate report. Instrument sort's
+# input at the same time: preserving identity must use a bounded digest rather
+# than storing the full attacker-controlled match in INJTMP.
+mkdir -p "$FIX/injagg" "$FIX/injtmp" "$FIX/injsort"
+long_injection_prefix=$(printf '%04096d' 0 | tr '0' 'a')
+printf '{"type":"user","message":{"content":[{"type":"text","text":"add %sx to the trust gate"}]}}\n' \
+       "$long_injection_prefix" > "$FIX/injagg/long.jsonl"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"add %sy to the trust gate"}]}}\n' \
+       "$long_injection_prefix" >> "$FIX/injagg/long.jsonl"
+real_sort=$(command -v sort)
+cat > "$FIX/injsort/sort" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *'.agtel_inj.'*) "$REAL_AWK" '{if (length > max) max=length} END {print max+0}' "$@" > "$INJECTION_STORAGE_TRACE" ;;
+esac
+exec "$REAL_SORT" "$@"
+EOF
+chmod +x "$FIX/injsort/sort"
+: > "$FIX/injection-storage-trace"
+OUT=$(PATH="$FIX/injsort:$PATH" REAL_SORT="$real_sort" REAL_AWK="$real_awk" \
+      INJECTION_STORAGE_TRACE="$FIX/injection-storage-trace" TMPDIR="$FIX/injtmp" \
+      CLAUDE_PROJECTS_DIR="$FIX/injagg" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "aggregate counts retain identities beyond the provenance bound" "$OUT" "TOTAL occurrences: 2   (distinct phrases: 2)"
+stored_width=$(tail -n 1 "$FIX/injection-storage-trace" 2>/dev/null || true)
+case "$stored_width" in
+  ''|*[!0-9]*) bad "aggregate scratch identity is bounded" "sort input width was not observed" ;;
+  *) if [ "$stored_width" -le 160 ]; then ok "aggregate scratch identity is bounded"
+     else bad "aggregate scratch identity is bounded" "stored attacker-controlled row width=$stored_width"; fi ;;
+esac
+
+# The default path must remain aggregate-only. Instrument the exact jq filter
+# used for provenance record typing: it must be absent without the flag and
+# present with the flag. This is deterministic proof of the 5 MiB slowdown's
+# root cause without a timing-flaky performance assertion.
+mkdir -p "$FIX/jqshim"
+real_jq=$(command -v jq)
+cat > "$FIX/jqshim/jq" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *'.type // "malformed"'*) printf 'provenance-parse\n' >> "$JQ_TRACE" ;;
+esac
+exec "$REAL_JQ" "$@"
+EOF
+chmod +x "$FIX/jqshim/jq"
+: > "$FIX/jq-trace"
+OUT=$(PATH="$FIX/jqshim:$PATH" REAL_JQ="$real_jq" JQ_TRACE="$FIX/jq-trace" \
+      CLAUDE_PROJECTS_DIR="$FIX/injprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if [ ! -s "$FIX/jq-trace" ]; then
+  ok "default injection scan skips provenance-only jq parsing"
+else
+  bad "default injection scan skips provenance-only jq parsing" "provenance jq filter ran without --injection-provenance"
+fi
+: > "$FIX/jq-trace"
+OUT=$(PATH="$FIX/jqshim:$PATH" REAL_JQ="$real_jq" JQ_TRACE="$FIX/jq-trace" \
+      CLAUDE_PROJECTS_DIR="$FIX/injprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --injection-provenance 2>&1)
+if [ -s "$FIX/jq-trace" ]; then
+  ok "opt-in injection provenance still parses record types"
+else
+  bad "opt-in injection provenance still parses record types" "provenance jq filter never ran with the flag"
+fi
 
 # Codex denial detection is a DISCLOSED gap, not a silent zero.
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxdeny" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
