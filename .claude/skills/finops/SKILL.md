@@ -136,9 +136,13 @@ a consideration folded into the ranking.
 | **Financial action** (buy, cancel, change plan, add credits, commit) | **the private channel in *Spend contract*** | ask; **never execute** |
 | **Decision only he can make** (still wanted? floor change?) | **the private channel in *Spend contract*** | ask |
 
-⚠️ **That destination is currently UNRESOLVED** — the only Slack channel in the workspace is public,
-and financial detail must never go there. Until the maintainer designates a private destination, send
-**nothing** and raise anything blocking through the run report instead.
+⚠️ **That destination is currently UNRESOLVED, and that makes this half of the step DEFAULT-OFF.**
+The only Slack channel in the workspace is public, and financial detail must never go there. So while
+the destination is unresolved: run steps 1–4, ship the **measurement and engineering** rows above as
+normal PRs, and **stop before producing a financial ask or a spend proposal at all** — do not send it,
+and do not park it in the run report either, because a decision nobody can receive is the passive
+self-blocking the contract forbids. Resolving the destination is a maintainer act and is what flips
+this half on (`AGENTS.md` → *Spend contract* → **Activation gate**).
 
 **PRs carry the engineering change and relative figures only** — "cuts this namespace's compute ~40%"
 is fine; his balances, transactions and totals never appear in a public artifact. Follow the normal

@@ -118,6 +118,12 @@ assert_prose 'Protected-outcomes floor' \
   "Spend contract does not name the protected-outcomes floor the cost pass vetoes against"
 assert_prose 'fails closed on the cost dimension only' \
   "Spend contract does not fail closed on the cost dimension when its facts are missing"
+# Feature-flag-first: the decision-producing half must ship default-off, gated on the private
+# channel, so an unresolved destination cannot leave the ask path live.
+assert_prose 'DEFAULT-OFF until the private channel resolves' \
+  "Spend contract does not gate the decision-producing half default-off"
+assert_prose 'stops before' \
+  "Spend contract does not say where the cost pass stops while the channel is unresolved"
 
 for spend_source in "${finops_skill}" "${lifestyle_floor}" "${snapshot}"; do
   [ -f "${spend_source}" ] ||

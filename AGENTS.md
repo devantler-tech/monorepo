@@ -163,6 +163,21 @@ closed on the cost dimension only** — operate and advance work continue, spend
 | **Which lanes may run it** | **machine-local instances only** (`claude/*`, `codex/*`). The evidence script port-forwards OpenCost in the live cluster and the ledger is a private operator note, so the **Cursor cloud lane has neither half** and skips the cost pass explicitly rather than attempting a degraded version — it never quotes a figure it could not measure. |
 | **Private evidence store** | the out-of-repository ledger named under *Durable memory* — proposals, open asks, and projected-vs-realised. Absolute figures never enter a repo file. |
 
+**Activation gate — the decision-producing half is DEFAULT-OFF until the private channel resolves.**
+Spend stewardship ships latent, per *Feature-flag-first delivery*, and the gate is the **Private
+decision channel** row above rather than a config toggle:
+
+| Half of the mandate | State while the channel reads UNRESOLVED | Why |
+|---|---|---|
+| **Measurement & engineering** — wiring an evidence source, fixing the stale price table, an orphaned-volume cleanup | **ON** | ordinary engineering work with no financial output; blocking it would stall the very measurement the rest depends on |
+| **Decision-producing** — a financial ask, a spend proposal, a savings figure put to the maintainer | **OFF** | there is nowhere to send it, and parking it in a report is the passive self-blocking this contract forbids elsewhere |
+
+So while the channel is unresolved the cost pass runs steps 1–4 of its run loop and **stops before
+step 5's ask**: it may fix measurement, and it may **not** produce a financial decision. Resolving the
+channel is what flips the second half on — a maintainer act, never an agent one. **This is the tested
+both-states condition** for the feature-flag rule: the engineer must behave differently in each state,
+and the delivery-contract test pins the gate's presence.
+
 Three properties are **not negotiable by the engineer**, and merging the role changed none of them: it
 **never moves money** (it prepares the decision; the maintainer executes it), it **gives no
 personalised investment advice** (engineering economics only — rent vs own, tier, provider, payback),
