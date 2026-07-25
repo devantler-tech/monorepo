@@ -419,6 +419,7 @@ public and private — no per-repo loop needed to enumerate):
    the complete and canonical partition; labels are legacy and **provably incomplete** — 8 of 63 open
    Epics carried no `roadmap` label on 2026-07-18, and `Spike`/`Kata`/`Chore` have no label at all, so
    a label sweep silently drops them. Sweep each type once:
+
    ```sh
    # VERIFIED WORKING 2026-07-18 — run it, don't retype it from memory:
    #  · the search QUALIFIER type: works; there is NO issueType JSON field (gh search issues --json
@@ -434,6 +435,7 @@ public and private — no per-repo loop needed to enumerate):
               .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"
    done
    ```
+
    ⚠️ **Type sweeps alone are NOT complete — 65 open issues were untyped on 2026-07-18.** Since
    `no:type` does not work, derive the untyped set as **(the primary org-wide open-issue sweep) minus
    (the union of the type sweeps)** and report it as a **triage** signal: an untyped issue is invisible

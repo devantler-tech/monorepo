@@ -194,6 +194,10 @@ grep -Fq 'Never select, triage-as-work, or close' "${surveyor}" ||
   fail "surveyor may still close or triage an automation-authored issue"
 grep -Fq 'author,labels,updatedAt,url,assignees' "${surveyor}" ||
   fail "surveyor open-issue search omits author, so the issue-side filter cannot run"
+grep -Fq 'Match **author login only** — never the title' "${surveyor}" ||
+  fail "surveyor does not enforce exact author-only matching"
+grep -Fq 'Drop issues authored by the exact dependency-' "${surveyor}" ||
+  fail "surveyor type sweeps may still rank automation-authored issues"
 grep -Fq 'dependency PRs *and* issues are AUTOMATION-OWNED' "${constitution}" ||
   fail "constitution does not extend the automation-owned carve-out to issues"
 grep -Fq 'Never select, triage-as-work, or close an automation-authored' "${constitution}" ||
