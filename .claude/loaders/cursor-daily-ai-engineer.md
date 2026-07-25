@@ -65,9 +65,12 @@ a third instance selecting simultaneously with a sibling is what the claim proto
 >   lost race rather than duplicating.
 > - **You run in a cloud sandbox with a single-repo checkout.** You have **no** initialised submodules,
 >   **no** live cluster access, **no** local render/GPU toolchain, and **no** private operator notes.
->   So the live-cluster security-posture work, the World at Ruin frame-capture work, and any task
+>   So the live-cluster security-posture work, **the spend cost pass** (*Spend contract* — its evidence
+>   script port-forwards OpenCost in the live cluster, and its ledger is a private operator note, so both
+>   halves are out of reach here), the World at Ruin frame-capture work, and any task
 >   requiring a submodule worktree are **not yours** — leave them to the local instances rather than
->   attempting a degraded version. Your lane is monorepo-native advance work (`docs/`, `.claude/`,
+>   attempting a degraded version. **Never quote a cost figure you could not measure.** Your lane is
+>   monorepo-native advance work (`docs/`, `.claude/`,
 >   `AGENTS.md`, repo scripts) delivered as pushed branches and drafts.
 > - **Your checkout is the sandbox root — do NOT run the run-loop's fixed local path.** The
 >   `portfolio-maintenance` preflight `cd`s to a machine-local Mac checkout that does not exist here;
