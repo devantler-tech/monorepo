@@ -55,14 +55,17 @@ grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constit
 # rename cannot leave this consumer pointing at a file that no longer exists — which is
 # exactly what happened when the entrypoint moved automated-ai-engineer -> agentic-engineer
 # (agent-plugins#89, plugin 4.0.0) and the two sides were updated on different axes.
+# FAILS CLOSED on a missing submodule. An earlier revision skipped the check when the
+# directory was absent, which made it a no-op in CI (actions/checkout does not initialise
+# submodules), so the guard against entrypoint drift would never have run where it matters.
 plugin_agents="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/agents"
 entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
-if [ -d "${plugin_agents}" ]; then
-  [ -f "${plugin_agents}/${entrypoint}.agent.md" ] ||
-    fail "desired state entrypoint '${entrypoint}' does not resolve to a bundled agent in ${plugin_agents}"
-else
-  echo "agent-role delivery contract: NOTE — submodule not initialised; entrypoint resolution skipped" >&2
-fi
+[ -d "${plugin_agents}" ] ||
+  fail "cannot resolve the entrypoint: ${plugin_agents} is missing. Initialise it with
+       .claude/scripts/submodule-init.sh libraries/agent-plugins
+       (CI does this in the workflow step before this test)."
+[ -f "${plugin_agents}/${entrypoint}.agent.md" ] ||
+  fail "desired state entrypoint '${entrypoint}' does not resolve to a bundled agent in ${plugin_agents}"
 jq -e --arg e "${entrypoint}" '
   (.spec.roles | has($e))
   and .spec.runtime.scheduler.schedules[$e].definitionFrom
@@ -128,8 +131,12 @@ assert_prose 'fails closed on the cost dimension only' \
 # channel, so an unresolved destination cannot leave the ask path live.
 assert_prose 'DEFAULT-OFF until the private channel resolves' \
   "Spend contract does not gate the decision-producing half default-off"
-assert_prose 'stops before' \
-  "Spend contract does not say where the cost pass stops while the channel is unresolved"
+# Match the WHOLE clause, not just "stops before": the weak form survives even if the
+# contract loses what stops, under which condition, and that resolving it is the maintainer's.
+assert_prose "the cost pass runs steps 1–4 of its run loop and **stops before step 5's ask**" \
+  "Spend contract does not tie the stop to the unresolved channel and the financial-ask boundary"
+assert_prose 'Resolving the channel is what flips the second half on — a maintainer act, never an agent one' \
+  "Spend contract does not reserve activation to the maintainer"
 
 for spend_source in "${finops_skill}" "${lifestyle_floor}" "${snapshot}"; do
   [ -f "${spend_source}" ] ||
