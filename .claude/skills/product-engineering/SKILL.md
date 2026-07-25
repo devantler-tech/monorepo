@@ -1,6 +1,6 @@
 ---
 name: product-engineering
-description: The ADVANCE playbook for the Daily AI Engineer (the products' primary engineer) — how to move a devantler-tech product forward once it's healthy: product strategy & roadmaps, issue triage & decomposition, planning & implementing issues, test coverage, benchmarking & performance, and refactoring & code quality. Use after the operate ladder is satisfied and you're picking proactive enhancement work.
+description: The ADVANCE playbook for the Agentic Engineer (the products' primary engineer) — how to move a devantler-tech product forward once it's healthy: product strategy & roadmaps, issue triage & decomposition, planning & implementing issues, test coverage, benchmarking & performance, refactoring & code quality, and security hardening that never taxes developer experience. Use after the operate ladder is satisfied and you're picking proactive enhancement work.
 ---
 
 # Product engineering — moving products forward
@@ -10,8 +10,10 @@ loop live in [`portfolio-maintenance`](../portfolio-maintenance/SKILL.md); the b
 the monorepo [`AGENTS.md`](../../../AGENTS.md) (*Mandate*, *Product strategy & roadmaps*, *Enhancement
 work*, the trust gate and all guardrails). Read those first — this skill is the how-to, not the rules.
 
-You are the **primary engineer**: own each product's direction, quality, and growth, not just its
-uptime. Every kind of work below ships under the **same discipline** — per-run worktree, validate
+You are the **primary engineer**: own each product's direction, quality, growth **and security
+posture**, not just its uptime — and harden on the standing principle that **good developer experience
+is easy *and* secure** (contract → *Security hardening without a DevEx tax*; §10 below is the how-to).
+Every kind of work below ships under the **same discipline** — per-run worktree, validate
 (build + tests), root-cause, **draft PR** with the AI-disclosure line, one concern per PR, never weaken
 a safety/security guardrail, never hand-edit generated files. Match each repo's existing conventions
 and load its product card + `AGENTS.md ## Maintenance` for validate commands, protected files, labels,
@@ -30,8 +32,9 @@ Same work, fewer tokens.
 > (these ship with the Claude Code `engineering` plugin — they are *not* defined in this repo; if a
 > given skill isn't installed, just apply the same reasoning yourself): `engineering:architecture` (ADRs)
 > and `engineering:system-design` for non-trivial design; `engineering:testing-strategy` for test plans;
-> `engineering:tech-debt` to prioritise refactors; `engineering:code-review` to self-review a diff
-> before opening the PR; `engineering:debug` for a stubborn bug.
+> `engineering:tech-debt` to prioritise refactors; `engineering:debug` for a stubborn bug. (For the
+> mandatory pre-submission self-review, use `/review` + `/simplify` per step 4 below —
+> `engineering:code-review` is a fine substitute where those aren't installed.)
 
 ## 1. Strategy & roadmaps
 The roadmap of record is **GitHub Issues** (Issues are enabled on every repo) — never a file.
@@ -168,7 +171,11 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    the docs the change touches in the same PR** (help/generated reference, README, `AGENTS.md`, the
    relevant site page) — docs are part of the change too; re-run, never hand-edit, any doc generator.
 3. **Validate** (the card's build + test command) — never open a PR that breaks build/validation.
-4. Open a **draft PR**: Conventional-Commit title (`feat:`/`fix:`/`refactor:`/`perf:`/`test:`/`docs:`),
+4. **Self-review your own diff** — `/review` + `/simplify` (plus `/security-review` for
+   auth/secrets/permissions/workflow-trigger changes), fixing findings at the root cause before the
+   review request goes out. Contract *GitHub artifact conventions → SELF-REVIEW YOUR OWN DIFF* carries
+   the exemption for trivial changes and the one-pass bound — follow it, don't re-derive it here.
+5. Open a **draft PR**: Conventional-Commit title (`feat:`/`fix:`/`refactor:`/`perf:`/`test:`/`docs:`),
    AI-disclosure line, labels, and **`Fixes #N`** for the delivery issue. When measuring the outcome
    requires a later window, keep the experiment issue open and add **`Part of #N`** for it instead of
    closing it from the delivery PR. Body = PM-level why & what only (the org template — zero
@@ -298,7 +305,7 @@ at once** — the highest-leverage advance work is often cross-cutting (contract
   convention), it's now *generic* — it belongs in a **shared library**, not copied per repo:
   - CI building blocks → `devantler-tech/actions` (composite actions + the reusable workflows it absorbed).
   - Agent skills → `devantler-tech/agent-skills` (generic Copilot/agent skills, `gh skill`-installable).
-  - Plugins → `devantler-tech/agent-plugins` **once it exists** — if a plugin-shaped pattern is ready and the
+  - Plugins → `devantler-tech/agent-plugins` — if a plugin-shaped pattern is ready and the
     repo doesn't exist, propose creating it (flag to the maintainer) rather than forcing it elsewhere.
   - Cluster guardrail / admission / generation policies → `devantler-tech/kyverno-policies` (the
     shared, tested catalog the platform and platform-template consume instead of vendoring copies).
@@ -336,9 +343,26 @@ maintainer direction 2026-07-05):
   Dedupe against existing issues before filing; a research pass that files nothing new still updates
   the cursor and notes what was checked.
 
-## 10. Security & compliance posture
+## 10. Security & compliance posture — hardening without a DevEx tax
 Treat live security findings as first-class advance work, with the same evidence discipline as
-coverage and performance (contract → *Enhancement work → Security posture*).
+coverage and performance (contract → *Enhancement work → Security posture*). Hardening is **not** a
+separate queue you visit when the others are empty — it is a property of the work you are already
+doing, held to the contract's **two-sided test** (*Security hardening without a DevEx tax*).
+- **Answer both sides in the PR body.** (1) What class of failure is now impossible, caught, or
+  contained — never "improves security"; and (2) what the everyday path cost, which must come out **as
+  easy or easier** than before. A change that raises the floor *and* the friction is a draft, not a
+  delivery — reshape it until the secure way is also the shortest way. State both deltas even when one
+  is "unchanged".
+- **Never reduce friction by removing a control.** "Nobody understood the check, so I dropped it" and
+  "the gate was slow, so I made it non-blocking" are security decisions wearing a DevEx costume. Fix a
+  genuinely wrong control at its root, or scope it explicitly through the fix-vs-except ladder below —
+  never by quietly widening it. (This contract's own guardrails are out of scope entirely: loosening
+  one is reserved to the maintainer.)
+- **Reach for the paved road first** — secure defaults, so *doing nothing* is safe; encode the rule in
+  a template/policy/shared action so every product inherits it instead of reading prose; make each
+  check **fail with the fix** (name the exact command or edit that resolves it); prefer fast local or
+  early-CI feedback over a late heavyweight gate; automate rotation/provisioning/scanning rather than
+  documenting them on a checklist someone has to remember.
 - **Ingest, liveness-first.** Findings come from the product's live scanners (platform: the three
   Kubescape surfaces via the read-only
   [`platform-security-surveyor`](../../agents/platform-security-surveyor.md); other products: their

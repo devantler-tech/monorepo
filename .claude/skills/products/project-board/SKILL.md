@@ -38,8 +38,11 @@ carries **thousands** of items, so an unbounded pass samples the first page and 
 | **Hierarchy — undecomposed** | `type:"Epic"` issues with **no sub-issues** (`no:sub-issues-progress`) | 0 — an Epic with no children is *undecomposed, not finished*; decomposing them is high-value advance work (37 existed on 2026-07-18) |
 | **Dangling parents** | `Part of` references resolving to a PR, to self, or to nothing | 0 |
 | **Stale epics** | epics at `Sub-issues progress` 100% but still open | 0 (close or extend) |
+| **Closed root with open work** | `type:"Epic"` issues that are **closed** yet still have any **open** descendant | 0 — **re-open the Epic** (do not re-parent, and do not change the Backlog filter). The Backlog view is `is:issue is:open no:parent-issue` with Show hierarchy; a closed root fails `is:open`, so its open children disappear from every expandable tree even though the parent link is correct ([#2266](https://github.com/devantler-tech/monorepo/issues/2266)). GitHub project filters have no "closed parent with open descendants" qualifier, so the fix is lifecycle, not a fourth view or a filter edit |
 | **Reopened stuck at Done** | **open** issues whose Status is still `✅ Done` | 0 — closed→Done is a built-in workflow but **nothing moves an issue back out on reopen**, and the Kanban filters `-status:"✅ Done"`, so reopened work vanishes from the main view exactly when it needs attention. Move it back to the state that matches reality (0 on 2026-07-18 — latent, not live) |
 | **Archive** | closed/merged items still active on the board | none older than **30 days closed** — **except any item whose hierarchy still contains open work**, in either direction: a closed item with any still-open **ancestor** (a closed sub-Epic under an open top-level Epic keeps its own closed children too), *and* a closed item with any still-open **descendant** (an Epic closed prematurely while a child is still open must stay visible, or the open child is orphaned from a tree nobody can see). These stay active. Archiving it removes it from the Backlog's hierarchy, so the decomposition becomes unreadable while the progress bar still counts it, and "what is part of what" (the whole point of the board) silently loses rows. Younger items also stay active so Insights keeps recent history — see the Insights trap below; manual until [#2238](https://github.com/devantler-tech/monorepo/issues/2238)'s auto-archive works |
+
+**Never close an Epic while any descendant is still open.** Close the Epic only when its children are done (or explicitly cancelled). If a survey finds a closed Epic with open descendants, re-open it immediately — that is the #2266 resolution, not a Backlog filter change.
 
 Coverage and hierarchy are the two that silently rot, because **auto-add is forward-only and capped at
 5 workflows on the Team plan** — see [monorepo#2237](https://github.com/devantler-tech/monorepo/issues/2237).
@@ -82,6 +85,13 @@ Until that is solved, backfill is a standing duty, not an exception.
   | 🧮 Kanban | Board | `is:issue is:open -status:"✅ Done" -type:"Epic"` |
   | 📋 Backlog | Table | `is:issue is:open no:parent-issue` |
   | 🗺️ Roadmap | Roadmap | `is:issue is:open type:"Epic" no:parent-issue` |
+
+  **Keep these three filters.** [#2266](https://github.com/devantler-tech/monorepo/issues/2266)
+  asked whether open work under a *closed* root should be fixed by changing the Backlog filter,
+  re-opening the root, or re-parenting. **Decision (2026-07-22): re-open the root** (and never close
+  an Epic with open descendants). A filter change cannot express that case, a fourth view would
+  violate the three-view rule, and re-parenting destroys the recorded decomposition. No maintainer
+  UI edit is required for this decision.
 
   **Each view shows one layer of the hierarchy, and only one** (maintainer direction 2026-07-18):
   **Kanban = actionable work only** — a parent is resolved by finishing its children, so an epic is

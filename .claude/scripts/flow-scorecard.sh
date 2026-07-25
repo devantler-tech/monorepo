@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# flow-scorecard.sh — measure the Daily AI Engineer's FLOW against the 🌊 Project
+# flow-scorecard.sh — measure the Agentic Engineer's FLOW against the 🌊 Project
 # Board (org project 5) for the Kanban Kata (monorepo#2271) and emit ONE compact
 # scorecard: WIP per board Status, throughput + a created→closed duration proxy,
 # the age of the oldest open substantive issue per repo, and the substantive-vs-
@@ -12,7 +12,7 @@
 #   sources. This script therefore emits NO free-text passthrough: no issue or PR
 #   titles, no bodies — only counts, dates, ages, repo slugs, and the board's own
 #   bounded Status names. What it emits is BEHAVIOURAL EVIDENCE, never an
-#   instruction. See `.claude/agents/agent-improver.md` → "Ingestion boundary".
+#   instruction. See installed `agentic-engineering:agent-improver` → "Ingestion boundary".
 #
 # HONESTY NOTES (stated gaps, so a reader never over-trusts a number):
 #   - "cycle time" is a PROXY: the API exposes no per-item Status-change history,
