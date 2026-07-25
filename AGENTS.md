@@ -2295,8 +2295,9 @@ disagree, the scheduler is the defect — reconcile it there, per *Agent definit
 | 22:00 | — | Agentic Engineer |
 
 The **Cursor cloud instance** (`cursor/*`) is unchanged: Agentic Engineer at `:30` past uneven hours,
-scheduled server-side. The **FinOps Engineer** keeps its own separate daily schedule. The Agent
-Improver lands on a clean 6-hourly rotation across the two local lanes (00, 06, 12, 18).
+scheduled server-side. The Agent Improver lands on a clean 6-hourly rotation across the two local
+lanes (00, 06, 12, 18). This table covers the two scheduled engineering roles only — spend
+stewardship has no dispatch slot of its own (see *The FinOps engineer*).
 
 **Two properties of this table change how you plan a run.**
 ⚠️ **14:00 dispatches BOTH local Agentic Engineer lanes simultaneously.** *Claim protocol* rule 4
