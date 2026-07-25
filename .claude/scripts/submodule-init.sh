@@ -17,8 +17,10 @@
 #
 # `--check` never modifies submodule content, tracked files, or other sessions' worktrees, but it is
 # NOT strictly read-only: to prove isolation empirically it adds and then removes a throwaway,
-# uniquely-named probe worktree (and prunes its own admin entry). That empirical add/remove is the
-# whole point — it catches a dangling `core.worktree` a config read alone would miss.
+# uniquely-named probe worktree (and removes ONLY its own admin entry — never a repository-wide
+# `git worktree prune`, which would delete a sibling session's entry whenever that session's tree is
+# momentarily unreadable). That empirical add/remove is the whole point — it catches a dangling
+# `core.worktree` a config read alone would miss.
 set -euo pipefail
 
 die() {
@@ -107,7 +109,10 @@ check_existing_worktrees() {
     [ -d "$wt" ] || continue
     got=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) || got=''
     [ -n "$got" ] && got=$(cd "$got" 2>/dev/null && pwd -P)
-    want=$(cd "$wt" && pwd -P)
+    # An UNSEARCHABLE worktree dir passes `-d` but cannot be entered, so this must not abort or leak
+    # to stderr: resolve it to empty and let `same_dir` fail closed below. (It survives `set -e` only
+    # because callers invoke this function under `||`, which suspends it — do not rely on that.)
+    want=$(cd "$wt" 2>/dev/null && pwd -P) || want=''
     if ! same_dir "$got" "$want"; then
       warn "$path — ISOLATION BROKEN: existing linked worktree '$wt' resolves to '${got:-<unresolvable>}', not its own path. A parallel session there is colliding — do not edit it."
       rc=1
@@ -184,12 +189,24 @@ probe() {
     rc=1
   fi
 
-  git -C "$path" worktree remove --force "$name" >/dev/null 2>&1 || true
-  git -C "$path" worktree prune >/dev/null 2>&1 || true
-  rm -rf "$probe_dir"
-
   # A fresh probe passing does not clear existing live worktrees — enumerate and verify those too.
+  # This MUST run BEFORE any cleanup below. `git worktree prune` deletes the admin entry of any
+  # worktree whose tree is missing OR merely unverifiable, so pruning first destroyed the very
+  # evidence this sweep reads: "no linked worktrees to verify" and "a linked worktree that cannot be
+  # verified" became indistinguishable, and the second was reported as isolated ✓ (#2460). The sweep
+  # skips this probe's own `probe-iso-*` entry, so running it first is safe.
   check_existing_worktrees "$path" || rc=1
+
+  # Clean up ONLY this probe's own entry. A repository-wide `git worktree prune` also deletes a
+  # SIBLING session's admin entry whenever that session's tree is momentarily unreadable (restrictive
+  # permissions, an unmounted volume, an in-flight chmod) — permanently breaking the parallel session
+  # this script exists to protect. `worktree remove` already drops the admin entry on success; the
+  # scoped rm is the fallback for when it does not.
+  git -C "$path" worktree remove --force "$name" >/dev/null 2>&1 || true
+  rm -rf "$probe_dir"
+  local mdir
+  mdir=$(module_dir "$path") || mdir=''
+  [ -n "$mdir" ] && rm -rf "${mdir:?}/worktrees/${name:?}"
 
   [ "$rc" -eq 0 ] && printf 'submodule-init: %s — isolated ✓\n' "$path"
   return "$rc"

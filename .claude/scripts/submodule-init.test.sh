@@ -203,12 +203,54 @@ else
   echo "SKIP: case-only comparison — filesystem is case-sensitive (covered by the symlink case above)"
 fi
 
-# NOTE — the emptiness guard above is deliberately covered at the HELPER level only. Driving it through
-# `--check` end-to-end does not work today, and not because the guard is wrong: `probe` runs
-# `git worktree prune` before `check_existing_worktrees`, so an unverifiable worktree's admin entry is
-# deleted before the sweep meant to flag it, and `--check` reports the submodule isolated. That is a
-# separate fail-open tracked in monorepo#2460 — asserting the end-to-end behaviour here would pin the
-# bug rather than the fix.
+# 7. #2460 — an UNVERIFIABLE linked worktree must fail --check CLOSED, and the check must not destroy
+#    the evidence it reads. `probe` used to run a repository-wide `git worktree prune` BEFORE
+#    `check_existing_worktrees`; prune drops the admin entry of any worktree that is missing OR merely
+#    unverifiable, so the sweep found nothing and reported `isolated ✓` on a colliding tree.
+#    The fixture makes the worktree UNSEARCHABLE (chmod 0400): `-d` still passes, so the entry is not
+#    skipped as "missing", while both `cd` and `git -C` fail — i.e. genuinely unverifiable.
+c7="$tmp/c7"
+mk_super "$c7"
+live_wt="$c7/live-wt"
+git -C "$c7/super/sub" worktree add -q --detach "$live_wt"
+wt_admin="$c7/super/.git/modules/sub/worktrees"
+chmod 0400 "$live_wt"
+# Restore permissions on exit so the EXIT trap's `rm -rf "$tmp"` can actually remove the fixture.
+trap 'chmod -R u+rwx "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
+
+# PRECONDITION: if the platform lets us read the dir anyway (running as root, or a filesystem that
+# ignores the mode), the case under test never arises and the assertions below would pass vacuously.
+if (cd "$live_wt") 2>/dev/null; then
+  echo "SKIP: #2460 end-to-end — this platform can still enter a 0400 directory (vacuous otherwise)"
+else
+  out="$(cd "$c7/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+  report "unverifiable worktree: --check exits non-zero (fails closed)" \
+    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+  report "unverifiable worktree: reports ISOLATION BROKEN and names it" \
+    "$(grep -q 'ISOLATION BROKEN' <<<"$out" && grep -q 'live-wt' <<<"$out" && echo yes || echo no)" "$out"
+  report "unverifiable worktree: never reports the submodule isolated" \
+    "$(grep -q 'sub — isolated' <<<"$out" && echo no || echo yes)" "$out"
+  # The evidence-destruction half: the sibling's admin entry must SURVIVE the check.
+  report "unverifiable worktree: the sibling's admin entry survives --check (not pruned)" \
+    "$([[ -e "$wt_admin/live-wt" ]] && echo yes || echo no)" "$(ls "$wt_admin" 2>&1)"
+fi
+
+# 8. NEGATIVE CONTROL for 7 — the fix must not simply disable cleanup. On a clean tree, --check still
+#    removes its OWN probe entry, leaving no `probe-iso-*` admin dir behind.
+c8="$tmp/c8"
+mk_super "$c8"
+out="$(cd "$c8/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "cleanup: clean tree still passes --check" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+# A fully-cleaned tree may leave no `worktrees` dir at all, so `find` on a missing path must not abort
+# the suite under `set -Eeuo pipefail` — glob instead, and count with no pipeline.
+shopt -s nullglob
+leftover_admin=("$c8/super/.git/modules/sub/worktrees"/probe-iso-*)
+leftover_tree=("$c8/super/sub"/probe-iso-*)
+shopt -u nullglob
+report "cleanup: --check removes its own probe admin entry (no probe-iso-* left)" \
+  "$([[ ${#leftover_admin[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${leftover_admin[*]:-none}"
+report "cleanup: --check leaves no probe worktree directory behind" \
+  "$([[ ${#leftover_tree[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${leftover_tree[*]:-none}"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
