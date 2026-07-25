@@ -26,6 +26,7 @@ jobs:
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
       agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
+      work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
@@ -122,14 +123,24 @@ jobs:
               - '.github/workflows/ci.yaml'
             agent-role-delivery-contract:
               - 'AGENTS.md'
+              - '.claude/agents/daily-maintainer.md'
+              # The two retired agent forks stay listed deliberately: the test asserts they
+              # do NOT exist, so re-adding either must trigger the job that rejects it.
               - '.claude/agents/agent-improver.md'
               - '.claude/agents/finops-engineer.md'
               - '.claude/plugin-consumption/agentic-engineering.desired-state.json'
               - '.claude/settings.json'
               - '.claude/skills/agent-improvement/**'
               - '.claude/skills/finops/SKILL.md'
+              - '.claude/finops/**'
+              - '.claude/scripts/finops-snapshot.sh'
               - '.claude/scripts/agent-role-delivery-contract.test.sh'
               - 'libraries/agent-plugins'
+              - '.github/workflows/ci.yaml'
+            work-priority-ladder:
+              - 'AGENTS.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/scripts/work-priority-ladder.test.sh'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
@@ -479,8 +490,40 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The contract resolves the declared plugin entrypoint against the agent files the
+      # PINNED plugin actually bundles, so that one submodule must be present. Without it the
+      # test fails closed rather than skipping — an earlier revision skipped, which made the
+      # entrypoint-drift guard a silent no-op here. Only this submodule is initialised (not
+      # `submodules: true`, which would also try the private ones), over HTTPS because
+      # .gitmodules uses SSH and no deploy key exists in CI. The rewrite is command-scoped and
+      # carries no credential: agent-plugins is public and this is an anonymous read.
+      #
+      # NOT shallow, deliberately. `--depth 1` fetches only the submodule's branch tip, so it
+      # resolves the pinned commit ONLY while the pin happens to equal that tip. Every upstream
+      # merge moves the tip past the pin and the checkout would then fail — turning an unrelated
+      # PR red. agent-plugins is a small markdown marketplace, so a full fetch is the cheap and
+      # correct trade.
+      - name: Initialise the agent-plugins submodule
+        run: |
+          git -c 'url.https://github.com/.insteadOf=git@github.com:' \
+            submodule update --init libraries/agent-plugins
       - name: Verify the agent-role delivery contract
         run: bash .claude/scripts/agent-role-delivery-contract.test.sh
+
+  test-work-priority-ladder:
+    name: Test work-priority ladder
+    needs: changes
+    if: needs.changes.outputs.work-priority-ladder == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the work-priority ladder
+        run: bash .claude/scripts/work-priority-ladder.test.sh
 
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
@@ -518,6 +561,7 @@ jobs:
       - test-self-review-contract
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
+      - test-work-priority-ladder
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
@@ -542,5 +586,6 @@ jobs:
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}
+            ${{ needs.test-work-priority-ladder.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}
