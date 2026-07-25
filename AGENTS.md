@@ -491,9 +491,17 @@ issue never precedes an open `Security` one. Rungs 2 and 3 are otherwise ordinar
 decompose-and-start rule when one is large.
 
 ### Claim protocol — reserve the lane before you build
-This brain runs as **several instances at once**, all executing "pick the oldest actionable issue"
-over the same backlog. Two sessions surveying minutes apart will reliably pick the same issue —
-convergence is the **expected** behaviour of the selection rule, not bad luck. And because an open PR
+This brain runs as **several instances at once**, all executing *The work-selection ladder* over the
+same backlog. Two sessions surveying minutes apart will reliably pick the same issue —
+convergence is the **expected** behaviour of the selection rule, not bad luck.
+🔴 **The ladder makes this WORSE at rungs 2–3, and deliberately so — claim harder there.** Sorting by
+severity narrows the target pool from "the oldest of ~368 open issues" to "one of **18** open
+`type:"Security"` issues" (counts measured 2026-07-25), so every instance aims at the same handful
+instead of spreading across the age curve. Rung 1 pulls the other way — an own draft is owned by
+exactly one lane, so PR work barely collides — but the moment a run descends to rung 2 the collision
+odds jump, and cross-lane arbitration is still the **known-broken hole** in rule 4
+([monorepo#2302](https://github.com/devantler-tech/monorepo/issues/2302)). So on rungs 2–3: claim
+before you build, without exception, and scan **all three** namespaces first. And because an open PR
 only exists at the **end** of a build, the one recognised claim signal arrives exactly when it is too
 late to prevent the collision. Measured on `world-at-ruin` (2026-07-18): **six end-to-end builds
 discarded in ~24 hours** — #66 built to completion twice over, #81 lost after a full build with a
