@@ -142,6 +142,18 @@ report "linked worktree: submodule gitdir lives under the worktree admin dir" \
 out="$(cd "$c5/super-wt" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "linked worktree: --check passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 
+# Cleanup is scoped to the probe's own admin entry (#2460), and `module_dir` resolves differently in
+# this layout (.git/worktrees/<wt>/modules/<path>) — so prove the scoped removal lands in the RIGHT
+# place here too, or repeated runs would silently accumulate entries the old repo-wide prune used to
+# sweep. Several runs, because a single one cannot show accumulation.
+for _ in 1 2 3; do (cd "$c5/super-wt" && "$helper" --check >/dev/null 2>&1) || true; done
+c5_mdir="$(cd "$c5/super-wt/sub" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+shopt -s nullglob
+c5_left=("$c5_mdir/worktrees"/probe-iso-*)
+shopt -u nullglob
+report "linked worktree: repeated --check leaves no probe admin entries (scoped cleanup)" \
+  "$([[ ${#c5_left[@]} -eq 0 ]] && echo yes || echo no)" "mdir=$c5_mdir leftover=${c5_left[*]:-none}"
+
 # 6. Path comparison is by filesystem IDENTITY, not by spelling (#2457). The live defect was a
 #    worktree recorded as `.Codex/…` and reported by git as `.codex/…` — one inode on a
 #    case-insensitive volume, string-compared unequal, reported as ISOLATION BROKEN on a tree that
