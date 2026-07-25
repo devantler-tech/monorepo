@@ -50,6 +50,24 @@ grep -Fq '### Authority model' "${constitution}" ||
 grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constitution}" ||
   fail "consumer does not name the upstream Agent Improver source"
 
+# The bundled SKILL.md is SYNCED from devantler-tech/agent-skills (it carries
+# metadata.github-repo and the update-agent-skills workflow re-pulls it), so an edit there
+# is silently reverted. The consumer listed it as an authoring surface until 2026-07-25,
+# which would route a generic fix into a file that discards it. Assert the correct owner is
+# named, and that the synced path is not presented as the place to change behaviour.
+assert_prose "\`devantler-tech/agent-skills\`** authors the bundled" \
+  "consumer does not name agent-skills as the owner of bundled skills"
+assert_prose "not** an authoring surface" \
+  "consumer does not mark the synced SKILL.md copy as a non-authoring surface"
+
+# Provenance is a per-FILE question: the same plugin directory holds synced skills and
+# locally-authored agents, so a per-directory rule is wrong in one direction or the other.
+bundled_skill="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/skills/agent-improvement/SKILL.md"
+if [ -f "${bundled_skill}" ]; then
+  grep -q 'github-repo' "${bundled_skill}" ||
+    fail "bundled agent-improvement/SKILL.md no longer carries sync provenance — re-check whether it is still synced before trusting the contract text"
+fi
+
 # Every machine-readable entrypoint pointer must resolve to an agent the pinned plugin
 # actually BUNDLES. Derived from the submodule rather than hard-coded, so the next upstream
 # rename cannot leave this consumer pointing at a file that no longer exists — which is

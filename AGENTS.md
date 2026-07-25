@@ -263,11 +263,22 @@ definition surface, and an installed/cache copy is never an authoring target.
   script, the provider-neutral desired state, plugin settings, and the Cursor loader source. The local
   Agent Improver agent/skill forks are retired, and so is the standalone FinOps agent fork — the
   reviewed plugin is the source for both roles.
-- The generic upstream source in `devantler-tech/agent-plugins`, specifically
-  `plugins/agentic-engineering/agents/agent-improver.agent.md`,
-  `plugins/agentic-engineering/skills/agent-improvement/SKILL.md`, the plugin README/desired state,
-  and their manifest/contract validation. Change generic behaviour there first, merge it, then update
-  this consumer's `libraries/agent-plugins` gitlink and copied desired state.
+- The generic upstream source, which is split across **two** repositories. **Check the file's own
+  provenance before editing it — the question is per-FILE, never per-directory**, because one plugin
+  directory mixes both kinds:
+  - **`devantler-tech/agent-plugins`** authors
+    `plugins/agentic-engineering/agents/agent-improver.agent.md`, the plugin README/desired state, and
+    their manifest/contract validation. These carry **no** `metadata.github-repo`.
+  - **`devantler-tech/agent-skills`** authors the bundled *skills*, including `agent-improvement/`.
+    🔴 The copy at `plugins/agentic-engineering/skills/agent-improvement/SKILL.md` carries
+    `metadata.github-repo: …/agent-skills` and is re-pulled by the `update-agent-skills` workflow, so
+    editing it there is **silently reverted** — no conflict, no CI failure, no signal. It is a synced
+    artifact, **not** an authoring surface.
+
+  Verify with `grep -l "github-repo" plugins/*/skills/*/SKILL.md` (synced) versus
+  `grep -L "github-repo" plugins/*/agents/*.agent.md` (authored here). Change generic behaviour in the
+  **owning** repository first, merge it, then update this consumer's `libraries/agent-plugins` gitlink
+  and copied desired state.
 
 **Runtime-local surfaces — back up before editing, verify in place, and record before/after in native
 memory and the run report:**
