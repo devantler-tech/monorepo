@@ -41,8 +41,9 @@ public and private — no per-repo loop needed to enumerate):
 
 1. **Open PRs (org-wide, one call):**
    `gh search prs --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
-2. **Open issues (org-wide, one call) — include `assignees`, they are a CLAIM signal:**
-   `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,labels,updatedAt,url,assignees`
+2. **Open issues (org-wide, one call) — include `assignees` (claim signal) and `author`
+   (automation-owned filter):**
+   `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,labels,updatedAt,url,assignees`
    (`--archived=false` keeps archived repos' stale PRs/issues — e.g. `data-product`'s 2025 bot PRs —
    out of every survey; archived repos are read-only and carry no actionable signal.)
    (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
@@ -55,6 +56,16 @@ public and private — no per-repo loop needed to enumerate):
    ordinary open issues, noting the assignee so the orchestrator can respect a human's in-progress work
    on its own merits. Without these logins the orchestrator selects the oldest issue blind to live
    claims and re-opens the duplicate-build race the protocol exists to close.
+   **Short-circuit dependency-automation ISSUES the same way as their PRs** (live miss 2026-07-21,
+   #2349): an issue whose author is the exact `renovate[bot]` or `dependabot[bot]` identity
+   (org-search/REST; deeper surfaces may show `app/renovate` / `app/dependabot`) is
+   **AUTOMATION-OWNED (NO-ACTION)** — Renovate's Dependency Dashboard is the standing example
+   (`platform#313`, open since 2023-08-24 by design). Match **author login only** — never the title,
+   labels, or age. **Exclude them from every oldest-actionable / Advance ranking**; at most emit one
+   compact Operate `AUTOMATION-OWNED (NO-ACTION)` line. **Never select, triage-as-work, or close
+   them** — closing a Dependency Dashboard changes Renovate's behaviour. Without this filter the
+   dashboard heads a repo's oldest-first queue forever and every run re-derives that it is not real
+   work.
 2b. **Claim branches (one call per repo that has PR-less open issues):**
    `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep -E '^(claude|cursor|codex)/'` —
    report any `claude/*`, `cursor/*`, or `codex/*` branch that ends in `-<issue>`, ends in a
@@ -420,16 +431,23 @@ public and private — no per-repo loop needed to enumerate):
    for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do
      gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate \
        --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10],
-              .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"
+              .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"
    done
    ```
    ⚠️ **Type sweeps alone are NOT complete — 65 open issues were untyped on 2026-07-18.** Since
    `no:type` does not work, derive the untyped set as **(the primary org-wide open-issue sweep) minus
    (the union of the type sweeps)** and report it as a **triage** signal: an untyped issue is invisible
    to every type filter on the board and to this selection, so typing it is the fix.
+   Drop any row whose `.user.login` / author column is an exact dependency-automation identity before
+   ranking oldest-actionable (step 2 / the Drop-hits rule below) — without the author column the
+   filter cannot run.
    **Drop hits from archived repos** — this raw Search call has no archived filter (the primary sweep
    does), so an archived repo's open issue surfaces as actionable when it is a read-only tombstone
-   (`reusable-workflows` is the live example). **`security` is REPORTED, not prioritised**: the queue
+   (`reusable-workflows` is the live example). **Drop issues authored by the exact dependency-
+   automation identities** (`renovate[bot]` / `dependabot[bot]`; also `app/renovate` /
+   `app/dependabot` on surfaces that spell them that way) — same author-wide boundary as step 2 /
+   the PR short-circuit; they are never oldest-actionable (verified against `platform#313`).
+   **`security` is REPORTED, not prioritised**: the queue
    stays oldest-actionable-first and a security issue is *not* a reason to skip an older one — only an
    urgent security hotfix jumps, under the normal breakage rule.
    **Exclude a `Kata` whose named measurement date is still in the FUTURE** — contract skip reason (d)
@@ -529,7 +547,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
-- <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]> → AUTOMATION-OWNED (NO-ACTION)
+- <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…>, review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none> (orchestrator applies creation-record test before action; NOT asserted mine)
