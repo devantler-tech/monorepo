@@ -571,7 +571,8 @@ Digest rules:
   `pulls/<n>/reviews` the body-findings step (b) already fetched (`reviewDecision` alone names no
   author or SHA, and each CHANGES_REQUESTED review blocks merge independently — only-newest would
   hide an older human block behind a newer CodeRabbit one). Report the newest as
-  `rd=CHANGES_REQUESTED:<author>@<sha>` and name any additional CHANGES_REQUESTED authors.
+  `rd=CHANGES_REQUESTED:<agent|human>(<author>)@<sha>` — the qualifier is decided by the disclosure
+  test below, never by the login — and name any additional CHANGES_REQUESTED authors.
   Classify the PR **STALE-CR-DISMISSAL** instead of NEEDS-FIX **only when EVERY CHANGES_REQUESTED
   review is `coderabbitai[bot]`-authored**, none is at the current head, AND the pentad is otherwise
   clear with a current-head green review — the orchestrator then surfaces the stale-review dismissal

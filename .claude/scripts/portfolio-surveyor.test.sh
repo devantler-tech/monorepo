@@ -800,6 +800,12 @@ grep -Fq 'rd=CHANGES_REQUESTED:human(<author>)@<sha>' "${surveyor}" ||
 # shellcheck disable=SC2016
 grep -Fq 'including an unfamiliar actor word — is `human`' "${surveyor}" ||
   fail "surveyor does not resolve CHANGES_REQUESTED authorship ambiguity to human"
+# The sweep sentence must carry the qualifier too, or the rule reintroduces the login-only form
+# it replaces (partial propagation: the classifier is fixed while its producer still emits the
+# unqualified token, so the orchestrator never receives the distinction).
+# shellcheck disable=SC2016
+grep -Fq 'the qualifier is decided by the disclosure' "${surveyor}" ||
+  fail "surveyor still reports rd= without the agent/human qualifier at the sweep step"
 # A classifier with no schema slot is never reportable, so pin BOTH grammar rows independently.
 grep -Fq 'CHANGES_REQUESTED:agent(<author>)@<sha>|CHANGES_REQUESTED:human(<author>)@<sha>|none>, mergeState=<…> → REVIEW-READY' "${surveyor}" ||
   fail "surveyor draft digest grammar lacks the agent/human rd qualifier"
