@@ -797,6 +797,8 @@ grep -Fq 'rd=CHANGES_REQUESTED:agent(<author>)@<sha>' "${surveyor}" ||
 grep -Fq 'rd=CHANGES_REQUESTED:human(<author>)@<sha>' "${surveyor}" ||
   fail "surveyor cannot report a human-authored CHANGES_REQUESTED distinctly"
 # Fail closed: discarding the maintainer's own control signal is the worse of the two errors.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
 grep -Fq '**Ambiguity resolves to `human`.**' "${surveyor}" ||
   fail "surveyor does not resolve CHANGES_REQUESTED authorship ambiguity to human"
 # ...but failing closed must NOT re-break the structural match: an unfamiliar actor word after the
