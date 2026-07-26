@@ -1299,9 +1299,12 @@ a PR carrying one old CodeRabbit block *and* one old agent block satisfies neith
 forever. Re-verify the finding at head rather than treating it as feedback owed. **An agent-authored
 block AT the current head is ordinary feedback to fix or refute**, never dismissable — it is a live
 finding that merely came from a sibling. **One human block anywhere on the PR defeats both classes**,
-so a newer non-human review can never hide an older human one. **The dismissal itself stays the
-maintainer's on a promoted PR** — surface the one-click there and stop; only on a **draft** may the
-engineer dismiss its own superseded review. ⚠️ And note what this marker is: the disclosure prefix is
+so a newer non-human review can never hide an older human one. **The dismissal itself is ALWAYS the
+maintainer's** — surface the one-click and stop, draft or promoted; the engineer never dismisses a
+review autonomously. That reservation is what makes the failure-direction claim below true rather than
+aspirational: were an autonomous path allowed, a maintainer review whose first line imitated the public
+marker would be classified `agent` and, once stale, **discarded** rather than merely parked. ⚠️ And
+note what this marker is: the disclosure prefix is
 a **public convention, not authentication** — CodeRabbit's own review bodies reproduce it verbatim.
 It is safe here only because it can move a review from `human` to `agent` and never the reverse, so
 an imitated or missing marker costs a parked PR rather than a discarded control signal. A `devantler`

@@ -839,12 +839,24 @@ grep -Fq 'share ONE precondition set' "${surveyor}" ||
   fail "surveyor leaves a mixed CodeRabbit+agent stale block set unclassifiable, so it parks forever"
 grep -Fq 'stale blocks still qualifies' "${constitution}" ||
   fail "constitution leaves a mixed non-human stale block set unclassifiable"
-# Classifying is the surveyor's job; dismissing a review on a PROMOTED PR is reserved to the
-# maintainer, so the class must route there rather than mutate.
+# Dismissal is ALWAYS the maintainer's — draft or promoted. This is not stylistic: an autonomous
+# draft-dismissal path falsifies the failure-direction claim, because a maintainer review whose first
+# line imitates the PUBLIC marker would then be discarded outright rather than merely parked.
+grep -Fq 'ALWAYS the maintainer one-click — never an autonomous dismissal' "${surveyor}" ||
+  fail "surveyor permits an autonomous dismissal, which lets an imitated marker discard a human review"
+grep -Fq 'Do not reintroduce' "${surveyor}" ||
+  fail "surveyor does not tie the autonomous-dismissal ban to the marker's forgeability"
 grep -Fq 'Classifying is the surveyor' "${surveyor}" ||
-  fail "surveyor tells the orchestrator to dismiss a review on a promoted PR"
-grep -Fq "maintainer's on a promoted PR" "${constitution}" ||
-  fail "constitution lets the engineer dismiss a review on a promoted PR"
+  fail "surveyor does not separate classifying from mutating"
+grep -Fq 'The dismissal itself is ALWAYS the' "${constitution}" ||
+  fail "constitution lets the engineer dismiss a review autonomously"
+# The motivating case is a `devantler`-authored PR, which reports on the OWNERSHIP-UNVERIFIED row —
+# so the classification must exist THERE, or the orchestrator never receives it for its own PRs.
+grep -Fq 'stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none>' "${surveyor}" ||
+  fail "the devantler PR row cannot carry the stale-dismissal classification"
+# One precondition set, stated once. Two paragraphs disagreeing made the mixed case decidable two ways.
+grep -Fq 'review on the PR is NON-HUMAN' "${surveyor}" ||
+  fail "the CodeRabbit paragraph still carries a CodeRabbit-only precondition that contradicts the union"
 # The prefix is public and reproducible (CodeRabbit emits it verbatim). It is only safe because the
 # failure direction is one-way; a future reuse without that asymmetry would be an authentication hole.
 grep -Fq 'CONVENTION, not authentication' "${surveyor}" ||

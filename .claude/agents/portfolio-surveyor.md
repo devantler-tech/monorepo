@@ -528,7 +528,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]> → AUTOMATION-OWNED (NO-ACTION)
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
-- <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none> (orchestrator applies creation-record test before action; NOT asserted mine)
+- <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (orchestrator applies creation-record test before action; NOT asserted mine — the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
 
@@ -577,9 +577,14 @@ Digest rules:
   since `coderabbitai[bot]` is neither a sibling instance nor the maintainer and forcing it into
   either qualifier would make the CodeRabbit rule directly below unstatable.
   Classify the PR **STALE-CR-DISMISSAL** instead of NEEDS-FIX **only when EVERY CHANGES_REQUESTED
-  review is `coderabbitai[bot]`-authored**, none is at the current head, AND the pentad is otherwise
-  clear with a current-head green review — the orchestrator then surfaces the stale-review dismissal
-  one-click rather than spending more review requests (contract → *Merge policy*).
+  review on the PR is NON-HUMAN** — `coderabbitai[bot]` or an agent-authored `devantler` per the
+  disclosure test below, in any mix — none is at the current head, AND the pentad is otherwise clear
+  with a current-head green review; the orchestrator then surfaces the stale-review dismissal one-click
+  rather than spending more review requests (contract → *Merge policy*). **This precondition is stated
+  once and shared by both dismissal classes** (see the agent-authorship rule below, which only chooses
+  the class *name* from the authors present). An earlier CodeRabbit-ONLY wording contradicted it and
+  left the mixed CodeRabbit+agent case decidable two ways — parked or dismissable — depending on which
+  paragraph was read first.
 - **A `devantler` CHANGES_REQUESTED is not self-evidently human — apply the disclosure test before
   calling it one.** Every agent instance reviews as `devantler`, so the login alone cannot separate
   the maintainer's block from a sibling instance's own superseded review. Apply the SAME two-part
@@ -612,11 +617,18 @@ Digest rules:
   **A single human-authored block anywhere on the PR defeats both classes outright** — otherwise a
   newer non-human review's classification would hide an older human control signal, which is the
   precise failure the every-review sweep above exists to prevent.
-  **The remedy depends on whether the PR is PROMOTED — and on a promoted PR the dismissal is NOT the
-  orchestrator's to perform** (contract → *Merge policy*: dismissing a review on a promoted PR is
-  reserved to the maintainer). On a **draft**, the orchestrator re-verifies the finding at head and
-  dismisses its own superseded review. On a **promoted** PR it surfaces the one-click and stops, the
-  same route `STALE-CR-DISMISSAL` already takes. Classifying is the surveyor's job; mutating is not.
+  **The remedy is ALWAYS the maintainer one-click — never an autonomous dismissal, draft or not.**
+  The orchestrator re-verifies the finding at head, reports the class, and stops; it never dismisses a
+  review itself. Classifying is the surveyor's job; mutating is not.
+  🔴 **This is what makes the failure-direction claim above TRUE rather than aspirational.** An earlier
+  draft of this rule let the orchestrator self-dismiss on a draft — and that quietly falsified the
+  asymmetry: a maintainer review whose first line imitated the public marker would be classified
+  `agent`, and once stale on a draft it would have been **discarded outright**, not merely parked. With
+  dismissal reserved to the maintainer in every case, a misclassification costs at most a mislabelled
+  row he can overrule, which is the bounded cost the asymmetry actually promises. **Do not reintroduce
+  an autonomous-dismissal path without first replacing the public marker with something a non-author
+  cannot reproduce** — the two are load-bearing together, and this rule is safe only because the
+  mutation is withheld.
   **An agent-authored block AT the current head is ordinary NEEDS-FIX feedback**, never dismissable:
   it is a live finding that happens to come from a sibling, and fix-or-refute applies as it would to
   any lane's. Dropping this staleness test would let the classifier discard findings that still hold.
