@@ -98,7 +98,9 @@ assert_prose 'a run that opens its whole batch in one pass satisfies it **vacuou
   "${constitution_flat}" "contract does not explain why the ordering rule is satisfiable vacuously"
 grep -Fq '| **Per run** | Open at most **5** new own drafts. |' "${constitution}" ||
   fail "contract does not state the per-run draft intake cap"
-grep -Fq '| **Per lane** | While your own lane holds **more than 20** open drafts' "${constitution}" ||
+# Assert the WHOLE row, not just the threshold: a prefix match would still pass with the actual
+# instruction ("open no new ones") deleted, leaving a number that binds nothing.
+grep -Fq '| **Per lane** | While your own lane holds **more than 20** open drafts, open **no** new ones — spend the whole run finishing. |' "${constitution}" ||
   fail "contract does not state the per-lane draft ceiling"
 # The carve-outs are load-bearing: without them the cap would block a hotfix or stop the backlog
 # being captured, which is a guard firing on correct mandated work.
@@ -113,6 +115,10 @@ assert_prose 'What IS sprawl is a burst that outruns your own review capacity' \
 # which would trade the floor and "work as long as there is work" for the pile fix.
 assert_prose 'A cap is NOT licence to stop early, and it never blocks the floor' \
   "${constitution_flat}" "intake cap does not say it bounds starting rather than the run — it reads as licence to idle"
+# ...and that it says what a capped run should do INSTEAD. Without this, "don't stop early" states
+# only the prohibition, leaving the redirection to finishing implicit.
+assert_prose 'the cap redirects a run **from starting toward finishing**, and finishing is unbounded' \
+  "${constitution_flat}" "contract does not redirect a capped run toward finishing"
 
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.

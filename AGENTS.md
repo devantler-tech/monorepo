@@ -2529,16 +2529,12 @@ sharpens *PRs-before-issues* and the every-run own-draft review-thread sweep int
 finish-before-start ordering.)
 **The WIP limit is also a CAP ON INTAKE, not only an ordering — a run cannot finish what it cannot get
 reviewed.** The paragraph above orders work *within* a run, so a run that opens its whole batch in one
-pass satisfies it **vacuously**: it had nothing in flight when it started. That is precisely what
-happened. Measured 2026-07-26: **63 of 88 open `codex/*` drafts — 72% — were opened on a single day
-(2026-07-18)**, all on one repo, all one theme; **every sampled one had never been reviewed at all**,
-was last touched 2026-07-21, and had since gone `BLOCKED` or `DIRTY`. Net drainage was ~2/day across
-the lane, so the cohort was conflicting faster than it drained. **Ordering could not have helped**:
-promotion needs **≥1 green review at the current head**, every push re-stales it, and the review lanes
-are **metered and shared** — CodeRabbit per-review, Codex weekly, Bugbot monthly (which returned
-`Error` for every request after 25 in one batch). A 63-draft burst is **structurally unreviewable**,
-and it spends a scarce resource every other lane also needs. So intake is bounded by finishing
-capacity:
+pass satisfies it **vacuously**: it had nothing in flight when it started. **Ordering alone cannot
+drain a pile**, because promotion needs **≥1 green review at the current head**, every push re-stales
+it, and the review lanes are **metered and shared** — CodeRabbit per-review, Codex weekly, Bugbot
+monthly. A burst larger than that capacity is **structurally unreviewable**: it cannot finish, it ages
+into conflicts, and it spends a scarce resource every other lane also needs. So intake is bounded by
+finishing capacity:
 
 | Bound | Rule |
 |---|---|
@@ -2548,8 +2544,9 @@ capacity:
 **Rung-0 live breakage is exempt from both** — a hotfix is never blocked by a cap. So is the
 issue-capture *Issue-driven* mandates: **filing an issue is not opening a draft**, and the backlog must
 stay capturable while the caps bite. Both numbers are a deliberately permissive starting point rather
-than a measured optimum — 5/run is ~2.5× observed daily drainage, and 20 sits above the 18
-already-CLEAN drafts counted 2026-07-25. **Treat a cap you hit as the signal it is**: your lane's
+than a measured optimum — each sits above the lane's observed drainage and idle-clean counts, so the
+caps bite only on a burst ([#2490](https://github.com/devantler-tech/monorepo/issues/2490) holds the
+measurement they were set from). **Treat a cap you hit as the signal it is**: your lane's
 finishing capacity is the binding constraint, and the work to do is finishing.
 ⚠️ **A cap is NOT licence to stop early, and it never blocks the floor.** *Work as long as there is
 work* below is unchanged: the cap redirects a run **from starting toward finishing**, and finishing is
