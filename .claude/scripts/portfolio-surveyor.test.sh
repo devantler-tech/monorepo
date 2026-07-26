@@ -778,4 +778,52 @@ grep -Fq 'Do not gate this scan on assignees' "${surveyor}" ||
 grep -Fq 'none(cursor-lane)' "${surveyor}" ||
   fail "surveyor CLAIMED digest does not allow cursor-lane branch-only claims"
 
+# monorepo#2482 — every agent instance reviews as `devantler`, so an `rd=` rule keyed on the login
+# alone reports a sibling instance's own superseded CHANGES_REQUESTED as a permanent human gate and
+# parks a finished PR. Measured live on monorepo#2432: a disclosed agent review blocked the PR for
+# 3 days. Assert the classifier, BOTH digest-grammar sites, and the fail-closed direction.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq 'A `devantler` CHANGES_REQUESTED is not self-evidently human' "${surveyor}" ||
+  fail "surveyor still treats a devantler CHANGES_REQUESTED as self-evidently human"
+# The sender-marker fallback is the branch a login-only rule drops, and the 843rd measured 71
+# sibling comments in exactly that undisclosed shape — so it is the COMMON case, not a corner.
+grep -Fq 'leading 🤖 first-person automation sender marker naming an agent instance as' "${surveyor}" ||
+  fail "surveyor rd= classification omits the sibling sender-marker fallback"
+# shellcheck disable=SC2016
+grep -Fq 'rd=CHANGES_REQUESTED:agent(<author>)@<sha>' "${surveyor}" ||
+  fail "surveyor cannot report an agent-authored CHANGES_REQUESTED distinctly"
+# shellcheck disable=SC2016
+grep -Fq 'rd=CHANGES_REQUESTED:human(<author>)@<sha>' "${surveyor}" ||
+  fail "surveyor cannot report a human-authored CHANGES_REQUESTED distinctly"
+# Fail closed: discarding the maintainer's own control signal is the worse of the two errors.
+# shellcheck disable=SC2016
+grep -Fq 'including an unfamiliar actor word — is `human`' "${surveyor}" ||
+  fail "surveyor does not resolve CHANGES_REQUESTED authorship ambiguity to human"
+# A classifier with no schema slot is never reportable, so pin BOTH grammar rows independently.
+grep -Fq 'CHANGES_REQUESTED:agent(<author>)@<sha>|CHANGES_REQUESTED:human(<author>)@<sha>|none>, mergeState=<…> → REVIEW-READY' "${surveyor}" ||
+  fail "surveyor draft digest grammar lacks the agent/human rd qualifier"
+grep -Fq 'CHANGES_REQUESTED:agent(<author>)@<sha>|CHANGES_REQUESTED:human(<author>)@<sha>|none>, mergeState=<…> → MERGE-READY' "${surveyor}" ||
+  fail "surveyor non-draft digest grammar lacks the agent/human rd qualifier"
+grep -Fq 'STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL' "${surveyor}" ||
+  fail "surveyor non-draft digest grammar cannot emit STALE-AGENT-DISMISSAL"
+grep -Fq 'STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL' "${surveyor}" ||
+  fail "surveyor draft digest grammar cannot emit STALE-AGENT-DISMISSAL"
+
+# The constitution carries the same defect: it declared the stale-dismissal class CodeRabbit-only
+# and named `devantler` as the example of a human reviewer.
+# shellcheck disable=SC2016
+grep -Fq 'authorship by login alone cannot tell his block apart' "${constitution}" ||
+  fail "constitution still separates maintainer from agent reviews by login alone"
+grep -Fq 'or** when it opens with a leading 🤖 first-person automation' "${constitution}" ||
+  fail "constitution omits the sender-marker fallback for CHANGES_REQUESTED authorship"
+grep -Fq '**Ambiguity resolves to the maintainer**' "${constitution}" ||
+  fail "constitution does not fail closed on ambiguous CHANGES_REQUESTED authorship"
+# shellcheck disable=SC2016
+grep -Fq 'case `STALE-AGENT-DISMISSAL` — so a run acts on the digest' "${constitution}" ||
+  fail "constitution does not define the STALE-AGENT-DISMISSAL digest class"
+if grep -Fq 'The class is **CodeRabbit-only**' "${constitution}"; then
+  fail "constitution still declares the stale-dismissal class CodeRabbit-only"
+fi
+
 echo "portfolio surveyor contract: all assertions passed"
