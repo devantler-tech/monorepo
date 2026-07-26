@@ -2551,6 +2551,11 @@ stay capturable while the caps bite. Both numbers are a deliberately permissive 
 than a measured optimum — 5/run is ~2.5× observed daily drainage, and 20 sits above the 18
 already-CLEAN drafts counted 2026-07-25. **Treat a cap you hit as the signal it is**: your lane's
 finishing capacity is the binding constraint, and the work to do is finishing.
+⚠️ **A cap is NOT licence to stop early, and it never blocks the floor.** *Work as long as there is
+work* below is unchanged: the cap redirects a run **from starting toward finishing**, and finishing is
+unbounded — a run that hits the cap and then idles has stopped too soon. The floor is unaffected for
+the same reason, because its first and preferred option is **an open PR of yours driven to merged**,
+which is exactly what a capped run should be doing.
 **Work as long as there is work — don't stop early.** The floor (≥1 artifact) is a **minimum and a
 backstop, not a target or a stopping point**: keep going while actionable work remains, and **prefer
 long, continuous sessions** over stopping after a handful of items. End a run only when actionable work

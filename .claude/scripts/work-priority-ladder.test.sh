@@ -109,6 +109,10 @@ assert_prose 'filing an issue is not opening a draft' \
 # Autonomy must no longer bless an unreviewable burst as "not sprawl".
 assert_prose 'What IS sprawl is a burst that outruns your own review capacity' \
   "${constitution_flat}" "Autonomy still licenses an unbounded draft set as 'not sprawl'"
+# A cap bounds STARTING, never the run itself — without this the cap reads as permission to idle,
+# which would trade the floor and "work as long as there is work" for the pile fix.
+assert_prose 'A cap is NOT licence to stop early, and it never blocks the floor' \
+  "${constitution_flat}" "intake cap does not say it bounds starting rather than the run — it reads as licence to idle"
 
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.
