@@ -263,28 +263,38 @@ definition surface, and an installed/cache copy is never an authoring target.
   script, the provider-neutral desired state, plugin settings, and the Cursor loader source. The local
   Agent Improver agent/skill forks are retired, and so is the standalone FinOps agent fork — the
   reviewed plugin is the source for both roles.
-- The generic upstream source, which is split across **two** repositories. **Check the file's own
-  provenance before editing it — the question is per-FILE, never per-directory**, because one plugin
-  directory mixes both kinds:
+- The generic upstream source, which is **NOT one repository**. **Check the file's own provenance
+  before editing it — the question is per-FILE, never per-directory**, because one plugin directory
+  mixes locally-authored files with copies synced from *several different* upstreams:
   - **`devantler-tech/agent-plugins`** authors
     `plugins/agentic-engineering/agents/agent-improver.agent.md`, the plugin README/desired state, and
     their manifest/contract validation. These carry **no** `metadata.github-repo`.
-  - **`devantler-tech/agent-skills`** authors the bundled *skills*, including `agent-improvement/`.
+  - **`devantler-tech/agent-skills`** authors `agent-improvement/` and most of our own skills.
     🔴 The copy at `plugins/agentic-engineering/skills/agent-improvement/SKILL.md` carries
     `metadata.github-repo: https://github.com/devantler-tech/agent-skills` and is re-pulled by the
     `update-agent-skills` workflow, so editing it there is **silently reverted** — no conflict, no CI
     failure, no signal. It is a synced artifact, **not** an authoring surface.
+  - ⚠️ **Other bundled skills come from third-party upstreams entirely** — measured 2026-07-25:
+    `find-skills` from `vercel-labs/skills`, `git-commit`/`refactor` from `github/awesome-copilot`,
+    `test-driven-development` from `obra/superpowers`, `astro` from `astrolicious/agent-skills`.
+    Sending a fix for one of those to `agent-skills` routes it to a repository that does not own it,
+    and the *Ask before upstream creates* rule applies to every one of them. **Read the value; never
+    assume the owner.**
 
-  Verify **from the monorepo root**, matching the key *and its value* — a bare `github-repo` test only
-  proves the file is synced from *somewhere*, not from the repo you are about to open a PR against:
+  Verify **from the monorepo root**, and **query the frontmatter structurally** — a `grep` for the
+  string is not good enough here. It reports a file whose *body* merely mentions the URL, accepts a
+  prefix-extended rename (`agent-skills-v2`), and misses that the value sits under some other mapping
+  than `metadata`. Ask for the exact YAML path instead:
 
   ```sh
-  # synced — edit these upstream, in the repo the value names:
-  grep -l 'github-repo: https://github.com/devantler-tech/agent-skills' \
-    libraries/agent-plugins/plugins/*/skills/*/SKILL.md
-  # authored in agent-plugins — safe to edit there:
-  grep -L 'github-repo' libraries/agent-plugins/plugins/*/agents/*.agent.md
+  # who owns each bundled skill (empty/null ⇒ authored in agent-plugins, safe to edit there):
+  for f in libraries/agent-plugins/plugins/*/skills/*/SKILL.md; do
+    printf '%s\t%s\n' "$(yq --front-matter=extract '.metadata.github-repo // "LOCAL"' "$f")" "$f"
+  done
   ```
+
+  Anything printing `https://github.com/devantler-tech/agent-skills` is **synced** — edit it upstream
+  in that repo. `LOCAL` means it is authored in `agent-plugins`.
 
   Change generic behaviour in the **owning** repository first. The rollout then differs by owner, and
   **the skills path has an extra hop that is easy to skip**:
