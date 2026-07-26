@@ -1186,9 +1186,11 @@ Prefer acting — a draft PR on an issue, or filing the issue for a new find —
 report-only note for things that genuinely aren't a diff or an issue (environment/infra/repo-config/
 external blockers). Restraint applies to *noise* (don't stack
 duplicate PRs or filler comments on the **same** concern), not to work you've already identified.
-**A set of in-flight drafts still maturing toward readiness is NOT sprawl and NOT a reason to stop** —
-distinct, substantive work across products is exactly what's wanted; only duplicate/filler PRs on one
-concern are bounded. A maintainer-sequenced queue on **one** product (e.g. a recovery sprint) holds
+**Distinct, substantive work ACROSS PRODUCTS is NOT sprawl and NOT a reason to stop** — breadth is
+exactly what's wanted; duplicate/filler PRs on one concern are what's bounded. **What IS sprawl is a
+burst that outruns your own review capacity**: drafts you cannot carry to a green review are not work
+in progress, they are work that cannot finish — see the intake cap in *Cadence & focus*, which bounds
+how many you may open. A maintainer-sequenced queue on **one** product (e.g. a recovery sprint) holds
 back only *that* product's lane — it never gates advance work on the **other** products. **That said,
 finish before you start more** (*stop starting, start finishing* — see *Cadence & focus*): the
 deliverable is now the **merged, readiness-proven PR**, so each run drive your existing in-flight own
@@ -2525,6 +2527,32 @@ nothing while they sit. Concretely: a pentad-clear own PR left un-promoted/un-me
 blocked on a **fixable** check/thread, is unfinished work — clear it **before** you start more. (This
 sharpens *PRs-before-issues* and the every-run own-draft review-thread sweep into an explicit
 finish-before-start ordering.)
+**The WIP limit is also a CAP ON INTAKE, not only an ordering — a run cannot finish what it cannot get
+reviewed.** The paragraph above orders work *within* a run, so a run that opens its whole batch in one
+pass satisfies it **vacuously**: it had nothing in flight when it started. **Ordering alone cannot
+drain a pile**, because promotion needs **≥1 green review at the current head**, every push re-stales
+it, and the review lanes are **metered and shared** — CodeRabbit per-review, Codex weekly, Bugbot
+monthly. A burst larger than that capacity is **structurally unreviewable**: it cannot finish, it ages
+into conflicts, and it spends a scarce resource every other lane also needs. So intake is bounded by
+finishing capacity:
+
+| Bound | Rule |
+|---|---|
+| **Per run** | Open at most **5** new own drafts. |
+| **Per lane** | While your own lane holds **more than 20** open drafts, open **no** new ones — spend the whole run finishing. |
+
+**Rung-0 live breakage is exempt from both** — a hotfix is never blocked by a cap. So is the
+issue-capture *Issue-driven* mandates: **filing an issue is not opening a draft**, and the backlog must
+stay capturable while the caps bite. Both numbers are a deliberately permissive starting point rather
+than a measured optimum — each sits above the lane's observed drainage and idle-clean counts, so the
+caps bite only on a burst ([#2490](https://github.com/devantler-tech/monorepo/issues/2490) holds the
+measurement they were set from). **Treat a cap you hit as the signal it is**: your lane's
+finishing capacity is the binding constraint, and the work to do is finishing.
+⚠️ **A cap is NOT licence to stop early, and it never blocks the floor.** *Work as long as there is
+work* below is unchanged: the cap redirects a run **from starting toward finishing**, and finishing is
+unbounded — a run that hits the cap and then idles has stopped too soon. The floor is unaffected for
+the same reason, because its first and preferred option is **an open PR of yours driven to merged**,
+which is exactly what a capped run should be doing.
 **Work as long as there is work — don't stop early.** The floor (≥1 artifact) is a **minimum and a
 backstop, not a target or a stopping point**: keep going while actionable work remains, and **prefer
 long, continuous sessions** over stopping after a handful of items. End a run only when actionable work
