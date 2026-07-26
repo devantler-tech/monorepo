@@ -227,7 +227,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   an explicit concrete problem CodeRabbit reports while selected for the current head counts; fold
   it into the non-thread `body_findings` count, fix or refute it, then
   push when files changed, then restart the ordered provider loop at CodeRabbit; a pure refutation
-  restarts at the same head without an empty commit. Across hourly runs
+  restarts at the same head without an empty commit. Across runs
   older PRs accumulate red checks, threads, and conflicts the live watcher (alive only in the
   *spawning* session) never sees; the survey must catch them (contract *Autonomy → Watch the PRs you
   spawn*). **Externally-gated / parked PRs are IN the sweep** — a merge gate excuses the merge, never
@@ -238,7 +238,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still queued").
 
 **Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the
-product's `weekly`/live cursor in memory — NOT every hourly run), also spawn the read-only
+product's `weekly`/live cursor in memory — NOT every run), also spawn the read-only
 [`platform-security-surveyor`](../../agents/platform-security-surveyor.md) with the current baseline
 (last recorded posture score / CVE counts / routing state from memory). It runs the bounded
 `kubectl --context admin@prod` pass over the three Kubescape surfaces **liveness-first** — a broken
@@ -317,7 +317,8 @@ their failing CI — is the **first-priority work every run, ahead of issues** (
 outranks it). Exact Renovate/Dependabot PRs are automation-owned dependency PRs, not actionable PRs.
 Scope: every **`devantler-tech`** repo's actionable trusted-author PRs; scheduled runs do not enumerate or act on
 external repositories. Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
-are the work queue**, you resolve the **oldest actionable** one first, and new non-trivial finds are
+are the work queue**, worked in the order contract *The work-selection ladder* sets — **security
+issues, then bugs, then the oldest actionable issue** — and new non-trivial finds are
 **filed as issues before** they're built (trivial obvious fixes excepted). **Every run must clear the
 floor — at least one concrete artifact** (ideally a merged/drafted PR or a draft resolving the oldest
 actionable issue; else a newly-filed well-formed issue, a triage/strategy pass, an unblocking
@@ -330,7 +331,11 @@ readiness are **not** a reason to stop — advance a *different* product. **Stop
 merged — pentad clear (green CI + threads resolved + not DIRTY + ≥1 green review at the current head)
 + user-evaluated → **self-promote → merge** (contract *Autonomy*; definition PRs included since their
 separate gate was retired 2026-07-18) — or to an explicitly-named blocker; a *half-finished* one (red CI,
-open threads, conflicting, never user-evaluated) is unfinished work to clear first. Work the ladder top-down — **hotfix/operate first, then advance**:
+open threads, conflicting, never user-evaluated) is unfinished work to clear first. 🔴 **Your own
+DRAFTS are rung-1 work, not a separate softer category** — the `non-draft` wording in contract *Merge
+policy* scopes the merge command, never this sweep, and reading it as non-drafts-only is what left
+**99 own PRs open, all drafts, none promoted, median age 6.9 days** on 2026-07-25. Work the ladder
+top-down — **hotfix/operate first, then advance**:
 
 **Value check before build.** When an issue reaches the front of the advance queue, revalidate its
 current evidence, affected audience/problem, hypothesis, and success signal using
@@ -370,13 +375,14 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    every push) is your duty; the full request discipline (**one provider request at a time**, in
    CodeRabbit > Codex > Cursor Bugbot order, and **stop on its first successful current-head review**;
    a reaction emoji earns a generous bounded wait for the substantive response, while no reaction
-   means inspect or retry promptly; before every trigger post a separate disclosed current-head
-   reservation marker, re-read authenticated reservations, and let the oldest `created_at` then
-   lowest comment id win before posting the provider request marker (each request marker names its
-   provider and winning reservation id; pair Cursor's marker to the next exact-author bare trigger,
-   ignoring interleaved other-author and reservation-only comments); accept markers only from exact author `devantler`
-   with the structural agent disclosure; the winning request supersedes every losing reservation in
-   that provider/head election; persist a completed no-gate outcome, or an authenticated
+   means inspect or retry promptly; put the current-head request marker in the **same comment as the
+   trigger**, re-reading the repository-visible current-head request markers immediately before
+   posting it (each marker names its provider; pair Cursor's marker to the next exact-author bare
+   trigger, ignoring interleaved other-author comments); accept markers only from exact author `devantler`
+   with the structural agent disclosure; **never post a separate pre-trigger reservation comment** —
+   that two-phase step was retired on measurement 2026-07-25, having posted a blank-rendering comment
+   1–2 seconds before its own trigger and closed zero races in 75 elections;
+   persist a completed no-gate outcome, or an authenticated
    `review-progress-head` marker after evidenced silent expiry, so the next run advances rather than
    repeats the provider; calculate that cursor as the furthest completed lane by provider order,
    never by latest response time;
@@ -437,8 +443,10 @@ when the operate ladder is clear you still advance at least one product (never e
 Advance work is **issue-driven** (contract *Issue-driven*): its heart is **resolving the oldest
 actionable open issue**, and any new non-trivial find is **filed as an issue first** to enter that same
 backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
-7. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
-   open issue that's actually startable; skip one only if it's blocked, too under-specified to begin, or
+7. **Resolve the next issue by the ladder** *(the default advance action)* — take the highest rung
+   with actionable work: open `type:"Security"` issues first, then `type:"Bug"`, then the **oldest**
+   startable issue (contract *The work-selection ladder*). Within a rung, oldest first.
+   Skip one only if it's blocked, too under-specified to begin, or
    it already has an open PR. A **bare `devantler` assignee does *not* reserve** an issue
    **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
    (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
@@ -498,8 +506,10 @@ blog experiment/PR through review, deployment, and measurement before starting a
 finds no worthwhile story is useful but does not move the publication clock; marketing, positioning,
 discovery, and adoption are product work, while filler and traffic-only vanity are not.
 
-**Fairness & ordering:** issue **age is the primary sort** for what to resolve (oldest actionable
-first — contract *Issue-driven*); when issue value/age is comparable, prefer the product with the
+**Fairness & ordering:** **severity is the primary sort, age the tiebreaker within a tier** — open
+`type:"Security"` issues, then `type:"Bug"`, then everything else oldest-actionable-first (contract
+*The work-selection ladder*); a three-week-old `Docs` issue never precedes an open `Security` one.
+When severity and age are comparable, prefer the product with the
 oldest `last_worked` (and oldest strategy review). Aim over time to advance every product, not just the
 noisy ones.
 **Cadence gates:** per-product strategy review and docs pass weekly-to-monthly (oldest first); review
