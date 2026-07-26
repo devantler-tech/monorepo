@@ -11,7 +11,7 @@ constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 daily_maintainer="${repo_root}/.claude/agents/daily-maintainer.md"
-parity_checklist="${repo_root}/.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md"
+parity_checklist="${repo_root}/.claude/plugin-consumption/agentic-engineering-surveyor-diff.md"
 workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
@@ -47,7 +47,7 @@ grep -Fq 'author exactly `devantler` and carry the structural disclosure prefix'
   fail "an external account can spoof a same-head body-finding resolution record"
 grep -Fq 'An identical repeated same-SHA CodeRabbit finding preserves its authenticated resolution record' "${constitution}" ||
   fail "an unchanged CodeRabbit false positive can reopen forever"
-grep -Fq 'Immediately before every provider request, re-read the repository-visible current-head reservation' "${constitution}" ||
+grep -Fq 'Immediately before every provider request, re-read the repository-visible current-head request' "${constitution}" ||
   fail "overlapping instances can open concurrent provider lanes"
 grep -Fq 'review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>' "${surveyor}" ||
   fail "surveyor does not expose an in-flight provider request to sibling instances"
@@ -55,14 +55,18 @@ grep -Fq 'A request marker is authoritative only from exact author `devantler` w
   fail "an external comment can spoof an in-flight provider request"
 grep -Fq 'Only one provider request may be active at a time' "${constitution}" ||
   fail "constitution does not forbid concurrent provider requests"
-grep -Fq 'post a separate disclosed reservation marker before any provider trigger' "${constitution}" ||
-  fail "provider selection is still vulnerable to a check-then-trigger race"
-grep -Fq 'oldest `created_at`, then lowest comment id' "${constitution}" ||
-  fail "concurrent review reservations have no deterministic winner"
-grep -Fq 'review_reservation=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>' "${surveyor}" ||
-  fail "surveyor does not expose the pre-trigger reservation to sibling instances"
-grep -Fq 'A winning request supersedes every reservation for that provider/head election' "${surveyor}" ||
-  fail "losing reservations can revive after the winning request completes"
+# The two-phase reservation was retired on measurement 2026-07-25: it posted a blank-rendering
+# comment 1-2s before its own trigger (too narrow to be observable by a sibling) and closed zero
+# races across 75 elections, at a cost of 90 blank comments/7d and a doubled write rate. These
+# guards keep the replacement in force and stop the retired phase returning silently.
+grep -Fq 'Never post a separate pre-trigger reservation comment' "${constitution}" ||
+  fail "the measured-useless two-phase reservation can silently return"
+grep -Fq 'Put the request marker in the SAME' "${constitution}" ||
+  fail "the request marker can drift back out of the trigger comment"
+grep -Fq 'There is no pre-trigger reservation surface to scan' "${surveyor}" ||
+  fail "surveyor can resurrect a reservation surface from stray legacy markers"
+! grep -Fq 'review_reservation=' "${surveyor}" ||
+  fail "surveyor still reports a retired reservation field"
 grep -Fq 'pair it with the next exact-author bare `@cursor review` trigger while ignoring interleaved comments' "${surveyor}" ||
   fail "Cursor request markers break when another comment lands before the bare trigger"
 grep -Fq 'review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>' "${surveyor}" ||
@@ -110,7 +114,7 @@ grep -Fq 'stop after the first provider succeeds' "${daily_maintainer}" ||
 # The contract must be a required PR check, including when its own workflow wiring changes.
 grep -Fq 'review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}' "${workflow}" ||
   fail "CI does not export the review-provider contract change filter"
-grep -Fq '.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md' "${workflow}" ||
+grep -Fq '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md' "${workflow}" ||
   fail "parity-checklist changes do not trigger the review-provider contract check"
 grep -Fq 'test-review-provider-loop-contract:' "${workflow}" ||
   fail "CI does not define the review-provider contract test job"
