@@ -590,15 +590,33 @@ Digest rules:
   path — **or**, the fallback a login-only rule drops, when it **opens with** a leading 🤖
   first-person automation sender marker naming an agent instance as the SENDER while omitting the
   canonical prefix. Both branches are **anchored at the start of the body**; a disclosure appearing
-  anywhere later is quoted material and classifies nothing. Report it
-  `rd=CHANGES_REQUESTED:agent(<author>)@<sha>`.
-  Classify the PR **STALE-AGENT-DISMISSAL** on **BOTH** guards the CodeRabbit case uses, not one:
-  **only when EVERY CHANGES_REQUESTED review on the PR is agent-authored**, **AND none of them is at
-  the current head**, AND the pentad is otherwise clear with a current-head green review — the
-  orchestrator then re-verifies the finding at head and dismisses its own superseded review instead
-  of parking the PR behind a gate no human set. **A single human-authored block anywhere on the PR
-  defeats the class outright** — otherwise a newer agent review's classification would hide an older
-  human control signal, which is the precise failure the every-review sweep above exists to prevent.
+  anywhere later is quoted material and classifies nothing, and a first line that is itself **nested
+  inside a quote** (`> > 🤖 …`, what GitHub's quote-reply produces from an agent's comment) is quoted
+  material too. Report it `rd=CHANGES_REQUESTED:agent(<author>)@<sha>`.
+  ⚠️ **The prefix is a CONVENTION, not authentication — it is public and trivially reproduced.**
+  Measured 2026-07-26: CodeRabbit's own review bodies begin with it verbatim. And every instance
+  authors as `devantler` through one credential, so no GitHub metadata separates them either — which
+  is *why* the contract leans on a convention here. **What makes that tolerable is the failure
+  direction, not the marker's strength:** the marker can only move a review from `human` to `agent`,
+  and `human` is the safe classification, so a missing or imitated marker costs a parked PR, never a
+  discarded control signal. Never reuse this prefix as proof of authorship where that asymmetry does
+  not hold.
+  **The two stale-dismissal classes share ONE precondition set**, so a *mixed* set of stale blocks is
+  still dismissable: **every** CHANGES_REQUESTED on the PR is **non-human** (any mix of
+  `coderabbitai[bot]` and agent-authored `devantler`), **none** is at the current head, and the pentad
+  is otherwise clear with a current-head green review. Without the union a PR carrying an old
+  CodeRabbit block *and* an old agent block satisfies **neither** class — one wants every block
+  CodeRabbit's, the other wants every block an agent's — so it parks forever, the exact failure this
+  rule exists to remove. Report **STALE-CR-DISMISSAL** whenever any CodeRabbit block is in the set
+  (its remedy is the stricter one) and **STALE-AGENT-DISMISSAL** when all are agent-authored.
+  **A single human-authored block anywhere on the PR defeats both classes outright** — otherwise a
+  newer non-human review's classification would hide an older human control signal, which is the
+  precise failure the every-review sweep above exists to prevent.
+  **The remedy depends on whether the PR is PROMOTED — and on a promoted PR the dismissal is NOT the
+  orchestrator's to perform** (contract → *Merge policy*: dismissing a review on a promoted PR is
+  reserved to the maintainer). On a **draft**, the orchestrator re-verifies the finding at head and
+  dismisses its own superseded review. On a **promoted** PR it surfaces the one-click and stops, the
+  same route `STALE-CR-DISMISSAL` already takes. Classifying is the surveyor's job; mutating is not.
   **An agent-authored block AT the current head is ordinary NEEDS-FIX feedback**, never dismissable:
   it is a live finding that happens to come from a sibling, and fix-or-refute applies as it would to
   any lane's. Dropping this staleness test would let the classifier discard findings that still hold.

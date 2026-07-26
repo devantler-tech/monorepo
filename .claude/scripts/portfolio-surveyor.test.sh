@@ -821,7 +821,9 @@ grep -Fq 'the prefix match stays **actor-word-agnostic**' "${surveyor}" ||
 # Staleness is what makes a dismissal safe. Without it the classifier discards a sibling's LIVE
 # current-head finding — the same class of loss the CodeRabbit rule already guards with
 # "none is at the current head".
-grep -Fq 'AND none of them is at' "${surveyor}" ||
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '`coderabbitai[bot]` and agent-authored `devantler`), **none** is at the current head' "${surveyor}" ||
   fail "surveyor STALE-AGENT-DISMISSAL lacks the current-head staleness precondition"
 grep -Fq 'An agent-authored block AT the current head is ordinary NEEDS-FIX feedback' "${surveyor}" ||
   fail "surveyor does not route a current-head agent finding to NEEDS-FIX"
@@ -831,11 +833,31 @@ grep -Fq 'An agent-authored block AT the current head is ordinary NEEDS-FIX feed
 # shellcheck disable=SC2016
 grep -Fq 'a **bot** reviewer keeps the plain' "${surveyor}" ||
   fail "surveyor does not keep a plain author form for bot reviewers at the sweep step"
+# A mixed stale set (one CodeRabbit block + one agent block) satisfies NEITHER per-author class, so
+# without a shared precondition set the PR parks forever — the failure this whole rule removes.
+grep -Fq 'share ONE precondition set' "${surveyor}" ||
+  fail "surveyor leaves a mixed CodeRabbit+agent stale block set unclassifiable, so it parks forever"
+grep -Fq 'stale blocks still qualifies' "${constitution}" ||
+  fail "constitution leaves a mixed non-human stale block set unclassifiable"
+# Classifying is the surveyor's job; dismissing a review on a PROMOTED PR is reserved to the
+# maintainer, so the class must route there rather than mutate.
+grep -Fq 'Classifying is the surveyor' "${surveyor}" ||
+  fail "surveyor tells the orchestrator to dismiss a review on a promoted PR"
+grep -Fq "maintainer's on a promoted PR" "${constitution}" ||
+  fail "constitution lets the engineer dismiss a review on a promoted PR"
+# The prefix is public and reproducible (CodeRabbit emits it verbatim). It is only safe because the
+# failure direction is one-way; a future reuse without that asymmetry would be an authentication hole.
+grep -Fq 'CONVENTION, not authentication' "${surveyor}" ||
+  fail "surveyor presents the public disclosure prefix as if it authenticated authorship"
+grep -Fq 'public convention, not authentication' "${constitution}" ||
+  fail "constitution presents the public disclosure prefix as if it authenticated authorship"
+grep -Fq 'a first line that is itself **nested' "${surveyor}" ||
+  fail "surveyor counts a quote-nested disclosure as an agent marker"
 # Both guards, not one: "EVERY review is agent-authored" is what stops a newer agent review's
 # classification from hiding an OLDER human block — the CodeRabbit rule carries the same guard.
-grep -Fq 'only when EVERY CHANGES_REQUESTED review on the PR is agent-authored' "${surveyor}" ||
+grep -Fq 'still dismissable: **every** CHANGES_REQUESTED on the PR is **non-human**' "${surveyor}" ||
   fail "surveyor STALE-AGENT-DISMISSAL can fire while a human block is also open"
-grep -Fq 'A single human-authored block anywhere on the PR' "${surveyor}" ||
+grep -Fq 'A single human-authored block anywhere on the PR defeats both classes outright' "${surveyor}" ||
   fail "surveyor does not let a human block defeat the stale-agent class"
 # A bot reviewer is neither a sibling instance nor the maintainer, so forcing it into either
 # qualifier leaves a CodeRabbit CHANGES_REQUESTED with no valid token and unstates the CR rule.

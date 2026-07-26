@@ -1292,12 +1292,19 @@ sender marker naming an agent instance as the SENDER without that canonical pref
 are anchored at the start of the body — a disclosure merely appearing somewhere inside it classifies
 nothing**, because he routinely quotes an agent's disclosed text when replying to it, and an
 anywhere-match would turn his own review into agent output and hand it to the dismissal path. An agent-authored
-block is own-output, and it is dismissable on the **same two guards the CodeRabbit case uses** — only
-when **every** CHANGES_REQUESTED on the PR is agent-authored **and none sits at the current head**:
-re-verify the finding at head and dismiss the superseded review rather than treating it as feedback
-owed. **An agent-authored block AT the current head is ordinary feedback to fix or refute**, never
-dismissable — it is a live finding that merely came from a sibling. **One human block anywhere on the
-PR defeats the class**, so a newer agent review can never hide an older human one. A `devantler`
+block is own-output. **Both stale-dismissal classes share one precondition set**, so a *mixed* set of
+stale blocks still qualifies: **every** CHANGES_REQUESTED on the PR is **non-human** (any mix of
+CodeRabbit and agent-authored `devantler`) **and none sits at the current head** — without that union
+a PR carrying one old CodeRabbit block *and* one old agent block satisfies neither class and parks
+forever. Re-verify the finding at head rather than treating it as feedback owed. **An agent-authored
+block AT the current head is ordinary feedback to fix or refute**, never dismissable — it is a live
+finding that merely came from a sibling. **One human block anywhere on the PR defeats both classes**,
+so a newer non-human review can never hide an older human one. **The dismissal itself stays the
+maintainer's on a promoted PR** — surface the one-click there and stop; only on a **draft** may the
+engineer dismiss its own superseded review. ⚠️ And note what this marker is: the disclosure prefix is
+a **public convention, not authentication** — CodeRabbit's own review bodies reproduce it verbatim.
+It is safe here only because it can move a review from `human` to `agent` and never the reverse, so
+an imitated or missing marker costs a parked PR rather than a discarded control signal. A `devantler`
 review carrying **neither** marker is the
 **human maintainer** — a control signal to act on, never a stale artifact to dismiss, whatever its
 SHA. **Ambiguity resolves to the maintainer**: the two errors are not symmetric, since reading his
