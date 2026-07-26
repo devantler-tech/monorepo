@@ -67,6 +67,15 @@ grep -Fq 'the bar, only the trigger' "${constitution}" ||
 grep -Fq 'clean at a sha' "${constitution}" ||
   fail "a local review round no longer has to be clean at the current head to satisfy the gate"
 
+# Root cause for monorepo#2344: pin CodeRabbit so review errors / rate limits do not fail the
+# outward commit/progress status. The merge carve-out above is defense-in-depth; without this
+# pin, an inherited UI override can keep posting failure statuses that force UNSTABLE forever.
+coderabbit_yaml="${repo_root}/.coderabbit.yaml"
+grep -Eq '^[[:space:]]*fail_commit_status:[[:space:]]*false[[:space:]]*$' "${coderabbit_yaml}" ||
+  fail ".coderabbit.yaml must pin reviews.fail_commit_status: false so rate-limit statuses cannot block CLEAN"
+grep -Fq 'reviews.fail_commit_status: false' "${constitution}" ||
+  fail "constitution no longer names .coderabbit.yaml fail_commit_status: false as the primary #2344 lever"
+
 grep -Fq 'Self-review the' "${maintenance_skill}" ||
   fail "portfolio-maintenance run loop does not self-review the diff before requesting review"
 grep -Fq '**Self-review your own diff**' "${product_engineering_skill}" ||
