@@ -857,6 +857,10 @@ grep -Fq 'stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none>' "${su
 # One precondition set, stated once. Two paragraphs disagreeing made the mixed case decidable two ways.
 grep -Fq 'review on the PR is NON-HUMAN' "${surveyor}" ||
   fail "the CodeRabbit paragraph still carries a CodeRabbit-only precondition that contradicts the union"
+# ...and the PRECONDITION paragraph must not name a class either: naming one there mislabelled an
+# all-agent set as STALE-CR-DISMISSAL. Precondition and naming live in exactly one place each.
+grep -Fq 'class-NEUTRAL — it never names a class' "${surveyor}" ||
+  fail "the shared-precondition paragraph names a dismissal class, so an all-agent set can be mislabelled"
 # The prefix is public and reproducible (CodeRabbit emits it verbatim). It is only safe because the
 # failure direction is one-way; a future reuse without that asymmetry would be an authentication hole.
 grep -Fq 'CONVENTION, not authentication' "${surveyor}" ||

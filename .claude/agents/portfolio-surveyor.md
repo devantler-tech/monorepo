@@ -576,15 +576,17 @@ Digest rules:
   disclosure test below and never by the login; a **bot** reviewer keeps the plain `<author>` form,
   since `coderabbitai[bot]` is neither a sibling instance nor the maintainer and forcing it into
   either qualifier would make the CodeRabbit rule directly below unstatable.
-  Classify the PR **STALE-CR-DISMISSAL** instead of NEEDS-FIX **only when EVERY CHANGES_REQUESTED
+  Classify the PR as **stale-dismissable** rather than NEEDS-FIX **only when EVERY CHANGES_REQUESTED
   review on the PR is NON-HUMAN** — `coderabbitai[bot]` or an agent-authored `devantler` per the
   disclosure test below, in any mix — none is at the current head, AND the pentad is otherwise clear
   with a current-head green review; the orchestrator then surfaces the stale-review dismissal one-click
-  rather than spending more review requests (contract → *Merge policy*). **This precondition is stated
-  once and shared by both dismissal classes** (see the agent-authorship rule below, which only chooses
-  the class *name* from the authors present). An earlier CodeRabbit-ONLY wording contradicted it and
-  left the mixed CodeRabbit+agent case decidable two ways — parked or dismissable — depending on which
-  paragraph was read first.
+  rather than spending more review requests (contract → *Merge policy*). **This paragraph states the
+  shared PRECONDITION only and is deliberately class-NEUTRAL — it never names a class.** The class name
+  is chosen once, by the agent-authorship rule below: `STALE-CR-DISMISSAL` when any CodeRabbit block is
+  in the set, `STALE-AGENT-DISMISSAL` when every block is agent-authored. Naming a class here as well
+  is how this paragraph twice went out of step with that rule — first with a CodeRabbit-ONLY
+  precondition that made the mixed set decidable two ways, then with a CodeRabbit-ONLY *label* that
+  mislabelled an all-agent set. Keep the precondition and the naming in exactly one place each.
 - **A `devantler` CHANGES_REQUESTED is not self-evidently human — apply the disclosure test before
   calling it one.** Every agent instance reviews as `devantler`, so the login alone cannot separate
   the maintainer's block from a sibling instance's own superseded review. Apply the SAME two-part
