@@ -807,7 +807,7 @@ grep -Fq 'the prefix match stays **actor-word-agnostic**' "${surveyor}" ||
 # Staleness is what makes a dismissal safe. Without it the classifier discards a sibling's LIVE
 # current-head finding — the same class of loss the CodeRabbit rule already guards with
 # "none is at the current head".
-grep -Fq 'only when no agent-authored CHANGES_REQUESTED is at the current head' "${surveyor}" ||
+grep -Fq 'AND none of them is at' "${surveyor}" ||
   fail "surveyor STALE-AGENT-DISMISSAL lacks the current-head staleness precondition"
 grep -Fq 'An agent-authored block AT the current head is ordinary NEEDS-FIX feedback' "${surveyor}" ||
   fail "surveyor does not route a current-head agent finding to NEEDS-FIX"
@@ -815,13 +815,24 @@ grep -Fq 'An agent-authored block AT the current head is ordinary NEEDS-FIX feed
 # it replaces (partial propagation: the classifier is fixed while its producer still emits the
 # unqualified token, so the orchestrator never receives the distinction).
 # shellcheck disable=SC2016
-grep -Fq 'the qualifier is decided by the disclosure' "${surveyor}" ||
-  fail "surveyor still reports rd= without the agent/human qualifier at the sweep step"
+grep -Fq 'a **bot** reviewer keeps the plain' "${surveyor}" ||
+  fail "surveyor does not keep a plain author form for bot reviewers at the sweep step"
+# Both guards, not one: "EVERY review is agent-authored" is what stops a newer agent review's
+# classification from hiding an OLDER human block — the CodeRabbit rule carries the same guard.
+grep -Fq 'only when EVERY CHANGES_REQUESTED review on the PR is agent-authored' "${surveyor}" ||
+  fail "surveyor STALE-AGENT-DISMISSAL can fire while a human block is also open"
+grep -Fq 'A single human-authored block anywhere on the PR' "${surveyor}" ||
+  fail "surveyor does not let a human block defeat the stale-agent class"
+# A bot reviewer is neither a sibling instance nor the maintainer, so forcing it into either
+# qualifier leaves a CodeRabbit CHANGES_REQUESTED with no valid token and unstates the CR rule.
+# shellcheck disable=SC2016
+grep -Fq 'qualifier applies to `devantler` reviews ONLY' "${surveyor}" ||
+  fail "surveyor forces the agent/human qualifier onto bot reviewers"
 # A classifier with no schema slot is never reportable, so pin BOTH grammar rows independently.
-grep -Fq 'CHANGES_REQUESTED:agent(<author>)@<sha>|CHANGES_REQUESTED:human(<author>)@<sha>|none>, mergeState=<…> → REVIEW-READY' "${surveyor}" ||
-  fail "surveyor draft digest grammar lacks the agent/human rd qualifier"
-grep -Fq 'CHANGES_REQUESTED:agent(<author>)@<sha>|CHANGES_REQUESTED:human(<author>)@<sha>|none>, mergeState=<…> → MERGE-READY' "${surveyor}" ||
-  fail "surveyor non-draft digest grammar lacks the agent/human rd qualifier"
+grep -Fq 'CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY' "${surveyor}" ||
+  fail "surveyor draft digest grammar lacks the bot form or the devantler qualifiers"
+grep -Fq 'CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY' "${surveyor}" ||
+  fail "surveyor non-draft digest grammar lacks the bot form or the devantler qualifiers"
 grep -Fq 'STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL' "${surveyor}" ||
   fail "surveyor non-draft digest grammar cannot emit STALE-AGENT-DISMISSAL"
 grep -Fq 'STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL' "${surveyor}" ||
@@ -836,12 +847,12 @@ grep -Fq 'or** when it opens with a leading 🤖 first-person automation' "${con
   fail "constitution omits the sender-marker fallback for CHANGES_REQUESTED authorship"
 grep -Fq '**Ambiguity resolves to the maintainer**' "${constitution}" ||
   fail "constitution does not fail closed on ambiguous CHANGES_REQUESTED authorship"
-grep -Fq 'only when no such review sits at the current head' "${constitution}" ||
+grep -Fq 'and none sits at the current head' "${constitution}" ||
   fail "constitution lets an agent-authored review be dismissed without the staleness test"
 grep -Fq 'head is ordinary feedback to fix or refute' "${constitution}" ||
   fail "constitution does not route a current-head agent finding to fix-or-refute"
 # shellcheck disable=SC2016
-grep -Fq 'case `STALE-AGENT-DISMISSAL` — so a run acts on the digest' "${constitution}" ||
+grep -Fq 'case `STALE-AGENT-DISMISSAL`, so a run acts on the digest' "${constitution}" ||
   fail "constitution does not define the STALE-AGENT-DISMISSAL digest class"
 if grep -Fq 'The class is **CodeRabbit-only**' "${constitution}"; then
   fail "constitution still declares the stale-dismissal class CodeRabbit-only"

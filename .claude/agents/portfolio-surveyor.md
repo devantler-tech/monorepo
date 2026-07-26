@@ -526,8 +526,8 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]> → AUTOMATION-OWNED (NO-ACTION)
-- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:agent(<author>)@<sha>|CHANGES_REQUESTED:human(<author>)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
-- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:agent(<author>)@<sha>|CHANGES_REQUESTED:human(<author>)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
+- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
+- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none> (orchestrator applies creation-record test before action; NOT asserted mine)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
@@ -571,8 +571,11 @@ Digest rules:
   `pulls/<n>/reviews` the body-findings step (b) already fetched (`reviewDecision` alone names no
   author or SHA, and each CHANGES_REQUESTED review blocks merge independently — only-newest would
   hide an older human block behind a newer CodeRabbit one). Report the newest as
-  `rd=CHANGES_REQUESTED:<agent|human>(<author>)@<sha>` — the qualifier is decided by the disclosure
-  test below, never by the login — and name any additional CHANGES_REQUESTED authors.
+  `rd=CHANGES_REQUESTED:<author>@<sha>` and name any additional CHANGES_REQUESTED authors. **The
+  `agent(…)`/`human(…)` qualifier applies to `devantler` reviews ONLY**, where it is decided by the
+  disclosure test below and never by the login; a **bot** reviewer keeps the plain `<author>` form,
+  since `coderabbitai[bot]` is neither a sibling instance nor the maintainer and forcing it into
+  either qualifier would make the CodeRabbit rule directly below unstatable.
   Classify the PR **STALE-CR-DISMISSAL** instead of NEEDS-FIX **only when EVERY CHANGES_REQUESTED
   review is `coderabbitai[bot]`-authored**, none is at the current head, AND the pentad is otherwise
   clear with a current-head green review — the orchestrator then surfaces the stale-review dismissal
@@ -584,10 +587,13 @@ Digest rules:
   the structural `> 🤖 Generated by the` disclosure, **or** — the fallback a login-only rule drops —
   when it opens with a leading 🤖 first-person automation sender marker naming an agent instance as
   the SENDER while omitting the canonical prefix. Report it `rd=CHANGES_REQUESTED:agent(<author>)@<sha>`.
-  Classify the PR **STALE-AGENT-DISMISSAL** on the SAME staleness test the CodeRabbit case uses:
-  **only when no agent-authored CHANGES_REQUESTED is at the current head**, AND the pentad is
-  otherwise clear with a current-head green review — the orchestrator then re-verifies the finding at
-  head and dismisses its own superseded review instead of parking the PR behind a gate no human set.
+  Classify the PR **STALE-AGENT-DISMISSAL** on **BOTH** guards the CodeRabbit case uses, not one:
+  **only when EVERY CHANGES_REQUESTED review on the PR is agent-authored**, **AND none of them is at
+  the current head**, AND the pentad is otherwise clear with a current-head green review — the
+  orchestrator then re-verifies the finding at head and dismisses its own superseded review instead
+  of parking the PR behind a gate no human set. **A single human-authored block anywhere on the PR
+  defeats the class outright** — otherwise a newer agent review's classification would hide an older
+  human control signal, which is the precise failure the every-review sweep above exists to prevent.
   **An agent-authored block AT the current head is ordinary NEEDS-FIX feedback**, never dismissable:
   it is a live finding that happens to come from a sibling, and fix-or-refute applies as it would to
   any lane's. Dropping this staleness test would let the classifier discard findings that still hold.
