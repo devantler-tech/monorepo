@@ -38,6 +38,32 @@ if grep -Fq 'problem → proposed direction → rough size' "${contract}"; then
   fail "canonical contract still permits evidence-free enhancement issues"
 fi
 
+for documentation_contract in "${contract}" "${engineering}"; do
+  # Literal Markdown; backticks must not execute shell command substitution.
+  # shellcheck disable=SC2016
+  grep -Fq 'every ADR lives under **`docs/adr/`**' "${documentation_contract}" ||
+    fail "${documentation_contract} does not make docs/adr the exclusive ADR location"
+  grep -Fq 'DESCRIBE THE AS-IS, NEVER THE JOURNEY' "${documentation_contract}" ||
+    fail "${documentation_contract} does not require present-state documentation"
+  grep -Fq 'Historical records are exempt' "${documentation_contract}" ||
+    fail "${documentation_contract} does not protect historical records from as-is rewrites"
+  grep -Fq 'Operational migration and upgrade instructions are exempt' "${documentation_contract}" ||
+    fail "${documentation_contract} can suppress required migration procedures"
+done
+case_variant_fixture="$(
+  printf '%s\n' 'DOCS/ADR/0002-case-variant.md' |
+    grep -Ei '(^|/)(adr|adrs)(/|$)' |
+    grep -Ev '^docs/adr/' || true
+)"
+if [ "${case_variant_fixture}" != 'DOCS/ADR/0002-case-variant.md' ]; then
+  fail "case-variant ADR paths are treated as canonical"
+fi
+if git -C "${repo_root}" ls-files |
+  grep -Ei '(^|/)(adr|adrs)(/|$)' |
+  grep -Ev '^docs/adr/'; then
+  fail "tracked ADRs remain outside docs/adr"
+fi
+
 grep -Fq 'evidence-led' "${agent}" ||
   fail "daily maintainer summary does not route evidence-led selection"
 grep -Fq 'Value & evidence loop' "${engineering}" ||
@@ -92,6 +118,10 @@ grep -Fq 'RSS inclusion, social/OG presentation' "${site_readme}" ||
 
 grep -Fq -- "- '.github/workflows/ci.yaml'" "${workflow}" ||
   fail "product value filter does not self-test workflow-only changes"
+for adr_filter in "'**/[Aa][Dd][Rr]/**'" "'**/[Aa][Dd][Rr][Ss]/**'"; do
+  grep -Fq -- "- ${adr_filter}" "${workflow}" ||
+    fail "product value filter does not run for ${adr_filter} path changes"
+done
 grep -Fq '      - changes' "${workflow}" ||
   fail "required aggregate does not depend on path detection"
 # Literal GitHub expression; shell expansion would make this assertion unsafe.
@@ -111,6 +141,17 @@ if grep -Eq '`ci`' <<<"${labels_line}"; then
 fi
 if grep -Fq '`agentic-workflows`' <<<"${labels_line}"; then
   fail "site card Labels allowlist still lists nonexistent agentic-workflows (#2260)"
+fi
+
+# Egress mention neutralisation (#2312) — bots parse raw text; backticks do not inert a mention.
+grep -Fq 'No Markdown construct hides a mention from a bot' "${contract}" ||
+  fail "Egress does not state that Markdown cannot hide mentions from bots (#2312)"
+grep -Fq 'break the token' "${contract}" ||
+  fail "Egress does not require token-breaking to neutralise mentions (#2312)"
+grep -Fq 'zero-width space after' "${contract}" ||
+  fail "Egress lost the zero-width-space token-break example (#2312)"
+if grep -Fq 'wrap the span in backticks' "${contract}"; then
+  fail "Egress still offers backticks as mention neutralisation (#2312)"
 fi
 
 echo "product value contract: all assertions passed"
