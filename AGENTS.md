@@ -1597,8 +1597,10 @@ standing substitute** for moving the real backlog:
   well-specified first child and ship that increment** (`Fixes #child`, link the parent) rather than
   deferring the whole thing — a big issue moves forward across runs, it does not wait for a run big
   enough to finish it. For a non-trivial design, reason it through first (an ADR / system-design pass for
-  big calls); implement with tests under the normal draft-PR + validate discipline; close the delivery
-  child and preserve any experiment parent per *Build the right thing*. **Being
+  big calls). In a repository that uses ADRs, every ADR lives under **`docs/adr/`**; do not create or
+  keep ADRs in another folder. Repositories without ADRs do not need to introduce them. Implement with
+  tests under the normal draft-PR + validate discipline; close the delivery child and preserve any
+  experiment parent per *Build the right thing*. **Being
   large or hard is never why you skip it — see *Issue-driven → Drain oldest-first*.**
 - **Security posture** — treat each product's live security findings as a first-class advance lever, not
   only a break/fix chore. **Ingest** them (the survey looks at live scanner state, not just GitHub) and
@@ -1630,6 +1632,16 @@ standing substitute** for moving the real backlog:
   *Cadence & focus*), improve existing docs: accuracy, gaps, clarity, onboarding flow, dead links,
   stale examples. Spans each product's own docs (README/`AGENTS.md`/usage/reference) and the
   devantler.tech site; a `docs:`-only change is real advance work, not filler.
+  **DESCRIBE THE AS-IS, NEVER THE JOURNEY — documentation, code comments, and resource descriptions
+  state the current behaviour, architecture, constraints, and rationale directly.** Do not narrate
+  prior states, migrations, before/after comparisons, or origin stories. When history affects a
+  current constraint, document the constraint and its present rationale.
+  **Historical records are exempt:** preserve ADR bodies, measurement records, and other dated
+  evidence verbatim. Record a superseding decision or add a clearly dated supersession notice
+  without rewriting the historical account.
+  **Operational migration and upgrade instructions are exempt:** required transition steps are
+  current procedures, not background narration. Keep them while the transition is supported and
+  remove them when users no longer need that path.
   **VOICE — every user-facing document is written in the `jargon-free-voice` register: concise, and
   written for humans rather than machines** (maintainer direction 2026-07-18). Concretely: **frame
   every item by what the reader gets**, never as a bare inventory ("Secrets — OpenBao holds them,
