@@ -45,6 +45,8 @@ for documentation_contract in "${contract}" "${engineering}"; do
     fail "${documentation_contract} does not make docs/adr the exclusive ADR location"
   grep -Fq 'DESCRIBE THE AS-IS, NEVER THE JOURNEY' "${documentation_contract}" ||
     fail "${documentation_contract} does not require present-state documentation"
+  grep -Fq 'Historical records are exempt' "${documentation_contract}" ||
+    fail "${documentation_contract} does not protect historical records from as-is rewrites"
 done
 if git -C "${repo_root}" ls-files |
   grep -Ei '(^|/)(adr|adrs)(/|$)' |

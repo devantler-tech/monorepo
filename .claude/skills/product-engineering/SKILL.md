@@ -226,6 +226,9 @@ Treat docs as part of the product — keep them **in sync** with what ships and 
   state the current behaviour, architecture, constraints, and rationale directly. Do not narrate
   prior states, migrations, before/after comparisons, or origin stories. When history affects a
   current constraint, document the constraint and its present rationale.
+- **Historical records are exempt.** Preserve ADR bodies, measurement records, and other dated
+  evidence verbatim. Record a superseding decision or add a clearly dated supersession notice
+  without rewriting the historical account.
 - **Voice (every user-facing doc).** Write in the `jargon-free-voice` register — concise, and for
   humans rather than machines (maintainer direction 2026-07-18; contract → *Enhancement work →
   Documentation*). In practice:

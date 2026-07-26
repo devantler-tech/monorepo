@@ -1592,6 +1592,9 @@ standing substitute** for moving the real backlog:
   state the current behaviour, architecture, constraints, and rationale directly.** Do not narrate
   prior states, migrations, before/after comparisons, or origin stories. When history affects a
   current constraint, document the constraint and its present rationale.
+  **Historical records are exempt:** preserve ADR bodies, measurement records, and other dated
+  evidence verbatim. Record a superseding decision or add a clearly dated supersession notice
+  without rewriting the historical account.
   **VOICE — every user-facing document is written in the `jargon-free-voice` register: concise, and
   written for humans rather than machines** (maintainer direction 2026-07-18). Concretely: **frame
   every item by what the reader gets**, never as a bare inventory ("Secrets — OpenBao holds them,
