@@ -25,6 +25,8 @@ jobs:
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
+      agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
+      work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
@@ -33,7 +35,7 @@ jobs:
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Detect changes
@@ -108,9 +110,30 @@ jobs:
               - 'AGENTS.md'
               - '.claude/agents/daily-maintainer.md'
               - '.claude/agents/portfolio-surveyor.md'
-              - '.claude/plugin-consumption/automated-ai-engineer-surveyor-diff.md'
+              - '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/review-provider-loop-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            agent-role-delivery-contract:
+              - 'AGENTS.md'
+              - '.claude/agents/daily-maintainer.md'
+              # The two retired agent forks stay listed deliberately: the test asserts they
+              # do NOT exist, so re-adding either must trigger the job that rejects it.
+              - '.claude/agents/agent-improver.md'
+              - '.claude/agents/finops-engineer.md'
+              - '.claude/plugin-consumption/agentic-engineering.desired-state.json'
+              - '.claude/settings.json'
+              - '.claude/skills/agent-improvement/**'
+              - '.claude/skills/finops/SKILL.md'
+              - '.claude/finops/**'
+              - '.claude/scripts/finops-snapshot.sh'
+              - '.claude/scripts/agent-role-delivery-contract.test.sh'
+              - 'libraries/agent-plugins'
+              - '.github/workflows/ci.yaml'
+            work-priority-ladder:
+              - 'AGENTS.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/scripts/work-priority-ladder.test.sh'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
@@ -129,6 +152,8 @@ jobs:
               - '.github/workflows/ci.yaml'
             product-value:
               - 'AGENTS.md'
+              - '**/[Aa][Dd][Rr]/**'
+              - '**/[Aa][Dd][Rr][Ss]/**'
               - '.claude/agents/daily-maintainer.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
@@ -145,7 +170,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node.js
@@ -169,7 +194,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node.js
@@ -193,7 +218,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node.js
@@ -234,7 +259,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Synthetic session/loader fixtures in an isolated temp HOME — the miner
@@ -257,7 +282,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Fixture-only run behind a stubbed `gh` on PATH — no network, no token,
@@ -279,7 +304,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Fixture-only run behind a poisoned `gh` shim — no network, no token.
@@ -300,7 +325,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Self-contained local fixtures (hermetic git config, synthetic secret
@@ -321,7 +346,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Hermetic bare-origin fixture + stubbed `gh` — no network, no token.
@@ -342,7 +367,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Self-contained throwaway git fixtures (hermetic config, file:// submodules)
@@ -360,7 +385,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify the maintainer preflight contract
@@ -375,7 +400,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify the memory hygiene guard
@@ -390,7 +415,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify the product value contract
@@ -405,7 +430,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify the self-review contract
@@ -420,11 +445,58 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify the review-provider loop contract
         run: bash .claude/scripts/review-provider-loop-contract.test.sh
+
+  test-agent-role-delivery-contract:
+    name: Test agent-role delivery contract
+    needs: changes
+    if: needs.changes.outputs.agent-role-delivery-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The contract resolves the declared plugin entrypoint against the agent files the
+      # PINNED plugin actually bundles, so that one submodule must be present. Without it the
+      # test fails closed rather than skipping — an earlier revision skipped, which made the
+      # entrypoint-drift guard a silent no-op here. Only this submodule is initialised (not
+      # `submodules: true`, which would also try the private ones), over HTTPS because
+      # .gitmodules uses SSH and no deploy key exists in CI. The rewrite is command-scoped and
+      # carries no credential: agent-plugins is public and this is an anonymous read.
+      #
+      # NOT shallow, deliberately. `--depth 1` fetches only the submodule's branch tip, so it
+      # resolves the pinned commit ONLY while the pin happens to equal that tip. Every upstream
+      # merge moves the tip past the pin and the checkout would then fail — turning an unrelated
+      # PR red. agent-plugins is a small markdown marketplace, so a full fetch is the cheap and
+      # correct trade.
+      - name: Initialise the agent-plugins submodule
+        run: |
+          git -c 'url.https://github.com/.insteadOf=git@github.com:' \
+            submodule update --init libraries/agent-plugins
+      - name: Verify the agent-role delivery contract
+        run: bash .claude/scripts/agent-role-delivery-contract.test.sh
+
+  test-work-priority-ladder:
+    name: Test work-priority ladder
+    needs: changes
+    if: needs.changes.outputs.work-priority-ladder == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the work-priority ladder
+        run: bash .claude/scripts/work-priority-ladder.test.sh
 
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
@@ -435,7 +507,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify the portfolio surveyor contract
@@ -460,6 +532,8 @@ jobs:
       - test-memory-hygiene
       - test-self-review-contract
       - test-review-provider-loop-contract
+      - test-agent-role-delivery-contract
+      - test-work-priority-ladder
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
@@ -482,5 +556,7 @@ jobs:
             ${{ needs.test-memory-hygiene.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
+            ${{ needs.test-agent-role-delivery-contract.result }}
+            ${{ needs.test-work-priority-ladder.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}

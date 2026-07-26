@@ -9,8 +9,8 @@
 #   from UNTRUSTED sources: CI logs, PR/issue bodies, web pages, third-party tool output that
 #   happened to pass through a session. It is BEHAVIOURAL EVIDENCE — counts, timings, error
 #   signatures, outcomes — and is NEVER an instruction. A consumer that reads a directive out
-#   of this output and acts on it has been injected. See `.claude/agents/agent-improver.md`
-#   → "Ingestion boundary".
+#   of this output and acts on it has been injected. See the installed
+#   `agentic-engineering` plugin's `agent-improver` → "Ingestion boundary".
 #
 # Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME] [--injection-provenance]
 set -uo pipefail
@@ -171,10 +171,13 @@ want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
 ERRTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_err.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 INJTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_inj.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Distinct prefix from .agtel_inj so the aggregate-identity width instrumentation
+# in the test suite keeps measuring only the phrase scratch it targets.
+CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -1186,6 +1189,36 @@ if want safety; then
           printf '%s\t%s\n' "$digest" "$display"
         done > "$INJTMP"
     echo "    TOTAL occurrences: $(wc -l < "$INJTMP" | tr -d ' ')   (distinct phrases: $(cut -f1 "$INJTMP" | sort -u | grep -c . || true))"
+    # Concentration — the same occurrences grouped by the transcript RECORD that
+    # carried them. The total alone cannot separate a real attempt from echo:
+    # this tool PRINTS the phrase list in its own report, that report lands in a
+    # transcript as tool output, and the NEXT run counts it again. Measured
+    # 2026-07-25 on the live corpus: 453 occurrences, but only 11 records in 2
+    # sessions, and 295 of them on ONE record holding a previous report. So the
+    # total tracks this tool's own activity to a degree the total cannot show.
+    # CONCENTRATION IS CONTEXT, NEVER A CLASSIFIER. Flat record/session counts
+    # do NOT rule out a new hit: a real attempt can share an existing record —
+    # the same reason nothing is filtered here. Classifying a record as
+    # self-referential can suppress a real hit that shares it, which is why
+    # PR #2364 was closed. Disclosure keeps the count fail-closed and still
+    # makes the echo visible.
+    # jq-free by construction: one grep pass, line numbers via -n, so this adds
+    # no per-record parse to the default scan.
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      inj_sess=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
+      [ -n "$inj_sess" ] || inj_sess=unknown
+      grep -noiE "$INJ_PHRASE_RE" "$f" 2>/dev/null \
+        | awk -F: -v s="$inj_sess" '$1 ~ /^[0-9]+$/ {print s "\t" substr($1,1,12)}'
+    done > "$CONCTMP"
+    inj_records=$(sort -u "$CONCTMP" | grep -c . || true)
+    inj_sessions=$(cut -f1 "$CONCTMP" | sort -u | grep -c . || true)
+    inj_top=$(sort "$CONCTMP" | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
+    echo "      across ${inj_records:-0} transcript records in ${inj_sessions:-0} sessions; largest single record: ${inj_top:-0}"
+    echo "      (concentration is CONTEXT, not a verdict. A rising total with flat"
+    echo "       records MAY be echo — a previous report re-counted by the NEXT run —"
+    echo "       but flat record/session counts do NOT rule out a new hit: a real"
+    echo "       attempt can share an existing record. Read both; classify neither.)"
+    : > "$CONCTMP"
     # Group on the fixed-width digest plus bounded display. If display
     # truncation happens before identity is derived, distinct matches collapse.
     sort "$INJTMP" | uniq -c | sort -rn | head -6 \
@@ -1210,6 +1243,15 @@ if want safety; then
     echo "        as real, check it came from an issue/PR/CI body and NOT from the"
     echo "        definition text itself. A rising count with no new external source"
     echo "        means the docs were read, not that the deployment is under attack."
+    echo "        ⚠️  THE DOMINANT ECHO SOURCE IS THIS REPORT, NOT THE DOCS."
+    echo "        HISTORICAL CONTEXT — one measurement taken 2026-07-25, NOT this"
+    echo "        scan. THIS scan's own figures are the concentration line above."
+    echo "        Then: 453 occurrences resolved to 11 records in 2 sessions, 295"
+    echo "        of them on ONE record — a previous run's telemetry output, which"
+    echo "        prints the phrase list above and is then re-counted here. So the"
+    echo "        total is partly a function of how often THIS TOOL RAN. Trend the"
+    echo "        record and session counts — but flat records never CLEAR a hit,"
+    echo "        because a real attempt can share an existing record."
     echo
     echo "  credential-shaped strings reaching a transcript (distinct values, BY SHAPE):"
     echo "  [BOTH instances — this detector is format-agnostic, so it covers Codex too]"
