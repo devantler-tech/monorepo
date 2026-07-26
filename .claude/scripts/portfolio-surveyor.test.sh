@@ -797,9 +797,20 @@ grep -Fq 'rd=CHANGES_REQUESTED:agent(<author>)@<sha>' "${surveyor}" ||
 grep -Fq 'rd=CHANGES_REQUESTED:human(<author>)@<sha>' "${surveyor}" ||
   fail "surveyor cannot report a human-authored CHANGES_REQUESTED distinctly"
 # Fail closed: discarding the maintainer's own control signal is the worse of the two errors.
-# shellcheck disable=SC2016
-grep -Fq 'including an unfamiliar actor word — is `human`' "${surveyor}" ||
+grep -Fq '**Ambiguity resolves to `human`.**' "${surveyor}" ||
   fail "surveyor does not resolve CHANGES_REQUESTED authorship ambiguity to human"
+# ...but failing closed must NOT re-break the structural match: an unfamiliar actor word after the
+# canonical prefix is still own-output (contract → Untrusted input), which a naive "anything unusual
+# is human" reading would invert.
+grep -Fq 'the prefix match stays **actor-word-agnostic**' "${surveyor}" ||
+  fail "surveyor ambiguity rule overrides the actor-word-agnostic structural prefix match"
+# Staleness is what makes a dismissal safe. Without it the classifier discards a sibling's LIVE
+# current-head finding — the same class of loss the CodeRabbit rule already guards with
+# "none is at the current head".
+grep -Fq 'only when no agent-authored CHANGES_REQUESTED is at the current head' "${surveyor}" ||
+  fail "surveyor STALE-AGENT-DISMISSAL lacks the current-head staleness precondition"
+grep -Fq 'An agent-authored block AT the current head is ordinary NEEDS-FIX feedback' "${surveyor}" ||
+  fail "surveyor does not route a current-head agent finding to NEEDS-FIX"
 # The sweep sentence must carry the qualifier too, or the rule reintroduces the login-only form
 # it replaces (partial propagation: the classifier is fixed while its producer still emits the
 # unqualified token, so the orchestrator never receives the distinction).
@@ -825,6 +836,10 @@ grep -Fq 'or** when it opens with a leading 🤖 first-person automation' "${con
   fail "constitution omits the sender-marker fallback for CHANGES_REQUESTED authorship"
 grep -Fq '**Ambiguity resolves to the maintainer**' "${constitution}" ||
   fail "constitution does not fail closed on ambiguous CHANGES_REQUESTED authorship"
+grep -Fq 'only when no such review sits at the current head' "${constitution}" ||
+  fail "constitution lets an agent-authored review be dismissed without the staleness test"
+grep -Fq 'head is ordinary feedback to fix or refute' "${constitution}" ||
+  fail "constitution does not route a current-head agent finding to fix-or-refute"
 # shellcheck disable=SC2016
 grep -Fq 'case `STALE-AGENT-DISMISSAL` — so a run acts on the digest' "${constitution}" ||
   fail "constitution does not define the STALE-AGENT-DISMISSAL digest class"
