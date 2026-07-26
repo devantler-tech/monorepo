@@ -1186,9 +1186,11 @@ Prefer acting — a draft PR on an issue, or filing the issue for a new find —
 report-only note for things that genuinely aren't a diff or an issue (environment/infra/repo-config/
 external blockers). Restraint applies to *noise* (don't stack
 duplicate PRs or filler comments on the **same** concern), not to work you've already identified.
-**A set of in-flight drafts still maturing toward readiness is NOT sprawl and NOT a reason to stop** —
-distinct, substantive work across products is exactly what's wanted; only duplicate/filler PRs on one
-concern are bounded. A maintainer-sequenced queue on **one** product (e.g. a recovery sprint) holds
+**Distinct, substantive work ACROSS PRODUCTS is NOT sprawl and NOT a reason to stop** — breadth is
+exactly what's wanted; duplicate/filler PRs on one concern are what's bounded. **What IS sprawl is a
+burst that outruns your own review capacity**: drafts you cannot carry to a green review are not work
+in progress, they are work that cannot finish — see the intake cap in *Cadence & focus*, which bounds
+how many you may open. A maintainer-sequenced queue on **one** product (e.g. a recovery sprint) holds
 back only *that* product's lane — it never gates advance work on the **other** products. **That said,
 finish before you start more** (*stop starting, start finishing* — see *Cadence & focus*): the
 deliverable is now the **merged, readiness-proven PR**, so each run drive your existing in-flight own
@@ -2525,6 +2527,30 @@ nothing while they sit. Concretely: a pentad-clear own PR left un-promoted/un-me
 blocked on a **fixable** check/thread, is unfinished work — clear it **before** you start more. (This
 sharpens *PRs-before-issues* and the every-run own-draft review-thread sweep into an explicit
 finish-before-start ordering.)
+**The WIP limit is also a CAP ON INTAKE, not only an ordering — a run cannot finish what it cannot get
+reviewed.** The paragraph above orders work *within* a run, so a run that opens its whole batch in one
+pass satisfies it **vacuously**: it had nothing in flight when it started. That is precisely what
+happened. Measured 2026-07-26: **63 of 88 open `codex/*` drafts — 72% — were opened on a single day
+(2026-07-18)**, all on one repo, all one theme; **every sampled one had never been reviewed at all**,
+was last touched 2026-07-21, and had since gone `BLOCKED` or `DIRTY`. Net drainage was ~2/day across
+the lane, so the cohort was conflicting faster than it drained. **Ordering could not have helped**:
+promotion needs **≥1 green review at the current head**, every push re-stales it, and the review lanes
+are **metered and shared** — CodeRabbit per-review, Codex weekly, Bugbot monthly (which returned
+`Error` for every request after 25 in one batch). A 63-draft burst is **structurally unreviewable**,
+and it spends a scarce resource every other lane also needs. So intake is bounded by finishing
+capacity:
+
+| Bound | Rule |
+|---|---|
+| **Per run** | Open at most **5** new own drafts. |
+| **Per lane** | While your own lane holds **more than 20** open drafts, open **no** new ones — spend the whole run finishing. |
+
+**Rung-0 live breakage is exempt from both** — a hotfix is never blocked by a cap. So is the
+issue-capture *Issue-driven* mandates: **filing an issue is not opening a draft**, and the backlog must
+stay capturable while the caps bite. Both numbers are a deliberately permissive starting point rather
+than a measured optimum — 5/run is ~2.5× observed daily drainage, and 20 sits above the 18
+already-CLEAN drafts counted 2026-07-25. **Treat a cap you hit as the signal it is**: your lane's
+finishing capacity is the binding constraint, and the work to do is finishing.
 **Work as long as there is work — don't stop early.** The floor (≥1 artifact) is a **minimum and a
 backstop, not a target or a stopping point**: keep going while actionable work remains, and **prefer
 long, continuous sessions** over stopping after a handful of items. End a run only when actionable work
