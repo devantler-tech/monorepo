@@ -229,6 +229,9 @@ Treat docs as part of the product — keep them **in sync** with what ships and 
 - **Historical records are exempt.** Preserve ADR bodies, measurement records, and other dated
   evidence verbatim. Record a superseding decision or add a clearly dated supersession notice
   without rewriting the historical account.
+- **Operational migration and upgrade instructions are exempt.** Required transition steps are
+  current procedures, not background narration. Keep them while the transition is supported and
+  remove them when users no longer need that path.
 - **Voice (every user-facing doc).** Write in the `jargon-free-voice` register — concise, and for
   humans rather than machines (maintainer direction 2026-07-18; contract → *Enhancement work →
   Documentation*). In practice:

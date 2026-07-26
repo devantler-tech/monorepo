@@ -1595,6 +1595,9 @@ standing substitute** for moving the real backlog:
   **Historical records are exempt:** preserve ADR bodies, measurement records, and other dated
   evidence verbatim. Record a superseding decision or add a clearly dated supersession notice
   without rewriting the historical account.
+  **Operational migration and upgrade instructions are exempt:** required transition steps are
+  current procedures, not background narration. Keep them while the transition is supported and
+  remove them when users no longer need that path.
   **VOICE — every user-facing document is written in the `jargon-free-voice` register: concise, and
   written for humans rather than machines** (maintainer direction 2026-07-18). Concretely: **frame
   every item by what the reader gets**, never as a bare inventory ("Secrets — OpenBao holds them,

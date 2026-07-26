@@ -47,10 +47,20 @@ for documentation_contract in "${contract}" "${engineering}"; do
     fail "${documentation_contract} does not require present-state documentation"
   grep -Fq 'Historical records are exempt' "${documentation_contract}" ||
     fail "${documentation_contract} does not protect historical records from as-is rewrites"
+  grep -Fq 'Operational migration and upgrade instructions are exempt' "${documentation_contract}" ||
+    fail "${documentation_contract} can suppress required migration procedures"
 done
+case_variant_fixture="$(
+  printf '%s\n' 'DOCS/ADR/0002-case-variant.md' |
+    grep -Ei '(^|/)(adr|adrs)(/|$)' |
+    grep -Ev '^docs/adr/' || true
+)"
+if [ "${case_variant_fixture}" != 'DOCS/ADR/0002-case-variant.md' ]; then
+  fail "case-variant ADR paths are treated as canonical"
+fi
 if git -C "${repo_root}" ls-files |
   grep -Ei '(^|/)(adr|adrs)(/|$)' |
-  grep -Eiv '^docs/adr/'; then
+  grep -Ev '^docs/adr/'; then
   fail "tracked ADRs remain outside docs/adr"
 fi
 
@@ -108,7 +118,7 @@ grep -Fq 'RSS inclusion, social/OG presentation' "${site_readme}" ||
 
 grep -Fq -- "- '.github/workflows/ci.yaml'" "${workflow}" ||
   fail "product value filter does not self-test workflow-only changes"
-for adr_filter in "'**/adr/**'" "'**/adrs/**'"; do
+for adr_filter in "'**/[Aa][Dd][Rr]/**'" "'**/[Aa][Dd][Rr][Ss]/**'"; do
   grep -Fq -- "- ${adr_filter}" "${workflow}" ||
     fail "product value filter does not run for ${adr_filter} path changes"
 done
