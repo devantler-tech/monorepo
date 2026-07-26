@@ -780,15 +780,20 @@ grep -Fq 'none(cursor-lane)' "${surveyor}" ||
 
 # rd= authorship (monorepo#2482): devantler also authors agent reviews, so login-alone
 # classification reads an agent CHANGES_REQUESTED as a permanent human gate. The surveyor must
-# apply the same structural disclosure test used for comments, distinguish agent vs human in the
-# digest grammar, and resolve uncertainty to agent output.
+# apply the same structural disclosure test used for comments — both the blockquote prefix AND the
+# leading-🤖 sender-marker fallback — distinguish agent vs human in the digest grammar, and resolve
+# uncertainty to agent output.
 grep -Fq 'rd=CHANGES_REQUESTED:agent@<sha>' "${surveyor}" ||
   fail "surveyor digest grammar cannot report an agent-authored CHANGES_REQUESTED"
 grep -Fq 'Apply the same structural disclosure' "${surveyor}" ||
   fail "surveyor rd= rules do not apply the disclosure test to review bodies"
+grep -Fq 'leading-🤖 sender-marker fallback' "${surveyor}" ||
+  fail "surveyor rd= rules omit the leading-🤖 sender-marker fallback for review bodies"
 grep -Fq 'uncertainty resolves to agent output' "${surveyor}" ||
   fail "surveyor rd= rules do not fail closed toward agent output on uncertainty"
 grep -Fq 'CHANGES_REQUESTED:agent@<sha>' "${constitution}" ||
   fail "constitution merge-policy rd= grammar omits the agent-authored CHANGES_REQUESTED form"
+grep -Fq 'leading-🤖 sender-marker fallback' "${constitution}" ||
+  fail "constitution merge-policy rd= grammar omits the leading-🤖 sender-marker fallback"
 
 echo "portfolio surveyor contract: all assertions passed"
