@@ -62,9 +62,17 @@ skill_path='plugins/agentic-engineering/skills/agent-improvement/SKILL.md'
 # real owner to agent-plugins and appending an unrelated copy of the expected phrase
 # elsewhere satisfied a global check. Extraction therefore starts at the OWNER line (the
 # bullet's first line), not at the path line, so the owner declaration is bound to this skill.
+# Stop at the next SIBLING BULLET as well as at a blank line. Markdown bullets are normally
+# consecutive with no blank line between them, so a blank-line-only terminator swallowed the
+# following bullet too — and the "same bullet" binding this guard claims could then be
+# satisfied by text that had moved into that sibling.
 skill_bullet="$(awk '
-  /\*\*`devantler-tech\/agent-skills`\*\* authors `agent-improvement\/`/ { inb = 1 }
-  inb { if ($0 ~ /^[[:space:]]*$/) exit; print }
+  !inb && /\*\*`devantler-tech\/agent-skills`\*\* authors `agent-improvement\/`/ { inb = 1; print; next }
+  inb {
+    if ($0 ~ /^[[:space:]]*$/) exit
+    if ($0 ~ /^[[:space:]]*[-*+] /) exit
+    print
+  }
 ' "${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' ')"
 [ -n "${skill_bullet}" ] ||
   fail "consumer does not name agent-skills as the owner of bundled skills"

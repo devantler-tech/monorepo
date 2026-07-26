@@ -269,17 +269,21 @@ definition surface, and an installed/cache copy is never an authoring target.
   - **`devantler-tech/agent-plugins`** authors
     `plugins/agentic-engineering/agents/agent-improver.agent.md`, the plugin README/desired state, and
     their manifest/contract validation. These carry **no** `metadata.github-repo`.
-  - **`devantler-tech/agent-skills`** authors `agent-improvement/` and most of our own skills.
+  - **`devantler-tech/agent-skills`** authors `agent-improvement/`, **and that one skill is the only
+    bundled skill this grant covers** — no other skill in that repository is a named surface.
     🔴 The copy at `plugins/agentic-engineering/skills/agent-improvement/SKILL.md` carries
     `metadata.github-repo: https://github.com/devantler-tech/agent-skills` and is re-pulled by the
     `update-agent-skills` workflow, so editing it there is **silently reverted** — no conflict, no CI
     failure, no signal. It is a synced artifact, **not** an authoring surface.
-  - ⚠️ **Other bundled skills come from third-party upstreams entirely** — measured 2026-07-25:
-    `find-skills` from `vercel-labs/skills`, `git-commit`/`refactor` from `github/awesome-copilot`,
-    `test-driven-development` from `obra/superpowers`, `astro` from `astrolicious/agent-skills`.
-    Sending a fix for one of those to `agent-skills` routes it to a repository that does not own it,
-    and the *Ask before upstream creates* rule applies to every one of them. **Read the value; never
-    assume the owner.**
+
+  ⚠️ **The following is INFORMATIONAL ROUTING GUIDANCE, not part of the grant.** It exists so a fix is
+  not sent to the wrong repository; it names **no** additional definition surface, and every skill in
+  it is **out of scope** for autonomous change. Other bundled skills come from third-party upstreams
+  entirely — measured 2026-07-25: `find-skills` from `vercel-labs/skills`, `git-commit`/`refactor`
+  from `github/awesome-copilot`, `test-driven-development` from `obra/superpowers`, `astro` from
+  `astrolicious/agent-skills`. Each is a third party, so the *Ask before upstream creates* rule and the
+  *Professional-work repository boundary* both apply before any interaction. **Read the value to learn
+  who owns a file; never read it as permission to change that file.**
 
   Verify **from the monorepo root**, and **query the frontmatter structurally** — a `grep` for the
   string is not good enough here. It reports a file whose *body* merely mentions the URL, accepts a
