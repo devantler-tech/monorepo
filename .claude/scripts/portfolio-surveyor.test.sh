@@ -788,7 +788,7 @@ grep -Fq 'A `devantler` CHANGES_REQUESTED is not self-evidently human' "${survey
   fail "surveyor still treats a devantler CHANGES_REQUESTED as self-evidently human"
 # The sender-marker fallback is the branch a login-only rule drops, and the 843rd measured 71
 # sibling comments in exactly that undisclosed shape — so it is the COMMON case, not a corner.
-grep -Fq 'leading 🤖 first-person automation sender marker naming an agent instance as' "${surveyor}" ||
+grep -Fq 'first-person automation sender marker naming an agent instance as the SENDER' "${surveyor}" ||
   fail "surveyor rd= classification omits the sibling sender-marker fallback"
 # shellcheck disable=SC2016
 grep -Fq 'rd=CHANGES_REQUESTED:agent(<author>)@<sha>' "${surveyor}" ||
@@ -796,6 +796,18 @@ grep -Fq 'rd=CHANGES_REQUESTED:agent(<author>)@<sha>' "${surveyor}" ||
 # shellcheck disable=SC2016
 grep -Fq 'rd=CHANGES_REQUESTED:human(<author>)@<sha>' "${surveyor}" ||
   fail "surveyor cannot report a human-authored CHANGES_REQUESTED distinctly"
+# ANCHORING is load-bearing, not stylistic: the maintainer routinely quotes an agent's disclosed
+# text when replying to it, so an "appears anywhere in the body" match would classify HIS review as
+# agent output and route it to the dismissal path — the exact loss the fail-closed rule below is
+# meant to prevent. Both files must require the marker at the START of the body.
+grep -Fq 'first line only, never merely' "${surveyor}" ||
+  fail "surveyor matches the disclosure anywhere in the body, so quoted agent text misclassifies a human review"
+grep -Fq 'anywhere later is quoted material and classifies nothing' "${surveyor}" ||
+  fail "surveyor does not state that a non-leading disclosure classifies nothing"
+grep -Fq 'BEGINS WITH** the structural' "${constitution}" ||
+  fail "constitution matches the disclosure anywhere in the body rather than at the start"
+grep -Fq 'a disclosure merely appearing somewhere inside it classifies' "${constitution}" ||
+  fail "constitution does not anchor both agent-authorship branches at the start of the body"
 # Fail closed: discarding the maintainer's own control signal is the worse of the two errors.
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
@@ -845,7 +857,7 @@ grep -Fq 'STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL' "${surveyor}" ||
 # shellcheck disable=SC2016
 grep -Fq 'authorship by login alone cannot tell his block apart' "${constitution}" ||
   fail "constitution still separates maintainer from agent reviews by login alone"
-grep -Fq 'or** when it opens with a leading 🤖 first-person automation' "${constitution}" ||
+grep -Fq 'when it **opens with** a leading 🤖 first-person automation' "${constitution}" ||
   fail "constitution omits the sender-marker fallback for CHANGES_REQUESTED authorship"
 grep -Fq '**Ambiguity resolves to the maintainer**' "${constitution}" ||
   fail "constitution does not fail closed on ambiguous CHANGES_REQUESTED authorship"
