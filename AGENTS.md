@@ -263,10 +263,18 @@ definition surface, and an installed/cache copy is never an authoring target.
   script, the provider-neutral desired state, plugin settings, and the Cursor loader source. The local
   Agent Improver agent/skill forks are retired, and so is the standalone FinOps agent fork — the
   reviewed plugin is the source for both roles.
-- The generic upstream source in `devantler-tech/agent-plugins`, specifically
-  `plugins/agentic-engineering/agents/agent-improver.agent.md`,
-  `plugins/agentic-engineering/skills/agent-improvement/SKILL.md`, the plugin README/desired state,
-  and their manifest/contract validation. Change generic behaviour there first, merge it, then update
+- The generic upstream source — **in the repository that actually authors the file**, which differs
+  per file inside one plugin directory. In `devantler-tech/agent-plugins`:
+  `plugins/agentic-engineering/agents/agent-improver.agent.md`, the plugin README/desired state, and
+  their manifest/contract validation. **Skill bodies are NOT authored there:**
+  `plugins/*/skills/*/SKILL.md` carry `metadata.github-repo` provenance and are re-pulled by the
+  daily `update-agent-skills` workflow, so a hand-edit survives until the next sync and then
+  **silently disappears** — no conflict, no CI failure, no signal. Author them in the repo that
+  `github-repo` names, normally **`devantler-tech/agent-skills`** (the Agent Improver's skill is
+  `agent-improvement/SKILL.md` there), and let the sync carry the bundled copy down; the interval
+  where the bundled copy still reads the old wording is correct, not a miss. Provenance is a
+  **per-file** question — run `grep -l github-repo <path>` before editing anything under a plugin,
+  rather than trusting the directory. Change generic behaviour upstream first, merge it, then update
   this consumer's `libraries/agent-plugins` gitlink and copied desired state.
 
 **Runtime-local surfaces — back up before editing, verify in place, and record before/after in native

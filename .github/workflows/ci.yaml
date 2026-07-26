@@ -33,6 +33,7 @@ jobs:
       board-add: ${{ steps.filter.outputs.board-add }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
+      authoring-surface: ${{ steps.filter.outputs.authoring-surface }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -158,6 +159,12 @@ jobs:
               - '.claude/skills/products/monorepo/SKILL.md'
               - '.claude/scripts/product-value-contract.test.sh'
               - 'docs/README.md'
+              - '.github/workflows/ci.yaml'
+            authoring-surface:
+              # The guard script itself is listed so a PR deleting it still runs it,
+              # and ci.yaml so removing the job below is covered the same way.
+              - 'AGENTS.md'
+              - '.claude/scripts/authoring-surface-provenance.test.sh'
               - '.github/workflows/ci.yaml'
 
   build-docs:
@@ -418,6 +425,21 @@ jobs:
           persist-credentials: false
       - name: Verify the product value contract
         run: bash .claude/scripts/product-value-contract.test.sh
+
+  test-authoring-surface-provenance:
+    name: Test authoring-surface provenance
+    needs: changes
+    if: needs.changes.outputs.authoring-surface == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the authoring-surface provenance guard
+        run: bash .claude/scripts/authoring-surface-provenance.test.sh
 
   test-self-review-contract:
     name: Test self-review contract
