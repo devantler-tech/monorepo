@@ -1,13 +1,18 @@
 ---
 name: finops
-description: The run procedure for the FinOps engineer — measure where the money actually goes (OpenCost attribution, real usage, provider surface), attribute it to workloads and drivers, diagnose waste vs rate vs rightsizing vs non-want, check every proposal against the lifestyle floor, ship engineering changes as PRs and financial decisions as Slack asks, then verify the saving against the next real invoice. Use on the FinOps schedule or when asked to look at platform spend.
+description: The Agentic Engineer's cost-pass procedure — measure where the money actually goes (OpenCost attribution, real usage, provider surface), attribute it to workloads and drivers, diagnose waste vs rate vs rightsizing vs non-want, check every proposal against the lifestyle floor, ship engineering changes as PRs and financial decisions as private asks, then verify the saving against the next real invoice. Use on the cost-pass cadence or when asked to look at platform spend.
 ---
 
-# FinOps run loop
+# FinOps run loop — the cost pass
 
-The procedure for [`finops-engineer`](../../agents/finops-engineer.md). **Read that agent definition
-first** — especially *the one rule that outranks every other* and *the lifestyle floor*, which govern
-everything below. This skill is the *how*.
+The procedure for the **Agentic Engineer's own spend mandate**. There is no separate FinOps agent:
+spend was merged into the primary engineer on 2026-07-25 (`AGENTS.md` → *Spend contract*; upstream
+[ADR 0005](https://github.com/devantler-tech/agent-plugins/blob/main/docs/adr/0005-merge-spend-stewardship-into-the-engineer.md)).
+
+**Two things govern everything below, and they are not restated here** — read them first: the plugin
+entrypoint's **Spend stewardship** section (value per unit cost over cost reduction, the
+protected-outcomes veto, and the hard money limits) and `AGENTS.md` → *Spend contract* (this
+deployment's floor, evidence sources, private channel, and cadence). This skill is only the *how*.
 
 **One line:** measure the spend → attribute it → find the value-preserving change → check it against
 the floor → ship the engineering half, ask for the financial half → prove it on the bill.
@@ -26,7 +31,7 @@ git fetch origin main && git merge --ff-only origin/main
 Confirm you have an **isolated working tree before the first edit**
 (`git rev-parse --show-toplevel`); branch inside it, per `AGENTS.md` → *Execution model*.
 
-Read your native memory: last snapshot, open Slack asks awaiting an answer, proposals shipped and
+Read your native memory: last snapshot, open maintainer asks awaiting an answer, proposals shipped and
 **not yet verified against a bill**, and the current lifestyle floor. Memory is your own prior notes —
 a starting point, stale by default, verified against live state before you act on it.
 
@@ -128,15 +133,35 @@ a consideration folded into the ranking.
 | Manifest / config / node shape | `platform` (or the owning repo) | draft PR, normal GitOps path |
 | Measurement or tooling fix | monorepo | draft PR |
 | Needs decomposition | owning repo | well-formed issue, boarded |
-| **Financial action** (buy, cancel, change plan, add credits, commit) | **Slack → the maintainer** | ask; **never execute** |
-| **Decision only he can make** (still wanted? floor change?) | **Slack → the maintainer** | ask |
+| **Financial action** (buy, cancel, change plan, add credits, commit) | **the private channel in *Spend contract*** | ask; **never execute** |
+| **Decision only he can make** (still wanted? floor change?) | **the private channel in *Spend contract*** | ask |
 
-**PRs carry the engineering change and relative figures only** — "cuts this namespace's compute ~40%"
-is fine; his balances, transactions and totals never appear in a public artifact. Follow the normal
+⚠️ **That destination is currently UNRESOLVED, and that makes this half of the step DEFAULT-OFF.**
+The only Slack channel in the workspace is public, and financial detail must never go there. So while
+the destination is unresolved: run steps 1–4, ship the **measurement and engineering** rows above as
+normal PRs, and **stop before producing a financial ask or a spend proposal at all** — do not send it,
+and do not park it in the run report either, because a decision nobody can receive is the passive
+self-blocking the contract forbids. Resolving the destination is a maintainer act and is what flips
+this half on (`AGENTS.md` → *Spend contract* → **Activation gate**).
+
+**PRs carry the engineering change and relative figures only, and every figure states its strength** —
+"models a ~40% compute reduction for this namespace (OpenCost, 3d window)" is fine; the bare
+"cuts this namespace's compute ~40%" is **not**, because it reads as measured when the billing API is
+not wired and every saving figure here is *modelled*. His balances, transactions and totals never
+appear in a public artifact. Follow the normal
 draft-PR discipline: validate, RED/GREEN where there is a testable claim, one concern per PR, and the
 PM-level body shape (*Why* → *What* → issue link).
 
-**The Slack ask has a fixed shape**, because a message he must act on should never need a second
+**Own the engineering work through delivery.** After selecting an implementable change, check for an
+existing PR or live claim, claim the issue and push the role's unique branch, then implement rather
+than handing the finding off. Keep the draft current, fix or refute every review finding, resolve all
+threads, secure a qualifying review at the exact current head, self-promote only on genuine readiness,
+and drive the reviewed head to merge using the owning repository's declared mechanics. An issue or
+draft is an intermediate checkpoint, not the output, unless a named external dependency or missing
+authority blocks implementation. A financial action is missing authority; it does not block any
+separable engineering PR.
+
+**The ask has a fixed shape**, because a message he must act on should never need a second
 message to clarify:
 
 > 🤖 *disclosure line naming this agent as sender*
@@ -175,14 +200,18 @@ it, and treat wiring it as high-value work in its own right.
 
 ## 7. Record and report
 
-Into memory: the snapshot, proposals with evidence and confidence, open Slack asks with dates, the
+Into memory: the snapshot, proposals with evidence and confidence, open maintainer asks with dates, the
 projected-vs-realised ledger, and findings deliberately **not** acted on with the reason (so future
 runs need not re-derive the decision — especially floor vetoes).
 
 The report states: window and totals; what changed since last run; proposals shipped with links;
-decisions awaiting him; realised-vs-projected on anything verified; and the measurement gaps still
-open. **Financial detail goes to Slack or private operator notes — never a repo file or public
-artifact.**
+realised-vs-projected on anything verified; and the measurement gaps still open. **Financial detail
+goes to the private channel or the private operator notes — never a repo file or public artifact.**
+
+⚠️ **While the private channel is UNRESOLVED, the report carries no financial decision either** — not
+as a pending item, not as an "awaiting him" note. That half is off (step 5), so there is nothing to
+list; a decision parked where he does not read it is the passive self-blocking the contract forbids.
+Report the *measurement* work and the blocked state itself, never the decision.
 
 **Report honestly.** A run that found nothing worth changing says exactly that. There is enormous
 pressure on a cost agent to justify itself with a number every run; inventing one corrupts the
@@ -207,5 +236,5 @@ baseline every later run reasons from and spends trust that is hard to win back.
 - Inferring "unwanted" from "unused".
 - Quoting OpenCost as an invoice.
 - A saving so small it costs more attention than money, presented because the run needed an artifact.
-- Slack messages that are really status updates.
+- Messages to the maintainer that are really status updates.
 - Any change to the lifestyle floor that the maintainer did not ask for.
