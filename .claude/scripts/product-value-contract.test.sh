@@ -106,6 +106,10 @@ grep -Fq 'RSS inclusion, social/OG presentation' "${site_readme}" ||
 
 grep -Fq -- "- '.github/workflows/ci.yaml'" "${workflow}" ||
   fail "product value filter does not self-test workflow-only changes"
+for adr_filter in "'**/adr/**'" "'**/adrs/**'"; do
+  grep -Fq -- "- ${adr_filter}" "${workflow}" ||
+    fail "product value filter does not run for ${adr_filter} path changes"
+done
 grep -Fq '      - changes' "${workflow}" ||
   fail "required aggregate does not depend on path detection"
 # Literal GitHub expression; shell expansion would make this assertion unsafe.

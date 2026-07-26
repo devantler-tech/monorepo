@@ -141,6 +141,8 @@ jobs:
               - '.github/workflows/ci.yaml'
             product-value:
               - 'AGENTS.md'
+              - '**/adr/**'
+              - '**/adrs/**'
               - '.claude/agents/daily-maintainer.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
