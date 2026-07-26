@@ -50,6 +50,77 @@ grep -Fq '### Authority model' "${constitution}" ||
 grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constitution}" ||
   fail "consumer does not name the upstream Agent Improver source"
 
+# The bundled SKILL.md is SYNCED from devantler-tech/agent-skills (it carries
+# metadata.github-repo and the update-agent-skills workflow re-pulls it), so an edit there
+# is silently reverted. The consumer listed it as an authoring surface until 2026-07-25,
+# which would route a generic fix into a file that discards it.
+#
+skill_path='plugins/agentic-engineering/skills/agent-improvement/SKILL.md'
+
+# Owner, path, provenance value and the non-authoring rule must all appear in ONE bullet.
+# Asserting any of them against the whole contract is a scope hole — verified: changing the
+# real owner to agent-plugins and appending an unrelated copy of the expected phrase
+# elsewhere satisfied a global check. Extraction therefore starts at the OWNER line (the
+# bullet's first line), not at the path line, so the owner declaration is bound to this skill.
+# Stop at the next SIBLING BULLET as well as at a blank line. Markdown bullets are normally
+# consecutive with no blank line between them, so a blank-line-only terminator swallowed the
+# following bullet too — and the "same bullet" binding this guard claims could then be
+# satisfied by text that had moved into that sibling.
+skill_bullet="$(awk '
+  !inb && /\*\*`devantler-tech\/agent-skills`\*\* authors `agent-improvement\/`/ { inb = 1; print; next }
+  inb {
+    if ($0 ~ /^[[:space:]]*$/) exit
+    if ($0 ~ /^[[:space:]]*[-*+] /) exit
+    print
+  }
+' "${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' ')"
+[ -n "${skill_bullet}" ] ||
+  fail "consumer does not name agent-skills as the owner of bundled skills"
+assert_bullet() {
+  case "${skill_bullet}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+assert_bullet "${skill_path}\` carries" \
+  "the agent-skills owner bullet does not name the bundled agent-improvement/SKILL.md"
+assert_bullet 'github-repo: https://github.com/devantler-tech/agent-skills' \
+  "the agent-skills owner bullet does not name devantler-tech/agent-skills as the upstream"
+assert_bullet 'It is a synced artifact, **not** an authoring surface' \
+  "the agent-skills owner bullet does not mark that copy a non-authoring surface"
+
+# Provenance is a per-FILE question: the same plugin directory holds synced skills and
+# locally-authored agents, so a per-directory rule is wrong in one direction or the other.
+#
+# An UNINITIALISED submodule is a normal local state, not contract drift. Detect it first, or
+# a fresh checkout reports "the skill is missing upstream" and hides the actionable fix.
+plugin_root="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering"
+[ -d "${plugin_root}" ] ||
+  fail "libraries/agent-plugins is not initialised, so the bundled skill cannot be checked. Initialise it with
+       .claude/scripts/submodule-init.sh libraries/agent-plugins"
+
+bundled_skill="${plugin_root}/skills/agent-improvement/SKILL.md"
+[ -f "${bundled_skill}" ] ||
+  fail "bundled agent-improvement/SKILL.md is missing at the pinned plugin revision — AGENTS.md routes generic skill edits through this path, so its absence invalidates the contract text"
+
+# Query the frontmatter STRUCTURALLY, at the exact YAML path `metadata.github-repo`.
+#
+# A line-oriented grep cannot express this and kept failing in new ways: it accepted the value
+# under a different mapping (`examples.github-repo`), accepted a body example after the real
+# field was deleted, and treated frontmatter with no closing delimiter as valid. yq resolves
+# the real path or returns null, which is the property actually wanted — and it is SHORTER than
+# the hand-rolled extraction it replaces, so this closes the hole while cutting complexity.
+command -v yq >/dev/null ||
+  fail "yq is required to verify the bundled skill's provenance structurally. Install it (brew install yq; it is preinstalled on GitHub ubuntu runners)"
+# `|| skill_upstream=''` is load-bearing under `set -e`: yq exits non-zero on unparseable
+# frontmatter (e.g. no closing delimiter), which would abort the script SILENTLY — a failing
+# test with no message, indistinguishable from a crash. Capture the failure and let the
+# assertion below report it with the actionable text.
+skill_upstream="$(yq --front-matter=extract '.metadata.github-repo // ""' "${bundled_skill}" 2>/dev/null)" ||
+  skill_upstream=''
+[ "${skill_upstream}" = 'https://github.com/devantler-tech/agent-skills' ] ||
+  fail "bundled agent-improvement/SKILL.md does not declare metadata.github-repo = https://github.com/devantler-tech/agent-skills (got: '${skill_upstream:-<none or unparseable frontmatter>}') — re-check the owning repository before trusting the contract text"
+
 # Every machine-readable entrypoint pointer must resolve to an agent the pinned plugin
 # actually BUNDLES. Derived from the submodule rather than hard-coded, so the next upstream
 # rename cannot leave this consumer pointing at a file that no longer exists — which is

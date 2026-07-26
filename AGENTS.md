@@ -263,11 +263,55 @@ definition surface, and an installed/cache copy is never an authoring target.
   script, the provider-neutral desired state, plugin settings, and the Cursor loader source. The local
   Agent Improver agent/skill forks are retired, and so is the standalone FinOps agent fork — the
   reviewed plugin is the source for both roles.
-- The generic upstream source in `devantler-tech/agent-plugins`, specifically
-  `plugins/agentic-engineering/agents/agent-improver.agent.md`,
-  `plugins/agentic-engineering/skills/agent-improvement/SKILL.md`, the plugin README/desired state,
-  and their manifest/contract validation. Change generic behaviour there first, merge it, then update
-  this consumer's `libraries/agent-plugins` gitlink and copied desired state.
+- The generic upstream source, which is **NOT one repository**. **Check the file's own provenance
+  before editing it — the question is per-FILE, never per-directory**, because one plugin directory
+  mixes locally-authored files with copies synced from *several different* upstreams:
+  - **`devantler-tech/agent-plugins`** authors
+    `plugins/agentic-engineering/agents/agent-improver.agent.md`, the plugin README/desired state, and
+    their manifest/contract validation. These carry **no** `metadata.github-repo`.
+  - **`devantler-tech/agent-skills`** authors `agent-improvement/`, **and that one skill is the only
+    bundled skill this grant covers** — no other skill in that repository is a named surface.
+    🔴 The copy at `plugins/agentic-engineering/skills/agent-improvement/SKILL.md` carries
+    `metadata.github-repo: https://github.com/devantler-tech/agent-skills` and is re-pulled by the
+    `update-agent-skills` workflow, so editing it there is **silently reverted** — no conflict, no CI
+    failure, no signal. It is a synced artifact, **not** an authoring surface.
+
+  ⚠️ **The following is INFORMATIONAL ROUTING GUIDANCE, not part of the grant.** It exists so a fix is
+  not sent to the wrong repository; it names **no** additional definition surface, and every skill in
+  it is **out of scope** for autonomous change. Other bundled skills come from third-party upstreams
+  entirely — measured 2026-07-25: `find-skills` from `vercel-labs/skills`, `git-commit`/`refactor`
+  from `github/awesome-copilot`, `test-driven-development` from `obra/superpowers`, `astro` from
+  `astrolicious/agent-skills`. Each is a third party, so the *Ask before upstream creates* rule and the
+  *Professional-work repository boundary* both apply before any interaction. **Read the value to learn
+  who owns a file; never read it as permission to change that file.**
+
+  Verify **from the monorepo root**, and **query the frontmatter structurally** — a `grep` for the
+  string is not good enough here. It reports a file whose *body* merely mentions the URL, accepts a
+  prefix-extended rename (`agent-skills-v2`), and misses that the value sits under some other mapping
+  than `metadata`. Ask for the exact YAML path instead:
+
+  ```sh
+  # who owns each bundled skill (empty/null ⇒ authored in agent-plugins, safe to edit there):
+  for f in libraries/agent-plugins/plugins/*/skills/*/SKILL.md; do
+    printf '%s\t%s\n' "$(yq --front-matter=extract '.metadata.github-repo // "LOCAL"' "$f")" "$f"
+  done
+  ```
+
+  Anything printing `https://github.com/devantler-tech/agent-skills` is **synced** — edit it upstream
+  in that repo. `LOCAL` means it is authored in `agent-plugins`.
+
+  Change generic behaviour in the **owning** repository first. The rollout then differs by owner, and
+  **the skills path has an extra hop that is easy to skip**:
+  - *Authored in `agent-plugins`* (agents, README, desired state): merge there, then bump this
+    consumer's `libraries/agent-plugins` gitlink.
+  - *Authored in `agent-skills`* (bundled skills): merge there, **then wait for `update-agent-skills`
+    to re-pull it into `agent-plugins` and for THAT generated PR to merge**, and only then bump the
+    gitlink. Bumping straight after the `agent-skills` merge pins a revision that still carries the
+    **old** skill — the change is real upstream and absent here, which reads as a completed rollout
+    while nothing has actually shipped to this deployment. Confirm by reading the skill's content at
+    the pinned revision, never by the upstream PR being merged.
+
+  Finally, update the copied desired state.
 
 **Runtime-local surfaces — back up before editing, verify in place, and record before/after in native
 memory and the run report:**
