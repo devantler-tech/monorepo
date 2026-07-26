@@ -102,6 +102,7 @@ jobs:
               - '.claude/scripts/maintainer-preflight.test.sh'
             self-review-contract:
               - 'AGENTS.md'
+              - '.coderabbit.yaml'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/scripts/self-review-contract.test.sh'

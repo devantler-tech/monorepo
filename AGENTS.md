@@ -1113,6 +1113,10 @@ result at the current head — self-promotion is forbidden before that. Request 
   (the underlying defect is [#2344](https://github.com/devantler-tech/monorepo/issues/2344)). **No
   other failing status is ever excluded** — this carve-out is exactly the review provider's own
   quota signal on its own context, never a red CI check, never a required check, never a finding.
+  **Primary lever (same issue):** keep `.coderabbit.yaml` pinned to
+  `reviews.fail_commit_status: false` so CodeRabbit itself does not publish a failing outward
+  status on review errors / rate limits — the merge carve-out is defense-in-depth for any residual
+  quota status, not a substitute for stopping the status at the source.
 
   **What does NOT relax — the bar, only the trigger.** A local review is held to the same standard as
   a bot lane (correctness, security, the repo's `## Review guidelines`), it is posted as a real
