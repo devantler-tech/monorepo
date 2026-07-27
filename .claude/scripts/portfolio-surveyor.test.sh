@@ -230,6 +230,13 @@ grep -Fq 'authored by an exact dependency-automation identity' "${maintenance_sk
   fail "run loop's select step omits the automation-author exclusion"
 grep -Fq 'never actionable at all' "${maintenance_skill}" ||
   fail "run loop does not state that an automation-authored issue is never actionable"
+# product-engineering re-enumerates the same closed skip set, so it drifts into the identical
+# contradiction unless (f) is stated there too. (The other files that mention oldest-actionable
+# merely defer to the contract and enumerate nothing, so they need no copy.)
+grep -Fq 'authored by an exact dependency-automation' "${product_engineering_skill}" ||
+  fail "advance playbook's skip set omits the automation-author exclusion (f)"
+grep -Fq 'never actionable at all' "${product_engineering_skill}" ||
+  fail "advance playbook does not state that an automation-authored issue is never actionable"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||
