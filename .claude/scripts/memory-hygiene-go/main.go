@@ -311,25 +311,23 @@ func validateReadable(path string) error {
 }
 
 func readFirstLine(reader io.Reader) (string, error) {
-	var line strings.Builder
-	buffer := make([]byte, 1)
-	for {
-		count, err := reader.Read(buffer)
-		if count > 0 {
-			if buffer[0] == '\n' {
-				return strings.TrimSuffix(line.String(), "\r"), nil
-			}
-			line.WriteByte(buffer[0])
-		}
-		if errors.Is(err, io.EOF) {
-			if line.Len() == 0 {
-				return "", errors.New("empty summary")
-			}
-			return strings.TrimSuffix(line.String(), "\r"), nil
-		}
-		if err != nil {
-			return "", err
-		}
+	prefix := make([]byte, 4)
+	count, err := io.ReadFull(reader, prefix)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", err
+	}
+	if count == 0 {
+		return "", errors.New("empty summary")
+	}
+
+	header := string(prefix[:count])
+	switch {
+	case header == "v1", header == "v1\r":
+		return "v1", nil
+	case strings.HasPrefix(header, "v1\n"), strings.HasPrefix(header, "v1\r\n"):
+		return "v1", nil
+	default:
+		return header, nil
 	}
 }
 

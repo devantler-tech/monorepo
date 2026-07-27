@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -47,6 +49,19 @@ func codexStore(t *testing.T) string {
 	writeSummaryKB(t, filepath.Join(dir, "memory_summary.md"), 5)
 	writeKB(t, filepath.Join(dir, "MEMORY.md"), 80)
 	return dir
+}
+
+type boundedHeaderProbe struct {
+	bytesRead int
+}
+
+func (probe *boundedHeaderProbe) Read(buffer []byte) (int, error) {
+	if probe.bytesRead >= 5 {
+		return 0, errors.New("header reader exceeded probe limit")
+	}
+	buffer[0] = 'x'
+	probe.bytesRead++
+	return 1, nil
 }
 
 func TestArgumentValidation(t *testing.T) {
@@ -304,6 +319,14 @@ func TestCodexLayout(t *testing.T) {
 	})
 }
 
+func TestCodexHeaderReadIsBounded(t *testing.T) {
+	probe := &boundedHeaderProbe{}
+	_, _ = readFirstLine(probe)
+	if probe.bytesRead > 4 {
+		t.Fatalf("read %d malformed-header bytes, want at most 4", probe.bytesRead)
+	}
+}
+
 func TestOutputModesAndReadOnlyBehavior(t *testing.T) {
 	dir := legacyStore(t)
 	writeKB(t, filepath.Join(dir, "portfolio-status.md"), 80)
@@ -355,6 +378,69 @@ func TestOutputModesAndReadOnlyBehavior(t *testing.T) {
 	}
 }
 
+func TestShellWrapperPreservesRuntimeBehavior(t *testing.T) {
+	wrapper, err := filepath.Abs(filepath.Join("..", "memory-hygiene.sh"))
+	if err != nil {
+		t.Fatalf("resolve shell wrapper: %v", err)
+	}
+
+	t.Run("relative memory directory uses caller working directory", func(t *testing.T) {
+		callerDir := t.TempDir()
+		store := filepath.Join(callerDir, "memory")
+		if err := os.Mkdir(store, 0o700); err != nil {
+			t.Fatalf("create relative store: %v", err)
+		}
+		writeKB(t, filepath.Join(store, "MEMORY.md"), 5)
+
+		command := exec.Command(wrapper, "--layout", "legacy", "--dir", "memory", "--quiet")
+		command.Dir = callerDir
+		output, runErr := command.CombinedOutput()
+		if runErr != nil {
+			t.Fatalf("relative wrapper invocation failed: %v; output=%q", runErr, output)
+		}
+		if len(output) != 0 {
+			t.Fatalf("quiet relative invocation emitted %q", output)
+		}
+	})
+
+	t.Run("exit two and quiet output survive the launcher", func(t *testing.T) {
+		command := exec.Command(
+			wrapper,
+			"--layout", "legacy",
+			"--dir", filepath.Join(t.TempDir(), "missing"),
+			"--quiet",
+		)
+		output, runErr := command.CombinedOutput()
+		var exitErr *exec.ExitError
+		if !errors.As(runErr, &exitErr) {
+			t.Fatalf("wrapper error = %v, want an exit error; output=%q", runErr, output)
+		}
+		if exitErr.ExitCode() != 2 {
+			t.Fatalf("wrapper exit code = %d, want 2; output=%q", exitErr.ExitCode(), output)
+		}
+		if strings.Contains(string(output), "exit status 2") {
+			t.Fatalf("wrapper leaked go run diagnostic: %q", output)
+		}
+	})
+
+	t.Run("exit one survives the launcher", func(t *testing.T) {
+		store := legacyStore(t)
+		writeKB(t, filepath.Join(store, "portfolio-status.md"), 80)
+		command := exec.Command(wrapper, "--layout", "legacy", "--dir", store, "--quiet")
+		output, runErr := command.CombinedOutput()
+		var exitErr *exec.ExitError
+		if !errors.As(runErr, &exitErr) {
+			t.Fatalf("wrapper error = %v, want an exit error; output=%q", runErr, output)
+		}
+		if exitErr.ExitCode() != 1 {
+			t.Fatalf("wrapper exit code = %d, want 1; output=%q", exitErr.ExitCode(), output)
+		}
+		if len(output) != 0 {
+			t.Fatalf("quiet threshold failure emitted %q", output)
+		}
+	})
+}
+
 func TestRepositoryContracts(t *testing.T) {
 	read := func(path string) string {
 		t.Helper()
@@ -366,24 +452,36 @@ func TestRepositoryContracts(t *testing.T) {
 	}
 
 	constitution := read(filepath.Join("..", "..", "..", "AGENTS.md"))
+	normalizedConstitution := strings.Join(strings.Fields(constitution), " ")
 	for _, required := range []string{
 		"An exit 1 makes repairing the over-threshold boot-loaded file",
 		"An exit 2 indicates a usage, malformed-layout, missing, or unreadable-store error",
+		"If a Codex exit 2 names a missing, unreadable, or malformed `memory_summary.md`",
 	} {
-		if !strings.Contains(constitution, required) {
+		if !strings.Contains(normalizedConstitution, required) {
 			t.Fatalf("AGENTS.md is missing %q", required)
 		}
 	}
 
 	maintenance := read(filepath.Join("..", "..", "skills", "portfolio-maintenance", "SKILL.md"))
-	if !strings.Contains(maintenance, "memory skills") {
+	normalizedMaintenance := strings.Join(strings.Fields(maintenance), " ")
+	if !strings.Contains(normalizedMaintenance, "memory skills") {
 		t.Fatal("portfolio maintenance omits Codex memory skills from progressive retrieval")
+	}
+	if !strings.Contains(
+		normalizedMaintenance,
+		"If a Codex exit 2 names a missing, unreadable, or malformed `memory_summary.md`",
+	) {
+		t.Fatal("portfolio maintenance omits restart after projection-specific exit 2")
 	}
 
 	workflow := read(filepath.Join("..", "..", "..", ".github", "workflows", "ci.yaml"))
 	start := strings.Index(workflow, "            memory-hygiene:")
+	if start < 0 {
+		t.Fatal("cannot locate memory-hygiene path filter")
+	}
 	end := strings.Index(workflow[start:], "            maintainer-preflight:")
-	if start < 0 || end < 0 {
+	if end < 0 {
 		t.Fatal("cannot locate memory-hygiene path filter")
 	}
 	filter := workflow[start : start+end]

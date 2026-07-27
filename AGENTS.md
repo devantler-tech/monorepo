@@ -2673,9 +2673,12 @@ step:
    checks. An exit 1 makes repairing the over-threshold boot-loaded file that tick's mandated hygiene
    item: consolidate an author-managed file safely, or refresh an oversized Codex projection through
    the runtime. An exit 2 indicates a usage, malformed-layout, missing, or unreadable-store error;
-   resolve it before proceeding. After a Codex projection refresh for exit 1, **restart the run**,
-   because the old projection was already injected before the shell gate ran; it must not continue on
-   the replacement file. Never rewrite Codex's
+   resolve it before proceeding. If a Codex exit 2 names a missing, unreadable, or malformed
+   `memory_summary.md`, repair the projection through the runtime's supported path and **restart the
+   run**: this session started without a valid projection. Other exit-2 causes may rerun
+   the guard in the same session after resolution. After a Codex projection refresh for exit 1,
+   **restart the run**, because the old projection was already injected before the shell gate ran; it
+   must not continue on the replacement file. Never rewrite Codex's
    generated registry or temporary inputs to clear this gate. **Memory is a MULTI-WRITER
    surface** — several instances append per hour, so re-read immediately before writing, prefer a
    **non-clobbering append** over a whole-file rewrite, and **stand down rather than clobber** when a

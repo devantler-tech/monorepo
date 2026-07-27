@@ -89,7 +89,10 @@ card.
    it and **restart the run; do not continue this session on the replacement file**. For a legacy
    store, repair the author-managed file, rerun the check, then continue to step 4. `near` entries
    are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or unreadable
-   store — resolve it rather than proceeding on an unchecked memory read.
+   store — resolve it rather than proceeding on an unchecked memory read. If a Codex exit 2 names a
+   missing, unreadable, or malformed `memory_summary.md`, repair the projection through the runtime's
+   supported path and **restart the run** because this session started without a valid projection;
+   other exit-2 causes may rerun the guard in this session after resolution.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
    rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
