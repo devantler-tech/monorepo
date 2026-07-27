@@ -1878,6 +1878,40 @@ if printf '%s' "$OUT" | grep -q "$S_GHPB"; then
   bad "output boundary never prints the credential value" "raw token appeared in output"
 else ok "output boundary never prints the credential value"; fi
 
+# The locator must AGREE with the table row it annotates: a locator naming a
+# different shape than the count it explains is worse than no locator. Asserted
+# as agreement on both sides, not as a guess about which shape is right —
+# an earlier version of this test asserted __PATP__ was weak-generic, which the
+# table disproves (21 chars after the prefix satisfies its {20,} bound).
+mkdir -p "$FIX/credshort"
+cat > "$FIX/credshort/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"token=__PATP__ here"}]}}
+EOF
+subst "$FIX/credshort/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credshort" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+if printf '%s' "$OUT" | grep -q 'github-pat (fine-grained)' \
+   && printf '%s' "$OUT" | grep -q 'shape=github-pat'; then
+  ok "locator shape agrees with the table row it annotates"
+else bad "locator shape agrees with the table row it annotates" \
+  "$(printf '%s' "$OUT" | grep -E 'github-|session=' | head -3)"; fi
+
+# The converse, and the one that actually matters: a LONG token behind a
+# `token=` wrapper is the commonest real-leak shape, and grep's leftmost rule
+# hands it to the generic alternative — so the match begins at the KEY. The
+# locator must strip that wrapper exactly as the table does, or every real
+# wrapped leak is located as `generic-assignment` while the table counts it
+# high-signal. The short-value test above CANNOT catch this (it is generic
+# either way), which an ablation proved.
+mkdir -p "$FIX/credwrap"
+cat > "$FIX/credwrap/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPD__ here"}]}}
+EOF
+subst "$FIX/credwrap/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credwrap" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "wrapped real token locates as its true shape" "$OUT" "shape=github-token"
+
 # A mid-blob chance match: base64 alphabet includes `+` and `/`, which are the
 # only characters that can satisfy the boundary anchor INSIDE a blob. The image
 # path is already excluded structurally; this covers the remaining blob shapes

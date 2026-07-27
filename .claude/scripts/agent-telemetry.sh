@@ -223,7 +223,7 @@ emit_injection_hits() {
 # rather than shared because the table consumes normalised values and this
 # consumes raw matches; keep the two prefix sets in step.
 emit_credential_hits() {
-  local f="$1" session line raw record match shape
+  local f="$1" session line raw record match shape m
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
@@ -237,17 +237,31 @@ emit_credential_hits() {
         printf '%s' "$raw" | grep -hoiE "$CRED_TABLE_RE" \
           | while IFS= read -r match || [ -n "$match" ]; do
               # Classify to a SHAPE NAME and discard the value immediately.
-              # Anything unclassified reports as the weak generic bucket, so an
-              # unrecognised shape is never silently dropped from the locator.
-              case "$(printf '%s' "$match" | tr '[:upper:]' '[:lower:]')" in
-                *github_pat_*)  shape="github-pat" ;;
-                *ghp_*|*gho_*|*ghu_*|*ghs_*|*ghr_*) shape="github-token" ;;
-                *akia*)         shape="aws-access-key-id" ;;
-                *xox*)          shape="slack-token" ;;
-                *eyj*)          shape="jwt-like" ;;
-                *-----begin*)   shape="private-key-block" ;;
-                *)              shape="generic-assignment" ;;
-              esac
+              # These mirror the TABLE's shape_of() including its LENGTH bounds,
+              # not just the prefix: a prefix-only test would report
+              # `shape=github-token` for `token=ghp_short`, which the table
+              # correctly counts as weak generic — a locator disagreeing with
+              # the table it annotates is worse than no locator. Anything
+              # unclassified reports as the weak generic bucket, so an
+              # unrecognised shape is never silently dropped.
+              m=$(printf '%s' "$match" | tr '[:upper:]' '[:lower:]')
+              m=${m#[^a-z0-9_-]}
+              # Strip a `KEY=`/`key: ` wrapper exactly as the table does before
+              # classifying. grep's LEFTMOST-match rule hands `token=ghp_…` to
+              # the generic alternative, so the match begins at the KEY — and
+              # that wrapped form is the commonest real-leak shape. Without
+              # this, every wrapped leak would be located as
+              # `shape=generic-assignment` while the table counted it as a
+              # high-signal token.
+              case $m in *[:=]*) m=${m#*[:=]}; m=${m#"${m%%[![:space:]]*}"}; m=${m#[\"\']} ;; esac
+              if   [[ $m =~ ^github_pat_[a-z0-9_]{20,} ]];        then shape="github-pat"
+              elif [[ $m =~ ^gh[pousr]_[a-z0-9]{16,} ]];          then shape="github-token"
+              elif [[ $m =~ ^akia[0-9a-z]{12,} ]];                then shape="aws-access-key-id"
+              elif [[ $m =~ ^xox[baprs]-[a-z0-9-]{10,} ]];        then shape="slack-token"
+              elif [[ $m =~ ^eyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,} ]]; then shape="jwt-like"
+              elif [[ $m == -----begin* ]];                       then shape="private-key-block"
+              else shape="generic-assignment"
+              fi
               printf '%s\t%s\t%s\t%s\n' "$session" "$line" "$record" "$shape"
             done
       done
