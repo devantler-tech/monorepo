@@ -788,6 +788,26 @@ cheap. Report every self-promoted merge prominently in the run report. **Definit
 PRs follow this same rule** — their separate human promotion gate was retired by maintainer direction
 2026-07-18, so they self-promote on the same three genuine-readiness conditions (see
 *Self-improvement*).
+**When the prose contract and a runtime permission disagree about self-promotion, the contract
+decides** ([#2248](https://github.com/devantler-tech/monorepo/issues/2248)). The 2026-07-16
+product-work direction and the 2026-07-18 definition-PR direction settle it: self-promoting a
+trusted, routine-owned draft on genuine readiness is **correct mandated behaviour**, not a violation
+to walk back. So a deny-listed `gh pr ready` (or equivalent) in the agent runtime is **not** evidence
+that parking every ready draft is the real rule, and must **not** be written into shared memory as
+though it were — that turns one runtime denial into a portfolio-wide stop. It is a
+**permission-expansion** surface under *Self-improvement → Runtime guard/permission stewardship*:
+capture the denial, name the minimal grant, and surface it to the maintainer.
+**You never widen the enforcement layer yourself** — for *this* engineer that edit is the
+maintainer's alone. ⚠️ That sentence is scoped to this actor and does **not** generalise: the
+`agent-improver` holds a different grant, and *Authority model* authorises it to loosen enforcement
+**autonomously** on evidence. Reading the prohibition as universal would have the scheduled improver
+defer a fix it is mandated to apply, and would make this contract contradict itself about who may
+edit that layer.
+None of this weakens the three readiness conditions or the Cursor lane's measured handoff:
+`app/cursor` is a trusted author but still cannot request a review or clear the green-review gate, so
+a local sibling performs promote/merge once readiness is proven (see *Cursor App handoff* above). An
+untrusted author never self-promotes. Separating agent identity so promotion can stay human-gated on
+a distinguishable author remains a longer-term hardening path, not a reason to suspend this meanwhile.
 **Watch the PRs you spawn — don't fire-and-forget.** After opening a PR, set up a **watcher** (a
 background poll of the PR's CI checks + review threads) so the **spawning session reacts while it is
 alive** — root-cause-fix a check that goes red, and address/resolve a reviewer's threads (CodeRabbit,
@@ -2773,7 +2793,10 @@ performance, security, and reliability. The `self-improvement` skill is the proc
     licence to self-serve: **you never widen your own guards.** Capture the denial (what was blocked,
     why the work is mandated, the minimal grant that would unblock it) and surface the widening to the
     maintainer as a one-click / `AskUserQuestion` / devantler-tech Slack ping — a permission expansion
-    is an authorization change and his call alone.
+    is an authorization change and his call alone. **A runtime deny of self-promotion on a
+    readiness-proven own draft is exactly this class** (see *Autonomy* /
+    [#2248](https://github.com/devantler-tech/monorepo/issues/2248)): it is a permission surface to
+    escalate, never a rewrite of the constitution into "park it forever".
   Fold a full review into the **~monthly host least-privilege audit**; between audits act on evidence
   as it appears. Never edit the *other* instance's guard configuration — surface cross-instance
   findings in the report.
