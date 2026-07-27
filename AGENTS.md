@@ -65,8 +65,7 @@ view is proposed precisely and applied by the maintainer.
 `product-engineering` skill): the CI building block `devantler-tech/actions` (which
 absorbed the archived `reusable-workflows` repo), the agent extensions `devantler-tech/agent-skills` (generic,
 cross-tool agent skills) + `devantler-tech/agent-plugins` (a tool-neutral marketplace bundling those skills
-for VS Code / Copilot CLI / Claude Code; rescope in progress —
-[plugins#7](https://github.com/devantler-tech/agent-plugins/issues/7)), and the cluster-guardrail
+for VS Code / Copilot CLI / Claude Code), and the cluster-guardrail
 catalog `devantler-tech/kyverno-policies` (shared, tested Kyverno policies the platform and
 platform-template consume instead of vendoring copies). A generic pattern proven in one
 product belongs in a shared library so *every* product inherits it — keep them **industry-standard and
