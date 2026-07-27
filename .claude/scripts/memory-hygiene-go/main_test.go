@@ -317,6 +317,27 @@ func TestCodexLayout(t *testing.T) {
 			t.Fatalf("stderr %q does not identify unreadable registry", stderr)
 		}
 	})
+
+	t.Run("measures a symlinked projection target", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink fixture requires POSIX privileges")
+		}
+		dir := t.TempDir()
+		target := filepath.Join(t.TempDir(), "projection.md")
+		writeSummaryKB(t, target, 30)
+		if err := os.Symlink(target, filepath.Join(dir, "memory_summary.md")); err != nil {
+			t.Fatalf("symlink projection: %v", err)
+		}
+		writeKB(t, filepath.Join(dir, "MEMORY.md"), 5)
+
+		code, stdout, stderr := execute("--layout", "codex", "--dir", dir)
+		if code != 1 {
+			t.Fatalf("exit code = %d, want 1; stdout=%q stderr=%q", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "OVER") || !strings.Contains(stdout, "memory_summary.md") {
+			t.Fatalf("stdout %q does not report the symlinked projection target", stdout)
+		}
+	})
 }
 
 func TestCodexHeaderReadIsBounded(t *testing.T) {
@@ -437,6 +458,28 @@ func TestShellWrapperPreservesRuntimeBehavior(t *testing.T) {
 		}
 		if len(output) != 0 {
 			t.Fatalf("quiet threshold failure emitted %q", output)
+		}
+	})
+
+	t.Run("build failure maps to launcher error", func(t *testing.T) {
+		fakeBin := t.TempDir()
+		fakeGo := filepath.Join(fakeBin, "go")
+		if err := os.WriteFile(fakeGo, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+			t.Fatalf("write fake go command: %v", err)
+		}
+
+		command := exec.Command(wrapper, "--layout", "legacy", "--dir", t.TempDir(), "--quiet")
+		command.Env = []string{"PATH=" + fakeBin + ":" + os.Getenv("PATH")}
+		output, runErr := command.CombinedOutput()
+		var exitErr *exec.ExitError
+		if !errors.As(runErr, &exitErr) {
+			t.Fatalf("wrapper error = %v, want an exit error; output=%q", runErr, output)
+		}
+		if exitErr.ExitCode() != 2 {
+			t.Fatalf("wrapper exit code = %d, want 2; output=%q", exitErr.ExitCode(), output)
+		}
+		if !strings.Contains(string(output), "failed to build Go guard") {
+			t.Fatalf("wrapper build failure output = %q", output)
 		}
 	})
 }

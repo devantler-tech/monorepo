@@ -81,7 +81,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		path := filepath.Join(cfg.dir, name)
-		info, statErr := entry.Info()
+		info, statErr := os.Stat(path)
 		if statErr != nil {
 			return reportFailure(
 				stderr,

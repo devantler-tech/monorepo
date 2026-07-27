@@ -10,7 +10,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-go -C "$script_dir/memory-hygiene-go" build -o "$memory_hygiene_binary" .
+if ! go -C "$script_dir/memory-hygiene-go" build -o "$memory_hygiene_binary" .; then
+  echo "memory-hygiene: failed to build Go guard" >&2
+  exit 2
+fi
 
 set +e
 "$memory_hygiene_binary" "$@"
