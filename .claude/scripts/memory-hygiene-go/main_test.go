@@ -395,6 +395,67 @@ func TestCodexLayout(t *testing.T) {
 	})
 }
 
+func TestProjectionSnapshotRejectsReplacementDuringGuard(t *testing.T) {
+	capture := func(t *testing.T) (string, *projectionSnapshot) {
+		t.Helper()
+		dir := codexStore(t)
+		snapshot, err := validateCodexStore(
+			dir,
+			time.Now().Add(time.Minute),
+			defaultIndexKB*1024,
+		)
+		if err != nil {
+			t.Fatalf("capture projection snapshot: %v", err)
+		}
+		t.Cleanup(func() {
+			if closeErr := snapshot.file.Close(); closeErr != nil {
+				t.Errorf("close projection snapshot: %v", closeErr)
+			}
+		})
+		return filepath.Join(dir, "memory_summary.md"), snapshot
+	}
+
+	t.Run("atomic replacement preserving metadata", func(t *testing.T) {
+		summary, snapshot := capture(t)
+		replacement := filepath.Join(t.TempDir(), "memory_summary.md")
+		writeSummaryKB(t, replacement, 5)
+		if err := os.Chtimes(replacement, snapshot.info.ModTime(), snapshot.info.ModTime()); err != nil {
+			t.Fatalf("preserve replacement timestamp: %v", err)
+		}
+		if err := os.Rename(replacement, summary); err != nil {
+			t.Fatalf("replace projection during guard: %v", err)
+		}
+
+		err := validateProjectionUnchanged(snapshot, summary)
+		if err == nil || !strings.Contains(err.Error(), "changed while guard ran") {
+			t.Fatalf("replacement validation error = %v, want changed-while-running failure", err)
+		}
+	})
+
+	t.Run("same-inode rewrite preserving metadata", func(t *testing.T) {
+		summary, snapshot := capture(t)
+		file, err := os.OpenFile(summary, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatalf("open projection for in-place rewrite: %v", err)
+		}
+		if _, err := file.WriteAt([]byte("y"), 4); err != nil {
+			_ = file.Close()
+			t.Fatalf("rewrite projection in place: %v", err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatalf("close rewritten projection: %v", err)
+		}
+		if err := os.Chtimes(summary, snapshot.info.ModTime(), snapshot.info.ModTime()); err != nil {
+			t.Fatalf("restore projection timestamp: %v", err)
+		}
+
+		err = validateProjectionUnchanged(snapshot, summary)
+		if err == nil || !strings.Contains(err.Error(), "changed while guard ran") {
+			t.Fatalf("content validation error = %v, want changed-while-running failure", err)
+		}
+	})
+}
+
 func TestCodexHeaderReadIsBounded(t *testing.T) {
 	probe := &boundedHeaderProbe{}
 	_, _ = readFirstLine(probe)

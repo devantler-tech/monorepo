@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,13 @@ type config struct {
 	showAll                  bool
 }
 
+type projectionSnapshot struct {
+	file      *os.File
+	info      os.FileInfo
+	digest    [sha256.Size]byte
+	hasDigest bool
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -52,15 +60,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	indexFile := legacyIndexFile
-	var codexProjectionInfo os.FileInfo
+	var codexProjection *projectionSnapshot
 	if cfg.layout == "codex" {
-		codexProjectionInfo, err = validateCodexStore(
+		codexProjection, err = validateCodexStore(
 			cfg.dir,
 			time.UnixMilli(cfg.projectionLoadedBeforeMs),
+			cfg.indexKB*1024,
 		)
 		if err != nil {
 			return reportFailure(stderr, err, false)
 		}
+		defer func() {
+			_ = codexProjection.file.Close()
+		}()
 		indexFile = codexSummaryFile
 	}
 
@@ -89,8 +101,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		path := filepath.Join(cfg.dir, name)
-		info := codexProjectionInfo
-		if cfg.layout != "codex" {
+		var info os.FileInfo
+		if cfg.layout == "codex" {
+			info = codexProjection.info
+		} else {
 			var statErr error
 			info, statErr = os.Stat(path)
 			if statErr != nil {
@@ -104,12 +118,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		if err := validateReadable(path); err != nil {
-			return reportFailure(
-				stderr,
-				fmt.Errorf("unreadable memory file %s: %w", name, err),
-				false,
-			)
+		if cfg.layout != "codex" {
+			if err := validateReadable(path); err != nil {
+				return reportFailure(
+					stderr,
+					fmt.Errorf("unreadable memory file %s: %w", name, err),
+					false,
+				)
+			}
 		}
 
 		limitKB := cfg.thresholdKB
@@ -133,6 +149,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 			output.line("near %5dK / %3dK  %s", sizeKB, limitKB, name)
 		case cfg.showAll:
 			output.line("ok   %5dK / %3dK  %s", sizeKB, limitKB, name)
+		}
+	}
+
+	if cfg.layout == "codex" && overCount == 0 {
+		if err := validateProjectionUnchanged(
+			codexProjection,
+			filepath.Join(cfg.dir, codexSummaryFile),
+		); err != nil {
+			return reportFailure(
+				stderr,
+				err,
+				false,
+			)
 		}
 	}
 
@@ -313,7 +342,11 @@ func validateDirectory(dir string) error {
 	return nil
 }
 
-func validateCodexStore(dir string, projectionLoadedBefore time.Time) (os.FileInfo, error) {
+func validateCodexStore(
+	dir string,
+	projectionLoadedBefore time.Time,
+	indexLimitBytes int64,
+) (*projectionSnapshot, error) {
 	for _, name := range []string{codexSummaryFile, legacyIndexFile} {
 		path := filepath.Join(dir, name)
 		info, err := os.Stat(path)
@@ -332,26 +365,30 @@ func validateCodexStore(dir string, projectionLoadedBefore time.Time) (os.FileIn
 	if err != nil {
 		return nil, fmt.Errorf("unreadable Codex memory file: %s: %w", codexSummaryFile, err)
 	}
-	firstLine, readErr := readFirstLine(summary)
+	keepOpen := false
+	defer func() {
+		if !keepOpen {
+			_ = summary.Close()
+		}
+	}()
+
 	info, statErr := summary.Stat()
-	closeErr := summary.Close()
-	if readErr != nil {
-		return nil, fmt.Errorf(
-			"malformed Codex boot projection: %s: %w",
-			codexSummaryFile,
-			readErr,
-		)
-	}
 	if statErr != nil {
 		return nil, fmt.Errorf("unreadable Codex memory file: %s: %w", codexSummaryFile, statErr)
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("unreadable Codex memory file: %s: %w", codexSummaryFile, closeErr)
 	}
 	if info.ModTime().After(projectionLoadedBefore) {
 		return nil, fmt.Errorf(
 			"codex boot projection changed after injection; restart required: %s",
 			codexSummaryFile,
+		)
+	}
+
+	firstLine, readErr := readFirstLine(summary)
+	if readErr != nil {
+		return nil, fmt.Errorf(
+			"malformed Codex boot projection: %s: %w",
+			codexSummaryFile,
+			readErr,
 		)
 	}
 	if firstLine != "v1" {
@@ -360,7 +397,80 @@ func validateCodexStore(dir string, projectionLoadedBefore time.Time) (os.FileIn
 			codexSummaryFile,
 		)
 	}
-	return info, nil
+
+	snapshot := &projectionSnapshot{file: summary, info: info}
+	if info.Size() <= indexLimitBytes {
+		digest, digestErr := digestFile(summary)
+		if digestErr != nil {
+			return nil, fmt.Errorf(
+				"unreadable Codex memory file: %s: %w",
+				codexSummaryFile,
+				digestErr,
+			)
+		}
+		snapshot.digest = digest
+		snapshot.hasDigest = true
+	}
+
+	finalInfo, statErr := summary.Stat()
+	if statErr != nil {
+		return nil, fmt.Errorf("unreadable Codex memory file: %s: %w", codexSummaryFile, statErr)
+	}
+	if finalInfo.Size() != info.Size() || !finalInfo.ModTime().Equal(info.ModTime()) {
+		return nil, fmt.Errorf(
+			"codex boot projection changed while guard ran; restart required: %s",
+			codexSummaryFile,
+		)
+	}
+	snapshot.info = finalInfo
+	keepOpen = true
+	return snapshot, nil
+}
+
+func validateProjectionUnchanged(snapshot *projectionSnapshot, path string) error {
+	current, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("codex boot projection changed while guard ran; restart required: %w", err)
+	}
+	defer func() {
+		_ = current.Close()
+	}()
+
+	currentInfo, err := current.Stat()
+	if err != nil {
+		return fmt.Errorf("codex boot projection changed while guard ran; restart required: %w", err)
+	}
+	if !os.SameFile(snapshot.info, currentInfo) ||
+		snapshot.info.Size() != currentInfo.Size() ||
+		!snapshot.info.ModTime().Equal(currentInfo.ModTime()) {
+		return errors.New("codex boot projection changed while guard ran; restart required")
+	}
+	if snapshot.hasDigest {
+		currentDigest, digestErr := digestFile(current)
+		if digestErr != nil {
+			return fmt.Errorf(
+				"codex boot projection changed while guard ran; restart required: %w",
+				digestErr,
+			)
+		}
+		if currentDigest != snapshot.digest {
+			return errors.New("codex boot projection changed while guard ran; restart required")
+		}
+	}
+	return nil
+}
+
+func digestFile(file *os.File) ([sha256.Size]byte, error) {
+	var digest [sha256.Size]byte
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return digest, err
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return digest, err
+	}
+	copy(digest[:], hash.Sum(nil))
+	return digest, nil
 }
 
 func validateReadable(path string) error {
