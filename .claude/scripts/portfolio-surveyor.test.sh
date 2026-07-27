@@ -926,7 +926,7 @@ fi
 # vocabularies — a full mirror of `gh`'s field lists would go stale on the next
 # CLI release and start failing on correct text.
 pr_view_forbidden='reviewThreads merged baseRepository authorAssociation commentsCount isPullRequest isLocked repository'
-search_forbidden='reviewThreads merged baseRepository mergedAt headRefName headRefOid headRepository mergeStateStatus reviewDecision statusCheckRollup statusCheckRollup files commits reviews latestReviews mergeable mergeCommit'
+search_forbidden='reviewThreads merged baseRepository mergedAt headRefName headRefOid headRepository mergeStateStatus reviewDecision statusCheckRollup files commits reviews latestReviews mergeable mergeCommit'
 
 surveyor_flat="$(tr '\n' ' ' < "${surveyor}" | tr -s ' ')"
 
