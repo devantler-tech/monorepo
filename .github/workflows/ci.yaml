@@ -27,6 +27,7 @@ jobs:
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
       agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
+      board-claim-token: ${{ steps.filter.outputs.board-claim-token }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
@@ -135,6 +136,12 @@ jobs:
               - 'AGENTS.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/work-priority-ladder.test.sh'
+              - '.github/workflows/ci.yaml'
+            board-claim-token:
+              - 'AGENTS.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/products/project-board/SKILL.md'
+              - '.claude/scripts/board-claim-token-contract.test.sh'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
@@ -514,6 +521,21 @@ jobs:
       - name: Verify the portfolio surveyor contract
         run: bash .claude/scripts/portfolio-surveyor.test.sh
 
+  test-board-claim-token-contract:
+    name: Test board-claim token contract
+    needs: changes
+    if: needs.changes.outputs.board-claim-token == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the board-claim token contract
+        run: bash .claude/scripts/board-claim-token-contract.test.sh
+
   status:
     name: "CI - Required Checks"
     runs-on: ubuntu-latest
@@ -535,6 +557,7 @@ jobs:
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
       - test-work-priority-ladder
+      - test-board-claim-token-contract
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
@@ -559,5 +582,6 @@ jobs:
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}
             ${{ needs.test-work-priority-ladder.result }}
+            ${{ needs.test-board-claim-token-contract.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}

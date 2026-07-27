@@ -297,13 +297,23 @@ submodule. Split its work in two, because only one half is path-less:
   check out and no build to validate. Don't let the repo-shaped Act step below cause the board to be
   skipped for want of a `<path>`. ⚠️ **But you still need a CLAIM**: with no branch to push, a bare
   assignment is not a claim, so two instances can pick the same board issue and mutate the board
-  concurrently. Before mutating, **comment the claim on the issue** (disclosure line + what you are
-  about to change) and **re-read the issue immediately before acting** — if a sibling's disclosed
-  claim is already there, that lane is owned; pick something else. **The claim MUST expire and MUST be
-  closed out**, or a crashed run blocks the issue forever: treat a disclosed claim as **live for ~2
-  hours** (matching the branch-claim lease) and **stale after that — take it over and say so in a
-  reply**. On finishing, **reply to your own claim** stating what changed; an un-replied claim older
-  than the lease is abandoned, not owned.
+  concurrently. Before mutating, **comment the claim on the issue** and **re-read the issue
+  immediately before acting**. The comment shape is load-bearing — every instance still comments as
+  `devantler`, so the disclosure line alone cannot tell siblings apart (monorepo#2265):
+  1. **Unique token.** Every board-only claim comment MUST include the greppable token
+     `` `board-claim:<lane>` `` on its own line, where `<lane>` is exactly `claude`, `codex`, or
+     `cursor` (the posting instance's lane — never invent a fourth). Example for this skill's local
+     Claude instance: `` `board-claim:claude` ``. Match **your own** claim by that exact token; a
+     different lane's token is a sibling's.
+  2. **Body.** Disclosure line → the `board-claim:<lane>` token → one sentence naming what you are
+     about to change. No other prose is required.
+  3. **Lease.** A claim is **live for ~2 hours** timed from the comment's `created_at` (matching the
+     branch-claim lease) and **stale after that**. An unreplied claim older than the lease is
+     abandoned, not owned — take it over and say so in a **new** claim comment (do not edit the
+     stale one). If a sibling's live claim is already there, that lane is owned; pick something else.
+  4. **Close-out.** On finishing (or abandoning mid-flight), **reply to your own claim** stating
+     what changed. The reply is what ends the lease early; without it, siblings wait out the full
+     ~2h window.
 - **Any accompanying file change** (an `add-to-project` workflow, an agent-definition or card update)
   is **ordinary monorepo work and keeps the FULL discipline** — per-run worktree, validate, draft PR.
   **Never skip isolation for it:** several instances run concurrently, and editing the shared checkout
