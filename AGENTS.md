@@ -950,23 +950,28 @@ never collapsed to "no review" followed by another review request. A **fourth sa
 when no lane will deliver at that head** — unavailable, or rate/billing limited — the agent's own posted
 local review round (see *Local review round* in the request discipline below); it is never a way
 around requesting a reviewer that is actually serving.
-**Carve-out — Renovate/Dependabot dependency PRs are AUTOMATION-OWNED and need NO agent action**
-(maintainer direction 2026-07-16). Match only the exact app identities: org-search/REST surfaces expose
-`renovate[bot]` and `dependabot[bot]`; deeper GraphQL surfaces may expose `app/renovate` and
-`app/dependabot`. Do not key this classification on the unreliable search `is_bot` field, titles,
-branch names, or dependency labels. This is an author-wide ownership boundary. Do not inspect commit provenance
+**Carve-out — Renovate/Dependabot dependency PRs *and* issues are AUTOMATION-OWNED and need NO agent action**
+(maintainer direction 2026-07-16; issue side confirmed 2026-07-21 via #2349). Match
+only the exact app identities: org-search/REST surfaces expose `renovate[bot]` and `dependabot[bot]`;
+deeper GraphQL / `gh issue view` surfaces may expose `app/renovate` and `app/dependabot`. Do not key
+this classification on the unreliable search `is_bot` field, titles, branch names, or dependency
+labels. This is an author-wide ownership boundary covering **both** their pull requests **and** their
+issues (Renovate's Dependency Dashboard is an open issue by design — e.g. `platform#313` since
+2023-08-24 — and must never head an oldest-actionable queue). Do not inspect commit provenance
 or reclassify the PR because a human/agent adaptation commit exists. Repository automation
 and the human who chose to edit that bot branch remain responsible; agents never add such commits going
 forward. Repository checks and dependency automation own these PRs' entire lifecycle, including updates
 and merging. **Never request a review from any lane (CodeRabbit, Codex, Cursor Bugbot), inspect
 ancillary CodeRabbit output, comment, rebase/recreate, rerun checks, push adaptation commits,
-arm auto-merge, or merge them.** Red, stale, DIRTY/conflicting, major-version, missing-review, and
-other reviewer-output states are not routine-agent work and never make one of these PRs a hygiene gap or
-fire. The survey may report one compact `AUTOMATION-OWNED (NO-ACTION)` line from the exact author
-identity, but does not deepen its pentad or count it against `nothing_on_fire`. If a merged dependency
-bump breaks `main`, repair that resulting `main` breakage normally on an agent-owned branch; never
-touch the bot PR branch. This actor-wide no-action rule is stronger than the trusted-author permissions
-below and is separate from the narrower programmed-bot review exemption.
+arm auto-merge, or merge them.** **Never select, triage-as-work, or close an automation-authored
+issue** — closing a Dependency Dashboard changes Renovate's behaviour. Red, stale, DIRTY/conflicting,
+major-version, missing-review, and other reviewer-output states are not routine-agent work and never
+make one of these PRs a hygiene gap or fire. The survey may report one compact `AUTOMATION-OWNED
+(NO-ACTION)` line from the exact author identity, but does not deepen a PR's pentad, rank an
+automation issue as oldest-actionable, or count either against `nothing_on_fire`. If a merged
+dependency bump breaks `main`, repair that resulting `main` breakage normally on an agent-owned
+branch; never touch the bot PR branch. This actor-wide no-action rule is stronger than the
+trusted-author permissions below and is separate from the narrower programmed-bot review exemption.
 
 **Carve-out — trusted programmed bot PRs need NO review.** Two suite-owned paths are intentionally
 gated by required CI and auto-merge rather than an AI review:
