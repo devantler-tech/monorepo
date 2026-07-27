@@ -52,6 +52,43 @@ readonly STATUS_LADDER='✅ Done | 📊 Verifying | 🚀 Ready to Merge | 👀 I
 
 die() { printf 'board-add: %s\n' "$1" >&2; exit "${2:-2}"; }
 
+# Every gh call below sends stderr HERE rather than to /dev/null, because that
+# stderr is the only place GitHub says *why* it refused. Discarding it and
+# guessing "auth, network, or scope" named three causes that are fixed by looking
+# at the token, and omitted the one that is fixed by waiting — an exhausted
+# GraphQL budget (#2502). Each `2>` redirect truncates the file, so it always
+# holds the most recent failure and never a stale one.
+GH_ERR="$(mktemp)"
+trap 'rm -f "$GH_ERR"' EXIT
+
+# True when the last captured stderr shows GitHub refused the call for budget
+# reasons — primary limit, secondary limit, or the GraphQL variant.
+gh_saw_rate_limit() {
+  grep -qiE 'rate.limit|RATE_LIMITED|submitted too quickly' "$GH_ERR" 2>/dev/null
+}
+
+# die() for a failed gh call: report a rate limit AS a rate limit, and fall back
+# to the caller's original wording for everything else. The fallback matters as
+# much as the detection — a classifier that called every failure a rate limit
+# would be exactly as misleading as the guess it replaces.
+die_gh() { # <rate-limit-context> <message-for-every-other-cause>
+  if gh_saw_rate_limit; then
+    local budget
+    # `GET /rate_limit` is itself unmetered, so it still answers precisely when
+    # everything else is refused. Never fatal: a missing figure must not turn a
+    # clear diagnosis into a crash.
+    budget=$(gh api rate_limit \
+               --jq '"\(.resources.graphql.remaining)/\(.resources.graphql.limit), resets \(.resources.graphql.reset|todate)"' \
+             2>/dev/null) || budget="figure unavailable"
+    die "${1} — GitHub GraphQL RATE LIMIT is exhausted (${budget}).
+          Nothing was written: the board add did NOT happen. Retry after the reset.
+          This is NOT an auth, scope, or network problem — the credential is fine.
+          The budget is shared across every agent lane and session, so a survey or
+          bulk sweep in the same hour is the usual cause."
+  fi
+  die "$2"
+}
+
 usage() {
   cat >&2 <<EOF
 usage: board-add.sh <issue-url> [status-name]
@@ -107,15 +144,17 @@ esac
 # here as a *usage* error) and, because stderr is discarded, no diagnostic at
 # all. Binding the failure to `die` keeps operational failures on exit 2 where
 # they belong. An assignment inside a `||` list does not trip `set -e`.
-PROJECT_ID=$(gh project view "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json 2>/dev/null \
+PROJECT_ID=$(gh project view "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json 2>"$GH_ERR" \
              | jq -r '.id // empty') \
-             || die "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER} (auth, network, or scope)"
+             || die_gh "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER}" \
+                       "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER} (auth, network, or scope)"
 [ -n "$PROJECT_ID" ] || die "could not resolve project ${PROJECT_OWNER}/${PROJECT_NUMBER}"
 
 FIELD_JSON=$(gh project field-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
-               --limit "$FIELD_PAGE_LIMIT" --format json 2>/dev/null \
+               --limit "$FIELD_PAGE_LIMIT" --format json 2>"$GH_ERR" \
              | jq -r '.fields[] | select(.name=="Status")') \
-             || die "could not read the field list of project ${PROJECT_NUMBER} (auth, network, or scope)"
+             || die_gh "could not read the field list of project ${PROJECT_NUMBER}" \
+                       "could not read the field list of project ${PROJECT_NUMBER} (auth, network, or scope)"
 [ -n "$FIELD_JSON" ] || die "could not resolve the Status field on project ${PROJECT_NUMBER}"
 
 FIELD_ID=$(printf '%s' "$FIELD_JSON" | jq -r '.id // empty')
@@ -137,8 +176,9 @@ fi
 # Add. `item-add` is idempotent server-side (an existing item is returned, not
 # duplicated), and prints nothing useful off-TTY, so ask for the id explicitly.
 ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
-            --url "$ISSUE_URL" --format json 2>/dev/null | jq -r '.id // empty') \
-            || die "item-add failed for ${ISSUE_URL} (auth, network, or scope)"
+            --url "$ISSUE_URL" --format json 2>"$GH_ERR" | jq -r '.id // empty') \
+            || die_gh "item-add failed for ${ISSUE_URL}" \
+                      "item-add failed for ${ISSUE_URL} (auth, network, or scope)"
 [ -n "$ITEM_ID" ] || die "item-add returned no item id for ${ISSUE_URL}"
 
 # DELIBERATELY NO ROLLBACK-BY-DELETE. An earlier revision deleted the item when
@@ -153,8 +193,9 @@ ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
 # URL sets the Status (item-add is idempotent). So we fail loudly and tell the
 # caller the one thing that resolves it.
 if ! gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" \
-        --field-id "$FIELD_ID" --single-select-option-id "$OPTION_ID" >/dev/null 2>&1; then
-  die "could not set the Status for ${ISSUE_URL} (item ${ITEM_ID}).
+        --field-id "$FIELD_ID" --single-select-option-id "$OPTION_ID" >/dev/null 2>"$GH_ERR"; then
+  die_gh "could not set the Status for ${ISSUE_URL} (item ${ITEM_ID})" \
+         "could not set the Status for ${ISSUE_URL} (item ${ITEM_ID}).
           The item may now be on the board WITHOUT a Status — re-run this script
           on the same URL to finish it; it is idempotent and will not duplicate."
 fi
@@ -165,7 +206,14 @@ fi
 # Fetch the ONE item by node id. Do NOT use `gh project item-list`: it walks all
 # ~4,300 board items over the shared 5k/hr GraphQL budget and has already died on
 # that here — an unaffordable read for a single-field check.
-ACTUAL=$(gh api graphql -f id="$ITEM_ID" -f query='
+#
+# The read-back must distinguish "the board says something else" from "the query
+# never ran". It used to swallow both with `|| true`, so an unrun query left
+# $ACTUAL empty and the script announced "board shows no Status at all" — a
+# statement of fact about a board it had not managed to read. Under a rate limit
+# that is exactly what happened, and it is the most misleading of the five sites:
+# the other four report a failure, this one reported a wrong answer.
+if ! ACTUAL=$(gh api graphql -f id="$ITEM_ID" -f query='
   query($id: ID!) {
     node(id: $id) {
       ... on ProjectV2Item {
@@ -174,7 +222,12 @@ ACTUAL=$(gh api graphql -f id="$ITEM_ID" -f query='
         }
       }
     }
-  }' --jq '.data.node.fieldValueByName.name // empty' 2>/dev/null || true)
+  }' --jq '.data.node.fieldValueByName.name // empty' 2>"$GH_ERR"); then
+  die_gh "could not read the Status back for ${ISSUE_URL} (item ${ITEM_ID})" \
+         "could not read the Status back for ${ISSUE_URL} (item ${ITEM_ID}) (auth, network, or scope).
+          The Status may well have been set — this is a failed VERIFICATION, not a
+          failed write. Re-run this script on the same URL to confirm."
+fi
 
 if [ "$ACTUAL" != "$STATUS_NAME" ]; then
   # Do NOT echo $ACTUAL — it is board-controlled text, the same untrusted class

@@ -34,7 +34,8 @@ check() { # check <name> <expected-exit> <actual-exit> [haystack] [needle]
 }
 
 # ── the fake gh ────────────────────────────────────────────────────────────
-# Behaviour knobs (env): STUB_PRIVATE, STUB_READBACK, STUB_ADD_ID, STUB_EDIT_RC
+# Behaviour knobs (env): STUB_PRIVATE, STUB_READBACK, STUB_ADD_ID, STUB_EDIT_RC,
+#                        STUB_FAIL_ON, STUB_FAIL_STDERR, STUB_RATELIMIT_RC
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -42,8 +43,22 @@ set -euo pipefail
 # Record every invocation so tests can assert on ARGUMENTS (page limits) and on
 # CALLS THAT MUST HAPPEN (rollback), not merely on exit codes.
 [ -n "${STUB_LOG:-}" ] && printf '%s\n' "$*" >>"$STUB_LOG"
+# A failing stage may also emit stderr — that is how GitHub reports an exhausted
+# budget, and the whole point of the rate-limit arms below.
+fail_stage() { # <stage>
+  [ "${STUB_FAIL_ON:-}" = "$1" ] || return 1
+  [ -n "${STUB_FAIL_STDERR:-}" ] && printf '%s\n' "$STUB_FAIL_STDERR" >&2
+  return 0
+}
 case "$1 ${2:-}" in
+  "api rate_limit")
+                  # `GET /rate_limit` is itself unmetered, so it must keep
+                  # answering while everything else is refused. Fixed output so
+                  # the assertion is deterministic.
+                  [ "${STUB_RATELIMIT_RC:-0}" != "0" ] && exit "${STUB_RATELIMIT_RC}"
+                  printf '%s\n' "0/5000, resets 2026-07-27T15:55:22Z" ;;
   "api graphql")
+                  fail_stage "api graphql" && exit 1
                   # Two different graphql callers: the pre-existing-item probe
                   # (query mentions projectItems) and the status read-back.
                   if printf '%s' "$*" | grep -q 'projectItems'; then
@@ -54,10 +69,10 @@ case "$1 ${2:-}" in
   "api repos"*|"api "*)
                   # repos/<o>/<r> visibility probe
                   printf '%s\n' "${STUB_PRIVATE:-false}" ;;
-  "project view") [ "${STUB_FAIL_ON:-}" = "project view" ] && exit 1
+  "project view") fail_stage "project view" && exit 1
                   printf '{"id":"PVT_test","number":5}\n' ;;
   "project field-list")
-                  [ "${STUB_FAIL_ON:-}" = "project field-list" ] && exit 1
+                  fail_stage "project field-list" && exit 1
                   cat <<'JSON'
 {"fields":[{"id":"PVTSSF_test","name":"Status","options":[
   {"id":"opt_done","name":"✅ Done"},
@@ -67,11 +82,12 @@ case "$1 ${2:-}" in
 JSON
                   ;;
   "project item-add")
-                  [ "${STUB_FAIL_ON:-}" = "project item-add" ] && exit 1
+                  fail_stage "project item-add" && exit 1
                   # NOTE `-` not `:-`: the empty-id case is set-but-empty, and
                   # `:-` would substitute the default and silently skip the test.
                   printf '{"id":"%s"}\n' "${STUB_ADD_ID-PVTI_test}" ;;
   "project item-edit")
+                  fail_stage "project item-edit" && exit 1
                   exit "${STUB_EDIT_RC:-0}" ;;
   "project item-delete")
                   exit "${STUB_DELETE_RC:-0}" ;;
@@ -114,6 +130,63 @@ for stage in "project view" "project field-list" "project item-add"; do
   check "operational failure in '$stage' → exit 2" 2 "$rc"
   check "operational failure in '$stage' → diagnostic" 2 "$rc" "$out" "board-add:"
 done
+
+# ── A RATE LIMIT IS NOT AN AUTH PROBLEM ────────────────────────────────────
+# Every gh call here discarded stderr and reported a fixed guess, "auth, network,
+# or scope". On tick 851 the real cause was an exhausted GraphQL budget, and that
+# guess sent the run after credentials that were fine while the fix was simply to
+# wait for the reset. Of the four causes the message can imply, the rate limit is
+# the only one that self-heals on a known clock — and it was the one omitted.
+#
+# One arm per call site: #2502 is a CLASS across five sites, and fixing only the
+# two that happened to be observed would leave the same wrong diagnosis on the
+# rest. The read-back arm is the sharpest — see its note below.
+RL='API rate limit already exceeded for user ID 26203420.'
+
+for stage in "project view" "project field-list" "project item-add" "project item-edit"; do
+  STUB_FAIL_ON="$stage" STUB_FAIL_STDERR="$RL" run "$URL"
+  check "rate limit in '$stage' → exit 2" 2 "$rc"
+  check "rate limit in '$stage' → named as a rate limit" 2 "$rc" "$out" "RATE LIMIT"
+  check "rate limit in '$stage' → reports the reset" 2 "$rc" "$out" "2026-07-27T15:55:22Z"
+  check "rate limit in '$stage' → says the add did not happen" 2 "$rc" "$out" "did NOT happen"
+  # The actionable half: a caller must not go looking at the token.
+  if printf '%s' "$out" | grep -qF "auth, network, or scope"; then
+    printf 'FAIL rate limit in %q still reported as an auth/scope problem\n  got: %s\n' "$stage" "$out" >&2
+    fail=$((fail + 1))
+  else
+    printf 'ok   rate limit in %s is not blamed on auth/scope\n' "$stage"; pass=$((pass + 1))
+  fi
+done
+
+# The read-back is the WORST of the five. It swallowed failure with `|| true`, so
+# an unrun query produced an empty $ACTUAL and the script announced "board shows
+# no Status at all" — a false statement of fact about the board, from a query
+# that never executed. A rate limit here must be reported as a failed READ.
+STUB_FAIL_ON="api graphql" STUB_FAIL_STDERR="$RL" run "$URL"
+check "rate limit in read-back → exit 2" 2 "$rc"
+check "rate limit in read-back → named as a rate limit" 2 "$rc" "$out" "RATE LIMIT"
+if printf '%s' "$out" | grep -qF "read-back MISMATCH"; then
+  printf 'FAIL unrun read-back reported as a board MISMATCH (false claim about the board)\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   unrun read-back is not reported as a board mismatch\n'; pass=$((pass + 1))
+fi
+
+# NEGATIVE CONTROL — the classification must DISCRIMINATE. A failure with no
+# rate-limit signal keeps the original wording; without this arm the fix could
+# simply relabel every failure a rate limit and every arm above would pass.
+STUB_FAIL_ON="project view" STUB_FAIL_STDERR="HTTP 403: Resource not accessible by integration" run "$URL"
+check "non-rate-limit failure keeps old wording" 2 "$rc" "$out" "auth, network, or scope"
+if printf '%s' "$out" | grep -qF "RATE LIMIT"; then
+  printf 'FAIL a non-rate-limit failure was misreported as a rate limit\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   non-rate-limit failure is not misreported as a rate limit\n'; pass=$((pass + 1))
+fi
+
+# And a failure with NO stderr at all must not crash the classifier.
+STUB_FAIL_ON="project view" run "$URL"
+check "silent failure still diagnoses" 2 "$rc" "$out" "auth, network, or scope"
 
 # ── INGESTION BOUNDARY: never echo board-controlled option names ───────────
 # Option names are editable by anyone with project write access, so rendering
