@@ -96,8 +96,9 @@ card.
    concurrent append (the same two-writer discipline as a shared `claude/*` branch). Consolidating a
    large file is read-heavy — **delegate it to a subagent** so the raw content stays out of your context.
 4. **Load durable memory:** **view the native boot surface** (Claude: the memory tool / project
-   `memory/` dir + `MEMORY.md`; Codex: the supplied `v1` `memory_summary.md`, then search `MEMORY.md` and
-   rollout summaries only for relevant detail) — the single source of truth for cross-run orchestration (rotation
+   `memory/` dir + `MEMORY.md`; Codex: the supplied `v1` `memory_summary.md`, then search `MEMORY.md`
+   and open referenced rollout summaries, memory skills, or extension resources only for relevant
+   detail) — the single source of truth for cross-run orchestration (rotation
    cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent
    run notes, `learnings`). It may be stale — verify against live GitHub. *(The legacy `state.json` is
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
