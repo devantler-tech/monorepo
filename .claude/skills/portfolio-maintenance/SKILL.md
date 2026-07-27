@@ -77,20 +77,22 @@ card.
 
    The guard is layout-aware. In a legacy/Claude store it checks `MEMORY.md` plus root topic files and
    exit 1 makes **safely consolidating the named author-managed file this tick** mandatory. In the
-   complete Codex native layout it checks the boot-loaded `memory_summary.md` projection and excludes
-   generated `MEMORY.md` / `raw_memories.md` sources from the boot budget; `--all` makes those
-   exemptions visible. A Codex exit 1 routes to the runtime's supported projection-refresh path —
-   **never rewrite the generated registry/history to clear it**. Repair the flagged boot surface
-   first, rerun the check, then continue to step 4. `near` entries are next tick's breach; fold them
-   in when cheap. An **exit 2** is a misconfiguration or unreadable store — resolve it rather than
-   proceeding on an unchecked memory read.
+   Codex native layout it recognises the persistent `memory_summary.md` + `MEMORY.md` pair, checks
+   only the boot-loaded summary, and excludes generated registry and temporary consolidation inputs
+   from the boot budget; `--all` makes those exemptions visible. A Codex exit 1 routes to the
+   runtime's supported projection-refresh path — **never rewrite the generated registry or temporary
+   inputs to clear it**. Because the old summary was already injected before this shell step, refresh
+   it and **restart the run; do not continue this session on the replacement file**. For a legacy
+   store, repair the author-managed file, rerun the check, then continue to step 4. `near` entries
+   are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or unreadable
+   store — resolve it rather than proceeding on an unchecked memory read.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
    rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
    concurrent append (the same two-writer discipline as a shared `claude/*` branch). Consolidating a
    large file is read-heavy — **delegate it to a subagent** so the raw content stays out of your context.
 4. **Load durable memory:** **view the native boot surface** (Claude: the memory tool / project
-   `memory/` dir + `MEMORY.md`; Codex: the supplied `memory_summary.md`, then search `MEMORY.md` and
+   `memory/` dir + `MEMORY.md`; Codex: the supplied `v1` `memory_summary.md`, then search `MEMORY.md` and
    rollout summaries only for relevant detail) — the single source of truth for cross-run orchestration (rotation
    cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent
    run notes, `learnings`). It may be stale — verify against live GitHub. *(The legacy `state.json` is

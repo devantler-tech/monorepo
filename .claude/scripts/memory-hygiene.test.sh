@@ -139,29 +139,27 @@ else
   fail "Codex failure names only the boot projection (got: $out)"
 fi
 if grep -qi "refresh.*boot projection" <<<"$out" &&
+   grep -qi "restart.*run" <<<"$out" &&
    grep -qi "do not rewrite.*MEMORY.md.*raw_memories.md" <<<"$out"; then
-  pass "Codex failure routes to projection refresh without source rewrites"
+  pass "Codex failure routes to projection refresh and a clean restart"
 else
-  fail "Codex failure routes to projection refresh without source rewrites (got: $out)"
+  fail "Codex failure routes to projection refresh and a clean restart (got: $out)"
 fi
 
-# A lone lookalike filename is not enough to waive the legacy checks. The
-# generated registry, raw aggregate, and rollout-summary directory together
-# identify the runtime-managed Codex projection layout.
-store="$tmp/codex-lookalike"
+# INIT/no-op Codex stores guarantee only the two persistent projections.
+# Temporary raw input and rollout summaries may both be absent.
+store="$tmp/codex-minimal"
 mkdir -p "$store"
 mkcodexsummary "$store/memory_summary.md" 5
 mkfile "$store/MEMORY.md" 80
-mkfile "$store/raw_memories.md" 200
-check "incomplete Codex lookalike stays fail-closed" "1" "$(run --dir "$store")"
+check "minimal Codex layout does not require temporary inputs" "0" "$(run --dir "$store")"
 
-# A complete Codex layout still needs a recognised projection schema. Unknown
+# A Codex layout still needs the exact supported projection schema. Unknown
 # content must not turn the generated-source exemptions into a fail-open path.
 store="$tmp/codex-malformed-summary"
-mkdir -p "$store/rollout_summaries"
+mkdir -p "$store"
 printf 'not-a-version\n' > "$store/memory_summary.md"
 mkfile "$store/MEMORY.md" 80
-mkfile "$store/raw_memories.md" 200
 check "malformed Codex boot projection exits 2" "2" "$(run --dir "$store")"
 out="$(run_out --dir "$store")"
 if grep -qi "malformed.*memory_summary.md" <<<"$out"; then
@@ -170,8 +168,27 @@ else
   fail "malformed Codex projection is named (got: $out)"
 fi
 
-# Runtime markers without the required boot projection are a broken Codex
-# store, not a healthy legacy store.
+# Future or partially-upgraded projection schemas must also fail closed until
+# the guard explicitly supports them.
+store="$tmp/codex-unsupported-summary"
+mkdir -p "$store"
+printf 'v2\n' > "$store/memory_summary.md"
+mkfile "$store/MEMORY.md" 80
+check "unsupported Codex boot projection schema exits 2" "2" "$(run --dir "$store")"
+
+# Either persistent projection missing from an otherwise Codex-shaped store is
+# broken state, not a healthy legacy store.
+store="$tmp/codex-missing-memory"
+mkdir -p "$store"
+mkcodexsummary "$store/memory_summary.md" 5
+check "Codex layout without MEMORY.md exits 2" "2" "$(run --dir "$store")"
+out="$(run_out --dir "$store")"
+if grep -qi "incomplete Codex.*MEMORY.md" <<<"$out"; then
+  pass "missing Codex registry is named"
+else
+  fail "missing Codex registry is named (got: $out)"
+fi
+
 store="$tmp/codex-missing-summary"
 mkdir -p "$store/rollout_summaries"
 mkfile "$store/MEMORY.md" 5

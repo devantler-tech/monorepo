@@ -2643,12 +2643,13 @@ step:
    of well-named topics, not one per fact; prune stale entries); don't let it sprawl.
 
    **The runtime layouts are deliberately different.** Claude's author-managed project memory uses
-   `MEMORY.md` as the boot index plus root topic files. Codex native memory supplies the bounded
-   `memory_summary.md` projection at boot; `MEMORY.md` is its searchable registry,
-   `raw_memories.md` is generated append-only history, and `rollout_summaries/` holds the detail the
-   registry points at. Search those Codex sources on demand — they are runtime-managed evidence, not
-   files to trim merely to satisfy a boot-read budget. Update Codex memory only through the runtime's
-   supported memory-maintenance path and let it rebuild the projection.
+   `MEMORY.md` as the boot index plus root topic files. Codex native memory supplies the bounded,
+   exactly-`v1` `memory_summary.md` projection at boot; `MEMORY.md` is its searchable registry,
+   `raw_memories.md` is an optional temporary consolidation input, and `rollout_summaries/` holds
+   detail when any exists. INIT/no-op stores guarantee only the two persistent projections. Search
+   those Codex sources on demand — they are runtime-managed evidence, not files to trim merely to
+   satisfy a boot-read budget. Update Codex memory only through the runtime's supported
+   memory-maintenance path and let it rebuild the projection.
 
    In an author-managed/legacy store, **`MEMORY.md` is one line per entry — never more.** It is an
    *index*: each bullet is a
@@ -2663,12 +2664,14 @@ step:
    to a run that already read it successfully, which is why it was breached four times (82KB 07-01,
    83KB 07-12, 122KB 07-16, 74KB 07-18). Pre-flight runs
    [`.claude/scripts/memory-hygiene.sh`](.claude/scripts/memory-hygiene.sh) (read-only). It
-   automatically recognises the complete Codex projection layout and applies the tight index budget
-   to `memory_summary.md`; generated `MEMORY.md` and `raw_memories.md` sources are diagnostic-only
-   (`--all` shows the exemption). Legacy/Claude stores retain the original root-file checks. A
-   non-zero exit makes repairing the named **boot-loaded** file that tick's mandated hygiene item:
-   consolidate an author-managed file safely, or refresh an oversized Codex projection through the
-   runtime. Never rewrite Codex's generated registry/history to clear this gate. **Memory is a MULTI-WRITER
+   recognises Codex from its persistent `memory_summary.md` + `MEMORY.md` pair and applies the tight
+   index budget only to the summary; generated registry and temporary input files are
+   diagnostic-only (`--all` shows the exemption). Legacy/Claude stores retain the original root-file
+   checks. A non-zero exit makes repairing the named **boot-loaded** file that tick's mandated hygiene
+   item: consolidate an author-managed file safely, or refresh an oversized Codex projection through
+   the runtime. A Codex run must then **restart**, because the old projection was already injected
+   before the shell gate ran; it must not continue on the replacement file. Never rewrite Codex's
+   generated registry or temporary inputs to clear this gate. **Memory is a MULTI-WRITER
    surface** — several instances append per hour, so re-read immediately before writing, prefer a
    **non-clobbering append** over a whole-file rewrite, and **stand down rather than clobber** when a
    rewrite is rejected because a sibling moved the file under you (the two-writer discipline that

@@ -5,7 +5,7 @@
 # Markdown stores and Codex's generated projection layout:
 #   - legacy/Claude: MEMORY.md is the index and root topic files are boot inputs;
 #   - Codex: memory_summary.md is the boot projection, while MEMORY.md and
-#     raw_memories.md are runtime-managed searchable/history sources.
+#     any temporary consolidation inputs are runtime-managed sources.
 #
 # Why this exists (monorepo#2223): the memory store is read at the start of every
 # run, and the "keep it short" rule lives as prose INSIDE the file it governs —
@@ -33,10 +33,10 @@
 # a run-start step stays readable on a store of ~100 files. --all lists every
 # file; --quiet suppresses output entirely and reports via the exit code alone.
 #
-# Layout selection is automatic and fail-closed: the Codex exemptions apply only
-# when memory_summary.md, MEMORY.md, raw_memories.md, and rollout_summaries/ are
-# all present. Use --all to show runtime-managed files that were deliberately
-# excluded from the boot budget.
+# Layout selection is automatic and fail-closed: Codex is identified by its two
+# persistent projections, memory_summary.md and MEMORY.md. Temporary inputs such
+# as raw_memories.md and rollout_summaries/ are not required. Use --all to show
+# runtime-managed files that were deliberately excluded from the boot budget.
 #
 # Exit codes:
 #   0  every boot-loaded file is within its threshold
@@ -113,29 +113,28 @@ say() { [[ "$quiet" -eq 1 ]] || printf '%s\n' "$*"; }
 is_archive() { [[ "$(basename "$1")" == *archive* ]]; }
 
 # Codex keeps its bounded run-start projection separate from the generated,
-# searchable registry and append-only raw history. Require the complete shape
-# before selecting it so a legacy store cannot bypass checks by adding one
-# lookalike filename.
+# searchable registry. INIT/no-op stores guarantee only these two persistent
+# files; raw_memories.md is a temporary consolidation input and rollout
+# summaries may not exist yet.
 layout="legacy"
 index_file="$LEGACY_INDEX_FILE"
-if [[ -f "$dir/raw_memories.md" && -d "$dir/rollout_summaries" ]]; then
-  if [[ ! -f "$dir/memory_summary.md" ]]; then
-    echo "memory-hygiene: incomplete Codex memory layout: missing memory_summary.md" >&2
-    exit 2
-  fi
+if [[ -f "$dir/memory_summary.md" ]]; then
   if [[ ! -f "$dir/$LEGACY_INDEX_FILE" ]]; then
     echo "memory-hygiene: incomplete Codex memory layout: missing $LEGACY_INDEX_FILE" >&2
     exit 2
   fi
   layout="codex"
   index_file="memory_summary.md"
+elif [[ -f "$dir/raw_memories.md" || -d "$dir/rollout_summaries" ]]; then
+  echo "memory-hygiene: incomplete Codex memory layout: missing memory_summary.md" >&2
+  exit 2
 fi
 
 if [[ "$layout" == "codex" ]]; then
   summary_version=""
   IFS= read -r summary_version < "$dir/$index_file" || true
-  if ! [[ "$summary_version" =~ ^v[0-9]+$ ]]; then
-    echo "memory-hygiene: malformed Codex boot projection: $index_file (expected vN header)" >&2
+  if [[ "$summary_version" != "v1" ]]; then
+    echo "memory-hygiene: malformed Codex boot projection: $index_file (expected v1 header)" >&2
     exit 2
   fi
 fi
@@ -204,6 +203,7 @@ if [[ "$over_count" -gt 0 ]]; then
   if [[ "$layout" == "codex" ]]; then
     say "memory-hygiene: $over_count/$checked boot projection file(s) OVER threshold."
     say "  Refresh the Codex boot projection through the runtime's supported memory-maintenance path."
+    say "  Restart the run afterward; this session already received the old projection."
     say "  Do not rewrite MEMORY.md or raw_memories.md; they are runtime-managed sources."
   else
     say "memory-hygiene: $over_count/$checked file(s) OVER threshold — consolidate this tick."
