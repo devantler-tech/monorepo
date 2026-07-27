@@ -290,6 +290,43 @@ else
   printf 'ok   unrun read-back is not reported as a board mismatch\n'; pass=$((pass + 1))
 fi
 
+# ── …and it must not OVERCLAIM the WRITE either ────────────────────────────
+# CodeRabbit P2 on #2505, at head 4ef0ab2c. The read-back site used to say the
+# Status write "already succeeded" and was "most likely set". That contradicts
+# this script's own contract, stated at the read-back itself: an exit-0 from
+# `item-edit` is NOT evidence the value landed — only reading it back is. Once
+# the read-back is the thing that failed, the field's final state is unknown,
+# and the script may not promise otherwise.
+#
+# Same stakes as the post-add arms above, and the same clobber: a re-run calls
+# item-edit with the DEFAULT status, so telling an operator the Status is
+# "most likely set" and to re-run invites them to overwrite a real value they
+# were told not to worry about.
+for phrase in "already succeeded" "most likely set" "may well have been set"; do
+  if printf '%s' "$out" | grep -qF "$phrase"; then
+    printf 'FAIL read-back failure claims the write landed: %q\n  got: %s\n' "$phrase" "$out" >&2
+    fail=$((fail + 1))
+  else
+    printf 'ok   read-back failure does not claim the write landed (%s)\n' "$phrase"; pass=$((pass + 1))
+  fi
+done
+check "read-back rate limit → states the Status is unverified" 2 "$rc" "$out" "UNVERIFIED"
+check "read-back rate limit → warns a re-run overwrites" 2 "$rc" "$out" "OVERWRITES"
+
+# The same two duties on the NON-rate-limit read-back path, which carries its
+# own message. Without this arm the fix could correct only the rate-limit
+# branch and leave the identical overclaim live everywhere else.
+STUB_FAIL_ON="api graphql" STUB_FAIL_STDERR="HTTP 403: Resource not accessible by integration" run "$URL"
+check "read-back auth failure → exit 2" 2 "$rc"
+check "read-back auth failure → states the Status is unverified" 2 "$rc" "$out" "UNVERIFIED"
+check "read-back auth failure → warns a re-run overwrites" 2 "$rc" "$out" "OVERWRITES"
+if printf '%s' "$out" | grep -qF "may well have been set"; then
+  printf 'FAIL non-rate-limit read-back failure claims the write landed\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   non-rate-limit read-back failure does not claim the write landed\n'; pass=$((pass + 1))
+fi
+
 # NEGATIVE CONTROL — the classification must DISCRIMINATE. A failure with no
 # rate-limit signal keeps the original wording; without this arm the fix could
 # simply relabel every failure a rate limit and every arm above would pass.

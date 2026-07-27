@@ -310,13 +310,27 @@ if ! ACTUAL=$(gh api graphql -f id="$ITEM_ID" -f query='
   }' --jq '.data.node.fieldValueByName.name // empty' 2>"$GH_ERR"); then
   # Both writes have already been attempted; only the confirmation failed. Saying
   # "nothing was written" here would be the most wrong of all six sites.
+  #
+  # But the opposite overclaim is just as wrong, and this site used to make it
+  # ("the Status write already succeeded … most likely set"). The contract stated
+  # at the top of this read-back is the whole reason it exists: an exit-0 from
+  # item-edit is NOT evidence the value landed. Once the read is what failed, the
+  # final state is genuinely unknown — so report the write as UNVERIFIED, and warn
+  # about the overwrite, because the repair instruction is "re-run" and a re-run
+  # writes the DEFAULT status over whatever is actually there (monorepo#2506).
   die_gh graphql "could not read the Status back for ${ISSUE_URL} (item ${ITEM_ID})" \
-         "The item was added and the Status write already succeeded — only the
-          confirming read failed, so the Status is most likely set. Re-run this
-          script on the same URL after the reset to confirm it." \
+         "The item is on the board. The Status write command returned success, but
+          that is not evidence it persisted — only this read-back establishes that,
+          and the read-back is what failed. The Status is therefore UNVERIFIED: it
+          may or may not be set. To confirm it, re-run this script on the same URL
+          after the reset — but look at the card first, because that OVERWRITES
+          whatever Status it currently has." \
          "could not read the Status back for ${ISSUE_URL} (item ${ITEM_ID}) (auth, network, or scope).
-          The Status may well have been set — this is a failed VERIFICATION, not a
-          failed write. Re-run this script on the same URL to confirm."
+          This is a failed VERIFICATION rather than a failed write — but the write is
+          not confirmed either: the command returned success, and only this read-back
+          could establish that it persisted. The Status is UNVERIFIED. To confirm it,
+          re-run this script on the same URL — but look at the card first, because
+          that OVERWRITES whatever Status it currently has."
 fi
 
 if [ "$ACTUAL" != "$STATUS_NAME" ]; then
