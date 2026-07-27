@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 #
-# Reports when a durable-memory file has grown past the point where it will be
-# TRUNCATED at run start, so consolidation becomes a signalled, mandated hygiene
-# item instead of something a run happens to notice.
+# Reports when the durable-memory content loaded at run start has grown past the
+# point where it will be TRUNCATED. The guard supports both author-managed
+# Markdown stores and Codex's generated projection layout:
+#   - legacy/Claude: MEMORY.md is the index and root topic files are boot inputs;
+#   - Codex: memory_summary.md is the boot projection, while MEMORY.md and
+#     raw_memories.md are runtime-managed searchable/history sources.
 #
 # Why this exists (monorepo#2223): the memory store is read at the start of every
 # run, and the "keep it short" rule lives as prose INSIDE the file it governs —
@@ -14,7 +17,7 @@
 # caused a documented misstep on 2026-06-05.
 #
 # Thresholds sit BELOW the Read tool's ~25k-token cap so the warning fires while
-# the file is still fully readable, not after it has already been cut.
+# a boot-loaded file is still fully readable, not after it has already been cut.
 #
 # STRICTLY READ-ONLY: this reports and exits. It never edits, rewrites, prunes,
 # or deletes memory. Consolidation is a judgement call that needs the agent's
@@ -30,9 +33,14 @@
 # a run-start step stays readable on a store of ~100 files. --all lists every
 # file; --quiet suppresses output entirely and reports via the exit code alone.
 #
+# Layout selection is automatic and fail-closed: the Codex exemptions apply only
+# when memory_summary.md, MEMORY.md, raw_memories.md, and rollout_summaries/ are
+# all present. Use --all to show runtime-managed files that were deliberately
+# excluded from the boot budget.
+#
 # Exit codes:
-#   0  every checked file is within its threshold
-#   1  at least one file is over threshold (consolidate it this tick)
+#   0  every boot-loaded file is within its threshold
+#   1  at least one boot-loaded file is over threshold
 #   2  usage error, or the memory directory does not exist
 set -Eeuo pipefail
 
@@ -40,10 +48,10 @@ set -Eeuo pipefail
 # lands near 20k tokens — comfortably inside the ~25k cap with headroom for the
 # growth a single tick adds.
 DEFAULT_THRESHOLD_KB=48
-# MEMORY.md is the INDEX every run reads first and is required to be one short
-# line per entry, so it gets a tighter bound than the topic files it points at.
+# The run-start index/projection gets a tighter bound than topic files. This is
+# MEMORY.md for legacy/Claude stores and memory_summary.md for Codex.
 DEFAULT_INDEX_KB=24
-INDEX_FILE="MEMORY.md"
+LEGACY_INDEX_FILE="MEMORY.md"
 
 dir=""
 threshold_kb="$DEFAULT_THRESHOLD_KB"
@@ -104,6 +112,39 @@ say() { [[ "$quiet" -eq 1 ]] || printf '%s\n' "$*"; }
 # them to the run-start budget would report a permanent, un-actionable failure.
 is_archive() { [[ "$(basename "$1")" == *archive* ]]; }
 
+# Codex keeps its bounded run-start projection separate from the generated,
+# searchable registry and append-only raw history. Require the complete shape
+# before selecting it so a legacy store cannot bypass checks by adding one
+# lookalike filename.
+layout="legacy"
+index_file="$LEGACY_INDEX_FILE"
+if [[ -f "$dir/raw_memories.md" && -d "$dir/rollout_summaries" ]]; then
+  if [[ ! -f "$dir/memory_summary.md" ]]; then
+    echo "memory-hygiene: incomplete Codex memory layout: missing memory_summary.md" >&2
+    exit 2
+  fi
+  if [[ ! -f "$dir/$LEGACY_INDEX_FILE" ]]; then
+    echo "memory-hygiene: incomplete Codex memory layout: missing $LEGACY_INDEX_FILE" >&2
+    exit 2
+  fi
+  layout="codex"
+  index_file="memory_summary.md"
+fi
+
+if [[ "$layout" == "codex" ]]; then
+  summary_version=""
+  IFS= read -r summary_version < "$dir/$index_file" || true
+  if ! [[ "$summary_version" =~ ^v[0-9]+$ ]]; then
+    echo "memory-hygiene: malformed Codex boot projection: $index_file (expected vN header)" >&2
+    exit 2
+  fi
+fi
+
+is_runtime_managed_source() {
+  [[ "$layout" == "codex" ]] || return 1
+  [[ "$(basename "$1")" != "$index_file" ]]
+}
+
 over_count=0
 checked=0
 
@@ -121,11 +162,17 @@ fi
 while IFS= read -r file; do
   [[ -n "$file" ]] || continue
   is_archive "$file" && continue
+  if is_runtime_managed_source "$file"; then
+    if [[ "$show_all" -eq 1 ]]; then
+      say "skip                  $(basename "$file") (Codex runtime-managed source)"
+    fi
+    continue
+  fi
 
   base="$(basename "$file")"
   bytes=$(wc -c < "$file" | tr -d '[:space:]')
 
-  if [[ "$base" == "$INDEX_FILE" ]]; then
+  if [[ "$base" == "$index_file" ]]; then
     limit_kb="$index_kb"
   else
     limit_kb="$threshold_kb"
@@ -154,10 +201,16 @@ fi
 
 if [[ "$over_count" -gt 0 ]]; then
   say ""
-  say "memory-hygiene: $over_count/$checked file(s) OVER threshold — consolidate this tick."
-  say "  These will TRUNCATE at run start and silently hide carry-forwards."
-  say "  Memory is a multi-writer surface: re-read immediately before writing and"
-  say "  prefer a non-clobbering append over a whole-file rewrite."
+  if [[ "$layout" == "codex" ]]; then
+    say "memory-hygiene: $over_count/$checked boot projection file(s) OVER threshold."
+    say "  Refresh the Codex boot projection through the runtime's supported memory-maintenance path."
+    say "  Do not rewrite MEMORY.md or raw_memories.md; they are runtime-managed sources."
+  else
+    say "memory-hygiene: $over_count/$checked file(s) OVER threshold — consolidate this tick."
+    say "  These will TRUNCATE at run start and silently hide carry-forwards."
+    say "  Memory is a multi-writer surface: re-read immediately before writing and"
+    say "  prefer a non-clobbering append over a whole-file rewrite."
+  fi
   exit 1
 fi
 

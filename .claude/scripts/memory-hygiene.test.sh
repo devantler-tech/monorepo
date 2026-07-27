@@ -3,9 +3,10 @@
 # Self-test for memory-hygiene.sh — proves the guard actually FIRES on an
 # over-cap memory file (the whole point: portfolio-status.md truncated at run
 # start four times while an advisory prose rule sat inside it), that a
-# within-budget store stays silent, that the MEMORY.md index is held to its own
-# tighter bound, that deliberately-large archives are exempt, and that the tool
-# never mutates the store it inspects.
+# within-budget store stays silent, that each runtime's boot index/projection is
+# held to its own tighter bound, that Codex's generated sources and deliberately
+# large archives are exempt, and that the tool never mutates the store it
+# inspects.
 #
 # The mutation assertion is the important one: a memory guard that "helpfully"
 # rewrote a file could clobber a sibling instance's concurrent append — the exact
@@ -35,6 +36,15 @@ check() {
 mkfile() {
   local path="$1" kb="$2"
   : > "$path"
+  local i
+  for (( i = 0; i < kb; i++ )); do
+    printf '%1024s\n' '' >> "$path"
+  done
+}
+
+mkcodexsummary() {
+  local path="$1" kb="$2"
+  printf 'v1\n' > "$path"
   local i
   for (( i = 0; i < kb; i++ )); do
     printf '%1024s\n' '' >> "$path"
@@ -91,6 +101,88 @@ store="$tmp/index-ok"
 mkdir -p "$store"
 mkfile "$store/MEMORY.md" 30
 check "index bound is configurable" "0" "$(run --dir "$store" --index-kb 48)"
+
+# ---------------------------------------------------------------------------
+# Codex keeps the bounded boot projection separate from its generated,
+# searchable registry and append-only raw history. Those generated sources may
+# be large without making the run-start projection unreadable.
+# ---------------------------------------------------------------------------
+store="$tmp/codex-projection"
+mkdir -p "$store/rollout_summaries"
+mkcodexsummary "$store/memory_summary.md" 5
+mkfile "$store/MEMORY.md" 80
+mkfile "$store/raw_memories.md" 200
+mkfile "$store/future_registry.md" 120
+check "Codex gates the boot projection, not generated sources" "0" "$(run --dir "$store")"
+out="$(run_out --dir "$store" --all)"
+if grep -q "skip.*MEMORY.md.*runtime-managed" <<<"$out" &&
+   grep -q "skip.*raw_memories.md.*runtime-managed" <<<"$out" &&
+   grep -q "skip.*future_registry.md.*runtime-managed" <<<"$out"; then
+  pass "Codex diagnostics identify skipped runtime-managed sources"
+else
+  fail "Codex diagnostics identify skipped runtime-managed sources (got: $out)"
+fi
+
+# The Codex projection is the run-start index and keeps the tighter index
+# budget. Generated source sizes must not hide an oversized projection.
+store="$tmp/codex-projection-over"
+mkdir -p "$store/rollout_summaries"
+mkcodexsummary "$store/memory_summary.md" 30
+mkfile "$store/MEMORY.md" 80
+mkfile "$store/raw_memories.md" 200
+check "oversized Codex boot projection exits 1" "1" "$(run --dir "$store")"
+out="$(run_out --dir "$store")"
+if grep -q "OVER.*memory_summary.md" <<<"$out" &&
+   ! grep -q "OVER.*MEMORY.md\\|OVER.*raw_memories.md" <<<"$out"; then
+  pass "Codex failure names only the boot projection"
+else
+  fail "Codex failure names only the boot projection (got: $out)"
+fi
+if grep -qi "refresh.*boot projection" <<<"$out" &&
+   grep -qi "do not rewrite.*MEMORY.md.*raw_memories.md" <<<"$out"; then
+  pass "Codex failure routes to projection refresh without source rewrites"
+else
+  fail "Codex failure routes to projection refresh without source rewrites (got: $out)"
+fi
+
+# A lone lookalike filename is not enough to waive the legacy checks. The
+# generated registry, raw aggregate, and rollout-summary directory together
+# identify the runtime-managed Codex projection layout.
+store="$tmp/codex-lookalike"
+mkdir -p "$store"
+mkcodexsummary "$store/memory_summary.md" 5
+mkfile "$store/MEMORY.md" 80
+mkfile "$store/raw_memories.md" 200
+check "incomplete Codex lookalike stays fail-closed" "1" "$(run --dir "$store")"
+
+# A complete Codex layout still needs a recognised projection schema. Unknown
+# content must not turn the generated-source exemptions into a fail-open path.
+store="$tmp/codex-malformed-summary"
+mkdir -p "$store/rollout_summaries"
+printf 'not-a-version\n' > "$store/memory_summary.md"
+mkfile "$store/MEMORY.md" 80
+mkfile "$store/raw_memories.md" 200
+check "malformed Codex boot projection exits 2" "2" "$(run --dir "$store")"
+out="$(run_out --dir "$store")"
+if grep -qi "malformed.*memory_summary.md" <<<"$out"; then
+  pass "malformed Codex projection is named"
+else
+  fail "malformed Codex projection is named (got: $out)"
+fi
+
+# Runtime markers without the required boot projection are a broken Codex
+# store, not a healthy legacy store.
+store="$tmp/codex-missing-summary"
+mkdir -p "$store/rollout_summaries"
+mkfile "$store/MEMORY.md" 5
+mkfile "$store/raw_memories.md" 10
+check "Codex layout without boot projection exits 2" "2" "$(run --dir "$store")"
+out="$(run_out --dir "$store")"
+if grep -qi "incomplete Codex.*memory_summary.md" <<<"$out"; then
+  pass "missing Codex projection is named"
+else
+  fail "missing Codex projection is named (got: $out)"
+fi
 
 # ---------------------------------------------------------------------------
 # Archives are deliberately huge and are NOT read at run start — holding them to

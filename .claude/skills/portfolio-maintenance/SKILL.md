@@ -65,29 +65,33 @@ card.
    the maintainer to replace a credential that was never tested. Keep the injected-token result, saved-login
    result, and `git fetch` result as separate gates, because repository reachability cannot prove GitHub API
    identity (and vice versa); record only these gate classifications in durable memory, never credential output.
-3. **Check the memory store fits in one read — BEFORE you read it.** A file past the Read cap is
+3. **Check the boot memory surface fits in one read — BEFORE you read it.** A boot-loaded file past the Read cap is
    **truncated silently**: the run continues on a partial cursor with no signal that carry-forwards,
    stand-down notes, or `HANDS-OFF` records beyond the cut are missing (the 2026-06-05 blinding;
    breached again 2026-07-18). This check runs **ahead of the `view` below** — running it after would
    let the run ingest the truncated cursor first, which is the exact failure it exists to prevent:
 
    ```sh
-   .claude/scripts/memory-hygiene.sh --dir <memory-dir>   # read-only; exit 1 = consolidate this tick
+   .claude/scripts/memory-hygiene.sh --dir <memory-dir>   # read-only; exit 1 = repair the boot surface
    ```
 
-   A non-zero exit makes **consolidating the named file this tick** a mandated hygiene item, not an
-   optional courtesy — that is what stops the size rule (prose living inside the file it governs) from
-   being breached over and over. **Consolidate the flagged file FIRST, then run step 4** so the cursor
-   you act on is complete; if you consolidate later in the run, re-`view` the file afterwards. `near`
-   entries are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or an
-   unreadable store — resolve it rather than proceeding on an unchecked memory read.
+   The guard is layout-aware. In a legacy/Claude store it checks `MEMORY.md` plus root topic files and
+   exit 1 makes **safely consolidating the named author-managed file this tick** mandatory. In the
+   complete Codex native layout it checks the boot-loaded `memory_summary.md` projection and excludes
+   generated `MEMORY.md` / `raw_memories.md` sources from the boot budget; `--all` makes those
+   exemptions visible. A Codex exit 1 routes to the runtime's supported projection-refresh path —
+   **never rewrite the generated registry/history to clear it**. Repair the flagged boot surface
+   first, rerun the check, then continue to step 4. `near` entries are next tick's breach; fold them
+   in when cheap. An **exit 2** is a misconfiguration or unreadable store — resolve it rather than
+   proceeding on an unchecked memory read.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
    rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
    concurrent append (the same two-writer discipline as a shared `claude/*` branch). Consolidating a
    large file is read-heavy — **delegate it to a subagent** so the raw content stays out of your context.
-4. **Load durable memory:** **`view` your native memory** (Claude: the memory tool / the project
-   `memory/` dir + `MEMORY.md`) — the single source of truth for cross-run orchestration (rotation
+4. **Load durable memory:** **view the native boot surface** (Claude: the memory tool / project
+   `memory/` dir + `MEMORY.md`; Codex: the supplied `memory_summary.md`, then search `MEMORY.md` and
+   rollout summaries only for relevant detail) — the single source of truth for cross-run orchestration (rotation
    cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent
    run notes, `learnings`). It may be stale — verify against live GitHub. *(The legacy `state.json` is
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
@@ -588,7 +592,9 @@ For each selected product:
 - **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
   back what changed so the next run picks up cleanly — `last_run`, `rotation_cursor`, each touched
   product's `last_worked`/`weekly`/roadmap cursor/`last_research`/`needs_attention`, the CI & link caches (prune CI
-  entries >7 days), recent run notes, and any new `learnings`. Keep memory **coherent and organised**:
+  entries >7 days), recent run notes, and any new `learnings`. Use the runtime's supported write path;
+  for Codex, never hand-edit generated `memory_summary.md`, `MEMORY.md`, or `raw_memories.md`.
+  In an author-managed/legacy store, keep memory **coherent and organised**:
   a small set of well-named files (e.g. `portfolio-status.md`, `caches.md`, `learnings.md`, plus
   `feedback_*.md`) with `MEMORY.md` as a true index; **edit in place and prune stale content** rather
   than appending forever; don't create a new file per fact. **Bound the every-run read:** keep the

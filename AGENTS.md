@@ -2633,26 +2633,42 @@ of a capability the runtime already provides. Durable memory is now one native s
 step:
 1. **Your native persistent memory.** Use the runtime's built-in memory — for Claude, the **memory
    tool** (the `/memories` directory; in Claude Code, the project's `memory/` dir with its `MEMORY.md`
-   index). **View it at the start of every run** and treat it as the single source of truth for
+   index). **View the runtime's boot memory surface at the start of every run** and treat native
+   memory as the single source of truth for
    cross-run orchestration: rotation cursor, per-product `last_worked` / `weekly` / roadmap cursor
    (last strategy review + current theme) / `last_research` (the upstream-research/product-debugging
    cursor — see *Enhancement work*) / `last_value_review`; for the site, blog review/publication/
    refresh and metrics-review cursors; open `needs_attention`, the CI & link investigation caches,
    recent run notes, and self-improvement `learnings`. Keep it **coherent and organised** (a small set
-   of well-named files, not one per fact; prune stale entries; keep `MEMORY.md` a true index); don't
-   let it sprawl. **`MEMORY.md` is one line per entry — never more.** It is an *index*: each bullet is a
+   of well-named topics, not one per fact; prune stale entries); don't let it sprawl.
+
+   **The runtime layouts are deliberately different.** Claude's author-managed project memory uses
+   `MEMORY.md` as the boot index plus root topic files. Codex native memory supplies the bounded
+   `memory_summary.md` projection at boot; `MEMORY.md` is its searchable registry,
+   `raw_memories.md` is generated append-only history, and `rollout_summaries/` holds the detail the
+   registry points at. Search those Codex sources on demand — they are runtime-managed evidence, not
+   files to trim merely to satisfy a boot-read budget. Update Codex memory only through the runtime's
+   supported memory-maintenance path and let it rebuild the projection.
+
+   In an author-managed/legacy store, **`MEMORY.md` is one line per entry — never more.** It is an
+   *index*: each bullet is a
    pointer + one-line hook to a detail file; the latest-tick log and `last_run` prose belong in
    `portfolio-status.md`, **never dumped into a MEMORY.md index line**. A single index line that grew
    into a multi-tick prose blob pushed `MEMORY.md` past the Read tool's token cap and made it unreadable
    at run start — which silently blinded a run to a recorded `HANDS-OFF` note and caused a misstep
    (2026-06-05). **Bound the every-run read:** cap run-history / recent-run notes to the **last ~10
    runs (or ~7 days)**, rolling older entries into a one-line summary, so the start-of-run `view` stays
-   small as history accumulates — and so `MEMORY.md` itself never exceeds the Read cap. **That bound is
+   small as history accumulates. **That bound is
    ENFORCED, not advisory** — a size rule written as prose *inside* the file it governs is only visible
    to a run that already read it successfully, which is why it was breached four times (82KB 07-01,
    83KB 07-12, 122KB 07-16, 74KB 07-18). Pre-flight runs
-   [`.claude/scripts/memory-hygiene.sh`](.claude/scripts/memory-hygiene.sh) (read-only); a non-zero exit
-   makes consolidating the named file **that tick's mandated hygiene item**. **Memory is a MULTI-WRITER
+   [`.claude/scripts/memory-hygiene.sh`](.claude/scripts/memory-hygiene.sh) (read-only). It
+   automatically recognises the complete Codex projection layout and applies the tight index budget
+   to `memory_summary.md`; generated `MEMORY.md` and `raw_memories.md` sources are diagnostic-only
+   (`--all` shows the exemption). Legacy/Claude stores retain the original root-file checks. A
+   non-zero exit makes repairing the named **boot-loaded** file that tick's mandated hygiene item:
+   consolidate an author-managed file safely, or refresh an oversized Codex projection through the
+   runtime. Never rewrite Codex's generated registry/history to clear this gate. **Memory is a MULTI-WRITER
    surface** — several instances append per hour, so re-read immediately before writing, prefer a
    **non-clobbering append** over a whole-file rewrite, and **stand down rather than clobber** when a
    rewrite is rejected because a sibling moved the file under you (the two-writer discipline that
