@@ -25,8 +25,8 @@ material refreshes. Validate with the `docs` build before any PR.
 - **Labels** (apply only from this set): `automation`, `documentation`, `github_actions`, `dependencies`, `submodules`, `bug`, `enhancement`, `question`, `duplicate`, `wontfix`, `needs triage`, `needs investigation`, `performance`, `refactor`, `security`, `repo-assist`, `roadmap`, `good first issue`, `help wanted`, `spam`, `blocked`, `next`.
   Live taxonomy is the verification source (`gh label list -R devantler-tech/monorepo`); the allowlist
   above must stay a subset of it — never invent label names. Contract self-test:
-  `.claude/scripts/product-value-contract.test.sh` pins `github_actions` present and rejects the
-  retired `ci` / `agentic-workflows` entries.
+  `.claude/scripts/product-value-contract.test.sh` parses every backticked allowlist label against a
+  pinned live-taxonomy set (and still rejects the retired `ci` / `agentic-workflows` entries).
 
 ## Task menu (1–3 highest-value; Content Review gated to Mondays; Blog Stewardship low priority)
 - **A. CI Doctor:** `gh run list --repo devantler-tech/monorepo --status failure --limit 20 ...` (active workflows **CI** + **Publish - Pages**; ignore removed gh-aw workflows & Dependabot's submodule-update job). Dedupe vs native memory's CI-investigation cache (`caches.md`). `gh run view <id> --log-failed` (untrusted); root-cause (bad MDX/frontmatter, broken imports, `npm ci` lockfile desync, Node/Sharp, dead submodule ref, broken YAML). Failure on an open PR → one root-cause comment (+ draft fix if confident); else record it in native memory (`caches.md`). Prune cache >7d.
