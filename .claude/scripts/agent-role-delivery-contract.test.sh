@@ -162,6 +162,15 @@ for authority_row in \
 done
 grep -Fq 'FULL SYMMETRIC AUTHORITY' "${constitution}" ||
   fail "consumer does not preserve the maintainer-granted symmetric authority"
+# The never-widen-enforcement prohibition is ACTOR-SCOPED. Stated unconditionally it
+# contradicts the Authority model row above, which grants the agent-improver autonomous
+# enforcement loosening — and a scheduled improver reading it would defer a fix it is
+# mandated to apply. Both halves are pinned: the scoping AND the exception, because
+# deleting either one alone silently recreates the contradiction (#2248).
+assert_prose "for *this* engineer that edit is the maintainer's alone" \
+  "the never-widen-enforcement prohibition is no longer scoped to the Agentic Engineer"
+assert_prose 'holds a different grant, and *Authority model* authorises it to loosen enforcement' \
+  "consumer no longer exempts the agent-improver from the never-widen-enforcement prohibition"
 grep -Fq 'An issue, recommendation, or draft PR is not completion' "${constitution}" ||
   fail "consumer permits a write-capable role to stop before merge"
 grep -Fq '### Writer namespaces' "${constitution}" ||
