@@ -128,11 +128,16 @@ command -v jq >/dev/null 2>&1 || die "jq not found"
 
 # FAIL CLOSED on visibility: project 5 is public, so a private repo's issue must
 # never be swept onto it by an agent. An unreadable repo is treated as private.
-IS_PRIVATE=$(gh api "repos/${REPO_OWNER}/${REPO_NAME}" --jq '.private' 2>/dev/null || echo "unknown")
+IS_PRIVATE=$(gh api "repos/${REPO_OWNER}/${REPO_NAME}" --jq '.private' 2>"$GH_ERR" || echo "unknown")
 case "$IS_PRIVATE" in
   false) : ;;
   true)  die "${REPO_OWNER}/${REPO_NAME} is PRIVATE; project 5 is public — adding it is a maintainer decision, not an agent default" ;;
-  *)     die "could not determine visibility of ${REPO_OWNER}/${REPO_NAME}; refusing (fail-closed)" ;;
+  # Still fail-closed — an undetermined visibility never proceeds. But say WHY:
+  # this probe is on the REST budget, which has its own separate limit, and
+  # "refusing (fail-closed)" alone reads as "this repo is unreadable to you"
+  # when the real answer may be "come back after the reset".
+  *)     die_gh "could not determine visibility of ${REPO_OWNER}/${REPO_NAME}" \
+                "could not determine visibility of ${REPO_OWNER}/${REPO_NAME}; refusing (fail-closed)" ;;
 esac
 
 # Field metadata. Resolved live rather than hardcoded: option ids change whenever

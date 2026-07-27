@@ -67,7 +67,11 @@ case "$1 ${2:-}" in
                     printf '%s\n' "${STUB_READBACK-📥 Backlog}"
                   fi ;;
   "api repos"*|"api "*)
-                  # repos/<o>/<r> visibility probe
+                  # repos/<o>/<r> visibility probe. On the REST budget, which has
+                  # its own separate limit — so it can be refused independently.
+                  if [ -n "${STUB_FAIL_REPOS:-}" ]; then
+                    printf '%s\n' "$STUB_FAIL_REPOS" >&2; exit 1
+                  fi
                   printf '%s\n' "${STUB_PRIVATE:-false}" ;;
   "project view") fail_stage "project view" && exit 1
                   printf '{"id":"PVT_test","number":5}\n' ;;
@@ -187,6 +191,23 @@ fi
 # And a failure with NO stderr at all must not crash the classifier.
 STUB_FAIL_ON="project view" run "$URL"
 check "silent failure still diagnoses" 2 "$rc" "$out" "auth, network, or scope"
+
+# The visibility probe is the SIXTH site and rides the REST budget, which is
+# limited separately from GraphQL — so it can be refused on its own. It must stay
+# fail-closed (an undetermined visibility never reaches the public board) while
+# still naming the real cause.
+STUB_FAIL_REPOS="$RL" run "$URL"
+check "rate limit in visibility probe → exit 2" 2 "$rc"
+check "rate limit in visibility probe → named as a rate limit" 2 "$rc" "$out" "RATE LIMIT"
+check "rate limit in visibility probe → still refuses" 2 "$rc" "$out" "could not determine visibility"
+
+STUB_FAIL_REPOS="HTTP 404: Not Found" run "$URL"
+check "unreadable repo keeps fail-closed wording" 2 "$rc" "$out" "refusing (fail-closed)"
+
+# A PRIVATE repo must still be refused as private — the new classifier must not
+# swallow the visibility verdict itself.
+STUB_PRIVATE=true run "$URL"
+check "private repo still refused after the change" 2 "$rc" "$out" "is PRIVATE"
 
 # ── INGESTION BOUNDARY: never echo board-controlled option names ───────────
 # Option names are editable by anyone with project write access, so rendering
