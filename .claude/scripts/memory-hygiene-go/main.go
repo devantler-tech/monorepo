@@ -15,6 +15,7 @@ import (
 const (
 	defaultThresholdKB = int64(48)
 	defaultIndexKB     = int64(24)
+	maxThresholdKB     = int64(1<<63-1) / 1024
 	legacyIndexFile    = "MEMORY.md"
 	codexSummaryFile   = "memory_summary.md"
 )
@@ -105,15 +106,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 			limitKB = cfg.indexKB
 		}
 		limitBytes := limitKB * 1024
+		nearBytes := limitBytes - limitBytes/10
 		size := info.Size()
-		sizeKB := (size + 1023) / 1024
+		sizeKB := size / 1024
+		if size%1024 != 0 {
+			sizeKB++
+		}
 		checked++
 
 		switch {
 		case size > limitBytes:
 			overCount++
 			output.line("OVER %5dK / %3dK  %s", sizeKB, limitKB, name)
-		case size*100/limitBytes >= 90:
+		case size >= nearBytes:
 			output.line("near %5dK / %3dK  %s", sizeKB, limitKB, name)
 		case cfg.showAll:
 			output.line("ok   %5dK / %3dK  %s", sizeKB, limitKB, name)
@@ -241,6 +246,9 @@ func positiveDecimal(value string) (int64, error) {
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed <= 0 {
 		return 0, fmt.Errorf("thresholds must be positive integers (got %q)", value)
+	}
+	if parsed > maxThresholdKB {
+		return 0, fmt.Errorf("threshold exceeds supported size (got %q)", value)
 	}
 	return parsed, nil
 }

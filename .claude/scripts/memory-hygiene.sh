@@ -2,7 +2,11 @@
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-memory_hygiene_binary="$(mktemp "${TMPDIR:-/tmp}/memory-hygiene.XXXXXX")"
+memory_hygiene_binary=""
+if ! memory_hygiene_binary="$(mktemp "${TMPDIR:-/tmp}/memory-hygiene.XXXXXX")"; then
+  echo "memory-hygiene: failed to allocate temporary binary" >&2
+  exit 2
+fi
 
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 cleanup() {

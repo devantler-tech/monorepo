@@ -109,6 +109,12 @@ func TestArgumentValidation(t *testing.T) {
 			wantStderr: "thresholds must be positive integers",
 		},
 		{
+			name:       "threshold overflows byte conversion",
+			args:       []string{"--layout", "legacy", "--dir", validStore, "--index-kb", "9007199254740992"},
+			wantCode:   2,
+			wantStderr: "threshold exceeds supported size",
+		},
+		{
 			name:       "unknown flag",
 			args:       []string{"--layout", "legacy", "--dir", validStore, "--bogus"},
 			wantCode:   2,
@@ -483,6 +489,26 @@ func TestShellWrapperPreservesRuntimeBehavior(t *testing.T) {
 		}
 		if !strings.Contains(string(output), "failed to build Go guard") {
 			t.Fatalf("wrapper build failure output = %q", output)
+		}
+	})
+
+	t.Run("temporary setup failure maps to launcher error", func(t *testing.T) {
+		missingTemp := filepath.Join(t.TempDir(), "missing")
+		command := exec.Command(wrapper, "--layout", "legacy", "--dir", t.TempDir(), "--quiet")
+		command.Env = []string{
+			"PATH=" + os.Getenv("PATH"),
+			"TMPDIR=" + missingTemp,
+		}
+		output, runErr := command.CombinedOutput()
+		var exitErr *exec.ExitError
+		if !errors.As(runErr, &exitErr) {
+			t.Fatalf("wrapper error = %v, want an exit error; output=%q", runErr, output)
+		}
+		if exitErr.ExitCode() != 2 {
+			t.Fatalf("wrapper exit code = %d, want 2; output=%q", exitErr.ExitCode(), output)
+		}
+		if !strings.Contains(string(output), "failed to allocate temporary binary") {
+			t.Fatalf("wrapper setup failure output = %q", output)
 		}
 	})
 }
