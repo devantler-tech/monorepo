@@ -147,11 +147,12 @@ done
 # rest. The read-back arm is the sharpest — see its note below.
 RL='API rate limit already exceeded for user ID 26203420.'
 
-for stage in "project view" "project field-list" "project item-add" "project item-edit"; do
+for stage in "project view" "project field-list" "project item-add"; do
   STUB_FAIL_ON="$stage" STUB_FAIL_STDERR="$RL" run "$URL"
   check "rate limit in '$stage' → exit 2" 2 "$rc"
   check "rate limit in '$stage' → named as a rate limit" 2 "$rc" "$out" "RATE LIMIT"
   check "rate limit in '$stage' → reports the reset" 2 "$rc" "$out" "2026-07-27T15:55:22Z"
+  # These three all fail BEFORE item-add succeeds, so "nothing was written" is true.
   check "rate limit in '$stage' → says the add did not happen" 2 "$rc" "$out" "did NOT happen"
   # The actionable half: a caller must not go looking at the token.
   if printf '%s' "$out" | grep -qF "auth, network, or scope"; then
@@ -161,6 +162,55 @@ for stage in "project view" "project field-list" "project item-add" "project ite
     printf 'ok   rate limit in %s is not blamed on auth/scope\n' "$stage"; pass=$((pass + 1))
   fi
 done
+
+# ── POST-ADD failures must NOT claim "nothing was written" ─────────────────
+# Codex P2 on #2505. By the time item-edit or the read-back is refused, item-add
+# has already succeeded — so a shared "the board add did NOT happen" is factually
+# wrong AND hides the status-less item that now needs repairing. The state note
+# is per-call-site for exactly this reason.
+STUB_FAIL_ON="project item-edit" STUB_FAIL_STDERR="$RL" run "$URL"
+check "post-add rate limit → exit 2" 2 "$rc"
+check "post-add rate limit → still named a rate limit" 2 "$rc" "$out" "RATE LIMIT"
+check "post-add rate limit → says the item WAS added" 2 "$rc" "$out" "item WAS added"
+check "post-add rate limit → keeps the repair instruction" 2 "$rc" "$out" "Re-run this script"
+if printf '%s' "$out" | grep -qF "did NOT happen"; then
+  printf 'FAIL post-add failure denies a write that already succeeded\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   post-add failure does not deny the completed add\n'; pass=$((pass + 1))
+fi
+
+# ── The RESOURCE named must be the one that was actually refused ───────────
+# Codex P2 on #2505. REST and GraphQL are metered separately, so reading the
+# GraphQL counter after a REST refusal can print a healthy allowance as
+# "exhausted" beside an unrelated reset time — the very wrong-diagnosis defect
+# this helper exists to remove. The visibility probe is the REST site.
+STUB_FAIL_REPOS="$RL" run "$URL"
+check "REST refusal names the REST budget" 2 "$rc" "$out" "REST (core)"
+if printf '%s' "$out" | grep -qF "GraphQL RATE LIMIT"; then
+  printf 'FAIL a REST refusal was reported against the GraphQL budget\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   a REST refusal is not attributed to GraphQL\n'; pass=$((pass + 1))
+fi
+# ...and the GraphQL sites must still name GraphQL, or the fix above would have
+# simply swapped one wrong resource for another.
+STUB_FAIL_ON="project view" STUB_FAIL_STDERR="$RL" run "$URL"
+check "GraphQL refusal still names GraphQL" 2 "$rc" "$out" "GraphQL RATE LIMIT"
+
+# ── SECONDARY limits are a different animal ────────────────────────────────
+# No primary counter reflects a secondary limit, so quoting a healthy
+# remaining/limit beside it would read as "you have budget" — the opposite of
+# the truth. It gets its own message and quotes no allowance.
+STUB_FAIL_ON="project view" STUB_FAIL_STDERR="You have exceeded a secondary rate limit" run "$URL"
+check "secondary limit → exit 2" 2 "$rc"
+check "secondary limit → named as secondary" 2 "$rc" "$out" "SECONDARY rate limit"
+if printf '%s' "$out" | grep -qF "5000"; then
+  printf 'FAIL secondary limit quoted a primary allowance\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   secondary limit quotes no primary allowance\n'; pass=$((pass + 1))
+fi
 
 # The read-back is the WORST of the five. It swallowed failure with `|| true`, so
 # an unrun query produced an empty $ACTUAL and the script announced "board shows
