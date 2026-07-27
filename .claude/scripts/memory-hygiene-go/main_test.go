@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func execute(args ...string) (int, string, string) {
@@ -51,6 +52,15 @@ func codexStore(t *testing.T) string {
 	return dir
 }
 
+func codexArgs(dir string, extra ...string) []string {
+	args := []string{
+		"--layout", "codex",
+		"--dir", dir,
+		"--projection-loaded-before-ms", fmt.Sprint(time.Now().Add(time.Minute).UnixMilli()),
+	}
+	return append(args, extra...)
+}
+
 type boundedHeaderProbe struct {
 	bytesRead int
 }
@@ -66,6 +76,7 @@ func (probe *boundedHeaderProbe) Read(buffer []byte) (int, error) {
 
 func TestArgumentValidation(t *testing.T) {
 	validStore := legacyStore(t)
+	validCodexStore := codexStore(t)
 	tests := []struct {
 		name       string
 		args       []string
@@ -83,6 +94,22 @@ func TestArgumentValidation(t *testing.T) {
 			args:       []string{"--layout", "other", "--dir", validStore},
 			wantCode:   2,
 			wantStderr: "unsupported layout",
+		},
+		{
+			name:       "Codex layout needs the trusted injection boundary",
+			args:       []string{"--layout", "codex", "--dir", validCodexStore},
+			wantCode:   2,
+			wantStderr: "--projection-loaded-before-ms is required",
+		},
+		{
+			name: "legacy layout rejects a misleading injection boundary",
+			args: []string{
+				"--layout", "legacy",
+				"--dir", validStore,
+				"--projection-loaded-before-ms", "1",
+			},
+			wantCode:   2,
+			wantStderr: "--projection-loaded-before-ms is only valid",
 		},
 		{
 			name:       "missing directory argument",
@@ -203,11 +230,33 @@ func TestLegacyLayout(t *testing.T) {
 }
 
 func TestCodexLayout(t *testing.T) {
+	t.Run("rejects a projection replaced after injection", func(t *testing.T) {
+		dir := codexStore(t)
+		summary := filepath.Join(dir, "memory_summary.md")
+		injectedBefore := time.Now().Add(-2 * time.Minute)
+		replacedAfter := injectedBefore.Add(time.Minute)
+		if err := os.Chtimes(summary, replacedAfter, replacedAfter); err != nil {
+			t.Fatalf("date replacement projection: %v", err)
+		}
+
+		code, _, stderr := execute(
+			"--layout", "codex",
+			"--dir", dir,
+			"--projection-loaded-before-ms", fmt.Sprint(injectedBefore.UnixMilli()),
+		)
+		if code != 2 {
+			t.Fatalf("exit code = %d, want 2; stderr=%q", code, stderr)
+		}
+		if !strings.Contains(stderr, "projection changed after injection; restart required") {
+			t.Fatalf("stderr %q does not identify the stale injected projection", stderr)
+		}
+	})
+
 	t.Run("gates only boot projection", func(t *testing.T) {
 		dir := codexStore(t)
 		writeKB(t, filepath.Join(dir, "raw_memories.md"), 200)
 		writeKB(t, filepath.Join(dir, "future_registry.md"), 120)
-		code, stdout, stderr := execute("--layout", "codex", "--dir", dir, "--all")
+		code, stdout, stderr := execute(codexArgs(dir, "--all")...)
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0; stdout=%q stderr=%q", code, stdout, stderr)
 		}
@@ -220,7 +269,7 @@ func TestCodexLayout(t *testing.T) {
 
 	t.Run("minimal store needs no temporary inputs", func(t *testing.T) {
 		dir := codexStore(t)
-		code, _, _ := execute("--layout", "codex", "--dir", dir)
+		code, _, _ := execute(codexArgs(dir)...)
 		if code != 0 {
 			t.Fatalf("exit code = %d, want 0", code)
 		}
@@ -229,7 +278,7 @@ func TestCodexLayout(t *testing.T) {
 	t.Run("oversized summary requires refresh and restart", func(t *testing.T) {
 		dir := codexStore(t)
 		writeSummaryKB(t, filepath.Join(dir, "memory_summary.md"), 30)
-		code, stdout, _ := execute("--layout", "codex", "--dir", dir)
+		code, stdout, _ := execute(codexArgs(dir)...)
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
@@ -255,7 +304,7 @@ func TestCodexLayout(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "memory_summary.md"), []byte(header), 0o600); err != nil {
 				t.Fatalf("replace summary header: %v", err)
 			}
-			code, _, stderr := execute("--layout", "codex", "--dir", dir)
+			code, _, stderr := execute(codexArgs(dir)...)
 			if code != 2 {
 				t.Fatalf("header %q exit code = %d, want 2", header, code)
 			}
@@ -290,7 +339,7 @@ func TestCodexLayout(t *testing.T) {
 			t.Run(test.name, func(t *testing.T) {
 				dir := t.TempDir()
 				test.prepare(t, dir)
-				code, _, stderr := execute("--layout", "codex", "--dir", dir)
+				code, _, stderr := execute(codexArgs(dir)...)
 				if code != 2 {
 					t.Fatalf("exit code = %d, want 2", code)
 				}
@@ -315,7 +364,7 @@ func TestCodexLayout(t *testing.T) {
 				t.Errorf("restore registry permissions: %v", err)
 			}
 		})
-		code, _, stderr := execute("--layout", "codex", "--dir", dir)
+		code, _, stderr := execute(codexArgs(dir)...)
 		if code != 2 {
 			t.Fatalf("exit code = %d, want 2; stderr=%q", code, stderr)
 		}
@@ -336,7 +385,7 @@ func TestCodexLayout(t *testing.T) {
 		}
 		writeKB(t, filepath.Join(dir, "MEMORY.md"), 5)
 
-		code, stdout, stderr := execute("--layout", "codex", "--dir", dir)
+		code, stdout, stderr := execute(codexArgs(dir)...)
 		if code != 1 {
 			t.Fatalf("exit code = %d, want 1; stdout=%q stderr=%q", code, stdout, stderr)
 		}
@@ -528,7 +577,8 @@ func TestRepositoryContracts(t *testing.T) {
 	for _, required := range []string{
 		"An exit 1 makes repairing the over-threshold boot-loaded file",
 		"An exit 2 indicates a usage, malformed-layout, missing, or unreadable-store error",
-		"If a Codex exit 2 names a missing, unreadable, or malformed `memory_summary.md`",
+		"`x-codex-turn-metadata.turn_started_at_unix_ms` from `nodeRepl.requestMeta`",
+		"If a Codex exit 2 names a missing, unreadable, malformed, or post-injection-changed `memory_summary.md`",
 	} {
 		if !strings.Contains(normalizedConstitution, required) {
 			t.Fatalf("AGENTS.md is missing %q", required)
@@ -542,9 +592,15 @@ func TestRepositoryContracts(t *testing.T) {
 	}
 	if !strings.Contains(
 		normalizedMaintenance,
-		"If a Codex exit 2 names a missing, unreadable, or malformed `memory_summary.md`",
+		"If a Codex exit 2 names a missing, unreadable, malformed, or post-injection-changed `memory_summary.md`",
 	) {
 		t.Fatal("portfolio maintenance omits restart after projection-specific exit 2")
+	}
+	if !strings.Contains(
+		normalizedMaintenance,
+		"`x-codex-turn-metadata.turn_started_at_unix_ms` from `nodeRepl.requestMeta`",
+	) {
+		t.Fatal("portfolio maintenance omits the trusted Codex projection freshness boundary")
 	}
 
 	workflow := read(filepath.Join("..", "..", "..", ".github", "workflows", "ci.yaml"))

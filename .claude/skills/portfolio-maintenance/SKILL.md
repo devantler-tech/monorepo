@@ -81,7 +81,11 @@ card.
    or unknown `--layout` fails closed. For Claude, pass `--layout legacy`: the guard checks `MEMORY.md`
    plus root topic files, and exit 1 makes **safely consolidating the named author-managed file this
    tick** mandatory. For Codex, pass `--layout codex`: the guard requires the persistent
-   `memory_summary.md` + `MEMORY.md` pair, checks only the boot-loaded summary, and excludes generated
+   `memory_summary.md` + `MEMORY.md` pair. Before invoking it, read the trusted current request's
+   `x-codex-turn-metadata.turn_started_at_unix_ms` from `nodeRepl.requestMeta` and pass that value as
+   `--projection-loaded-before-ms`; do not derive this precondition from the current clock or the
+   file itself. The guard fails closed if the file is newer because this session may contain the
+   pre-replacement projection. It checks only the boot-loaded summary and excludes generated
    registry and temporary consolidation inputs from the boot budget; `--all` makes those exemptions
    visible. A Codex exit 1 routes to the
    runtime's supported projection-refresh path — **never rewrite the generated registry or temporary
@@ -90,8 +94,9 @@ card.
    store, repair the author-managed file, rerun the check, then continue to step 4. `near` entries
    are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or unreadable
    store — resolve it rather than proceeding on an unchecked memory read. If a Codex exit 2 names a
-   missing, unreadable, or malformed `memory_summary.md`, repair the projection through the runtime's
-   supported path and **restart the run** because this session started without a valid projection;
+   missing, unreadable, malformed, or post-injection-changed `memory_summary.md`, repair the projection
+   through the runtime's supported path when needed and **restart the run** because this session did
+   not start with the projection the guard checked;
    other exit-2 causes may rerun the guard in this session after resolution.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a

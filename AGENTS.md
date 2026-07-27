@@ -2666,16 +2666,22 @@ step:
    [`.claude/scripts/memory-hygiene.sh`](.claude/scripts/memory-hygiene.sh) (read-only). It
    requires the caller to declare `--layout legacy` or `--layout codex`; file-shape guessing is
    forbidden because a minimal Codex store missing its summary is indistinguishable from a valid
-   legacy `MEMORY.md`-only store. Missing or unknown layout fails closed. In Codex mode it requires
-   the persistent `memory_summary.md` + `MEMORY.md` pair and applies the tight index budget only to
-   the summary; generated registry and temporary input files are
+   legacy `MEMORY.md`-only store. Missing or unknown layout fails closed. Codex callers must also
+   read the current request's trusted
+   `x-codex-turn-metadata.turn_started_at_unix_ms` from `nodeRepl.requestMeta` and pass it as
+   `--projection-loaded-before-ms`; never substitute the current clock or the file's modification
+   time. This is the projection's freshness precondition: if the on-disk summary is newer than the
+   request that injected it, the guard cannot prove that it checked the projection in this session
+   and fails closed. In Codex mode it requires the persistent `memory_summary.md` + `MEMORY.md` pair
+   and applies the tight index budget only to the summary; generated registry and temporary input files are
    diagnostic-only (`--all` shows the exemption). Legacy/Claude stores retain the original root-file
    checks. An exit 1 makes repairing the over-threshold boot-loaded file that tick's mandated hygiene
    item: consolidate an author-managed file safely, or refresh an oversized Codex projection through
    the runtime. An exit 2 indicates a usage, malformed-layout, missing, or unreadable-store error;
-   resolve it before proceeding. If a Codex exit 2 names a missing, unreadable, or malformed
-   `memory_summary.md`, repair the projection through the runtime's supported path and **restart the
-   run**: this session started without a valid projection. Other exit-2 causes may rerun
+   resolve it before proceeding. If a Codex exit 2 names a missing, unreadable, malformed, or
+   post-injection-changed `memory_summary.md`, repair it through the runtime's supported path when
+   needed and **restart the run**: this session did not start with the projection the guard checked.
+   Other exit-2 causes may rerun
    the guard in the same session after resolution. After a Codex projection refresh for exit 1,
    **restart the run**, because the old projection was already injected before the shell gate ran; it
    must not continue on the replacement file. Never rewrite Codex's

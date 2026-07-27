@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -21,12 +22,13 @@ const (
 )
 
 type config struct {
-	dir         string
-	layout      string
-	thresholdKB int64
-	indexKB     int64
-	quiet       bool
-	showAll     bool
+	dir                      string
+	layout                   string
+	thresholdKB              int64
+	indexKB                  int64
+	projectionLoadedBeforeMs int64
+	quiet                    bool
+	showAll                  bool
 }
 
 func main() {
@@ -50,8 +52,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	indexFile := legacyIndexFile
+	var codexProjectionInfo os.FileInfo
 	if cfg.layout == "codex" {
-		if err := validateCodexStore(cfg.dir); err != nil {
+		codexProjectionInfo, err = validateCodexStore(
+			cfg.dir,
+			time.UnixMilli(cfg.projectionLoadedBeforeMs),
+		)
+		if err != nil {
 			return reportFailure(stderr, err, false)
 		}
 		indexFile = codexSummaryFile
@@ -82,13 +89,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		path := filepath.Join(cfg.dir, name)
-		info, statErr := os.Stat(path)
-		if statErr != nil {
-			return reportFailure(
-				stderr,
-				fmt.Errorf("unreadable memory file %s: %w", name, statErr),
-				false,
-			)
+		info := codexProjectionInfo
+		if cfg.layout != "codex" {
+			var statErr error
+			info, statErr = os.Stat(path)
+			if statErr != nil {
+				return reportFailure(
+					stderr,
+					fmt.Errorf("unreadable memory file %s: %w", name, statErr),
+					false,
+				)
+			}
 		}
 		if !info.Mode().IsRegular() {
 			continue
@@ -193,7 +204,7 @@ func parseArgs(args []string) (config, bool, error) {
 			cfg.showAll = true
 		case "--quiet":
 			cfg.quiet = true
-		case "--dir", "--layout", "--threshold-kb", "--index-kb":
+		case "--dir", "--layout", "--threshold-kb", "--index-kb", "--projection-loaded-before-ms":
 			if i+1 >= len(args) {
 				return cfg, false, usageError{message: fmt.Sprintf("%s requires a value", arg)}
 			}
@@ -216,6 +227,12 @@ func parseArgs(args []string) (config, bool, error) {
 					return cfg, false, err
 				}
 				cfg.indexKB = index
+			case "--projection-loaded-before-ms":
+				loadedBefore, err := positiveUnixMilliseconds(value)
+				if err != nil {
+					return cfg, false, err
+				}
+				cfg.projectionLoadedBeforeMs = loadedBefore
 			}
 		default:
 			return cfg, false, usageError{message: fmt.Sprintf("unknown argument %q", arg)}
@@ -227,6 +244,16 @@ func parseArgs(args []string) (config, bool, error) {
 	}
 	if cfg.layout != "legacy" && cfg.layout != "codex" {
 		return cfg, false, fmt.Errorf("unsupported layout %q (expected legacy or codex)", cfg.layout)
+	}
+	if cfg.layout == "codex" && cfg.projectionLoadedBeforeMs == 0 {
+		return cfg, false, usageError{
+			message: "--projection-loaded-before-ms is required with --layout codex",
+		}
+	}
+	if cfg.layout == "legacy" && cfg.projectionLoadedBeforeMs != 0 {
+		return cfg, false, usageError{
+			message: "--projection-loaded-before-ms is only valid with --layout codex",
+		}
 	}
 	if cfg.dir == "" {
 		return cfg, false, usageError{message: "--dir is required"}
@@ -253,6 +280,28 @@ func positiveDecimal(value string) (int64, error) {
 	return parsed, nil
 }
 
+func positiveUnixMilliseconds(value string) (int64, error) {
+	if value == "" {
+		return 0, errors.New("projection load boundary must be a positive Unix millisecond timestamp")
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return 0, fmt.Errorf(
+				"projection load boundary must be a positive Unix millisecond timestamp (got %q)",
+				value,
+			)
+		}
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf(
+			"projection load boundary must be a positive Unix millisecond timestamp (got %q)",
+			value,
+		)
+	}
+	return parsed, nil
+}
+
 func validateDirectory(dir string) error {
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -264,40 +313,54 @@ func validateDirectory(dir string) error {
 	return nil
 }
 
-func validateCodexStore(dir string) error {
+func validateCodexStore(dir string, projectionLoadedBefore time.Time) (os.FileInfo, error) {
 	for _, name := range []string{codexSummaryFile, legacyIndexFile} {
 		path := filepath.Join(dir, name)
 		info, err := os.Stat(path)
 		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("incomplete Codex memory layout: missing %s", name)
+			return nil, fmt.Errorf("incomplete Codex memory layout: missing %s", name)
 		}
 		if err != nil || !info.Mode().IsRegular() {
-			return fmt.Errorf("unreadable Codex memory file: %s", name)
+			return nil, fmt.Errorf("unreadable Codex memory file: %s", name)
 		}
 		if err := validateReadable(path); err != nil {
-			return fmt.Errorf("unreadable Codex memory file: %s: %w", name, err)
+			return nil, fmt.Errorf("unreadable Codex memory file: %s: %w", name, err)
 		}
 	}
 
 	summary, err := os.Open(filepath.Join(dir, codexSummaryFile))
 	if err != nil {
-		return fmt.Errorf("unreadable Codex memory file: %s: %w", codexSummaryFile, err)
+		return nil, fmt.Errorf("unreadable Codex memory file: %s: %w", codexSummaryFile, err)
 	}
 	firstLine, readErr := readFirstLine(summary)
+	info, statErr := summary.Stat()
 	closeErr := summary.Close()
 	if readErr != nil {
-		return fmt.Errorf("malformed Codex boot projection: %s: %w", codexSummaryFile, readErr)
+		return nil, fmt.Errorf(
+			"malformed Codex boot projection: %s: %w",
+			codexSummaryFile,
+			readErr,
+		)
+	}
+	if statErr != nil {
+		return nil, fmt.Errorf("unreadable Codex memory file: %s: %w", codexSummaryFile, statErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("unreadable Codex memory file: %s: %w", codexSummaryFile, closeErr)
+		return nil, fmt.Errorf("unreadable Codex memory file: %s: %w", codexSummaryFile, closeErr)
+	}
+	if info.ModTime().After(projectionLoadedBefore) {
+		return nil, fmt.Errorf(
+			"codex boot projection changed after injection; restart required: %s",
+			codexSummaryFile,
+		)
 	}
 	if firstLine != "v1" {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"malformed Codex boot projection: %s (expected v1 header)",
 			codexSummaryFile,
 		)
 	}
-	return nil
+	return info, nil
 }
 
 func validateReadable(path string) error {
@@ -373,7 +436,10 @@ func reportFailure(stderr io.Writer, err error, includeUsage bool) int {
 
 func usage() string {
 	return `Usage:
-  memory-hygiene.sh --layout <legacy|codex> --dir <memory-dir>
+  memory-hygiene.sh --layout legacy --dir <memory-dir>
+                    [--threshold-kb N] [--index-kb N] [--all] [--quiet]
+  memory-hygiene.sh --layout codex --dir <memory-dir>
+                    --projection-loaded-before-ms UNIX_MS
                     [--threshold-kb N] [--index-kb N] [--all] [--quiet]
 
 Exit codes:
