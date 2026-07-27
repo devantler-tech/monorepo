@@ -34,6 +34,7 @@ keeping them healthy *and* moving them forward.
 | World at Ruin (game) | `devantler-tech/world-at-ruin` | `applications/world-at-ruin` | [AGENTS.md](https://github.com/devantler-tech/world-at-ruin/blob/main/AGENTS.md) |
 | Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
 | AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
+| Doggy countdown | `devantler-tech/doggy-countdown` | — (not a submodule yet; GitHub API) | [README](https://github.com/devantler-tech/doggy-countdown/blob/main/README.md) (no `AGENTS.md` yet) |
 | UniFi network | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
 | 🌊 Project Board (org project 5) | — (not a repo; [org project 5](https://github.com/orgs/devantler-tech/projects/5)) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
 
@@ -86,6 +87,7 @@ no row are filed on the **default intake repo** below.
 | World at Ruin | THIS suite's own online fantasy game — its world, dungeons, characters, monsters, combat, loot and progression (not games in general) | `devantler-tech/world-at-ruin` |
 | Wedding app | THIS suite's existing deployed wedding website only — its guest pages, RSVPs, schedules, photos and practical info (not new wedding sites in general) | `devantler-tech/wedding-app` |
 | AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |
+| Doggy countdown | THIS suite's existing deployed Simba countdown page only — the date, copy, and presentation of that one countdown (not new countdown sites in general) | `devantler-tech/doggy-countdown` |
 | App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
 | KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
 | Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/actions` |
