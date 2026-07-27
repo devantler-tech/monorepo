@@ -1144,6 +1144,12 @@ result at the current head — self-promotion is forbidden before that. Request 
   that *is* serving: if a higher-priority lane will deliver within the run, use it — the local round
   is what keeps a *throttle* from parking finished work, not a way to skip review. Record the
   per-lane state that justified it in the run report.
+  **Admissible evidence is a direct per-PR check of all three surfaces only** (review objects, issue
+  comments — Codex's green is an issue COMMENT with `**Reviewed commit:** <sha>` — **and** Bugbot
+  check-runs): never declare a lane unavailable from an aggregate digest field, a portfolio-wide
+  "no greens" summary, or a surveyor's `green_review=none` / `not-requested` row alone.
+  `not-requested` means request a first review; it is ordinary post-auto-review-disabled state, not
+  an outage.
   ⚠️ **Not the same thing as the pre-submission self-review** in *GitHub artifact conventions*, which
   runs before every review request whatever the lanes are doing. That one is routine hygiene and
   **satisfies nothing** — having done it never counts toward this fallback, which alone
