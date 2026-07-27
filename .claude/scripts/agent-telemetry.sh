@@ -227,14 +227,24 @@ emit_credential_hits() {
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
-  grep -niE "$CRED_TABLE_RE" "$f" 2>/dev/null \
+  # -a is LOAD-BEARING: a single NUL byte anywhere in the file makes grep treat
+  # it as binary and emit nothing at all. The table and concentration scans both
+  # pass -a, so without it here the row is counted while its locator silently
+  # vanishes — provenance disappearing exactly on the odd record most worth
+  # inspecting. Reproduced, not assumed (CodeRabbit finding).
+  # `tr -d '\000'` is the second half of the same fix: bash's `read` TRUNCATES a
+  # line at the first NUL, so -a alone gets the line out of grep and then the
+  # match is silently lost from $raw before the inner scan ever sees it.
+  # (Verified under bash specifically — zsh's read does not truncate, so an
+  # interactive spot-check in the wrong shell reports this as working.)
+  grep -naiE "$CRED_TABLE_RE" "$f" 2>/dev/null | tr -d '\000' \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
         record=$(printf '%s' "$raw" | jq -r '.type // "malformed"' 2>/dev/null \
                  | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
         [ -n "$record" ] || record=malformed
-        printf '%s' "$raw" | grep -hoiE "$CRED_TABLE_RE" \
+        printf '%s' "$raw" | grep -haoiE "$CRED_TABLE_RE" \
           | while IFS= read -r match || [ -n "$match" ]; do
               # Classify to a SHAPE NAME and discard the value immediately.
               # These mirror the TABLE's shape_of() including its LENGTH bounds,

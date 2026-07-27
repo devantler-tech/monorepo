@@ -1933,6 +1933,18 @@ if printf '%s' "$OUT" | grep -qE '^[[:space:]]+1 github-token'; then
 else bad "table still counts ONE distinct value for the repeated token" \
   "$(printf '%s' "$OUT" | grep 'github-token' | head -2)"; fi
 
+# A NUL byte anywhere in the file makes grep treat it as binary and emit
+# NOTHING without -a. The table and concentration scans both pass -a, so
+# omitting it in the locator counts the row while its provenance silently
+# vanishes — on exactly the odd record most worth inspecting. Reproduced
+# against real grep before fixing (CodeRabbit finding on #2520).
+mkdir -p "$FIX/credbin"
+printf 'prefix \000 token "__GHPA__" here\n' > "$FIX/credbin/s.jsonl"
+subst "$FIX/credbin/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credbin" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "NUL-bearing record still produces a locator" "$OUT" "session=s.jsonl"
+
 # A mid-blob chance match: base64 alphabet includes `+` and `/`, which are the
 # only characters that can satisfy the boundary anchor INSIDE a blob. The image
 # path is already excluded structurally; this covers the remaining blob shapes
