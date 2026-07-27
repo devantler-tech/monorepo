@@ -1515,7 +1515,23 @@ if want safety; then
         emit_credential_hits "$f"
       done | redact > "$CREDPROV"
       echo "    occurrence provenance (locator + SHAPE only — never the value):"
-      awk -F'\t' '{printf "      session=%s line=%s record=%s shape=%s\n", $1, $2, $3, $4}' "$CREDPROV"
+      # Collapse identical locators to `Nx`. One record legitimately holds
+      # several matches, so the raw list repeats a location once per match —
+      # measured 171 lines for 100 distinct locations on a 1-day corpus, which
+      # buries the few high-signal rows this exists to surface. The count is
+      # PRINTED, not dropped, so nothing is silently truncated.
+      # NB: do NOT rebuild $0 to drop uniq's count — assigning to a field
+      # re-joins with OFS and turns the TABS into spaces, after which the
+      # split() below finds one field and every value prints empty.
+      sort "$CREDPROV" | uniq -c | sort -rn \
+        | awk '{
+            line = $0
+            sub(/^[[:space:]]*/, "", line)
+            n = line; sub(/[^0-9].*$/, "", n)
+            rest = line; sub(/^[0-9]+[[:space:]]+/, "", rest)
+            split(rest, p, "\t")
+            printf "      %4dx session=%s line=%s record=%s shape=%s\n", n, p[1], p[2], p[3], p[4]
+          }'
       : > "$CREDPROV"
     else
       echo "    provenance: rerun with --section safety --credential-provenance"

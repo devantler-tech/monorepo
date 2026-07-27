@@ -1912,6 +1912,27 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credwrap" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
 check "wrapped real token locates as its true shape" "$OUT" "shape=github-token"
 
+# Repeated matches at ONE location collapse to `Nx` with the count printed, not
+# dropped. Measured 171 locator lines for 100 distinct locations on a 1-day
+# corpus, which buries the few high-signal rows. The TABLE still counts ONE
+# distinct value here — the two surfaces answer different questions, and this
+# pins that they disagree in the RIGHT direction.
+mkdir -p "$FIX/creddup"
+DUPTOK="__GHPD__"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"a \\"%s\\" b \\"%s\\" c \\"%s\\""}]}}\n' \
+  "$DUPTOK" "$DUPTOK" "$DUPTOK" > "$FIX/creddup/s.jsonl"
+subst "$FIX/creddup/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/creddup" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+if printf '%s' "$OUT" | grep -qE '3x session=s\.jsonl line=1 .*shape=github-token'; then
+  ok "repeated matches at one location collapse with a printed count"
+else bad "repeated matches at one location collapse with a printed count" \
+  "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
+if printf '%s' "$OUT" | grep -qE '^[[:space:]]+1 github-token'; then
+  ok "table still counts ONE distinct value for the repeated token"
+else bad "table still counts ONE distinct value for the repeated token" \
+  "$(printf '%s' "$OUT" | grep 'github-token' | head -2)"; fi
+
 # A mid-blob chance match: base64 alphabet includes `+` and `/`, which are the
 # only characters that can satisfy the boundary anchor INSIDE a blob. The image
 # path is already excluded structurally; this covers the remaining blob shapes
