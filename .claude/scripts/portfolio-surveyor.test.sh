@@ -99,6 +99,27 @@ grep -Fq 'siblings may build, run, review,' "${cursor_loader}" ||
   fail "Cursor loader still prevents trusted sibling instances from driving Cursor-authored PRs"
 grep -Fq 'and drive your PRs' "${cursor_loader}" ||
   fail "Cursor loader does not authorize the sibling handoff through merge"
+grep -Fq 'Product repositories are in scope' "${cursor_loader}" ||
+  fail "Cursor loader still treats its empty boot checkout as a product-repository boundary"
+grep -Fq 'submodule-init.sh' "${cursor_loader}" ||
+  fail "Cursor loader does not document on-demand submodule-init for product work"
+grep -Fq 'environment-membership-bound' "${cursor_loader}" ||
+  fail "Cursor loader does not document the ManagePullRequest / open_git_pr membership constraint"
+if grep -Fq 'any task requiring a submodule worktree are **not yours**' "${cursor_loader}"; then
+  fail "Cursor loader still forbids product work that the cloud lane demonstrably delivers"
+fi
+if grep -Fq 'monorepo-native advance work' "${cursor_loader}"; then
+  fail "Cursor loader still scopes the lane to monorepo-native-only"
+fi
+cursor_env_json="${repo_root}/.cursor/environment.json"
+[ -f "${cursor_env_json}" ] ||
+  fail "Cursor .cursor/environment.json is missing (product-scope AC)"
+grep -Fq 'repositoryDependencies' "${cursor_env_json}" ||
+  fail "Cursor environment.json does not declare repositoryDependencies"
+grep -Fq 'npm ci' "${cursor_env_json}" ||
+  fail "Cursor environment.json does not preserve the docs npm ci install"
+grep -Fq 'github.com/devantler-tech/ksail' "${cursor_env_json}" ||
+  fail "Cursor environment.json omits portfolio product repos from repositoryDependencies"
 grep -Fq -- "- '.claude/loaders/cursor-daily-ai-engineer.md'" "${ci_workflow}" ||
   fail "Cursor loader changes do not trigger the portfolio surveyor contract job"
 if grep -Fq '`app/cursor` is **not** in the contract' "${cursor_loader}"; then
