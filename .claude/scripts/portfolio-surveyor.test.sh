@@ -215,6 +215,21 @@ grep -Fq 'dependency PRs *and* issues are AUTOMATION-OWNED' "${constitution}" ||
   fail "constitution does not extend the automation-owned carve-out to issues"
 grep -Fq 'Never select, triage-as-work, or close an automation-authored' "${constitution}" ||
   fail "constitution may still let agents close a Renovate Dependency Dashboard"
+# The skip list in *Drain oldest-first* is a CLOSED set: "skip ONLY when one of these is true".
+# A carve-out that forbids selecting an automation-authored issue without adding it to that set
+# leaves the contract self-contradictory — told to claim the oldest issue and forbidden to work it.
+# Pin the exclusion in BOTH normative selection surfaces, and pin the author-vs-label distinction
+# that keeps it from colliding with "an `automation` label is NOT a valid skip reason".
+grep -Fq 'authored by an exact dependency-automation identity' "${constitution}" ||
+  fail "constitution skip list omits the automation-author exclusion (f)"
+grep -Fq 'never actionable at all' "${constitution}" ||
+  fail "constitution does not state that an automation-authored issue is never actionable"
+grep -Fq 'keys on the AUTHOR, never the `automation` label' "${constitution}" ||
+  fail "constitution does not separate the automation AUTHOR exclusion from the automation LABEL non-reason"
+grep -Fq 'authored by an exact dependency-automation identity' "${maintenance_skill}" ||
+  fail "run loop's select step omits the automation-author exclusion"
+grep -Fq 'never actionable at all' "${maintenance_skill}" ||
+  fail "run loop does not state that an automation-authored issue is never actionable"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||

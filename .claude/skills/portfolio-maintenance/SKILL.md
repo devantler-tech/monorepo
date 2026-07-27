@@ -463,7 +463,10 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    stand down rather than force over them. Check open PRs, remote
    `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
    (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
-   itself. If it **already has an
+   itself. An issue **authored by an exact dependency-automation identity** (`renovate[bot]` /
+   `dependabot[bot]`, `app/renovate` / `app/dependabot`) is skip reason **(f)**: it is
+   automation-owned, **never actionable at all**, and is never selected, worked, or closed — match the
+   author only, never the `automation` label. If it **already has an
    actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
    automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
    **external** PRs static-review-only (trust gate). Otherwise ship it: tests +

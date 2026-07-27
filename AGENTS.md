@@ -500,7 +500,15 @@ governs the issue work that follows.) Two rules enforce that:
    is recorded on the issue and has not elapsed. Once that date arrives, measuring and recording the
    decision is actionable work; or (e) another instance holds a **live claim** on it — assigned **and**
    branched, within the ~2h window, no PR yet (see *Claim protocol*). (e) is the only skip reason that
-   expires on its own: once the window lapses with no PR, the issue is fair game again.
+   expires on its own: once the window lapses with no PR, the issue is fair game again; or (f) it is
+   **authored by an exact dependency-automation identity** (`renovate[bot]` / `dependabot[bot]`, or
+   `app/renovate` / `app/dependabot`) — see the automation-owned carve-out under *Merge policy*.
+   (f) is not a deferral like the others: such an issue is **never actionable at all** and never
+   becomes so, because it is a live control surface the bot owns (Renovate's Dependency Dashboard is
+   the standing example). It is never selected, never worked, and never closed by an agent.
+   ⚠️ **(f) keys on the AUTHOR, never the `automation` label** — the two are unrelated, and the very
+   next sentence keeps the label a non-reason. A `devantler`-authored issue *labelled* `automation` is
+   ordinary actionable work.
    **Size, difficulty, architectural weight, a
    `roadmap`/`enhancement`/`security`/`performance`/`repo-assist`/`automation` label, or a vague
    "maintainer-hot" feel are NOT valid skip reasons.** A large or hard issue **is the work, not an excuse
