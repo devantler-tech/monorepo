@@ -53,10 +53,18 @@ fail_stage() { # <stage>
 case "$1 ${2:-}" in
   "api rate_limit")
                   # `GET /rate_limit` is itself unmetered, so it must keep
-                  # answering while everything else is refused. Fixed output so
-                  # the assertion is deterministic.
+                  # answering while everything else is refused. Two callers with
+                  # different jq: the formatted figure for the message, and a
+                  # bare remaining count for the budget probe. Distinguish them
+                  # by the jq itself so one stub serves both.
                   [ "${STUB_RATELIMIT_RC:-0}" != "0" ] && exit "${STUB_RATELIMIT_RC}"
-                  printf '%s\n' "0/5000, resets 2026-07-27T15:55:22Z" ;;
+                  if printf '%s' "$*" | grep -q 'resets'; then
+                    printf '%s\n' "0/5000, resets 2026-07-27T15:55:22Z"
+                  else
+                    # Default HEALTHY, so a plain failure is not mistaken for a
+                    # rate limit — the negative controls depend on this.
+                    printf '%s\n' "${STUB_REMAINING:-5000}"
+                  fi ;;
   "api graphql")
                   fail_stage "api graphql" && exit 1
                   # Two different graphql callers: the pre-existing-item probe
@@ -197,6 +205,39 @@ fi
 # simply swapped one wrong resource for another.
 STUB_FAIL_ON="project view" STUB_FAIL_STDERR="$RL" run "$URL"
 check "GraphQL refusal still names GraphQL" 2 "$rc" "$out" "GraphQL RATE LIMIT"
+
+# ── gh DOES NOT RELIABLY SAY it was rate limited ───────────────────────────
+# Measured 2026-07-27 against the live API with GraphQL at 0/5000:
+#
+#   $ gh project view 5 --owner devantler-tech --format json
+#   unknown owner type
+#
+# No mention of a limit, and a cause that is simply wrong. This is the script's
+# most common failure point, so a stderr-only classifier is silent exactly where
+# it is needed — the first version of this fix was, and only exercising it
+# against a live exhausted budget revealed that. The budget probe is what makes
+# the diagnosis work; without it this arm reads the old auth wording.
+STUB_FAIL_ON="project view" STUB_FAIL_STDERR="unknown owner type" STUB_REMAINING=0 run "$URL"
+check "exhausted budget is caught despite misleading stderr" 2 "$rc" "$out" "RATE LIMIT"
+check "…and still names the reset" 2 "$rc" "$out" "2026-07-27T15:55:22Z"
+if printf '%s' "$out" | grep -qF "auth, network, or scope"; then
+  printf 'FAIL exhausted budget with unhelpful stderr still blamed on auth/scope\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   exhausted budget is not blamed on auth/scope\n'; pass=$((pass + 1))
+fi
+
+# NEGATIVE CONTROL for the probe: an unhelpful stderr with a HEALTHY budget must
+# NOT be called a rate limit. Without this, the probe could simply declare every
+# failure a rate limit and the arm above would still pass.
+STUB_FAIL_ON="project view" STUB_FAIL_STDERR="unknown owner type" STUB_REMAINING=4231 run "$URL"
+check "healthy budget keeps the old wording" 2 "$rc" "$out" "auth, network, or scope"
+if printf '%s' "$out" | grep -qF "RATE LIMIT"; then
+  printf 'FAIL healthy budget reported as a rate limit\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   healthy budget is not reported as a rate limit\n'; pass=$((pass + 1))
+fi
 
 # ── SECONDARY limits are a different animal ────────────────────────────────
 # No primary counter reflects a secondary limit, so quoting a healthy

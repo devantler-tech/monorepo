@@ -74,6 +74,28 @@ gh_saw_rate_limit() {
   grep -qiE 'rate.limit|RATE_LIMITED' "$GH_ERR" 2>/dev/null
 }
 
+# stderr is NOT sufficient on its own: `gh` does not reliably say when it was
+# refused for budget reasons. Measured 2026-07-27 with GraphQL at 0/5000 —
+#
+#   $ gh project view 5 --owner devantler-tech --format json
+#   unknown owner type
+#
+# — which names neither a rate limit nor the real cause, and is the single most
+# common failure point in this script. A classifier reading only stderr would
+# stay silent exactly where it is needed most.
+#
+# So ask the API what the budget actually is. `GET /rate_limit` is unmetered, so
+# it answers even when everything else is refused, and it is authoritative in a
+# way an error string is not.
+gh_budget_exhausted() { # <resource>
+  local remaining
+  remaining=$(gh api rate_limit --jq ".resources.${1}.remaining" 2>/dev/null) || return 1
+  case "$remaining" in
+    ''|*[!0-9]*) return 1 ;;   # unparseable — do not guess
+    *) [ "$remaining" -eq 0 ] ;;
+  esac
+}
+
 # die() for a failed gh call: report a rate limit AS a rate limit, and fall back
 # to the caller's original wording for everything else. The fallback matters as
 # much as the detection — a classifier that called every failure a rate limit
@@ -102,7 +124,8 @@ die_gh() { # <resource: graphql|core> <context> <state> <message-for-every-other
           calls down and retry shortly. This is NOT an auth, scope, or network problem."
   fi
 
-  if gh_saw_rate_limit; then
+  # Either signal is enough: GitHub said so, OR the budget is provably gone.
+  if gh_saw_rate_limit || gh_budget_exhausted "$resource"; then
     # `GET /rate_limit` is itself unmetered, so it still answers precisely when
     # everything else is refused. Never fatal: a missing figure must not turn a
     # clear diagnosis into a crash.
