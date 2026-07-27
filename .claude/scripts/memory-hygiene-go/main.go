@@ -113,10 +113,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		case size > limitBytes:
 			overCount++
 			output.line("OVER %5dK / %3dK  %s", sizeKB, limitKB, name)
-		case cfg.showAll:
-			output.line("ok   %5dK / %3dK  %s", sizeKB, limitKB, name)
 		case size*100/limitBytes >= 90:
 			output.line("near %5dK / %3dK  %s", sizeKB, limitKB, name)
+		case cfg.showAll:
+			output.line("ok   %5dK / %3dK  %s", sizeKB, limitKB, name)
 		}
 	}
 

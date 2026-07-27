@@ -369,6 +369,9 @@ func TestOutputModesAndReadOnlyBehavior(t *testing.T) {
 	if code != 1 || !strings.Contains(stdout, "small-topic.md") {
 		t.Fatalf("--all code/output = %d/%q, want failing code with healthy file listed", code, stdout)
 	}
+	if !strings.Contains(stdout, "near") || !strings.Contains(stdout, "caches.md") {
+		t.Fatalf("--all output loses the near-threshold signal: %q", stdout)
+	}
 
 	code, stdout, stderr := execute("--layout", "legacy", "--dir", dir, "--quiet")
 	if code != 1 || stdout != "" || stderr != "" {
