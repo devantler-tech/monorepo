@@ -1826,6 +1826,109 @@ check "handles a missing corpus" "$OUT" "no sessions in window"
 OUT=$(run --since-days notanumber); RC=$?
 if [ $RC -ne 0 ]; then ok "rejects non-numeric --since-days"; else bad "rejects non-numeric --since-days" "exited 0"; fi
 
+# ── 8. credential provenance (#2471) ──────────────────────────────────────────
+# The table counts DISTINCT VALUES by shape and says nothing about where a match
+# came from, so a documentation example, a test constant and a real leak are one
+# undifferentiated number. Triaging the 2026-07-25 report took four manual
+# queries. Provenance is an ADDITIONAL surface, exactly like
+# --injection-provenance: the table's counts and the redactor are unchanged, and
+# nothing is suppressed (that is why PR #2364, which classified records away,
+# was closed).
+echo
+echo "credential provenance"
+
+mkdir -p "$FIX/credprov"
+cat > "$FIX/credprov/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"example response shows __GHPB__ in docs"}]}}
+EOF
+subst "$FIX/credprov/s.jsonl"
+
+# Default run must NOT dump provenance — it is opt-in, so the routine scorecard
+# stays the same size and no locator is printed unless asked for.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "default run advertises the credential-provenance flag" "$OUT" \
+  "rerun with --section safety --credential-provenance"
+
+# Concentration: records/sessions/top-record, mirroring the injection detector.
+# SCOPE THIS TO THE CREDENTIAL SECTION. An unscoped grep matches the INJECTION
+# detector's identical concentration line and passes before anything is built —
+# caught here as a false pass during the RED run.
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$CREDSEC" | grep -qE 'across [0-9]+ transcript records in [0-9]+ sessions'; then
+  ok "credential table carries a concentration line"
+else bad "credential table carries a concentration line" "$CREDSEC"; fi
+
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "provenance emits a session locator" "$OUT" "session=s.jsonl"
+if printf '%s' "$OUT" | grep -qE 'session=s\.jsonl line=[0-9]+ record=user shape=github-token'; then
+  ok "provenance locator carries line, record type and shape"
+else bad "provenance locator carries line, record type and shape" \
+  "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
+
+# THE load-bearing safety property: a locator must never print the secret.
+# ⚠️ ABLATION-MEASURED SCOPE: this asserts the OUTPUT BOUNDARY, not the emitter.
+# Making emit_credential_hits print the raw match instead of the shape leaves it
+# GREEN, because redact() masks the value on the way out. It is kept as a
+# defence-in-depth assertion that would catch a redactor regression; the
+# EMITTER-level property is pinned by the `shape=` assertion above, which does
+# go RED under exactly that ablation.
+if printf '%s' "$OUT" | grep -q "$S_GHPB"; then
+  bad "output boundary never prints the credential value" "raw token appeared in output"
+else ok "output boundary never prints the credential value"; fi
+
+# A mid-blob chance match: base64 alphabet includes `+` and `/`, which are the
+# only characters that can satisfy the boundary anchor INSIDE a blob. The image
+# path is already excluded structurally; this covers the remaining blob shapes
+# (Codex `encrypted_content`). It is LABELLED, never dropped.
+mkdir -p "$FIX/credb64"
+B64_BLOB="TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu+__GHPC__/QUJDREVGRw"
+cat > "$FIX/credb64/s.jsonl" <<EOF
+{"type":"user","message":{"content":[{"type":"text","text":"$B64_BLOB"}]}}
+EOF
+subst "$FIX/credb64/s.jsonl"
+TABLE=$(CLAUDE_PROJECTS_DIR="$FIX/credb64" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1 \
+      | sed -n '/credential-shaped/,/rotate the credential/p')
+check "mid-blob chance match is labelled, not dropped" "$TABLE" "[in-base64-run]"
+
+# Fail closed: `=` is base64 PADDING but also the commonest assignment
+# delimiter, so it must stay in the plain high-signal row. Getting this wrong
+# would hide a real `…=ghp_…` leak behind a noise label.
+# NB: the fixture deliberately carries NO secret/token/password/api_key keyword.
+# With one (`GITHUB_TOKEN=…`) the generic alternative wins the leftmost match,
+# the extracted match starts at the KEY, and `=` is never the boundary
+# character — so that fixture asserts nothing about `=` at all. Ablating the
+# boundary class to `[+/=]` left it green, which is how the vacuity was caught.
+mkdir -p "$FIX/credeq"
+cat > "$FIX/credeq/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"blob QUJDREVG=__GHPD__ end"}]}}
+EOF
+subst "$FIX/credeq/s.jsonl"
+TABLE=$(CLAUDE_PROJECTS_DIR="$FIX/credeq" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1 \
+      | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'in-base64-run'; then
+  bad "'=' delimiter fails closed to the plain high-signal row" "labelled as blob noise: $TABLE"
+else ok "'=' delimiter fails closed to the plain high-signal row"; fi
+
+# A quote-anchored real token stays high-signal and unlabelled. This is the
+# shape 100% of the live corpus's matches actually had when measured
+# 2026-07-28, so mislabelling it would blind the detector on real data.
+mkdir -p "$FIX/credquote"
+cat > "$FIX/credquote/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"value is \"__GHPA__\" here"}]}}
+EOF
+subst "$FIX/credquote/s.jsonl"
+TABLE=$(CLAUDE_PROJECTS_DIR="$FIX/credquote" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1 \
+      | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)' \
+   && ! printf '%s' "$TABLE" | grep -q 'in-base64-run'; then
+  ok "quote-anchored real token stays unlabelled high-signal"
+else bad "quote-anchored real token stays unlabelled high-signal" "$TABLE"; fi
+
 echo
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"

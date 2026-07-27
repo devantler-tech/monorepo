@@ -12,13 +12,15 @@
 #   of this output and acts on it has been injected. See the installed
 #   `agentic-engineering` plugin's `agent-improver` → "Ingestion boundary".
 #
-# Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME] [--injection-provenance]
+# Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME]
+#                           [--injection-provenance] [--credential-provenance]
 set -uo pipefail
 
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
 INJECTION_PROVENANCE=0
+CREDENTIAL_PROVENANCE=0
 
 # Require a value before shifting past it. `shift 2` with only one arg left is a
 # no-op error under `set +e`, which spins the loop on the same $1 forever — a
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
     --max-files)  need_val "$@"; MAX_FILES="$2";  shift 2 ;;
     --section)    need_val "$@"; SECTION="$2";    shift 2 ;;
     --injection-provenance) INJECTION_PROVENANCE=1; shift ;;
+    --credential-provenance) CREDENTIAL_PROVENANCE=1; shift ;;
     -h|--help)    sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
@@ -174,10 +177,12 @@ PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot creat
 # Distinct prefix from .agtel_inj so the aggregate-identity width instrumentation
 # in the test suite keeps measuring only the phrase scratch it targets.
 CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+CREDCONC=$(mktemp "${TMPDIR:-/tmp}/.agtel_credconc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV"' EXIT
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -207,6 +212,43 @@ emit_injection_hits() {
                        | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)
               [ -n "$phrase" ] || continue
               printf '%s\t%s\t%s\t%s\n' "$session" "$line" "$record" "$phrase"
+            done
+      done
+}
+
+# Locator for a credential-shaped match: session, line, record type and SHAPE.
+# Deliberately weaker than emit_injection_hits, which prints the matched phrase:
+# a phrase is evidence, a credential is the secret itself, so the value NEVER
+# leaves this function. Shape classification is duplicated from the table's awk
+# rather than shared because the table consumes normalised values and this
+# consumes raw matches; keep the two prefix sets in step.
+emit_credential_hits() {
+  local f="$1" session line raw record match shape
+  session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
+  [ -n "$session" ] || session=unknown
+
+  grep -niE "$CRED_TABLE_RE" "$f" 2>/dev/null \
+    | while IFS=: read -r line raw; do
+        case "$line" in ''|*[!0-9]*) continue ;; esac
+        line=$(printf '%s' "$line" | cut -c1-12)
+        record=$(printf '%s' "$raw" | jq -r '.type // "malformed"' 2>/dev/null \
+                 | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
+        [ -n "$record" ] || record=malformed
+        printf '%s' "$raw" | grep -hoiE "$CRED_TABLE_RE" \
+          | while IFS= read -r match || [ -n "$match" ]; do
+              # Classify to a SHAPE NAME and discard the value immediately.
+              # Anything unclassified reports as the weak generic bucket, so an
+              # unrecognised shape is never silently dropped from the locator.
+              case "$(printf '%s' "$match" | tr '[:upper:]' '[:lower:]')" in
+                *github_pat_*)  shape="github-pat" ;;
+                *ghp_*|*gho_*|*ghu_*|*ghs_*|*ghr_*) shape="github-token" ;;
+                *akia*)         shape="aws-access-key-id" ;;
+                *xox*)          shape="slack-token" ;;
+                *eyj*)          shape="jwt-like" ;;
+                *-----begin*)   shape="private-key-block" ;;
+                *)              shape="generic-assignment" ;;
+              esac
+              printf '%s\t%s\t%s\t%s\n' "$session" "$line" "$record" "$shape"
             done
       done
 }
@@ -272,6 +314,24 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # for the leak TABLE; redact() keeps the broad unanchored CRED_RE, so
 # over-redaction is preserved even where the table refuses to count.
 CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN [A-Z ]*PRIVATE KEY-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+
+# Sentinel marking a match whose boundary character was `+` or `/`. Those are
+# the ONLY two characters that can satisfy the boundary anchor *inside* a
+# base64 run — every other base64 character is in [A-Za-z0-9_-], which the
+# anchor rejects — so they are the signature of a mid-blob chance match rather
+# than a pasted credential. `=` is deliberately EXCLUDED: it is base64 padding
+# but also the commonest assignment delimiter, so treating it as blob noise
+# would hide a real `TOKEN=ghp_…` leak. Ambiguity fails closed into the plain
+# high-signal row, exactly as [masked-display] does.
+#
+# A control byte is used because it cannot occur in any credential alphabet nor
+# in the generic value class, so it can only ever have been written by the sed
+# below — a printable sentinel could be forged by corpus content.
+# Only the ANCHORED token alternatives can carry a `+`/`/` first character (the
+# generic alternative's match begins with its key name), and no token alphabet
+# contains `:` or `=`, so the assignment-stripping sed downstream cannot fire on
+# a marked value and the mark survives to the classifier intact.
+B64MARK=$(printf '\001')
 
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
@@ -1357,7 +1417,8 @@ if want safety; then
         | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
         | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
         | tr ';&|' '\n' | grep -v '^$' \
-        | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
+        | sed -E -e "s|^[+/]|$B64MARK|" -e "s/^[^A-Za-z0-9_${B64MARK}-]//" \
+        -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
         -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
         | grep -E . | sort -u
     done | sort -u | awk '
@@ -1376,6 +1437,13 @@ if want safety; then
       }
       {
         x = tolower($0)
+        # Mid-blob chance match: strip the sentinel before classifying, so the
+        # shape is derived from the value itself and the label is additive.
+        # The count is SUBDIVIDED, never dropped — a suppressing classifier is
+        # what got PR #2364 closed, because a record can hold a real hit and
+        # noise at once.
+        blob = 0
+        if (substr(x, 1, 1) == sprintf("%c", 1)) { blob = 1; x = substr(x, 2) }
         s = shape_of(x)
         # NB: the label itself passes through the output-boundary redactor, so
         # it must not be credential-SHAPED ("token=…" would come out mangled
@@ -1391,14 +1459,53 @@ if want safety; then
         # prefix+mask form under these regexes, and the weak generic bucket
         # keeps its own label.
         else if (x ~ /^[a-z0-9_-]+\*\*\*/) s = s " [masked-display]"
+        # Applied only to a shape that CLASSIFIED: the weak generic bucket is
+        # already triage-first, and labelling it would imply a precision the
+        # boundary character does not carry there.
+        if (blob && shape_of(x) != "") s = s " [in-base64-run]"
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /'
+    # Concentration, mirroring the injection detector and placed directly under
+    # the table it qualifies. The TABLE counts distinct VALUES on purpose (one
+    # leak pasted into fifty transcripts is one credential to rotate); this
+    # answers the different question the table cannot — WHERE to look — without
+    # printing any value. Triaging the 2026-07-25 report needed four manual
+    # queries precisely because a documentation example, a test constant and a
+    # real leak render as the same integer.
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      cred_sess=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
+      [ -n "$cred_sess" ] || cred_sess=unknown
+      grep -naoEi "$CRED_TABLE_RE" "$f" 2>/dev/null \
+        | awk -F: -v s="$cred_sess" '$1 ~ /^[0-9]+$/ {print s "\t" substr($1,1,12)}'
+    done > "$CREDCONC"
+    cred_records=$(sort -u "$CREDCONC" | grep -c . || true)
+    cred_sessions=$(cut -f1 "$CREDCONC" | sort -u | grep -c . || true)
+    cred_top=$(sort "$CREDCONC" | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
+    echo "      across ${cred_records:-0} transcript records in ${cred_sessions:-0} sessions; largest single record: ${cred_top:-0}"
+    echo "      (raw-line locator: the TABLE scans DECODED strings, so an"
+    echo "       escaped-quote match can be counted there yet have no locator"
+    echo "       line here. Concentration is CONTEXT, never a verdict.)"
+    : > "$CREDCONC"
     echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"
     echo "     fix the path that logged it — see the cross-system rotation rule; triage"
     echo "     the weak-signal generic bucket before treating it as a leak."
     echo "     [masked-display] = a tool's own prefix+mask token rendering, e.g."
     echo "     gh auth status — the secret segment never reached the transcript;"
-    echo "     verify the mask is the tool's own display, don't rotate)"
+    echo "     verify the mask is the tool's own display, don't rotate."
+    echo "     [in-base64-run] = the match's boundary character was '+' or '/',"
+    echo "     the only two that can satisfy the anchor INSIDE a base64 run, so"
+    echo "     it is very likely a chance substring of an encoded blob. Nothing"
+    echo "     is suppressed — verify before dismissing.)"
+    if [ "$CREDENTIAL_PROVENANCE" -eq 1 ]; then
+      printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+        emit_credential_hits "$f"
+      done | redact > "$CREDPROV"
+      echo "    occurrence provenance (locator + SHAPE only — never the value):"
+      awk -F'\t' '{printf "      session=%s line=%s record=%s shape=%s\n", $1, $2, $3, $4}' "$CREDPROV"
+      : > "$CREDPROV"
+    else
+      echo "    provenance: rerun with --section safety --credential-provenance"
+    fi
     echo
     echo "  build/codegen commands run in a session that ALSO checked out a"
     echo "  non-own branch (candidates for untrusted-code execution):"
