@@ -376,7 +376,7 @@ report "empty-init: --check still SKIPS a legitimately deinitialised submodule" 
 #    fixture: bump the gitlink in the index while leaving the working tree on
 #    the old SHA, then advance and assert HEAD + isolation.
 c12="$tmp/c12"
-mk_super "$c11"
+mk_super "$c12"
 (
   cd "$c12/remote-sub"
   echo next >file.txt
@@ -406,7 +406,7 @@ report "advance: --check passes afterwards" "$([[ $rc -eq 0 ]] && echo yes || ec
 
 # 13. --advance refuses a dirty working tree.
 c13="$tmp/c13"
-mk_super "$c12"
+mk_super "$c13"
 echo dirty >>"$c13/super/sub/file.txt"
 out="$(cd "$c13/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 report "advance dirty: exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
@@ -415,7 +415,7 @@ report "advance dirty: names the dirty-tree refusal" \
 
 # 14. --advance refuses a checkout that is ahead of the recorded pin.
 c14="$tmp/c14"
-mk_super "$c13"
+mk_super "$c14"
 pin="$(git -C "$c14/super/sub" rev-parse HEAD)"
 (
   cd "$c14/super/sub"
