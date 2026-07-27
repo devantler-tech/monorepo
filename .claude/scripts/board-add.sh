@@ -143,9 +143,19 @@ die_gh() { # <resource: graphql|core> <context> <state> <message-for-every-other
 
 # The two states the board can be in when a call fails.
 readonly STATE_NOTHING_WRITTEN="Nothing was written: the board add did NOT happen. Retry after the reset."
-readonly STATE_ITEM_ADDED="The item WAS added; only its Status is unset, so it may now be on the board
-          WITHOUT one. Re-run this script on the same URL after the reset to finish
-          it — item-add is idempotent and will not duplicate."
+# Say only what is actually known. `item-add` is idempotent server-side and
+# returns the EXISTING item for an issue already on the board, so at this point
+# the script cannot distinguish a fresh add from a no-op — which means it cannot
+# claim the Status is unset either. Getting this wrong is harmful, not merely
+# imprecise: the repair is to re-run, a re-run writes the DEFAULT status, and an
+# operator told the card has no Status will re-run and silently overwrite a real
+# one back to Backlog (the clobber measured in monorepo#2506).
+readonly STATE_ITEM_ON_BOARD="The item is ON THE BOARD, but its Status was NOT written. item-add returns the
+          existing item for an issue that was already there, so this cannot tell a
+          fresh add from a no-op: the Status is either unset (new item) or still its
+          previous value (already present). Re-run this script on the same URL after
+          the reset to set it — but look at the card first, because the re-run
+          OVERWRITES whatever Status it currently has."
 
 usage() {
   cat >&2 <<EOF
@@ -258,19 +268,21 @@ ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
 # misreadings ends in DELETING a board card the maintainer already had. That
 # trades a recoverable failure for a destructive one.
 #
-# The failure left behind here is benign and self-healing instead: a status-less
-# item, which is exactly what this script fixes, and re-running it on the same
-# URL sets the Status (item-add is idempotent). So we fail loudly and tell the
-# caller the one thing that resolves it.
+# The failure left behind here is recoverable instead: the item is on the board
+# with its Status unwritten, and re-running this script on the same URL sets it
+# (item-add is idempotent). So we fail loudly and tell the caller what is true.
 if ! gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" \
         --field-id "$FIELD_ID" --single-select-option-id "$OPTION_ID" >/dev/null 2>"$GH_ERR"; then
-  # item-add has ALREADY succeeded here, so "nothing was written" would be false —
-  # and worse, it would hide the status-less item that now needs repairing.
+  # item-add has ALREADY succeeded here, so "nothing was written" would be false.
+  # It does NOT follow that the item is new or status-less — item-add returns the
+  # existing item too — so neither message may promise an unset Status.
   die_gh graphql "could not set the Status for ${ISSUE_URL} (item ${ITEM_ID})" \
-         "$STATE_ITEM_ADDED" \
+         "$STATE_ITEM_ON_BOARD" \
          "could not set the Status for ${ISSUE_URL} (item ${ITEM_ID}).
-          The item may now be on the board WITHOUT a Status — re-run this script
-          on the same URL to finish it; it is idempotent and will not duplicate."
+          The item is on the board and its Status was not written — it is either
+          unset, or unchanged if the issue was already there.
+          To set it, re-run this script on the same URL — but look at the card
+          first, because that OVERWRITES whatever Status it currently has."
 fi
 
 # VERIFY BY READ-BACK — the whole point of the script. An exit-0 from item-edit is

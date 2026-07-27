@@ -179,7 +179,7 @@ done
 STUB_FAIL_ON="project item-edit" STUB_FAIL_STDERR="$RL" run "$URL"
 check "post-add rate limit → exit 2" 2 "$rc"
 check "post-add rate limit → still named a rate limit" 2 "$rc" "$out" "RATE LIMIT"
-check "post-add rate limit → says the item WAS added" 2 "$rc" "$out" "item WAS added"
+check "post-add rate limit → affirms the item is on the board" 2 "$rc" "$out" "ON THE BOARD"
 check "post-add rate limit → keeps the repair instruction" 2 "$rc" "$out" "Re-run this script"
 if printf '%s' "$out" | grep -qF "did NOT happen"; then
   printf 'FAIL post-add failure denies a write that already succeeded\n  got: %s\n' "$out" >&2
@@ -187,6 +187,29 @@ if printf '%s' "$out" | grep -qF "did NOT happen"; then
 else
   printf 'ok   post-add failure does not deny the completed add\n'; pass=$((pass + 1))
 fi
+
+# ── …but it must not OVERCLAIM the add either ──────────────────────────────
+# Codex P2 on #2505, second round. `item-add` is idempotent server-side and
+# returns the existing item for an issue that is ALREADY on the board — so at
+# this point the script genuinely cannot tell a fresh add from a no-op. Two
+# specific claims are therefore unsafe:
+#
+#   "The item WAS added"        — it may have been on the board for weeks.
+#   "only its Status is unset"  — a pre-existing item keeps its previous Status.
+#
+# This is not cosmetic. The repair instruction says to re-run, and a re-run
+# calls item-edit with the DEFAULT status, so an operator who believes the card
+# has no Status will re-run and silently overwrite a real one back to Backlog —
+# the measured clobber behind monorepo#2506. The message must state what is
+# actually known and warn about the overwrite.
+if printf '%s' "$out" | grep -qF "only its Status is unset"; then
+  printf 'FAIL post-add message asserts an unset Status it cannot know\n  got: %s\n' "$out" >&2
+  fail=$((fail + 1))
+else
+  printf 'ok   post-add message does not assert an unset Status\n'; pass=$((pass + 1))
+fi
+check "post-add message admits the item may be pre-existing" 2 "$rc" "$out" "already"
+check "post-add message warns the re-run OVERWRITES a Status" 2 "$rc" "$out" "OVERWRITES"
 
 # ── The RESOURCE named must be the one that was actually refused ───────────
 # Codex P2 on #2505. REST and GraphQL are metered separately, so reading the
