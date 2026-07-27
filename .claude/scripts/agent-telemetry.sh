@@ -272,6 +272,18 @@ emit_credential_hits() {
               elif [[ $m == -----begin* ]];                       then shape="private-key-block"
               else shape="generic-assignment"
               fi
+              # Carry the table's [masked-display] qualifier through. Without
+              # it the table shows `github-pat (fine-grained) [masked-display]`
+              # (a tool's own masked rendering, do NOT rotate) while the
+              # locator says plain `shape=github-pat`, so an operator holding
+              # both a masked display and a real token of the same shape cannot
+              # tell which record belongs to the lower-risk row — and may rotate
+              # on the wrong one. Same rule as the wrapper/length agreement
+              # above: a locator that disagrees with the row it annotates is
+              # worse than no locator.
+              case $m in
+                [a-z0-9_-]*\*\*\**) [ "$shape" = generic-assignment ] || shape="$shape [masked-display]" ;;
+              esac
               printf '%s\t%s\t%s\t%s\n' "$session" "$line" "$record" "$shape"
             done
       done
@@ -338,25 +350,6 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # for the leak TABLE; redact() keeps the broad unanchored CRED_RE, so
 # over-redaction is preserved even where the table refuses to count.
 CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN [A-Z ]*PRIVATE KEY-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
-
-# Sentinel marking a match whose boundary character was `+` or `/`. Those are
-# the ONLY two characters that can satisfy the boundary anchor *inside* a
-# base64 run — every other base64 character is in [A-Za-z0-9_-], which the
-# anchor rejects — so they are the signature of a mid-blob chance match rather
-# than a pasted credential. `=` is deliberately EXCLUDED: it is base64 padding
-# but also the commonest assignment delimiter, so treating it as blob noise
-# would hide a real `TOKEN=ghp_…` leak. Ambiguity fails closed into the plain
-# high-signal row, exactly as [masked-display] does.
-#
-# A control byte is used because it cannot occur in any credential alphabet nor
-# in the generic value class, so it can only ever have been written by the sed
-# below — a printable sentinel could be forged by corpus content.
-# Only the ANCHORED token alternatives can carry a `+`/`/` first character (the
-# generic alternative's match begins with its key name), and no token alphabet
-# contains `:` or `=`, so the assignment-stripping sed downstream cannot fire on
-# a marked value and the mark survives to the classifier intact.
-B64MARK=$(printf '\001')
-
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
 # on Linux and its output pollutes the file list — six phantom paths for one
@@ -1441,7 +1434,7 @@ if want safety; then
         | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
         | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
         | tr ';&|' '\n' | grep -v '^$' \
-        | sed -E -e "s|^[+/]|$B64MARK|" -e "s/^[^A-Za-z0-9_${B64MARK}-]//" \
+        | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
         -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
         -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
         | grep -E . | sort -u
@@ -1461,13 +1454,6 @@ if want safety; then
       }
       {
         x = tolower($0)
-        # Mid-blob chance match: strip the sentinel before classifying, so the
-        # shape is derived from the value itself and the label is additive.
-        # The count is SUBDIVIDED, never dropped — a suppressing classifier is
-        # what got PR #2364 closed, because a record can hold a real hit and
-        # noise at once.
-        blob = 0
-        if (substr(x, 1, 1) == sprintf("%c", 1)) { blob = 1; x = substr(x, 2) }
         s = shape_of(x)
         # NB: the label itself passes through the output-boundary redactor, so
         # it must not be credential-SHAPED ("token=…" would come out mangled
@@ -1483,10 +1469,6 @@ if want safety; then
         # prefix+mask form under these regexes, and the weak generic bucket
         # keeps its own label.
         else if (x ~ /^[a-z0-9_-]+\*\*\*/) s = s " [masked-display]"
-        # Applied only to a shape that CLASSIFIED: the weak generic bucket is
-        # already triage-first, and labelling it would imply a precision the
-        # boundary character does not carry there.
-        if (blob && shape_of(x) != "") s = s " [in-base64-run]"
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /'
     # Concentration, mirroring the injection detector and placed directly under
@@ -1506,20 +1488,22 @@ if want safety; then
     cred_sessions=$(cut -f1 "$CREDCONC" | sort -u | grep -c . || true)
     cred_top=$(sort "$CREDCONC" | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
     echo "      across ${cred_records:-0} transcript records in ${cred_sessions:-0} sessions; largest single record: ${cred_top:-0}"
-    echo "      (raw-line locator: the TABLE scans DECODED strings, so an"
-    echo "       escaped-quote match can be counted there yet have no locator"
-    echo "       line here. Concentration is CONTEXT, never a verdict.)"
+    echo "      (raw-line locator — it can DIVERGE FROM THE TABLE IN BOTH"
+    echo "       DIRECTIONS, so read it as a pointer, never as a second count."
+    echo "       UNDER: the table scans DECODED strings, so an escaped-quote"
+    echo "       match is counted there with no locator line here. OVER: the"
+    echo "       table structurally excludes complete base64 image payloads"
+    echo "       (encoded binary manufactures token shapes at random '+'/'/'"
+    echo "       boundaries); this raw scan does not, so a record inside such"
+    echo "       an image can appear here while the table stays empty."
+    echo "       Concentration is CONTEXT, never a verdict.)"
     : > "$CREDCONC"
     echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"
     echo "     fix the path that logged it — see the cross-system rotation rule; triage"
     echo "     the weak-signal generic bucket before treating it as a leak."
     echo "     [masked-display] = a tool's own prefix+mask token rendering, e.g."
     echo "     gh auth status — the secret segment never reached the transcript;"
-    echo "     verify the mask is the tool's own display, don't rotate."
-    echo "     [in-base64-run] = the match's boundary character was '+' or '/',"
-    echo "     the only two that can satisfy the anchor INSIDE a base64 run, so"
-    echo "     it is very likely a chance substring of an encoded blob. Nothing"
-    echo "     is suppressed — verify before dismissing.)"
+    echo "     verify the mask is the tool's own display, don't rotate)"
     if [ "$CREDENTIAL_PROVENANCE" -eq 1 ]; then
       printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
         emit_credential_hits "$f"

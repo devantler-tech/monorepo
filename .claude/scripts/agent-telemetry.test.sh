@@ -1945,56 +1945,24 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credbin" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR=
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
 check "NUL-bearing record still produces a locator" "$OUT" "session=s.jsonl"
 
-# A mid-blob chance match: base64 alphabet includes `+` and `/`, which are the
-# only characters that can satisfy the boundary anchor INSIDE a blob. The image
-# path is already excluded structurally; this covers the remaining blob shapes
-# (Codex `encrypted_content`). It is LABELLED, never dropped.
-mkdir -p "$FIX/credb64"
-B64_BLOB="TWFueSBoYW5kcyBtYWtlIGxpZ2h0IHdvcmsu+__GHPC__/QUJDREVGRw"
-cat > "$FIX/credb64/s.jsonl" <<EOF
-{"type":"user","message":{"content":[{"type":"text","text":"$B64_BLOB"}]}}
+# The locator must carry the table's [masked-display] qualifier. Without it the
+# table says "do NOT rotate, it's a tool's own mask" while the locator names a
+# bare high-signal shape — so an operator holding both a masked display and a
+# real token of that shape cannot tell which record is the lower-risk one
+# (Codex finding on #2520).
+mkdir -p "$FIX/credmaskloc"
+cat > "$FIX/credmaskloc/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"Token: __PATA__*** (masked)"}]}}
 EOF
-subst "$FIX/credb64/s.jsonl"
-TABLE=$(CLAUDE_PROJECTS_DIR="$FIX/credb64" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 3650 --section safety 2>&1 \
-      | sed -n '/credential-shaped/,/rotate the credential/p')
-check "mid-blob chance match is labelled, not dropped" "$TABLE" "[in-base64-run]"
+subst "$FIX/credmaskloc/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credmaskloc" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+if printf '%s' "$OUT" | grep -q 'masked-display' \
+   && printf '%s' "$OUT" | grep -qE 'shape=github-pat \[masked-display\]'; then
+  ok "locator carries the table's [masked-display] qualifier"
+else bad "locator carries the table's [masked-display] qualifier" \
+  "$(printf '%s' "$OUT" | grep -E 'github-pat|session=' | head -3)"; fi
 
-# Fail closed: `=` is base64 PADDING but also the commonest assignment
-# delimiter, so it must stay in the plain high-signal row. Getting this wrong
-# would hide a real `…=ghp_…` leak behind a noise label.
-# NB: the fixture deliberately carries NO secret/token/password/api_key keyword.
-# With one (`GITHUB_TOKEN=…`) the generic alternative wins the leftmost match,
-# the extracted match starts at the KEY, and `=` is never the boundary
-# character — so that fixture asserts nothing about `=` at all. Ablating the
-# boundary class to `[+/=]` left it green, which is how the vacuity was caught.
-mkdir -p "$FIX/credeq"
-cat > "$FIX/credeq/s.jsonl" <<'EOF'
-{"type":"user","message":{"content":[{"type":"text","text":"blob QUJDREVG=__GHPD__ end"}]}}
-EOF
-subst "$FIX/credeq/s.jsonl"
-TABLE=$(CLAUDE_PROJECTS_DIR="$FIX/credeq" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 3650 --section safety 2>&1 \
-      | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -q 'in-base64-run'; then
-  bad "'=' delimiter fails closed to the plain high-signal row" "labelled as blob noise: $TABLE"
-else ok "'=' delimiter fails closed to the plain high-signal row"; fi
-
-# A quote-anchored real token stays high-signal and unlabelled. This is the
-# shape 100% of the live corpus's matches actually had when measured
-# 2026-07-28, so mislabelling it would blind the detector on real data.
-mkdir -p "$FIX/credquote"
-cat > "$FIX/credquote/s.jsonl" <<'EOF'
-{"type":"user","message":{"content":[{"type":"text","text":"value is \"__GHPA__\" here"}]}}
-EOF
-subst "$FIX/credquote/s.jsonl"
-TABLE=$(CLAUDE_PROJECTS_DIR="$FIX/credquote" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 3650 --section safety 2>&1 \
-      | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)' \
-   && ! printf '%s' "$TABLE" | grep -q 'in-base64-run'; then
-  ok "quote-anchored real token stays unlabelled high-signal"
-else bad "quote-anchored real token stays unlabelled high-signal" "$TABLE"; fi
 
 echo
 echo "──────────────────────────────"
