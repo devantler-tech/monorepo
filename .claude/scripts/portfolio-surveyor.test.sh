@@ -778,4 +778,136 @@ grep -Fq 'Do not gate this scan on assignees' "${surveyor}" ||
 grep -Fq 'none(cursor-lane)' "${surveyor}" ||
   fail "surveyor CLAIMED digest does not allow cursor-lane branch-only claims"
 
+# monorepo#2482 — every agent instance reviews as `devantler`, so an `rd=` rule keyed on the login
+# alone reports a sibling instance's own superseded CHANGES_REQUESTED as a permanent human gate and
+# parks a finished PR. Measured live on monorepo#2432: a disclosed agent review blocked the PR for
+# 3 days. Assert the classifier, BOTH digest-grammar sites, and the fail-closed direction.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq 'A `devantler` CHANGES_REQUESTED is not self-evidently human' "${surveyor}" ||
+  fail "surveyor still treats a devantler CHANGES_REQUESTED as self-evidently human"
+# The sender-marker fallback is the branch a login-only rule drops, and the 843rd measured 71
+# sibling comments in exactly that undisclosed shape — so it is the COMMON case, not a corner.
+grep -Fq 'first-person automation sender marker naming an agent instance as the SENDER' "${surveyor}" ||
+  fail "surveyor rd= classification omits the sibling sender-marker fallback"
+# shellcheck disable=SC2016
+grep -Fq 'rd=CHANGES_REQUESTED:agent(<author>)@<sha>' "${surveyor}" ||
+  fail "surveyor cannot report an agent-authored CHANGES_REQUESTED distinctly"
+# shellcheck disable=SC2016
+grep -Fq 'rd=CHANGES_REQUESTED:human(<author>)@<sha>' "${surveyor}" ||
+  fail "surveyor cannot report a human-authored CHANGES_REQUESTED distinctly"
+# ANCHORING is load-bearing, not stylistic: the maintainer routinely quotes an agent's disclosed
+# text when replying to it, so an "appears anywhere in the body" match would classify HIS review as
+# agent output and route it to the dismissal path — the exact loss the fail-closed rule below is
+# meant to prevent. Both files must require the marker at the START of the body.
+grep -Fq 'first line only, never merely' "${surveyor}" ||
+  fail "surveyor matches the disclosure anywhere in the body, so quoted agent text misclassifies a human review"
+grep -Fq 'anywhere later is quoted material and classifies nothing' "${surveyor}" ||
+  fail "surveyor does not state that a non-leading disclosure classifies nothing"
+grep -Fq 'BEGINS WITH** the structural' "${constitution}" ||
+  fail "constitution matches the disclosure anywhere in the body rather than at the start"
+grep -Fq 'a disclosure merely appearing somewhere inside it classifies' "${constitution}" ||
+  fail "constitution does not anchor both agent-authorship branches at the start of the body"
+# Fail closed: discarding the maintainer's own control signal is the worse of the two errors.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '**Ambiguity resolves to `human`.**' "${surveyor}" ||
+  fail "surveyor does not resolve CHANGES_REQUESTED authorship ambiguity to human"
+# ...but failing closed must NOT re-break the structural match: an unfamiliar actor word after the
+# canonical prefix is still own-output (contract → Untrusted input), which a naive "anything unusual
+# is human" reading would invert.
+grep -Fq 'the prefix match stays **actor-word-agnostic**' "${surveyor}" ||
+  fail "surveyor ambiguity rule overrides the actor-word-agnostic structural prefix match"
+# Staleness is what makes a dismissal safe. Without it the classifier discards a sibling's LIVE
+# current-head finding — the same class of loss the CodeRabbit rule already guards with
+# "none is at the current head".
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '`coderabbitai[bot]` and agent-authored `devantler`), **none** is at the current head' "${surveyor}" ||
+  fail "surveyor STALE-AGENT-DISMISSAL lacks the current-head staleness precondition"
+grep -Fq 'An agent-authored block AT the current head is ordinary NEEDS-FIX feedback' "${surveyor}" ||
+  fail "surveyor does not route a current-head agent finding to NEEDS-FIX"
+# The sweep sentence must carry the qualifier too, or the rule reintroduces the login-only form
+# it replaces (partial propagation: the classifier is fixed while its producer still emits the
+# unqualified token, so the orchestrator never receives the distinction).
+# shellcheck disable=SC2016
+grep -Fq 'a **bot** reviewer keeps the plain' "${surveyor}" ||
+  fail "surveyor does not keep a plain author form for bot reviewers at the sweep step"
+# A mixed stale set (one CodeRabbit block + one agent block) satisfies NEITHER per-author class, so
+# without a shared precondition set the PR parks forever — the failure this whole rule removes.
+grep -Fq 'share ONE precondition set' "${surveyor}" ||
+  fail "surveyor leaves a mixed CodeRabbit+agent stale block set unclassifiable, so it parks forever"
+grep -Fq 'stale blocks still qualifies' "${constitution}" ||
+  fail "constitution leaves a mixed non-human stale block set unclassifiable"
+# Dismissal is ALWAYS the maintainer's — draft or promoted. This is not stylistic: an autonomous
+# draft-dismissal path falsifies the failure-direction claim, because a maintainer review whose first
+# line imitates the PUBLIC marker would then be discarded outright rather than merely parked.
+grep -Fq 'ALWAYS the maintainer one-click — never an autonomous dismissal' "${surveyor}" ||
+  fail "surveyor permits an autonomous dismissal, which lets an imitated marker discard a human review"
+grep -Fq 'Do not reintroduce' "${surveyor}" ||
+  fail "surveyor does not tie the autonomous-dismissal ban to the marker's forgeability"
+grep -Fq 'Classifying is the surveyor' "${surveyor}" ||
+  fail "surveyor does not separate classifying from mutating"
+grep -Fq 'The dismissal itself is ALWAYS the' "${constitution}" ||
+  fail "constitution lets the engineer dismiss a review autonomously"
+# The motivating case is a `devantler`-authored PR, which reports on the OWNERSHIP-UNVERIFIED row —
+# so the classification must exist THERE, or the orchestrator never receives it for its own PRs.
+grep -Fq 'stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none>' "${surveyor}" ||
+  fail "the devantler PR row cannot carry the stale-dismissal classification"
+# One precondition set, stated once. Two paragraphs disagreeing made the mixed case decidable two ways.
+grep -Fq 'review on the PR is NON-HUMAN' "${surveyor}" ||
+  fail "the CodeRabbit paragraph still carries a CodeRabbit-only precondition that contradicts the union"
+# ...and the PRECONDITION paragraph must not name a class either: naming one there mislabelled an
+# all-agent set as STALE-CR-DISMISSAL. Precondition and naming live in exactly one place each.
+grep -Fq 'class-NEUTRAL — it never names a class' "${surveyor}" ||
+  fail "the shared-precondition paragraph names a dismissal class, so an all-agent set can be mislabelled"
+# The prefix is public and reproducible (CodeRabbit emits it verbatim). It is only safe because the
+# failure direction is one-way; a future reuse without that asymmetry would be an authentication hole.
+grep -Fq 'CONVENTION, not authentication' "${surveyor}" ||
+  fail "surveyor presents the public disclosure prefix as if it authenticated authorship"
+grep -Fq 'public convention, not authentication' "${constitution}" ||
+  fail "constitution presents the public disclosure prefix as if it authenticated authorship"
+grep -Fq 'a first line that is itself **nested' "${surveyor}" ||
+  fail "surveyor counts a quote-nested disclosure as an agent marker"
+# Both guards, not one: "EVERY review is agent-authored" is what stops a newer agent review's
+# classification from hiding an OLDER human block — the CodeRabbit rule carries the same guard.
+grep -Fq 'still dismissable: **every** CHANGES_REQUESTED on the PR is **non-human**' "${surveyor}" ||
+  fail "surveyor STALE-AGENT-DISMISSAL can fire while a human block is also open"
+grep -Fq 'A single human-authored block anywhere on the PR defeats both classes outright' "${surveyor}" ||
+  fail "surveyor does not let a human block defeat the stale-agent class"
+# A bot reviewer is neither a sibling instance nor the maintainer, so forcing it into either
+# qualifier leaves a CodeRabbit CHANGES_REQUESTED with no valid token and unstates the CR rule.
+# shellcheck disable=SC2016
+grep -Fq 'qualifier applies to `devantler` reviews ONLY' "${surveyor}" ||
+  fail "surveyor forces the agent/human qualifier onto bot reviewers"
+# A classifier with no schema slot is never reportable, so pin BOTH grammar rows independently.
+grep -Fq 'CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY' "${surveyor}" ||
+  fail "surveyor draft digest grammar lacks the bot form or the devantler qualifiers"
+grep -Fq 'CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY' "${surveyor}" ||
+  fail "surveyor non-draft digest grammar lacks the bot form or the devantler qualifiers"
+grep -Fq 'STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL' "${surveyor}" ||
+  fail "surveyor non-draft digest grammar cannot emit STALE-AGENT-DISMISSAL"
+grep -Fq 'STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL' "${surveyor}" ||
+  fail "surveyor draft digest grammar cannot emit STALE-AGENT-DISMISSAL"
+
+# The constitution carries the same defect: it declared the stale-dismissal class CodeRabbit-only
+# and named `devantler` as the example of a human reviewer.
+# shellcheck disable=SC2016
+grep -Fq 'authorship by login alone cannot tell his block apart' "${constitution}" ||
+  fail "constitution still separates maintainer from agent reviews by login alone"
+grep -Fq 'when it **opens with** a leading 🤖 first-person automation' "${constitution}" ||
+  fail "constitution omits the sender-marker fallback for CHANGES_REQUESTED authorship"
+grep -Fq '**Ambiguity resolves to the maintainer**' "${constitution}" ||
+  fail "constitution does not fail closed on ambiguous CHANGES_REQUESTED authorship"
+grep -Fq 'and none sits at the current head' "${constitution}" ||
+  fail "constitution lets an agent-authored review be dismissed without the staleness test"
+grep -Fq 'head is ordinary feedback to fix or refute' "${constitution}" ||
+  fail "constitution does not route a current-head agent finding to fix-or-refute"
+# shellcheck disable=SC2016
+grep -Fq 'case `STALE-AGENT-DISMISSAL`, so a run acts on the digest' "${constitution}" ||
+  fail "constitution does not define the STALE-AGENT-DISMISSAL digest class"
+if grep -Fq 'The class is **CodeRabbit-only**' "${constitution}"; then
+  fail "constitution still declares the stale-dismissal class CodeRabbit-only"
+fi
+
 echo "portfolio surveyor contract: all assertions passed"

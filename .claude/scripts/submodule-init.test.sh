@@ -322,66 +322,114 @@ report "scoped cleanup: a pre-existing sibling worktree still exists afterwards"
 report "scoped cleanup: that sibling worktree is still FUNCTIONAL (not just present)" \
   "$(git -C "$c10_sib" rev-parse --show-toplevel >/dev/null 2>&1 && echo yes || echo no)"
 
-# 11. --advance: move a populated checkout to a newer recorded pin WITHOUT
+# 11. #2492 — init mode must FAIL when `git submodule update --init` exits 0 without populating.
+#     Observed running from a linked superproject worktree while a sibling worktree already held the
+#     submodule: git printed `checked out '<sha>'`, exited 0, left the directory EMPTY, and the script
+#     still reported `isolated ✓` with exit 0 — `probe` verifies isolation, not content, so it passes
+#     vacuously on an empty tree. Simulated here with the same PATH-shim technique as case 10 so the
+#     reproduction is deterministic on every platform rather than depending on that git quirk.
+#
+#     ⚠️ HONEST LIMIT — the production symptom was a false SUCCESS (`isolated ✓`, exit 0). That exact
+#     state could NOT be reproduced hermetically: in a fixture, an empty submodule has no gitdir, so
+#     `probe` rejects it on its own and the run already fails without the guard. Two of the four
+#     assertions below are therefore non-discriminating and are labelled as such. What IS proven RED
+#     is the guard's real contribution — failing AT the init step with an accurate message, instead of
+#     continuing into `repair` and emerging with a benign-sounding "nothing to probe". The guard is a
+#     fail-closed POST-CONDITION, so it holds whatever made `update --init` no-op; do not weaken it to
+#     match only the reproducible half.
+c11="$tmp/c11"
+mk_super "$c11"
+git -C "$c11/super" submodule --quiet deinit -f sub >/dev/null
+report "empty-init precondition: the submodule really is empty before the run" \
+  "$([[ -z "$(ls -A "$c11/super/sub" 2>/dev/null)" ]] && echo yes || echo no)"
+noop_shim="$tmp/shim-noop"
+mkdir -p "$noop_shim"
+cat >"$noop_shim/git" <<EOF
+#!/usr/bin/env bash
+# Make ONLY 'submodule update' a silent success; everything else passes through untouched. This is
+# exactly the observed failure: exit 0, nothing populated.
+for a in "\$@"; do [[ "\$a" == "submodule" ]] && seen_sub=1; [[ "\$a" == "update" ]] && seen_upd=1; done
+if [[ -n "\${seen_sub:-}" && -n "\${seen_upd:-}" ]]; then exit 0; fi
+exec "$real_git" "\$@"
+EOF
+chmod +x "$noop_shim/git"
+out="$(cd "$c11/super" && PATH="$noop_shim:$PATH" "$helper" sub 2>&1)" && rc=0 || rc=$?
+# NON-DISCRIMINATING context (both hold with the guard ablated, because `probe` then rejects the
+# empty tree on its own path). Kept because they pin the overall contract, NOT as proof of the guard.
+report "empty-init: init mode FAILS when the submodule is still empty afterwards" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "empty-init: it never reports 'isolated ✓' for an empty submodule" \
+  "$(grep -q 'isolated ✓' <<<"$out" && echo no || echo yes)" "$out"
+# THE discriminating assertion — verified RED with the guard ablated. Without it the run still exits
+# non-zero, but only after `repair`, and the message is `not checked out here; nothing to probe`,
+# which reads as a benign skip rather than a failed init. The guard fails immediately, at the step
+# that actually broke, and says so.
+report "empty-init: the failure NAMES the empty submodule (fails at init, not later as a 'skip')" \
+  "$(grep -q 'STILL EMPTY' <<<"$out" && echo yes || echo no)" "$out"
+# `--check` must be UNCHANGED: an uninitialised submodule is legitimately empty there and is skipped,
+# not failed. Without this, the fix above could be "achieved" by failing on every empty submodule.
+out="$(cd "$c11/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "empty-init: --check still SKIPS a legitimately deinitialised submodule" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+# 12. --advance: move a populated checkout to a newer recorded pin WITHOUT
 #    `git submodule update` (which rewrites shared core.worktree). Hermetic
 #    fixture: bump the gitlink in the index while leaving the working tree on
 #    the old SHA, then advance and assert HEAD + isolation.
-c11="$tmp/c11"
+c12="$tmp/c12"
 mk_super "$c11"
 (
-  cd "$c11/remote-sub"
+  cd "$c12/remote-sub"
   echo next >file.txt
   git add file.txt
   git commit -q -m next
 )
-new_sha="$(git -C "$c11/remote-sub" rev-parse HEAD)"
-old_sha="$(git -C "$c11/super/sub" rev-parse HEAD)"
+new_sha="$(git -C "$c12/remote-sub" rev-parse HEAD)"
+old_sha="$(git -C "$c12/super/sub" rev-parse HEAD)"
 (
-  cd "$c11/super"
+  cd "$c12/super"
   # Record the new pin in the superproject without moving the working tree.
   git update-index --cacheinfo "160000,$new_sha,sub"
   git commit -q -m "bump sub"
 )
 report "advance fixture: working tree still on old pin before --advance" \
-  "$([[ "$(git -C "$c11/super/sub" rev-parse HEAD)" == "$old_sha" ]] && echo yes || echo no)"
+  "$([[ "$(git -C "$c12/super/sub" rev-parse HEAD)" == "$old_sha" ]] && echo yes || echo no)"
 # Make the new object reachable in the submodule (file:// remote).
-git -C "$c11/super/sub" fetch -q origin
-out="$(cd "$c11/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+git -C "$c12/super/sub" fetch -q origin
+out="$(cd "$c12/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 report "advance: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 report "advance: checkout moved to the recorded pin" \
-  "$([[ "$(git -C "$c11/super/sub" rev-parse HEAD)" == "$new_sha" ]] && echo yes || echo no)"
+  "$([[ "$(git -C "$c12/super/sub" rev-parse HEAD)" == "$new_sha" ]] && echo yes || echo no)"
 report "advance: does not leave a shared core.worktree" \
-  "$([[ -z "$(git config -f "$c11/super/.git/modules/sub/config" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)"
-out="$(cd "$c11/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+  "$([[ -z "$(git config -f "$c12/super/.git/modules/sub/config" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)"
+out="$(cd "$c12/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "advance: --check passes afterwards" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 
-# 12. --advance refuses a dirty working tree.
-c12="$tmp/c12"
+# 13. --advance refuses a dirty working tree.
+c13="$tmp/c13"
 mk_super "$c12"
-echo dirty >>"$c12/super/sub/file.txt"
-out="$(cd "$c12/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+echo dirty >>"$c13/super/sub/file.txt"
+out="$(cd "$c13/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 report "advance dirty: exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
 report "advance dirty: names the dirty-tree refusal" \
   "$(grep -q 'dirty working tree' <<<"$out" && echo yes || echo no)" "$out"
 
-# 13. --advance refuses a checkout that is ahead of the recorded pin.
-c13="$tmp/c13"
+# 14. --advance refuses a checkout that is ahead of the recorded pin.
+c14="$tmp/c14"
 mk_super "$c13"
-pin="$(git -C "$c13/super/sub" rev-parse HEAD)"
+pin="$(git -C "$c14/super/sub" rev-parse HEAD)"
 (
-  cd "$c13/super/sub"
+  cd "$c14/super/sub"
   echo local >extra.txt
   git add extra.txt
   git commit -q -m local-ahead
 )
 # Superproject gitlink still points at the old pin; checkout is one commit ahead.
 report "advance ahead fixture: gitlink still at old pin" \
-  "$([[ "$(git -C "$c13/super" rev-parse HEAD:sub)" == "$pin" ]] && echo yes || echo no)"
-out="$(cd "$c13/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+  "$([[ "$(git -C "$c14/super" rev-parse HEAD:sub)" == "$pin" ]] && echo yes || echo no)"
+out="$(cd "$c14/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 report "advance ahead: exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
 report "advance ahead: names the ahead-of-pin refusal" \
   "$(grep -q 'ahead of the recorded pin' <<<"$out" && echo yes || echo no)" "$out"
-
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

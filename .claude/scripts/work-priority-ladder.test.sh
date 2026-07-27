@@ -18,7 +18,9 @@
 #      the merge command rather than the sweep — the exact misreading that produced the pile;
 #   3. severity outranks age, so a Security issue is not queued behind an older Docs one;
 #   4. the run-loop skill agrees with the contract — three surfaces restate this ordering, and a
-#      silent divergence between them is how the previous wording drifted.
+#      silent divergence between them is how the previous wording drifted;
+#   5. intake is CAPPED and not merely ordered — because fixing (2) still did not drain the pile, and
+#      the re-measurement showed why: ordering is not the binding constraint, review capacity is.
 
 set -euo pipefail
 
@@ -80,6 +82,43 @@ assert_prose 'severity is the primary sort, age the tiebreaker within a tier' \
   "${skill_flat}" "run-loop skill still sorts the issue queue by age alone"
 assert_prose 'Resolve the next issue by the ladder' \
   "${skill_flat}" "run-loop skill's advance step does not follow the ladder"
+
+# ── 5. intake is CAPPED, not merely ordered ──────────────────────────────────
+# Re-measured 2026-07-26, after §2's fix landed: the pile did NOT drain. 99 → 91 open own PRs, still
+# 100% drafts, and median age ROSE 6.9d → 8.0d. Per lane it was 88/91 `codex/*` — and 63 of those 88
+# (72%) were opened on ONE day, all on one repo, all one theme, every sampled one NEVER reviewed and
+# by then BLOCKED or DIRTY. So §2's diagnosis was incomplete: ordering cannot drain a pile, because
+# promotion needs a green review at the current head and the review lanes are metered and shared. A
+# run that opens its whole batch in one pass satisfies "finish before you start more" VACUOUSLY — it
+# had nothing in flight when it started. These guard the cap that closes that, and the carve-outs
+# that keep it from blocking mandated work.
+assert_prose 'The WIP limit is also a CAP ON INTAKE, not only an ordering' \
+  "${constitution_flat}" "contract does not bound draft intake — ordering alone cannot drain a pile"
+assert_prose 'a run that opens its whole batch in one pass satisfies it **vacuously**' \
+  "${constitution_flat}" "contract does not explain why the ordering rule is satisfiable vacuously"
+grep -Fq '| **Per run** | Open at most **5** new own drafts. |' "${constitution}" ||
+  fail "contract does not state the per-run draft intake cap"
+# Assert the WHOLE row, not just the threshold: a prefix match would still pass with the actual
+# instruction ("open no new ones") deleted, leaving a number that binds nothing.
+grep -Fq '| **Per lane** | While your own lane holds **more than 20** open drafts, open **no** new ones — spend the whole run finishing. |' "${constitution}" ||
+  fail "contract does not state the per-lane draft ceiling"
+# The carve-outs are load-bearing: without them the cap would block a hotfix or stop the backlog
+# being captured, which is a guard firing on correct mandated work.
+assert_prose 'Rung-0 live breakage is exempt from both' \
+  "${constitution_flat}" "intake cap does not exempt live breakage — it would block a hotfix"
+assert_prose 'filing an issue is not opening a draft' \
+  "${constitution_flat}" "intake cap does not exempt issue capture — the backlog would stop being capturable"
+# Autonomy must no longer bless an unreviewable burst as "not sprawl".
+assert_prose 'What IS sprawl is a burst that outruns your own review capacity' \
+  "${constitution_flat}" "Autonomy still licenses an unbounded draft set as 'not sprawl'"
+# A cap bounds STARTING, never the run itself — without this the cap reads as permission to idle,
+# which would trade the floor and "work as long as there is work" for the pile fix.
+assert_prose 'A cap is NOT licence to stop early, and it never blocks the floor' \
+  "${constitution_flat}" "intake cap does not say it bounds starting rather than the run — it reads as licence to idle"
+# ...and that it says what a capped run should do INSTEAD. Without this, "don't stop early" states
+# only the prohibition, leaving the redirection to finishing implicit.
+assert_prose 'the cap redirects a run **from starting toward finishing**, and finishing is unbounded' \
+  "${constitution_flat}" "contract does not redirect a capped run toward finishing"
 
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.

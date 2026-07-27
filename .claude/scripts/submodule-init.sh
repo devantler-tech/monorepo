@@ -275,6 +275,17 @@ init_repair_probe() {
     # Fresh (empty) submodule: populate it at its pinned commit, then relocate the `core.worktree`
     # that `git submodule update` writes into the shared config.
     git submodule update --init "$path"
+    # It can exit 0 having populated NOTHING — observed 2026-07-26 running from a linked superproject
+    # worktree while a sibling worktree already held that submodule: git printed `checked out '<sha>'`,
+    # exited 0, and left the directory empty. `probe` below verifies ISOLATION, not content, so it
+    # passes vacuously on an empty directory and the script reports `isolated ✓` for a submodule that
+    # was never checked out. That is fail-open on this script's PRIMARY job, and it is worse than a
+    # loud failure: globs into an empty submodule match nothing, so content checks — including the
+    # bundled-skill ownership audit AGENTS.md mandates before editing a synced file — pass vacuously
+    # instead of erroring. Assert the post-condition: init mode was ASKED to populate, so an empty
+    # tree is a FAILURE here, never the legitimate skip `--check` makes of an uninitialised submodule.
+    is_populated "$path" ||
+      die "'$path' is STILL EMPTY after 'git submodule update --init' (which exited 0) — do not read or edit it"
     repair "$path"
   fi
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
