@@ -72,14 +72,18 @@ card.
    let the run ingest the truncated cursor first, which is the exact failure it exists to prevent:
 
    ```sh
-   .claude/scripts/memory-hygiene.sh --dir <memory-dir>   # read-only; exit 1 = repair the boot surface
+   .claude/scripts/memory-hygiene.sh --layout <legacy|codex> --dir <memory-dir>
+   # read-only; exit 1 = repair the boot surface
    ```
 
-   The guard is layout-aware. In a legacy/Claude store it checks `MEMORY.md` plus root topic files and
-   exit 1 makes **safely consolidating the named author-managed file this tick** mandatory. In the
-   Codex native layout it recognises the persistent `memory_summary.md` + `MEMORY.md` pair, checks
-   only the boot-loaded summary, and excludes generated registry and temporary consolidation inputs
-   from the boot budget; `--all` makes those exemptions visible. A Codex exit 1 routes to the
+   The caller must name the runtime layout; this is deliberate because a minimal Codex store missing
+   its summary is indistinguishable from a valid legacy `MEMORY.md`-only store by file shape. Missing
+   or unknown `--layout` fails closed. For Claude, pass `--layout legacy`: the guard checks `MEMORY.md`
+   plus root topic files, and exit 1 makes **safely consolidating the named author-managed file this
+   tick** mandatory. For Codex, pass `--layout codex`: the guard requires the persistent
+   `memory_summary.md` + `MEMORY.md` pair, checks only the boot-loaded summary, and excludes generated
+   registry and temporary consolidation inputs from the boot budget; `--all` makes those exemptions
+   visible. A Codex exit 1 routes to the
    runtime's supported projection-refresh path — **never rewrite the generated registry or temporary
    inputs to clear it**. Because the old summary was already injected before this shell step, refresh
    it and **restart the run; do not continue this session on the replacement file**. For a legacy

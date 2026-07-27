@@ -2664,8 +2664,11 @@ step:
    to a run that already read it successfully, which is why it was breached four times (82KB 07-01,
    83KB 07-12, 122KB 07-16, 74KB 07-18). Pre-flight runs
    [`.claude/scripts/memory-hygiene.sh`](.claude/scripts/memory-hygiene.sh) (read-only). It
-   recognises Codex from its persistent `memory_summary.md` + `MEMORY.md` pair and applies the tight
-   index budget only to the summary; generated registry and temporary input files are
+   requires the caller to declare `--layout legacy` or `--layout codex`; file-shape guessing is
+   forbidden because a minimal Codex store missing its summary is indistinguishable from a valid
+   legacy `MEMORY.md`-only store. Missing or unknown layout fails closed. In Codex mode it requires
+   the persistent `memory_summary.md` + `MEMORY.md` pair and applies the tight index budget only to
+   the summary; generated registry and temporary input files are
    diagnostic-only (`--all` shows the exemption). Legacy/Claude stores retain the original root-file
    checks. A non-zero exit makes repairing the named **boot-loaded** file that tick's mandated hygiene
    item: consolidate an author-managed file safely, or refresh an oversized Codex projection through

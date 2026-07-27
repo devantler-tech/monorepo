@@ -26,17 +26,19 @@
 # rewrite can clobber a sibling instance's concurrent append. Prefer appending.
 #
 # Usage:
-#   memory-hygiene.sh [--dir <memory-dir>] [--threshold-kb N] [--index-kb N]
-#                     [--all] [--quiet]
+#   memory-hygiene.sh --layout <legacy|codex> --dir <memory-dir>
+#                     [--threshold-kb N] [--index-kb N] [--all] [--quiet]
 #
 # By default only OVER-threshold and near-threshold (>=90%) files are listed, so
 # a run-start step stays readable on a store of ~100 files. --all lists every
 # file; --quiet suppresses output entirely and reports via the exit code alone.
 #
-# Layout selection is automatic and fail-closed: Codex is identified by its two
-# persistent projections, memory_summary.md and MEMORY.md. Temporary inputs such
-# as raw_memories.md and rollout_summaries/ are not required. Use --all to show
-# runtime-managed files that were deliberately excluded from the boot budget.
+# Layout selection is explicit and fail-closed. A minimal Codex store missing
+# memory_summary.md is otherwise indistinguishable from a valid legacy
+# MEMORY.md-only store, so guessing from filenames would make one lane fail
+# open. Temporary inputs such as raw_memories.md and rollout_summaries/ are not
+# required. Use --all to show runtime-managed files that were deliberately
+# excluded from the boot budget.
 #
 # Exit codes:
 #   0  every boot-loaded file is within its threshold
@@ -54,6 +56,7 @@ DEFAULT_INDEX_KB=24
 LEGACY_INDEX_FILE="MEMORY.md"
 
 dir=""
+layout=""
 threshold_kb="$DEFAULT_THRESHOLD_KB"
 index_kb="$DEFAULT_INDEX_KB"
 quiet=0
@@ -66,6 +69,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir) dir="${2-}"; shift 2 || exit 2 ;;
+    --layout) layout="${2-}"; shift 2 || exit 2 ;;
     --threshold-kb) threshold_kb="${2-}"; shift 2 || exit 2 ;;
     --index-kb) index_kb="${2-}"; shift 2 || exit 2 ;;
     --all) show_all=1; shift ;;
@@ -74,6 +78,19 @@ while [[ $# -gt 0 ]]; do
     *) echo "memory-hygiene: unknown argument '$1'" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [[ -z "$layout" ]]; then
+  echo "memory-hygiene: --layout <legacy|codex> is required" >&2
+  usage >&2
+  exit 2
+fi
+case "$layout" in
+  legacy|codex) ;;
+  *)
+    echo "memory-hygiene: unsupported layout '$layout' (expected legacy or codex)" >&2
+    exit 2
+    ;;
+esac
 
 # Validate as a STRING first, then normalise to base 10. Bash arithmetic treats
 # a leading zero as octal, so `--threshold-kb 048` would pass the regex and then
@@ -112,31 +129,28 @@ say() { [[ "$quiet" -eq 1 ]] || printf '%s\n' "$*"; }
 # them to the run-start budget would report a permanent, un-actionable failure.
 is_archive() { [[ "$(basename "$1")" == *archive* ]]; }
 
-# Codex keeps its bounded run-start projection separate from the generated,
-# searchable registry. INIT/no-op stores guarantee only these two persistent
-# files; raw_memories.md is a temporary consolidation input and rollout
-# summaries may not exist yet.
-layout="legacy"
-index_file="$LEGACY_INDEX_FILE"
-if [[ -f "$dir/memory_summary.md" ]]; then
+# The caller supplies the unambiguous runtime signal. Codex keeps its bounded
+# run-start projection separate from the generated searchable registry.
+# INIT/no-op stores guarantee only these two persistent files; raw_memories.md
+# is a temporary consolidation input and rollout summaries may not exist yet.
+if [[ "$layout" == "codex" ]]; then
+  if [[ ! -f "$dir/memory_summary.md" ]]; then
+    echo "memory-hygiene: incomplete Codex memory layout: missing memory_summary.md" >&2
+    exit 2
+  fi
   if [[ ! -f "$dir/$LEGACY_INDEX_FILE" ]]; then
     echo "memory-hygiene: incomplete Codex memory layout: missing $LEGACY_INDEX_FILE" >&2
     exit 2
   fi
-  layout="codex"
   index_file="memory_summary.md"
-elif [[ -f "$dir/raw_memories.md" || -d "$dir/rollout_summaries" ]]; then
-  echo "memory-hygiene: incomplete Codex memory layout: missing memory_summary.md" >&2
-  exit 2
-fi
-
-if [[ "$layout" == "codex" ]]; then
   summary_version=""
   IFS= read -r summary_version < "$dir/$index_file" || true
   if [[ "$summary_version" != "v1" ]]; then
     echo "memory-hygiene: malformed Codex boot projection: $index_file (expected v1 header)" >&2
     exit 2
   fi
+else
+  index_file="$LEGACY_INDEX_FILE"
 fi
 
 is_runtime_managed_source() {

@@ -52,9 +52,12 @@ mkcodexsummary() {
 }
 
 # Capture the exit code explicitly: a bare `run ...` call must not let the tool's
-# (expected) non-zero status trip `set -e` and abort the suite mid-way.
-run() { local rc=0; "$tool" "$@" >/dev/null 2>&1 || rc=$?; echo "$rc"; }
-run_out() { "$tool" "$@" 2>&1 || true; }
+# (expected) non-zero status trip `set -e` and abort the suite mid-way. Most
+# fixtures are legacy stores; Codex fixtures use the explicit runtime signal.
+run() { local rc=0; "$tool" --layout legacy "$@" >/dev/null 2>&1 || rc=$?; echo "$rc"; }
+run_out() { "$tool" --layout legacy "$@" 2>&1 || true; }
+run_codex() { local rc=0; "$tool" --layout codex "$@" >/dev/null 2>&1 || rc=$?; echo "$rc"; }
+run_out_codex() { "$tool" --layout codex "$@" 2>&1 || true; }
 
 # ---------------------------------------------------------------------------
 # A store comfortably inside budget passes.
@@ -113,8 +116,8 @@ mkcodexsummary "$store/memory_summary.md" 5
 mkfile "$store/MEMORY.md" 80
 mkfile "$store/raw_memories.md" 200
 mkfile "$store/future_registry.md" 120
-check "Codex gates the boot projection, not generated sources" "0" "$(run --dir "$store")"
-out="$(run_out --dir "$store" --all)"
+check "Codex gates the boot projection, not generated sources" "0" "$(run_codex --dir "$store")"
+out="$(run_out_codex --dir "$store" --all)"
 if grep -q "skip.*MEMORY.md.*runtime-managed" <<<"$out" &&
    grep -q "skip.*raw_memories.md.*runtime-managed" <<<"$out" &&
    grep -q "skip.*future_registry.md.*runtime-managed" <<<"$out"; then
@@ -130,8 +133,8 @@ mkdir -p "$store/rollout_summaries"
 mkcodexsummary "$store/memory_summary.md" 30
 mkfile "$store/MEMORY.md" 80
 mkfile "$store/raw_memories.md" 200
-check "oversized Codex boot projection exits 1" "1" "$(run --dir "$store")"
-out="$(run_out --dir "$store")"
+check "oversized Codex boot projection exits 1" "1" "$(run_codex --dir "$store")"
+out="$(run_out_codex --dir "$store")"
 if grep -q "OVER.*memory_summary.md" <<<"$out" &&
    ! grep -q "OVER.*MEMORY.md\\|OVER.*raw_memories.md" <<<"$out"; then
   pass "Codex failure names only the boot projection"
@@ -152,7 +155,7 @@ store="$tmp/codex-minimal"
 mkdir -p "$store"
 mkcodexsummary "$store/memory_summary.md" 5
 mkfile "$store/MEMORY.md" 80
-check "minimal Codex layout does not require temporary inputs" "0" "$(run --dir "$store")"
+check "minimal Codex layout does not require temporary inputs" "0" "$(run_codex --dir "$store")"
 
 # A Codex layout still needs the exact supported projection schema. Unknown
 # content must not turn the generated-source exemptions into a fail-open path.
@@ -160,8 +163,8 @@ store="$tmp/codex-malformed-summary"
 mkdir -p "$store"
 printf 'not-a-version\n' > "$store/memory_summary.md"
 mkfile "$store/MEMORY.md" 80
-check "malformed Codex boot projection exits 2" "2" "$(run --dir "$store")"
-out="$(run_out --dir "$store")"
+check "malformed Codex boot projection exits 2" "2" "$(run_codex --dir "$store")"
+out="$(run_out_codex --dir "$store")"
 if grep -qi "malformed.*memory_summary.md" <<<"$out"; then
   pass "malformed Codex projection is named"
 else
@@ -174,27 +177,43 @@ store="$tmp/codex-unsupported-summary"
 mkdir -p "$store"
 printf 'v2\n' > "$store/memory_summary.md"
 mkfile "$store/MEMORY.md" 80
-check "unsupported Codex boot projection schema exits 2" "2" "$(run --dir "$store")"
+check "unsupported Codex boot projection schema exits 2" "2" "$(run_codex --dir "$store")"
 
 # Either persistent projection missing from an otherwise Codex-shaped store is
 # broken state, not a healthy legacy store.
 store="$tmp/codex-missing-memory"
 mkdir -p "$store"
 mkcodexsummary "$store/memory_summary.md" 5
-check "Codex layout without MEMORY.md exits 2" "2" "$(run --dir "$store")"
-out="$(run_out --dir "$store")"
+check "Codex layout without MEMORY.md exits 2" "2" "$(run_codex --dir "$store")"
+out="$(run_out_codex --dir "$store")"
 if grep -qi "incomplete Codex.*MEMORY.md" <<<"$out"; then
   pass "missing Codex registry is named"
 else
   fail "missing Codex registry is named (got: $out)"
 fi
 
+# The two persistent files are the minimum healthy Codex shape, so once the
+# summary itself is missing the filesystem cannot distinguish the store from a
+# valid legacy MEMORY.md-only store. The caller must supply the runtime signal.
+store="$tmp/codex-minimal-missing-summary"
+mkdir -p "$store"
+mkfile "$store/MEMORY.md" 5
+explicit_rc=0
+"$tool" --layout codex --dir "$store" >/dev/null 2>&1 || explicit_rc=$?
+check "explicit Codex layout without boot projection exits 2" "2" "$explicit_rc"
+out="$("$tool" --layout codex --dir "$store" 2>&1 || true)"
+if grep -qi "incomplete Codex.*memory_summary.md" <<<"$out"; then
+  pass "explicit Codex layout names missing projection"
+else
+  fail "explicit Codex layout names missing projection (got: $out)"
+fi
+
 store="$tmp/codex-missing-summary"
 mkdir -p "$store/rollout_summaries"
 mkfile "$store/MEMORY.md" 5
 mkfile "$store/raw_memories.md" 10
-check "Codex layout without boot projection exits 2" "2" "$(run --dir "$store")"
-out="$(run_out --dir "$store")"
+check "Codex layout without boot projection exits 2" "2" "$(run_codex --dir "$store")"
+out="$(run_out_codex --dir "$store")"
 if grep -qi "incomplete Codex.*memory_summary.md" <<<"$out"; then
   pass "missing Codex projection is named"
 else
@@ -236,7 +255,19 @@ check "store is unmodified by a failing run" "$before" "$after"
 # run-loop step can tell "misconfigured" from "consolidate now".
 # ---------------------------------------------------------------------------
 check "missing --dir exits 2" "2" "$(run)"
+missing_layout_rc=0
+"$tool" --dir "$tmp/under" >/dev/null 2>&1 || missing_layout_rc=$?
+check "missing --layout exits 2" "2" "$missing_layout_rc"
+out="$("$tool" --dir "$tmp/under" 2>&1 || true)"
+if grep -q -- "--layout.*required" <<<"$out"; then
+  pass "missing layout names the required runtime signal"
+else
+  fail "missing layout names the required runtime signal (got: $out)"
+fi
 check "nonexistent dir exits 2" "2" "$(run --dir "$tmp/does-not-exist")"
+unknown_layout_rc=0
+"$tool" --layout other --dir "$tmp/under" >/dev/null 2>&1 || unknown_layout_rc=$?
+check "unknown layout exits 2" "2" "$unknown_layout_rc"
 check "non-numeric threshold exits 2" "2" "$(run --dir "$tmp/under" --threshold-kb abc)"
 check "zero threshold exits 2" "2" "$(run --dir "$tmp/under" --threshold-kb 0)"
 check "unknown flag exits 2" "2" "$(run --dir "$tmp/under" --bogus)"
@@ -267,7 +298,7 @@ exit 1
 SHIM
 chmod +x "$shim/find"
 shim_rc=0
-PATH="$shim:$PATH" "$tool" --dir "$tmp/under" >/dev/null 2>&1 || shim_rc=$?
+PATH="$shim:$PATH" "$tool" --layout legacy --dir "$tmp/under" >/dev/null 2>&1 || shim_rc=$?
 check "enumeration failure fails CLOSED (exit 2, not 0)" "2" "$shim_rc"
 
 # ---------------------------------------------------------------------------
@@ -306,7 +337,7 @@ check "--all does not change the exit code" "1" "$(run --dir "$store" --all)"
 # --quiet suppresses the report but preserves the exit code (for run-loop use).
 # ---------------------------------------------------------------------------
 check "--quiet preserves the failing exit code" "1" "$(run --dir "$tmp/over" --quiet)"
-if [[ -z "$("$tool" --dir "$tmp/over" --quiet 2>&1 || true)" ]]; then
+if [[ -z "$("$tool" --layout legacy --dir "$tmp/over" --quiet 2>&1 || true)" ]]; then
   pass "--quiet emits no output"
 else
   fail "--quiet emits no output"
