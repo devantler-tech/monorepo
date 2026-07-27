@@ -2670,10 +2670,12 @@ step:
    the persistent `memory_summary.md` + `MEMORY.md` pair and applies the tight index budget only to
    the summary; generated registry and temporary input files are
    diagnostic-only (`--all` shows the exemption). Legacy/Claude stores retain the original root-file
-   checks. A non-zero exit makes repairing the named **boot-loaded** file that tick's mandated hygiene
+   checks. An exit 1 makes repairing the over-threshold boot-loaded file that tick's mandated hygiene
    item: consolidate an author-managed file safely, or refresh an oversized Codex projection through
-   the runtime. A Codex run must then **restart**, because the old projection was already injected
-   before the shell gate ran; it must not continue on the replacement file. Never rewrite Codex's
+   the runtime. An exit 2 indicates a usage, malformed-layout, missing, or unreadable-store error;
+   resolve it before proceeding. After a Codex projection refresh for exit 1, **restart the run**,
+   because the old projection was already injected before the shell gate ran; it must not continue on
+   the replacement file. Never rewrite Codex's
    generated registry or temporary inputs to clear this gate. **Memory is a MULTI-WRITER
    surface** — several instances append per hour, so re-read immediately before writing, prefer a
    **non-clobbering append** over a whole-file rewrite, and **stand down rather than clobber** when a

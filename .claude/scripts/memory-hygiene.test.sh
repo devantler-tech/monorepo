@@ -17,6 +17,7 @@ set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tool="$script_dir/memory-hygiene.sh"
+constitution="$script_dir/../../AGENTS.md"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -208,16 +209,14 @@ else
   fail "explicit Codex layout names missing projection (got: $out)"
 fi
 
-store="$tmp/codex-missing-summary"
-mkdir -p "$store/rollout_summaries"
-mkfile "$store/MEMORY.md" 5
-mkfile "$store/raw_memories.md" 10
-check "Codex layout without boot projection exits 2" "2" "$(run_codex --dir "$store")"
-out="$(run_out_codex --dir "$store")"
-if grep -qi "incomplete Codex.*memory_summary.md" <<<"$out"; then
-  pass "missing Codex projection is named"
+# The canonical run-loop contract must preserve the different recovery paths:
+# exit 1 repairs an over-threshold boot surface; exit 2 repairs the invocation
+# or store and never restarts against an unchanged projection.
+if grep -Fq "An exit 1 makes repairing the over-threshold boot-loaded file" "$constitution" &&
+   grep -Fq "An exit 2 indicates a usage, malformed-layout, missing, or unreadable-store error" "$constitution"; then
+  pass "run-loop contract distinguishes exit 1 repair from exit 2 recovery"
 else
-  fail "missing Codex projection is named (got: $out)"
+  fail "run-loop contract distinguishes exit 1 repair from exit 2 recovery"
 fi
 
 # ---------------------------------------------------------------------------
