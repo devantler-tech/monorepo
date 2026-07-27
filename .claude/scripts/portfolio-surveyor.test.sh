@@ -181,6 +181,62 @@ grep -Fq 'do **not** call' "${surveyor}" ||
   fail "surveyor still permits heavy dependency-PR deepening"
 grep -Fq 'count it against' "${surveyor}" ||
   fail "surveyor may still turn dependency automation into operate work"
+# Issue-side automation ownership (#2349): Renovate's Dependency Dashboard is an open issue by
+# design and will head oldest-first forever unless the surveyor excludes exact author identities
+# the same way it already does for dependency PRs. Match author only — never title/labels/age.
+grep -Fq 'Short-circuit dependency-automation ISSUES' "${surveyor}" ||
+  fail "surveyor does not short-circuit dependency-automation issues as no-action"
+grep -Fq 'Exclude them from every oldest-actionable' "${surveyor}" ||
+  fail "surveyor may still rank a Renovate Dependency Dashboard as oldest-actionable"
+grep -Fq 'platform#313' "${surveyor}" ||
+  fail "surveyor does not pin the live Dependency Dashboard counter-example"
+grep -Fq 'Never select, triage-as-work, or close' "${surveyor}" ||
+  fail "surveyor may still close or triage an automation-authored issue"
+grep -Fq 'author,labels,updatedAt,url,assignees' "${surveyor}" ||
+  fail "surveyor open-issue search omits author, so the issue-side filter cannot run"
+grep -Fq 'Drop issues authored by the exact dependency-' "${surveyor}" ||
+  fail "surveyor type sweeps may still rank automation-authored issues"
+grep -Fq '.user.login, .title,' "${surveyor}" ||
+  fail "surveyor type-sweep jq omits the author column the issue-side filter needs"
+# Pin every spelling of the identity on BOTH surfaces, and pin the author-only prohibition itself:
+# without these a later edit could drop one identity, or re-admit title/label/age matching, while
+# the descriptive prose still reads correct and every other assertion still passes.
+for identity in 'renovate[bot]' 'dependabot[bot]' 'app/renovate' 'app/dependabot'; do
+  grep -Fq "${identity}" "${surveyor}" ||
+    fail "surveyor omits automation identity: ${identity}"
+  grep -Fq "${identity}" "${constitution}" ||
+    fail "constitution omits automation identity: ${identity}"
+done
+grep -Fq 'Match **author login only** — never the title' "${surveyor}" ||
+  fail "surveyor does not enforce exact author-only matching"
+grep -Fq 'labels, or age' "${surveyor}" ||
+  fail "surveyor does not prohibit label/age matching"
+grep -Fq 'dependency PRs *and* issues are AUTOMATION-OWNED' "${constitution}" ||
+  fail "constitution does not extend the automation-owned carve-out to issues"
+grep -Fq 'Never select, triage-as-work, or close an automation-authored' "${constitution}" ||
+  fail "constitution may still let agents close a Renovate Dependency Dashboard"
+# The skip list in *Drain oldest-first* is a CLOSED set: "skip ONLY when one of these is true".
+# A carve-out that forbids selecting an automation-authored issue without adding it to that set
+# leaves the contract self-contradictory — told to claim the oldest issue and forbidden to work it.
+# Pin the exclusion in BOTH normative selection surfaces, and pin the author-vs-label distinction
+# that keeps it from colliding with "an `automation` label is NOT a valid skip reason".
+grep -Fq 'authored by an exact dependency-automation identity' "${constitution}" ||
+  fail "constitution skip list omits the automation-author exclusion (f)"
+grep -Fq 'never actionable at all' "${constitution}" ||
+  fail "constitution does not state that an automation-authored issue is never actionable"
+grep -Fq 'keys on the AUTHOR, never the `automation` label' "${constitution}" ||
+  fail "constitution does not separate the automation AUTHOR exclusion from the automation LABEL non-reason"
+grep -Fq 'authored by an exact dependency-automation identity' "${maintenance_skill}" ||
+  fail "run loop's select step omits the automation-author exclusion"
+grep -Fq 'never actionable at all' "${maintenance_skill}" ||
+  fail "run loop does not state that an automation-authored issue is never actionable"
+# product-engineering re-enumerates the same closed skip set, so it drifts into the identical
+# contradiction unless (f) is stated there too. (The other files that mention oldest-actionable
+# merely defer to the contract and enumerate nothing, so they need no copy.)
+grep -Fq 'authored by an exact dependency-automation' "${product_engineering_skill}" ||
+  fail "advance playbook's skip set omits the automation-author exclusion (f)"
+grep -Fq 'never actionable at all' "${product_engineering_skill}" ||
+  fail "advance playbook does not state that an automation-authored issue is never actionable"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||

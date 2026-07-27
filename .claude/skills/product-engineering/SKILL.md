@@ -126,7 +126,12 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    under-specified to begin, (d) a delivered experiment is waiting for its named future measurement
    date — once that date arrives, measuring it is actionable — or (e) another instance holds a **live
    claim** (assigned **and** branched, within ~2h, no PR yet; contract *Claim protocol*), the only
-   skip reason that expires on its own. **Size, difficulty, a `roadmap`/`enhancement`/
+   skip reason that expires on its own, or (f) it is **authored by an exact dependency-automation
+   identity** (`renovate[bot]` / `dependabot[bot]`, `app/renovate` / `app/dependabot`) — unlike the
+   others that is not a deferral: such an issue is **never actionable at all**, never becomes so, and
+   is never selected, worked, or closed (Renovate's Dependency Dashboard is the standing example).
+   ⚠️ (f) matches the **author**, never the `automation` **label** — see the next sentence.
+   **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
    when the oldest issue is large, **decompose it into a small first child and ship that increment**
    (`Fixes #child`; add `Part of #experiment` when the parent stays open) so the big thing advances
