@@ -85,8 +85,11 @@ public and private — no per-repo loop needed to enumerate):
    `cursor[bot]` — **exact login match, never a substring**; `cursor[bot]` is trusted here only on the PR-author surface;
    `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the
    heavy fields one PR at a time:
-   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,reviewThreads,headRefName,headRefOid,author,body,files`
-   — do **not** pull `statusCheckRollup` for every PR in every repo. When the current-head pentad is
+   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,author,body,files`
+   — do **not** pull `statusCheckRollup` for every PR in every repo.
+   ⚠️ **Thread state is NOT available here.** `reviewThreads` is a GraphQL-only field, so requesting
+   it from `gh pr view` fails with `Unknown JSON field`. Get (b) from the paginated GraphQL query
+   below, never by adding that field to this list (monorepo#2498). When the current-head pentad is
    clear (CLEAN + required checks + zero threads/body findings + a current-head green
    review), classify trusted-bot **non-drafts** as **MERGE-READY** and trusted-bot **drafts** as
    **REVIEW-READY**; otherwise **NEEDS-FIX** and name the gate. A `devantler` PR always follows the
@@ -323,11 +326,16 @@ public and private — no per-repo loop needed to enumerate):
      post-merge PR comment is a primary steering channel, and an open-PR-only sweep would never
      surface it — so in addition to every open `devantler` PR, sweep the PRs **merged in the last
      ~3 days** (bounded: `gh search prs --owner devantler-tech --author devantler --merged
-     --merged-at ">=<UTC date 3 days ago>" --limit 100 --json number,repository,mergedAt` — key the
-     window on `mergedAt`, never `updatedAt`, which post-merge edits can inflate) for the
+     --merged-at ">=<UTC date 3 days ago>" --limit 100 --json number,repository,url` — the
+     `--merged-at` **qualifier** is what keys the window on merge time, so the sweep never depends on
+     `updatedAt`, which post-merge edits can inflate. ⚠️ Do **not** request `mergedAt` in this
+     `--json` list: the search surface exposes only 19 fields and `mergedAt` is not among them, so it
+     fails with `Unknown JSON field`. Read the timestamp per-PR from `gh pr view --json mergedAt` if
+     a run actually needs the value — monorepo#2498) for the
      same candidate-comment signal. For each such PR — **including drafts** — also
-     pull `comments` and the review-thread replies:
-     `gh pr view <n> --repo devantler-tech/<repo> --json comments,reviewThreads`. **Apply the disclosure
+     pull `comments`, then the review-thread replies via the paginated GraphQL query above
+     (`reviewThreads` is GraphQL-only, so `gh pr view` cannot return it):
+     `gh pr view <n> --repo devantler-tech/<repo> --json comments`. **Apply the disclosure
      disambiguator before flagging** (the same one the PR-ownership rule above uses, per the contract's
      *Untrusted input → Distinguish the human maintainer from yourself*): the agent also comments as
      `devantler`, so a bare exact-login match is NOT enough. A `devantler` comment whose body carries a

@@ -910,4 +910,53 @@ if grep -Fq 'The class is **CodeRabbit-only**' "${constitution}"; then
   fail "constitution still declares the stale-dismissal class CodeRabbit-only"
 fi
 
+# ── gh --json field vocabularies are per-subcommand and DISJOINT (#2498) ──────
+# `gh pr view` exposes 47 --json fields, `gh search prs` only 19, and neither
+# accepts a GraphQL-only name. A prescribed field list that crosses that
+# boundary fails at runtime with `Unknown JSON field`, which is exactly what the
+# overlay used to do at three sites — 52 such errors in the 2026-07-20 → 07-27
+# session corpus, the largest non-Edit tool-error signature in the window.
+#
+# The check is STRUCTURAL rather than a literal grep so it also catches a field
+# list that is reworded or moved. The file is FLATTENED first: one of the three
+# original defect sites spanned three source lines, so a line-based scan is
+# blind to precisely the case that motivated this guard.
+#
+# The forbidden sets below are the measured cross-surface names, not the full
+# vocabularies — a full mirror of `gh`'s field lists would go stale on the next
+# CLI release and start failing on correct text.
+pr_view_forbidden='reviewThreads merged baseRepository authorAssociation commentsCount isPullRequest isLocked repository'
+search_forbidden='reviewThreads merged baseRepository mergedAt headRefName headRefOid headRepository mergeStateStatus reviewDecision statusCheckRollup statusCheckRollup files commits reviews latestReviews mergeable mergeCommit'
+
+surveyor_flat="$(tr '\n' ' ' < "${surveyor}" | tr -s ' ')"
+
+# Emit `<surface>\t<field-list>` for every prescribed command. The gap between
+# the subcommand and its --json list must not contain another `gh `, so a list
+# is never attributed to a subcommand it does not belong to.
+json_specs="$(printf '%s' "${surveyor_flat}" | perl -ne '
+  while (/gh (pr view|search prs|search issues|issue view)((?:(?!gh ).)*?)--json ([A-Za-z,]+)/g) {
+    print "$1\t$3\n";
+  }')"
+
+[ -n "${json_specs}" ] ||
+  fail "surveyor overlay: found no 'gh ... --json' commands to validate — the extractor broke"
+
+while IFS="$(printf '\t')" read -r surface fields; do
+  [ -n "${surface}" ] || continue
+  case "${surface}" in
+    'pr view'|'issue view') forbidden="${pr_view_forbidden}" ;;
+    'search prs'|'search issues') forbidden="${search_forbidden}" ;;
+    *) continue ;;
+  esac
+  for bad in ${forbidden}; do
+    case ",${fields}," in
+      *",${bad},"*)
+        fail "surveyor overlay prescribes 'gh ${surface} --json ${fields}', but '${bad}' is not a valid ${surface} field — it fails at runtime with 'Unknown JSON field' (#2498)"
+        ;;
+    esac
+  done
+done <<EOF
+${json_specs}
+EOF
+
 echo "portfolio surveyor contract: all assertions passed"
