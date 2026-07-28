@@ -42,6 +42,12 @@ S_JWT="${S_JWTHEAD}NiJ9.${S_JWTTAIL}"
 S_AWS=$(_j 'AKI' 'AIOSFODNN7EXAMPLE')
 S_SLACK=$(_j 'xox' 'b-1234567890-abcdefghijklmno')
 S_GEN='s3cr3t''value0123456789abcdef'
+# A value that itself ends in '=' — base64 padding is the everyday case. The
+# assignment-stripping sed ran twice, so the value's own trailing '=' was eaten
+# as a second wrapper, leaving an empty string that `grep -E .` then dropped:
+# the credential disappeared from the table entirely, which is a false negative
+# in a leak detector rather than a cosmetic bug.
+S_GENPAD='c3ZhbHVl''MDEyMzQ1Njc4OWFiY2R='
 
 # Replace placeholders in a fixture file with the assembled samples.
 subst() {
@@ -55,6 +61,7 @@ subst() {
       -e "s|__JWTTAIL__|$S_JWTTAIL|g" \
       -e "s|__JWTHEAD__|$S_JWTHEAD|g" -e "s|__JWT__|$S_JWT|g" \
       -e "s|__AWS__|$S_AWS|g"     -e "s|__SLACK__|$S_SLACK|g" \
+      -e "s|__GENPAD__|$S_GENPAD|g" \
       -e "s|__GEN__|$S_GEN|g" "$_f" && rm -f "$_f.bak"
   done
 }
@@ -67,6 +74,7 @@ ex() { printf '%s' "$1" | sed \
       -e "s|__JWTTAIL__|$S_JWTTAIL|g" \
       -e "s|__JWTHEAD__|$S_JWTHEAD|g" -e "s|__JWT__|$S_JWT|g" \
       -e "s|__AWS__|$S_AWS|g"     -e "s|__SLACK__|$S_SLACK|g" \
+      -e "s|__GENPAD__|$S_GENPAD|g" \
       -e "s|__GEN__|$S_GEN|g"; }
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -393,6 +401,10 @@ parity_case "aws"        "leak __AWS__" "__AWS__"
 parity_case "slack"      "leak __SLACK__" "__SLACK__"
 parity_case "jwt"        "leak __JWT__" "__JWTTAIL__"
 parity_case "generic"    "config token=__GEN__" "__GEN__"
+# A value ending in '=' must survive assignment-stripping. Stripping the wrapper
+# twice consumed the value's own padding and emptied the line, so the leak was
+# reported as clean.
+parity_case "generic_padded" "config secret=__GENPAD__" "__GENPAD__"
 
 # Codex image tools persist rendered images as very large `data:` strings in
 # custom tool outputs. Those strings are encoded binary, not transcript text;
@@ -1911,6 +1923,23 @@ subst "$FIX/credwrap/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credwrap" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
 check "wrapped real token locates as its true shape" "$OUT" "shape=github-token"
+
+# One raw field can carry SEVERAL assignments, and grep's leftmost-longest rule
+# returns the whole run as a single match. The table splits on `;&|` before
+# classifying, so it counts the high-signal key; the locator did not, so it
+# stripped only the first wrapper and reported the remainder as
+# `generic-assignment`. That is the locator-disagrees-with-its-own-table failure
+# the classifier comment calls worse than no locator: the operator is told to
+# look for a weak generic where an AWS key is sitting.
+mkdir -p "$FIX/credcompound"
+cat > "$FIX/credcompound/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"env token=abcdefghijk;AWS_ACCESS_KEY=__AWS__ tail"}]}}
+EOF
+subst "$FIX/credcompound/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credcompound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "compound assignment locates the high-signal key, not just generic" \
+      "$OUT" "shape=aws-access-key-id"
 
 # Repeated matches at ONE location collapse to `Nx` with the count printed, not
 # dropped. Measured 171 locator lines for 100 distinct locations on a 1-day

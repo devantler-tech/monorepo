@@ -244,7 +244,13 @@ emit_credential_hits() {
         record=$(printf '%s' "$raw" | jq -r '.type // "malformed"' 2>/dev/null \
                  | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
         [ -n "$record" ] || record=malformed
+        # Split on `;&|` exactly as the TABLE does before classifying. One raw
+        # field can carry several assignments, and grep's leftmost-longest rule
+        # returns the whole run as a single match — so without this the locator
+        # strips only the first wrapper and reports `generic-assignment` for a
+        # field the table counts as a high-signal key.
         printf '%s' "$raw" | grep -haoiE "$CRED_TABLE_RE" \
+          | tr ';&|' '\n' | grep -v '^$' \
           | while IFS= read -r match || [ -n "$match" ]; do
               # Classify to a SHAPE NAME and discard the value immediately.
               # These mirror the TABLE's shape_of() including its LENGTH bounds,
@@ -1434,8 +1440,9 @@ if want safety; then
         | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
         | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
         | tr ';&|' '\n' | grep -v '^$' \
-        | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
-        -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
+        | sed -E -e 's/^[^A-Za-z0-9_-]//' \
+        -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
+        -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
         -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
         | grep -E . | sort -u
     done | sort -u | awk '
