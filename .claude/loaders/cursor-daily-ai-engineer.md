@@ -23,14 +23,20 @@ this file and the deployed automation is a defect to fix here first.
 | Tools | `prComment` — add others only when a run demonstrably needs them |
 | Scope | **Private** automation (not team-scoped) — see *Identity* below |
 
-**Why that cron.** Both machine-local Agentic Engineer lanes now dispatch on **even** hours (see the
-*Cadence & focus* table), so `:30` past **uneven** hours puts Cursor squarely between them — never
-simultaneous with a sibling, and always ~90 minutes after the last local run, so a claim either sibling
-just pushed is already visible when Cursor selects its issue. It also covers the schedule's one local
-gap: with no local Agentic Engineer at 18:00, the 17:30 and 19:30 Cursor runs are what keep the
-16:00 → 20:00 stretch swept. Changing this is a one-field edit in the Automations UI — but keep the
-offset, since a third instance selecting simultaneously with a sibling is exactly what the claim
-protocol cannot arbitrate across lanes.
+**Why that cron.** The machine-local lanes split by parity — **Claude on even hours, Codex on uneven
+hours** (see the *Cadence & focus* table) — so `:30` past **uneven** hours drops Cursor into the one
+remaining gap: 30 minutes after the Codex dispatch it follows, and ~38 minutes before the next Claude
+one. No two consecutive dispatches land less than 30 minutes apart, and Cursor is **never simultaneous
+with a sibling**. The 30-minute trail behind Codex is deliberate and sufficient: the claim protocol requires a
+claim to be pushed *before* building, within the first minutes of a run, so a claim Codex just took is
+already visible when Cursor selects its issue.
+
+**This cron did not change when the local lanes densified — do not re-paste the automation for it.**
+The value is still `30 1-23/2 * * *` and the prompt below still describes it correctly; only the
+*rationale* above was rewritten, because the premise it used to give ("both local lanes dispatch on
+even hours", and a local gap at 18:00) is no longer true. Changing the cron is a one-field edit in the
+Automations UI — but keep the offset, since a third instance selecting simultaneously with a sibling is
+exactly what the claim protocol cannot arbitrate across lanes.
 
 ## Instructions (paste this into the automation's prompt)
 
