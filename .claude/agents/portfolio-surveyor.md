@@ -430,7 +430,7 @@ public and private — no per-repo loop needed to enumerate):
 
    Report it on its own line instead, so it stays visible without being ranked as a fire:
 
-   ```
+   ```text
    GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>
    ```
 

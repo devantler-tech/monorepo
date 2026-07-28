@@ -1099,8 +1099,20 @@ grep -Fq 'a GITHUB-MANAGED-SCAN line never makes this false' "${surveyor}" ||
 
 # NEGATIVE CONTROL — the repository's own failing workflow must remain rung-0 breakage. Without this,
 # a future edit could exempt runs wholesale and every assertion above would still pass.
+#
+# Two assertions, because the digest LINE and the CLASSIFICATION are separable: an edit could keep the
+# `CI red on main` template while quietly detaching it from `nothing_on_fire`, and the line's presence
+# alone would not notice.
 grep -Fq '<repo>: CI red on main @<sha>' "${surveyor}" ||
   fail "surveyor must still report a repository-owned failing workflow as CI red on main (#2536)"
+
+grep -Fq 'true only if NO CI red on main' "${surveyor}" ||
+  fail "surveyor must keep a repository-owned red on main driving nothing_on_fire: false — the GitHub-managed exemption must not detach the general rule (#2536)"
+
+# The rung-0 definition in the constitution must carry the same carve-out, or the two surfaces
+# disagree about what preempts a run.
+grep -Fq 'A failing GitHub-*managed* run is NOT breakage' "${constitution}" ||
+  fail "AGENTS.md rung-0 must state that a GitHub-managed run is not breakage (#2536)"
 
 # The exemption must key on the run PATH, not on `event: dynamic`, or it would exempt every future
 # GitHub-managed run type — including actionable ones. `dynamic` stays a main-branch event.
