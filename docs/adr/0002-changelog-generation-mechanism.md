@@ -9,7 +9,7 @@
 
 ## Context
 
-Epic [#2269](https://github.com/devantler-tech/monorepo/issues/2269) requires every portfolio product repo to carry a generated in-repo `CHANGELOG.md`. Release automation must produce that file under PR-protected `main` without fighting branch protection or product-specific CD couplers.
+Epic [#2269](https://github.com/devantler-tech/monorepo/issues/2269) requires a generated in-repo `CHANGELOG.md` for **semver-releasing product repos** (templates, libraries, apps, and other `create-release` / release-please callers). **`homebrew-tap` and the monorepo site are deliberately out of scope** for this epic's first wave: the tap is cask-driven (no product `.releaserc`), and the monorepo docs site has no product release cutter. A later child may add a protection-friendly mechanism for those two if the epic is widened. Release automation must produce the file under PR-protected `main` without fighting branch protection or product-specific CD couplers.
 
 ## Decision
 
@@ -21,7 +21,7 @@ Epic [#2269](https://github.com/devantler-tech/monorepo/issues/2269) requires ev
 | **`actions`** | release-please | Already ships `CHANGELOG.md` this way |
 | **KSail** | semantic-release cuts tags for GoReleaser; `CHANGELOG.md` lands through a sequenced protection-friendly PR path that does **not** dual-own semver | Preserves `feat!` → major and Homebrew cask CD |
 | **World at Ruin** | semantic-release draft-release → CD publish; `CHANGELOG.md` via the same protection-friendly PR path | Preserves immutable-release ordering (tag → attach → publish) |
-| **homebrew-tap / monorepo site** | Out of scope for product semver changelogs unless a later child says otherwise | Tap is cask-driven; monorepo has no product `.releaserc` |
+| **homebrew-tap / monorepo site** | **Out of scope** for [#2269](https://github.com/devantler-tech/monorepo/issues/2269) until a later child widens the epic | Tap is cask-driven; monorepo site has no product `.releaserc` — not an unimplemented gap |
 
 ### Hard constraints
 
