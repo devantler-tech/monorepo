@@ -252,21 +252,14 @@ report "a file:// origin is not accepted as GitHub (apply refused)" \
 report "the file:// refusal is the unverifiable-origin one, not a slug match" \
   "$(grep -qF 'no GitHub origin' <<<"$out" && echo yes || echo no)" "out=$out"
 
-# --- 7i. a differently-cased path is still the same repository -------------
-# On a case-insensitive volume `pwd -P` keeps the caller's casing while git
-# reports its own, so a string compare would abort a perfectly valid sweep.
+# NOTE — the repository-root check compares filesystem identity (`-ef`) rather
+# than strings, so two spellings of one directory cannot abort a valid sweep.
+# There is deliberately NO assertion for it: on this host `cd "$cased" && pwd -P`
+# returns the canonical on-disk casing, so the caller's casing never survives to
+# diverge from git's, and every candidate test passed against the OLD string
+# compare too. An assertion that cannot fail is worse than none — it reads as
+# proof. `-ef` ships as a correctness improvement, unproven by test.
 git -C "$slugwork" remote set-url origin "https://github.com/devantler-tech/does-not-exist-2531.git"
-cased="$(dirname "$slugwork")/$(basename "$slugwork" | tr '[:lower:]' '[:upper:]')"
-manifest="$tmp/manifest7i"
-: >"$manifest"
-if [ -d "$cased" ]; then
-  out="$("$helper" "$cased" "ksail" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
-  report "a differently-cased path reaches the ORIGIN check, not the root abort" \
-    "$(grep -qF 'does not match the checkout' <<<"$out" && echo yes || echo no)" "out=$out"
-else
-  report "a differently-cased path reaches the ORIGIN check, not the root abort" "yes" \
-    "skipped — case-sensitive volume, the string compare cannot diverge here"
-fi
 
 # --- 7e. a diverging PUSH destination is refused ---------------------------
 # The keep-set is fetched from the fetch url, but `git push origin --delete`
