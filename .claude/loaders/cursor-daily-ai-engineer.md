@@ -26,8 +26,8 @@ this file and the deployed automation is a defect to fix here first.
 **Why that cron.** The machine-local lanes split by parity — **Claude on even hours, Codex on uneven
 hours** (see the *Cadence & focus* table) — so `:30` past **uneven** hours drops Cursor into the one
 remaining gap: 30 minutes after the Codex dispatch it follows, and ~38 minutes before the next Claude
-one. The three lanes end up 30–50 minutes apart all day, and Cursor is **never simultaneous with a
-sibling**. The 30-minute trail behind Codex is deliberate and sufficient: the claim protocol requires a
+one. No two consecutive dispatches land less than 30 minutes apart, and Cursor is **never simultaneous
+with a sibling**. The 30-minute trail behind Codex is deliberate and sufficient: the claim protocol requires a
 claim to be pushed *before* building, within the first minutes of a run, so a claim Codex just took is
 already visible when Cursor selects its issue.
 

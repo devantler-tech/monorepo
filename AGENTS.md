@@ -2519,8 +2519,9 @@ invariant to know that whatever else is running, it did not start when you did.
 | **Codex** — `codex/*`, uneven hours | 01, 03, 05, 09, 11, 13, 15, 17, 21, 23 | 07, 19 |
 | **Cursor** — `cursor/*`, uneven hours at `:30` | 01:30 … 23:30 | — |
 
-Each lane dispatches **every 2 hours**, uniformly, and the three lanes interleave 30–50 minutes apart
-(the Claude runtime adds a few minutes of dispatch jitter, which only widens the gaps). The Agent
+Each lane dispatches **every 2 hours**, uniformly, and the three lanes interleave so that consecutive
+dispatches are **never less than 30 minutes apart** (the Claude runtime adds a few minutes of dispatch
+jitter, which only widens the gaps). The Agent
 Improver keeps its 4×/day rotation, alternating lanes (00 Claude, 07 Codex, 12 Claude, 19 Codex).
 This table covers the two scheduled engineering roles only — spend stewardship has no dispatch slot
 of its own (see *Spend contract*).
@@ -2533,9 +2534,7 @@ the 7 days to 2026-07-28 (n=26 completed Claude dispatches): **median 51 min, p7
 longer than 60 minutes, max 377**. So a sibling lane is very often still working when you start.
 *Claim protocol* rule 4 records that claim arbitration does **not** work across lanes — each instance
 writes its own namespace, so both pushes succeed and both believe they won. Scan `codex/*`,
-`claude/*` **and** `cursor/*` branches and open PRs before claiming, always. (The previous schedule
-put two local instances on the same hour **four** times a day — 00, 06, 12 and 14 — while this
-paragraph warned about only one of them; the invariant above is what retires that whole class.)
+`claude/*` **and** `cursor/*` branches and open PRs before claiming, always.
 **Same-lane overlap is expected, and it IS arbitrated.** With 2-hour spacing and ~12% of runs
 exceeding 120 minutes, your own lane's next dispatch can start before you finish. That case is safe
 by construction — same namespace, same deterministic branch name, and a non-forced push is refused
