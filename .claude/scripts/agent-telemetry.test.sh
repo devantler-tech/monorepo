@@ -219,6 +219,15 @@ check "missing improver pointer is explicit" "$OUT" "UNKNOWN: codex improver sch
 mv "$FIX/codex/automations/agent-improver/automation.toml.missing" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
+# A matching value without the runtime's own write marker cannot prove that a
+# dispatch occurred after the edit, so persistence remains explicitly unknown.
+sed -i.bak '/^updated_at = /d' \
+  "$FIX/codex/automations/agent-improver/automation.toml"
+OUT=$(run --section drift)
+check "missing runtime marker is explicit" "$OUT" "UNKNOWN: codex improver change marker missing"
+mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
+   "$FIX/codex/automations/agent-improver/automation.toml"
+
 # A persisted runtime rewrite must report the concrete expected/actual delta.
 sed -i.bak 's/BYHOUR=7,19/BYHOUR=6,18/' \
   "$FIX/codex/automations/agent-improver/automation.toml"

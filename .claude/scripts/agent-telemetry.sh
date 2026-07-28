@@ -1831,7 +1831,7 @@ if want drift; then
   }
 
   compare_schedule() {
-    local label="$1" expected="$2" actual="$3" file="$4" marker="${5:-}"
+    local label="$1" expected="$2" actual="$3" file="$4" marker="${5:-}" marker_required="${6:-0}"
     if [ ! -f "$file" ]; then
       echo "    UNKNOWN: $label schedule pointer missing"
     elif [ -z "$expected" ]; then
@@ -1843,6 +1843,9 @@ if want drift; then
         "${label}:" "$expected" "$actual" "$marker"
     else
       echo "    ⚠️  DRIFT: $label schedule expected=$expected actual=$actual$marker"
+    fi
+    if [ "$marker_required" -eq 1 ] && [ -z "$marker" ] && [ -f "$file" ]; then
+      echo "    UNKNOWN: $label change marker missing"
     fi
   }
 
@@ -1858,9 +1861,9 @@ if want drift; then
   compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" "$CLAUDE_LOADER"
   compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" "$CLAUDE_IMPROVER_LOADER"
   compare_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
-    "$CODEX_LOADER" "$(codex_change_marker "$CODEX_LOADER")"
+    "$CODEX_LOADER" "$(codex_change_marker "$CODEX_LOADER")" 1
   compare_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
-    "$CODEX_IMPROVER_LOADER" "$(codex_change_marker "$CODEX_IMPROVER_LOADER")"
+    "$CODEX_IMPROVER_LOADER" "$(codex_change_marker "$CODEX_IMPROVER_LOADER")" 1
 
   if [ -n "$CLAUDE_ENGINEER_ACTUAL" ] && [ -n "$CLAUDE_IMPROVER_ACTUAL" ] \
      && [ -n "$CODEX_ENGINEER_ACTUAL" ] && [ -n "$CODEX_IMPROVER_ACTUAL" ]; then
