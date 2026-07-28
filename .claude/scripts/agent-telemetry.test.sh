@@ -2052,6 +2052,29 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credbin" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR=
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
 check "NUL-bearing record still produces a locator" "$OUT" "session=s.jsonl"
 
+# ...and the NUL must be TRANSLATED, not DELETED. Deleting it welds the fragments
+# on either side into one string, so two short token-shaped pieces — neither a
+# credential on its own — become a full-length one that never existed in the
+# transcript. The table (which scans decoded strings with the NUL intact)
+# correctly counts only the real AWS key here; the deleting form ADDITIONALLY
+# emitted `shape=github-token`, a PHANTOM high-signal locator sending an operator
+# to rotate something nobody leaked. That is a false positive in a leak detector,
+# and the same locator-disagrees-with-its-own-table failure this provenance work
+# exists to remove. The AWS key on the same line is load-bearing: it is what makes
+# the OUTER grep select the line at all, so the welded fragments reach the inner
+# scan. (Codex P2 on #2520; reproduced against the real detector before fixing.)
+mkdir -p "$FIX/crednulweld"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"k=%s x %s\000%s y"}]}}\n' \
+  "$S_AWS" "$(_j 'gh' 'p_AAAAAAAA')" 'AAAAAAAAAAAA' > "$FIX/crednulweld/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednulweld" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+# Assert BOTH sides: the real credential is still located, and no phantom appears.
+if printf '%s' "$OUT" | grep -q 'shape=aws-access-key-id' \
+   && ! printf '%s' "$OUT" | grep -q 'shape=github-token'; then
+  ok "NUL is translated, not deleted, so fragments cannot weld into a phantom token"
+else bad "NUL is translated, not deleted, so fragments cannot weld into a phantom token" \
+  "$(printf '%s' "$OUT" | grep -E 'shape=' | head -3)"; fi
+
 # The locator must carry the table's [masked-display] qualifier. Without it the
 # table says "do NOT rotate, it's a tool's own mask" while the locator names a
 # bare high-signal shape — so an operator holding both a masked display and a

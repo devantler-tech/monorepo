@@ -232,12 +232,24 @@ emit_credential_hits() {
   # pass -a, so without it here the row is counted while its locator silently
   # vanishes — provenance disappearing exactly on the odd record most worth
   # inspecting. Reproduced, not assumed (CodeRabbit finding).
-  # `tr -d '\000'` is the second half of the same fix: bash's `read` TRUNCATES a
+  # Translating NUL is the second half of the same fix: bash's `read` TRUNCATES a
   # line at the first NUL, so -a alone gets the line out of grep and then the
   # match is silently lost from $raw before the inner scan ever sees it.
   # (Verified under bash specifically — zsh's read does not truncate, so an
   # interactive spot-check in the wrong shell reports this as working.)
-  grep -naiE "$CRED_TABLE_RE" "$f" 2>/dev/null | tr -d '\000' \
+  # 🔴 It must be `tr '\000' ' '`, NOT `tr -d '\000'`. DELETING the byte welds the
+  # fragments on either side of it into one string, so two short, harmless
+  # token-shaped pieces become a full-length credential that never existed:
+  # `ghp_<8 chars>\0<12 chars>` is correctly NOT counted by the table, but the
+  # deleting form emitted `shape=github-token` for it — a PHANTOM high-signal
+  # locator pointing at a credential nobody ever leaked, which is a false
+  # positive in a leak detector and the exact locator/table disagreement this
+  # provenance work exists to remove. A space is the right replacement because it
+  # appears in no token alphabet and in none of the shape regexes, so it cannot
+  # weld and cannot itself be mistaken for value content; it also keeps `$raw`
+  # parseable for the `jq` call below, which a literal NUL would not.
+  # (Codex P2 on #2520; reproduced before fixing.)
+  grep -naiE "$CRED_TABLE_RE" "$f" 2>/dev/null | tr '\000' ' ' \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
