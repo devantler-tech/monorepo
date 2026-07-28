@@ -1094,8 +1094,20 @@ grep -Fq 'dynamic/github-code-scanning/' "${surveyor}" ||
 grep -Fq 'GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed' "${surveyor}" ||
   fail "surveyor must define the GITHUB-MANAGED-SCAN (NO-ACTION) digest line (#2536)"
 
-grep -Fq 'a GITHUB-MANAGED-SCAN line never makes this false' "${surveyor}" ||
-  fail "surveyor must state that a GitHub-managed scan never sets nothing_on_fire: false (#2536)"
+grep -Fq 'a GITHUB-MANAGED-SCAN (NO-ACTION) line never makes this false' "${surveyor}" ||
+  fail "surveyor must state that a one-off GitHub-managed scan never sets nothing_on_fire: false (#2536)"
+
+# ESCALATION — the exemption covers only the FIRST failure of a streak. A scan still failing on the
+# next scheduled run is ours to repair (build, code-scanning config, or advanced setup), and must not
+# sit behind a permanent NO-ACTION line while security coverage is silently dead.
+grep -Fq 'GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE)' "${surveyor}" ||
+  fail "surveyor must escalate a GitHub-managed scan that fails on consecutive scheduled runs (#2536)"
+
+grep -Fq 'Only the **first** failure of a streak is exempt' "${surveyor}" ||
+  fail "surveyor must bound the GitHub-managed exemption to the first failure of a streak (#2536)"
+
+grep -Fq 'but a (REPEATED — ACTIONABLE) one does' "${surveyor}" ||
+  fail "surveyor must count a repeated GitHub-managed failure against nothing_on_fire (#2536)"
 
 # NEGATIVE CONTROL — the repository's own failing workflow must remain rung-0 breakage. Without this,
 # a future edit could exempt runs wholesale and every assertion above would still pass.

@@ -437,6 +437,27 @@ public and private — no per-repo loop needed to enumerate):
    Keep reporting it every run rather than suppressing it: a *persistent* failure across several
    scheduled ticks is a real signal, and only a line that keeps appearing can show that.
 
+   **A REPEATED failure is actionable, and the exemption must not swallow it.** The single-occurrence
+   case is unactionable because it is GitHub's to fix and it clears itself. A scan that fails again on
+   the *next* scheduled run is a different condition: default setup fails repeatedly when the
+   repository cannot be built or analyzed, or when its language/config no longer suits default setup —
+   all of which are ours to repair, by fixing the build, adjusting the code-scanning configuration, or
+   moving that repository to advanced setup. Left as a permanent `NO-ACTION` line, the portfolio would
+   keep reporting `nothing_on_fire: true` while its security coverage is silently dead — the exact
+   failure the *liveness-first* rule exists to prevent elsewhere in this survey.
+
+   So check the workflow's **previous scheduled run** (`gh api
+   "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?per_page=2"`, comparing the two
+   most recent). If **both** concluded `failure`, escalate — it counts toward `nothing_on_fire` and is
+   reported as actionable, naming the run of the streak's first failure so its age is visible:
+
+   ```text
+   GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> failing since <YYYY-MM-DD> (<n> consecutive scheduled runs)
+   ```
+
+   Only the **first** failure of a streak is exempt. That keeps the fix from becoming a way to ignore
+   broken security scanning indefinitely, which is a worse outcome than the false rung-0 it replaced.
+
    ⚠️ **Match on the `path` prefix, never on `event: dynamic` alone.** `dynamic` stays in the
    main-branch event list above because it is how GitHub-managed runs legitimately reach `main`, so
    keying the exemption on the event would exempt future managed run types wholesale — including any
@@ -568,7 +589,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken; a GITHUB-MANAGED-SCAN line never makes this false
+nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken; a GITHUB-MANAGED-SCAN (NO-ACTION) line never makes this false, but a (REPEATED — ACTIONABLE) one does
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
@@ -580,7 +601,8 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
-- GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `path` starts `dynamic/github-code-scanning/`: no workflow file to fix, not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire
+- GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `path` starts `dynamic/github-code-scanning/`: no workflow file to fix, not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only
+- GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> failing since <YYYY-MM-DD> (<n> consecutive scheduled runs)   # two+ consecutive scheduled failures: ours to repair (build, code-scanning config, or move to advanced setup) — DOES count against nothing_on_fire
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
