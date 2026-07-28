@@ -2509,39 +2509,42 @@ schedule; see *Agentic engineering plugin contract*). Times are the agent host's
 runtime-local scheduler entries are **thin pointers that must match this table**; when the two
 disagree, the scheduler is the defect — reconcile it there, per *Agent definition locations*.
 
-| Hour | Codex — `codex/*` | Claude — `claude/*` |
+**The parity invariant IS the schedule: Claude takes EVEN hours, Codex takes UNEVEN hours, and no two
+local instances ever share a dispatch hour.** Read your lane's row for your own slots; read the
+invariant to know that whatever else is running, it did not start when you did.
+
+| Lane | Agentic Engineer | Agent Improver |
 |---|---|---|
-| 00:00 | Agentic Engineer | Agent Improver |
-| 02:00 | — | Agentic Engineer |
-| 04:00 | Agentic Engineer | — |
-| 06:00 | Agent Improver | Agentic Engineer |
-| 08:00 | Agentic Engineer | — |
-| 10:00 | — | Agentic Engineer |
-| 12:00 | Agentic Engineer | Agent Improver |
-| 14:00 | **Agentic Engineer** | **Agentic Engineer** |
-| 16:00 | — | Agentic Engineer |
-| 18:00 | Agent Improver | — |
-| 20:00 | Agentic Engineer | — |
-| 22:00 | — | Agentic Engineer |
+| **Claude** — `claude/*`, even hours | 02, 04, 06, 08, 10, 14, 16, 18, 20, 22 | 00, 12 |
+| **Codex** — `codex/*`, uneven hours | 01, 03, 05, 09, 11, 13, 15, 17, 21, 23 | 07, 19 |
+| **Cursor** — `cursor/*`, uneven hours at `:30` | 01:30 … 23:30 | — |
 
-The **Cursor cloud instance** (`cursor/*`) is unchanged: Agentic Engineer at `:30` past uneven hours,
-scheduled server-side. The Agent Improver lands on a clean 6-hourly rotation across the two local
-lanes (00, 06, 12, 18). This table covers the two scheduled engineering roles only — spend
-stewardship has no dispatch slot of its own (see *The FinOps engineer*).
+Each lane dispatches **every 2 hours**, uniformly, and the three lanes interleave 30–50 minutes apart
+(the Claude runtime adds a few minutes of dispatch jitter, which only widens the gaps). The Agent
+Improver keeps its 4×/day rotation, alternating lanes (00 Claude, 07 Codex, 12 Claude, 19 Codex).
+This table covers the two scheduled engineering roles only — spend stewardship has no dispatch slot
+of its own (see *Spend contract*).
 
-**Two properties of this table change how you plan a run.**
-⚠️ **14:00 dispatches BOTH local Agentic Engineer lanes simultaneously.** *Claim protocol* rule 4
-records that claim arbitration does **not** work across lanes — each instance writes its own
-namespace, so both pushes succeed and both believe they won. A simultaneous start is therefore the
-portfolio's highest duplicate-work risk. On a 14:00 run, scan `codex/*` **and** `claude/*` branches
-and open PRs before claiming, not just your own namespace.
-**18:00 is the longest Agentic Engineer gap:** 16:00 → 20:00 is four hours covered only by the Cursor
-lane's 17:30 and 19:30 runs, so a watch item deferred at 16:00 waits longer than a usual tick.
+**Two properties of this schedule change how you plan a run.**
+⚠️ **A sibling being mid-run is the NORMAL case — scan cross-lane on EVERY run, never at one special
+hour.** The parity invariant removes simultaneous *starts*, which is the window where two instances
+select the same issue; it does **not** remove overlap, because runs outlive their hour. Measured over
+the 7 days to 2026-07-28 (n=26 completed Claude dispatches): **median 51 min, p75 79 min, 46% ran
+longer than 60 minutes, max 377**. So a sibling lane is very often still working when you start.
+*Claim protocol* rule 4 records that claim arbitration does **not** work across lanes — each instance
+writes its own namespace, so both pushes succeed and both believe they won. Scan `codex/*`,
+`claude/*` **and** `cursor/*` branches and open PRs before claiming, always. (The previous schedule
+put two local instances on the same hour **four** times a day — 00, 06, 12 and 14 — while this
+paragraph warned about only one of them; the invariant above is what retires that whole class.)
+**Same-lane overlap is expected, and it IS arbitrated.** With 2-hour spacing and ~12% of runs
+exceeding 120 minutes, your own lane's next dispatch can start before you finish. That case is safe
+by construction — same namespace, same deterministic branch name, and a non-forced push is refused
+(see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim branch.
 
-**Each Agentic Engineer instance is dispatched every 2–6 hours** depending on its slot above. That
-interval is the gap **between runs, not a per-run time
+**Each Agentic Engineer instance is dispatched every 2 hours.** That interval is the gap **between
+runs, not a per-run time
 budget** — and it is the *instance's* own gap that bounds a carry-forward, so a run that defers a
-watch item to "the next tick" is deferring it hours, not minutes. Each run works
+watch item to "the next tick" is deferring it two hours, not minutes. Each run works
 *The work-selection ladder* top-down — **breakage → every open PR you own or trust, drafts included →
 security issues → bugs → the oldest actionable issue** — capturing new
 non-trivial finds as issues (see *Issue-driven*).
