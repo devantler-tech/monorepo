@@ -488,7 +488,10 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    author only, never the `automation` label. If it **already has an
    actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
    automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
-   **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
+   **external** PRs static-review-only (trust gate). **`type:"Spike"` is not a delivery-PR path**
+   (#2267): when the selected issue is a Spike, record the decision on the Spike and file its
+   follow-up issues — that pair is the floor artifact; do **not** invent a draft PR for it (same
+   rule as [`product-engineering`](../product-engineering/SKILL.md) §3). Otherwise ship it: tests +
    validate + **draft PR**; use `Fixes #delivery` and, when later measurement keeps the experiment
    open, `Part of #experiment`.
 8. **Capture new finds as issues** — a coverage hole, perf hotspot, refactor target, docs gap, security

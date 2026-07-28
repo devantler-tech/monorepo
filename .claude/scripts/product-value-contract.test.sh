@@ -84,6 +84,12 @@ grep -Fq 'last_blog_stewardship' "${run_loop}" ||
   fail "run loop does not persist the blog-stewardship cursor"
 grep -Fq "use \`Fixes #delivery\`" "${run_loop}" ||
   fail "run loop can close an experiment before measurement"
+# Spike floor (#2267): the primary run loop must not invent a delivery PR for a Spike.
+# shellcheck disable=SC2016 # literal backticks in prose we pin
+grep -Fq '`type:"Spike"` is not a delivery-PR path' "${run_loop}" ||
+  fail "run loop still treats Spikes as delivery-PR work (#2267)"
+grep -Fq 'do **not** invent a draft PR for it' "${run_loop}" ||
+  fail "run loop lacks the Spike no-delivery-PR floor rule (#2267)"
 
 grep -Fq 'Blog Stewardship' "${site_card}" ||
   fail "site card has no recurring blog task"
