@@ -1126,6 +1126,20 @@ grep -Fq 'true only if NO CI red on main' "${surveyor}" ||
 grep -Fq 'A failing GitHub-*managed* run is NOT breakage' "${constitution}" ||
   fail "AGENTS.md rung-0 must state that a GitHub-managed run is not breakage (#2536)"
 
+# The constitution must carry the STREAK BOUND too. Without this, AGENTS.md could be edited to exempt
+# every repeated failure while the overlay still escalates — the two surfaces would then disagree about
+# whether dead security scanning is breakage, and only the overlay assertion above would notice.
+grep -Fq 'Only the first failure of a streak' "${constitution}" ||
+  fail "AGENTS.md must bound the GitHub-managed exemption to the first failure of a streak (#2536)"
+
+# The streak walk must use the same red set and the same branch filter as the red-set query, or it
+# misclassifies timeout streaks and lets pull-request scans pollute the history.
+grep -Fq 'Red means `failure` OR `timed_out`' "${surveyor}" ||
+  fail "surveyor's streak walk must treat timed_out as red, matching the red set (#2536)"
+
+grep -Fq 'runs?branch=main&per_page=100' "${surveyor}" ||
+  fail "surveyor's streak walk must filter to main, or a PR-triggered managed run pollutes it (#2536)"
+
 # The exemption must key on the run PATH, not on `event: dynamic`, or it would exempt every future
 # GitHub-managed run type — including actionable ones. `dynamic` stays a main-branch event.
 grep -Fq 'never on `event: dynamic` alone' "${surveyor}" ||

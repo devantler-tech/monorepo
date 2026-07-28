@@ -594,7 +594,7 @@ actionable work**:
 
 | # | Rung | What it covers |
 |---|---|---|
-| **0** | **Live breakage** | CI red on `main`, a broken build or site, an urgent security fix. Preempts everything and is the one exception to capture-before-you-build. **A failing GitHub-*managed* run is NOT breakage** — a `dynamic/github-code-scanning/*` run has no workflow file to fix, cannot be re-run (`403`), and self-heals; it is reported `GITHUB-MANAGED-SCAN (NO-ACTION)` and never counts against `nothing_on_fire`. **Only the first failure of a streak** — a scan still failing on the next scheduled run is ours to repair (build, code-scanning config, or advanced setup) and IS actionable (see the surveyor). |
+| **0** | **Live breakage** | CI red on `main`, a broken build or site, an urgent security fix. Preempts everything and is the one exception to capture-before-you-build. **A failing GitHub-*managed* run is NOT breakage** — a `dynamic/github-code-scanning/*` run has no workflow file to fix, cannot be re-run (`403`), and self-heals; it is reported `GITHUB-MANAGED-SCAN (NO-ACTION)` and never counts against `nothing_on_fire`. **Only the first failure of a streak** — a scan still red (`failure` or `timed_out`) on the next run of `main` is ours to repair (build, code-scanning config, or advanced setup) and IS actionable (see the surveyor). |
 | **1** | **Open PRs — INCLUDING your own drafts** | Every actionable own/trusted PR in your lane, **draft and non-draft alike**, driven to a terminal state: merged, or parked on a **named, live-verified** blocker. Automation-owned dependency PRs are excluded (see *Merge policy*). |
 | **2** | **Security issues** | `type:"Security"`, regardless of age. |
 | **3** | **Bugs** | `type:"Bug"`, regardless of age. |

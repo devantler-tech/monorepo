@@ -446,13 +446,33 @@ public and private — no per-repo loop needed to enumerate):
    keep reporting `nothing_on_fire: true` while its security coverage is silently dead — the exact
    failure the *liveness-first* rule exists to prevent elsewhere in this survey.
 
-   So check the workflow's **previous scheduled run** (`gh api
-   "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?per_page=2"`, comparing the two
-   most recent). If **both** concluded `failure`, escalate — it counts toward `nothing_on_fire` and is
-   reported as actionable, naming the run of the streak's first failure so its age is visible:
+   So walk that workflow's own run history on `main`:
+
+   ```sh
+   gh api --paginate \
+     "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100"
+   ```
+
+   Walk it newest-first and count consecutive **red** runs, stopping at the first run that is not red.
+   Three details are each load-bearing:
+   - **`branch=main`** — default setup also runs on pull requests, and an unfiltered history mixes
+     those in. A failed PR scan would then turn a *first* main failure into `REPEATED`, and an
+     intervening successful PR scan would hide two genuinely consecutive main failures. This is the
+     same filter, for the same reason, as the `branch=main` on the red-set query above.
+   - **Red means `failure` OR `timed_out`** — exactly the red set defined above, never `failure`
+     alone. A scan that times out repeatedly is as broken as one that fails, and a mixed
+     `failure`/`timed_out` streak is still a streak.
+   - **`--paginate`, not a two-run peek** — the digest names the streak's start date and length, so it
+     must walk back to the first non-red run to know them. Reading only the newest two would report a
+     start date that is merely the previous run, and a count that is almost always `2`, understating
+     how long coverage has been dead.
+
+   Two or more consecutive red runs escalate: it counts toward `nothing_on_fire` and is reported as
+   actionable, naming the judged sha (as every red claim in this survey must) and the streak's real
+   age:
 
    ```text
-   GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> failing since <YYYY-MM-DD> (<n> consecutive scheduled runs)
+   GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)
    ```
 
    Only the **first** failure of a streak is exempt. That keeps the fix from becoming a way to ignore
@@ -602,7 +622,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
 - GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `path` starts `dynamic/github-code-scanning/`: no workflow file to fix, not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only
-- GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> failing since <YYYY-MM-DD> (<n> consecutive scheduled runs)   # two+ consecutive scheduled failures: ours to repair (build, code-scanning config, or move to advanced setup) — DOES count against nothing_on_fire
+- GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out) runs on main: ours to repair (build, code-scanning config, or move to advanced setup) — DOES count against nothing_on_fire
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
