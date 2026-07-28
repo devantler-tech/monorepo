@@ -1081,4 +1081,33 @@ done <<EOF
 ${json_specs}
 EOF
 
+# --- GitHub-managed code scanning is not repository breakage (#2536) ----------
+#
+# A default-setup code-scanning run has no workflow file to fix and GitHub refuses to re-run it, so
+# ranking it at rung 0 — which preempts everything — burns a run's opening minutes on something
+# structurally unactionable that self-heals. It must still be REPORTED, because a failure persisting
+# across several scheduled ticks is a real signal.
+
+grep -Fq 'dynamic/github-code-scanning/' "${surveyor}" ||
+  fail "surveyor must classify runs whose path starts 'dynamic/github-code-scanning/' as GitHub-managed (#2536)"
+
+grep -Fq 'GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed' "${surveyor}" ||
+  fail "surveyor must define the GITHUB-MANAGED-SCAN (NO-ACTION) digest line (#2536)"
+
+grep -Fq 'a GITHUB-MANAGED-SCAN line never makes this false' "${surveyor}" ||
+  fail "surveyor must state that a GitHub-managed scan never sets nothing_on_fire: false (#2536)"
+
+# NEGATIVE CONTROL — the repository's own failing workflow must remain rung-0 breakage. Without this,
+# a future edit could exempt runs wholesale and every assertion above would still pass.
+grep -Fq '<repo>: CI red on main @<sha>' "${surveyor}" ||
+  fail "surveyor must still report a repository-owned failing workflow as CI red on main (#2536)"
+
+# The exemption must key on the run PATH, not on `event: dynamic`, or it would exempt every future
+# GitHub-managed run type — including actionable ones. `dynamic` stays a main-branch event.
+grep -Fq 'never on `event: dynamic` alone' "${surveyor}" ||
+  fail "surveyor must key the GitHub-managed exemption on the run path, not the dynamic event (#2536)"
+
+grep -Fq '`workflow_dispatch`, `dynamic`' "${surveyor}" ||
+  fail "surveyor must keep 'dynamic' in the main-branch event list — the exemption is by path (#2536)"
+
 echo "portfolio surveyor contract: all assertions passed"

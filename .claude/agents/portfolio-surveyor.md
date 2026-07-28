@@ -407,6 +407,28 @@ public and private — no per-repo loop needed to enumerate):
       files can legally share — collapsing them hides one workflow's failure behind the other
       file's later success), and report a red for any that concluded `failure` or `timed_out`.
 
+   **Split GitHub-MANAGED runs out of that red set before reporting it.** A run whose `path` begins
+   with `dynamic/github-code-scanning/` (default-setup code scanning; `event: dynamic`, no workflow
+   file in the repository) is **not** repository breakage and never counts toward `nothing_on_fire`.
+   There is nothing to root-cause-fix — no workflow file exists — and GitHub refuses to re-run one
+   outright (`POST .../rerun-failed-jobs` → `403 This workflow run cannot be retried`), so it is
+   structurally unactionable and self-heals on the next scheduled tick. Ranking it at rung 0, which
+   preempts everything, has twice cost a run its opening minutes.
+
+   Report it on its own line instead, so it stays visible without being ranked as a fire:
+
+   ```
+   GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>
+   ```
+
+   Keep reporting it every run rather than suppressing it: a *persistent* failure across several
+   scheduled ticks is a real signal, and only a line that keeps appearing can show that.
+
+   ⚠️ **Match on the `path` prefix, never on `event: dynamic` alone.** `dynamic` stays in the
+   main-branch event list above because it is how GitHub-managed runs legitimately reach `main`, so
+   keying the exemption on the event would exempt future managed run types wholesale — including any
+   that *are* actionable. The `path` is what identifies default-setup code scanning specifically.
+
    All three filters are load-bearing, for different false positives:
    - **Not keyed to head** — a failed run stays attached to the sha it executed against, so it lingers
      in history long after `main` moved on. This is what made a two-day-old `CI - KSail` failure
@@ -546,7 +568,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken
+nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken; a GITHUB-MANAGED-SCAN line never makes this false
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
@@ -558,6 +580,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
+- GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `path` starts `dynamic/github-code-scanning/`: no workflow file to fix, not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
