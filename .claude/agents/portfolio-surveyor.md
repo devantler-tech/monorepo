@@ -407,6 +407,19 @@ public and private — no per-repo loop needed to enumerate):
       files can legally share — collapsing them hides one workflow's failure behind the other
       file's later success), and report a red for any that concluded `failure` or `timed_out`.
 
+   All three filters are load-bearing, for different false positives:
+   - **Not keyed to head** — a failed run stays attached to the sha it executed against, so it lingers
+     in history long after `main` moved on. This is what made a two-day-old `CI - KSail` failure
+     surface as live breakage.
+   - **Not a main-branch event** — a `pull_request`/`issue_comment`-triggered workflow can carry
+     `head_sha` equal to main's sha and `head_branch: main` while testing a PR. Those runs are not
+     main's health. Do **not** instead de-duplicate check-runs by name to suppress them: several
+     independent comment-triggered runs coexist at one sha, so "newest per check name" hides a genuine
+     failure behind a later `skipped` — a fail-open this exact check was caught making.
+   - **Not filtered to `branch=main`** — a release or sync branch can point at main's exact commit,
+     and its `push`/`workflow_dispatch` runs then pass both filters above while failing for reasons
+     that are not main's health.
+
    **Split GitHub-MANAGED runs out of that red set before reporting it.** A run whose `path` begins
    with `dynamic/github-code-scanning/` (default-setup code scanning; `event: dynamic`, no workflow
    file in the repository) is **not** repository breakage and never counts toward `nothing_on_fire`.
@@ -428,19 +441,6 @@ public and private — no per-repo loop needed to enumerate):
    main-branch event list above because it is how GitHub-managed runs legitimately reach `main`, so
    keying the exemption on the event would exempt future managed run types wholesale — including any
    that *are* actionable. The `path` is what identifies default-setup code scanning specifically.
-
-   All three filters are load-bearing, for different false positives:
-   - **Not keyed to head** — a failed run stays attached to the sha it executed against, so it lingers
-     in history long after `main` moved on. This is what made a two-day-old `CI - KSail` failure
-     surface as live breakage.
-   - **Not a main-branch event** — a `pull_request`/`issue_comment`-triggered workflow can carry
-     `head_sha` equal to main's sha and `head_branch: main` while testing a PR. Those runs are not
-     main's health. Do **not** instead de-duplicate check-runs by name to suppress them: several
-     independent comment-triggered runs coexist at one sha, so "newest per check name" hides a genuine
-     failure behind a later `skipped` — a fail-open this exact check was caught making.
-   - **Not filtered to `branch=main`** — a release or sync branch can point at main's exact commit,
-     and its `push`/`workflow_dispatch` runs then pass both filters above while failing for reasons
-     that are not main's health.
 
    Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
