@@ -80,9 +80,8 @@ if [ "$here_phys" != "$top_phys" ]; then
   exit 2
 fi
 
-# (b) That repository must be the one the keep-set is fetched for. Only
-#     comparable when origin parses as a GitHub owner/repo; a local or
-#     non-GitHub origin (hermetic test clones) is left to check (a) alone.
+# (b) That repository must be the one the keep-set is fetched for, and when it
+#     cannot be tied to the slug a DESTRUCTIVE sweep refuses to run.
 #     The URL itself is never echoed — it can carry credentials.
 origin_url=$(git remote get-url origin 2>/dev/null) || origin_url=""
 origin_nwo=""
@@ -90,9 +89,28 @@ origin_nwo=""
 # origin must not slip past the host test and silently skip this whole check.
 # Owner/repo are compared case-insensitively too, on the same normalised copy.
 origin_lc=$(printf '%s' "$origin_url" | tr '[:upper:]' '[:lower:]')
-case "$origin_lc" in
-  *github.com:*|*github.com/*)
-    origin_nwo=${origin_lc#*github.com}
+
+# Drop any userinfo BEFORE looking for the host. In "scheme://user:token@host/path"
+# the credential itself may contain "github.com", and a search for the first
+# occurrence would latch onto THAT — leaving the token inside the value this
+# script goes on to print in its mismatch message.
+origin_scan=$origin_lc
+case "$origin_scan" in
+  *://*) origin_scan=${origin_scan#*://} ;;
+esac
+origin_auth=${origin_scan%%/*}            # authority: up to the first path slash
+origin_rest=${origin_scan#"$origin_auth"}
+case "$origin_auth" in
+  *@*) origin_auth=${origin_auth##*@} ;;  # keep only what follows the LAST '@'
+esac
+origin_scan=$origin_auth$origin_rest
+
+# Match the host at the START of what remains, never as a substring: a
+# "mygithub.com/owner/repo" origin is a different host and must not be read as
+# GitHub's, which a substring test would do.
+case "$origin_scan" in
+  github.com:*|github.com/*)
+    origin_nwo=${origin_scan#github.com}
     case "$origin_nwo" in
       :*)
         origin_nwo=${origin_nwo#:}
@@ -113,9 +131,24 @@ case "$origin_lc" in
     ;;
 esac
 slug_lc=$(printf 'devantler-tech/%s' "$SLUG" | tr '[:upper:]' '[:lower:]')
-if [ -n "$origin_nwo" ] && [ "$origin_nwo" != "$slug_lc" ]; then
-  echo "$SLUG: ABORT — slug '$SLUG' does not match the checkout at '$REPO_PATH', whose origin" >&2
-  echo "  is '$origin_nwo'. The keep-set would be fetched for the wrong repository." >&2
+if [ -n "$origin_nwo" ]; then
+  if [ "$origin_nwo" != "$slug_lc" ]; then
+    echo "$SLUG: ABORT — slug '$SLUG' does not match the checkout at '$REPO_PATH', whose origin" >&2
+    echo "  is '$origin_nwo'. The keep-set would be fetched for the wrong repository." >&2
+    exit 2
+  fi
+elif [ "$MODE" = "apply" ] && [ "${BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN:-}" != "1" ]; then
+  # Origin does not parse as a GitHub owner/repo, so check (a) proved the tree is
+  # SOME repository's root but nothing ties it to <slug>. The keep-set is still
+  # fetched for devantler-tech/<slug>, so a wrong slug here deletes real branches
+  # against another repository's open-PR evidence. Deletion is irreversible for
+  # an unpushed local branch and CLOSES the PR for a remote one, so the
+  # unverifiable case fails CLOSED rather than proceeding on an unchecked
+  # assumption. dry-run is exempt: it deletes nothing.
+  echo "$SLUG: ABORT — the checkout at '$REPO_PATH' has no GitHub origin, so it cannot be" >&2
+  echo "  tied to slug '$SLUG' and a destructive sweep would run against unverified" >&2
+  echo "  evidence. Point origin at devantler-tech/$SLUG, or re-run with 'dry-run'." >&2
+  echo "  A hermetic fixture declares itself with BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN=1." >&2
   exit 2
 fi
 

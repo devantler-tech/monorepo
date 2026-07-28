@@ -62,6 +62,12 @@ STUB
 chmod +x "$tmp/bin/gh"
 export PATH="$tmp/bin:$PATH"
 
+# These fixtures use a local bare "origin", which cannot be tied to a slug, so an
+# apply-mode sweep refuses to run against them. Declaring the fixture explicitly
+# is what keeps that refusal fail-closed in production while the offline tests
+# still exercise the real deletion paths. Test 9 unsets it to prove the refusal.
+export BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN=1
+
 # Build a clone with a local bare origin so `git fetch` / `git push` stay offline.
 # CI runners have no default git identity — set one on the work clone before any commit.
 bare="$tmp/origin.git"
@@ -193,16 +199,30 @@ report "uppercase-host origin is still identity-checked (exit 2)" \
   "$([[ ${rc:-0} -eq 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
 
 # --- 7c. an explicit port must NOT be read as part of the owner -----------
-# ":443/owner/repo" must reduce to "owner/repo". If the port leaked into the
-# comparison the guard would REJECT a correct repository. Slug matches the
-# origin here, so a correct parse passes the guard and fails later at the fetch
-# (exit 1) — proving the guard let it through without needing the network.
+# ":443/owner/repo" must reduce to "owner/repo"; a leaked port would make the
+# parsed owner "443/devantler-tech", so a correct repository would be rejected.
+# The slug is deliberately WRONG so the guard aborts and prints what it parsed:
+# that asserts the port was stripped without letting the sweep reach the network.
 git -C "$slugwork" remote set-url origin "https://github.com:443/devantler-tech/does-not-exist-2531.git"
 manifest="$tmp/manifest7c"
 : >"$manifest"
-out="$("$helper" "$slugwork" "does-not-exist-2531" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
-report "explicit port does not falsely reject a matching repo (not exit 2)" \
-  "$([[ ${rc:-0} -ne 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+out="$("$helper" "$slugwork" "ksail" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "explicit port is stripped from the parsed origin" \
+  "$(grep -qF "is 'devantler-tech/does-not-exist-2531'" <<<"$out" && echo yes || echo no)" "out=$out"
+
+# --- 7d. credentials in the origin URL never reach the message -----------
+# Userinfo can itself contain the host ("https://github.com:TOKEN@github.com/..."),
+# so a parser that searched for the FIRST "github.com" would keep the token in
+# the value it prints. The guard must report owner/repo only.
+git -C "$slugwork" remote set-url origin \
+  "https://github.com:s3kr3t-fixture-token@github.com/devantler-tech/does-not-exist-2531.git"
+manifest="$tmp/manifest7d"
+: >"$manifest"
+out="$("$helper" "$slugwork" "ksail" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "credentialed origin is parsed to owner/repo, not the userinfo" \
+  "$(grep -qF "is 'devantler-tech/does-not-exist-2531'" <<<"$out" && echo yes || echo no)" "out=$out"
+report "credentialed origin never echoes the secret" \
+  "$(grep -qF 's3kr3t-fixture-token' <<<"$out" && echo no || echo yes)"
 
 # --- 8. a non-GitHub origin still runs (hermetic clones must keep working) -
 # The origin-vs-slug half can only compare when origin parses as a GitHub
@@ -214,6 +234,34 @@ manifest="$tmp/manifest8"
 : >"$manifest"
 out="$("$helper" "$work" "monorepo" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
 report "non-GitHub origin does not trip the slug guard" \
+  "$([[ ${rc:-0} -eq 0 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+
+# --- 9. an unverifiable origin FAILS CLOSED for a destructive sweep -------
+# Check (a) proves the tree is a repository root, but a non-GitHub origin ties it
+# to no slug — while the keep-set is still fetched for devantler-tech/<slug>. A
+# wrong slug there deletes local branches outright and CLOSES the PR of any
+# remote one, so apply mode must refuse unless a fixture declares itself.
+# Every other test exports the fixture variable, so this one drops it.
+: >"$OPEN_HEADS_FILE"
+: >"$PR_EVIDENCE_FILE"
+manifest="$tmp/manifest9"
+: >"$manifest"
+out="$(env -u BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN \
+        "$helper" "$work" "monorepo" "$manifest" apply claude 2>&1)" && rc=0 || rc=$?
+report "apply against an unverifiable origin is refused (exit 2)" \
+  "$([[ ${rc:-0} -eq 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+report "the refusal names the unverifiable origin, not a slug mismatch" \
+  "$(grep -qF 'no GitHub origin' <<<"$out" && echo yes || echo no)" "out=$out"
+report "the refusal happened before any sweep output" \
+  "$(grep -q 'ns=claude' <<<"$out" && echo no || echo yes)" "out=$out"
+
+# dry-run over the SAME unverifiable origin still runs — the refusal is scoped to
+# destruction, so the guard cannot be satisfied merely by the variable existing.
+manifest="$tmp/manifest9b"
+: >"$manifest"
+out="$(env -u BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN \
+        "$helper" "$work" "monorepo" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "dry-run over the same unverifiable origin is unaffected" \
   "$([[ ${rc:-0} -eq 0 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
 
 # Silence unused-var lint for the open_sha we only needed for push tip creation.
