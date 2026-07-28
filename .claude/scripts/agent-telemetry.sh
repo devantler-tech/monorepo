@@ -1538,8 +1538,39 @@ if want safety; then
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
       cred_sess=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
       [ -n "$cred_sess" ] || cred_sess=unknown
+      # Redact the basename BEFORE it reaches the scratch file. redact() runs at
+      # the OUTPUT boundary, so a credential-shaped session name would otherwise
+      # sit unmasked in $CREDCONC for the length of the run — and that file
+      # survives a SIGKILL, which the EXIT/HUP/INT/TERM trap cannot cover. The
+      # report would still print it masked, so this buys value minimisation at
+      # rest, not a change in what is displayed. Ordered AFTER the `tr -cd` on
+      # purpose: the mask introduces `…` and `<>`, which that filter strips.
+      # Two distinct real sessions stay distinct (UUID basenames carry no
+      # credential shape and pass through untouched); two DIFFERENT names of the
+      # same shape can merge, which under-counts sessions in a case that cannot
+      # occur outside a fixture and fails safe. (Codex P2 on #2520.)
+      cred_sess=$(printf '%s\n' "$cred_sess" | redact)
+      [ -n "$cred_sess" ] || cred_sess=unknown
+      # Split compound matches on `;&|` exactly as the TABLE does. The generic
+      # alternative's value class admits those separators, so grep's
+      # leftmost-longest rule hands back a whole run of assignments as ONE
+      # match and `grep -o` emits ONE line — reporting `largest single record:
+      # 1` for a record the table counts as three credentials. That is the
+      # amplified record the metric exists to surface, so the count has to
+      # agree with the table. The line locator is carried onto every fragment;
+      # a match consisting only of separators still emits its one row, so a
+      # locator can never be lost. records/sessions reduce through `sort -u`
+      # and are unchanged by construction. (Codex P2 on #2520.)
       grep -naoEi "$CRED_TABLE_RE" "$f" 2>/dev/null \
-        | awk -F: -v s="$cred_sess" '$1 ~ /^[0-9]+$/ {print s "\t" substr($1,1,12)}'
+        | awk -F: -v s="$cred_sess" '
+            $1 ~ /^[0-9]+$/ {
+              ln = substr($1, 1, 12)
+              rest = substr($0, index($0, ":") + 1)
+              n = split(rest, frag, /[;&|]/)
+              emitted = 0
+              for (i = 1; i <= n; i++) if (frag[i] != "") { print s "\t" ln; emitted = 1 }
+              if (!emitted) print s "\t" ln
+            }'
     done > "$CREDCONC"
     cred_records=$(sort -u "$CREDCONC" | grep -c . || true)
     cred_sessions=$(cut -f1 "$CREDCONC" | sort -u | grep -c . || true)

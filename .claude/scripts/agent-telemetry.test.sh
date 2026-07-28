@@ -2121,6 +2121,56 @@ else bad "locator withholds [masked-display] when the pre-mask run is not class 
   "$(printf '%s' "$OUT" | grep -E 'github-token|session=' | head -3)"; fi
 
 
+# The concentration line must SPLIT compound matches, exactly as the table does.
+# The generic alternative's value class admits `;`, `&` and `|`, so grep's
+# leftmost-longest rule returns a whole run of assignments as ONE match — and
+# `grep -o` then emits ONE line for it. Counting lines therefore reported
+# `largest single record: 1` for a record the table and the provenance locator
+# both split into three credentials, which defeats the entire purpose of a
+# concentration metric: an amplified record is exactly what it exists to find.
+# Splitting here restores agreement with the table (the same rule the locator
+# already follows) and moves ONLY the top-record figure — records and sessions
+# both reduce through `sort -u`, so they are unchanged by construction.
+# (Codex P2 on #2520; reproduced against the real detector before fixing.)
+mkdir -p "$FIX/credcompound"
+cat > "$FIX/credcompound/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPA__;key=__AWS__;password=abcdefghijkl"}]}}
+EOF
+subst "$FIX/credcompound/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credcompound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$CREDSEC" | grep -qE 'largest single record: 3'; then
+  ok "concentration splits compound matches like the table"
+else bad "concentration splits compound matches like the table" \
+  "$(printf '%s' "$CREDSEC" | grep -E 'across .* records')"; fi
+
+# Guard the REGRESSION the source-side session redaction could introduce.
+# Redacting the basename before it reaches the scratch file must not collapse
+# distinct sessions into one bucket — a redactor that mapped every name to a
+# constant would still pass every "no secret is printed" assertion while
+# silently destroying the session count the concentration line reports.
+# ⚠️ SCOPE, stated because the obvious assertion is VACUOUS: the property the
+# redaction actually buys — that a credential-shaped basename never lands in
+# the temp file — is NOT observable from the output, because redact() masks the
+# value at the output boundary either way. The same limitation is documented
+# above for the emitter test. This assertion pins the part that IS observable.
+mkdir -p "$FIX/credsesscount"
+cat > "$FIX/credsesscount/alpha.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPA__"}]}}
+EOF
+cat > "$FIX/credsesscount/beta.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"key=__AWS__"}]}}
+EOF
+subst "$FIX/credsesscount/alpha.jsonl" "$FIX/credsesscount/beta.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credsesscount" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$CREDSEC" | grep -qE 'in 2 sessions'; then
+  ok "session redaction keeps distinct sessions distinct"
+else bad "session redaction keeps distinct sessions distinct" \
+  "$(printf '%s' "$CREDSEC" | grep -E 'across .* records')"; fi
+
 echo
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
