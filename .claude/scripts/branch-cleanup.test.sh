@@ -224,6 +224,37 @@ report "credentialed origin is parsed to owner/repo, not the userinfo" \
 report "credentialed origin never echoes the secret" \
   "$(grep -qF 's3kr3t-fixture-token' <<<"$out" && echo no || echo yes)"
 
+# --- 7e. a diverging PUSH destination is refused ---------------------------
+# The keep-set is fetched from the fetch url, but `git push origin --delete`
+# writes to the push url. With `remote.origin.pushurl` set they are different
+# repositories, so a fetch-url-only check would authorise deletions in a repo the
+# evidence never described. Fetch url matches the slug here, so ONLY the push url
+# can trigger the refusal.
+git -C "$slugwork" remote set-url origin "https://github.com/devantler-tech/does-not-exist-2531.git"
+git -C "$slugwork" remote set-url --push origin "https://github.com/devantler-tech/some-other-repo.git"
+manifest="$tmp/manifest7e"
+: >"$manifest"
+out="$("$helper" "$slugwork" "does-not-exist-2531" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "a diverging push destination is refused (exit 2)" \
+  "$([[ ${rc:-0} -eq 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+report "the refusal names the push destination, not the fetch origin" \
+  "$(grep -qF 'push destination' <<<"$out" && grep -qF 'some-other-repo' <<<"$out" && echo yes || echo no)" "out=$out"
+
+# --- 7f. a pushInsteadOf rewrite is refused too ----------------------------
+# `pushInsteadOf` redirects the push without touching either configured url, and
+# `get-url --push --all` is what resolves it — so the same check must catch it.
+git -C "$slugwork" remote set-url --push --delete "https://github.com/devantler-tech/some-other-repo.git" 2>/dev/null \
+  || git -C "$slugwork" config --unset-all remote.origin.pushurl 2>/dev/null || true
+git -C "$slugwork" config url."https://github.com/somewhere-else/".pushInsteadOf "https://github.com/devantler-tech/"
+manifest="$tmp/manifest7f"
+: >"$manifest"
+out="$("$helper" "$slugwork" "does-not-exist-2531" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "a pushInsteadOf rewrite is refused (exit 2)" \
+  "$([[ ${rc:-0} -eq 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+report "the pushInsteadOf refusal names the rewritten destination" \
+  "$(grep -qF 'somewhere-else' <<<"$out" && echo yes || echo no)" "out=$out"
+git -C "$slugwork" config --unset url."https://github.com/somewhere-else/".pushInsteadOf
+
 # --- 8. a non-GitHub origin still runs (hermetic clones must keep working) -
 # The origin-vs-slug half can only compare when origin parses as a GitHub
 # owner/repo. A local bare origin cannot, so it is skipped there — the
