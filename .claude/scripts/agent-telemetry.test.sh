@@ -101,6 +101,7 @@ ex() { printf '%s' "$1" | sed \
 mkdir -p "$FIX/projects/proj-a" "$FIX/codex/automations/daily-ai-engineer" \
          "$FIX/codex/automations/agent-improver" \
          "$FIX/codex/sessions" "$FIX/monorepo/.claude" \
+         "$FIX/claude-store" \
          "$FIX/claude-sched/daily-ai-assistant" \
          "$FIX/claude-sched/agent-improver"
 
@@ -123,6 +124,26 @@ description: Thin scheduler pointer for the Agentic Engineer (claude/* lane: EVE
 EOF
 cat > "$FIX/claude-sched/agent-improver/SKILL.md" <<'EOF'
 description: Thin scheduler pointer for the Agent Improver (claude/* lane: 00 and 12 local).
+EOF
+cat > "$FIX/claude-store/scheduled-tasks.json" <<EOF
+{
+  "scheduledTasks": [
+    {
+      "id": "daily-ai-assistant",
+      "enabled": true,
+      "filePath": "$FIX/claude-sched/daily-ai-assistant/SKILL.md",
+      "cronExpression": "0 2,4,6,8,10,14,16,18,20,22 * * *",
+      "lastRunAt": "2026-07-25T20:00:00.000Z"
+    },
+    {
+      "id": "agent-improver",
+      "enabled": true,
+      "filePath": "$FIX/claude-sched/agent-improver/SKILL.md",
+      "cronExpression": "0 0,12 * * *",
+      "lastRunAt": "2026-07-25T12:00:00.000Z"
+    }
+  ]
+}
 EOF
 cat > "$FIX/codex/automations/daily-ai-engineer/automation.toml" <<'EOF'
 prompt = "definition/self-improvement PRs are the one exception: NEVER self-promote those"
@@ -151,12 +172,13 @@ mkdir -p "$FIX/monorepo/.claude"
 run() {
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  CLAUDE_SCHEDULE_STORE_PATH="$FIX/claude-store/scheduled-tasks.json" \
   CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" \
   CLAUDE_IMPROVER_LOADER_PATH="$FIX/claude-sched/agent-improver/SKILL.md" \
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
   CODEX_IMPROVER_LOADER_PATH="$FIX/codex/automations/agent-improver/automation.toml" \
-  CLAUDE_ENGINEER_MARKER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-1}" \
-  CLAUDE_IMPROVER_MARKER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-1}" \
+  CLAUDE_ENGINEER_MARKER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-1750000000}" \
+  CLAUDE_IMPROVER_MARKER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-1750000000}" \
   CODEX_ENGINEER_MARKER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-1785238559000}" \
   CODEX_IMPROVER_MARKER_BASELINE="${CODEX_IMPROVER_MARKER_BASELINE:-1785222863000}" \
   bash "$TARGET" --since-days 3650 --max-files 50 "$@" 2>&1
@@ -250,6 +272,15 @@ check "minute drift invalidates aggregate parity" "$OUT" "local simultaneous sta
 mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
+# Invalid values must not be silently dropped while the remaining set matches.
+sed -i.bak 's/BYHOUR=7,19/BYHOUR=7,19,24/' \
+  "$FIX/codex/automations/agent-improver/automation.toml"
+OUT=$(run --section drift)
+check "out-of-range hour invalidates recurrence" "$OUT" "UNKNOWN: codex improver recurrence rule is incomplete or unsupported"
+nocheck "out-of-range hour never normalizes to MATCH" "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
+mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
+   "$FIX/codex/automations/agent-improver/automation.toml"
+
 # BYHOUR is a set; harmless serialization order must not create false drift.
 sed -i.bak 's/BYHOUR=7,19/BYHOUR=19,7/' \
   "$FIX/codex/automations/agent-improver/automation.toml"
@@ -258,13 +289,22 @@ check "hour sets are sorted before comparison" "$OUT" "codex improver:  expected
 mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
-# Same-provider overlaps are collisions too.
-sed -i.bak 's/lane: 00 and 12 local/lane: 00 and 10 local/' \
-  "$FIX/claude-sched/agent-improver/SKILL.md"
+# Loader prose is not scheduler state. A stale description must not override the
+# authoritative cron record.
+sed -i.bak -e 's/02–22/00–22/' -e 's|00/12|02/04|' \
+  "$FIX/claude-sched/daily-ai-assistant/SKILL.md"
+OUT=$(run --section drift)
+check "Claude cadence comes from scheduler store" "$OUT" "claude engineer: expected=2,4,6,8,10,14,16,18,20,22 actual=2,4,6,8,10,14,16,18,20,22 MATCH"
+mv "$FIX/claude-sched/daily-ai-assistant/SKILL.md.bak" \
+   "$FIX/claude-sched/daily-ai-assistant/SKILL.md"
+
+# Same-provider overlaps in the authoritative store are collisions too.
+sed -i.bak 's/"cronExpression": "0 0,12/"cronExpression": "0 0,10/' \
+  "$FIX/claude-store/scheduled-tasks.json"
 OUT=$(run --section drift)
 check "same-provider overlap is counted" "$OUT" "local simultaneous starts/day: 1"
-mv "$FIX/claude-sched/agent-improver/SKILL.md.bak" \
-   "$FIX/claude-sched/agent-improver/SKILL.md"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" \
+   "$FIX/claude-store/scheduled-tasks.json"
 
 # A persisted runtime rewrite must report the concrete expected/actual delta.
 sed -i.bak 's/BYHOUR=7,19/BYHOUR=6,18/' \

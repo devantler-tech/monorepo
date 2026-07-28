@@ -1741,10 +1741,42 @@ if want drift; then
   CODEX_IMPROVER_LOADER="${CODEX_IMPROVER_LOADER_PATH:-$CODEX_HOME/automations/agent-improver/automation.toml}"
   AGENTS_MD="$MONOREPO/AGENTS.md"
 
+  discover_claude_schedule_store() {
+    local root candidate selected="" matches=0
+    if [ -n "${CLAUDE_SCHEDULE_STORE_PATH:-}" ]; then
+      [ -f "$CLAUDE_SCHEDULE_STORE_PATH" ] && printf '%s\n' "$CLAUDE_SCHEDULE_STORE_PATH"
+      return 0
+    fi
+    root="${CLAUDE_SCHEDULE_STORE_ROOT:-$HOME/Library/Application Support/Claude/claude-code-sessions}"
+    for candidate in "$root"/*/*/scheduled-tasks.json; do
+      [ -f "$candidate" ] || continue
+      jq -e --arg engineer "$CLAUDE_LOADER" --arg improver "$CLAUDE_IMPROVER_LOADER" '
+        [.scheduledTasks[]? |
+          select(.enabled == true) |
+          select(
+            (.id == "daily-ai-assistant" and .filePath == $engineer) or
+            (.id == "agent-improver" and .filePath == $improver)
+          ) |
+          .id
+        ] | sort | unique == ["agent-improver", "daily-ai-assistant"]
+      ' "$candidate" >/dev/null 2>&1 || continue
+      selected="$candidate"
+      matches=$((matches + 1))
+    done
+    [ "$matches" -eq 1 ] && printf '%s\n' "$selected"
+  }
+
+  CLAUDE_SCHEDULE_STORE=$(discover_claude_schedule_store)
+
   for f in "$CLAUDE_LOADER" "$CLAUDE_IMPROVER_LOADER" \
            "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER" "$AGENTS_MD"; do
     [ -f "$f" ] && echo "  present: $f" || echo "  MISSING: $f"
   done
+  if [ -n "$CLAUDE_SCHEDULE_STORE" ] && [ -f "$CLAUDE_SCHEDULE_STORE" ]; then
+    echo "  present: $CLAUDE_SCHEDULE_STORE"
+  else
+    echo "  MISSING: authoritative Claude scheduled-tasks store"
+  fi
 
   echo
   echo "  cadence table vs all four runtime schedule pointers:"
@@ -1771,6 +1803,18 @@ if want drift; then
         print out
       }
     '
+  }
+
+  validated_hours() {
+    awk -F',' '
+      {
+        if (NF < 1) exit 1
+        for (i = 1; i <= NF; i++) {
+          if ($i !~ /^[0-9][0-9]?$/ || $i + 0 < 0 || $i + 0 > 23) exit 1
+        }
+        print
+      }
+    ' | normalise_hours
   }
 
   cadence_expected() {
@@ -1810,43 +1854,36 @@ if want drift; then
             minute != "0" || second != "0") exit 1
         print hours
       }
-    ' | normalise_hours
+    ' | validated_hours
   }
 
-  # Claude's native schedule pointer is a thin SKILL.md rather than a TOML
-  # record. Its machine-readable surface is the pointer's bounded lane clause:
-  # the engineer declares an even range and exclusions; the improver declares
-  # its two hours. Parse only those clauses, never unrelated numbers elsewhere
-  # in the prompt.
-  claude_pointer_hours() {
-    local file="$1" role="$2" flat bounds exclusions start end ex1 ex2
-    [ -f "$file" ] || return 0
-    flat=$(tr '\n' ' ' < "$file")
-    if [ "$role" = engineer ]; then
-      bounds=$(printf '%s\n' "$flat" \
-        | sed -nE 's/.*EVEN hours ([0-9][0-9])[^0-9]+([0-9][0-9]).*/\1,\2/p')
-      exclusions=$(printf '%s\n' "$flat" \
-        | sed -nE 's/.*minus the ([0-9][0-9])\/([0-9][0-9]).*/\1,\2/p')
-      [ -n "$bounds" ] || return 0
-      start=${bounds%%,*}
-      end=${bounds##*,}
-      ex1=${exclusions%%,*}
-      ex2=${exclusions##*,}
-      awk -v first="$start" -v last="$end" -v skip1="$ex1" -v skip2="$ex2" '
-        BEGIN {
-          out = ""
-          for (h = first + 0; h <= last + 0; h++) {
-            if (h % 2 != 0 || h == skip1 + 0 || h == skip2 + 0) continue
-            out = out (out == "" ? "" : ",") h
-          }
-          print out
-        }
-      '
-    else
-      printf '%s\n' "$flat" \
-        | sed -nE 's/.*lane:[^0-9]*([0-9][0-9])[[:space:]]+and[[:space:]]+([0-9][0-9])[[:space:]]+local.*/\1,\2/p' \
-        | normalise_hours
-    fi
+  claude_store_field() {
+    local store="$1" id="$2" pointer="$3" field="$4"
+    [ -f "$store" ] || return 0
+    jq -r --arg id "$id" --arg pointer "$pointer" --arg field "$field" '
+      [.scheduledTasks[]? |
+        select(.enabled == true and .id == $id and .filePath == $pointer)
+      ] |
+      if length == 1 then (.[0][$field] // empty) else empty end
+    ' "$store" 2>/dev/null
+  }
+
+  claude_store_hours() {
+    local store="$1" id="$2" pointer="$3" cron
+    cron=$(claude_store_field "$store" "$id" "$pointer" cronExpression)
+    [ -n "$cron" ] || return 0
+    printf '%s\n' "$cron" | awk '
+      NF == 5 && $1 == "0" && $3 == "*" && $4 == "*" && $5 == "*" { print $2 }
+    ' | validated_hours
+  }
+
+  claude_store_marker() {
+    local store="$1" id="$2" pointer="$3" last_run
+    last_run=$(claude_store_field "$store" "$id" "$pointer" lastRunAt)
+    [ -n "$last_run" ] || return 0
+    jq -nr --arg value "$last_run" '
+      $value | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor
+    ' 2>/dev/null
   }
 
   codex_change_marker() {
@@ -1858,11 +1895,6 @@ if want drift; then
         exit
       }
     ' "$1" 2>/dev/null
-  }
-
-  file_change_marker() {
-    [ -f "$1" ] || return 0
-    stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null || true
   }
 
   marker_advanced() {
@@ -1878,6 +1910,8 @@ if want drift; then
       echo "    UNKNOWN: $label schedule pointer missing"
     elif [ -z "$actual" ] && [ "$pointer_kind" = recurrence ]; then
       echo "    UNKNOWN: $label recurrence rule is incomplete or unsupported"
+    elif [ -z "$actual" ] && [ "$pointer_kind" = cron ]; then
+      echo "    UNKNOWN: $label authoritative scheduler record is missing or unsupported"
     elif [ -z "$actual" ]; then
       echo "    UNKNOWN: $label schedule could not be parsed from its pointer"
     elif [ -z "$expected" ]; then
@@ -1906,12 +1940,12 @@ if want drift; then
   CLAUDE_IMPROVER_EXPECTED=$(cadence_expected Claude 4)
   CODEX_ENGINEER_EXPECTED=$(cadence_expected Codex 3)
   CODEX_IMPROVER_EXPECTED=$(cadence_expected Codex 4)
-  CLAUDE_ENGINEER_ACTUAL=$(claude_pointer_hours "$CLAUDE_LOADER" engineer)
-  CLAUDE_IMPROVER_ACTUAL=$(claude_pointer_hours "$CLAUDE_IMPROVER_LOADER" improver)
+  CLAUDE_ENGINEER_ACTUAL=$(claude_store_hours "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
+  CLAUDE_IMPROVER_ACTUAL=$(claude_store_hours "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
   CODEX_ENGINEER_ACTUAL=$(codex_pointer_hours "$CODEX_LOADER")
   CODEX_IMPROVER_ACTUAL=$(codex_pointer_hours "$CODEX_IMPROVER_LOADER")
-  CLAUDE_ENGINEER_MARKER=$(file_change_marker "$CLAUDE_LOADER")
-  CLAUDE_IMPROVER_MARKER=$(file_change_marker "$CLAUDE_IMPROVER_LOADER")
+  CLAUDE_ENGINEER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
+  CLAUDE_IMPROVER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
   CODEX_ENGINEER_MARKER=$(codex_change_marker "$CODEX_LOADER")
   CODEX_IMPROVER_MARKER=$(codex_change_marker "$CODEX_IMPROVER_LOADER")
   CLAUDE_ENGINEER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-}"
@@ -1920,9 +1954,9 @@ if want drift; then
   CODEX_IMPROVER_BASELINE="${CODEX_IMPROVER_MARKER_BASELINE:-}"
 
   compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
-    "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE"
+    "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" cron
   compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
-    "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE"
+    "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE" cron
   compare_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
     "$CODEX_LOADER" "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" recurrence
   compare_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \

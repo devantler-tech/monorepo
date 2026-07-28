@@ -201,7 +201,11 @@ for marker_baseline in \
   assert_prose "${marker_baseline}" \
     "runtime-local delivery does not name ${marker_baseline} for persistence verification"
 done
-assert_prose 'A missing baseline, a marker that did not advance, or an incomplete recurrence rule is `UNKNOWN`, never `MATCH`.' \
+assert_prose 'authoritative `scheduled-tasks.json` record selected by exact task id plus pointer path' \
+  "runtime-local delivery does not require the authoritative Claude scheduler record"
+assert_prose '`lastRunAt` as its marker; the `SKILL.md` description is not scheduler state' \
+  "runtime-local delivery can mistake Claude loader prose for deployed cadence"
+assert_prose 'A missing or ambiguous store, missing baseline, marker that did not advance, or incomplete recurrence rule is `UNKNOWN`, never `MATCH`.' \
   "runtime-local delivery does not fail closed on incomplete persistence evidence"
 
 # --- The merged spend mandate -------------------------------------------------
