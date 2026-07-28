@@ -44,13 +44,22 @@ grep -Fq 'Only an explicit credential rejection' "${run_loop}" ||
 grep -Fq 'GitHub service degraded' "${run_loop}" ||
   fail "missing the REST 5xx / service-degraded classification"
 
-grep -Fq "gh api graphql -f query='{viewer{login}}'" "${run_loop}" ||
-  fail "missing the authenticated GraphQL viewer.login fallback"
+grep -Fq "gh api graphql --hostname github.com -f query='{viewer{login}}'" "${run_loop}" ||
+  fail "missing the authenticated GraphQL viewer.login fallback pinned to github.com"
 
-grep -Fq 'HTTP 401/403' "${run_loop}" ||
-  fail "missing the explicit 401/403 authentication-rejection criterion"
+grep -Fq 'rate-limited 403/429' "${run_loop}" ||
+  fail "missing the rate-limit-as-service-degradation classification"
 
-grep -Fq 'A REST 5xx with a successful GraphQL' "${run_loop}" ||
+grep -Fq 'same host and credential context' "${run_loop}" ||
+  fail "GraphQL fallback does not preserve the failing probe's credential context"
+
+grep -Fq 'HTTP **401**' "${run_loop}" ||
+  fail "missing the explicit HTTP 401 authentication-rejection criterion"
+
+grep -Fq 'non-rate-limit' "${run_loop}" ||
+  fail "missing the non-rate-limit 403 credential-rejection criterion"
+
+grep -Fq 'A REST 5xx (or' "${run_loop}" ||
   fail "missing the REST-503-plus-GraphQL-success regression rule"
 
 grep -Fq 'recommend' "${run_loop}" && grep -Fq 'gh auth login' "${run_loop}" ||

@@ -58,16 +58,23 @@ card.
    approved host-level execution path.
    Clearing the injected tokens does not make a sandboxed macOS Keychain readable.
    **Distinguish authentication rejection from GitHub service degradation** (monorepo#2206): a REST
-   `/user` (or `gh auth status`) probe that returns HTTP 5xx, HTML, or other non-JSON service noise is
-   **not** proof the credential is bad — classify that outcome as `GitHub service degraded` and run a
-   bounded authenticated GraphQL fallback
-   `env -u GH_TOKEN -u GITHUB_TOKEN gh api graphql -f query='{viewer{login}}'` (same cleared-env /
-   host-level path as the REST probe). Accept the identity when GraphQL returns `devantler`.
-   Only an explicit credential rejection from that host-level check proves the saved login invalid —
-   meaning HTTP 401/403, or `gh` reporting the token rejected / not logged in — and **only then** recommend
-   `gh auth login`. A REST 5xx with a successful GraphQL `viewer.login` must never be
-   reported as an invalid saved login. If the host-level check instead authenticates a different
-   account, hard-block as `wrong GitHub identity` without describing the credential as invalid.
+   `/user` (or `gh auth status`) probe that returns HTTP 5xx, HTML, other non-JSON service noise, **or
+   a rate-limited 403/429** (GitHub may return either status when the limit is exceeded — check
+   `x-ratelimit-*` headers or a rate-limit message body) is **not** proof the credential is bad —
+   classify that outcome as `GitHub service degraded` and run a bounded authenticated GraphQL
+   fallback against the **same host and credential context** as the failing probe:
+   `gh api graphql --hostname github.com -f query='{viewer{login}}'`. Prefix with
+   `env -u GH_TOKEN -u GITHUB_TOKEN` **only when the failing probe itself was the cleared-env
+   saved-login check**; otherwise keep the injected `GH_TOKEN`/`GITHUB_TOKEN` so a transient REST
+   failure cannot be misread as a bad keychain login. Always pass `--hostname github.com` so
+   `GH_HOST` cannot redirect the fallback to an unrelated enterprise host. Accept the identity when
+   GraphQL returns `devantler`.
+   Only an explicit credential rejection proves the login invalid — meaning HTTP **401**, a **non-rate-limit**
+   403 that is clearly a credential/permission rejection (never a rate-limit 403), or `gh` reporting
+   the token rejected / not logged in — and **only then** recommend `gh auth login`. A REST 5xx (or
+   rate-limit) with a successful GraphQL `viewer.login` must never be reported as an invalid saved
+   login. If the host-level check instead authenticates a different account, hard-block as
+   `wrong GitHub identity` without describing the credential as invalid.
    If the host-level check cannot run or fails for a transport reason (and the GraphQL fallback is
    likewise unreachable), hard-block as `authentication verification unavailable` instead of
    instructing the maintainer to replace a credential that was never tested. Keep the injected-token
