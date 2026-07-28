@@ -170,10 +170,10 @@ matches_homebrew_provenance() {
 # single tap-token commit whose message is the normalized title. Named explicitly by maintainer
 # direction 2026-07-18 as a programmed release path.
 #
-# This arm carries an identity check that the GoReleaser arm gets for free. The tap token commits
-# under the maintainer's own Git identity, so every login/name/email/message field is the same
-# whether the workflow produced the commit or a person rewrote it — an adaptation commit cannot be
-# detected by identity here the way `goreleaserbot` detects it above.
+# This arm has to earn a property the GoReleaser arm gets for free. The tap token commits under the
+# maintainer's own Git identity, so every login/name/email/message field is the same whether the
+# workflow produced the commit or a person rewrote it — an adaptation commit cannot be detected by
+# identity here the way `goreleaserbot` detects it above.
 #
 # The author/committer date pair supplies the missing signal. A commit created in one operation
 # carries one timestamp in both fields; `git commit --amend` preserves the author date and moves the
