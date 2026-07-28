@@ -223,7 +223,7 @@ emit_injection_hits() {
 # rather than shared because the table consumes normalised values and this
 # consumes raw matches; keep the two prefix sets in step.
 emit_credential_hits() {
-  local f="$1" session line raw record match shape m
+  local f="$1" session line raw record match shape m _pass _c
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
@@ -269,7 +269,27 @@ emit_credential_hits() {
               # this, every wrapped leak would be located as
               # `shape=generic-assignment` while the table counted it as a
               # high-signal token.
-              case $m in *[:=]*) m=${m#*[:=]}; m=${m#"${m%%[![:space:]]*}"}; m=${m#[\"\']} ;; esac
+              # TWICE, because the table strips twice. Its sed's `[^:=]*` cannot
+              # cross a separator, so one pass removes exactly ONE wrapper — and
+              # a token stored under a credential-NAMED record field arrives as
+              # two (`secret":"token=ghp_…`). A single strip left `token=ghp_…`
+              # here and reported `generic-assignment` while the table counted a
+              # live github-token, sending the operator to a weak-signal record.
+              # (Codex P2 on #2520.)
+              # The `-n` guard mirrors the sed's `(.+)`, which refuses a
+              # separator that would leave nothing behind — that is what keeps a
+              # value whose own last character is `=` (base64 padding) from being
+              # eaten as a further wrapper and dropped from the report entirely.
+              for _pass in 1 2; do
+                case $m in
+                  *[:=]*)
+                    _c=${m#*[:=]}
+                    _c=${_c#"${_c%%[![:space:]]*}"}
+                    _c=${_c#[\"\']}
+                    [ -n "$_c" ] && m=$_c
+                    ;;
+                esac
+              done
               if   [[ $m =~ ^github_pat_[a-z0-9_]{20,} ]];        then shape="github-pat"
               elif [[ $m =~ ^gh[pousr]_[a-z0-9]{16,} ]];          then shape="github-token"
               elif [[ $m =~ ^akia[0-9a-z]{12,} ]];                then shape="aws-access-key-id"

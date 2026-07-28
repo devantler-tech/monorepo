@@ -1941,6 +1941,64 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credcompound" CODEX_HOME="$FIX/nocodex" MONOREPO
 check "compound assignment locates the high-signal key, not just generic" \
       "$OUT" "shape=aws-access-key-id"
 
+# NESTED wrappers: a token assignment stored under a credential-NAMED record
+# field (`{"secret":"token=ghp_…"}`) carries TWO wrappers in one match, because
+# the generic alternative matches from the outer `secret` and its value class
+# runs straight through the inner `token=`. The TABLE strips with a greedy
+# `[^:=]*[:=]` sed, which reaches the LAST separator in one pass, so it
+# classifies the underlying token. The locator stripped with `${m#*[:=]}` —
+# bash's SHORTEST match — which reaches only the FIRST separator, leaving
+# `token=ghp_…` and reporting `generic-assignment`. Same
+# locator-disagrees-with-its-own-table failure as the compound case above,
+# reached through a different door: the operator is sent to a weak-signal record
+# while the table reports a live token. (Codex P2 on #2520.)
+#
+# ⚠️ The nesting must be a REAL record field, not a JSON blob inside a text
+# value. The locator greps the RAW transcript line, where a nested blob's quotes
+# are backslash-escaped (`{\"secret\":\"token=…`) — and `\` breaks the outer
+# wrapper's `["']?[[:space:]]*[:=]`, so only one wrapper survives and the two
+# surfaces agree. That fixture passes without any fix and was measured doing so.
+mkdir -p "$FIX/crednested"
+cat > "$FIX/crednested/s.jsonl" <<'EOF'
+{"type":"user","secret":"token=__GHPD__","message":{"content":[{"type":"text","text":"see config"}]}}
+EOF
+subst "$FIX/crednested/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednested" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+# Assert AGREEMENT on both sides, as the sibling parity tests do — the table's
+# verdict is the reference, so a regression that broke the table instead of the
+# locator cannot pass by making the two agree on the wrong answer.
+if printf '%s' "$OUT" | grep -q 'github-token (classic/app)' \
+   && printf '%s' "$OUT" | grep -q 'shape=github-token'; then
+  ok "nested wrappers locate as the underlying token shape"
+else bad "nested wrappers locate as the underlying token shape" \
+  "$(printf '%s' "$OUT" | grep -E 'github-token|generic-assignment|session=' | head -4)"; fi
+
+# A value whose OWN trailing character is a separator must still produce a
+# locator row after nested stripping — base64 padding is the everyday case.
+#
+# ⚠️ ABLATION-MEASURED SCOPE, stated because the obvious reading is wrong: this
+# asserts the ROW SURVIVES, not that the stripper stopped at the right place.
+# Measured three variants against it — two passes with the non-empty guard, two
+# passes WITHOUT the guard, and longest-match `${m##*[:=]}` — and all three pass,
+# because a value stripped down to nothing fails every shape regex and lands in
+# the same `generic-assignment` bucket the correct value lands in. The locator
+# prints only the shape, so no assertion on its output can separate them.
+# The `-n` guard in the stripper is therefore defence-in-depth for parity with
+# the table's own value (its sed's `(.+)` refuses to leave nothing), NOT a
+# property this suite pins — the same honest scoping as the output-boundary
+# assertion above. What IS pinned here: dropping the row entirely, which is the
+# false negative this PR's head commit fixed and a real regression risk.
+mkdir -p "$FIX/crednestpad"
+cat > "$FIX/crednestpad/s.jsonl" <<'EOF'
+{"type":"user","secret":"token=__GENPAD__","message":{"content":[{"type":"text","text":"see config"}]}}
+EOF
+subst "$FIX/crednestpad/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednestpad" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "nested wrapper around a '='-terminated value still emits a locator" \
+      "$OUT" "shape=generic-assignment"
+
 # Repeated matches at ONE location collapse to `Nx` with the count printed, not
 # dropped. Measured 171 locator lines for 100 distinct locations on a 1-day
 # corpus, which buries the few high-signal rows. The TABLE still counts ONE
