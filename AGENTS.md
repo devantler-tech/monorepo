@@ -32,12 +32,19 @@ keeping them healthy *and* moving them forward.
 | UniFi Crossplane provider (shared lib) | `devantler-tech/provider-upjet-unifi` | `libraries/provider-upjet-unifi` | [AGENTS.md](https://github.com/devantler-tech/provider-upjet-unifi/blob/main/AGENTS.md) |
 | Kyverno policy library (shared lib) | `devantler-tech/kyverno-policies` | `libraries/kyverno-policies` | [AGENTS.md](https://github.com/devantler-tech/kyverno-policies/blob/main/AGENTS.md) |
 | World at Ruin (game) | `devantler-tech/world-at-ruin` | `applications/world-at-ruin` | [AGENTS.md](https://github.com/devantler-tech/world-at-ruin/blob/main/AGENTS.md) |
-| Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
-| AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
+| Wedding app | `devantler-tech/wedding-app` | `applications/wedding-app` | [AGENTS.md](https://github.com/devantler-tech/wedding-app/blob/main/AGENTS.md) |
+| AS Coaching | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | [AGENTS.md](https://github.com/devantler-tech/ascoachingogvaner/blob/main/AGENTS.md) |
 | UniFi network | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
 | 🌊 Project Board (org project 5) | — (not a repo; [org project 5](https://github.com/orgs/devantler-tech/projects/5)) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
 
 > Submodule `AGENTS.md` links use full GitHub URLs because those files live in the submodule repos, not this repo's tree (a relative link would 404 on GitHub).
+
+> **This table deliberately records no repository visibility.** Visibility changes without touching
+> this file, so a `(private)` marker here is a fact that goes stale silently while still being read
+> as authoritative — and it feeds a decision that matters, since putting a private repo's issue on
+> the public board is a maintainer call (see *Every issue belongs on the board*). Determine it live
+> from `gh api repos/devantler-tech/<repo> --jq .private` at the moment you need it, never from this
+> table.
 
 **World at Ruin — newest product, bootstrapped 2026-07-16** (maintainer direction the same day). A
 cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** as a
