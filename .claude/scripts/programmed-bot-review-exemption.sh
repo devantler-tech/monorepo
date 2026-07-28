@@ -17,9 +17,11 @@ commits_json="$7"
 commit_schema='type == "array" and length > 0 and all(.[];
   type == "object" and
   keys == [
+    "author_date",
     "author_email",
     "author_login",
     "author_name",
+    "committer_date",
     "committer_email",
     "committer_login",
     "committer_name",
@@ -27,7 +29,9 @@ commit_schema='type == "array" and length > 0 and all(.[];
     "sha"
   ] and
   all(.[]; type == "string") and
-  (.sha | test("^[0-9a-f]{40}$"))
+  (.sha | test("^[0-9a-f]{40}$")) and
+  (.author_date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+  (.committer_date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
 )'
 
 if [[ ! "${head}" =~ ^[0-9a-f]{40}$ ]] ||
@@ -97,12 +101,15 @@ is_semver() {
   [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
 }
 
+# The date pair is dropped before the identity comparison: this arm is authored by a bot account
+# that a rewrite would replace, so it already detects an adaptation commit the way the World at Ruin
+# arm cannot, and pinning timestamps here would only make the fixture brittle.
 matches_ksail_provenance() {
   local version="$1"
   jq -e \
     --arg head "${head}" \
     --arg version "${version}" \
-    '. == [{
+    'map(del(.author_date, .committer_date)) == [{
       sha: $head,
       author_login: "",
       author_name: "devantler-tech-bot[bot]",
@@ -163,18 +170,34 @@ matches_homebrew_provenance() {
 # single tap-token commit whose message is the normalized title. Named explicitly by maintainer
 # direction 2026-07-18 as a programmed release path.
 #
-# KNOWN LIMIT (#2291): this arm cannot detect a hand-amended commit. The tap token commits under the
-# maintainer's own Git identity, so `git commit --amend --no-edit` preserves every field checked
-# here while the cask body changes, and the PR stays exempt. The GoReleaser arm above is not
-# exposed to this, because an amend there replaces the `goreleaserbot` identity and breaks the
-# match. Closing it needs commit-signature provenance, which this schema does not carry.
+# This arm carries an identity check that the GoReleaser arm gets for free. The tap token commits
+# under the maintainer's own Git identity, so every login/name/email/message field is the same
+# whether the workflow produced the commit or a person rewrote it — an adaptation commit cannot be
+# detected by identity here the way `goreleaserbot` detects it above.
+#
+# The author/committer date pair supplies the missing signal. A commit created in one operation
+# carries one timestamp in both fields; `git commit --amend` preserves the author date and moves the
+# committer date, which is exactly the maneuver that edits a cask body while leaving every identity
+# field intact. Requiring the pair to be equal therefore revokes the exemption for a rewritten
+# commit and keeps it for a freshly-produced one (#2291).
+#
+# Measured 2026-07-28 on the real path: the CD workflow pushes with the tap token rather than
+# committing through the API, so its commits are `verified=false`/`unsigned`. A signature predicate
+# would reject every genuine release, which is why the date pair — not commit signing — is the
+# discriminator here.
+#
+# Residual, deliberately accepted: `git commit --amend --reset-author`, or an explicit `--date`,
+# realigns the pair and is not detected. Both are deliberate evasions by an actor who already holds
+# tap write access, whereas the plain `--amend` this catches is the maneuver reachable by accident.
 matches_war_cask_provenance() {
   local version="$1"
 
   jq -e \
     --arg head "${head}" \
     --arg version "${version}" \
-    '. == [{
+    'length == 1 and
+     (.[0].author_date == .[0].committer_date) and
+     (map(del(.author_date, .committer_date)) == [{
       sha: $head,
       author_login: "devantler",
       author_name: "Nikolai Emil Damm",
@@ -183,7 +206,7 @@ matches_war_cask_provenance() {
       committer_name: "Nikolai Emil Damm",
       committer_email: "ned@devantler.tech",
       message: "chore(cask): update world-at-ruin to \($version)"
-    }]' <<<"${commits_json}" >/dev/null
+    }])' <<<"${commits_json}" >/dev/null
 }
 
 if [[ "${branch}" == "deps/agent-skills-update" &&

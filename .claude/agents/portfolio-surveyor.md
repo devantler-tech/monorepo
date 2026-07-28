@@ -193,8 +193,13 @@ public and private — no per-repo loop needed to enumerate):
      with `gh api --paginate --slurp ... | jq -c 'add | map(...)'` (this `gh` version does not allow
      `--slurp` together with its own `--jq` flag), then normalize every commit into `commits_json` as an ordered compact
      JSON array whose objects contain exactly `sha`, `author_login`, `author_name`, `author_email`,
-     `committer_login`, `committer_name`, `committer_email`, and `message` (use an empty string for a
-     null login). Do not substitute `gh pr view --json commits`: it omits raw committer provenance.
+     `author_date`, `committer_login`, `committer_name`, `committer_email`, `committer_date`, and
+     `message` (use an empty string for a null login). Take both dates from the raw commit object
+     (`.commit.author.date` / `.commit.committer.date`) and pass them through verbatim in the
+     API's `YYYY-MM-DDTHH:MM:SSZ` form — the classifier compares them to each other to tell a
+     freshly-produced release commit from a rewritten one, so a reformatted or omitted date fails
+     the payload closed. Do not substitute `gh pr view --json commits`: it omits raw committer
+     provenance and both dates.
      The list's last SHA must equal `headRefOid`; an agent/maintainer adaptation commit therefore
      revokes the exemption even when the branch, title, and files still look generated. Exit 1 means
      the normal review gate applies; exit 2 or any query/classifier failure is a survey error
