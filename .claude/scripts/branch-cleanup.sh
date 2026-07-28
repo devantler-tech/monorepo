@@ -68,12 +68,15 @@ if ! toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || [ -z "$toplevel" ]
   echo "$SLUG: ABORT — '$REPO_PATH' is not inside a git repository" >&2
   exit 2
 fi
-# Compare physical paths: git may report an unresolved path where `pwd -P` has
-# followed symlinks (macOS /tmp -> /private/tmp), and that difference alone must
-# not read as a mismatch.
+# Compare by FILESYSTEM IDENTITY, not by string. Two spellings of one directory
+# are routine here: git may report an unresolved path where `pwd -P` has followed
+# symlinks (macOS /tmp -> /private/tmp), and on a case-insensitive volume (APFS)
+# the caller's casing survives in `pwd -P` while git reports its own — so a valid
+# sweep reached through a differently-cased path would abort on a string compare.
+# `-ef` compares device+inode and is what submodule-init.sh already uses.
 here_phys=$(pwd -P)
 top_phys=$(cd "$toplevel" 2>/dev/null && pwd -P)
-if [ "$here_phys" != "$top_phys" ]; then
+if [ -z "$top_phys" ] || ! [ "$here_phys" -ef "$top_phys" ]; then
   echo "$SLUG: ABORT — '$REPO_PATH' is not the repository root; git resolved upward to a" >&2
   echo "  parent repository, so this sweep would delete from the wrong tree. An" >&2
   echo "  uninitialised submodule is the usual cause — run .claude/scripts/submodule-init.sh" >&2
@@ -89,14 +92,26 @@ fi
 github_nwo() {
   url_lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
 
+  # The SCHEME decides whether the host means anything. Discarding everything
+  # through "://" without checking it accepts `file://github.com/owner/repo`,
+  # which git resolves as a LOCAL path (/owner/repo) while this script would go
+  # on to fetch its keep-set from GitHub — deleting branches in one repository
+  # against another's evidence. Only GitHub-capable network transports qualify;
+  # every other scheme is left unverifiable, which apply mode already refuses.
+  scan=$url_lc
+  case "$scan" in
+    *://*)
+      case "${scan%%://*}" in
+        https|http|ssh|git) scan=${scan#*://} ;;
+        *) printf '%s' ""; return ;;
+      esac
+      ;;
+  esac
+
   # Drop any userinfo BEFORE looking for the host. In "scheme://user:token@host/path"
   # the credential itself may contain "github.com", and a search for the first
   # occurrence would latch onto THAT — leaving the token inside the value this
   # script goes on to print in its mismatch message.
-  scan=$url_lc
-  case "$scan" in
-    *://*) scan=${scan#*://} ;;
-  esac
   auth=${scan%%/*}                  # authority: up to the first path slash
   rest=${scan#"$auth"}
   case "$auth" in
@@ -124,10 +139,23 @@ github_nwo() {
           ;;
         /*) nwo=${nwo#/} ;;
       esac
+      # A query or fragment can carry a CREDENTIAL (".../ksail.git?access_token=…").
+      # Left attached it also defeats the .git strip below, so the comparison fails
+      # and the mismatch message prints the token. Cut both before anything else.
+      nwo=${nwo%%\?*}
+      nwo=${nwo%%#*}
       # Trailing slash BEFORE the .git suffix: ".../ksail.git/" must reduce to
       # "devantler-tech/ksail", and stripping ".git" first would leave the slash.
       nwo=${nwo%/}
       nwo=${nwo%.git}
+      # A GitHub repository is exactly two path components. Anything else is a
+      # URL shape this parser does not understand, and guessing at it is how a
+      # stray suffix reaches the log — leave it unverifiable instead.
+      case "$nwo" in
+        */*/*|*/) nwo="" ;;
+        */*) ;;
+        *) nwo="" ;;
+      esac
       ;;
   esac
   printf '%s' "$nwo"

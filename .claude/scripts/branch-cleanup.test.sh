@@ -224,6 +224,50 @@ report "credentialed origin is parsed to owner/repo, not the userinfo" \
 report "credentialed origin never echoes the secret" \
   "$(grep -qF 's3kr3t-fixture-token' <<<"$out" && echo no || echo yes)"
 
+# --- 7g. a credential in the QUERY never reaches the log -------------------
+# A query/fragment can carry a token, and left attached it also defeats the .git
+# strip — so the comparison fails and the mismatch message prints the token.
+git -C "$slugwork" remote set-url origin \
+  "https://github.com/devantler-tech/does-not-exist-2531.git?access_token=s3kr3t-query-token"
+manifest="$tmp/manifest7g"
+: >"$manifest"
+out="$("$helper" "$slugwork" "ksail" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "a query-string credential never reaches the output" \
+  "$(grep -qF 's3kr3t-query-token' <<<"$out" && echo no || echo yes)" "out=$out"
+report "the query is stripped, leaving a clean owner/repo" \
+  "$(grep -qF "is 'devantler-tech/does-not-exist-2531'" <<<"$out" && echo yes || echo no)" "out=$out"
+
+# --- 7h. file:// is NOT a GitHub origin ------------------------------------
+# git treats file:// as a LOCAL transport, so `file://github.com/devantler-tech/x`
+# resolves to /devantler-tech/x on disk. Accepting it as GitHub would sweep a
+# local repository against GitHub's PR evidence. It must read as unverifiable —
+# which dry-run tolerates and apply refuses.
+git -C "$slugwork" remote set-url origin "file://github.com/devantler-tech/does-not-exist-2531"
+manifest="$tmp/manifest7h"
+: >"$manifest"
+out="$(env -u BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN \
+        "$helper" "$slugwork" "does-not-exist-2531" "$manifest" apply claude 2>&1)" && rc=0 || rc=$?
+report "a file:// origin is not accepted as GitHub (apply refused)" \
+  "$([[ ${rc:-0} -eq 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+report "the file:// refusal is the unverifiable-origin one, not a slug match" \
+  "$(grep -qF 'no GitHub origin' <<<"$out" && echo yes || echo no)" "out=$out"
+
+# --- 7i. a differently-cased path is still the same repository -------------
+# On a case-insensitive volume `pwd -P` keeps the caller's casing while git
+# reports its own, so a string compare would abort a perfectly valid sweep.
+git -C "$slugwork" remote set-url origin "https://github.com/devantler-tech/does-not-exist-2531.git"
+cased="$(dirname "$slugwork")/$(basename "$slugwork" | tr '[:lower:]' '[:upper:]')"
+manifest="$tmp/manifest7i"
+: >"$manifest"
+if [ -d "$cased" ]; then
+  out="$("$helper" "$cased" "ksail" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+  report "a differently-cased path reaches the ORIGIN check, not the root abort" \
+    "$(grep -qF 'does not match the checkout' <<<"$out" && echo yes || echo no)" "out=$out"
+else
+  report "a differently-cased path reaches the ORIGIN check, not the root abort" "yes" \
+    "skipped — case-sensitive volume, the string compare cannot diverge here"
+fi
+
 # --- 7e. a diverging PUSH destination is refused ---------------------------
 # The keep-set is fetched from the fetch url, but `git push origin --delete`
 # writes to the push url. With `remote.origin.pushurl` set they are different
