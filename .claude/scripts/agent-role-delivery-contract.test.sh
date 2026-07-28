@@ -187,6 +187,12 @@ for writer_namespace in '`claude/*`' '`codex/*`' '`cursor/*`'; do
 done
 grep -Fq 'remain undeployed and read-only' "${constitution}" ||
   fail "consumer does not fail closed for unmapped Cursor role schedules"
+assert_prose 'the in-session read-back is necessary but not sufficient' \
+  "runtime-local delivery incorrectly treats an in-session read-back as persistence proof"
+assert_prose 're-read after at least one dispatch of that schedule' \
+  "runtime-local delivery does not require a post-dispatch persistence check"
+assert_prose 'a reverted value with an advanced marker means the runtime overwrote the file' \
+  "runtime-local delivery does not recognise the dispatch-time rewrite failure mode"
 
 # --- The merged spend mandate -------------------------------------------------
 # Spend is a dimension of the Agentic Engineer. The consumer must supply the Spend

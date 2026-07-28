@@ -337,6 +337,13 @@ memory and the run report:**
   `/Users/homelab-mac-mini/.claude/hooks/`, and
   `/Users/homelab-mac-mini/.codex/config.toml`.
 
+For runtime-managed schedule pointers, **the in-session read-back is necessary but not sufficient**.
+Record the applied schedule and the surface's own change marker, then **re-read after at least one
+dispatch of that schedule**. Completion requires the value to persist while the marker advances; **a
+reverted value with an advanced marker means the runtime overwrote the file**, so use the runtime's
+supported control path rather than treating the file as authoritative. Keep the backup until this
+post-dispatch check passes.
+
 The deployed Cursor Automation has no supported local write surface. Its reviewed source is
 `.claude/loaders/cursor-daily-ai-engineer.md`; after that source merges, use a declared Maintainer
 channel for the UI paste rather than claiming the server-side prompt changed. Marketplace/plugin

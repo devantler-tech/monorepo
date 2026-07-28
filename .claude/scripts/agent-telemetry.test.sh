@@ -99,8 +99,10 @@ ex() { printf '%s' "$1" | sed \
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 mkdir -p "$FIX/projects/proj-a" "$FIX/codex/automations/daily-ai-engineer" \
+         "$FIX/codex/automations/agent-improver" \
          "$FIX/codex/sessions" "$FIX/monorepo/.claude" \
-         "$FIX/claude-sched/daily-ai-assistant"
+         "$FIX/claude-sched/daily-ai-assistant" \
+         "$FIX/claude-sched/agent-improver"
 
 # A session with: one failing Bash call, one credential-shaped string, one blocked
 # action, and — critically — a line of PROSE that tries to issue an instruction.
@@ -117,15 +119,32 @@ subst "$FIX/projects/proj-a/s1.jsonl"
 
 # Loader fixtures: Codex asserts the RETIRED gate; the constitution records it retired.
 cat > "$FIX/claude-sched/daily-ai-assistant/SKILL.md" <<'EOF'
-You are the devantler-tech AI Engineer, dispatched **every 4 hours** (00/04 local).
-You run in parallel with a sibling agent dispatched every second **hour** (uneven).
+description: Thin scheduler pointer for the Agentic Engineer (claude/* lane: EVEN hours 02–22, minus the 00/12 Agent Improver slots).
+EOF
+cat > "$FIX/claude-sched/agent-improver/SKILL.md" <<'EOF'
+description: Thin scheduler pointer for the Agent Improver (claude/* lane: 00 and 12 local).
 EOF
 cat > "$FIX/codex/automations/daily-ai-engineer/automation.toml" <<'EOF'
-prompt = "You are the devantler-tech AI Engineer, dispatched every second **hour** (uneven). definition/self-improvement PRs are the one exception: NEVER self-promote those"
-rrule = "RRULE:FREQ=HOURLY;BYHOUR=1,3,5;BYMINUTE=0"
+prompt = "definition/self-improvement PRs are the one exception: NEVER self-promote those"
+rrule = "RRULE:FREQ=HOURLY;BYHOUR=1,3,5,9,11,13,15,17,21,23;BYMINUTE=0"
+updated_at = 1785238559676
+EOF
+cat > "$FIX/codex/automations/agent-improver/automation.toml" <<'EOF'
+rrule = "RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0"
+updated_at = 1785222863850
 EOF
 cat > "$FIX/monorepo/AGENTS.md" <<'EOF'
 Definition PRs: their separate human promotion gate was retired by maintainer direction 2026-07-18.
+
+| Lane | Clean artifact | Findings artifact |
+|---|---|---|
+| **Codex** (`chatgpt-codex-connector[bot]`) | comment carries a 10-char SHA | review object |
+
+### Cadence & focus
+| Lane | Agentic Engineer | Agent Improver |
+|---|---|---|
+| **Claude** — `claude/*`, even hours | 02, 04, 06, 08, 10, 14, 16, 18, 20, 22 | 00, 12 |
+| **Codex** — `codex/*`, uneven hours | 01, 03, 05, 09, 11, 13, 15, 17, 21, 23 | 07, 19 |
 EOF
 mkdir -p "$FIX/monorepo/.claude"
 
@@ -133,7 +152,9 @@ run() {
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   CLAUDE_LOADER_PATH="$FIX/claude-sched/daily-ai-assistant/SKILL.md" \
+  CLAUDE_IMPROVER_LOADER_PATH="$FIX/claude-sched/agent-improver/SKILL.md" \
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
+  CODEX_IMPROVER_LOADER_PATH="$FIX/codex/automations/agent-improver/automation.toml" \
   bash "$TARGET" --since-days 3650 --max-files 50 "$@" 2>&1
 }
 
@@ -179,16 +200,38 @@ echo
 echo "drift"
 OUT=$(run --section drift)
 check "detects retired-rule residue"   "$OUT" "DRIFT"
-check "reads codex self-cadence"       "$OUT" "codex prose:  dispatched every second"
-check "reads claude self-cadence"      "$OUT" "claude prose: dispatched **every 4 hours**"
-# Regression guard: the claude loader also mentions the SIBLING's "(uneven)" cadence.
-# An unanchored match reads the wrong agent's schedule back as the claude one.
-nocheck "does not misread sibling cadence as claude's" "$OUT" "claude prose: dispatched every second"
+check "compares Claude engineer schedule" "$OUT" "claude engineer: expected=2,4,6,8,10,14,16,18,20,22 actual=2,4,6,8,10,14,16,18,20,22 MATCH"
+check "compares Claude improver schedule" "$OUT" "claude improver: expected=0,12 actual=0,12 MATCH"
+check "compares Codex engineer schedule"  "$OUT" "codex engineer:  expected=1,3,5,9,11,13,15,17,21,23 actual=1,3,5,9,11,13,15,17,21,23 MATCH"
+check "compares Codex improver schedule"  "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
+check "reports Codex engineer change marker" "$OUT" "MATCH updated_at=1785238559676"
+check "reports Codex improver change marker" "$OUT" "MATCH updated_at=1785222863850"
+check "proves local start parity"         "$OUT" "local simultaneous starts/day: 0"
+check "proves engineer dispatch volume"   "$OUT" "local engineer dispatches/day: 20"
+
+# Removing one pointer must fail closed rather than leaving the schedule surface
+# silently unmeasured. This is the exact blind spot that hid the reverted Codex
+# schedule after the applying run had recorded an in-session success.
+mv "$FIX/codex/automations/agent-improver/automation.toml" \
+   "$FIX/codex/automations/agent-improver/automation.toml.missing"
+OUT=$(run --section drift)
+check "missing improver pointer is explicit" "$OUT" "UNKNOWN: codex improver schedule pointer missing"
+mv "$FIX/codex/automations/agent-improver/automation.toml.missing" \
+   "$FIX/codex/automations/agent-improver/automation.toml"
+
+# A persisted runtime rewrite must report the concrete expected/actual delta.
+sed -i.bak 's/BYHOUR=7,19/BYHOUR=6,18/' \
+  "$FIX/codex/automations/agent-improver/automation.toml"
+OUT=$(run --section drift)
+check "runtime schedule rewrite is detected" "$OUT" "DRIFT: codex improver schedule expected=7,19 actual=6,18"
+check "runtime rewrite exposes collisions"   "$OUT" "local simultaneous starts/day: 2"
+mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
+   "$FIX/codex/automations/agent-improver/automation.toml"
 
 # ── 6. clean-state: no false positives when nothing is wrong ──────────────────
 echo
 echo "clean state"
-sed -i.bak 's/ definition\/self-improvement PRs are the one exception: NEVER self-promote those//' \
+sed -i.bak 's/definition\/self-improvement PRs are the one exception: NEVER self-promote those//' \
   "$FIX/codex/automations/daily-ai-engineer/automation.toml"
 OUT=$(run --section drift)
 nocheck "no drift reported once loaders agree" "$OUT" "⚠️  DRIFT"

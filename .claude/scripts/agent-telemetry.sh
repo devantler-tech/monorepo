@@ -1736,49 +1736,162 @@ if want drift; then
   echo
   echo "── DRIFT (loader ↔ constitution ↔ memory) ───────────────────────"
   CLAUDE_LOADER="${CLAUDE_LOADER_PATH:-$HOME/.claude/scheduled-tasks/daily-ai-assistant/SKILL.md}"
+  CLAUDE_IMPROVER_LOADER="${CLAUDE_IMPROVER_LOADER_PATH:-$HOME/.claude/scheduled-tasks/agent-improver/SKILL.md}"
   CODEX_LOADER="${CODEX_LOADER_PATH:-$CODEX_HOME/automations/daily-ai-engineer/automation.toml}"
+  CODEX_IMPROVER_LOADER="${CODEX_IMPROVER_LOADER_PATH:-$CODEX_HOME/automations/agent-improver/automation.toml}"
   AGENTS_MD="$MONOREPO/AGENTS.md"
 
-  for f in "$CLAUDE_LOADER" "$CODEX_LOADER" "$AGENTS_MD"; do
+  for f in "$CLAUDE_LOADER" "$CLAUDE_IMPROVER_LOADER" \
+           "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER" "$AGENTS_MD"; do
     [ -f "$f" ] && echo "  present: $f" || echo "  MISSING: $f"
   done
 
   echo
-  echo "  declared cadence vs actual schedule:"
-  # Extract the loader's SELF-description only. Both loaders also describe the
-  # SIBLING's cadence ("You run in parallel with ... dispatched every second hour"),
-  # so an unanchored match reads the wrong agent's schedule back — anchor on the
-  # self-identifying clause instead.
-  # Portable awk rather than a regex: the Codex loader packs the whole prompt onto
-  # ONE line containing both cadences, so a greedy `.*dispatched` picks the sibling's.
-  # index() finds the FIRST "dispatched" after the self-identifying clause. awk also
-  # sidesteps bounded/lazy quantifiers, which differ across grep implementations
-  # (BSD grep vs GNU grep vs ugrep) and would make this pass locally and fail in CI.
-  self_cadence() {
-    awk '
+  echo "  cadence table vs all four runtime schedule pointers:"
+
+  # Canonicalise an hour set for exact comparison. The contract prints zero-
+  # padded hours while RRULE uses integers; comparing the raw strings would
+  # report false drift for equivalent schedules.
+  normalise_hours() {
+    awk -F',' '
       {
-        i = index($0, "You are the devantler-tech")
-        if (i > 0) {
-          rest = substr($0, i)
-          j = index(rest, "dispatched")
-          if (j > 0) { print substr(rest, j, 70); exit }
+        out = ""
+        for (i = 1; i <= NF; i++) {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+          if ($i !~ /^[0-9][0-9]?$/) continue
+          h = $i + 0
+          if (h < 0 || h > 23 || seen[h]++) continue
+          out = out (out == "" ? "" : ",") h
         }
-      }' "$1" 2>/dev/null
+      }
+      END { print out }
+    '
   }
-  if [ -f "$CODEX_LOADER" ]; then
-    echo "    codex rrule:  $(grep -o 'BYHOUR=[0-9,]*' "$CODEX_LOADER" 2>/dev/null | head -1)"
-    echo "    codex prose:  $(self_cadence "$CODEX_LOADER")"
+
+  cadence_expected() {
+    local provider="$1" column="$2" lane
+    [ -f "$AGENTS_MD" ] || return 0
+    lane=$(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]')
+    awk -F'|' -v p="$provider" -v lane="$lane/*" -v c="$column" '
+      index($2, "**" p "**") && index($2, lane) { print $c; exit }
+    ' "$AGENTS_MD" 2>/dev/null | tr -cd '0-9, \n' | normalise_hours
+  }
+
+  codex_pointer_hours() {
+    [ -f "$1" ] || return 0
+    sed -nE 's/^rrule[[:space:]]*=[[:space:]]*".*BYHOUR=([0-9,]+).*/\1/p' "$1" \
+      | head -1 | normalise_hours
+  }
+
+  # Claude's native schedule pointer is a thin SKILL.md rather than a TOML
+  # record. Its machine-readable surface is the pointer's bounded lane clause:
+  # the engineer declares an even range and exclusions; the improver declares
+  # its two hours. Parse only those clauses, never unrelated numbers elsewhere
+  # in the prompt.
+  claude_pointer_hours() {
+    local file="$1" role="$2" flat bounds exclusions start end ex1 ex2
+    [ -f "$file" ] || return 0
+    flat=$(tr '\n' ' ' < "$file")
+    if [ "$role" = engineer ]; then
+      bounds=$(printf '%s\n' "$flat" \
+        | sed -nE 's/.*EVEN hours ([0-9][0-9])[^0-9]+([0-9][0-9]).*/\1,\2/p')
+      exclusions=$(printf '%s\n' "$flat" \
+        | sed -nE 's/.*minus the ([0-9][0-9])\/([0-9][0-9]).*/\1,\2/p')
+      [ -n "$bounds" ] || return 0
+      start=${bounds%%,*}
+      end=${bounds##*,}
+      ex1=${exclusions%%,*}
+      ex2=${exclusions##*,}
+      awk -v first="$start" -v last="$end" -v skip1="$ex1" -v skip2="$ex2" '
+        BEGIN {
+          out = ""
+          for (h = first + 0; h <= last + 0; h++) {
+            if (h % 2 != 0 || h == skip1 + 0 || h == skip2 + 0) continue
+            out = out (out == "" ? "" : ",") h
+          }
+          print out
+        }
+      '
+    else
+      printf '%s\n' "$flat" \
+        | sed -nE 's/.*lane:[^0-9]*([0-9][0-9])[[:space:]]+and[[:space:]]+([0-9][0-9])[[:space:]]+local.*/\1,\2/p' \
+        | normalise_hours
+    fi
+  }
+
+  codex_change_marker() {
+    [ -f "$1" ] || return 0
+    awk -F'=' '
+      /^updated_at[[:space:]]*=/ {
+        gsub(/[[:space:]]/, "", $2)
+        print " updated_at=" $2
+        exit
+      }
+    ' "$1" 2>/dev/null
+  }
+
+  compare_schedule() {
+    local label="$1" expected="$2" actual="$3" file="$4" marker="${5:-}"
+    if [ ! -f "$file" ]; then
+      echo "    UNKNOWN: $label schedule pointer missing"
+    elif [ -z "$expected" ]; then
+      echo "    UNKNOWN: $label schedule absent from AGENTS.md cadence table"
+    elif [ -z "$actual" ]; then
+      echo "    UNKNOWN: $label schedule could not be parsed from its pointer"
+    elif [ "$expected" = "$actual" ]; then
+      printf '    %-16s expected=%s actual=%s MATCH%s\n' \
+        "${label}:" "$expected" "$actual" "$marker"
+    else
+      echo "    ⚠️  DRIFT: $label schedule expected=$expected actual=$actual$marker"
+    fi
+  }
+
+  CLAUDE_ENGINEER_EXPECTED=$(cadence_expected Claude 3)
+  CLAUDE_IMPROVER_EXPECTED=$(cadence_expected Claude 4)
+  CODEX_ENGINEER_EXPECTED=$(cadence_expected Codex 3)
+  CODEX_IMPROVER_EXPECTED=$(cadence_expected Codex 4)
+  CLAUDE_ENGINEER_ACTUAL=$(claude_pointer_hours "$CLAUDE_LOADER" engineer)
+  CLAUDE_IMPROVER_ACTUAL=$(claude_pointer_hours "$CLAUDE_IMPROVER_LOADER" improver)
+  CODEX_ENGINEER_ACTUAL=$(codex_pointer_hours "$CODEX_LOADER")
+  CODEX_IMPROVER_ACTUAL=$(codex_pointer_hours "$CODEX_IMPROVER_LOADER")
+
+  compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" "$CLAUDE_LOADER"
+  compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" "$CLAUDE_IMPROVER_LOADER"
+  compare_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
+    "$CODEX_LOADER" "$(codex_change_marker "$CODEX_LOADER")"
+  compare_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
+    "$CODEX_IMPROVER_LOADER" "$(codex_change_marker "$CODEX_IMPROVER_LOADER")"
+
+  if [ -n "$CLAUDE_ENGINEER_ACTUAL" ] && [ -n "$CLAUDE_IMPROVER_ACTUAL" ] \
+     && [ -n "$CODEX_ENGINEER_ACTUAL" ] && [ -n "$CODEX_IMPROVER_ACTUAL" ]; then
+    COLLISIONS=$(awk -v a="$CLAUDE_ENGINEER_ACTUAL,$CLAUDE_IMPROVER_ACTUAL" \
+                     -v b="$CODEX_ENGINEER_ACTUAL,$CODEX_IMPROVER_ACTUAL" '
+      BEGIN {
+        split(a, aa, ",")
+        split(b, bb, ",")
+        for (i in aa) if (aa[i] != "") left[aa[i]] = 1
+        for (i in bb) if (bb[i] != "" && left[bb[i]]) collisions++
+        print collisions + 0
+      }
+    ')
+    ENGINEER_DISPATCHES=$(awk -v a="$CLAUDE_ENGINEER_ACTUAL" -v b="$CODEX_ENGINEER_ACTUAL" '
+      BEGIN {
+        na = split(a, aa, ",")
+        nb = split(b, bb, ",")
+        print (a == "" ? 0 : na) + (b == "" ? 0 : nb)
+      }
+    ')
+    echo "    local simultaneous starts/day: $COLLISIONS"
+    echo "    local engineer dispatches/day: $ENGINEER_DISPATCHES"
+  else
+    echo "    local simultaneous starts/day: UNKNOWN (one or more pointers unmeasured)"
+    echo "    local engineer dispatches/day: UNKNOWN (one or more engineer pointers unmeasured)"
   fi
-  if [ -f "$CLAUDE_LOADER" ]; then
-    echo "    claude prose: $(self_cadence "$CLAUDE_LOADER")"
-    echo "    claude cron:  (loader file holds no cron — cross-check the scheduled-tasks store)"
-  fi
-  echo "    ⇒ compare prose against the ACTUAL schedule; a mismatch means the agent"
-  echo "      is told a cadence it does not run on (affects its own pacing decisions)."
 
   echo
   echo "  retired-rule residue (loader asserts something the constitution dropped):"
-  for L in "$CLAUDE_LOADER" "$CODEX_LOADER"; do
+  for L in "$CLAUDE_LOADER" "$CLAUDE_IMPROVER_LOADER" \
+           "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER"; do
     [ -f "$L" ] || continue
     if grep -qiE 'NEVER self-promote those|promotion stays the maintainer' "$L" 2>/dev/null; then
       if [ -f "$AGENTS_MD" ] && grep -qiE 'promotion gate .{0,40}retired|retired by maintainer direction' "$AGENTS_MD" 2>/dev/null; then
