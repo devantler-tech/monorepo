@@ -307,9 +307,21 @@ emit_credential_hits() {
               # on the wrong one. Same rule as the wrapper/length agreement
               # above: a locator that disagrees with the row it annotates is
               # worse than no locator.
-              case $m in
-                [a-z0-9_-]*\*\*\**) [ "$shape" = generic-assignment ] || shape="$shape [masked-display]" ;;
-              esac
+              # ANCHORED, mirroring the table's `x ~ /^[a-z0-9_-]+\*\*\*/`. A
+              # bash glob cannot express "one-or-more of this class": in
+              # `[a-z0-9_-]*\*\*\**` the middle `*` is an unrestricted wildcard,
+              # so it only required ONE leading class character and `***`
+              # SOMEWHERE later. The shape regexes above are anchored at `^`
+              # only, so `ghp_<16 class chars>.junk***tail` classifies as
+              # github-token and that glob then tagged it `[masked-display]`
+              # while the table — whose regex fails at the `.` — did not.
+              # Wrong in the DANGEROUS direction: `[masked-display]` is
+              # documented as "do NOT rotate", so a live credential was labelled
+              # not-worth-rotating. (CodeRabbit Major on #2520; reproduced
+              # before fixing.)
+              if [ "$shape" != generic-assignment ] && [[ $m =~ $MASK_TAIL_RE ]]; then
+                shape="$shape [masked-display]"
+              fi
               printf '%s\t%s\t%s\t%s\n' "$session" "$line" "$record" "$shape"
             done
       done
@@ -376,6 +388,12 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # for the leak TABLE; redact() keeps the broad unanchored CRED_RE, so
 # over-redaction is preserved even where the table refuses to count.
 CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN [A-Z ]*PRIVATE KEY-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+# The locator's masked-display test, kept as a REGEX rather than a glob and kept
+# byte-for-byte equivalent to the table's own `x ~ /^[a-z0-9_-]+\*\*\*/`. It must
+# stay anchored and must require the WHOLE run before `***` to be class
+# characters: a glob cannot express that (its `*` is an unrestricted wildcard),
+# and the loose form mislabels a real credential as a tool's masked rendering.
+MASK_TAIL_RE='^[a-z0-9_-]+\*\*\*'
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
 # on Linux and its output pollutes the file list — six phantom paths for one

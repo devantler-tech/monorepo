@@ -2070,6 +2070,33 @@ if printf '%s' "$OUT" | grep -q 'masked-display' \
 else bad "locator carries the table's [masked-display] qualifier" \
   "$(printf '%s' "$OUT" | grep -E 'github-pat|session=' | head -3)"; fi
 
+# ...and must NOT carry it when the table would not. The fixture above cannot
+# catch an over-loose test, because its mask run immediately follows class
+# characters, so a strict and a loose check agree there. Here the run before
+# `***` contains a `.`, which is NOT in the class: the table's anchored
+# `^[a-z0-9_-]+\*\*\*` therefore does not fire, while a bash glob
+# (`[a-z0-9_-]*\*\*\**`, whose middle `*` is an unrestricted wildcard) did.
+# The shape regexes are anchored at `^` only, so the value still classifies
+# github-token — meaning a LIVE credential was tagged `[masked-display]`, which
+# the report documents as "do NOT rotate". Wrong in the dangerous direction, so
+# the negative side is pinned as tightly as the positive one.
+# (CodeRabbit Major on #2520; reproduced against the real detector first.)
+mkdir -p "$FIX/credmasknotclass"
+cat > "$FIX/credmasknotclass/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPA__.junk***tail here"}]}}
+EOF
+subst "$FIX/credmasknotclass/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credmasknotclass" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+# Assert BOTH sides, so the table stays the reference: the row must be the plain
+# high-signal shape, and the locator must agree with it rather than adding the
+# lower-risk qualifier.
+if printf '%s' "$OUT" | grep -qE 'shape=github-token$|shape=github-token[^[]' \
+   && ! printf '%s' "$OUT" | grep -qE 'shape=github-token \[masked-display\]'; then
+  ok "locator withholds [masked-display] when the pre-mask run is not class chars"
+else bad "locator withholds [masked-display] when the pre-mask run is not class chars" \
+  "$(printf '%s' "$OUT" | grep -E 'github-token|session=' | head -3)"; fi
+
 
 echo
 echo "──────────────────────────────"
