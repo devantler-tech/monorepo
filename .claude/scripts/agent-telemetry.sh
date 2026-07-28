@@ -1834,6 +1834,8 @@ if want drift; then
     local label="$1" expected="$2" actual="$3" file="$4" marker="${5:-}" marker_required="${6:-0}"
     if [ ! -f "$file" ]; then
       echo "    UNKNOWN: $label schedule pointer missing"
+    elif [ "$marker_required" -eq 1 ] && [ -z "$marker" ]; then
+      echo "    UNKNOWN: $label change marker missing"
     elif [ -z "$expected" ]; then
       echo "    UNKNOWN: $label schedule absent from AGENTS.md cadence table"
     elif [ -z "$actual" ]; then
@@ -1843,9 +1845,6 @@ if want drift; then
         "${label}:" "$expected" "$actual" "$marker"
     else
       echo "    ⚠️  DRIFT: $label schedule expected=$expected actual=$actual$marker"
-    fi
-    if [ "$marker_required" -eq 1 ] && [ -z "$marker" ] && [ -f "$file" ]; then
-      echo "    UNKNOWN: $label change marker missing"
     fi
   }
 

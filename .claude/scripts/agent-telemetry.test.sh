@@ -225,6 +225,7 @@ sed -i.bak '/^updated_at = /d' \
   "$FIX/codex/automations/agent-improver/automation.toml"
 OUT=$(run --section drift)
 check "missing runtime marker is explicit" "$OUT" "UNKNOWN: codex improver change marker missing"
+nocheck "missing runtime marker never claims persistence" "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
 mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
