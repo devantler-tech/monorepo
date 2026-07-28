@@ -337,6 +337,20 @@ memory and the run report:**
   `/Users/homelab-mac-mini/.claude/hooks/`, and
   `/Users/homelab-mac-mini/.codex/config.toml`.
 
+For runtime-managed schedule pointers, **the in-session read-back is necessary but not sufficient**.
+Record the applied schedule and the surface's own change marker, then **re-read after at least one
+dispatch of that schedule**. Completion requires the value to persist while the marker advances; **a
+reverted value with an advanced marker means the runtime overwrote the file**, so use the runtime's
+supported control path rather than treating the file as authoritative. Keep the backup until this
+post-dispatch check passes. Supply that post-apply baseline to the drift check as
+`CLAUDE_ENGINEER_MARKER_BASELINE`, `CLAUDE_IMPROVER_MARKER_BASELINE`,
+`CODEX_ENGINEER_MARKER_BASELINE`, or `CODEX_IMPROVER_MARKER_BASELINE`. Claude cadence comes from the
+authoritative `scheduled-tasks.json` record selected by exact task id plus pointer path, with
+`lastRunAt` as its marker; the `SKILL.md` description is not scheduler state. Codex cadence and
+markers come from `automation.toml`'s complete RRULE and `updated_at`. A missing or ambiguous store,
+missing baseline, marker that did not advance, or incomplete recurrence rule is `UNKNOWN`, never
+`MATCH`.
+
 The deployed Cursor Automation has no supported local write surface. Its reviewed source is
 `.claude/loaders/cursor-daily-ai-engineer.md`; after that source merges, use a declared Maintainer
 channel for the UI paste rather than claiming the server-side prompt changed. Marketplace/plugin
