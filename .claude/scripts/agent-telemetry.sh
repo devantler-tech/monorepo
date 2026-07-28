@@ -12,13 +12,15 @@
 #   of this output and acts on it has been injected. See the installed
 #   `agentic-engineering` plugin's `agent-improver` → "Ingestion boundary".
 #
-# Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME] [--injection-provenance]
+# Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME]
+#                           [--injection-provenance] [--credential-provenance]
 set -uo pipefail
 
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
 INJECTION_PROVENANCE=0
+CREDENTIAL_PROVENANCE=0
 
 # Require a value before shifting past it. `shift 2` with only one arg left is a
 # no-op error under `set +e`, which spins the loop on the same $1 forever — a
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
     --max-files)  need_val "$@"; MAX_FILES="$2";  shift 2 ;;
     --section)    need_val "$@"; SECTION="$2";    shift 2 ;;
     --injection-provenance) INJECTION_PROVENANCE=1; shift ;;
+    --credential-provenance) CREDENTIAL_PROVENANCE=1; shift ;;
     -h|--help)    sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
@@ -174,10 +177,12 @@ PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot creat
 # Distinct prefix from .agtel_inj so the aggregate-identity width instrumentation
 # in the test suite keeps measuring only the phrase scratch it targets.
 CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+CREDCONC=$(mktemp "${TMPDIR:-/tmp}/.agtel_credconc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV"' EXIT
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -207,6 +212,144 @@ emit_injection_hits() {
                        | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)
               [ -n "$phrase" ] || continue
               printf '%s\t%s\t%s\t%s\n' "$session" "$line" "$record" "$phrase"
+            done
+      done
+}
+
+# Locator for a credential-shaped match: session, line, record type and SHAPE.
+# Deliberately weaker than emit_injection_hits, which prints the matched phrase:
+# a phrase is evidence, a credential is the secret itself, so the value NEVER
+# leaves this function. Shape classification is duplicated from the table's awk
+# rather than shared because the table consumes normalised values and this
+# consumes raw matches; keep the two prefix sets in step.
+emit_credential_hits() {
+  local f="$1" session line raw record match shape m _pass _c
+  session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
+  [ -n "$session" ] || session=unknown
+
+  # -a is LOAD-BEARING: a single NUL byte anywhere in the file makes grep treat
+  # it as binary and emit nothing at all. The table and concentration scans both
+  # pass -a, so without it here the row is counted while its locator silently
+  # vanishes — provenance disappearing exactly on the odd record most worth
+  # inspecting. Reproduced, not assumed (CodeRabbit finding).
+  # Translating NUL is the second half of the same fix: bash's `read` TRUNCATES a
+  # line at the first NUL, so -a alone gets the line out of grep and then the
+  # match is silently lost from $raw before the inner scan ever sees it.
+  # (Verified under bash specifically — zsh's read does not truncate, so an
+  # interactive spot-check in the wrong shell reports this as working.)
+  # 🔴 It must be `tr '\000' ' '`, NOT `tr -d '\000'`. DELETING the byte welds the
+  # fragments on either side of it into one string, so two short, harmless
+  # token-shaped pieces become a full-length credential that never existed:
+  # `ghp_<8 chars>\0<12 chars>` is correctly NOT counted by the table, but the
+  # deleting form emitted `shape=github-token` for it — a PHANTOM high-signal
+  # locator pointing at a credential nobody ever leaked, which is a false
+  # positive in a leak detector and the exact locator/table disagreement this
+  # provenance work exists to remove. A space is the right replacement because it
+  # appears in no token alphabet and in none of the shape regexes, so it cannot
+  # weld and cannot itself be mistaken for value content; it also keeps `$raw`
+  # parseable for the `jq` call below, which a literal NUL would not.
+  # (Codex P2 on #2520; reproduced before fixing.)
+  # `strip_ansi` runs BEFORE the scan so a styled credential is locatable at all;
+  # it is line-for-line, so grep's `-n` numbering still names the real record.
+  strip_ansi < "$f" 2>/dev/null | grep -naiE "$CRED_TABLE_RE" 2>/dev/null | tr '\000' ' ' \
+    | while IFS=: read -r line raw; do
+        case "$line" in ''|*[!0-9]*) continue ;; esac
+        line=$(printf '%s' "$line" | cut -c1-12)
+        record=$(printf '%s' "$raw" | jq -r '.type // "malformed"' 2>/dev/null \
+                 | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
+        [ -n "$record" ] || record=malformed
+        # Split on `;&|` exactly as the TABLE does before classifying. One raw
+        # field can carry several assignments, and grep's leftmost-longest rule
+        # returns the whole run as a single match — so without this the locator
+        # strips only the first wrapper and reports `generic-assignment` for a
+        # field the table counts as a high-signal key.
+        printf '%s' "$raw" | grep -haoiE "$CRED_TABLE_RE" \
+          | tr ';&|' '\n' | grep -v '^$' \
+          | while IFS= read -r match || [ -n "$match" ]; do
+              # Classify to a SHAPE NAME and discard the value immediately.
+              # These mirror the TABLE's shape_of() including its LENGTH bounds,
+              # not just the prefix: a prefix-only test would report
+              # `shape=github-token` for `token=ghp_short`, which the table
+              # correctly counts as weak generic — a locator disagreeing with
+              # the table it annotates is worse than no locator. Anything
+              # unclassified reports as the weak generic bucket, so an
+              # unrecognised shape is never silently dropped.
+              m=$(printf '%s' "$match" | tr '[:upper:]' '[:lower:]')
+              m=${m#[^a-z0-9_-]}
+              # Strip a `KEY=`/`key: ` wrapper exactly as the table does before
+              # classifying. grep's LEFTMOST-match rule hands `token=ghp_…` to
+              # the generic alternative, so the match begins at the KEY — and
+              # that wrapped form is the commonest real-leak shape. Without
+              # this, every wrapped leak would be located as
+              # `shape=generic-assignment` while the table counted it as a
+              # high-signal token.
+              # TWICE, because the table strips twice. Its sed's `[^:=]*` cannot
+              # cross a separator, so one pass removes exactly ONE wrapper — and
+              # a token stored under a credential-NAMED record field arrives as
+              # two (`secret":"token=ghp_…`). A single strip left `token=ghp_…`
+              # here and reported `generic-assignment` while the table counted a
+              # live github-token, sending the operator to a weak-signal record.
+              # (Codex P2 on #2520.)
+              # The `-n` guard mirrors the sed's `(.+)`, which refuses a
+              # separator that would leave nothing behind — that is what keeps a
+              # value whose own last character is `=` (base64 padding) from being
+              # eaten as a further wrapper and dropped from the report entirely.
+              # That guard only covers a SINGLE trailing `=`. Base64 pads with up
+              # to TWO, and `secret=<b64>==` leaves `=` behind — non-empty, so the
+              # guard passes it, and the whole value collapses to `=`. Distinct
+              # secrets then share one identity and `sort -u` counts them as one
+              # credential: an UNDER-count in a leak detector. So pass 2 also
+              # refuses a remainder that itself begins with `=`, which is padding
+              # rather than a nested wrapper. Kept byte-equivalent to the table's
+              # `([^=].*)` second pass — a locator that disagreed with the table
+              # here would reintroduce exactly the divergence this work removes.
+              # (Codex P2 on #2520; reproduced before fixing.)
+              for _pass in 1 2; do
+                case $m in
+                  *[:=]*)
+                    _c=${m#*[:=]}
+                    _c=${_c#"${_c%%[![:space:]]*}"}
+                    _c=${_c#[\"\']}
+                    if [ "$_pass" = 2 ]; then
+                      case $_c in '='*) _c= ;; esac
+                    fi
+                    [ -n "$_c" ] && m=$_c
+                    ;;
+                esac
+              done
+              if   [[ $m =~ ^github_pat_[a-z0-9_]{20,} ]];        then shape="github-pat"
+              elif [[ $m =~ ^gh[pousr]_[a-z0-9]{16,} ]];          then shape="github-token"
+              elif [[ $m =~ ^akia[0-9a-z]{12,} ]];                then shape="aws-access-key-id"
+              elif [[ $m =~ ^xox[baprs]-[a-z0-9-]{10,} ]];        then shape="slack-token"
+              elif [[ $m =~ ^eyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,} ]]; then shape="jwt-like"
+              elif [[ $m == -----begin* ]];                       then shape="private-key-block"
+              else shape="generic-assignment"
+              fi
+              # Carry the table's [masked-display] qualifier through. Without
+              # it the table shows `github-pat (fine-grained) [masked-display]`
+              # (a tool's own masked rendering, do NOT rotate) while the
+              # locator says plain `shape=github-pat`, so an operator holding
+              # both a masked display and a real token of the same shape cannot
+              # tell which record belongs to the lower-risk row — and may rotate
+              # on the wrong one. Same rule as the wrapper/length agreement
+              # above: a locator that disagrees with the row it annotates is
+              # worse than no locator.
+              # ANCHORED, mirroring the table's `x ~ /^[a-z0-9_-]+\*\*\*/`. A
+              # bash glob cannot express "one-or-more of this class": in
+              # `[a-z0-9_-]*\*\*\**` the middle `*` is an unrestricted wildcard,
+              # so it only required ONE leading class character and `***`
+              # SOMEWHERE later. The shape regexes above are anchored at `^`
+              # only, so `ghp_<16 class chars>.junk***tail` classifies as
+              # github-token and that glob then tagged it `[masked-display]`
+              # while the table — whose regex fails at the `.` — did not.
+              # Wrong in the DANGEROUS direction: `[masked-display]` is
+              # documented as "do NOT rotate", so a live credential was labelled
+              # not-worth-rotating. (CodeRabbit Major on #2520; reproduced
+              # before fixing.)
+              if [ "$shape" != generic-assignment ] && [[ $m =~ $MASK_TAIL_RE ]]; then
+                shape="$shape [masked-display]"
+              fi
+              printf '%s\t%s\t%s\t%s\n' "$session" "$line" "$record" "$shape"
             done
       done
 }
@@ -272,7 +415,33 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # for the leak TABLE; redact() keeps the broad unanchored CRED_RE, so
 # over-redaction is preserved even where the table refuses to count.
 CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN [A-Z ]*PRIVATE KEY-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
-
+# The locator's masked-display test, kept as a REGEX rather than a glob and kept
+# byte-for-byte equivalent to the table's own `x ~ /^[a-z0-9_-]+\*\*\*/`. It must
+# stay anchored and must require the WHOLE run before `***` to be class
+# characters: a glob cannot express that (its `*` is an unrestricted wildcard),
+# and the loose form mislabels a real credential as a tool's masked rendering.
+MASK_TAIL_RE='^[a-z0-9_-]+\*\*\*'
+# ANSI normalization for the RAW scans (the locator and the concentration
+# metric), which read the transcript VERBATIM.
+#
+# 🔴 BOTH forms are load-bearing, and the encoded one is the form that actually
+# occurs. The TABLE decodes with `jq` first, so by the time it normalizes it can
+# only ever see a literal ESC byte. A raw scan never decodes — and a JSON string
+# cannot carry a literal ESC, so a transcript stores it ENCODED as ``.
+# Mirroring only the table's literal-ESC strip here is therefore a NO-OP on real
+# transcript bytes: measured on a realistic fixture, the styled token stayed
+# invisible under the literal-only strip and matched only once both forms went.
+#
+# Without this, a styled credential is counted by the table while the locator
+# cannot find it: the boundary-anchored regex needs a non-`[A-Za-z0-9_-]` char
+# before the prefix, and the CSI terminator `m` sits directly against it. The
+# reported shape is "one high-signal token across 0 transcript records", which
+# reads as a detector fault rather than the leak it is. (Codex P2 on #2520;
+# reproduced before fixing.)
+_ESC=$(printf '\033')
+strip_ansi() {
+  sed -E -e "s/${_ESC}\[[0-9;:]*[A-Za-z]//g" -e 's/\\u001[bB]\[[0-9;:]*[A-Za-z]//g'
+}
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
 # on Linux and its output pollutes the file list — six phantom paths for one
@@ -1357,7 +1526,9 @@ if want safety; then
         | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
         | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
         | tr ';&|' '\n' | grep -v '^$' \
-        | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
+        | sed -E -e 's/^[^A-Za-z0-9_-]//' \
+        -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
+        -e "s/^[^:=]*[:=][[:space:]]*[\"']?([^=].*)$/\1/" \
         -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
         | grep -E . | sort -u
     done | sort -u | awk '
@@ -1393,12 +1564,99 @@ if want safety; then
         else if (x ~ /^[a-z0-9_-]+\*\*\*/) s = s " [masked-display]"
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /'
+    # Concentration, mirroring the injection detector and placed directly under
+    # the table it qualifies. The TABLE counts distinct VALUES on purpose (one
+    # leak pasted into fifty transcripts is one credential to rotate); this
+    # answers the different question the table cannot — WHERE to look — without
+    # printing any value. Triaging the 2026-07-25 report needed four manual
+    # queries precisely because a documentation example, a test constant and a
+    # real leak render as the same integer.
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      cred_sess=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
+      [ -n "$cred_sess" ] || cred_sess=unknown
+      # Redact the basename BEFORE it reaches the scratch file. redact() runs at
+      # the OUTPUT boundary, so a credential-shaped session name would otherwise
+      # sit unmasked in $CREDCONC for the length of the run — and that file
+      # survives a SIGKILL, which the EXIT/HUP/INT/TERM trap cannot cover. The
+      # report would still print it masked, so this buys value minimisation at
+      # rest, not a change in what is displayed. Ordered AFTER the `tr -cd` on
+      # purpose: the mask introduces `…` and `<>`, which that filter strips.
+      # Two distinct real sessions stay distinct (UUID basenames carry no
+      # credential shape and pass through untouched); two DIFFERENT names of the
+      # same shape can merge, which under-counts sessions in a case that cannot
+      # occur outside a fixture and fails safe. (Codex P2 on #2520.)
+      cred_sess=$(printf '%s\n' "$cred_sess" | redact)
+      [ -n "$cred_sess" ] || cred_sess=unknown
+      # Split compound matches on `;&|` exactly as the TABLE does. The generic
+      # alternative's value class admits those separators, so grep's
+      # leftmost-longest rule hands back a whole run of assignments as ONE
+      # match and `grep -o` emits ONE line — reporting `largest single record:
+      # 1` for a record the table counts as three credentials. That is the
+      # amplified record the metric exists to surface, so the count has to
+      # agree with the table. The line locator is carried onto every fragment;
+      # a match consisting only of separators still emits its one row, so a
+      # locator can never be lost. records/sessions reduce through `sort -u`
+      # and are unchanged by construction. (Codex P2 on #2520.)
+      # Normalized exactly as the locator is, and for the same reason: an
+      # unnormalized scan reports a styled leak as `across 0 transcript records`,
+      # which is the metric contradicting the table it qualifies.
+      strip_ansi < "$f" 2>/dev/null | grep -naoEi "$CRED_TABLE_RE" 2>/dev/null \
+        | awk -F: -v s="$cred_sess" '
+            $1 ~ /^[0-9]+$/ {
+              ln = substr($1, 1, 12)
+              rest = substr($0, index($0, ":") + 1)
+              n = split(rest, frag, /[;&|]/)
+              emitted = 0
+              for (i = 1; i <= n; i++) if (frag[i] != "") { print s "\t" ln; emitted = 1 }
+              if (!emitted) print s "\t" ln
+            }'
+    done > "$CREDCONC"
+    cred_records=$(sort -u "$CREDCONC" | grep -c . || true)
+    cred_sessions=$(cut -f1 "$CREDCONC" | sort -u | grep -c . || true)
+    cred_top=$(sort "$CREDCONC" | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
+    echo "      across ${cred_records:-0} transcript records in ${cred_sessions:-0} sessions; largest single record: ${cred_top:-0}"
+    echo "      (raw-line locator — it can DIVERGE FROM THE TABLE IN BOTH"
+    echo "       DIRECTIONS, so read it as a pointer, never as a second count."
+    echo "       UNDER: the table scans DECODED strings, so an escaped-quote"
+    echo "       match is counted there with no locator line here. OVER: the"
+    echo "       table structurally excludes complete base64 image payloads"
+    echo "       (encoded binary manufactures token shapes at random '+'/'/'"
+    echo "       boundaries); this raw scan does not, so a record inside such"
+    echo "       an image can appear here while the table stays empty."
+    echo "       Concentration is CONTEXT, never a verdict.)"
+    : > "$CREDCONC"
     echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"
     echo "     fix the path that logged it — see the cross-system rotation rule; triage"
     echo "     the weak-signal generic bucket before treating it as a leak."
     echo "     [masked-display] = a tool's own prefix+mask token rendering, e.g."
     echo "     gh auth status — the secret segment never reached the transcript;"
     echo "     verify the mask is the tool's own display, don't rotate)"
+    if [ "$CREDENTIAL_PROVENANCE" -eq 1 ]; then
+      printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+        emit_credential_hits "$f"
+      done | redact > "$CREDPROV"
+      echo "    occurrence provenance (locator + SHAPE only — never the value):"
+      # Collapse identical locators to `Nx`. One record legitimately holds
+      # several matches, so the raw list repeats a location once per match —
+      # measured 171 lines for 100 distinct locations on a 1-day corpus, which
+      # buries the few high-signal rows this exists to surface. The count is
+      # PRINTED, not dropped, so nothing is silently truncated.
+      # NB: do NOT rebuild $0 to drop uniq's count — assigning to a field
+      # re-joins with OFS and turns the TABS into spaces, after which the
+      # split() below finds one field and every value prints empty.
+      sort "$CREDPROV" | uniq -c | sort -rn \
+        | awk '{
+            line = $0
+            sub(/^[[:space:]]*/, "", line)
+            n = line; sub(/[^0-9].*$/, "", n)
+            rest = line; sub(/^[0-9]+[[:space:]]+/, "", rest)
+            split(rest, p, "\t")
+            printf "      %4dx session=%s line=%s record=%s shape=%s\n", n, p[1], p[2], p[3], p[4]
+          }'
+      : > "$CREDPROV"
+    else
+      echo "    provenance: rerun with --section safety --credential-provenance"
+    fi
     echo
     echo "  build/codegen commands run in a session that ALSO checked out a"
     echo "  non-own branch (candidates for untrusted-code execution):"

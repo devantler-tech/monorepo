@@ -42,6 +42,28 @@ S_JWT="${S_JWTHEAD}NiJ9.${S_JWTTAIL}"
 S_AWS=$(_j 'AKI' 'AIOSFODNN7EXAMPLE')
 S_SLACK=$(_j 'xox' 'b-1234567890-abcdefghijklmno')
 S_GEN='s3cr3t''value0123456789abcdef'
+# A value that itself ends in '=' — base64 padding is the everyday case. The
+# assignment-stripping sed ran twice, so the value's own trailing '=' was eaten
+# as a second wrapper, leaving an empty string that `grep -E .` then dropped:
+# the credential disappeared from the table entirely, which is a false negative
+# in a leak detector rather than a cosmetic bug.
+S_GENPAD='c3ZhbHVl''MDEyMzQ1Njc4OWFiY2R='
+# Base64 pads with up to TWO '=', and the single-pad case above does not cover
+# it: the second strip pass left exactly '=' behind, which is non-empty, so the
+# emptiness guard passed it and the whole value collapsed to '='. Distinct
+# secrets then shared one identity and `sort -u` counted them as ONE — an
+# under-count in a leak detector. Two DIFFERENT values are needed to see it: a
+# single padded value looks fine on its own, which is why it survived.
+S_GENPAD2A='c3ZhbHVl''MDEyMzQ1Njc4OWFiY2Rl''=='
+S_GENPAD2B='cXV4cXV1''eGNvcmdlZGdyYXVsdHk''=='
+# A HIGH-SIGNAL token carrying the same double padding. A collapsed GENERIC
+# value is unobservable — '=' and the intact value both classify as
+# generic-assignment — so a generic fixture cannot pin the locator's copy of the
+# strip at all. Padding a token makes the collapse change the reported CLASS
+# (github-token -> generic-assignment), which is precisely the locator/table
+# divergence this work exists to remove, and it is what makes the guard testable
+# on both sides.
+S_GHPPAD2="${S_GHPB}=="
 
 # Replace placeholders in a fixture file with the assembled samples.
 subst() {
@@ -55,6 +77,9 @@ subst() {
       -e "s|__JWTTAIL__|$S_JWTTAIL|g" \
       -e "s|__JWTHEAD__|$S_JWTHEAD|g" -e "s|__JWT__|$S_JWT|g" \
       -e "s|__AWS__|$S_AWS|g"     -e "s|__SLACK__|$S_SLACK|g" \
+      -e "s|__GENPAD__|$S_GENPAD|g" \
+      -e "s|__GENPAD2A__|$S_GENPAD2A|g" -e "s|__GENPAD2B__|$S_GENPAD2B|g" \
+      -e "s|__GHPPAD2__|$S_GHPPAD2|g" \
       -e "s|__GEN__|$S_GEN|g" "$_f" && rm -f "$_f.bak"
   done
 }
@@ -67,6 +92,9 @@ ex() { printf '%s' "$1" | sed \
       -e "s|__JWTTAIL__|$S_JWTTAIL|g" \
       -e "s|__JWTHEAD__|$S_JWTHEAD|g" -e "s|__JWT__|$S_JWT|g" \
       -e "s|__AWS__|$S_AWS|g"     -e "s|__SLACK__|$S_SLACK|g" \
+      -e "s|__GENPAD__|$S_GENPAD|g" \
+      -e "s|__GENPAD2A__|$S_GENPAD2A|g" -e "s|__GENPAD2B__|$S_GENPAD2B|g" \
+      -e "s|__GHPPAD2__|$S_GHPPAD2|g" \
       -e "s|__GEN__|$S_GEN|g"; }
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -393,6 +421,10 @@ parity_case "aws"        "leak __AWS__" "__AWS__"
 parity_case "slack"      "leak __SLACK__" "__SLACK__"
 parity_case "jwt"        "leak __JWT__" "__JWTTAIL__"
 parity_case "generic"    "config token=__GEN__" "__GEN__"
+# A value ending in '=' must survive assignment-stripping. Stripping the wrapper
+# twice consumed the value's own padding and emptied the line, so the leak was
+# reported as clean.
+parity_case "generic_padded" "config secret=__GENPAD__" "__GENPAD__"
 
 # Codex image tools persist rendered images as very large `data:` strings in
 # custom tool outputs. Those strings are encoded binary, not transcript text;
@@ -1825,6 +1857,428 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nonexistent" CODEX_HOME="$FIX/codex" \
 check "handles a missing corpus" "$OUT" "no sessions in window"
 OUT=$(run --since-days notanumber); RC=$?
 if [ $RC -ne 0 ]; then ok "rejects non-numeric --since-days"; else bad "rejects non-numeric --since-days" "exited 0"; fi
+
+# ── 8. credential provenance (#2471) ──────────────────────────────────────────
+# The table counts DISTINCT VALUES by shape and says nothing about where a match
+# came from, so a documentation example, a test constant and a real leak are one
+# undifferentiated number. Triaging the 2026-07-25 report took four manual
+# queries. Provenance is an ADDITIONAL surface, exactly like
+# --injection-provenance: the table's counts and the redactor are unchanged, and
+# nothing is suppressed (that is why PR #2364, which classified records away,
+# was closed).
+echo
+echo "credential provenance"
+
+mkdir -p "$FIX/credprov"
+cat > "$FIX/credprov/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"example response shows __GHPB__ in docs"}]}}
+EOF
+subst "$FIX/credprov/s.jsonl"
+
+# Default run must NOT dump provenance — it is opt-in, so the routine scorecard
+# stays the same size and no locator is printed unless asked for.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "default run advertises the credential-provenance flag" "$OUT" \
+  "rerun with --section safety --credential-provenance"
+
+# Concentration: records/sessions/top-record, mirroring the injection detector.
+# SCOPE THIS TO THE CREDENTIAL SECTION. An unscoped grep matches the INJECTION
+# detector's identical concentration line and passes before anything is built —
+# caught here as a false pass during the RED run.
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$CREDSEC" | grep -qE 'across [0-9]+ transcript records in [0-9]+ sessions'; then
+  ok "credential table carries a concentration line"
+else bad "credential table carries a concentration line" "$CREDSEC"; fi
+
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "provenance emits a session locator" "$OUT" "session=s.jsonl"
+if printf '%s' "$OUT" | grep -qE 'session=s\.jsonl line=[0-9]+ record=user shape=github-token'; then
+  ok "provenance locator carries line, record type and shape"
+else bad "provenance locator carries line, record type and shape" \
+  "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
+
+# THE load-bearing safety property: a locator must never print the secret.
+# ⚠️ ABLATION-MEASURED SCOPE: this asserts the OUTPUT BOUNDARY, not the emitter.
+# Making emit_credential_hits print the raw match instead of the shape leaves it
+# GREEN, because redact() masks the value on the way out. It is kept as a
+# defence-in-depth assertion that would catch a redactor regression; the
+# EMITTER-level property is pinned by the `shape=` assertion above, which does
+# go RED under exactly that ablation.
+if printf '%s' "$OUT" | grep -q "$S_GHPB"; then
+  bad "output boundary never prints the credential value" "raw token appeared in output"
+else ok "output boundary never prints the credential value"; fi
+
+# The locator must AGREE with the table row it annotates: a locator naming a
+# different shape than the count it explains is worse than no locator. Asserted
+# as agreement on both sides, not as a guess about which shape is right —
+# an earlier version of this test asserted __PATP__ was weak-generic, which the
+# table disproves (21 chars after the prefix satisfies its {20,} bound).
+mkdir -p "$FIX/credshort"
+cat > "$FIX/credshort/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"token=__PATP__ here"}]}}
+EOF
+subst "$FIX/credshort/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credshort" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+if printf '%s' "$OUT" | grep -q 'github-pat (fine-grained)' \
+   && printf '%s' "$OUT" | grep -q 'shape=github-pat'; then
+  ok "locator shape agrees with the table row it annotates"
+else bad "locator shape agrees with the table row it annotates" \
+  "$(printf '%s' "$OUT" | grep -E 'github-|session=' | head -3)"; fi
+
+# The converse, and the one that actually matters: a LONG token behind a
+# `token=` wrapper is the commonest real-leak shape, and grep's leftmost rule
+# hands it to the generic alternative — so the match begins at the KEY. The
+# locator must strip that wrapper exactly as the table does, or every real
+# wrapped leak is located as `generic-assignment` while the table counts it
+# high-signal. The short-value test above CANNOT catch this (it is generic
+# either way), which an ablation proved.
+mkdir -p "$FIX/credwrap"
+cat > "$FIX/credwrap/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPD__ here"}]}}
+EOF
+subst "$FIX/credwrap/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credwrap" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "wrapped real token locates as its true shape" "$OUT" "shape=github-token"
+
+# One raw field can carry SEVERAL assignments, and grep's leftmost-longest rule
+# returns the whole run as a single match. The table splits on `;&|` before
+# classifying, so it counts the high-signal key; the locator did not, so it
+# stripped only the first wrapper and reported the remainder as
+# `generic-assignment`. That is the locator-disagrees-with-its-own-table failure
+# the classifier comment calls worse than no locator: the operator is told to
+# look for a weak generic where an AWS key is sitting.
+mkdir -p "$FIX/credcompound"
+cat > "$FIX/credcompound/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"env token=abcdefghijk;AWS_ACCESS_KEY=__AWS__ tail"}]}}
+EOF
+subst "$FIX/credcompound/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credcompound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "compound assignment locates the high-signal key, not just generic" \
+      "$OUT" "shape=aws-access-key-id"
+
+# NESTED wrappers: a token assignment stored under a credential-NAMED record
+# field (`{"secret":"token=ghp_…"}`) carries TWO wrappers in one match, because
+# the generic alternative matches from the outer `secret` and its value class
+# runs straight through the inner `token=`. The TABLE strips with a greedy
+# `[^:=]*[:=]` sed, which reaches the LAST separator in one pass, so it
+# classifies the underlying token. The locator stripped with `${m#*[:=]}` —
+# bash's SHORTEST match — which reaches only the FIRST separator, leaving
+# `token=ghp_…` and reporting `generic-assignment`. Same
+# locator-disagrees-with-its-own-table failure as the compound case above,
+# reached through a different door: the operator is sent to a weak-signal record
+# while the table reports a live token. (Codex P2 on #2520.)
+#
+# ⚠️ The nesting must be a REAL record field, not a JSON blob inside a text
+# value. The locator greps the RAW transcript line, where a nested blob's quotes
+# are backslash-escaped (`{\"secret\":\"token=…`) — and `\` breaks the outer
+# wrapper's `["']?[[:space:]]*[:=]`, so only one wrapper survives and the two
+# surfaces agree. That fixture passes without any fix and was measured doing so.
+mkdir -p "$FIX/crednested"
+cat > "$FIX/crednested/s.jsonl" <<'EOF'
+{"type":"user","secret":"token=__GHPD__","message":{"content":[{"type":"text","text":"see config"}]}}
+EOF
+subst "$FIX/crednested/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednested" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+# Assert AGREEMENT on both sides, as the sibling parity tests do — the table's
+# verdict is the reference, so a regression that broke the table instead of the
+# locator cannot pass by making the two agree on the wrong answer.
+if printf '%s' "$OUT" | grep -q 'github-token (classic/app)' \
+   && printf '%s' "$OUT" | grep -q 'shape=github-token'; then
+  ok "nested wrappers locate as the underlying token shape"
+else bad "nested wrappers locate as the underlying token shape" \
+  "$(printf '%s' "$OUT" | grep -E 'github-token|generic-assignment|session=' | head -4)"; fi
+
+# A value whose OWN trailing character is a separator must still produce a
+# locator row after nested stripping — base64 padding is the everyday case.
+#
+# ⚠️ SCOPE: this asserts the ROW SURVIVES, not that the stripper stopped at the
+# right separator. All three stripper variants (two passes with the non-empty
+# guard, two passes without it, and longest-match `${m##*[:=]}`) pass THIS case,
+# because a GENERIC value stripped to nothing lands in the same
+# `generic-assignment` bucket the correctly-stripped generic value lands in.
+# The stop-at-the-right-separator half is pinned by the high-signal case below.
+mkdir -p "$FIX/crednestpad"
+cat > "$FIX/crednestpad/s.jsonl" <<'EOF'
+{"type":"user","secret":"token=__GENPAD__","message":{"content":[{"type":"text","text":"see config"}]}}
+EOF
+subst "$FIX/crednestpad/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednestpad" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "nested wrapper around a '='-terminated value still emits a locator" \
+      "$OUT" "shape=generic-assignment"
+
+# The other half: a padded HIGH-SIGNAL value. This is where stopping at the WRONG
+# separator becomes visible, because collapsing the value loses its SHAPE — and
+# the shape is the only thing the locator prints. A JWT ending in base64 padding
+# has no interior `:`/`=`, so the trailing `=` is the first separator the second
+# pass sees; without the non-empty guard that pass empties the value and the row
+# degrades to the weak generic bucket.
+# Measured, three arms against this fixture:
+#   two passes + `-n` guard (as implemented) → jwt-like   ✓
+#   two passes, guard removed               → generic    ✗
+#   longest-match `${m##*[:=]}`             → generic    ✗
+# Both failing arms leave the REST of the suite green, so this case is the only
+# thing standing between the stripper and a silent revert to the pre-fix
+# behaviour. It matters specifically because collapsing the two-pass loop into
+# one longest-match strip is the obvious "simplify this" edit.
+# (Found by a sibling instance's differential pass on this PR's head — it built
+# the same fix independently, lost the push race, and diffed the two suites.)
+mkdir -p "$FIX/crednestpadjwt"
+cat > "$FIX/crednestpadjwt/s.jsonl" <<'EOF'
+{"type":"user","secret":"__JWT__=","message":{"content":[{"type":"text","text":"see config"}]}}
+EOF
+subst "$FIX/crednestpadjwt/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednestpadjwt" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "a padded HIGH-SIGNAL value keeps its shape through nested stripping" \
+      "$OUT" "shape=jwt-like"
+
+# Repeated matches at ONE location collapse to `Nx` with the count printed, not
+# dropped. Measured 171 locator lines for 100 distinct locations on a 1-day
+# corpus, which buries the few high-signal rows. The TABLE still counts ONE
+# distinct value here — the two surfaces answer different questions, and this
+# pins that they disagree in the RIGHT direction.
+mkdir -p "$FIX/creddup"
+DUPTOK="__GHPD__"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"a \\"%s\\" b \\"%s\\" c \\"%s\\""}]}}\n' \
+  "$DUPTOK" "$DUPTOK" "$DUPTOK" > "$FIX/creddup/s.jsonl"
+subst "$FIX/creddup/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/creddup" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+if printf '%s' "$OUT" | grep -qE '3x session=s\.jsonl line=1 .*shape=github-token'; then
+  ok "repeated matches at one location collapse with a printed count"
+else bad "repeated matches at one location collapse with a printed count" \
+  "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
+if printf '%s' "$OUT" | grep -qE '^[[:space:]]+1 github-token'; then
+  ok "table still counts ONE distinct value for the repeated token"
+else bad "table still counts ONE distinct value for the repeated token" \
+  "$(printf '%s' "$OUT" | grep 'github-token' | head -2)"; fi
+
+# A NUL byte anywhere in the file makes grep treat it as binary and emit
+# NOTHING without -a. The table and concentration scans both pass -a, so
+# omitting it in the locator counts the row while its provenance silently
+# vanishes — on exactly the odd record most worth inspecting. Reproduced
+# against real grep before fixing (CodeRabbit finding on #2520).
+mkdir -p "$FIX/credbin"
+printf 'prefix \000 token "__GHPA__" here\n' > "$FIX/credbin/s.jsonl"
+subst "$FIX/credbin/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credbin" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "NUL-bearing record still produces a locator" "$OUT" "session=s.jsonl"
+
+# ...and the NUL must be TRANSLATED, not DELETED. Deleting it welds the fragments
+# on either side into one string, so two short token-shaped pieces — neither a
+# credential on its own — become a full-length one that never existed in the
+# transcript. The table (which scans decoded strings with the NUL intact)
+# correctly counts only the real AWS key here; the deleting form ADDITIONALLY
+# emitted `shape=github-token`, a PHANTOM high-signal locator sending an operator
+# to rotate something nobody leaked. That is a false positive in a leak detector,
+# and the same locator-disagrees-with-its-own-table failure this provenance work
+# exists to remove. The AWS key on the same line is load-bearing: it is what makes
+# the OUTER grep select the line at all, so the welded fragments reach the inner
+# scan. (Codex P2 on #2520; reproduced against the real detector before fixing.)
+mkdir -p "$FIX/crednulweld"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"k=%s x %s\000%s y"}]}}\n' \
+  "$S_AWS" "$(_j 'gh' 'p_AAAAAAAA')" 'AAAAAAAAAAAA' > "$FIX/crednulweld/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednulweld" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+# Assert BOTH sides: the real credential is still located, and no phantom appears.
+if printf '%s' "$OUT" | grep -q 'shape=aws-access-key-id' \
+   && ! printf '%s' "$OUT" | grep -q 'shape=github-token'; then
+  ok "NUL is translated, not deleted, so fragments cannot weld into a phantom token"
+else bad "NUL is translated, not deleted, so fragments cannot weld into a phantom token" \
+  "$(printf '%s' "$OUT" | grep -E 'shape=' | head -3)"; fi
+# Pin the CONCENTRATION figure for the same record, so the third surface cannot
+# drift away from the table and the locator (CodeRabbit on #2520). Only the AWS
+# key is a credential here: the github fragment is 8 chars after its prefix,
+# below the 16 the shape requires, and the fragment after the NUL is not a token
+# at all — so exactly one match, on one record.
+# ⚠️ MEASURED SCOPE, stated because the obvious reading overclaims: this pins the
+# figure, it does NOT re-prove the NUL translation. The concentration scan runs
+# its own `grep` over the raw file and never passes through the `tr` in
+# emit_credential_hits, so flipping that back to the deleting form leaves this
+# assertion GREEN — verified by ablation, not assumed. The weld itself stays
+# pinned by the phantom-shape assertion directly above.
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$CREDSEC" | grep -qE 'largest single record: 1$'; then
+  ok "NUL-weld record pins the concentration figure too"
+else bad "NUL-weld record pins the concentration figure too" \
+  "$(printf '%s' "$CREDSEC" | grep -E 'across .* records')"; fi
+
+# The locator must carry the table's [masked-display] qualifier. Without it the
+# table says "do NOT rotate, it's a tool's own mask" while the locator names a
+# bare high-signal shape — so an operator holding both a masked display and a
+# real token of that shape cannot tell which record is the lower-risk one
+# (Codex finding on #2520).
+mkdir -p "$FIX/credmaskloc"
+cat > "$FIX/credmaskloc/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"Token: __PATA__*** (masked)"}]}}
+EOF
+subst "$FIX/credmaskloc/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credmaskloc" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+if printf '%s' "$OUT" | grep -q 'masked-display' \
+   && printf '%s' "$OUT" | grep -qE 'shape=github-pat \[masked-display\]'; then
+  ok "locator carries the table's [masked-display] qualifier"
+else bad "locator carries the table's [masked-display] qualifier" \
+  "$(printf '%s' "$OUT" | grep -E 'github-pat|session=' | head -3)"; fi
+
+# ...and must NOT carry it when the table would not. The fixture above cannot
+# catch an over-loose test, because its mask run immediately follows class
+# characters, so a strict and a loose check agree there. Here the run before
+# `***` contains a `.`, which is NOT in the class: the table's anchored
+# `^[a-z0-9_-]+\*\*\*` therefore does not fire, while a bash glob
+# (`[a-z0-9_-]*\*\*\**`, whose middle `*` is an unrestricted wildcard) did.
+# The shape regexes are anchored at `^` only, so the value still classifies
+# github-token — meaning a LIVE credential was tagged `[masked-display]`, which
+# the report documents as "do NOT rotate". Wrong in the dangerous direction, so
+# the negative side is pinned as tightly as the positive one.
+# (CodeRabbit Major on #2520; reproduced against the real detector first.)
+mkdir -p "$FIX/credmasknotclass"
+cat > "$FIX/credmasknotclass/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPA__.junk***tail here"}]}}
+EOF
+subst "$FIX/credmasknotclass/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credmasknotclass" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+# Assert BOTH sides, so the table stays the reference: the row must be the plain
+# high-signal shape, and the locator must agree with it rather than adding the
+# lower-risk qualifier.
+if printf '%s' "$OUT" | grep -qE 'shape=github-token$|shape=github-token[^[]' \
+   && printf '%s' "$OUT" | grep -q 'github-token (classic/app)' \
+   && ! printf '%s' "$OUT" | grep -qE 'github-token \(classic/app\) \[masked-display\]' \
+   && ! printf '%s' "$OUT" | grep -qE 'shape=github-token \[masked-display\]'; then
+  ok "locator withholds [masked-display] when the pre-mask run is not class chars"
+else bad "locator withholds [masked-display] when the pre-mask run is not class chars" \
+  "$(printf '%s' "$OUT" | grep -E 'github-token|session=' | head -3)"; fi
+
+
+# The concentration line must SPLIT compound matches, exactly as the table does.
+# The generic alternative's value class admits `;`, `&` and `|`, so grep's
+# leftmost-longest rule returns a whole run of assignments as ONE match — and
+# `grep -o` then emits ONE line for it. Counting lines therefore reported
+# `largest single record: 1` for a record the table and the provenance locator
+# both split into three credentials, which defeats the entire purpose of a
+# concentration metric: an amplified record is exactly what it exists to find.
+# Splitting here restores agreement with the table (the same rule the locator
+# already follows) and moves ONLY the top-record figure — records and sessions
+# both reduce through `sort -u`, so they are unchanged by construction.
+# (Codex P2 on #2520; reproduced against the real detector before fixing.)
+mkdir -p "$FIX/credcompound"
+cat > "$FIX/credcompound/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPA__;key=__AWS__;password=abcdefghijkl"}]}}
+EOF
+subst "$FIX/credcompound/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credcompound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$CREDSEC" | grep -qE 'largest single record: 3'; then
+  ok "concentration splits compound matches like the table"
+else bad "concentration splits compound matches like the table" \
+  "$(printf '%s' "$CREDSEC" | grep -E 'across .* records')"; fi
+
+# Guard the REGRESSION the source-side session redaction could introduce.
+# Redacting the basename before it reaches the scratch file must not collapse
+# distinct sessions into one bucket — a redactor that mapped every name to a
+# constant would still pass every "no secret is printed" assertion while
+# silently destroying the session count the concentration line reports.
+# ⚠️ SCOPE, stated because the obvious assertion is VACUOUS: the property the
+# redaction actually buys — that a credential-shaped basename never lands in
+# the temp file — is NOT observable from the output, because redact() masks the
+# value at the output boundary either way. The same limitation is documented
+# above for the emitter test. This assertion pins the part that IS observable.
+mkdir -p "$FIX/credsesscount"
+cat > "$FIX/credsesscount/alpha.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPA__"}]}}
+EOF
+cat > "$FIX/credsesscount/beta.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"key=__AWS__"}]}}
+EOF
+subst "$FIX/credsesscount/alpha.jsonl" "$FIX/credsesscount/beta.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credsesscount" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$CREDSEC" | grep -qE 'in 2 sessions'; then
+  ok "session redaction keeps distinct sessions distinct"
+else bad "session redaction keeps distinct sessions distinct" \
+  "$(printf '%s' "$CREDSEC" | grep -E 'across .* records')"; fi
+
+# Base64 pads with up to TWO '='. The single-pad guard above does not reach that
+# case: the second strip pass left exactly '=' behind, which is non-empty, so
+# every double-padded value collapsed to the SAME '=' identity and `sort -u`
+# reported unrelated secrets as one credential. Two DIFFERENT values are what
+# makes it visible — one padded value alone looks correct, which is why the
+# existing single-pad fixture never caught it. (Codex P2 on #2520.)
+mkdir -p "$FIX/credpad2"
+cat > "$FIX/credpad2/a.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"password=__GENPAD2A__"}]}}
+EOF
+cat > "$FIX/credpad2/b.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"password=__GENPAD2B__"}]}}
+EOF
+subst "$FIX/credpad2/a.jsonl" "$FIX/credpad2/b.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credpad2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+check "two distinct double-padded secrets stay two credentials" "$CREDSEC" \
+      "2 generic-assignment"
+# The value must survive stripping intact, not merely be counted: a collapsed
+# identity is what merged them, so pin that no row is the bare padding.
+nocheck "a double-padded value never collapses to bare padding" "$CREDSEC" " 1 ="
+
+# The locator keeps its OWN copy of the two-pass strip, so the table-side fix
+# above does not cover it — and a generic fixture cannot: '=' and an intact
+# generic value both classify as generic-assignment, so the collapse is
+# invisible. Pad a HIGH-SIGNAL token instead and the collapse changes the
+# reported class, which is observable on both surfaces at once: unguarded, the
+# locator says generic-assignment about a row the table counts as a github-token
+# — the exact locator/table disagreement this work removes.
+mkdir -p "$FIX/credpadhi"
+cat > "$FIX/credpadhi/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"password=__GHPPAD2__"}]}}
+EOF
+subst "$FIX/credpadhi/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credpadhi" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+check "a double-padded HIGH-SIGNAL token keeps its shape in the table" "$CREDSEC" \
+      "1 github-token (classic/app)"
+if printf '%s' "$OUT" | grep -qE 'shape=github-token'; then
+  ok "the locator agrees: double padding does not demote a token to generic"
+else bad "the locator agrees: double padding does not demote a token to generic" \
+  "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
+
+# A styled credential must stay LOCATABLE, not just counted. The table decodes
+# with jq before normalizing, so it only ever meets a literal ESC byte; the raw
+# locator/concentration scans read the transcript verbatim, where a JSON string
+# stores ESC ENCODED. Unnormalized, the boundary-anchored regex sees the CSI
+# terminator 'm' against the prefix and rejects it — the table then reports a
+# high-signal token "across 0 transcript records", which reads as a broken
+# detector rather than a real leak. (Codex P2 on #2520.)
+mkdir -p "$FIX/credansi"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"styled \\u001b[31m__GHPB__\\u001b[0m"}]}}\n' \
+  > "$FIX/credansi/s.jsonl"
+subst "$FIX/credansi/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credansi" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+check "an ANSI-styled token is still counted by the table" "$CREDSEC" \
+      "1 github-token (classic/app)"
+# THE assertion this pair exists for: the locator must AGREE with that count.
+# Scoped to the credential section — the injection detector prints an identical
+# concentration line, and an unscoped grep passes on that one instead.
+nocheck "a styled credential is not reported across 0 records" "$CREDSEC" \
+      "across 0 transcript records"
+if printf '%s' "$OUT" | grep -qE 'session=s\.jsonl line=[0-9]+ record=user shape=github-token'; then
+  ok "a styled credential still emits a full provenance locator"
+else bad "a styled credential still emits a full provenance locator" \
+  "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
 
 echo
 echo "──────────────────────────────"
