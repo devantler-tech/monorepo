@@ -53,6 +53,53 @@ DO_LOCAL=0
 
 cd "$REPO_PATH" || exit 1
 
+# --- <repo_path> and <slug> must describe the SAME repository -------------
+# The tree that gets deleted from comes from <repo_path>; the keep-set that
+# decides what survives is fetched for devantler-tech/<slug>. When they
+# disagree, branches are deleted from repository A against repository B's
+# open-PR evidence — the safety contract's central promise evaluated against
+# the wrong repository. Both checks run BEFORE the checkout is moved and before
+# anything is fetched, so a mismatch costs nothing.
+
+# (a) The path must be that repository's own root. An UNINITIALISED SUBMODULE
+#     directory is empty, so `cd` succeeds and git resolves UPWARD to the
+#     parent — silently, with no error and a zero exit (monorepo#2531).
+if ! toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || [ -z "$toplevel" ]; then
+  echo "$SLUG: ABORT — '$REPO_PATH' is not inside a git repository" >&2
+  exit 2
+fi
+# Compare physical paths: git may report an unresolved path where `pwd -P` has
+# followed symlinks (macOS /tmp -> /private/tmp), and that difference alone must
+# not read as a mismatch.
+here_phys=$(pwd -P)
+top_phys=$(cd "$toplevel" 2>/dev/null && pwd -P)
+if [ "$here_phys" != "$top_phys" ]; then
+  echo "$SLUG: ABORT — '$REPO_PATH' is not the repository root; git resolved upward to a" >&2
+  echo "  parent repository, so this sweep would delete from the wrong tree. An" >&2
+  echo "  uninitialised submodule is the usual cause — run .claude/scripts/submodule-init.sh" >&2
+  exit 2
+fi
+
+# (b) That repository must be the one the keep-set is fetched for. Only
+#     comparable when origin parses as a GitHub owner/repo; a local or
+#     non-GitHub origin (hermetic test clones) is left to check (a) alone.
+#     The URL itself is never echoed — it can carry credentials.
+origin_url=$(git remote get-url origin 2>/dev/null) || origin_url=""
+origin_nwo=""
+case "$origin_url" in
+  *github.com[:/]*)
+    origin_nwo=${origin_url#*github.com}
+    origin_nwo=${origin_nwo#[:/]}
+    origin_nwo=${origin_nwo%.git}
+    origin_nwo=${origin_nwo%/}
+    ;;
+esac
+if [ -n "$origin_nwo" ] && [ "$origin_nwo" != "devantler-tech/$SLUG" ]; then
+  echo "$SLUG: ABORT — slug '$SLUG' does not match the checkout at '$REPO_PATH', whose origin" >&2
+  echo "  is '$origin_nwo'. The keep-set would be fetched for the wrong repository." >&2
+  exit 2
+fi
+
 # DEFAULT reads the LOCAL origin/HEAD (set at clone) and needs no fresh fetch,
 # so the checkout-restoration path can be armed BEFORE fetching.
 DEFAULT=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')

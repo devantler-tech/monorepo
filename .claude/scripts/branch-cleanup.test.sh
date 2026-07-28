@@ -148,6 +148,52 @@ report "default (claude) dry-run exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo
 report "default dry-run reports ns=claude" \
   "$(grep -q 'ns=claude' <<<"$out" && echo yes || echo no)"
 
+# --- 6. repo_path that is not its own git toplevel is REFUSED -------------
+# monorepo#2531: an uninitialised submodule directory is empty, so `cd` succeeds
+# and git resolves UPWARD to the parent repository. The sweep then deletes from
+# the parent's tree while the keep-set is fetched for <slug> — the safety
+# contract's central promise evaluated against the wrong repository.
+mkdir -p "$work/applications/uninitialised-submodule"
+: >"$OPEN_HEADS_FILE"
+: >"$PR_EVIDENCE_FILE"
+manifest="$tmp/manifest6"
+: >"$manifest"
+out="$("$helper" "$work/applications/uninitialised-submodule" "ksail" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "path that resolves upward to a parent repo is refused (exit 2)" \
+  "$([[ ${rc:-0} -eq 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+report "refusal names the repository-root mismatch" \
+  "$(grep -qi 'repository root' <<<"$out" && echo yes || echo no)" "out=$out"
+report "refusal happened before any sweep output" \
+  "$(grep -q 'ns=claude' <<<"$out" && echo no || echo yes)" "out=$out"
+
+# --- 7. slug that disagrees with the checkout's origin is REFUSED ---------
+# Same defect class, caught by the other half: the tree IS its own toplevel, but
+# it is not the repository the keep-set will be fetched for. Origin is a
+# non-existent GitHub repo so that a REGRESSION fails fast at the fetch instead
+# of pulling a real repository over the network.
+slugwork="$tmp/slugwork"
+git clone --quiet "$bare" "$slugwork"
+git -C "$slugwork" remote set-url origin "https://github.com/devantler-tech/does-not-exist-2531.git"
+manifest="$tmp/manifest7"
+: >"$manifest"
+out="$("$helper" "$slugwork" "ksail" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "slug that disagrees with origin is refused (exit 2)" \
+  "$([[ ${rc:-0} -eq 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+report "slug refusal names both the slug and the origin repo" \
+  "$(grep -q 'ksail' <<<"$out" && grep -q 'does-not-exist-2531' <<<"$out" && echo yes || echo no)" "out=$out"
+
+# --- 8. a non-GitHub origin still runs (hermetic clones must keep working) -
+# The origin-vs-slug half can only compare when origin parses as a GitHub
+# owner/repo. A local bare origin cannot, so it is skipped there — the
+# toplevel half above still covers the silent walk-upward class.
+: >"$OPEN_HEADS_FILE"
+: >"$PR_EVIDENCE_FILE"
+manifest="$tmp/manifest8"
+: >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "non-GitHub origin does not trip the slug guard" \
+  "$([[ ${rc:-0} -eq 0 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+
 # Silence unused-var lint for the open_sha we only needed for push tip creation.
 : "$open_sha" "$local_sha"
 
