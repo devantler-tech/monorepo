@@ -2540,10 +2540,14 @@ exceeding 120 minutes, your own lane's next dispatch can start before you finish
 by construction — same namespace, same deterministic branch name, and a non-forced push is refused
 (see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim branch.
 
-**Each Agentic Engineer instance is dispatched every 2 hours.** That interval is the gap **between
+**Your LANE fires every 2 hours; your own ROLE's next slot is sometimes 4.** Two of each lane's twelve
+slots belong to the Agent Improver, so an Agentic Engineer's own next tick is **2 hours away eight
+times a day and 4 hours away twice** — Claude across its 12:00 and 00:00 improver slots (10→14, 22→02),
+Codex across its 07:00 and 19:00 ones (05→09, 17→21). That interval is the gap **between
 runs, not a per-run time
-budget** — and it is the *instance's* own gap that bounds a carry-forward, so a run that defers a
-watch item to "the next tick" is deferring it two hours, not minutes. Each run works
+budget** — and it is the *instance's* own gap that bounds a carry-forward, so **check which slot you
+are in before deferring**: a watch item handed to "the next tick" from a Claude **10:00/22:00** or a
+Codex **05:00/17:00** run waits four hours, not two. Each run works
 *The work-selection ladder* top-down — **breakage → every open PR you own or trust, drafts included →
 security issues → bugs → the oldest actionable issue** — capturing new
 non-trivial finds as issues (see *Issue-driven*).
