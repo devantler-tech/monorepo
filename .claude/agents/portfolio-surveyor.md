@@ -308,14 +308,17 @@ public and private — no per-repo loop needed to enumerate):
      reply, and select a successful check-run whose `started_at` follows that trigger. When multiple
      qualifying runs exist, newest `started_at`, then highest check-run id wins. If any condition is
      missing, retain `bugbot-findings@<sha>`.
-     **Distinguish never-requested from requested-but-absent:** after checking **all three** review
-     surfaces at the abbreviated head (CodeRabbit/Codex review objects + issue comments, and Bugbot
-     check-runs), when every review-output count is zero
-     (`cr:rev=0,cmt=0` **and** `codex:rev=0,cmt=0` **and** `bugbot:chk=0`), emit
-     `not-requested@<abbrev-head>` — not `none`. `none(…)` is reserved for PRs that *do* carry
-     review-output artifacts (stale greens, findings, prior reviews, prior Bugbot runs) but no
-     current-head green. **AUTO-REVIEW IS OFF** on every lane, so `not-requested` signals a **first**
-     review request and `none`/`*-stale` signals a **(re-)request**; neither token is outage evidence.
+     **Distinguish never-requested from requested-but-absent — two independent checks.** First
+     count **total** review-output artifacts on the PR across **all three** surfaces
+     (CodeRabbit/Codex review objects + issue comments, and Bugbot check-runs) — **any SHA,
+     not filtered to the current head**. Second, separately match those artifacts against the
+     abbreviated current head. Emit `not-requested@<abbrev-head>` only when the **total**
+     per-PR counts are zero (`cr:rev=0,cmt=0` **and** `codex:rev=0,cmt=0` **and** `bugbot:chk=0`) —
+     zero current-head matches alone is not enough. `none(…)` is reserved for PRs whose **total**
+     counts are non-zero (stale greens, findings, prior reviews, prior Bugbot runs) but none
+     match the current head. **AUTO-REVIEW IS OFF** on every lane, so `not-requested` signals a
+     **first** review request and `none`/`*-stale` signals a **(re-)request**; neither token is
+     outage evidence.
      Report `review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>` by scanning authenticated
      `<!-- review-request-head: <full sha> provider=<lane> -->` markers,
      reactions/acks, and later substantive artifacts. For a Bugbot marker, **pair it with the next exact-author bare `@cursor review` trigger while ignoring interleaved comments** from other authors;
@@ -520,17 +523,19 @@ overwhelmingly more common causes are a review that was never requested (auto-re
 staled by a push, a request that was silently dropped, and — because Codex's clean pass is an issue
 COMMENT with no `commit_id`, and its findings are a review OBJECT, and Bugbot's green is a
 CHECK-RUN — a surface you looked at with the wrong key. Before emitting `not-requested` or `none`
-for any row, confirm you checked **all three** surfaces at the **abbreviated** head sha; emit
-`not-requested` only when every lane's review-output counts are zero, and `none` only when review
-output exists but none matches the current head.
+for any row, confirm you checked **all three** surfaces and counted **total** artifacts on the PR
+(any SHA); current-head matching is a **separate** step against those totals. Emit
+`not-requested` only when every lane's **total** review-output counts are zero, and `none` only
+when review output **exists on the PR** but none matches the current head.
 
-**Zero review-output on all three surfaces is `not-requested`, not `none`.** After checking review
-objects, issue comments, and Bugbot check-runs at the abbreviated head, if
-`cr:rev=0,cmt=0` **and** `codex:rev=0,cmt=0` **and** `bugbot:chk=0`, emit
-`not-requested@<abbrev-head>` — that is the never-requested state (request a first review). Do **not**
-emit `none(cr:rev=0,cmt=0; codex:rev=0,cmt=0; bugbot:chk=0 @…)` for that case: collapsing
-never-requested into `none` is how a digest once looked like a portfolio-wide outage (#2244) and
-unlocked unwarranted self-reviews.
+**Zero review-output on all three surfaces is `not-requested`, not `none`.** Count review
+objects, issue comments, and Bugbot check-runs **across the whole PR** (total, not
+current-head-filtered). If `cr:rev=0,cmt=0` **and** `codex:rev=0,cmt=0` **and** `bugbot:chk=0`,
+emit `not-requested@<abbrev-head>` — that is the never-requested state (request a first review).
+Do **not** emit `none(cr:rev=0,cmt=0; codex:rev=0,cmt=0; bugbot:chk=0 @…)` for that case, and do
+**not** treat "zero current-head matches" as `not-requested` when stale/other-SHA artifacts exist:
+collapsing never-requested into `none` (or the reverse) is how a digest once looked like a
+portfolio-wide outage (#2244) and unlocked unwarranted self-reviews.
 
 **`none` must CARRY ITS EVIDENCE, or the rule above is satisfiable by asserting it.** Report it as
 `none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)` — the count of
