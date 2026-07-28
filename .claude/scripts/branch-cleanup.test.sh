@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 #
-# Self-test for branch-cleanup.sh — proves namespace parameterisation (monorepo#2298):
+# Self-test for branch-cleanup.sh — proves namespace parameterisation (monorepo#2298)
+# and the MODE / manifest contract (monorepo#2252 / #2255):
 #   - a live cursor/* branch whose OPEN PR is in the keep-set SURVIVES a cursor sweep
 #   - a spent cursor/* branch with SHA-matched MERGED PR evidence is REAPED remotely
 #   - local deletion stays claude-only (cursor sweep never deletes local refs)
 #   - codex namespace is refused
+#   - unrecognised MODE exits non-zero
+#   - dry-run leaves the manifest byte-identical (and still reports would-delete counts)
+#   - apply mode records then deletes
 # Hermetic: local bare "origin" + stubbed `gh` on PATH. No network.
 set -Eeuo pipefail
 
@@ -331,6 +335,60 @@ out="$(env -u BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN \
         "$helper" "$work" "monorepo" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
 report "dry-run over the same unverifiable origin is unaffected" \
   "$([[ ${rc:-0} -eq 0 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+
+# --- 10. Unrecognised MODE exits non-zero (monorepo#2252) ------------------
+out="$("$helper" "$work" "monorepo" "$tmp/m-bad" report 2>&1)" && rc=0 || rc=$?
+report "unrecognised MODE exits 1" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "unrecognised MODE names the bad value" \
+  "$(grep -Fq "got 'report'" <<<"$out" && echo yes || echo no)"
+
+# Explicit empty MODE must also abort — ${4:-apply} would silently treat "" as
+# apply and delete; ${4-apply} only defaults when the arg is omitted.
+out="$("$helper" "$work" "monorepo" "$tmp/m-empty" "" 2>&1)" && rc=0 || rc=$?
+report "empty MODE exits 1" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "empty MODE names the empty value" \
+  "$(grep -Fq "got ''" <<<"$out" && echo yes || echo no)"
+
+# --- 11. dry-run leaves the manifest byte-identical (monorepo#2252) --------
+# Spent claude/* tip reachable from remote + SHA-matched MERGED evidence so it
+# is eligible for local AND remote delete counting under the default (claude)
+# namespace.
+spent_local_sha=$(mk_remote_branch "claude/spent-dry-run-2252")
+git -C "$work" checkout main >/dev/null
+: >"$OPEN_HEADS_FILE"
+printf '%s\tMERGED\t%s\n' "claude/spent-dry-run-2252" "$spent_local_sha" >"$PR_EVIDENCE_FILE"
+manifest="$tmp/manifest-dry"
+printf 'seed-row\n' >"$manifest"
+before=$(cksum "$manifest")
+out="$("$helper" "$work" "monorepo" "$manifest" dry-run 2>&1)" && rc=0 || rc=$?
+after=$(cksum "$manifest")
+report "MODE dry-run exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "dry-run leaves manifest byte-identical" \
+  "$([[ "$before" == "$after" ]] && echo yes || echo no)" "before=$before after=$after"
+report "dry-run still counts the would-delete locally" \
+  "$(grep -qE 'local: -1[[:space:]]' <<<"$out" && echo yes || echo no)" "out=$out"
+report "dry-run still counts the would-delete remotely" \
+  "$(grep -qE 'remote: -1[[:space:]]' <<<"$out" && echo yes || echo no)" "out=$out"
+report "dry-run did not delete the local branch" \
+  "$(git -C "$work" rev-parse --verify --quiet "refs/heads/claude/spent-dry-run-2252" >/dev/null && echo yes || echo no)"
+report "dry-run did not delete the remote ref" \
+  "$(git -C "$bare" show-ref --verify --quiet "refs/heads/claude/spent-dry-run-2252" && echo yes || echo no)"
+
+# --- 12. apply mode records then deletes (monorepo#2252) -------------------
+# Reuse the same spent branch (still present after dry-run).
+manifest="$tmp/manifest-apply"
+: >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
+report "MODE apply exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc out=$out"
+report "apply deleted the local branch" \
+  "$(git -C "$work" rev-parse --verify --quiet "refs/heads/claude/spent-dry-run-2252" >/dev/null && echo no || echo yes)"
+report "apply deleted the remote ref" \
+  "$(git -C "$bare" show-ref --verify --quiet "refs/heads/claude/spent-dry-run-2252" && echo no || echo yes)"
+report "apply recorded the local deletion sha in the manifest" \
+  "$(grep -Fq $'monorepo\tlocal\tclaude/spent-dry-run-2252\t'"$spent_local_sha" "$manifest" && echo yes || echo no)"
+report "apply recorded the remote deletion sha and MERGED status" \
+  "$(grep -Fq $'monorepo\tremote\tclaude/spent-dry-run-2252\t'"$spent_local_sha"$'\tMERGED' "$manifest" && echo yes || echo no)"
+
 
 # Silence unused-var lint for the open_sha we only needed for push tip creation.
 : "$open_sha" "$local_sha"
