@@ -90,8 +90,10 @@ case "$origin_url" in
   *github.com[:/]*)
     origin_nwo=${origin_url#*github.com}
     origin_nwo=${origin_nwo#[:/]}
-    origin_nwo=${origin_nwo%.git}
+    # Trailing slash BEFORE the .git suffix: ".../ksail.git/" must reduce to
+    # "devantler-tech/ksail", and stripping ".git" first would leave the slash.
     origin_nwo=${origin_nwo%/}
+    origin_nwo=${origin_nwo%.git}
     ;;
 esac
 if [ -n "$origin_nwo" ] && [ "$origin_nwo" != "devantler-tech/$SLUG" ]; then
