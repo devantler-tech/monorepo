@@ -2074,6 +2074,22 @@ if printf '%s' "$OUT" | grep -q 'shape=aws-access-key-id' \
   ok "NUL is translated, not deleted, so fragments cannot weld into a phantom token"
 else bad "NUL is translated, not deleted, so fragments cannot weld into a phantom token" \
   "$(printf '%s' "$OUT" | grep -E 'shape=' | head -3)"; fi
+# Pin the CONCENTRATION figure for the same record, so the third surface cannot
+# drift away from the table and the locator (CodeRabbit on #2520). Only the AWS
+# key is a credential here: the github fragment is 8 chars after its prefix,
+# below the 16 the shape requires, and the fragment after the NUL is not a token
+# at all — so exactly one match, on one record.
+# ⚠️ MEASURED SCOPE, stated because the obvious reading overclaims: this pins the
+# figure, it does NOT re-prove the NUL translation. The concentration scan runs
+# its own `grep` over the raw file and never passes through the `tr` in
+# emit_credential_hits, so flipping that back to the deleting form leaves this
+# assertion GREEN — verified by ablation, not assumed. The weld itself stays
+# pinned by the phantom-shape assertion directly above.
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if printf '%s' "$CREDSEC" | grep -qE 'largest single record: 1$'; then
+  ok "NUL-weld record pins the concentration figure too"
+else bad "NUL-weld record pins the concentration figure too" \
+  "$(printf '%s' "$CREDSEC" | grep -E 'across .* records')"; fi
 
 # The locator must carry the table's [masked-display] qualifier. Without it the
 # table says "do NOT rotate, it's a tool's own mask" while the locator names a
@@ -2115,6 +2131,8 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credmasknotclass" CODEX_HOME="$FIX/nocodex" MONO
 # high-signal shape, and the locator must agree with it rather than adding the
 # lower-risk qualifier.
 if printf '%s' "$OUT" | grep -qE 'shape=github-token$|shape=github-token[^[]' \
+   && printf '%s' "$OUT" | grep -q 'github-token (classic/app)' \
+   && ! printf '%s' "$OUT" | grep -qE 'github-token \(classic/app\) \[masked-display\]' \
    && ! printf '%s' "$OUT" | grep -qE 'shape=github-token \[masked-display\]'; then
   ok "locator withholds [masked-display] when the pre-mask run is not class chars"
 else bad "locator withholds [masked-display] when the pre-mask run is not class chars" \
