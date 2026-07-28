@@ -126,11 +126,11 @@ description: Thin scheduler pointer for the Agent Improver (claude/* lane: 00 an
 EOF
 cat > "$FIX/codex/automations/daily-ai-engineer/automation.toml" <<'EOF'
 prompt = "definition/self-improvement PRs are the one exception: NEVER self-promote those"
-rrule = "RRULE:FREQ=HOURLY;BYHOUR=1,3,5,9,11,13,15,17,21,23;BYMINUTE=0"
+rrule = "RRULE:FREQ=HOURLY;INTERVAL=1;BYHOUR=1,3,5,9,11,13,15,17,21,23;BYMINUTE=0;BYSECOND=0"
 updated_at = 1785238559676
 EOF
 cat > "$FIX/codex/automations/agent-improver/automation.toml" <<'EOF'
-rrule = "RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0"
+rrule = "RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0"
 updated_at = 1785222863850
 EOF
 cat > "$FIX/monorepo/AGENTS.md" <<'EOF'
@@ -155,6 +155,10 @@ run() {
   CLAUDE_IMPROVER_LOADER_PATH="$FIX/claude-sched/agent-improver/SKILL.md" \
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
   CODEX_IMPROVER_LOADER_PATH="$FIX/codex/automations/agent-improver/automation.toml" \
+  CLAUDE_ENGINEER_MARKER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-1}" \
+  CLAUDE_IMPROVER_MARKER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-1}" \
+  CODEX_ENGINEER_MARKER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-1785238559000}" \
+  CODEX_IMPROVER_MARKER_BASELINE="${CODEX_IMPROVER_MARKER_BASELINE:-1785222863000}" \
   bash "$TARGET" --since-days 3650 --max-files 50 "$@" 2>&1
 }
 
@@ -204,8 +208,8 @@ check "compares Claude engineer schedule" "$OUT" "claude engineer: expected=2,4,
 check "compares Claude improver schedule" "$OUT" "claude improver: expected=0,12 actual=0,12 MATCH"
 check "compares Codex engineer schedule"  "$OUT" "codex engineer:  expected=1,3,5,9,11,13,15,17,21,23 actual=1,3,5,9,11,13,15,17,21,23 MATCH"
 check "compares Codex improver schedule"  "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
-check "reports Codex engineer change marker" "$OUT" "MATCH updated_at=1785238559676"
-check "reports Codex improver change marker" "$OUT" "MATCH updated_at=1785222863850"
+check "reports Codex engineer marker advance" "$OUT" "MATCH marker=1785238559676 baseline=1785238559000"
+check "reports Codex improver marker advance" "$OUT" "MATCH marker=1785222863850 baseline=1785222863000"
 check "proves local start parity"         "$OUT" "local simultaneous starts/day: 0"
 check "proves engineer dispatch volume"   "$OUT" "local engineer dispatches/day: 20"
 
@@ -226,8 +230,41 @@ sed -i.bak '/^updated_at = /d' \
 OUT=$(run --section drift)
 check "missing runtime marker is explicit" "$OUT" "UNKNOWN: codex improver change marker missing"
 nocheck "missing runtime marker never claims persistence" "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
+check "missing runtime marker invalidates parity total" "$OUT" "local simultaneous starts/day: UNKNOWN"
+check "missing runtime marker invalidates dispatch total" "$OUT" "local engineer dispatches/day: UNKNOWN"
 mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
    "$FIX/codex/automations/agent-improver/automation.toml"
+
+# An unchanged marker is the in-session read-back, not persistence proof.
+OUT=$(CODEX_IMPROVER_MARKER_BASELINE=1785222863850 run --section drift)
+check "unchanged marker is not persistence proof" "$OUT" "UNKNOWN: codex improver change marker did not advance"
+nocheck "unchanged marker never claims persistence" "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
+
+# RRULE parity includes minute, second, frequency, interval, and filters, not
+# merely the set of hours.
+sed -i.bak 's/BYMINUTE=0/BYMINUTE=30/' \
+  "$FIX/codex/automations/agent-improver/automation.toml"
+OUT=$(run --section drift)
+check "minute drift invalidates recurrence" "$OUT" "UNKNOWN: codex improver recurrence rule is incomplete or unsupported"
+check "minute drift invalidates aggregate parity" "$OUT" "local simultaneous starts/day: UNKNOWN"
+mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
+   "$FIX/codex/automations/agent-improver/automation.toml"
+
+# BYHOUR is a set; harmless serialization order must not create false drift.
+sed -i.bak 's/BYHOUR=7,19/BYHOUR=19,7/' \
+  "$FIX/codex/automations/agent-improver/automation.toml"
+OUT=$(run --section drift)
+check "hour sets are sorted before comparison" "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
+mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
+   "$FIX/codex/automations/agent-improver/automation.toml"
+
+# Same-provider overlaps are collisions too.
+sed -i.bak 's/lane: 00 and 12 local/lane: 00 and 10 local/' \
+  "$FIX/claude-sched/agent-improver/SKILL.md"
+OUT=$(run --section drift)
+check "same-provider overlap is counted" "$OUT" "local simultaneous starts/day: 1"
+mv "$FIX/claude-sched/agent-improver/SKILL.md.bak" \
+   "$FIX/claude-sched/agent-improver/SKILL.md"
 
 # A persisted runtime rewrite must report the concrete expected/actual delta.
 sed -i.bak 's/BYHOUR=7,19/BYHOUR=6,18/' \

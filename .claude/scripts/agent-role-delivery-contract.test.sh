@@ -193,6 +193,16 @@ assert_prose 're-read after at least one dispatch of that schedule' \
   "runtime-local delivery does not require a post-dispatch persistence check"
 assert_prose 'a reverted value with an advanced marker means the runtime overwrote the file' \
   "runtime-local delivery does not recognise the dispatch-time rewrite failure mode"
+for marker_baseline in \
+  '`CLAUDE_ENGINEER_MARKER_BASELINE`' \
+  '`CLAUDE_IMPROVER_MARKER_BASELINE`' \
+  '`CODEX_ENGINEER_MARKER_BASELINE`' \
+  '`CODEX_IMPROVER_MARKER_BASELINE`'; do
+  assert_prose "${marker_baseline}" \
+    "runtime-local delivery does not name ${marker_baseline} for persistence verification"
+done
+assert_prose 'A missing baseline, a marker that did not advance, or an incomplete recurrence rule is `UNKNOWN`, never `MATCH`.' \
+  "runtime-local delivery does not fail closed on incomplete persistence evidence"
 
 # --- The merged spend mandate -------------------------------------------------
 # Spend is a dimension of the Agentic Engineer. The consumer must supply the Spend

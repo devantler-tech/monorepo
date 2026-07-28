@@ -342,7 +342,11 @@ Record the applied schedule and the surface's own change marker, then **re-read 
 dispatch of that schedule**. Completion requires the value to persist while the marker advances; **a
 reverted value with an advanced marker means the runtime overwrote the file**, so use the runtime's
 supported control path rather than treating the file as authoritative. Keep the backup until this
-post-dispatch check passes.
+post-dispatch check passes. Supply that post-apply baseline to the drift check as
+`CLAUDE_ENGINEER_MARKER_BASELINE`, `CLAUDE_IMPROVER_MARKER_BASELINE`,
+`CODEX_ENGINEER_MARKER_BASELINE`, or `CODEX_IMPROVER_MARKER_BASELINE`; the Claude pointers use their
+file modification time and the Codex pointers use `updated_at`. A missing baseline, a marker that did
+not advance, or an incomplete recurrence rule is `UNKNOWN`, never `MATCH`.
 
 The deployed Cursor Automation has no supported local write surface. Its reviewed source is
 `.claude/loaders/cursor-daily-ai-engineer.md`; after that source merges, use a declared Maintainer

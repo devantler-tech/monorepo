@@ -1755,16 +1755,21 @@ if want drift; then
   normalise_hours() {
     awk -F',' '
       {
-        out = ""
         for (i = 1; i <= NF; i++) {
           gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
           if ($i !~ /^[0-9][0-9]?$/) continue
           h = $i + 0
-          if (h < 0 || h > 23 || seen[h]++) continue
-          out = out (out == "" ? "" : ",") h
+          if (h >= 0 && h <= 23) seen[h] = 1
         }
       }
-      END { print out }
+      END {
+        out = ""
+        for (h = 0; h <= 23; h++) {
+          if (!seen[h]) continue
+          out = out (out == "" ? "" : ",") h
+        }
+        print out
+      }
     '
   }
 
@@ -1778,9 +1783,34 @@ if want drift; then
   }
 
   codex_pointer_hours() {
+    local rule
     [ -f "$1" ] || return 0
-    sed -nE 's/^rrule[[:space:]]*=[[:space:]]*".*BYHOUR=([0-9,]+).*/\1/p' "$1" \
-      | head -1 | normalise_hours
+    rule=$(sed -nE 's/^rrule[[:space:]]*=[[:space:]]*"RRULE:([^"]+)".*/\1/p' "$1" \
+      | head -1)
+    [ -n "$rule" ] || return 0
+    printf '%s\n' "$rule" | awk -F';' '
+      {
+        for (i = 1; i <= NF; i++) {
+          split($i, pair, "=")
+          key = pair[1]
+          value = substr($i, length(key) + 2)
+          if (seen[key]++) invalid = 1
+          if (key == "FREQ") freq = value
+          else if (key == "INTERVAL") interval = value
+          else if (key == "BYHOUR") hours = value
+          else if (key == "BYMINUTE") minute = value
+          else if (key == "BYSECOND") second = value
+          else invalid = 1
+        }
+      }
+      END {
+        if (invalid || (freq != "DAILY" && freq != "HOURLY") ||
+            (interval != "" && interval != "1") ||
+            hours !~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/ ||
+            minute != "0" || second != "0") exit 1
+        print hours
+      }
+    ' | normalise_hours
   }
 
   # Claude's native schedule pointer is a thin SKILL.md rather than a TOML
@@ -1824,28 +1854,52 @@ if want drift; then
     awk -F'=' '
       /^updated_at[[:space:]]*=/ {
         gsub(/[[:space:]]/, "", $2)
-        print " updated_at=" $2
+        print $2
         exit
       }
     ' "$1" 2>/dev/null
   }
 
+  file_change_marker() {
+    [ -f "$1" ] || return 0
+    stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null || true
+  }
+
+  marker_advanced() {
+    local current="$1" baseline="$2"
+    [[ "$current" =~ ^[0-9]+$ ]] && [[ "$baseline" =~ ^[0-9]+$ ]] \
+      && [ "$current" -gt "$baseline" ]
+  }
+
   compare_schedule() {
-    local label="$1" expected="$2" actual="$3" file="$4" marker="${5:-}" marker_required="${6:-0}"
+    local label="$1" expected="$2" actual="$3" file="$4"
+    local marker="${5:-}" baseline="${6:-}" pointer_kind="${7:-pointer}"
     if [ ! -f "$file" ]; then
       echo "    UNKNOWN: $label schedule pointer missing"
-    elif [ "$marker_required" -eq 1 ] && [ -z "$marker" ]; then
-      echo "    UNKNOWN: $label change marker missing"
-    elif [ -z "$expected" ]; then
-      echo "    UNKNOWN: $label schedule absent from AGENTS.md cadence table"
+    elif [ -z "$actual" ] && [ "$pointer_kind" = recurrence ]; then
+      echo "    UNKNOWN: $label recurrence rule is incomplete or unsupported"
     elif [ -z "$actual" ]; then
       echo "    UNKNOWN: $label schedule could not be parsed from its pointer"
-    elif [ "$expected" = "$actual" ]; then
-      printf '    %-16s expected=%s actual=%s MATCH%s\n' \
-        "${label}:" "$expected" "$actual" "$marker"
+    elif [ -z "$expected" ]; then
+      echo "    UNKNOWN: $label schedule absent from AGENTS.md cadence table"
+    elif [ "$expected" != "$actual" ]; then
+      echo "    ⚠️  DRIFT: $label schedule expected=$expected actual=$actual marker=${marker:-missing} baseline=${baseline:-missing}"
+    elif [ -z "$marker" ]; then
+      echo "    UNKNOWN: $label change marker missing"
+    elif [ -z "$baseline" ]; then
+      echo "    UNKNOWN: $label change marker baseline missing"
+    elif ! marker_advanced "$marker" "$baseline"; then
+      echo "    UNKNOWN: $label change marker did not advance (marker=$marker baseline=$baseline)"
     else
-      echo "    ⚠️  DRIFT: $label schedule expected=$expected actual=$actual$marker"
+      printf '    %-16s expected=%s actual=%s MATCH marker=%s baseline=%s\n' \
+        "${label}:" "$expected" "$actual" "$marker" "$baseline"
     fi
+  }
+
+  schedule_measured() {
+    local file="$1" expected="$2" actual="$3" marker="$4" baseline="$5"
+    [ -f "$file" ] && [ -n "$expected" ] && [ -n "$actual" ] \
+      && marker_advanced "$marker" "$baseline"
   }
 
   CLAUDE_ENGINEER_EXPECTED=$(cadence_expected Claude 3)
@@ -1856,23 +1910,41 @@ if want drift; then
   CLAUDE_IMPROVER_ACTUAL=$(claude_pointer_hours "$CLAUDE_IMPROVER_LOADER" improver)
   CODEX_ENGINEER_ACTUAL=$(codex_pointer_hours "$CODEX_LOADER")
   CODEX_IMPROVER_ACTUAL=$(codex_pointer_hours "$CODEX_IMPROVER_LOADER")
+  CLAUDE_ENGINEER_MARKER=$(file_change_marker "$CLAUDE_LOADER")
+  CLAUDE_IMPROVER_MARKER=$(file_change_marker "$CLAUDE_IMPROVER_LOADER")
+  CODEX_ENGINEER_MARKER=$(codex_change_marker "$CODEX_LOADER")
+  CODEX_IMPROVER_MARKER=$(codex_change_marker "$CODEX_IMPROVER_LOADER")
+  CLAUDE_ENGINEER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-}"
+  CLAUDE_IMPROVER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-}"
+  CODEX_ENGINEER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-}"
+  CODEX_IMPROVER_BASELINE="${CODEX_IMPROVER_MARKER_BASELINE:-}"
 
-  compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" "$CLAUDE_LOADER"
-  compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" "$CLAUDE_IMPROVER_LOADER"
+  compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
+    "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE"
+  compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
+    "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE"
   compare_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
-    "$CODEX_LOADER" "$(codex_change_marker "$CODEX_LOADER")" 1
+    "$CODEX_LOADER" "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" recurrence
   compare_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
-    "$CODEX_IMPROVER_LOADER" "$(codex_change_marker "$CODEX_IMPROVER_LOADER")" 1
+    "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE" recurrence
 
-  if [ -n "$CLAUDE_ENGINEER_ACTUAL" ] && [ -n "$CLAUDE_IMPROVER_ACTUAL" ] \
-     && [ -n "$CODEX_ENGINEER_ACTUAL" ] && [ -n "$CODEX_IMPROVER_ACTUAL" ]; then
-    COLLISIONS=$(awk -v a="$CLAUDE_ENGINEER_ACTUAL,$CLAUDE_IMPROVER_ACTUAL" \
-                     -v b="$CODEX_ENGINEER_ACTUAL,$CODEX_IMPROVER_ACTUAL" '
+  if schedule_measured "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
+       "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" \
+     && schedule_measured "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
+       "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE" \
+     && schedule_measured "$CODEX_LOADER" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
+       "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" \
+     && schedule_measured "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
+       "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"; then
+    COLLISIONS=$(awk -v schedules="$CLAUDE_ENGINEER_ACTUAL,$CLAUDE_IMPROVER_ACTUAL,$CODEX_ENGINEER_ACTUAL,$CODEX_IMPROVER_ACTUAL" '
       BEGIN {
-        split(a, aa, ",")
-        split(b, bb, ",")
-        for (i in aa) if (aa[i] != "") left[aa[i]] = 1
-        for (i in bb) if (bb[i] != "" && left[bb[i]]) collisions++
+        count = split(schedules, slots, ",")
+        for (i = 1; i <= count; i++) {
+          if (slots[i] != "") starts[slots[i]]++
+        }
+        for (hour in starts) {
+          if (starts[hour] > 1) collisions += starts[hour] - 1
+        }
         print collisions + 0
       }
     ')
