@@ -48,6 +48,22 @@ S_GEN='s3cr3t''value0123456789abcdef'
 # the credential disappeared from the table entirely, which is a false negative
 # in a leak detector rather than a cosmetic bug.
 S_GENPAD='c3ZhbHVl''MDEyMzQ1Njc4OWFiY2R='
+# Base64 pads with up to TWO '=', and the single-pad case above does not cover
+# it: the second strip pass left exactly '=' behind, which is non-empty, so the
+# emptiness guard passed it and the whole value collapsed to '='. Distinct
+# secrets then shared one identity and `sort -u` counted them as ONE — an
+# under-count in a leak detector. Two DIFFERENT values are needed to see it: a
+# single padded value looks fine on its own, which is why it survived.
+S_GENPAD2A='c3ZhbHVl''MDEyMzQ1Njc4OWFiY2Rl''=='
+S_GENPAD2B='cXV4cXV1''eGNvcmdlZGdyYXVsdHk''=='
+# A HIGH-SIGNAL token carrying the same double padding. A collapsed GENERIC
+# value is unobservable — '=' and the intact value both classify as
+# generic-assignment — so a generic fixture cannot pin the locator's copy of the
+# strip at all. Padding a token makes the collapse change the reported CLASS
+# (github-token -> generic-assignment), which is precisely the locator/table
+# divergence this work exists to remove, and it is what makes the guard testable
+# on both sides.
+S_GHPPAD2="${S_GHPB}=="
 
 # Replace placeholders in a fixture file with the assembled samples.
 subst() {
@@ -62,6 +78,8 @@ subst() {
       -e "s|__JWTHEAD__|$S_JWTHEAD|g" -e "s|__JWT__|$S_JWT|g" \
       -e "s|__AWS__|$S_AWS|g"     -e "s|__SLACK__|$S_SLACK|g" \
       -e "s|__GENPAD__|$S_GENPAD|g" \
+      -e "s|__GENPAD2A__|$S_GENPAD2A|g" -e "s|__GENPAD2B__|$S_GENPAD2B|g" \
+      -e "s|__GHPPAD2__|$S_GHPPAD2|g" \
       -e "s|__GEN__|$S_GEN|g" "$_f" && rm -f "$_f.bak"
   done
 }
@@ -75,6 +93,8 @@ ex() { printf '%s' "$1" | sed \
       -e "s|__JWTHEAD__|$S_JWTHEAD|g" -e "s|__JWT__|$S_JWT|g" \
       -e "s|__AWS__|$S_AWS|g"     -e "s|__SLACK__|$S_SLACK|g" \
       -e "s|__GENPAD__|$S_GENPAD|g" \
+      -e "s|__GENPAD2A__|$S_GENPAD2A|g" -e "s|__GENPAD2B__|$S_GENPAD2B|g" \
+      -e "s|__GHPPAD2__|$S_GHPPAD2|g" \
       -e "s|__GEN__|$S_GEN|g"; }
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -2188,6 +2208,77 @@ if printf '%s' "$CREDSEC" | grep -qE 'in 2 sessions'; then
   ok "session redaction keeps distinct sessions distinct"
 else bad "session redaction keeps distinct sessions distinct" \
   "$(printf '%s' "$CREDSEC" | grep -E 'across .* records')"; fi
+
+# Base64 pads with up to TWO '='. The single-pad guard above does not reach that
+# case: the second strip pass left exactly '=' behind, which is non-empty, so
+# every double-padded value collapsed to the SAME '=' identity and `sort -u`
+# reported unrelated secrets as one credential. Two DIFFERENT values are what
+# makes it visible — one padded value alone looks correct, which is why the
+# existing single-pad fixture never caught it. (Codex P2 on #2520.)
+mkdir -p "$FIX/credpad2"
+cat > "$FIX/credpad2/a.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"password=__GENPAD2A__"}]}}
+EOF
+cat > "$FIX/credpad2/b.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"password=__GENPAD2B__"}]}}
+EOF
+subst "$FIX/credpad2/a.jsonl" "$FIX/credpad2/b.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credpad2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+check "two distinct double-padded secrets stay two credentials" "$CREDSEC" \
+      "2 generic-assignment"
+# The value must survive stripping intact, not merely be counted: a collapsed
+# identity is what merged them, so pin that no row is the bare padding.
+nocheck "a double-padded value never collapses to bare padding" "$CREDSEC" " 1 ="
+
+# The locator keeps its OWN copy of the two-pass strip, so the table-side fix
+# above does not cover it — and a generic fixture cannot: '=' and an intact
+# generic value both classify as generic-assignment, so the collapse is
+# invisible. Pad a HIGH-SIGNAL token instead and the collapse changes the
+# reported class, which is observable on both surfaces at once: unguarded, the
+# locator says generic-assignment about a row the table counts as a github-token
+# — the exact locator/table disagreement this work removes.
+mkdir -p "$FIX/credpadhi"
+cat > "$FIX/credpadhi/s.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"password=__GHPPAD2__"}]}}
+EOF
+subst "$FIX/credpadhi/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credpadhi" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+check "a double-padded HIGH-SIGNAL token keeps its shape in the table" "$CREDSEC" \
+      "1 github-token (classic/app)"
+if printf '%s' "$OUT" | grep -qE 'shape=github-token'; then
+  ok "the locator agrees: double padding does not demote a token to generic"
+else bad "the locator agrees: double padding does not demote a token to generic" \
+  "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
+
+# A styled credential must stay LOCATABLE, not just counted. The table decodes
+# with jq before normalizing, so it only ever meets a literal ESC byte; the raw
+# locator/concentration scans read the transcript verbatim, where a JSON string
+# stores ESC ENCODED. Unnormalized, the boundary-anchored regex sees the CSI
+# terminator 'm' against the prefix and rejects it — the table then reports a
+# high-signal token "across 0 transcript records", which reads as a broken
+# detector rather than a real leak. (Codex P2 on #2520.)
+mkdir -p "$FIX/credansi"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"styled \\u001b[31m__GHPB__\\u001b[0m"}]}}\n' \
+  > "$FIX/credansi/s.jsonl"
+subst "$FIX/credansi/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credansi" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+check "an ANSI-styled token is still counted by the table" "$CREDSEC" \
+      "1 github-token (classic/app)"
+# THE assertion this pair exists for: the locator must AGREE with that count.
+# Scoped to the credential section — the injection detector prints an identical
+# concentration line, and an unscoped grep passes on that one instead.
+nocheck "a styled credential is not reported across 0 records" "$CREDSEC" \
+      "across 0 transcript records"
+if printf '%s' "$OUT" | grep -qE 'session=s\.jsonl line=[0-9]+ record=user shape=github-token'; then
+  ok "a styled credential still emits a full provenance locator"
+else bad "a styled credential still emits a full provenance locator" \
+  "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
 
 echo
 echo "──────────────────────────────"

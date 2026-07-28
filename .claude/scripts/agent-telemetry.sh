@@ -249,7 +249,9 @@ emit_credential_hits() {
   # weld and cannot itself be mistaken for value content; it also keeps `$raw`
   # parseable for the `jq` call below, which a literal NUL would not.
   # (Codex P2 on #2520; reproduced before fixing.)
-  grep -naiE "$CRED_TABLE_RE" "$f" 2>/dev/null | tr '\000' ' ' \
+  # `strip_ansi` runs BEFORE the scan so a styled credential is locatable at all;
+  # it is line-for-line, so grep's `-n` numbering still names the real record.
+  strip_ansi < "$f" 2>/dev/null | grep -naiE "$CRED_TABLE_RE" 2>/dev/null | tr '\000' ' ' \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
@@ -292,12 +294,25 @@ emit_credential_hits() {
               # separator that would leave nothing behind — that is what keeps a
               # value whose own last character is `=` (base64 padding) from being
               # eaten as a further wrapper and dropped from the report entirely.
+              # That guard only covers a SINGLE trailing `=`. Base64 pads with up
+              # to TWO, and `secret=<b64>==` leaves `=` behind — non-empty, so the
+              # guard passes it, and the whole value collapses to `=`. Distinct
+              # secrets then share one identity and `sort -u` counts them as one
+              # credential: an UNDER-count in a leak detector. So pass 2 also
+              # refuses a remainder that itself begins with `=`, which is padding
+              # rather than a nested wrapper. Kept byte-equivalent to the table's
+              # `([^=].*)` second pass — a locator that disagreed with the table
+              # here would reintroduce exactly the divergence this work removes.
+              # (Codex P2 on #2520; reproduced before fixing.)
               for _pass in 1 2; do
                 case $m in
                   *[:=]*)
                     _c=${m#*[:=]}
                     _c=${_c#"${_c%%[![:space:]]*}"}
                     _c=${_c#[\"\']}
+                    if [ "$_pass" = 2 ]; then
+                      case $_c in '='*) _c= ;; esac
+                    fi
                     [ -n "$_c" ] && m=$_c
                     ;;
                 esac
@@ -406,6 +421,27 @@ CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-
 # characters: a glob cannot express that (its `*` is an unrestricted wildcard),
 # and the loose form mislabels a real credential as a tool's masked rendering.
 MASK_TAIL_RE='^[a-z0-9_-]+\*\*\*'
+# ANSI normalization for the RAW scans (the locator and the concentration
+# metric), which read the transcript VERBATIM.
+#
+# 🔴 BOTH forms are load-bearing, and the encoded one is the form that actually
+# occurs. The TABLE decodes with `jq` first, so by the time it normalizes it can
+# only ever see a literal ESC byte. A raw scan never decodes — and a JSON string
+# cannot carry a literal ESC, so a transcript stores it ENCODED as ``.
+# Mirroring only the table's literal-ESC strip here is therefore a NO-OP on real
+# transcript bytes: measured on a realistic fixture, the styled token stayed
+# invisible under the literal-only strip and matched only once both forms went.
+#
+# Without this, a styled credential is counted by the table while the locator
+# cannot find it: the boundary-anchored regex needs a non-`[A-Za-z0-9_-]` char
+# before the prefix, and the CSI terminator `m` sits directly against it. The
+# reported shape is "one high-signal token across 0 transcript records", which
+# reads as a detector fault rather than the leak it is. (Codex P2 on #2520;
+# reproduced before fixing.)
+_ESC=$(printf '\033')
+strip_ansi() {
+  sed -E -e "s/${_ESC}\[[0-9;:]*[A-Za-z]//g" -e 's/\\u001[bB]\[[0-9;:]*[A-Za-z]//g'
+}
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
 # on Linux and its output pollutes the file list — six phantom paths for one
@@ -1492,7 +1528,7 @@ if want safety; then
         | tr ';&|' '\n' | grep -v '^$' \
         | sed -E -e 's/^[^A-Za-z0-9_-]//' \
         -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
-        -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
+        -e "s/^[^:=]*[:=][[:space:]]*[\"']?([^=].*)$/\1/" \
         -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
         | grep -E . | sort -u
     done | sort -u | awk '
@@ -1561,7 +1597,10 @@ if want safety; then
       # a match consisting only of separators still emits its one row, so a
       # locator can never be lost. records/sessions reduce through `sort -u`
       # and are unchanged by construction. (Codex P2 on #2520.)
-      grep -naoEi "$CRED_TABLE_RE" "$f" 2>/dev/null \
+      # Normalized exactly as the locator is, and for the same reason: an
+      # unnormalized scan reports a styled leak as `across 0 transcript records`,
+      # which is the metric contradicting the table it qualifies.
+      strip_ansi < "$f" 2>/dev/null | grep -naoEi "$CRED_TABLE_RE" 2>/dev/null \
         | awk -F: -v s="$cred_sess" '
             $1 ~ /^[0-9]+$/ {
               ln = substr($1, 1, 12)
