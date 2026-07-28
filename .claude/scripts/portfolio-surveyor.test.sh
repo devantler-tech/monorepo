@@ -181,6 +181,62 @@ grep -Fq 'do **not** call' "${surveyor}" ||
   fail "surveyor still permits heavy dependency-PR deepening"
 grep -Fq 'count it against' "${surveyor}" ||
   fail "surveyor may still turn dependency automation into operate work"
+# Issue-side automation ownership (#2349): Renovate's Dependency Dashboard is an open issue by
+# design and will head oldest-first forever unless the surveyor excludes exact author identities
+# the same way it already does for dependency PRs. Match author only — never title/labels/age.
+grep -Fq 'Short-circuit dependency-automation ISSUES' "${surveyor}" ||
+  fail "surveyor does not short-circuit dependency-automation issues as no-action"
+grep -Fq 'Exclude them from every oldest-actionable' "${surveyor}" ||
+  fail "surveyor may still rank a Renovate Dependency Dashboard as oldest-actionable"
+grep -Fq 'platform#313' "${surveyor}" ||
+  fail "surveyor does not pin the live Dependency Dashboard counter-example"
+grep -Fq 'Never select, triage-as-work, or close' "${surveyor}" ||
+  fail "surveyor may still close or triage an automation-authored issue"
+grep -Fq 'author,labels,updatedAt,url,assignees' "${surveyor}" ||
+  fail "surveyor open-issue search omits author, so the issue-side filter cannot run"
+grep -Fq 'Drop issues authored by the exact dependency-' "${surveyor}" ||
+  fail "surveyor type sweeps may still rank automation-authored issues"
+grep -Fq '.user.login, .title,' "${surveyor}" ||
+  fail "surveyor type-sweep jq omits the author column the issue-side filter needs"
+# Pin every spelling of the identity on BOTH surfaces, and pin the author-only prohibition itself:
+# without these a later edit could drop one identity, or re-admit title/label/age matching, while
+# the descriptive prose still reads correct and every other assertion still passes.
+for identity in 'renovate[bot]' 'dependabot[bot]' 'app/renovate' 'app/dependabot'; do
+  grep -Fq "${identity}" "${surveyor}" ||
+    fail "surveyor omits automation identity: ${identity}"
+  grep -Fq "${identity}" "${constitution}" ||
+    fail "constitution omits automation identity: ${identity}"
+done
+grep -Fq 'Match **author login only** — never the title' "${surveyor}" ||
+  fail "surveyor does not enforce exact author-only matching"
+grep -Fq 'labels, or age' "${surveyor}" ||
+  fail "surveyor does not prohibit label/age matching"
+grep -Fq 'dependency PRs *and* issues are AUTOMATION-OWNED' "${constitution}" ||
+  fail "constitution does not extend the automation-owned carve-out to issues"
+grep -Fq 'Never select, triage-as-work, or close an automation-authored' "${constitution}" ||
+  fail "constitution may still let agents close a Renovate Dependency Dashboard"
+# The skip list in *Drain oldest-first* is a CLOSED set: "skip ONLY when one of these is true".
+# A carve-out that forbids selecting an automation-authored issue without adding it to that set
+# leaves the contract self-contradictory — told to claim the oldest issue and forbidden to work it.
+# Pin the exclusion in BOTH normative selection surfaces, and pin the author-vs-label distinction
+# that keeps it from colliding with "an `automation` label is NOT a valid skip reason".
+grep -Fq 'authored by an exact dependency-automation identity' "${constitution}" ||
+  fail "constitution skip list omits the automation-author exclusion (f)"
+grep -Fq 'never actionable at all' "${constitution}" ||
+  fail "constitution does not state that an automation-authored issue is never actionable"
+grep -Fq 'keys on the AUTHOR, never the `automation` label' "${constitution}" ||
+  fail "constitution does not separate the automation AUTHOR exclusion from the automation LABEL non-reason"
+grep -Fq 'authored by an exact dependency-automation identity' "${maintenance_skill}" ||
+  fail "run loop's select step omits the automation-author exclusion"
+grep -Fq 'never actionable at all' "${maintenance_skill}" ||
+  fail "run loop does not state that an automation-authored issue is never actionable"
+# product-engineering re-enumerates the same closed skip set, so it drifts into the identical
+# contradiction unless (f) is stated there too. (The other files that mention oldest-actionable
+# merely defer to the contract and enumerate nothing, so they need no copy.)
+grep -Fq 'authored by an exact dependency-automation' "${product_engineering_skill}" ||
+  fail "advance playbook's skip set omits the automation-author exclusion (f)"
+grep -Fq 'never actionable at all' "${product_engineering_skill}" ||
+  fail "advance playbook does not state that an automation-authored issue is never actionable"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||
@@ -253,6 +309,17 @@ expect_classifier_error() {
   [[ "${rc}" -eq 2 ]] || fail "classifier did not fail closed for invalid fixture: ${name}"
 }
 
+# Every commit the surveyor normalizes carries the author/committer date pair, and the schema
+# requires both (#2291). A commit created in one operation has the same timestamp in each, so that
+# is the default here; only the World at Ruin amend fixtures state a diverging pair, which keeps the
+# date discriminator visible in exactly the tests that exercise it instead of in all nineteen.
+with_commit_dates() {
+  jq -c 'map(
+    .author_date = (.author_date // "2026-07-18T09:14:22Z")
+    | .committer_date = (.committer_date // .author_date)
+  )'
+}
+
 homebrew_commits_json() {
   local component="$1"
   local version="$2"
@@ -285,18 +352,26 @@ homebrew_commits_json() {
         committer_email: "generator-bot@users.noreply.github.com",
         message: "style: autocorrect Casks (brew style --fix)"
       }
-    ]'
+    ]' | with_commit_dates
 }
 
 # Measured from homebrew-tap #1238/#1241/#1242: World at Ruin's cask PRs come from its own CD
 # workflow rather than GoReleaser, so they are a single tap-token commit.
+#
+# The optional third argument sets the committer date independently of the author date. The CD
+# workflow creates the commit in one operation, so the real path leaves it unset and both dates
+# match (verified against homebrew-tap #1324-#1332, 8/8 equal on 2026-07-28). Passing a later
+# committer date reproduces `git commit --amend`, which is what a hand-edited cask body looks like
+# on this arm — every identity field survives the rewrite, so the date pair is the only signal.
 war_cask_commits_json() {
   local version="$1"
   local head_sha="$2"
+  local committer_date="${3:-}"
 
   jq -cn \
     --arg version "${version}" \
     --arg head_sha "${head_sha}" \
+    --arg committer_date "${committer_date}" \
     '[{
       sha: $head_sha,
       author_login: "devantler",
@@ -306,7 +381,9 @@ war_cask_commits_json() {
       committer_name: "Nikolai Emil Damm",
       committer_email: "ned@devantler.tech",
       message: "chore(cask): update world-at-ruin to \($version)"
-    }]'
+    }
+    | if $committer_date == "" then . else .committer_date = $committer_date end]' \
+    | with_commit_dates
 }
 
 ksail_head="8fdc117e5892a57a82781fc3a4806ef1f21873af"
@@ -320,7 +397,7 @@ ksail_commits="$(jq -cn --arg head "${ksail_head}" '[{
   committer_name: "devantler-tech-bot[bot]",
   committer_email: "devantler-tech-bot[bot]@users.noreply.github.com",
   message: "chore(copilot-plugin): release v7.172.2"
-}]')"
+}]' | with_commit_dates)"
 
 ksail_cask_head="c58256924878560caff669a7c05df0d84c458b38"
 ksail_cask_commits="$(homebrew_commits_json \
@@ -359,7 +436,7 @@ multi_cycle_cask_commits="$(jq -cn \
      author_login: "", author_name: "generator-bot", author_email: "generator-bot@users.noreply.github.com",
      committer_login: "", committer_name: "generator-bot", committer_email: "generator-bot@users.noreply.github.com",
      message: "style: autocorrect Casks (brew style --fix)"}
-  ]')"
+  ]' | with_commit_dates)"
 
 # An agent adaptation commit takes a cask PR off its programmed path and makes it review-bearing.
 adapted_cask_head="7f6e5d4c3b2a19087f6e5d4c3b2a19087f6e5d4c"
@@ -374,7 +451,7 @@ adapted_cask_commits="$(jq -cn \
      author_login: "devantler", author_name: "Nikolai Emil Damm", author_email: "ned@devantler.tech",
      committer_login: "devantler", committer_name: "Nikolai Emil Damm", committer_email: "ned@devantler.tech",
      message: "fix(cask): correct the sha256 by hand"}
-  ]')"
+  ]' | with_commit_dates)"
 
 default_title_cask_head="5a5792bb83bd6b8469f10cd7e00abfe75c7f36be"
 default_title_cask_commits="$(homebrew_commits_json \
@@ -393,7 +470,7 @@ platform_commits="$(jq -cn --arg head "${platform_head}" '[{
   committer_name: "GitHub",
   committer_email: "noreply@github.com",
   message: "chore(deps): update dependency devantler-tech/ksail to v7.172.1"
-}]')"
+}]' | with_commit_dates)"
 
 agent_plugins_skills_head="e9cf0d8f34ef5e235d11b5141d71bb067d96538d"
 agent_plugins_skills_files='["plugins/github/skills/gh-stack/SKILL.md","plugins/gitops-kubernetes/skills/gitops-knowledge/SKILL.md"]'
@@ -406,7 +483,7 @@ agent_plugins_skills_commits="$(jq -cn --arg head "${agent_plugins_skills_head}"
   committer_name: "github-actions[bot]",
   committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
   message: "chore(deps): update agent skills"
-}]')"
+}]' | with_commit_dates)"
 
 multi_agent_skills_head="6666666666666666666666666666666666666666"
 multi_agent_skills_commits="$(jq -cn --arg head "${multi_agent_skills_head}" '[
@@ -430,7 +507,7 @@ multi_agent_skills_commits="$(jq -cn --arg head "${multi_agent_skills_head}" '[
     committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
     message: "chore(deps): update agent skills"
   }
-]')"
+]' | with_commit_dates)"
 
 platform_skills_head="d668b9d0f52c22473abc75a7d7457505e3624cc6"
 platform_skills_files='[".agents/skills/gitops-cluster-debug/SKILL.md",".agents/skills/gitops-knowledge/SKILL.md"]'
@@ -443,7 +520,7 @@ platform_skills_commits="$(jq -cn --arg head "${platform_skills_head}" '[{
   committer_name: "github-actions[bot]",
   committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
   message: "chore(deps): update agent skills"
-}]')"
+}]' | with_commit_dates)"
 
 ksail_skills_head="fdffbf83c8c0c1cc01050dc3d5c79ab18c3a45b4"
 ksail_skills_files='[".agents/skills/gh-stack/SKILL.md"]'
@@ -456,7 +533,7 @@ ksail_skills_commits="$(jq -cn --arg head "${ksail_skills_head}" '[{
   committer_name: "github-actions[bot]",
   committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
   message: "chore(deps): update agent skills"
-}]')"
+}]' | with_commit_dates)"
 
 adapted_agent_skills_head="5555555555555555555555555555555555555555"
 adapted_agent_skills_commits="$(jq -c --arg head "${adapted_agent_skills_head}" '. + [{
@@ -468,7 +545,7 @@ adapted_agent_skills_commits="$(jq -c --arg head "${adapted_agent_skills_head}" 
   committer_name: "Nikolai Emil Damm",
   committer_email: "26203420+devantler@users.noreply.github.com",
   message: "fix: adapt generated skill update"
-}]' <<<"${agent_plugins_skills_commits}")"
+}]' <<<"${agent_plugins_skills_commits}" | with_commit_dates)"
 
 adapted_ksail_head="2222222222222222222222222222222222222222"
 adapted_ksail_commits="$(jq -c --arg head "${adapted_ksail_head}" '. + [{
@@ -480,7 +557,7 @@ adapted_ksail_commits="$(jq -c --arg head "${adapted_ksail_head}" '. + [{
   committer_name: "Nikolai Emil Damm",
   committer_email: "26203420+devantler@users.noreply.github.com",
   message: "fix: adapt generated release"
-}]' <<<"${ksail_commits}")"
+}]' <<<"${ksail_commits}" | with_commit_dates)"
 
 adapted_cask_head="3333333333333333333333333333333333333333"
 adapted_cask_commits="$(jq -c --arg head "${adapted_cask_head}" '. + [{
@@ -492,7 +569,7 @@ adapted_cask_commits="$(jq -c --arg head "${adapted_cask_head}" '. + [{
   committer_name: "Nikolai Emil Damm",
   committer_email: "26203420+devantler@users.noreply.github.com",
   message: "fix: adapt generated cask"
-}]' <<<"${ksail_cask_commits}")"
+}]' <<<"${ksail_cask_commits}" | with_commit_dates)"
 
 expect_exempt \
   "KSail programmed plugin release" \
@@ -573,6 +650,51 @@ expect_exempt \
   "${war_cask_head}" \
   '["Casks/world-at-ruin.rb"]' \
   "${war_cask_commits}"
+
+# #2291. The tap token commits under the maintainer's own identity, so a `git commit --amend` that
+# rewrites the cask body leaves every login, name, email, message, branch and path identical to a
+# genuine release — the exemption used to survive it. The author/committer date pair is what an
+# amend cannot preserve, so it is what re-gates the PR here.
+war_amended_cask_commits="$(war_cask_commits_json \
+  "v0.36.0" \
+  "${war_cask_head}" \
+  "2026-07-18T09:17:05Z")"
+
+expect_review_gated \
+  "World at Ruin cask whose commit was amended by hand" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/world-at-ruin" \
+  "chore(cask): update world-at-ruin to v0.36.0" \
+  "${war_cask_head}" \
+  '["Casks/world-at-ruin.rb"]' \
+  "${war_amended_cask_commits}"
+
+# A surveyor that has not been updated to send both dates must fail closed rather than silently
+# skipping the discriminator: without this the exemption would quietly widen back to what it was.
+expect_classifier_error \
+  "World at Ruin cask payload missing the commit date pair" \
+  "homebrew-tap" \
+  "devantler" \
+  "goreleaser/world-at-ruin" \
+  "chore(cask): update world-at-ruin to v0.36.0" \
+  "${war_cask_head}" \
+  '["Casks/world-at-ruin.rb"]' \
+  "$(jq -c 'map(del(.author_date, .committer_date))' <<<"${war_cask_commits}")"
+
+# The surveyor must be told to carry the pair, or a correct classifier is fed a payload that can
+# never exercise it. Naming the output fields is not enough on its own: the discriminator only works
+# if both values come from the raw commit object, so the source paths are asserted too. Taking
+# either date from the PR-level view instead would still satisfy a field-name-only assertion while
+# silently supplying a value the amend does not move.
+grep -Fq 'author_date' "${surveyor}" ||
+  fail "surveyor commit normalization does not carry author_date"
+grep -Fq 'committer_date' "${surveyor}" ||
+  fail "surveyor commit normalization does not carry committer_date"
+grep -Fq '.commit.author.date' "${surveyor}" ||
+  fail "surveyor does not source author_date from the raw commit object"
+grep -Fq '.commit.committer.date' "${surveyor}" ||
+  fail "surveyor does not source committer_date from the raw commit object"
 
 expect_exempt \
   "GoReleaser cask carrying several release cycles" \

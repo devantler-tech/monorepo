@@ -32,13 +32,20 @@ keeping them healthy *and* moving them forward.
 | UniFi Crossplane provider (shared lib) | `devantler-tech/provider-upjet-unifi` | `libraries/provider-upjet-unifi` | [AGENTS.md](https://github.com/devantler-tech/provider-upjet-unifi/blob/main/AGENTS.md) |
 | Kyverno policy library (shared lib) | `devantler-tech/kyverno-policies` | `libraries/kyverno-policies` | [AGENTS.md](https://github.com/devantler-tech/kyverno-policies/blob/main/AGENTS.md) |
 | World at Ruin (game) | `devantler-tech/world-at-ruin` | `applications/world-at-ruin` | [AGENTS.md](https://github.com/devantler-tech/world-at-ruin/blob/main/AGENTS.md) |
-| Wedding app (private) | `devantler-tech/wedding-app` | `applications/wedding-app` | (private) |
-| AS Coaching (private) | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | (private) |
+| Wedding app | `devantler-tech/wedding-app` | `applications/wedding-app` | [AGENTS.md](https://github.com/devantler-tech/wedding-app/blob/main/AGENTS.md) |
+| AS Coaching | `devantler-tech/ascoachingogvaner` | `applications/ascoachingogvaner` | [AGENTS.md](https://github.com/devantler-tech/ascoachingogvaner/blob/main/AGENTS.md) |
 | Doggy countdown | `devantler-tech/doggy-countdown` | — (not a submodule yet; GitHub API) | [README](https://github.com/devantler-tech/doggy-countdown/blob/main/README.md) (no `AGENTS.md` yet) |
 | UniFi network | `devantler-tech/unifi` | `applications/unifi` | [AGENTS.md](https://github.com/devantler-tech/unifi/blob/main/AGENTS.md) |
 | 🌊 Project Board (org project 5) | — (not a repo; [org project 5](https://github.com/orgs/devantler-tech/projects/5)) | — | [product card](.claude/skills/products/project-board/SKILL.md) |
 
 > Submodule `AGENTS.md` links use full GitHub URLs because those files live in the submodule repos, not this repo's tree (a relative link would 404 on GitHub).
+
+> **This table deliberately records no repository visibility.** Visibility changes without touching
+> this file, so a `(private)` marker here is a fact that goes stale silently while still being read
+> as authoritative — and it feeds a decision that matters, since putting a private repo's issue on
+> the public board is a maintainer call (see *Every issue belongs on the board*). Determine it live
+> from `gh api repos/devantler-tech/<repo> --jq .private` at the moment you need it, never from this
+> table.
 
 **World at Ruin — newest product, bootstrapped 2026-07-16** (maintainer direction the same day). A
 cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** as a
@@ -332,6 +339,20 @@ memory and the run report:**
   `/Users/homelab-mac-mini/.claude/hooks/`, and
   `/Users/homelab-mac-mini/.codex/config.toml`.
 
+For runtime-managed schedule pointers, **the in-session read-back is necessary but not sufficient**.
+Record the applied schedule and the surface's own change marker, then **re-read after at least one
+dispatch of that schedule**. Completion requires the value to persist while the marker advances; **a
+reverted value with an advanced marker means the runtime overwrote the file**, so use the runtime's
+supported control path rather than treating the file as authoritative. Keep the backup until this
+post-dispatch check passes. Supply that post-apply baseline to the drift check as
+`CLAUDE_ENGINEER_MARKER_BASELINE`, `CLAUDE_IMPROVER_MARKER_BASELINE`,
+`CODEX_ENGINEER_MARKER_BASELINE`, or `CODEX_IMPROVER_MARKER_BASELINE`. Claude cadence comes from the
+authoritative `scheduled-tasks.json` record selected by exact task id plus pointer path, with
+`lastRunAt` as its marker; the `SKILL.md` description is not scheduler state. Codex cadence and
+markers come from `automation.toml`'s complete RRULE and `updated_at`. A missing or ambiguous store,
+missing baseline, marker that did not advance, or incomplete recurrence rule is `UNKNOWN`, never
+`MATCH`.
+
 The deployed Cursor Automation has no supported local write surface. Its reviewed source is
 `.claude/loaders/cursor-daily-ai-engineer.md`; after that source merges, use a declared Maintainer
 channel for the UI paste rather than claiming the server-side prompt changed. Marketplace/plugin
@@ -502,7 +523,15 @@ governs the issue work that follows.) Two rules enforce that:
    is recorded on the issue and has not elapsed. Once that date arrives, measuring and recording the
    decision is actionable work; or (e) another instance holds a **live claim** on it — assigned **and**
    branched, within the ~2h window, no PR yet (see *Claim protocol*). (e) is the only skip reason that
-   expires on its own: once the window lapses with no PR, the issue is fair game again.
+   expires on its own: once the window lapses with no PR, the issue is fair game again; or (f) it is
+   **authored by an exact dependency-automation identity** (`renovate[bot]` / `dependabot[bot]`, or
+   `app/renovate` / `app/dependabot`) — see the automation-owned carve-out under *Merge policy*.
+   (f) is not a deferral like the others: such an issue is **never actionable at all** and never
+   becomes so, because it is a live control surface the bot owns (Renovate's Dependency Dashboard is
+   the standing example). It is never selected, never worked, and never closed by an agent.
+   ⚠️ **(f) keys on the AUTHOR, never the `automation` label** — the two are unrelated, and the very
+   next sentence keeps the label a non-reason. A `devantler`-authored issue *labelled* `automation` is
+   ordinary actionable work.
    **Size, difficulty, architectural weight, a
    `roadmap`/`enhancement`/`security`/`performance`/`repo-assist`/`automation` label, or a vague
    "maintainer-hot" feel are NOT valid skip reasons.** A large or hard issue **is the work, not an excuse
@@ -952,23 +981,28 @@ never collapsed to "no review" followed by another review request. A **fourth sa
 when no lane will deliver at that head** — unavailable, or rate/billing limited — the agent's own posted
 local review round (see *Local review round* in the request discipline below); it is never a way
 around requesting a reviewer that is actually serving.
-**Carve-out — Renovate/Dependabot dependency PRs are AUTOMATION-OWNED and need NO agent action**
-(maintainer direction 2026-07-16). Match only the exact app identities: org-search/REST surfaces expose
-`renovate[bot]` and `dependabot[bot]`; deeper GraphQL surfaces may expose `app/renovate` and
-`app/dependabot`. Do not key this classification on the unreliable search `is_bot` field, titles,
-branch names, or dependency labels. This is an author-wide ownership boundary. Do not inspect commit provenance
+**Carve-out — Renovate/Dependabot dependency PRs *and* issues are AUTOMATION-OWNED and need NO agent action**
+(maintainer direction 2026-07-16; issue side confirmed 2026-07-21 via #2349). Match
+only the exact app identities: org-search/REST surfaces expose `renovate[bot]` and `dependabot[bot]`;
+deeper GraphQL / `gh issue view` surfaces may expose `app/renovate` and `app/dependabot`. Do not key
+this classification on the unreliable search `is_bot` field, titles, branch names, or dependency
+labels. This is an author-wide ownership boundary covering **both** their pull requests **and** their
+issues (Renovate's Dependency Dashboard is an open issue by design — e.g. `platform#313` since
+2023-08-24 — and must never head an oldest-actionable queue). Do not inspect commit provenance
 or reclassify the PR because a human/agent adaptation commit exists. Repository automation
 and the human who chose to edit that bot branch remain responsible; agents never add such commits going
 forward. Repository checks and dependency automation own these PRs' entire lifecycle, including updates
 and merging. **Never request a review from any lane (CodeRabbit, Codex, Cursor Bugbot), inspect
 ancillary CodeRabbit output, comment, rebase/recreate, rerun checks, push adaptation commits,
-arm auto-merge, or merge them.** Red, stale, DIRTY/conflicting, major-version, missing-review, and
-other reviewer-output states are not routine-agent work and never make one of these PRs a hygiene gap or
-fire. The survey may report one compact `AUTOMATION-OWNED (NO-ACTION)` line from the exact author
-identity, but does not deepen its pentad or count it against `nothing_on_fire`. If a merged dependency
-bump breaks `main`, repair that resulting `main` breakage normally on an agent-owned branch; never
-touch the bot PR branch. This actor-wide no-action rule is stronger than the trusted-author permissions
-below and is separate from the narrower programmed-bot review exemption.
+arm auto-merge, or merge them.** **Never select, triage-as-work, or close an automation-authored
+issue** — closing a Dependency Dashboard changes Renovate's behaviour. Red, stale, DIRTY/conflicting,
+major-version, missing-review, and other reviewer-output states are not routine-agent work and never
+make one of these PRs a hygiene gap or fire. The survey may report one compact `AUTOMATION-OWNED
+(NO-ACTION)` line from the exact author identity, but does not deepen a PR's pentad, rank an
+automation issue as oldest-actionable, or count either against `nothing_on_fire`. If a merged
+dependency bump breaks `main`, repair that resulting `main` breakage normally on an agent-owned
+branch; never touch the bot PR branch. This actor-wide no-action rule is stronger than the
+trusted-author permissions below and is separate from the narrower programmed-bot review exemption.
 
 **Carve-out — trusted programmed bot PRs need NO review.** Two suite-owned paths are intentionally
 gated by required CI and auto-merge rather than an AI review:
@@ -2498,39 +2532,45 @@ schedule; see *Agentic engineering plugin contract*). Times are the agent host's
 runtime-local scheduler entries are **thin pointers that must match this table**; when the two
 disagree, the scheduler is the defect — reconcile it there, per *Agent definition locations*.
 
-| Hour | Codex — `codex/*` | Claude — `claude/*` |
+**The parity invariant IS the schedule: Claude takes EVEN hours, Codex takes UNEVEN hours, and no two
+local instances ever share a dispatch hour.** Read your lane's row for your own slots; read the
+invariant to know that whatever else is running, it did not start when you did.
+
+| Lane | Agentic Engineer | Agent Improver |
 |---|---|---|
-| 00:00 | Agentic Engineer | Agent Improver |
-| 02:00 | — | Agentic Engineer |
-| 04:00 | Agentic Engineer | — |
-| 06:00 | Agent Improver | Agentic Engineer |
-| 08:00 | Agentic Engineer | — |
-| 10:00 | — | Agentic Engineer |
-| 12:00 | Agentic Engineer | Agent Improver |
-| 14:00 | **Agentic Engineer** | **Agentic Engineer** |
-| 16:00 | — | Agentic Engineer |
-| 18:00 | Agent Improver | — |
-| 20:00 | Agentic Engineer | — |
-| 22:00 | — | Agentic Engineer |
+| **Claude** — `claude/*`, even hours | 02, 04, 06, 08, 10, 14, 16, 18, 20, 22 | 00, 12 |
+| **Codex** — `codex/*`, uneven hours | 01, 03, 05, 09, 11, 13, 15, 17, 21, 23 | 07, 19 |
+| **Cursor** — `cursor/*`, uneven hours at `:30` | 01:30 … 23:30 | — |
 
-The **Cursor cloud instance** (`cursor/*`) is unchanged: Agentic Engineer at `:30` past uneven hours,
-scheduled server-side. The Agent Improver lands on a clean 6-hourly rotation across the two local
-lanes (00, 06, 12, 18). This table covers the two scheduled engineering roles only — spend
-stewardship has no dispatch slot of its own (see *The FinOps engineer*).
+Each lane dispatches **every 2 hours**, uniformly, and the three lanes interleave so that consecutive
+dispatches are **never less than 30 minutes apart** (the Claude runtime adds a few minutes of dispatch
+jitter, which only widens the gaps). The Agent
+Improver keeps its 4×/day rotation, alternating lanes (00 Claude, 07 Codex, 12 Claude, 19 Codex).
+This table covers the two scheduled engineering roles only — spend stewardship has no dispatch slot
+of its own (see *Spend contract*).
 
-**Two properties of this table change how you plan a run.**
-⚠️ **14:00 dispatches BOTH local Agentic Engineer lanes simultaneously.** *Claim protocol* rule 4
-records that claim arbitration does **not** work across lanes — each instance writes its own
-namespace, so both pushes succeed and both believe they won. A simultaneous start is therefore the
-portfolio's highest duplicate-work risk. On a 14:00 run, scan `codex/*` **and** `claude/*` branches
-and open PRs before claiming, not just your own namespace.
-**18:00 is the longest Agentic Engineer gap:** 16:00 → 20:00 is four hours covered only by the Cursor
-lane's 17:30 and 19:30 runs, so a watch item deferred at 16:00 waits longer than a usual tick.
+**Two properties of this schedule change how you plan a run.**
+⚠️ **A sibling being mid-run is the NORMAL case — scan cross-lane on EVERY run, never at one special
+hour.** The parity invariant removes simultaneous *starts*, which is the window where two instances
+select the same issue; it does **not** remove overlap, because runs outlive their hour. Measured over
+the 7 days to 2026-07-28 (n=26 completed Claude dispatches): **median 51 min, p75 79 min, 46% ran
+longer than 60 minutes, max 377**. So a sibling lane is very often still working when you start.
+*Claim protocol* rule 4 records that claim arbitration does **not** work across lanes — each instance
+writes its own namespace, so both pushes succeed and both believe they won. Scan `codex/*`,
+`claude/*` **and** `cursor/*` branches and open PRs before claiming, always.
+**Same-lane overlap is expected, and it IS arbitrated.** With 2-hour spacing and ~12% of runs
+exceeding 120 minutes, your own lane's next dispatch can start before you finish. That case is safe
+by construction — same namespace, same deterministic branch name, and a non-forced push is refused
+(see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim branch.
 
-**Each Agentic Engineer instance is dispatched every 2–6 hours** depending on its slot above. That
-interval is the gap **between runs, not a per-run time
-budget** — and it is the *instance's* own gap that bounds a carry-forward, so a run that defers a
-watch item to "the next tick" is deferring it hours, not minutes. Each run works
+**Your LANE fires every 2 hours; your own ROLE's next slot is sometimes 4.** Two of each lane's twelve
+slots belong to the Agent Improver, so an Agentic Engineer's own next tick is **2 hours away eight
+times a day and 4 hours away twice** — Claude across its 12:00 and 00:00 improver slots (10→14, 22→02),
+Codex across its 07:00 and 19:00 ones (05→09, 17→21). That interval is the gap **between
+runs, not a per-run time
+budget** — and it is the *instance's* own gap that bounds a carry-forward, so **check which slot you
+are in before deferring**: a watch item handed to "the next tick" from a Claude **10:00/22:00** or a
+Codex **05:00/17:00** run waits four hours, not two. Each run works
 *The work-selection ladder* top-down — **breakage → every open PR you own or trust, drafts included →
 security issues → bugs → the oldest actionable issue** — capturing new
 non-trivial finds as issues (see *Issue-driven*).
@@ -2635,26 +2675,59 @@ of a capability the runtime already provides. Durable memory is now one native s
 step:
 1. **Your native persistent memory.** Use the runtime's built-in memory — for Claude, the **memory
    tool** (the `/memories` directory; in Claude Code, the project's `memory/` dir with its `MEMORY.md`
-   index). **View it at the start of every run** and treat it as the single source of truth for
+   index). **View the runtime's boot memory surface at the start of every run** and treat native
+   memory as the single source of truth for
    cross-run orchestration: rotation cursor, per-product `last_worked` / `weekly` / roadmap cursor
    (last strategy review + current theme) / `last_research` (the upstream-research/product-debugging
    cursor — see *Enhancement work*) / `last_value_review`; for the site, blog review/publication/
    refresh and metrics-review cursors; open `needs_attention`, the CI & link investigation caches,
    recent run notes, and self-improvement `learnings`. Keep it **coherent and organised** (a small set
-   of well-named files, not one per fact; prune stale entries; keep `MEMORY.md` a true index); don't
-   let it sprawl. **`MEMORY.md` is one line per entry — never more.** It is an *index*: each bullet is a
+   of well-named topics, not one per fact; prune stale entries); don't let it sprawl.
+
+   **The runtime layouts are deliberately different.** Claude's author-managed project memory uses
+   `MEMORY.md` as the boot index plus root topic files. Codex native memory supplies the bounded,
+   exactly-`v1` `memory_summary.md` projection at boot; `MEMORY.md` is its searchable registry,
+   `raw_memories.md` is an optional temporary consolidation input, and `rollout_summaries/` holds
+   detail when any exists. INIT/no-op stores guarantee only the two persistent projections. Search
+   those Codex sources on demand — they are runtime-managed evidence, not files to trim merely to
+   satisfy a boot-read budget. Update Codex memory only through the runtime's supported
+   memory-maintenance path and let it rebuild the projection.
+
+   In an author-managed/legacy store, **`MEMORY.md` is one line per entry — never more.** It is an
+   *index*: each bullet is a
    pointer + one-line hook to a detail file; the latest-tick log and `last_run` prose belong in
    `portfolio-status.md`, **never dumped into a MEMORY.md index line**. A single index line that grew
    into a multi-tick prose blob pushed `MEMORY.md` past the Read tool's token cap and made it unreadable
    at run start — which silently blinded a run to a recorded `HANDS-OFF` note and caused a misstep
    (2026-06-05). **Bound the every-run read:** cap run-history / recent-run notes to the **last ~10
    runs (or ~7 days)**, rolling older entries into a one-line summary, so the start-of-run `view` stays
-   small as history accumulates — and so `MEMORY.md` itself never exceeds the Read cap. **That bound is
+   small as history accumulates. **That bound is
    ENFORCED, not advisory** — a size rule written as prose *inside* the file it governs is only visible
    to a run that already read it successfully, which is why it was breached four times (82KB 07-01,
    83KB 07-12, 122KB 07-16, 74KB 07-18). Pre-flight runs
-   [`.claude/scripts/memory-hygiene.sh`](.claude/scripts/memory-hygiene.sh) (read-only); a non-zero exit
-   makes consolidating the named file **that tick's mandated hygiene item**. **Memory is a MULTI-WRITER
+   [`.claude/scripts/memory-hygiene.sh`](.claude/scripts/memory-hygiene.sh) (read-only). It
+   requires the caller to declare `--layout legacy` or `--layout codex`; file-shape guessing is
+   forbidden because a minimal Codex store missing its summary is indistinguishable from a valid
+   legacy `MEMORY.md`-only store. Missing or unknown layout fails closed. Codex callers must also
+   read the current request's trusted
+   `x-codex-turn-metadata.turn_started_at_unix_ms` from `nodeRepl.requestMeta` and pass it as
+   `--projection-loaded-before-ms`; never substitute the current clock or the file's modification
+   time. This is the projection's freshness precondition: if the on-disk summary is newer than the
+   request that injected it, the guard cannot prove that it checked the projection in this session
+   and fails closed. In Codex mode it requires the persistent `memory_summary.md` + `MEMORY.md` pair
+   and applies the tight index budget only to the summary; generated registry and temporary input files are
+   diagnostic-only (`--all` shows the exemption). Legacy/Claude stores retain the original root-file
+   checks. An exit 1 makes repairing the over-threshold boot-loaded file that tick's mandated hygiene
+   item: consolidate an author-managed file safely, or refresh an oversized Codex projection through
+   the runtime. An exit 2 indicates a usage, malformed-layout, missing, or unreadable-store error;
+   resolve it before proceeding. If a Codex exit 2 names a missing, unreadable, malformed, or
+   post-injection-changed `memory_summary.md`, repair it through the runtime's supported path when
+   needed and **restart the run**: this session did not start with the projection the guard checked.
+   Other exit-2 causes may rerun
+   the guard in the same session after resolution. After a Codex projection refresh for exit 1,
+   **restart the run**, because the old projection was already injected before the shell gate ran; it
+   must not continue on the replacement file. Never rewrite Codex's
+   generated registry or temporary inputs to clear this gate. **Memory is a MULTI-WRITER
    surface** — several instances append per hour, so re-read immediately before writing, prefer a
    **non-clobbering append** over a whole-file rewrite, and **stand down rather than clobber** when a
    rewrite is rejected because a sibling moved the file under you (the two-writer discipline that

@@ -187,6 +187,26 @@ for writer_namespace in '`claude/*`' '`codex/*`' '`cursor/*`'; do
 done
 grep -Fq 'remain undeployed and read-only' "${constitution}" ||
   fail "consumer does not fail closed for unmapped Cursor role schedules"
+assert_prose 'the in-session read-back is necessary but not sufficient' \
+  "runtime-local delivery incorrectly treats an in-session read-back as persistence proof"
+assert_prose 're-read after at least one dispatch of that schedule' \
+  "runtime-local delivery does not require a post-dispatch persistence check"
+assert_prose 'a reverted value with an advanced marker means the runtime overwrote the file' \
+  "runtime-local delivery does not recognise the dispatch-time rewrite failure mode"
+for marker_baseline in \
+  '`CLAUDE_ENGINEER_MARKER_BASELINE`' \
+  '`CLAUDE_IMPROVER_MARKER_BASELINE`' \
+  '`CODEX_ENGINEER_MARKER_BASELINE`' \
+  '`CODEX_IMPROVER_MARKER_BASELINE`'; do
+  assert_prose "${marker_baseline}" \
+    "runtime-local delivery does not name ${marker_baseline} for persistence verification"
+done
+assert_prose 'authoritative `scheduled-tasks.json` record selected by exact task id plus pointer path' \
+  "runtime-local delivery does not require the authoritative Claude scheduler record"
+assert_prose '`lastRunAt` as its marker; the `SKILL.md` description is not scheduler state' \
+  "runtime-local delivery can mistake Claude loader prose for deployed cadence"
+assert_prose 'A missing or ambiguous store, missing baseline, marker that did not advance, or incomplete recurrence rule is `UNKNOWN`, never `MATCH`.' \
+  "runtime-local delivery does not fail closed on incomplete persistence evidence"
 
 # --- The merged spend mandate -------------------------------------------------
 # Spend is a dimension of the Agentic Engineer. The consumer must supply the Spend

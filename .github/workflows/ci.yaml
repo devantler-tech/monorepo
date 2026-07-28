@@ -92,8 +92,11 @@ jobs:
               - '.claude/scripts/submodule-init.sh'
               - '.claude/scripts/submodule-init.test.sh'
             memory-hygiene:
+              - 'AGENTS.md'
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-hygiene.test.sh'
+              - '.claude/scripts/memory-hygiene-go/**'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -404,6 +407,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/memory-hygiene-go/go.mod
+          cache: false
       - name: Verify the memory hygiene guard
         run: bash .claude/scripts/memory-hygiene.test.sh
 
@@ -540,7 +548,7 @@ jobs:
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/actions/aggregate-job-checks@9705e47d7df0b556ec06786247297c0e5020e56d # v10.2.1
+        uses: devantler-tech/actions/aggregate-job-checks@61477e59ff498b657b76546b6eb8cae3470b485b # v11.0.0
         with:
           job-results: >-
             ${{ needs.changes.result }}
