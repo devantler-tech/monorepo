@@ -182,6 +182,28 @@ report "slug that disagrees with origin is refused (exit 2)" \
 report "slug refusal names both the slug and the origin repo" \
   "$(grep -q 'ksail' <<<"$out" && grep -q 'does-not-exist-2531' <<<"$out" && echo yes || echo no)" "out=$out"
 
+# --- 7b. an UPPERCASE GitHub host must not slip past the identity check ---
+# Hostnames are case-insensitive, so a case-sensitive host match would leave
+# origin unparsed and skip the slug comparison entirely — a silent bypass.
+git -C "$slugwork" remote set-url origin "https://GitHub.com/devantler-tech/does-not-exist-2531.git"
+manifest="$tmp/manifest7b"
+: >"$manifest"
+out="$("$helper" "$slugwork" "ksail" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "uppercase-host origin is still identity-checked (exit 2)" \
+  "$([[ ${rc:-0} -eq 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+
+# --- 7c. an explicit port must NOT be read as part of the owner -----------
+# ":443/owner/repo" must reduce to "owner/repo". If the port leaked into the
+# comparison the guard would REJECT a correct repository. Slug matches the
+# origin here, so a correct parse passes the guard and fails later at the fetch
+# (exit 1) — proving the guard let it through without needing the network.
+git -C "$slugwork" remote set-url origin "https://github.com:443/devantler-tech/does-not-exist-2531.git"
+manifest="$tmp/manifest7c"
+: >"$manifest"
+out="$("$helper" "$slugwork" "does-not-exist-2531" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "explicit port does not falsely reject a matching repo (not exit 2)" \
+  "$([[ ${rc:-0} -ne 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+
 # --- 8. a non-GitHub origin still runs (hermetic clones must keep working) -
 # The origin-vs-slug half can only compare when origin parses as a GitHub
 # owner/repo. A local bare origin cannot, so it is skipped there — the

@@ -86,17 +86,34 @@ fi
 #     The URL itself is never echoed — it can carry credentials.
 origin_url=$(git remote get-url origin 2>/dev/null) || origin_url=""
 origin_nwo=""
-case "$origin_url" in
-  *github.com[:/]*)
-    origin_nwo=${origin_url#*github.com}
-    origin_nwo=${origin_nwo#[:/]}
+# Hostnames are case-insensitive, so normalise before matching: an "GitHub.com"
+# origin must not slip past the host test and silently skip this whole check.
+# Owner/repo are compared case-insensitively too, on the same normalised copy.
+origin_lc=$(printf '%s' "$origin_url" | tr '[:upper:]' '[:lower:]')
+case "$origin_lc" in
+  *github.com:*|*github.com/*)
+    origin_nwo=${origin_lc#*github.com}
+    case "$origin_nwo" in
+      :*)
+        origin_nwo=${origin_nwo#:}
+        # After ':' this is EITHER an explicit port ("443/owner/repo") or the
+        # scp-style path ("owner/repo"). Only an all-digit first segment is a
+        # port; anything else is the owner and must be kept.
+        case "${origin_nwo%%/*}" in
+          ''|*[!0-9]*) ;;
+          *) origin_nwo=${origin_nwo#*/} ;;
+        esac
+        ;;
+      /*) origin_nwo=${origin_nwo#/} ;;
+    esac
     # Trailing slash BEFORE the .git suffix: ".../ksail.git/" must reduce to
     # "devantler-tech/ksail", and stripping ".git" first would leave the slash.
     origin_nwo=${origin_nwo%/}
     origin_nwo=${origin_nwo%.git}
     ;;
 esac
-if [ -n "$origin_nwo" ] && [ "$origin_nwo" != "devantler-tech/$SLUG" ]; then
+slug_lc=$(printf 'devantler-tech/%s' "$SLUG" | tr '[:upper:]' '[:lower:]')
+if [ -n "$origin_nwo" ] && [ "$origin_nwo" != "$slug_lc" ]; then
   echo "$SLUG: ABORT — slug '$SLUG' does not match the checkout at '$REPO_PATH', whose origin" >&2
   echo "  is '$origin_nwo'. The keep-set would be fetched for the wrong repository." >&2
   exit 2
