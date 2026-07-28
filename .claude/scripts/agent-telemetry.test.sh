@@ -1977,18 +1977,12 @@ else bad "nested wrappers locate as the underlying token shape" \
 # A value whose OWN trailing character is a separator must still produce a
 # locator row after nested stripping — base64 padding is the everyday case.
 #
-# ⚠️ ABLATION-MEASURED SCOPE, stated because the obvious reading is wrong: this
-# asserts the ROW SURVIVES, not that the stripper stopped at the right place.
-# Measured three variants against it — two passes with the non-empty guard, two
-# passes WITHOUT the guard, and longest-match `${m##*[:=]}` — and all three pass,
-# because a value stripped down to nothing fails every shape regex and lands in
-# the same `generic-assignment` bucket the correct value lands in. The locator
-# prints only the shape, so no assertion on its output can separate them.
-# The `-n` guard in the stripper is therefore defence-in-depth for parity with
-# the table's own value (its sed's `(.+)` refuses to leave nothing), NOT a
-# property this suite pins — the same honest scoping as the output-boundary
-# assertion above. What IS pinned here: dropping the row entirely, which is the
-# false negative this PR's head commit fixed and a real regression risk.
+# ⚠️ SCOPE: this asserts the ROW SURVIVES, not that the stripper stopped at the
+# right separator. All three stripper variants (two passes with the non-empty
+# guard, two passes without it, and longest-match `${m##*[:=]}`) pass THIS case,
+# because a GENERIC value stripped to nothing lands in the same
+# `generic-assignment` bucket the correctly-stripped generic value lands in.
+# The stop-at-the-right-separator half is pinned by the high-signal case below.
 mkdir -p "$FIX/crednestpad"
 cat > "$FIX/crednestpad/s.jsonl" <<'EOF'
 {"type":"user","secret":"token=__GENPAD__","message":{"content":[{"type":"text","text":"see config"}]}}
@@ -1998,6 +1992,32 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednestpad" CODEX_HOME="$FIX/nocodex" MONOREPO_
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
 check "nested wrapper around a '='-terminated value still emits a locator" \
       "$OUT" "shape=generic-assignment"
+
+# The other half: a padded HIGH-SIGNAL value. This is where stopping at the WRONG
+# separator becomes visible, because collapsing the value loses its SHAPE — and
+# the shape is the only thing the locator prints. A JWT ending in base64 padding
+# has no interior `:`/`=`, so the trailing `=` is the first separator the second
+# pass sees; without the non-empty guard that pass empties the value and the row
+# degrades to the weak generic bucket.
+# Measured, three arms against this fixture:
+#   two passes + `-n` guard (as implemented) → jwt-like   ✓
+#   two passes, guard removed               → generic    ✗
+#   longest-match `${m##*[:=]}`             → generic    ✗
+# Both failing arms leave the REST of the suite green, so this case is the only
+# thing standing between the stripper and a silent revert to the pre-fix
+# behaviour. It matters specifically because collapsing the two-pass loop into
+# one longest-match strip is the obvious "simplify this" edit.
+# (Found by a sibling instance's differential pass on this PR's head — it built
+# the same fix independently, lost the push race, and diffed the two suites.)
+mkdir -p "$FIX/crednestpadjwt"
+cat > "$FIX/crednestpadjwt/s.jsonl" <<'EOF'
+{"type":"user","secret":"__JWT__=","message":{"content":[{"type":"text","text":"see config"}]}}
+EOF
+subst "$FIX/crednestpadjwt/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednestpadjwt" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+check "a padded HIGH-SIGNAL value keeps its shape through nested stripping" \
+      "$OUT" "shape=jwt-like"
 
 # Repeated matches at ONE location collapse to `Nx` with the count printed, not
 # dropped. Measured 171 locator lines for 100 distinct locations on a 1-day
