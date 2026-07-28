@@ -683,11 +683,18 @@ expect_classifier_error \
   "$(jq -c 'map(del(.author_date, .committer_date))' <<<"${war_cask_commits}")"
 
 # The surveyor must be told to carry the pair, or a correct classifier is fed a payload that can
-# never exercise it.
+# never exercise it. Naming the output fields is not enough on its own: the discriminator only works
+# if both values come from the raw commit object, so the source paths are asserted too. Taking
+# either date from the PR-level view instead would still satisfy a field-name-only assertion while
+# silently supplying a value the amend does not move.
 grep -Fq 'author_date' "${surveyor}" ||
   fail "surveyor commit normalization does not carry author_date"
 grep -Fq 'committer_date' "${surveyor}" ||
   fail "surveyor commit normalization does not carry committer_date"
+grep -Fq '.commit.author.date' "${surveyor}" ||
+  fail "surveyor does not source author_date from the raw commit object"
+grep -Fq '.commit.committer.date' "${surveyor}" ||
+  fail "surveyor does not source committer_date from the raw commit object"
 
 expect_exempt \
   "GoReleaser cask carrying several release cycles" \
