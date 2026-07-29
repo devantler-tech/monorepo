@@ -385,6 +385,33 @@ t_aborts_when_the_manifest_cannot_be_written() {
   rm -rf "$root"
 }
 
+t_no_reaped_row_when_removal_is_aborted_after_recording() {
+  # The durability rule writes the manifest row BEFORE deleting, but several gates can
+  # still abort after that point. A row alone must therefore not read as "removed":
+  # here the worktree is LOCKED between the pre-record gates and the removal, so the
+  # run must leave a `pending` row and NO `reaped` row, and the directory must survive.
+  # The failure must land AFTER record(), so an early KEEP gate cannot be what makes
+  # this pass — a read-only parent directory lets every gate succeed and then makes the
+  # removal itself fail. Asserting the `pending` row EXISTS is what rules out the
+  # vacuous case where the worktree never reached record() at all.
+  local root; root=$(make_repo)
+  add_wt "$root" stuck pushed
+  chmod a-w "$root/repo/.claude/worktrees"          # entries can no longer be unlinked
+  "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 >/dev/null 2>&1
+  chmod u+w "$root/repo/.claude/worktrees"
+  local pending_rows reaped_rows
+  pending_rows=$(awk -F'\t' '$5=="pending"' "$root/manifest.tsv" 2>/dev/null | wc -l | tr -d ' ')
+  reaped_rows=$(awk -F'\t' '$5=="reaped"' "$root/manifest.tsv" 2>/dev/null | wc -l | tr -d ' ')
+  if [ -d "$root/repo/.claude/worktrees/stuck" ] \
+     && [ "${pending_rows:-0}" -eq 1 ] && [ "${reaped_rows:-0}" -eq 0 ]; then
+    ok "an aborted removal leaves 'pending' and never 'reaped'"
+  else
+    bad "an aborted removal leaves 'pending' and never 'reaped'" \
+        "dir=$([ -d "$root/repo/.claude/worktrees/stuck" ] && echo present || echo GONE) pending=$pending_rows reaped=$reaped_rows [$(cat "$root/manifest.tsv" 2>/dev/null)]"
+  fi
+  rm -rf "$root"
+}
+
 t_dry_run_writes_no_manifest_and_removes_nothing() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -406,7 +433,8 @@ t_apply_removes_and_records() {
   # NB: compare the exact tab-delimited BRANCH field. A substring grep is unusable
   # here: every manifest path contains '.claude/worktrees/', which contains BOTH
   # '/work' and 'claude/work' — so a naive grep reports the spared branch as recorded.
-  local branches; branches=$(awk -F'\t' '{print $2}' "$root/manifest.tsv" 2>/dev/null)
+  # only 'reaped' rows count as removals — a 'pending' row may be an aborted attempt
+  local branches; branches=$(awk -F'\t' '$5=="reaped"{print $2}' "$root/manifest.tsv" 2>/dev/null)
   if [ ! -d "$root/repo/.claude/worktrees/spent" ] \
      && [ -d "$root/repo/.claude/worktrees/work" ] \
      && printf '%s\n' "$branches" | grep -qxF 'claude/spent' \
@@ -448,6 +476,7 @@ t_keeps_live_cwd
 t_keeps_live_cwd_in_subdir_with_regex_metachars
 t_keeps_parent_of_a_nested_worktree
 t_aborts_when_the_manifest_cannot_be_written
+t_no_reaped_row_when_removal_is_aborted_after_recording
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode

@@ -45,9 +45,12 @@
 # different, already-committed commit. They are treated as noise ONLY after the
 # submodule itself is confirmed clean and fully pushed.
 #
-# In apply mode every removal is recorded (path -> branch -> sha -> evidence) to the
-# manifest BEFORE the removal, and the write is verified — no restore record, no
-# removal. dry-run never touches the manifest.
+# In apply mode every removal is recorded to the manifest BEFORE the removal, and the
+# write is verified — no restore record, no removal. dry-run never touches the manifest.
+# Rows are `path -> branch -> sha -> evidence -> outcome`, where outcome is `pending`
+# (written before deleting) or `reaped` (appended only once the directory is gone).
+# A `pending` with no matching `reaped` is an ABORTED attempt, not a deletion — restore
+# and audit tooling must key on `reaped`.
 set -uo pipefail
 
 REPO_PATH=${1:-}
@@ -107,9 +110,16 @@ WT_LIST=$(git -C "$TOPLEVEL" worktree list --porcelain 2>/dev/null) \
 now=$(date +%s)
 reaped=0; kept=0; freed_kb=0
 
-record() { # path branch sha evidence
+# record <path> <branch> <sha> <evidence> <outcome>
+# The outcome column is what stops a row claiming a removal that never happened. The
+# durability rule requires writing BEFORE deleting, but four gates can still abort
+# after that point (containment, the lock and live re-checks, the restore-ref write),
+# so a row alone cannot mean "reaped". `pending` is written first; a second `reaped`
+# row is appended only after the directory is actually gone. Restore tooling keys on
+# `reaped`; a `pending` with no matching `reaped` is an aborted attempt, not a deletion.
+record() { # path branch sha evidence outcome
   local line
-  line=$(printf '%s\t%s\t%s\t%s' "$1" "$2" "$3" "$4")
+  line=$(printf '%s\t%s\t%s\t%s\t%s' "$1" "$2" "$3" "$4" "$5")
   printf '%s\n' "$line" >> "$MANIFEST" || return 1
   # Verify the WHOLE record landed, not just the path: a path substring is already
   # present whenever the same worktree was reaped in an earlier sweep, so a
@@ -298,7 +308,7 @@ for wt in "$WT_ROOT"/*/; do
   # the ledger is unwritable, so every subsequent removal would be unrecorded too.
   # Aborting (rather than keeping and carrying on) is what stops the wrapper reporting
   # a healthy sweep — which matters most under the disk pressure this tool exists for.
-  if ! record "$wt_real" "$branch" "$sha" "reachable-from-remote;no-live-process;age=${age_h}h"; then
+  if ! record "$wt_real" "$branch" "$sha" "reachable-from-remote;no-live-process;age=${age_h}h" pending; then
     die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"
   fi
   # Containment assertion before ANY recursive delete. $wt_real is derived from a glob
@@ -334,6 +344,9 @@ for wt in "$WT_ROOT"/*/; do
 
   if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
      || { ! is_locked_now "$wt_real" && rm -rf "$wt_real" && git -C "$TOPLEVEL" worktree prune; }; then
+    # Completion row — written only now that the directory is actually gone.
+    record "$wt_real" "$branch" "$sha" "removed" reaped \
+      || die "removed $wt_real but could not record its completion — aborting"
     printf 'REAPED %-52s %s (%s MB)\n' "$name" "$branch" "$((sz_kb/1024))"
     reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
   else
