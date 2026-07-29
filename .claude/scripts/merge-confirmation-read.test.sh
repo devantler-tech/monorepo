@@ -89,27 +89,101 @@ assert_prose 'there is NO `merged` field' \
 assert_prose 'rejects the **whole** `--json` request when any single field is unknown' \
   "Merge policy does not state that one unknown field voids the entire --json read"
 
-# ── 4. NEGATIVE CONTROL — no --json list in the contract may contain a bare `merged` ───────────────
-# Word-boundary matters here: `mergedAt`, `mergedBy` and `mergeCommit` are all VALID and must not be
-# flagged. Splitting each prescribed list on commas and comparing whole elements is what keeps this
-# from becoming a substring check that either misses the defect or condemns the fix.
+# ── 4. NEGATIVE CONTROL — no --json list in any definition surface may name a bare `merged` ─────────
 #
-# Scope: EVERY definition surface that prescribes a `gh --json` call, not just the contract. Measured
-# 2026-07-29: AGENTS.md carries 5 such prescriptions, `portfolio-surveyor.md` carries 10 and the
-# run-loop skill 2 — so an AGENTS.md-only control would have guarded a third of the real surface while
-# reading as full coverage.
+# Word boundaries matter: `mergedAt`, `mergedBy` and `mergeCommit` are all VALID. Splitting each list on
+# commas and comparing whole elements is what keeps this from being a substring check that either misses
+# the defect or condemns the fix.
 #
-# The sources are hard-wrapped prose, so a long field list can WRAP across a line break. Scanning the
-# raw file would then see only the head of the list and miss a `merged` sitting on the continuation
-# line — the guard would silently stop guarding exactly when lists get long enough to matter (probed:
-# it did evade before this join). Rejoin a line ending in a comma with the next line first. Only that
-# exact shape is joined, never every ", ", so prose following a list can never be read as a field.
-# (Done in awk, not `tr`+`sed`: BSD sed does not honour a `\001` escape in the pattern, so the
-# separator trick silently no-ops and the probe still evades. Verified by re-running the wrap arm.)
-# DISCOVER the surfaces; never enumerate them. A hand-written list drifts the moment a definition file
-# is added — the Cursor loader was already missing from one — and the drift is invisible because the
-# control still reports success over the surfaces it does know about. Every Markdown file under
-# `.claude/` plus the contract is the definition set by construction.
+# DISCOVER surfaces; never enumerate. A hand-written list drifts the moment a definition file is added
+# (the Cursor loader was already missing from one), and the drift is invisible because the control still
+# reports success over the surfaces it does know about.
+#
+# NORMALISE before extracting. Four real formattings defeat a naive scan, each probed and confirmed:
+#   * a hard WRAPPED list — only the head is seen (comma-continuation);
+#   * a shell CONTINUATION — `--json \` then the fields on the next line, which has no `--json` prefix;
+#   * the `=` and quoted argument forms — `gh` accepts `--json=a,b` (verified against the live API);
+#   * the repository's ABBREVIATED form — `--json …mergeStateStatus,…`, where the ellipsis is outside
+#     `[A-Za-z,]` so extraction stops dead and captures an EMPTY list.
+# (The join is awk, not `tr`+`sed`: BSD sed ignores a `\001` escape, so that repair silently no-opped
+# and the probe still evaded.)
+normalise_and_extract() {           # $1 = file; emits one `--json <fields>` per line
+  awk '
+    { line = $0
+      sub(/^[[:space:]]+/, "", line)
+      # a trailing backslash is a shell continuation — drop it and join
+      if (line ~ /\\$/) { sub(/\\$/, "", line); hold = hold line; next }
+      hold = hold line
+      if (hold ~ /,$/) next         # list continues on the next line — keep accumulating
+      print hold; hold = "" }
+    END { if (hold != "") print hold }
+  ' "$1" \
+    | sed -E -e 's/--json[[:space:]]*=?[[:space:]]*["'"'"']?/--json /g' \
+             -e 's/…/,/g' -e 's/\.\.\./,/g' \
+    | grep -o -- '--json [A-Za-z,]*' | sort -u
+}
+
+# Report every `--json` list in $1 that names a bare `merged`.
+bad_lists_in() {
+  local list fields out=""
+  while IFS= read -r list; do
+    fields="${list#--json }"
+    fields="${fields%%[\` \"]*}"
+    case ",${fields}," in
+      *,merged,*) out="${out}--json ${fields}"$'\n' ;;
+    esac
+  done < <(normalise_and_extract "$1")
+  printf '%s' "${out}"
+}
+
+# ── 4a. SELF-TEST THE EXTRACTOR FIRST — otherwise this whole control is vacuous ─────────────────────
+# `scanned` counts readable FILES, not successfully parsed field lists. So if the extraction pattern
+# ever stops matching, every surface yields nothing, no offender is found, and the control prints OK
+# over all 24 surfaces while detecting nothing at all. Verified: replacing the pattern with one that
+# matches nothing left a real `merged` in AGENTS.md completely undetected, exit 0.
+#
+# So exercise the extractor against committed fixtures before trusting it on the real surfaces. Every
+# BAD form must be caught and every VALID form must pass; a broken extractor now fails HERE.
+self_test_dir="$(mktemp -d)"
+trap 'rm -rf "${self_test_dir}"' EXIT
+
+# Each form pairs `merged` with a DIFFERENT valid field on purpose. The extractor ends in `sort -u`
+# (correct for the real scan — identical prescriptions should dedupe), so fixtures that normalise to the
+# same string would collapse and the count would under-report detection that is actually working.
+cat > "${self_test_dir}/bad.md" <<'FIXTURE'
+plain:      `gh pr view <n> --json state,merged,mergedAt`
+equals:     `gh pr view <n> --json=merged,additions`
+dquoted:    `gh pr view <n> --json "merged,assignees"`
+squoted:    `gh pr view <n> --json='merged,author'`
+spaced-eq:  `gh pr view <n> --json  =  merged,body`
+ellipsis:   `gh pr view <n> --json …mergeStateStatus,merged,closed`
+wrapped:    `gh pr view <n> --json state,
+merged,comments`
+continued:  gh pr view <n> --json \
+  merged,commits
+FIXTURE
+
+cat > "${self_test_dir}/good.md" <<'FIXTURE'
+`gh pr view <n> --json state,mergedAt,mergedBy,mergeCommit`
+`gh pr view <n> --json=state,mergedAt`
+`gh pr view <n> --json "mergedAt,mergeCommit"`
+`gh pr view <n> --json='mergedBy,additions'`
+`gh pr view <n> --json …mergeStateStatus,reviewDecision`
+`gh pr view <n> --json state,
+mergedAt,mergeCommit`
+gh pr view <n> --json \
+  state,mergedAt
+FIXTURE
+
+bad_caught="$(bad_lists_in "${self_test_dir}/bad.md" | grep -c . || true)"
+[ "${bad_caught}" -ge 8 ] ||
+  fail "extractor self-test: caught only ${bad_caught}/8 known-bad \`--json\` forms — the negative control is not working, so its OK would be meaningless"
+
+good_flagged="$(bad_lists_in "${self_test_dir}/good.md" | grep -c . || true)"
+[ "${good_flagged}" -eq 0 ] ||
+  fail "extractor self-test: flagged ${good_flagged} VALID form(s) as invalid — mergedAt/mergedBy/mergeCommit must never be reported"
+
+# ── 4b. now run the validated extractor over the real definition surfaces ───────────────────────────
 scan_surfaces="$(
   printf '%s\n' "${constitution}"
   find "${repo_root}/.claude" -type f -name '*.md' 2>/dev/null | sort
@@ -117,44 +191,46 @@ scan_surfaces="$(
 
 offenders=""
 scanned=0
+lists_seen=0
 while IFS= read -r surface; do
   [ -r "${surface}" ] || continue          # a surface may legitimately not exist in every checkout
   scanned=$((scanned + 1))
-  rejoined="$(awk '
-    { line = $0; sub(/^[[:space:]]+/, "", line); hold = hold line
-      if (hold ~ /,$/) next               # list continues on the next line — keep accumulating
-      print hold; hold = "" }
-    END { if (hold != "") print hold }
-  ' "${surface}")"
-
-  while IFS= read -r list; do
-    # strip the `--json ` prefix, then take the field list up to the first space/backtick/quote
-    fields="${list#--json }"
-    fields="${fields%%[\` \"]*}"
-    case ",${fields}," in
-      *,merged,*) offenders="${offenders}  ${surface#"${repo_root}/"}: --json ${fields}"$'\n' ;;
-    esac
-    # Normalise the separator before extracting. `gh` accepts BOTH `--json a,b` and `--json=a,b`
-    # (verified against the live API), and prose may quote the list — so `--json=state,merged`,
-    # `--json "state,merged"` and `--json='state,merged'` are all reachable prescriptions that a
-    # space-only extractor lets through. Collapse `=`, surrounding whitespace and an opening quote
-    # into the single space form first.
-    # Also normalise the repository's ABBREVIATED form. `SKILL.md` writes
-    # `--json …mergeStateStatus,reviewDecision,…`; an ellipsis is outside `[A-Za-z,]` so extraction
-    # stopped dead at it and captured an EMPTY field list, leaving anything after the ellipsis
-    # unchecked (probed: a `merged` placed there evaded). Turn the elision into a comma so parsing
-    # continues through the rest of the fragment.
-  done < <(printf '%s\n' "${rejoined}" \
-    | sed -E -e 's/--json[[:space:]]*=?[[:space:]]*["'"'"']?/--json /g' \
-             -e 's/…/,/g' -e 's/\.\.\./,/g' \
-    | grep -o -- '--json [A-Za-z,]*' | sort -u)
+  lists_seen=$(( lists_seen + $(normalise_and_extract "${surface}" | grep -c . || true) ))
+  while IFS= read -r bad; do
+    [ -n "${bad}" ] && offenders="${offenders}  ${surface#"${repo_root}/"}: ${bad}"$'\n'
+  done < <(bad_lists_in "${surface}")
 done <<EOF
 ${scan_surfaces}
 EOF
 
-# A silently-small scan set would make this control vacuous — the exact failure it exists to prevent.
+# A silently-small scan set, or one that parsed no field lists at all, would make this vacuous.
 [ "${scanned}" -ge 5 ] ||
   fail "negative control scanned only ${scanned} surface(s); the definition surfaces are missing or moved"
+[ "${lists_seen}" -ge 5 ] ||
+  fail "negative control extracted only ${lists_seen} \`--json\` field list(s) from ${scanned} surfaces; the extractor is probably broken"
+
+# ── 5. THIS JOB'S OWN CI WIRING — a guard that does not gate is not a guard ──────────────────────────
+# Wiring a contract test into `ci.yaml` takes FIVE edits, and this job shipped with four: the
+# `changes` job's `outputs:` declaration was missing, so `needs.changes.outputs.…` was empty, the `if:`
+# was never true, and the job reported `skipping` on every run while passing locally. Worse, dropping it
+# from the `status` job's `needs:`/`job-results:` would let it run and print OK while its failures no
+# longer gated the required aggregate check. Assert all five here so this test guards its own wiring.
+workflow="${repo_root}/.github/workflows/ci.yaml"
+if [ -r "${workflow}" ]; then
+  for wiring in \
+    '            merge-confirmation-read:|paths-filter entry' \
+    '      merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}|changes-job outputs declaration (its absence makes the job skip silently)' \
+    '  test-merge-confirmation-read:|job definition' \
+    '      - test-merge-confirmation-read|status job needs: entry (its absence stops the job gating the merge)' \
+    '            ${{ needs.test-merge-confirmation-read.result }}|status job job-results entry'; do
+    needle="${wiring%%|*}"; what="${wiring#*|}"
+    grep -Fqx -- "${needle}" "${workflow}" ||
+      fail "ci.yaml is missing this job's ${what} — the guard would not gate"
+  done
+  # the filter must cover every surface the scan discovers, or a change to an unlisted one skips the job
+  grep -Fq -- "              - '.claude/**/*.md'" "${workflow}" ||
+    fail "ci.yaml filter does not cover all .claude Markdown surfaces, but the scan does — a change to an unlisted surface would skip this check"
+fi
 
 if [ -n "${offenders}" ]; then
   printf 'merge-confirmation read: FAIL — an invalid `merged` field is prescribed:\n%s' "${offenders}" >&2
@@ -163,4 +239,4 @@ if [ -n "${offenders}" ]; then
   exit 1
 fi
 
-echo "merge-confirmation read: OK — post-merge read prescribed; no invalid \`merged\` field across ${scanned} definition surfaces"
+echo "merge-confirmation read: OK — self-test caught ${bad_caught}/8 bad forms and flagged ${good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces"
