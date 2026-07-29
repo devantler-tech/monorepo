@@ -65,6 +65,21 @@ assert_prose 'rejects the **whole** `--json` request when any single field is un
 # Word-boundary matters here: `mergedAt`, `mergedBy` and `mergeCommit` are all VALID and must not be
 # flagged. Splitting each prescribed list on commas and comparing whole elements is what keeps this
 # from becoming a substring check that either misses the defect or condemns the fix.
+#
+# The contract is hard-wrapped prose, so a long field list can WRAP across a line break. Scanning the
+# raw file would then see only the head of the list and miss a `merged` sitting on the continuation
+# line — the guard would silently stop guarding exactly when lists get long enough to matter (probed:
+# it did evade before this join). Rejoin a line ending in a comma with the next line first. Only that
+# exact shape is joined, never every ", ", so prose following a list can never be read as a field.
+# (Done in awk, not `tr`+`sed`: BSD sed does not honour a `\001` escape in the pattern, so the
+# separator trick silently no-ops and the probe still evades. Verified by re-running the wrap arm.)
+rejoined="$(awk '
+  { line = $0; sub(/^[[:space:]]+/, "", line); hold = hold line
+    if (hold ~ /,$/) next                 # list continues on the next line — keep accumulating
+    print hold; hold = "" }
+  END { if (hold != "") print hold }
+' "${constitution}")"
+
 offenders=""
 while IFS= read -r list; do
   # strip the `--json ` prefix, then take the field list up to the first space/backtick/quote
@@ -73,7 +88,7 @@ while IFS= read -r list; do
   case ",${fields}," in
     *,merged,*) offenders="${offenders}  --json ${fields}"$'\n' ;;
   esac
-done < <(grep -o -- '--json [A-Za-z,]*' "${constitution}" | sort -u)
+done < <(printf '%s\n' "${rejoined}" | grep -o -- '--json [A-Za-z,]*' | sort -u)
 
 if [ -n "${offenders}" ]; then
   printf 'merge-confirmation read: FAIL — contract prescribes an invalid `merged` field:\n%s' "${offenders}" >&2
