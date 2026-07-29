@@ -184,9 +184,18 @@ good_flagged="$(bad_lists_in "${self_test_dir}/good.md" | grep -c . || true)"
   fail "extractor self-test: flagged ${good_flagged} VALID form(s) as invalid — mergedAt/mergedBy/mergeCommit must never be reported"
 
 # ── 4b. now run the validated extractor over the real definition surfaces ───────────────────────────
+# Markdown AND JSON. `.claude/plugin-consumption/agentic-engineering.desired-state.json` is a named
+# definition surface (AGENTS.md) and carries executable `bootstrapPrompt` strings, so a prescription can
+# live there with no Markdown involved.
+#
+# `.claude/scripts/*.sh` is deliberately NOT scanned, and the reason is not oversight: this very test
+# file contains invalid forms as SELF-TEST FIXTURES, so scanning shell would make the control fail on
+# itself. The risk profile also differs — a script with a bad `--json` fails loudly the first time it
+# runs, whereas a bad PROSE prescription silently misleads every agent that reads it, which is what this
+# control is for.
 scan_surfaces="$(
   printf '%s\n' "${constitution}"
-  find "${repo_root}/.claude" -type f -name '*.md' 2>/dev/null | sort
+  find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null | sort
 )"
 
 offenders=""
@@ -232,8 +241,10 @@ for wiring in \
     fail "ci.yaml is missing this job's ${what} — the guard would not gate"
 done
 # the filter must cover every surface the scan discovers, or a change to an unlisted one skips the job
-grep -Fq -- "              - '.claude/**/*.md'" "${workflow}" ||
-  fail "ci.yaml filter does not cover all .claude Markdown surfaces, but the scan does — a change to an unlisted surface would skip this check"
+for glob in "              - '.claude/**/*.md'" "              - '.claude/**/*.json'"; do
+  grep -Fqx -- "${glob}" "${workflow}" ||
+    fail "ci.yaml filter is missing ${glob# *} though the scan covers it — a change to an unlisted surface would skip this check"
+done
 if [ -n "${offenders}" ]; then
   printf 'merge-confirmation read: FAIL — an invalid `merged` field is prescribed:\n%s' "${offenders}" >&2
   echo "  \`merged\` exists on none of gh pr view / gh pr list / gh search prs, and one unknown" >&2

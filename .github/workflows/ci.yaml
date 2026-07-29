@@ -145,6 +145,7 @@ jobs:
               # every Markdown definition surface, matching the test's own discovery — an enumerated
               # subset would let a change to an unlisted surface skip the check that guards it
               - '.claude/**/*.md'
+              - '.claude/**/*.json'
               - '.claude/scripts/merge-confirmation-read.test.sh'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
