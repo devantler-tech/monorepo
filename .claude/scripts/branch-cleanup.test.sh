@@ -192,6 +192,24 @@ report "slug that disagrees with origin is refused (exit 2)" \
 report "slug refusal names both the slug and the origin repo" \
   "$(grep -q 'ksail' <<<"$out" && grep -q 'does-not-exist-2531' <<<"$out" && echo yes || echo no)" "out=$out"
 
+# --- 7a. an OWNER-QUALIFIED slug must be diagnosable ----------------------
+# <slug> is a BARE repo name; the helper prepends `devantler-tech/`. Passing the
+# owner-qualified form — the shape `gh -R` takes everywhere, so the likely
+# mistake — resolves to `devantler-tech/devantler-tech/<repo>` and is correctly
+# refused. But the message printed the RAW argument next to the parsed origin,
+# so for a slug whose repo half is right it rendered as a contradiction:
+#   slug 'devantler-tech/x' does not match the checkout ... whose origin is 'devantler-tech/x'
+# Identical strings, no stated reason — the reader cannot see that a second
+# owner was prepended. The refusal must name the value actually COMPARED.
+git -C "$slugwork" remote set-url origin "https://github.com/devantler-tech/does-not-exist-2531.git"
+manifest="$tmp/manifest7a"
+: >"$manifest"
+out="$("$helper" "$slugwork" "devantler-tech/does-not-exist-2531" "$manifest" dry-run claude 2>&1)" && rc=0 || rc=$?
+report "owner-qualified slug is refused (exit 2)" \
+  "$([[ ${rc:-0} -eq 2 ]] && echo yes || echo no)" "rc=${rc:-0} out=$out"
+report "owner-qualified refusal names the RESOLVED slug, not just the raw argument" \
+  "$(grep -q 'devantler-tech/devantler-tech/does-not-exist-2531' <<<"$out" && echo yes || echo no)" "out=$out"
+
 # --- 7b. an UPPERCASE GitHub host must not slip past the identity check ---
 # Hostnames are case-insensitive, so a case-sensitive host match would leave
 # origin unparsed and skip the slug comparison entirely — a silent bypass.
