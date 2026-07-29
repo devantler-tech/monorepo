@@ -145,6 +145,7 @@ jobs:
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/agents/platform-security-surveyor.md'
               - '.claude/loaders/cursor-daily-ai-engineer.md'
+              - '.cursor/environment.json'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/skills/products/agent-skills/SKILL.md'

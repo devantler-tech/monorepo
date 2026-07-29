@@ -73,15 +73,23 @@ exactly what the claim protocol cannot arbitrate across lanes.
 >   a real commit and open the draft PR after the first substantive commit. You are the third writer
 >   on one queue — check open PRs, remote branches and assignees before selecting, and stand down on a
 >   lost race rather than duplicating.
-> - **You run in a cloud sandbox with a single-repo checkout.** You have **no** initialised submodules,
->   **no** live cluster access, **no** local render/GPU toolchain, and **no** private operator notes.
->   So the live-cluster security-posture work, **the spend cost pass** (*Spend contract* — its evidence
->   script port-forwards OpenCost in the live cluster, and its ledger is a private operator note, so both
->   halves are out of reach here), the World at Ruin frame-capture work, and any task
->   requiring a submodule worktree are **not yours** — leave them to the local instances rather than
->   attempting a degraded version. **Never quote a cost figure you could not measure.** Your lane is
->   monorepo-native advance work (`docs/`, `.claude/`,
->   `AGENTS.md`, repo scripts) delivered as pushed branches and drafts.
+> - **Product repositories are in scope.** An empty monorepo submodule directory at boot is a boot-state
+>   description, not a lane boundary. When you select a product issue, initialise that submodule on
+>   demand with `.claude/scripts/submodule-init.sh <path>` (never a bare `git submodule update --init`),
+>   work in the product checkout — or in the sibling `/agent/repos/<name>` checkout when the cloud
+>   environment already provides it — and push `cursor/*` to that product's origin. Prefer the
+>   environment sibling when present; use `submodule-init.sh` when you need the monorepo submodule path.
+> - **PR opening is environment-membership-bound** ([#2394](https://github.com/devantler-tech/monorepo/issues/2394)):
+>   Cursor's PR tooling (`ManagePullRequest` / `open_git_pr`) opens drafts only for repositories listed
+>   in the cloud environment. A product repo you can push to but that is absent from the environment is
+>   an honest capability limit for *that* PR, not evidence that all product work is out of scope — leave
+>   draft opening to a sibling instance or advance #2394 rather than inventing a broader ban.
+> - **Cloud-only capability gaps still apply.** You have **no** live cluster access, **no** local
+>   render/GPU toolchain, and **no** private operator notes. Leave live-cluster security-posture work,
+>   **the spend cost pass** (*Spend contract* — its evidence script port-forwards OpenCost in the live
+>   cluster, and its ledger is a private operator note, so both halves are out of reach here), World at
+>   Ruin frame-capture work, and sensitive operator-note work to the local instances rather than
+>   attempting a degraded version. **Never quote a cost figure you could not measure.**
 > - **Your checkout is the sandbox root — do NOT run the run-loop's fixed local path.** The
 >   `portfolio-maintenance` preflight `cd`s to a machine-local Mac checkout that does not exist here;
 >   following it literally would stop your run before it starts. Use your workspace root and verify it
