@@ -35,8 +35,14 @@ make_repo() {
 # add_wt <root> <name> [pushed|unpushed]
 add_wt() {
   local root=$1 name=$2 kind=${3:-pushed}
-  git -C "$root/repo" worktree add -q -b "claude/$name" \
-      "$root/repo/.claude/worktrees/$name" main 2>/dev/null
+  # Status-checked, and stderr is kept on failure. A silently-failing fixture produces a
+  # repo with no worktree, and a REAP-negative assertion then passes on nothing — the
+  # exact hazard that let the staged-gitlink test go green against an empty porcelain.
+  if ! git -C "$root/repo" worktree add -q -b "claude/$name" \
+         "$root/repo/.claude/worktrees/$name" main; then
+    printf 'FIXTURE FAILURE: worktree add %s\n' "$name" >&2
+    return 1
+  fi
   if [ "$kind" = unpushed ]; then
     echo change > "$root/repo/.claude/worktrees/$name/new.txt"
     git -C "$root/repo/.claude/worktrees/$name" add new.txt

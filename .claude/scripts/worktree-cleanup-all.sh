@@ -58,7 +58,9 @@ sweep() { # <repo_path>
     printf '\n### SKIP %s (broken isolation: toplevel=%s)\n' "$path" "$toplevel"
     return 0
   fi
-  local rel=${path#$ROOT/}
+  # "$ROOT" is QUOTED: unquoted it is a glob pattern, so a root path containing
+  # [, * or ? would strip the wrong prefix (or none) and mislabel the manifest.
+  local rel=${path#"$ROOT"/}
   if [ "$path" = "$ROOT" ]; then rel="(root)"; label=monorepo
   else label=$(printf '%s' "$rel" | tr '/' '-'); fi
   printf '\n### %s\n' "$rel"
@@ -76,11 +78,25 @@ sweep() { # <repo_path>
 }
 
 sweep "$ROOT"
-# Every initialised submodule, from .gitmodules (never a hard-coded list — the
-# portfolio gains and loses submodules over time).
-while IFS= read -r sub; do
-  [ -n "$sub" ] || continue
-  sweep "$ROOT/$sub"
-done < <(git -C "$ROOT" config -f "$ROOT/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null | awk '{print $2}')
+
+# Every submodule, from .gitmodules (never a hard-coded list — the portfolio gains and
+# loses submodules over time).
+# The read is status-checked: an unreadable .gitmodules yields an empty list, which is
+# indistinguishable from "no submodules", and would silently degrade this to a
+# root-only sweep while still reporting success. `cut -d' ' -f2-` (not `awk '{print $2}'`)
+# so a submodule path containing whitespace is not truncated.
+if [ -f "$ROOT/.gitmodules" ]; then
+  submodules=$(git -C "$ROOT" config -f "$ROOT/.gitmodules" \
+                 --get-regexp '^submodule\..*\.path$' 2>/dev/null | cut -d' ' -f2-)
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ -n "$(git -C "$ROOT" config -f "$ROOT/.gitmodules" --list 2>/dev/null)" ]; then
+    printf 'worktree-cleanup-all: ABORTING — cannot read submodule paths from .gitmodules\n' >&2
+    exit 2
+  fi
+  while IFS= read -r sub; do
+    [ -n "$sub" ] || continue
+    sweep "$ROOT/$sub"
+  done <<< "$submodules"
+fi
 
 printf '\n=== done (manifests in %s) ===\n' "$MANIFEST_DIR"

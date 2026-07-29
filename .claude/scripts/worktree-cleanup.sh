@@ -104,10 +104,6 @@ WT_LIST=$(git -C "$TOPLEVEL" worktree list --porcelain 2>/dev/null) \
   || die "cannot list worktrees for $TOPLEVEL"
 [ -n "$WT_LIST" ] || die "empty worktree list for $TOPLEVEL"
 
-# Locked worktrees are in use by definition; never override a lock.
-LOCKED=$(printf '%s\n' "$WT_LIST" | awk '
-  /^worktree /{p=substr($0,10)} /^locked/{print p}')
-
 now=$(date +%s)
 reaped=0; kept=0; freed_kb=0
 
@@ -124,14 +120,34 @@ record() { # path branch sha evidence
 
 keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(basename "$1")" "$2"; }
 
-# is_locked_now <resolved-worktree-path> — re-queries git rather than consulting the
+# is_locked_now <resolved-worktree-path> — re-queries git rather than consulting a
 # startup snapshot, so a lock taken DURING the sweep is still honoured.
+#
+# FAILS CLOSED: if git cannot be queried, the answer is "locked". This runs immediately
+# before `rm -rf`, so "I could not tell" must never resolve to "safe to delete".
+#
+# Compares the recorded path BOTH raw and symlink-resolved. git prints worktree paths
+# as they were recorded at `worktree add` time, while $wt_real is pwd -P normalised; if
+# the repo was ever reached through a symlinked prefix the two differ and a plain
+# comparison would silently miss the lock.
 is_locked_now() {
-  git -C "$TOPLEVEL" worktree list --porcelain 2>/dev/null \
-    | awk -v target="$1" '
-        /^worktree /{p=substr($0,10)}
-        /^locked/{if (p==target) found=1}
-        END{exit found?0:1}'
+  local target=$1 out rc line p resolved
+  out=$(git -C "$TOPLEVEL" worktree list --porcelain 2>/dev/null); rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+    return 0   # cannot prove it is unlocked
+  fi
+  p=""
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) p=${line#worktree } ;;
+      locked*)
+        [ "$p" = "$target" ] && return 0
+        resolved=$(cd "$p" 2>/dev/null && pwd -P) || resolved=""
+        if [ -n "$resolved" ] && [ "$resolved" = "$target" ]; then return 0; fi
+        ;;
+    esac
+  done <<< "$out"
+  return 1
 }
 
 # count_real_changes <worktree> <porcelain-status> -> sets $REAL_CHANGES
@@ -201,8 +217,8 @@ for wt in "$WT_ROOT"/*/; do
     keep "$wt" "live process CWD"; continue
   fi
 
-  # KEEP: locked
-  if printf '%s\n' "$LOCKED" | grep -qxF "$wt_real"; then
+  # KEEP: locked (same symlink-resolved, fail-closed check used before removal)
+  if is_locked_now "$wt_real"; then
     keep "$wt" "locked"; continue
   fi
 
@@ -274,7 +290,11 @@ for wt in "$WT_ROOT"/*/; do
   # this, a stale remote-tracking ref can make a commit look pushed, and a later
   # fetch --prune + gc would collect the only copy — leaving a manifest entry that
   # cannot be restored. One ref per commit; the name is the SHA, so it is idempotent.
-  git -C "$TOPLEVEL" update-ref "refs/reaped/$sha" "$sha" 2>/dev/null || true
+  # This is a PRECONDITION of removal, not best-effort: no restore ref, no deletion —
+  # the same rule the manifest write already follows.
+  if ! git -C "$TOPLEVEL" update-ref "refs/reaped/$sha" "$sha" 2>/dev/null; then
+    keep "$wt" "could not write refs/reaped/$sha — refusing to remove"; continue
+  fi
 
   if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
      || { ! is_locked_now "$wt_real" && rm -rf "$wt_real" && git -C "$TOPLEVEL" worktree prune; }; then

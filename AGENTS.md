@@ -2301,8 +2301,10 @@ Per-repo safety lives in [`worktree-cleanup.sh`](.claude/scripts/worktree-cleanu
 **fail-closed**: it KEEPs any worktree that is a **live process CWD**, is **locked**, is **younger
 than `min_age_hours`**, holds **commits not reachable from any remote** (one
 `git rev-list --not --remotes` test covering both an unpushed branch and an orphan detached HEAD), or
-has **uncommitted work** — where submodule gitlink drift and `?? .codex/` / `?? .agents/` count as
-noise only once the submodule itself is proven clean and pushed. Every removal is recorded to a
+has **uncommitted work**. Two things are treated as noise rather than work: **unstaged** submodule
+gitlink drift — and only once that submodule is itself proven clean and pushed (a *staged* gitlink is
+authored intent living solely in that worktree's index, so it always counts as work) — and the stray
+tool dirs `?? .codex/` / `?? .agents/`, which are filtered unconditionally. Every removal is recorded to a
 restore manifest **outside the repo** (`~/.claude/worktree-cleanup-manifests/`) before it happens, and
 any infrastructure failure aborts rather than reaping. **Do not add a per-run worktree sweep** to
 compensate; a session removing its *own* worktree is exactly the thing that cannot work.

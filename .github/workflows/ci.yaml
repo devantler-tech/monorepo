@@ -90,6 +90,7 @@ jobs:
               - '.claude/scripts/worktree-cleanup.sh'
               - '.claude/scripts/worktree-cleanup-all.sh'
               - '.claude/scripts/worktree-cleanup.test.sh'
+              - '.claude/scripts/worktree-cleanup-all.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -388,6 +389,8 @@ jobs:
       # `case` inside $( ), and the age/stat probes are BSD-flavoured there.
       - name: Self-test worktree-cleanup safety gates
         run: bash .claude/scripts/worktree-cleanup.test.sh
+      - name: Self-test the multi-repo orchestrator
+        run: bash .claude/scripts/worktree-cleanup-all.test.sh
 
   test-submodule-init:
     needs: changes
