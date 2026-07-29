@@ -97,8 +97,13 @@ now=$(date +%s)
 reaped=0; kept=0; freed_kb=0
 
 record() { # path branch sha evidence
-  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$MANIFEST" || return 1
-  grep -qF "$1" "$MANIFEST" || return 1   # verify the write landed
+  local line
+  line=$(printf '%s\t%s\t%s\t%s' "$1" "$2" "$3" "$4")
+  printf '%s\n' "$line" >> "$MANIFEST" || return 1
+  # Verify the WHOLE record landed, not just the path: a path substring is already
+  # present whenever the same worktree was reaped in an earlier sweep, so a
+  # path-only check would confirm a write that never happened.
+  grep -qxF -- "$line" "$MANIFEST" || return 1
   return 0
 }
 
@@ -203,6 +208,15 @@ for wt in "$WT_ROOT"/*/; do
   if ! record "$wt_real" "$branch" "$sha" "reachable-from-remote;no-live-process;age=${age_h}h"; then
     keep "$wt" "MANIFEST WRITE FAILED — refusing to remove"; continue
   fi
+  # Containment assertion before ANY recursive delete. $wt_real is derived from a glob
+  # under $WT_ROOT and should always sit beneath it, but `rm -rf` is unforgiving enough
+  # that the invariant is asserted rather than assumed — a bug upstream of here must not become a recursive delete of the checkout (or of /).
+  # (belt-and-braces; the glob already constrains it)
+  case "$wt_real" in
+    "$WT_ROOT"/?*) : ;;
+    *) keep "$wt" "REFUSING to remove: '$wt_real' is not under '$WT_ROOT'"; continue ;;
+  esac
+
   if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
      || { rm -rf "$wt_real" && git -C "$TOPLEVEL" worktree prune; }; then
     printf 'REAPED %-52s %s (%s MB)\n' "$name" "$branch" "$((sz_kb/1024))"
