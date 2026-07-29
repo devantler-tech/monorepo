@@ -1330,15 +1330,17 @@ promoted, CLEAN, trusted-author PR to merge is the **expected, mandated** behavi
 re-weigh each time. In the rare case a merge is still refused, **don't burn the run** re-emitting
 variant evidence or retrying — leave the PR green with threads resolved and surface it to the
 maintainer as a one-click; that is the uncommon fallback, not the default.
-**Confirming the merge landed: `--json state,mergedAt` — there is NO `merged` field.** This read was
-unprescribed territory, and the improvisation it invited costs more than one value: `gh` rejects the
-**whole** `--json` request when any single field is unknown, so the common
-`state,merged,mergedAt,mergeCommit` set returns *nothing* and the run cannot tell whether its own merge
-succeeded — blind at the top of *The work-selection ladder*. `merged` exists on **none** of
-`gh pr view`, `gh pr list`, `gh search prs`. Read `state` (`MERGED`), adding `mergedAt` or
-`mergeCommit` only when you need the timestamp or the squash sha. (Measured 2026-07-29 by distinct
-sessions: 23 of 204 hit `Unknown JSON field: "merged"`, up from 8 of 211 — and up ~3.5× **per merge**,
-so not an artifact of the densified cadence.)
+**Confirming the merge landed: `gh pr view <n> --repo devantler-tech/<repo> --json state,mergedAt` —
+there is NO `merged` field.** This read was unprescribed territory, and the improvisation it invited
+costs more than one value: `gh` rejects the **whole** `--json` request when any single field is unknown,
+so the common `state,merged,mergedAt,mergeCommit` set returns *nothing* and the run cannot tell whether
+its own merge succeeded — blind at the top of *The work-selection ladder*. `merged` exists on **none**
+of `gh pr view`, `gh pr list`, `gh search prs`. Read `state` (`MERGED`), adding `mergedAt` or
+`mergeCommit` only when you need the timestamp or the squash sha. ⚠️ **The whole command is the
+prescription, not the field list** — field vocabularies are per-subcommand, so `gh search prs` rejects
+`mergedAt` outright (verified) and `state` does not mean the same thing on every surface. (Measured
+2026-07-29 by distinct sessions: 23 of 204 hit `Unknown JSON field: "merged"`, up from 8 of 211 — and
+up ~3.5× **per merge**, so not an artifact of the densified cadence.)
 **Stale CodeRabbit CHANGES_REQUESTED is a dismissal one-click, not a re-review loop.** CodeRabbit
 posts re-review results as COMMENTED and structurally never re-APPROVEs after a CHANGES_REQUESTED —
 so a promoted PR whose only blocker is a **`coderabbitai[bot]`-authored** CHANGES_REQUESTED review at

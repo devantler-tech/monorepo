@@ -36,12 +36,28 @@ fail() {
 
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
 
+# Scope the prose assertions to the MERGE POLICY SECTION, not the whole contract. Against the whole
+# file each assertion passes as long as its phrase survives anywhere — an example, a telemetry note, an
+# unrelated section — so a later edit could delete the instruction from its point of use while the job
+# still reported the merge procedure guarded. Requiring the phrases to co-occur inside the section is
+# what ties the guard to the place the rule has to be.
+merge_policy="$(awk '
+  /^### Merge policy/ { inside = 1; print; next }
+  inside && /^### /   { exit }
+  inside              { print }
+' "${constitution}")"
+
+# Fail closed if the section vanished or was renamed — otherwise every assertion below would be
+# checking an empty string and would pass vacuously, which is this control's own failure mode.
+[ "$(printf '%s' "${merge_policy}" | wc -c)" -gt 500 ] ||
+  fail "could not locate a '### Merge policy' section in AGENTS.md — assertions would be vacuous"
+
 # Markdown prose is hard-wrapped, so a guarded sentence routinely spans two lines and exists on NO
 # single line. Flatten once and match substrings against the flattened copy.
-constitution_flat="$(tr '\n' ' ' < "${constitution}" | tr -s '[:space:]' ' ')"
+merge_policy_flat="$(printf '%s' "${merge_policy}" | tr '\n' ' ' | tr -s '[:space:]' ' ')"
 
 assert_prose() {
-  case "${constitution_flat}" in
+  case "${merge_policy_flat}" in
     *"$1"*) ;;
     *) fail "$2" ;;
   esac
@@ -78,11 +94,14 @@ assert_prose 'rejects the **whole** `--json` request when any single field is un
 # exact shape is joined, never every ", ", so prose following a list can never be read as a field.
 # (Done in awk, not `tr`+`sed`: BSD sed does not honour a `\001` escape in the pattern, so the
 # separator trick silently no-ops and the probe still evades. Verified by re-running the wrap arm.)
-scan_surfaces="${constitution}
-${repo_root}/.claude/agents/portfolio-surveyor.md
-${repo_root}/.claude/agents/daily-maintainer.md
-${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md
-${repo_root}/.claude/skills/product-engineering/SKILL.md"
+# DISCOVER the surfaces; never enumerate them. A hand-written list drifts the moment a definition file
+# is added — the Cursor loader was already missing from one — and the drift is invisible because the
+# control still reports success over the surfaces it does know about. Every Markdown file under
+# `.claude/` plus the contract is the definition set by construction.
+scan_surfaces="$(
+  printf '%s\n' "${constitution}"
+  find "${repo_root}/.claude" -type f -name '*.md' 2>/dev/null | sort
+)"
 
 offenders=""
 scanned=0
@@ -108,15 +127,21 @@ while IFS= read -r surface; do
     # `--json "state,merged"` and `--json='state,merged'` are all reachable prescriptions that a
     # space-only extractor lets through. Collapse `=`, surrounding whitespace and an opening quote
     # into the single space form first.
+    # Also normalise the repository's ABBREVIATED form. `SKILL.md` writes
+    # `--json …mergeStateStatus,reviewDecision,…`; an ellipsis is outside `[A-Za-z,]` so extraction
+    # stopped dead at it and captured an EMPTY field list, leaving anything after the ellipsis
+    # unchecked (probed: a `merged` placed there evaded). Turn the elision into a comma so parsing
+    # continues through the rest of the fragment.
   done < <(printf '%s\n' "${rejoined}" \
-    | sed -E 's/--json[[:space:]]*=?[[:space:]]*["'"'"']?/--json /g' \
+    | sed -E -e 's/--json[[:space:]]*=?[[:space:]]*["'"'"']?/--json /g' \
+             -e 's/…/,/g' -e 's/\.\.\./,/g' \
     | grep -o -- '--json [A-Za-z,]*' | sort -u)
 done <<EOF
 ${scan_surfaces}
 EOF
 
-# A silently-empty scan set would make this control vacuous — the exact failure it exists to prevent.
-[ "${scanned}" -ge 2 ] ||
+# A silently-small scan set would make this control vacuous — the exact failure it exists to prevent.
+[ "${scanned}" -ge 5 ] ||
   fail "negative control scanned only ${scanned} surface(s); the definition surfaces are missing or moved"
 
 if [ -n "${offenders}" ]; then
