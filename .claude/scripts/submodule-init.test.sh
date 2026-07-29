@@ -142,6 +142,236 @@ report "linked worktree: submodule gitdir lives under the worktree admin dir" \
 out="$(cd "$c5/super-wt" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "linked worktree: --check passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 
+# Cleanup is scoped to the probe's own admin entry (#2460), and `module_dir` resolves differently in
+# this layout (.git/worktrees/<wt>/modules/<path>) — so prove the scoped removal lands in the RIGHT
+# place here too, or repeated runs would silently accumulate entries the old repo-wide prune used to
+# sweep. Several runs, because a single one cannot show accumulation.
+for _ in 1 2 3; do (cd "$c5/super-wt" && "$helper" --check >/dev/null 2>&1) || true; done
+c5_mdir="$(cd "$c5/super-wt/sub" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+shopt -s nullglob
+c5_left=("$c5_mdir/worktrees"/probe-iso-*)
+shopt -u nullglob
+report "linked worktree: repeated --check leaves no probe admin entries (scoped cleanup)" \
+  "$([[ ${#c5_left[@]} -eq 0 ]] && echo yes || echo no)" "mdir=$c5_mdir leftover=${c5_left[*]:-none}"
+
+# 6. Path comparison is by filesystem IDENTITY, not by spelling (#2457). The live defect was a
+#    worktree recorded as `.Codex/…` and reported by git as `.codex/…` — one inode on a
+#    case-insensitive volume, string-compared unequal, reported as ISOLATION BROKEN on a tree that
+#    was fine. Case-folding is only reachable on a case-insensitive filesystem, so the portable proof
+#    uses a SYMLINK alias: two spellings, one inode. Under the old `[ "$got" != "$want" ]` the alias
+#    case fails; the negative controls below are what keep the fix from being a blanket "equal".
+real="$tmp/c6-real"
+mkdir -p "$real"
+alias_link="$tmp/c6-alias"
+ln -s "$real" "$alias_link"
+other="$tmp/c6-other"
+mkdir -p "$other"
+
+# Sourcing must be side-effect-free (the guard sits above every top-level side effect), so it needs no
+# fixture repo and must not move or kill the caller's shell.
+same_dir_rc() (
+  # shellcheck source=/dev/null
+  . "$helper" >/dev/null 2>&1
+  same_dir "$1" "$2"
+)
+
+# PRECONDITION, not a nicety: `same_dir_rc` runs in a subshell, so if sourcing failed to define
+# `same_dir` at all, command-not-found exits non-zero and every "compare UNEQUAL" assertion below
+# would report PASS against nothing. Pin that the helper is really there first.
+# shellcheck source=/dev/null
+( . "$helper" >/dev/null 2>&1 && declare -f same_dir >/dev/null ) && ok=yes || ok=no
+report "same_dir: helper is defined when the script is sourced (guards the controls below)" "$ok"
+
+same_dir_rc "$real" "$alias_link" && ok=yes || ok=no
+report "same_dir: two spellings of ONE directory compare equal (symlink alias)" "$ok" \
+  "real=$real alias=$alias_link"
+
+same_dir_rc "$real" "$other" && ok=no || ok=yes
+report "same_dir: genuinely different directories compare UNEQUAL (negative control)" "$ok" \
+  "real=$real other=$other"
+
+same_dir_rc "" "$real" && ok=no || ok=yes
+report "same_dir: fails closed on one empty path" "$ok"
+
+# THE fail-open the emptiness guard exists for, and the only line in the diff that changes a reachable
+# outcome: `[ "" = "" ]` is TRUE, so without the guard two empty paths compare as "the same directory"
+# and an unverifiable worktree is reported isolated. The one-empty case above passes either way
+# (`[ -e "" ]` catches it), so it does NOT cover this.
+same_dir_rc "" "" && ok=no || ok=yes
+report "same_dir: fails closed when BOTH paths are empty (the pre-existing fail-open)" "$ok"
+
+same_dir_rc "$real" "$tmp/c6-does-not-exist" && ok=no || ok=yes
+report "same_dir: fails closed on a non-existent path" "$ok"
+
+# The case variant that actually bit, end-to-end — only meaningful where the filesystem folds case,
+# so probe for that rather than assuming the platform.
+case_dir="$tmp/c6-CaseProbe"
+mkdir -p "$case_dir"
+if [[ -d "$tmp/c6-caseprobe" ]]; then
+  same_dir_rc "$case_dir" "$tmp/c6-caseprobe" && ok=yes || ok=no
+  report "same_dir: case-only difference compares equal on a case-insensitive filesystem" "$ok" \
+    "$case_dir vs $tmp/c6-caseprobe"
+else
+  echo "SKIP: case-only comparison — filesystem is case-sensitive (covered by the symlink case above)"
+fi
+
+# 7. #2460 — an UNVERIFIABLE linked worktree must fail --check CLOSED, and the check must not destroy
+#    the evidence it reads. `probe` used to run a repository-wide `git worktree prune` BEFORE
+#    `check_existing_worktrees`; prune drops the admin entry of any worktree that is missing OR merely
+#    unverifiable, so the sweep found nothing and reported `isolated ✓` on a colliding tree.
+#    The fixture makes the worktree UNSEARCHABLE (chmod 0400): `-d` still passes, so the entry is not
+#    skipped as "missing", while both `cd` and `git -C` fail — i.e. genuinely unverifiable.
+c7="$tmp/c7"
+mk_super "$c7"
+live_wt="$c7/live-wt"
+git -C "$c7/super/sub" worktree add -q --detach "$live_wt"
+wt_admin="$c7/super/.git/modules/sub/worktrees"
+chmod 0400 "$live_wt"
+# Restore permissions on exit so the EXIT trap's `rm -rf "$tmp"` can actually remove the fixture.
+trap 'chmod -R u+rwx "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
+
+# PRECONDITION: if the platform lets us read the dir anyway (running as root, or a filesystem that
+# ignores the mode), the case under test never arises and the assertions below would pass vacuously.
+if (cd "$live_wt") 2>/dev/null; then
+  echo "SKIP: #2460 end-to-end — this platform can still enter a 0400 directory (vacuous otherwise)"
+else
+  out="$(cd "$c7/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+  report "unverifiable worktree: --check exits non-zero (fails closed)" \
+    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+  report "unverifiable worktree: reports ISOLATION BROKEN and names it" \
+    "$(grep -q 'ISOLATION BROKEN' <<<"$out" && grep -q 'live-wt' <<<"$out" && echo yes || echo no)" "$out"
+  report "unverifiable worktree: never reports the submodule isolated" \
+    "$(grep -q 'sub — isolated' <<<"$out" && echo no || echo yes)" "$out"
+  # The evidence-destruction half: the sibling's admin entry must SURVIVE the check.
+  report "unverifiable worktree: the sibling's admin entry survives --check (not pruned)" \
+    "$([[ -e "$wt_admin/live-wt" ]] && echo yes || echo no)" "$(ls "$wt_admin" 2>&1)"
+fi
+
+# 8. NEGATIVE CONTROL for 7 — the fix must not simply disable cleanup. On a clean tree, --check still
+#    removes its OWN probe entry, leaving no `probe-iso-*` admin dir behind.
+c8="$tmp/c8"
+mk_super "$c8"
+out="$(cd "$c8/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "cleanup: clean tree still passes --check" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+# A fully-cleaned tree may leave no `worktrees` dir at all, so `find` on a missing path must not abort
+# the suite under `set -Eeuo pipefail` — glob instead, and count with no pipeline.
+shopt -s nullglob
+leftover_admin=("$c8/super/.git/modules/sub/worktrees"/probe-iso-*)
+leftover_tree=("$c8/super/sub"/probe-iso-*)
+shopt -u nullglob
+report "cleanup: --check removes its own probe admin entry (no probe-iso-* left)" \
+  "$([[ ${#leftover_admin[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${leftover_admin[*]:-none}"
+report "cleanup: --check leaves no probe worktree directory behind" \
+  "$([[ ${#leftover_tree[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${leftover_tree[*]:-none}"
+# POSITIVE precondition: the two assertions above are pure ABSENCE checks, so they also pass when the
+# helper never ran at all (a non-executable script leaves no probe dirs either). Pin that it ran.
+report "cleanup: the probe actually ran (guards the absence assertions above)" \
+  "$(grep -q 'sub — isolated' <<<"$out" && echo yes || echo no)" "$out"
+
+# 9. #2460 follow-up — the probe self-exclusion must match THIS probe's admin dir by IDENTITY, never
+#    by a path substring. Moving the sweep before cleanup promoted that filter from dead code into the
+#    sweep's only self-exclusion, so an over-broad match became a live fail-open: a genuinely
+#    unverifiable sibling whose path merely CONTAINS `/probe-iso-` was skipped and the submodule
+#    reported isolated ✓.
+c9="$tmp/c9"
+mk_super "$c9"
+mkdir -p "$c9/probe-iso-experiments"
+c9_wt="$c9/probe-iso-experiments/live-wt"
+git -C "$c9/super/sub" worktree add -q --detach "$c9_wt"
+chmod 0400 "$c9_wt"
+if (cd "$c9_wt") 2>/dev/null; then
+  echo "SKIP: #2460 self-exclusion — this platform can still enter a 0400 directory (vacuous otherwise)"
+else
+  out="$(cd "$c9/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+  report "probe self-exclusion: an unverifiable sibling under a 'probe-iso-*' PATH still fails --check" \
+    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+  report "probe self-exclusion: it is reported, not silently skipped" \
+    "$(grep -q 'ISOLATION BROKEN' <<<"$out" && echo yes || echo no)" "$out"
+fi
+
+# 10. The scoped removal must stand on its own. `worktree remove` normally deletes the admin entry, so
+#     with it succeeding the new scoped `rm` is unobservable and a mutation test cannot see it. Force
+#     `git worktree remove` to fail with a PATH shim, leaving the scoped rm as the only cleanup path.
+#     Also pins that a PRE-EXISTING sibling entry survives and still works — the harm that removing by
+#     NAME (rather than by resolved admin dir) would cause when git counter-appends on a collision.
+c10="$tmp/c10"
+mk_super "$c10"
+c10_sib="$c10/sibling-wt"
+git -C "$c10/super/sub" worktree add -q --detach "$c10_sib"
+shim="$tmp/shim"
+mkdir -p "$shim"
+real_git="$(command -v git)"
+cat >"$shim/git" <<EOF
+#!/usr/bin/env bash
+# Fail ONLY 'worktree remove'; everything else passes through untouched.
+for a in "\$@"; do [[ "\$a" == "remove" ]] && seen_remove=1; [[ "\$a" == "worktree" ]] && seen_wt=1; done
+if [[ -n "\${seen_wt:-}" && -n "\${seen_remove:-}" ]]; then exit 1; fi
+exec "$real_git" "\$@"
+EOF
+chmod +x "$shim/git"
+out="$(cd "$c10/super" && PATH="$shim:$PATH" "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "scoped cleanup: --check still passes when 'worktree remove' fails" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+shopt -s nullglob
+c10_left=("$c10/super/.git/modules/sub/worktrees"/probe-iso-*)
+shopt -u nullglob
+report "scoped cleanup: the scoped rm alone removes the probe entry (worktree remove failing)" \
+  "$([[ ${#c10_left[@]} -eq 0 ]] && echo yes || echo no)" "leftover=${c10_left[*]:-none}"
+report "scoped cleanup: a pre-existing sibling worktree still exists afterwards" \
+  "$([[ -e "$c10/super/.git/modules/sub/worktrees/sibling-wt" ]] && echo yes || echo no)"
+report "scoped cleanup: that sibling worktree is still FUNCTIONAL (not just present)" \
+  "$(git -C "$c10_sib" rev-parse --show-toplevel >/dev/null 2>&1 && echo yes || echo no)"
+
+# 11. #2492 — init mode must FAIL when `git submodule update --init` exits 0 without populating.
+#     Observed running from a linked superproject worktree while a sibling worktree already held the
+#     submodule: git printed `checked out '<sha>'`, exited 0, left the directory EMPTY, and the script
+#     still reported `isolated ✓` with exit 0 — `probe` verifies isolation, not content, so it passes
+#     vacuously on an empty tree. Simulated here with the same PATH-shim technique as case 10 so the
+#     reproduction is deterministic on every platform rather than depending on that git quirk.
+#
+#     ⚠️ HONEST LIMIT — the production symptom was a false SUCCESS (`isolated ✓`, exit 0). That exact
+#     state could NOT be reproduced hermetically: in a fixture, an empty submodule has no gitdir, so
+#     `probe` rejects it on its own and the run already fails without the guard. Two of the four
+#     assertions below are therefore non-discriminating and are labelled as such. What IS proven RED
+#     is the guard's real contribution — failing AT the init step with an accurate message, instead of
+#     continuing into `repair` and emerging with a benign-sounding "nothing to probe". The guard is a
+#     fail-closed POST-CONDITION, so it holds whatever made `update --init` no-op; do not weaken it to
+#     match only the reproducible half.
+c11="$tmp/c11"
+mk_super "$c11"
+git -C "$c11/super" submodule --quiet deinit -f sub >/dev/null
+report "empty-init precondition: the submodule really is empty before the run" \
+  "$([[ -z "$(ls -A "$c11/super/sub" 2>/dev/null)" ]] && echo yes || echo no)"
+noop_shim="$tmp/shim-noop"
+mkdir -p "$noop_shim"
+cat >"$noop_shim/git" <<EOF
+#!/usr/bin/env bash
+# Make ONLY 'submodule update' a silent success; everything else passes through untouched. This is
+# exactly the observed failure: exit 0, nothing populated.
+for a in "\$@"; do [[ "\$a" == "submodule" ]] && seen_sub=1; [[ "\$a" == "update" ]] && seen_upd=1; done
+if [[ -n "\${seen_sub:-}" && -n "\${seen_upd:-}" ]]; then exit 0; fi
+exec "$real_git" "\$@"
+EOF
+chmod +x "$noop_shim/git"
+out="$(cd "$c11/super" && PATH="$noop_shim:$PATH" "$helper" sub 2>&1)" && rc=0 || rc=$?
+# NON-DISCRIMINATING context (both hold with the guard ablated, because `probe` then rejects the
+# empty tree on its own path). Kept because they pin the overall contract, NOT as proof of the guard.
+report "empty-init: init mode FAILS when the submodule is still empty afterwards" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "empty-init: it never reports 'isolated ✓' for an empty submodule" \
+  "$(grep -q 'isolated ✓' <<<"$out" && echo no || echo yes)" "$out"
+# THE discriminating assertion — verified RED with the guard ablated. Without it the run still exits
+# non-zero, but only after `repair`, and the message is `not checked out here; nothing to probe`,
+# which reads as a benign skip rather than a failed init. The guard fails immediately, at the step
+# that actually broke, and says so.
+report "empty-init: the failure NAMES the empty submodule (fails at init, not later as a 'skip')" \
+  "$(grep -q 'STILL EMPTY' <<<"$out" && echo yes || echo no)" "$out"
+# `--check` must be UNCHANGED: an uninitialised submodule is legitimately empty there and is skipped,
+# not failed. Without this, the fix above could be "achieved" by failing on every empty submodule.
+out="$(cd "$c11/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "empty-init: --check still SKIPS a legitimately deinitialised submodule" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

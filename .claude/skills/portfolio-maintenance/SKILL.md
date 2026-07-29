@@ -65,29 +65,48 @@ card.
    the maintainer to replace a credential that was never tested. Keep the injected-token result, saved-login
    result, and `git fetch` result as separate gates, because repository reachability cannot prove GitHub API
    identity (and vice versa); record only these gate classifications in durable memory, never credential output.
-3. **Check the memory store fits in one read — BEFORE you read it.** A file past the Read cap is
+3. **Check the boot memory surface fits in one read — BEFORE you read it.** A boot-loaded file past the Read cap is
    **truncated silently**: the run continues on a partial cursor with no signal that carry-forwards,
    stand-down notes, or `HANDS-OFF` records beyond the cut are missing (the 2026-06-05 blinding;
    breached again 2026-07-18). This check runs **ahead of the `view` below** — running it after would
    let the run ingest the truncated cursor first, which is the exact failure it exists to prevent:
 
    ```sh
-   .claude/scripts/memory-hygiene.sh --dir <memory-dir>   # read-only; exit 1 = consolidate this tick
+   .claude/scripts/memory-hygiene.sh --layout <legacy|codex> --dir <memory-dir>
+   # read-only; exit 1 = repair the boot surface
    ```
 
-   A non-zero exit makes **consolidating the named file this tick** a mandated hygiene item, not an
-   optional courtesy — that is what stops the size rule (prose living inside the file it governs) from
-   being breached over and over. **Consolidate the flagged file FIRST, then run step 4** so the cursor
-   you act on is complete; if you consolidate later in the run, re-`view` the file afterwards. `near`
-   entries are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or an
-   unreadable store — resolve it rather than proceeding on an unchecked memory read.
+   The caller must name the runtime layout; this is deliberate because a minimal Codex store missing
+   its summary is indistinguishable from a valid legacy `MEMORY.md`-only store by file shape. Missing
+   or unknown `--layout` fails closed. For Claude, pass `--layout legacy`: the guard checks `MEMORY.md`
+   plus root topic files, and exit 1 makes **safely consolidating the named author-managed file this
+   tick** mandatory. For Codex, pass `--layout codex`: the guard requires the persistent
+   `memory_summary.md` + `MEMORY.md` pair. Before invoking it, read the trusted current request's
+   `x-codex-turn-metadata.turn_started_at_unix_ms` from `nodeRepl.requestMeta` and pass that value as
+   `--projection-loaded-before-ms`; do not derive this precondition from the current clock or the
+   file itself. The guard fails closed if the file is newer because this session may contain the
+   pre-replacement projection. It checks only the boot-loaded summary and excludes generated
+   registry and temporary consolidation inputs from the boot budget; `--all` makes those exemptions
+   visible. A Codex exit 1 routes to the
+   runtime's supported projection-refresh path — **never rewrite the generated registry or temporary
+   inputs to clear it**. Because the old summary was already injected before this shell step, refresh
+   it and **restart the run; do not continue this session on the replacement file**. For a legacy
+   store, repair the author-managed file, rerun the check, then continue to step 4. `near` entries
+   are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or unreadable
+   store — resolve it rather than proceeding on an unchecked memory read. If a Codex exit 2 names a
+   missing, unreadable, malformed, or post-injection-changed `memory_summary.md`, repair the projection
+   through the runtime's supported path when needed and **restart the run** because this session did
+   not start with the projection the guard checked;
+   other exit-2 causes may rerun the guard in this session after resolution.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
    rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
    concurrent append (the same two-writer discipline as a shared `claude/*` branch). Consolidating a
    large file is read-heavy — **delegate it to a subagent** so the raw content stays out of your context.
-4. **Load durable memory:** **`view` your native memory** (Claude: the memory tool / the project
-   `memory/` dir + `MEMORY.md`) — the single source of truth for cross-run orchestration (rotation
+4. **Load durable memory:** **view the native boot surface** (Claude: the memory tool / project
+   `memory/` dir + `MEMORY.md`; Codex: the supplied `v1` `memory_summary.md`, then search `MEMORY.md`
+   and open referenced rollout summaries, memory skills, or extension resources only for relevant
+   detail) — the single source of truth for cross-run orchestration (rotation
    cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent
    run notes, `learnings`). It may be stale — verify against live GitHub. *(The legacy `state.json` is
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
@@ -227,7 +246,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   an explicit concrete problem CodeRabbit reports while selected for the current head counts; fold
   it into the non-thread `body_findings` count, fix or refute it, then
   push when files changed, then restart the ordered provider loop at CodeRabbit; a pure refutation
-  restarts at the same head without an empty commit. Across hourly runs
+  restarts at the same head without an empty commit. Across runs
   older PRs accumulate red checks, threads, and conflicts the live watcher (alive only in the
   *spawning* session) never sees; the survey must catch them (contract *Autonomy → Watch the PRs you
   spawn*). **Externally-gated / parked PRs are IN the sweep** — a merge gate excuses the merge, never
@@ -238,7 +257,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still queued").
 
 **Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the
-product's `weekly`/live cursor in memory — NOT every hourly run), also spawn the read-only
+product's `weekly`/live cursor in memory — NOT every run), also spawn the read-only
 [`platform-security-surveyor`](../../agents/platform-security-surveyor.md) with the current baseline
 (last recorded posture score / CVE counts / routing state from memory). It runs the bounded
 `kubectl --context admin@prod` pass over the three Kubescape surfaces **liveness-first** — a broken
@@ -317,7 +336,8 @@ their failing CI — is the **first-priority work every run, ahead of issues** (
 outranks it). Exact Renovate/Dependabot PRs are automation-owned dependency PRs, not actionable PRs.
 Scope: every **`devantler-tech`** repo's actionable trusted-author PRs; scheduled runs do not enumerate or act on
 external repositories. Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
-are the work queue**, you resolve the **oldest actionable** one first, and new non-trivial finds are
+are the work queue**, worked in the order contract *The work-selection ladder* sets — **security
+issues, then bugs, then the oldest actionable issue** — and new non-trivial finds are
 **filed as issues before** they're built (trivial obvious fixes excepted). **Every run must clear the
 floor — at least one concrete artifact** (ideally a merged/drafted PR or a draft resolving the oldest
 actionable issue; else a newly-filed well-formed issue, a triage/strategy pass, an unblocking
@@ -330,7 +350,11 @@ readiness are **not** a reason to stop — advance a *different* product. **Stop
 merged — pentad clear (green CI + threads resolved + not DIRTY + ≥1 green review at the current head)
 + user-evaluated → **self-promote → merge** (contract *Autonomy*; definition PRs included since their
 separate gate was retired 2026-07-18) — or to an explicitly-named blocker; a *half-finished* one (red CI,
-open threads, conflicting, never user-evaluated) is unfinished work to clear first. Work the ladder top-down — **hotfix/operate first, then advance**:
+open threads, conflicting, never user-evaluated) is unfinished work to clear first. 🔴 **Your own
+DRAFTS are rung-1 work, not a separate softer category** — the `non-draft` wording in contract *Merge
+policy* scopes the merge command, never this sweep, and reading it as non-drafts-only is what left
+**99 own PRs open, all drafts, none promoted, median age 6.9 days** on 2026-07-25. Work the ladder
+top-down — **hotfix/operate first, then advance**:
 
 **Value check before build.** When an issue reaches the front of the advance queue, revalidate its
 current evidence, affected audience/problem, hypothesis, and success signal using
@@ -370,13 +394,14 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    every push) is your duty; the full request discipline (**one provider request at a time**, in
    CodeRabbit > Codex > Cursor Bugbot order, and **stop on its first successful current-head review**;
    a reaction emoji earns a generous bounded wait for the substantive response, while no reaction
-   means inspect or retry promptly; before every trigger post a separate disclosed current-head
-   reservation marker, re-read authenticated reservations, and let the oldest `created_at` then
-   lowest comment id win before posting the provider request marker (each request marker names its
-   provider and winning reservation id; pair Cursor's marker to the next exact-author bare trigger,
-   ignoring interleaved other-author and reservation-only comments); accept markers only from exact author `devantler`
-   with the structural agent disclosure; the winning request supersedes every losing reservation in
-   that provider/head election; persist a completed no-gate outcome, or an authenticated
+   means inspect or retry promptly; put the current-head request marker in the **same comment as the
+   trigger**, re-reading the repository-visible current-head request markers immediately before
+   posting it (each marker names its provider; pair Cursor's marker to the next exact-author bare
+   trigger, ignoring interleaved other-author comments); accept markers only from exact author `devantler`
+   with the structural agent disclosure; **never post a separate pre-trigger reservation comment** —
+   that two-phase step was retired on measurement 2026-07-25, having posted a blank-rendering comment
+   1–2 seconds before its own trigger and closed zero races in 75 elections;
+   persist a completed no-gate outcome, or an authenticated
    `review-progress-head` marker after evidenced silent expiry, so the next run advances rather than
    repeats the provider; calculate that cursor as the furthest completed lane by provider order,
    never by latest response time;
@@ -437,8 +462,10 @@ when the operate ladder is clear you still advance at least one product (never e
 Advance work is **issue-driven** (contract *Issue-driven*): its heart is **resolving the oldest
 actionable open issue**, and any new non-trivial find is **filed as an issue first** to enter that same
 backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill; in order:
-7. **Resolve the oldest actionable open issue** *(the default advance action)* — pick the **oldest**
-   open issue that's actually startable; skip one only if it's blocked, too under-specified to begin, or
+7. **Resolve the next issue by the ladder** *(the default advance action)* — take the highest rung
+   with actionable work: open `type:"Security"` issues first, then `type:"Bug"`, then the **oldest**
+   startable issue (contract *The work-selection ladder*). Within a rung, oldest first.
+   Skip one only if it's blocked, too under-specified to begin, or
    it already has an open PR. A **bare `devantler` assignee does *not* reserve** an issue
    **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
    (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
@@ -455,7 +482,10 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    stand down rather than force over them. Check open PRs, remote
    `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
    (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
-   itself. If it **already has an
+   itself. An issue **authored by an exact dependency-automation identity** (`renovate[bot]` /
+   `dependabot[bot]`, `app/renovate` / `app/dependabot`) is skip reason **(f)**: it is
+   automation-owned, **never actionable at all**, and is never selected, worked, or closed — match the
+   author only, never the `automation` label. If it **already has an
    actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
    automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
    **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
@@ -498,8 +528,10 @@ blog experiment/PR through review, deployment, and measurement before starting a
 finds no worthwhile story is useful but does not move the publication clock; marketing, positioning,
 discovery, and adoption are product work, while filler and traffic-only vanity are not.
 
-**Fairness & ordering:** issue **age is the primary sort** for what to resolve (oldest actionable
-first — contract *Issue-driven*); when issue value/age is comparable, prefer the product with the
+**Fairness & ordering:** **severity is the primary sort, age the tiebreaker within a tier** — open
+`type:"Security"` issues, then `type:"Bug"`, then everything else oldest-actionable-first (contract
+*The work-selection ladder*); a three-week-old `Docs` issue never precedes an open `Security` one.
+When severity and age are comparable, prefer the product with the
 oldest `last_worked` (and oldest strategy review). Aim over time to advance every product, not just the
 noisy ones.
 **Cadence gates:** per-product strategy review and docs pass weekly-to-monthly (oldest first); review
@@ -578,7 +610,9 @@ For each selected product:
 - **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
   back what changed so the next run picks up cleanly — `last_run`, `rotation_cursor`, each touched
   product's `last_worked`/`weekly`/roadmap cursor/`last_research`/`needs_attention`, the CI & link caches (prune CI
-  entries >7 days), recent run notes, and any new `learnings`. Keep memory **coherent and organised**:
+  entries >7 days), recent run notes, and any new `learnings`. Use the runtime's supported write path;
+  for Codex, never hand-edit generated `memory_summary.md`, `MEMORY.md`, or `raw_memories.md`.
+  In an author-managed/legacy store, keep memory **coherent and organised**:
   a small set of well-named files (e.g. `portfolio-status.md`, `caches.md`, `learnings.md`, plus
   `feedback_*.md`) with `MEMORY.md` as a true index; **edit in place and prune stale content** rather
   than appending forever; don't create a new file per fact. **Bound the every-run read:** keep the

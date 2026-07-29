@@ -2,7 +2,8 @@
 
 The **third deployed instance** of the Agentic Engineer brain, running as a
 [Cursor Automation](https://cursor.com/docs/cloud-agent/automations) (cloud agent) alongside the two
-machine-local instances (Claude Code on even hours, ChatGPT/Codex on uneven).
+machine-local instances (Claude Code and ChatGPT/Codex, whose per-hour split is the table in
+`AGENTS.md` → *Cadence & focus*).
 
 Cursor Automations have **no local config file and no CLI** — they live server-side and are created in
 the Cursor Agents Window, at [cursor.com/automations](https://cursor.com/automations), or via Cursor's
@@ -22,11 +23,20 @@ this file and the deployed automation is a defect to fix here first.
 | Tools | `prComment` — add others only when a run demonstrably needs them |
 | Scope | **Private** automation (not team-scoped) — see *Identity* below |
 
-**Why that cron.** The local pair already covers every hour (Claude `0 */2`, Codex `0 1-23/2`), so
-there is no free hourly slot. `:30` past uneven hours leaves each instance its own 2-hour gap and puts
-Cursor 30 minutes *after* Codex, so a claim either sibling just pushed is already visible when Cursor
-selects its issue. Changing this is a one-field edit in the Automations UI — but keep the offset, since
-a third instance selecting simultaneously with a sibling is what the claim protocol exists to prevent.
+**Why that cron.** The machine-local lanes split by parity — **Claude on even hours, Codex on uneven
+hours** (see the *Cadence & focus* table) — so `:30` past **uneven** hours drops Cursor into the one
+remaining gap: 30 minutes after the Codex dispatch it follows, and ~38 minutes before the next Claude
+one. No two consecutive dispatches land less than 30 minutes apart, and Cursor is **never simultaneous
+with a sibling**. The 30-minute trail behind Codex is deliberate and sufficient: the claim protocol requires a
+claim to be pushed *before* building, within the first minutes of a run, so a claim Codex just took is
+already visible when Cursor selects its issue.
+
+**This cron did not change when the local lanes densified — do not re-paste the automation for it.**
+The value is still `30 1-23/2 * * *` and the prompt below still describes it correctly; only the
+*rationale* above was rewritten, because the premise it used to give ("both local lanes dispatch on
+even hours", and a local gap at 18:00) is no longer true. Changing the cron is a one-field edit in the
+Automations UI — but keep the offset, since a third instance selecting simultaneously with a sibling is
+exactly what the claim protocol cannot arbitrate across lanes.
 
 ## Instructions (paste this into the automation's prompt)
 
@@ -65,9 +75,12 @@ a third instance selecting simultaneously with a sibling is what the claim proto
 >   lost race rather than duplicating.
 > - **You run in a cloud sandbox with a single-repo checkout.** You have **no** initialised submodules,
 >   **no** live cluster access, **no** local render/GPU toolchain, and **no** private operator notes.
->   So the live-cluster security-posture work, the World at Ruin frame-capture work, and any task
+>   So the live-cluster security-posture work, **the spend cost pass** (*Spend contract* — its evidence
+>   script port-forwards OpenCost in the live cluster, and its ledger is a private operator note, so both
+>   halves are out of reach here), the World at Ruin frame-capture work, and any task
 >   requiring a submodule worktree are **not yours** — leave them to the local instances rather than
->   attempting a degraded version. Your lane is monorepo-native advance work (`docs/`, `.claude/`,
+>   attempting a degraded version. **Never quote a cost figure you could not measure.** Your lane is
+>   monorepo-native advance work (`docs/`, `.claude/`,
 >   `AGENTS.md`, repo scripts) delivered as pushed branches and drafts.
 > - **Your checkout is the sandbox root — do NOT run the run-loop's fixed local path.** The
 >   `portfolio-maintenance` preflight `cd`s to a machine-local Mac checkout that does not exist here;
