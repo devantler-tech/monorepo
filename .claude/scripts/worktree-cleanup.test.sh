@@ -397,17 +397,20 @@ t_no_reaped_row_when_removal_is_aborted_after_recording() {
   local root; root=$(make_repo)
   add_wt "$root" stuck pushed
   chmod a-w "$root/repo/.claude/worktrees"          # entries can no longer be unlinked
-  "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 >/dev/null 2>&1
+  local rc
+  "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 >/dev/null 2>&1; rc=$?
   chmod u+w "$root/repo/.claude/worktrees"
   local pending_rows reaped_rows
   pending_rows=$(awk -F'\t' '$5=="pending"' "$root/manifest.tsv" 2>/dev/null | wc -l | tr -d ' ')
   reaped_rows=$(awk -F'\t' '$5=="reaped"' "$root/manifest.tsv" 2>/dev/null | wc -l | tr -d ' ')
-  if [ -d "$root/repo/.claude/worktrees/stuck" ] \
+  # rc must be NON-ZERO: a removal that fails after every gate passed is an
+  # infrastructure failure, not an ordinary KEEP, and must not report a healthy sweep.
+  if [ -d "$root/repo/.claude/worktrees/stuck" ] && [ "$rc" -ne 0 ] \
      && [ "${pending_rows:-0}" -eq 1 ] && [ "${reaped_rows:-0}" -eq 0 ]; then
-    ok "an aborted removal leaves 'pending' and never 'reaped'"
+    ok "a removal that fails after all gates exits non-zero, leaving 'pending' only"
   else
-    bad "an aborted removal leaves 'pending' and never 'reaped'" \
-        "dir=$([ -d "$root/repo/.claude/worktrees/stuck" ] && echo present || echo GONE) pending=$pending_rows reaped=$reaped_rows [$(cat "$root/manifest.tsv" 2>/dev/null)]"
+    bad "a removal that fails after all gates exits non-zero, leaving 'pending' only" \
+        "rc=$rc dir=$([ -d "$root/repo/.claude/worktrees/stuck" ] && echo present || echo GONE) pending=$pending_rows reaped=$reaped_rows [$(cat "$root/manifest.tsv" 2>/dev/null)]"
   fi
   rm -rf "$root"
 }

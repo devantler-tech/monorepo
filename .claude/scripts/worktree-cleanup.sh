@@ -183,11 +183,15 @@ is_live_now() {
   return 1
 }
 
+# Returns 0 = locked, 1 = unlocked, 2 = COULD NOT DETERMINE — the same three-way
+# contract as is_live_now, and for the same reason: collapsing "the query failed" into
+# "locked" makes an infrastructure failure indistinguishable from a real lock, so the
+# run reports KEEP and exits 0 looking healthy while it could not actually check.
 is_locked_now() {
   local target=$1 out rc line p resolved
   out=$(git -C "$TOPLEVEL" worktree list --porcelain 2>/dev/null); rc=$?
   if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
-    return 0   # cannot prove it is unlocked
+    return 2
   fi
   p=""
   while IFS= read -r line; do
@@ -292,9 +296,11 @@ for wt in "$WT_ROOT"/*/; do
   fi
 
   # KEEP: locked (same symlink-resolved, fail-closed check used before removal)
-  if is_locked_now "$wt_real"; then
-    keep "$wt" "locked"; continue
-  fi
+  is_locked_now "$wt_real"; lock_rc=$?
+  case "$lock_rc" in
+    0) keep "$wt" "locked"; continue ;;
+    2) die "cannot query worktree locks for $wt_real — refusing to continue on an unverifiable lock state" ;;
+  esac
 
   # KEEP: too young.
   # Validate that mtime is NUMERIC rather than trusting stat's exit status. GNU stat
@@ -393,9 +399,11 @@ for wt in "$WT_ROOT"/*/; do
   # Re-check the lock against LIVE state, not the snapshot taken at startup. A lock
   # acquired while this sweep was running would otherwise be overridden by --force,
   # which git documents as "force removal even if worktree is dirty or locked".
-  if is_locked_now "$wt_real"; then
-    keep "$wt" "locked (acquired since the startup snapshot)"; continue
-  fi
+  is_locked_now "$wt_real"; lock_rc=$?
+  case "$lock_rc" in
+    0) keep "$wt" "locked (acquired since the startup snapshot)"; continue ;;
+    2) die "cannot re-query worktree locks for $wt_real — refusing to remove on an unverifiable lock state" ;;
+  esac
 
   # Same re-check for liveness: a session may have started here since the snapshot.
   is_live_now "$wt_real"; live_rc=$?
@@ -414,6 +422,19 @@ for wt in "$WT_ROOT"/*/; do
   count_real_changes "$wt" "$recheck_status"
   if [ "$REAL_CHANGES" -gt 0 ]; then
     keep "$wt" "$REAL_CHANGES uncommitted change(s) appeared since the status gate"
+    continue
+  fi
+
+  # Re-check the index flags too. Re-running status alone is not enough: the whole point
+  # of assume-unchanged / skip-worktree is that status cannot see those edits, so a flag
+  # set (by a process whose CWD is outside this worktree) after the earlier gate would
+  # leave the re-checked status clean while hiding a real edit.
+  recheck_idx=$(git -C "$wt" ls-files -v 2>/dev/null); recheck_idx_rc=$?
+  if [ "$recheck_idx_rc" -ne 0 ]; then
+    keep "$wt" "cannot re-read index flags before removal"; continue
+  fi
+  if grep -q '^[a-zS]' <<< "$recheck_idx"; then
+    keep "$wt" "assume-unchanged/skip-worktree flags appeared since the index gate"
     continue
   fi
 
@@ -444,8 +465,12 @@ for wt in "$WT_ROOT"/*/; do
   # run then exited 0 leaving a `pending` row for a path that is already gone.
   # Deletion success is judged by the directory being absent; a failed prune is a
   # separate, loud error.
+  # `unlocked_now` requires the explicit "unlocked" answer (1). Using `! is_locked_now`
+  # here would treat "could not determine" (2) as unlocked, since both are non-zero.
+  unlocked_now() { is_locked_now "$1"; [ "$?" -eq 1 ]; }
+
   if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
-     || { ! is_locked_now "$wt_real" && rm -rf "$wt_real" && [ ! -e "$wt_real" ] \
+     || { unlocked_now "$wt_real" && rm -rf "$wt_real" && [ ! -e "$wt_real" ] \
           && { git -C "$TOPLEVEL" worktree prune 2>/dev/null \
                || die "REMOVED $wt_real but 'git worktree prune' failed — the deletion DID happen; run 'git -C $TOPLEVEL worktree prune' to clear its admin entry (restore ref: refs/reaped/$sha)"; }; }; then
     # Completion row — written only now that the directory is actually gone.
@@ -457,7 +482,11 @@ for wt in "$WT_ROOT"/*/; do
     printf 'REAPED %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
     reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
   else
-    keep "$wt" "removal FAILED"
+    # A removal that got this far passed every safety gate and still could not be
+    # deleted — a filesystem or permission failure, not a verdict about this worktree.
+    # Reporting it as an ordinary KEEP let the run exit 0 with a `pending` row and no
+    # deletion, which reads as a healthy sweep.
+    die "removal FAILED for $wt_real after all gates passed (its manifest row is 'pending' and the directory still exists)"
   fi
 done
 
