@@ -68,6 +68,18 @@ assert_prose 'Confirming the merge landed' \
   "Merge policy does not name the post-merge confirmation read — the unprescribed step runs improvise"
 assert_prose '--json state,mergedAt' \
   "Merge policy does not prescribe a valid post-merge read (state,mergedAt)"
+# `mergeCommit` is part of the valid-field contract too — pin it, or the optional-field guidance could
+# be dropped from the prose while every other assertion still passed.
+#
+# Assert the GUIDANCE, not the bare token. `mergeCommit` also occurs in the counter-example
+# (`state,merged,mergedAt,mergeCommit`, the set being warned against), so a bare-token check is
+# satisfied by the warning alone and would pass with the actual guidance deleted — verified by ablation.
+assert_prose 'adding `mergedAt` or `mergeCommit` only when you need the timestamp or the squash sha' \
+  "Merge policy does not give the mergeCommit/mergedAt optional-field guidance"
+# The prescription must be a COMPLETE command, not a bare field list: field vocabularies are
+# per-subcommand, so `gh search prs` rejects `mergedAt` and a loose field list can be misapplied.
+assert_prose 'gh pr view <n> --repo devantler-tech/<repo> --json state,mergedAt' \
+  "Merge policy prescribes a bare field list rather than the whole post-merge command"
 
 # ── 2. the specific improvisation is named as invalid ──
 assert_prose 'there is NO `merged` field' \
