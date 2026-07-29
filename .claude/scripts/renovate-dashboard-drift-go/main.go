@@ -34,9 +34,21 @@
 //     repository gaining a Renovate config forces someone to record it here and
 //     decide, rather than being covered by nobody.
 //
-// Anything this cannot resolve offline — an unrecognised preset, a JSON5 feature
+// Anything this cannot resolve offline — an unrecognised preset, ignorePresets,
+// a Renovate config living under package.json's "renovate" key, a JSON5 feature
 // beyond comments and trailing commas — is an error for the same reason. The
 // check never guesses a config's meaning.
+//
+// # What a pass does NOT cover
+//
+// The undeclared-config half only sees repositories that are actually checked
+// out, and most of the portfolio is not: CI clones the declared roots, and
+// several mapped repositories are private and cannot be cloned there at all. So
+// a pass is a statement about what was read, not about the portfolio — and it
+// prints the mapped repositories it could not inspect, so the difference is
+// visible in the log rather than implied away. Widening that coverage is
+// tracked separately; it is a CI cost question, not a change to what this
+// program can prove.
 package main
 
 import (
@@ -65,14 +77,12 @@ var declaredConfigRoots = []string{
 	"templates/platform-template",
 }
 
-// configFileNames are the config locations Renovate reads, in its documented
-// precedence order.
+// configFileNames are the standalone config locations Renovate reads.
 //
-// package.json's "renovate" key is deliberately NOT included: this repository's
-// portfolio does not use it, and silently supporting a sixth location would mean
-// the declared-root check could not tell "no config" from "a config I do not
-// look at". If a repository ever adopts it, this check must fail closed on it
-// first.
+// package.json's "renovate" key is a location too, but it is not a standalone
+// file: an ordinary package.json without that key is not a config at all. It is
+// detected separately, by packageJSONConfig, so that "has no Renovate config"
+// stays distinguishable from "has one this check does not look at".
 var configFileNames = []string{
 	"renovate.json",
 	"renovate.json5",
@@ -136,6 +146,13 @@ var knownPresets = map[string]presetEffect{
 type renovateConfig struct {
 	DependencyDashboard *bool    `json:"dependencyDashboard"`
 	Extends             []string `json:"extends"`
+
+	// IgnorePresets cancels presets during resolution, including the opt-out
+	// this check reads. Modelling it properly means resolving preset bodies —
+	// ignorePresets applies to presets nested inside presets too — which is
+	// exactly the offline resolution this check does not attempt. It is
+	// captured only so its presence can be refused.
+	IgnorePresets []string `json:"ignorePresets"`
 }
 
 type finding struct {
@@ -143,6 +160,14 @@ type finding struct {
 	path string
 	msg  string
 }
+
+// errRootAbsent marks the one findConfigs failure that means "nothing was read
+// here", as opposed to "something here could not be understood".
+//
+// The distinction decides the verdict for an UNDECLARED root: absent is the
+// ordinary state of most of the portfolio and is reported as uninspected, while
+// any other error is a real finding that must not be filed under it.
+var errRootAbsent = errors.New("not checked out")
 
 func main() {
 	root := flag.String("root", ".", "path to the monorepo root")
@@ -162,9 +187,10 @@ func run(root string, stdout, stderr io.Writer) int {
 	}
 
 	var (
-		drift    []finding
-		unusable []finding
-		checked  []string
+		drift       []finding
+		unusable    []finding
+		checked     []string
+		uninspected []string
 	)
 
 	// Every declared root must be present, checked out, and still carrying
@@ -225,9 +251,26 @@ func run(root string, stdout, stderr io.Writer) int {
 		}
 
 		paths, err := findConfigs(root, r)
-		if err != nil || len(paths) == 0 {
-			// Not checked out, or genuinely has no config. Neither is drift:
-			// a repository without a Renovate config cannot enable a dashboard.
+		if errors.Is(err, errRootAbsent) {
+			// Not checked out. That is NOT the same as having no config —
+			// nothing was read — so it is reported alongside the pass rather
+			// than counted as clean.
+			uninspected = append(uninspected, r)
+
+			continue
+		}
+
+		if err != nil {
+			// Present but not understandable: a real finding, never filed
+			// under "uninspected".
+			unusable = append(unusable, finding{root: r, msg: err.Error()})
+
+			continue
+		}
+
+		if len(paths) == 0 {
+			// Checked out and genuinely config-less. A repository without a
+			// Renovate config cannot enable a dashboard.
 			continue
 		}
 
@@ -264,7 +307,28 @@ func run(root string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  ok  %s\n", p)
 	}
 
+	// A pass covers what was read, and most of the portfolio is usually not
+	// checked out. Saying so is the difference between "no undeclared config
+	// exists" and "none was found where I looked" — only the second is true.
+	if len(uninspected) > 0 {
+		sort.Strings(uninspected)
+		fmt.Fprintf(stdout, "%d mapped repositor%s NOT inspected (not checked out here), so an undeclared config in one would not have been seen:\n",
+			len(uninspected), plural(len(uninspected), "y was", "ies were"))
+
+		for _, r := range uninspected {
+			fmt.Fprintf(stdout, "  --  %s\n", r)
+		}
+	}
+
 	return 0
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+
+	return many
 }
 
 func (f finding) label() string {
@@ -315,7 +379,7 @@ func findConfigs(root, rel string) ([]string, error) {
 
 	info, err := os.Stat(dir)
 	if err != nil {
-		return nil, fmt.Errorf("not present (%v)", err)
+		return nil, fmt.Errorf("%w (%v)", errRootAbsent, err)
 	}
 
 	if !info.IsDir() {
@@ -331,11 +395,49 @@ func findConfigs(root, rel string) ([]string, error) {
 		}
 	}
 
+	hasPackageConfig, err := packageJSONConfig(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return nil, err
+	}
+
+	if hasPackageConfig {
+		found = append(found, filepath.ToSlash(filepath.Join(rel, "package.json")))
+	}
+
 	if len(found) > 1 {
 		return nil, fmt.Errorf("has %d Renovate config files (%s); Renovate errors on more than one", len(found), strings.Join(found, ", "))
 	}
 
 	return found, nil
+}
+
+// packageJSONConfig reports whether a package.json carries a "renovate" key,
+// which Renovate reads as a config location.
+//
+// A missing package.json is simply not a config. An UNPARSEABLE one is an error:
+// it cannot be ruled out as a config location, and "I could not tell" must never
+// resolve to "there is nothing here" in a check whose whole value is that a
+// config nobody looked at fails loudly.
+func packageJSONConfig(path string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("has a package.json that could not be read (%v)", err)
+	}
+
+	var pkg map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &pkg); err != nil {
+		return false, fmt.Errorf(
+			"has a package.json that could not be parsed (%v), so it cannot be ruled out as"+
+				" a Renovate config location. Renovate reads a top-level \"renovate\" key there", err)
+	}
+
+	_, ok := pkg["renovate"]
+
+	return ok, nil
 }
 
 // resolveDashboard reports what a config file resolves to for the dashboard.
@@ -344,17 +446,40 @@ func findConfigs(root, rel string) ([]string, error) {
 // process working directory — a check invoked with --root elsewhere must read the
 // configs under THAT root, not whatever happens to sit beside the caller.
 func resolveDashboard(root, rel string) (dashboardState, error) {
+	if filepath.Base(rel) == "package.json" {
+		return dashboardDisabled, errors.New(
+			"carries its Renovate config under package.json's \"renovate\" key, which this" +
+				" check does not resolve. Move the config to a renovate.json so this" +
+				" invariant covers it, or teach this check to read the key")
+	}
+
 	raw, err := os.ReadFile(filepath.Join(root, rel))
 	if err != nil {
 		return dashboardDisabled, fmt.Errorf("could not read: %w", err)
 	}
 
+	stripped, err := stripJSON5(raw)
+	if err != nil {
+		return dashboardDisabled, err
+	}
+
 	var cfg renovateConfig
-	if err := json.Unmarshal(stripJSON5(raw), &cfg); err != nil {
+	if err := json.Unmarshal(stripped, &cfg); err != nil {
 		return dashboardDisabled, fmt.Errorf(
 			"could not parse after removing JSON5 comments and trailing commas (%v)."+
 				" This check supports JSON plus those two JSON5 features; a config using"+
 				" more of JSON5 needs a real JSON5 parser here before it can be verified", err)
+	}
+
+	// ignorePresets can cancel the very opt-out preset this check reads, so a
+	// config carrying it cannot be resolved by preset names alone.
+	if len(cfg.IgnorePresets) > 0 {
+		return dashboardDisabled, fmt.Errorf(
+			"sets ignorePresets (%s), which can cancel a preset this check relies on —"+
+				" including `:disableDependencyDashboard` itself. Resolving that needs the"+
+				" preset bodies, which this offline check does not have, so the config is"+
+				" reported as unverifiable rather than assumed compliant",
+			strings.Join(cfg.IgnorePresets, ", "))
 	}
 
 	// An explicit top-level key wins over every preset, so it is decided first.
@@ -410,7 +535,7 @@ func presetKey(preset string) string {
 // comment strip would cut that URL in half at the `//` and produce a document
 // that either fails to parse or, worse, parses into something else. The same
 // applies to a `//` inside any other string value.
-func stripJSON5(src []byte) []byte {
+func stripJSON5(src []byte) ([]byte, error) {
 	out := make([]byte, 0, len(src))
 
 	var (
@@ -465,6 +590,17 @@ func stripJSON5(src []byte) []byte {
 					i++
 				}
 
+				// Running off the end means the comment never closed. Dropping
+				// the remainder would leave a document that parses cleanly and
+				// says nothing about the file Renovate would choke on, so this
+				// is an error rather than a silent truncation.
+				if i+1 >= len(src) || src[i] != '*' || src[i+1] != '/' {
+					return nil, errors.New(
+						"has an unterminated /* block comment, so it is not valid JSON5 and" +
+							" Renovate cannot parse it. Close the comment; this check will not" +
+							" verify a document it had to repair first")
+				}
+
 				i++ // land on the '/' so the loop's i++ moves past it
 
 				continue
@@ -474,7 +610,7 @@ func stripJSON5(src []byte) []byte {
 		out = append(out, c)
 	}
 
-	return removeTrailingCommas(out)
+	return removeTrailingCommas(out), nil
 }
 
 // removeTrailingCommas drops a comma that is followed only by whitespace and a

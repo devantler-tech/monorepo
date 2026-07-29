@@ -113,6 +113,15 @@ jobs:
               # gitlinks of the roots that carry one have to re-trigger this.
               # Without these the check would only run when the monorepo itself
               # changed, and a drift introduced upstream would land unexamined.
+              #
+              # Only these four are listed, and that bounds what this job can
+              # catch: a repository that has NO config today and gains one
+              # arrives as a gitlink outside this list, so the job is skipped.
+              # Listing every submodule would not fix it on its own — the
+              # checkout below clones only these roots, so an unlisted one is
+              # not on disk to inspect either. The check prints the mapped
+              # repositories it could not inspect rather than implying it
+              # covered them.
               - 'platform'
               - 'libraries/kyverno-policies'
               - 'libraries/provider-upjet-unifi'

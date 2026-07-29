@@ -50,6 +50,20 @@ func newRoot(t *testing.T, submodules ...string) string {
 	return root
 }
 
+// mustStrip strips a source that the caller asserts is well-formed, so the
+// comment/comma tests stay about what survives the strip rather than about
+// error plumbing.
+func mustStrip(t *testing.T, src string) []byte {
+	t.Helper()
+
+	out, err := stripJSON5([]byte(src))
+	if err != nil {
+		t.Fatalf("stripJSON5: %v", err)
+	}
+
+	return out
+}
+
 func runIn(t *testing.T, root string) (int, string) {
 	t.Helper()
 
@@ -76,8 +90,9 @@ func TestStripJSON5PreservesURLsInsideStrings(t *testing.T) {
 		Extends []string `json:"extends"`
 	}
 
-	if err := json.Unmarshal(stripJSON5([]byte(src)), &cfg); err != nil {
-		t.Fatalf("stripped document did not parse: %v\n%s", err, stripJSON5([]byte(src)))
+	stripped := mustStrip(t, src)
+	if err := json.Unmarshal(stripped, &cfg); err != nil {
+		t.Fatalf("stripped document did not parse: %v\n%s", err, stripped)
 	}
 
 	if cfg.Schema != "https://docs.renovatebot.com/renovate-schema.json" {
@@ -100,7 +115,7 @@ func TestStripJSON5HandlesBlockCommentsAndTrailingCommas(t *testing.T) {
 }`
 
 	var cfg renovateConfig
-	if err := json.Unmarshal(stripJSON5([]byte(src)), &cfg); err != nil {
+	if err := json.Unmarshal(mustStrip(t, src), &cfg); err != nil {
 		t.Fatalf("did not parse: %v", err)
 	}
 
@@ -118,7 +133,7 @@ func TestRemoveTrailingCommasLeavesStringsAlone(t *testing.T) {
 		Extends     []string `json:"extends"`
 	}
 
-	if err := json.Unmarshal(stripJSON5([]byte(src)), &cfg); err != nil {
+	if err := json.Unmarshal(mustStrip(t, src), &cfg); err != nil {
 		t.Fatalf("did not parse: %v", err)
 	}
 
@@ -382,5 +397,164 @@ func TestErrorsWhenGitmodulesIsMissing(t *testing.T) {
 
 	if code, out := runIn(t, root); code != 2 {
 		t.Fatalf("exit = %d, want 2\n%s", code, out)
+	}
+}
+
+// --- the ways a config can outrun this check ------------------------------
+//
+// Each case below is a config Renovate reads differently from the reduced model
+// here. The check's stated contract is that anything it cannot resolve offline
+// is an error, so every one of them must fail closed rather than resolve to a
+// comfortable "disabled".
+
+// An unterminated /* swallows the rest of the document. Renovate cannot parse
+// such a file at all, so a green verdict here would be about a document that
+// does not exist.
+func TestUnterminatedBlockCommentIsAnError(t *testing.T) {
+	root := t.TempDir()
+	// Complete, opt-out JSON followed by a comment that never closes. Dropping
+	// the malformed suffix leaves a document that parses and reads as disabled.
+	writeFile(t, filepath.Join(root, "renovate.json"), `{"extends":[":disableDependencyDashboard"]} /* oops`)
+
+	if _, err := resolveDashboard(root, "renovate.json"); err == nil {
+		t.Fatal("want an error: an unterminated block comment makes the file unparseable to Renovate," +
+			" so silently discarding it certifies a document Renovate never sees")
+	}
+}
+
+// A terminated block comment at the very end of the file is valid JSON5 and must
+// keep working — the guard above must reject the malformed case without
+// rejecting this one.
+func TestTerminatedTrailingBlockCommentStillResolves(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "renovate.json"), `{"extends":[":disableDependencyDashboard"]} /* fine */`)
+
+	got, err := resolveDashboard(root, "renovate.json")
+	if err != nil {
+		t.Fatalf("unexpected error on a well-formed trailing comment: %v", err)
+	}
+
+	if got != dashboardDisabled {
+		t.Errorf("state = %v, want disabled", got)
+	}
+}
+
+// Renovate's ignorePresets removes a preset from resolution, including the
+// opt-out this check relies on. Silently discarding the key turns a config that
+// really does inherit the dashboard into a green result.
+func TestIgnorePresetsIsAnError(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "renovate.json"),
+		`{"extends":["config:recommended",":disableDependencyDashboard"],"ignorePresets":[":disableDependencyDashboard"]}`)
+
+	if _, err := resolveDashboard(root, "renovate.json"); err == nil {
+		t.Fatal("want an error: ignorePresets can cancel the very opt-out this check reads," +
+			" so a config carrying it cannot be resolved by this reduced model")
+	}
+}
+
+// Renovate reads a "renovate" key in package.json as a config location. The file
+// comment promises this check fails closed on it; without that, such a config is
+// invisible and the repository reads as config-less.
+func TestPackageJSONRenovateKeyIsAnError(t *testing.T) {
+	root := newRoot(t, "platform")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/package.json"),
+		`{"name":"platform","renovate":{"extends":["config:recommended"]}}`)
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 — a package.json Renovate config must not read as no config\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "package.json") {
+		t.Errorf("expected the package.json config to be named, got:\n%s", out)
+	}
+}
+
+// The same key in an UNDECLARED repository is the case that matters most: it is
+// exactly "a repository grew a config nobody looked at", and treating it as
+// config-less is how it would stay unmonitored.
+func TestPackageJSONRenovateKeyInAnUndeclaredRepoIsAnError(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/package.json"),
+		`{"name":"ksail","renovate":{"extends":["config:recommended"]}}`)
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "not declared") {
+		t.Errorf("expected the undeclared config to be named, got:\n%s", out)
+	}
+}
+
+// A package.json with no "renovate" key is not a config location, and must not
+// be mistaken for one — most repositories in the portfolio have one.
+func TestPackageJSONWithoutARenovateKeyIsNotAConfig(t *testing.T) {
+	root := newRoot(t, "applications/ksail")
+	withDeclaredRoots(t, ".")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/package.json"), `{"name":"ksail","devDependencies":{}}`)
+
+	if code, out := runIn(t, root); code != 0 {
+		t.Fatalf("exit = %d, want 0 — an ordinary package.json is not a Renovate config\n%s", code, out)
+	}
+}
+
+// A package.json that cannot be parsed cannot be ruled out as a config location
+// either, so it fails closed like every other unreadable input.
+func TestUnparseablePackageJSONIsAnError(t *testing.T) {
+	root := newRoot(t, "applications/ksail")
+	withDeclaredRoots(t, ".")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/package.json"), `{"name": broken`)
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "package.json") {
+		t.Errorf("expected the unreadable package.json to be named, got:\n%s", out)
+	}
+}
+
+// --- saying what the green result actually covers --------------------------
+
+// Most mapped repositories are not checked out when this runs, and an
+// uninspected repository is not the same as one verified to have no config. A
+// pass must say which is which, or it reads as portfolio-wide coverage it does
+// not have.
+func TestSuccessOutputNamesTheRepositoriesItCouldNotInspect(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail", "applications/wedding-app")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// ksail is checked out and clean; wedding-app is absent, like a submodule
+	// CI cannot clone.
+	writeFile(t, filepath.Join(root, "applications/ksail/README.md"), "no renovate config here\n")
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "applications/wedding-app") {
+		t.Errorf("expected the uninspected repository to be named, got:\n%s", out)
+	}
+
+	if strings.Contains(out, "applications/ksail") {
+		t.Errorf("applications/ksail WAS inspected and has no config; it must not be reported as uninspected:\n%s", out)
 	}
 }
