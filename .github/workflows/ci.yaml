@@ -142,6 +142,10 @@ jobs:
               - '.github/workflows/ci.yaml'
             merge-confirmation-read:
               - 'AGENTS.md'
+              - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/agents/daily-maintainer.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/scripts/merge-confirmation-read.test.sh'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
