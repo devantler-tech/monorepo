@@ -1245,6 +1245,79 @@ if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | 
   ok "a credential AFTER a malformed record is still found"
 else bad "a credential AFTER a malformed record is still found" "jq aborted at the bad line"; fi
 
+# The credential table used to start one jq process per session file. At the
+# live seven-day volume that means thousands of process startups before the
+# scorecard can print anything. Batch size 1 is the byte-for-byte reference
+# behaviour; the default batch must produce the SAME complete safety output
+# while invoking the decoded-string filter once for this small corpus.
+#
+# Production mutation this catches: replacing the batched jq call with the old
+# per-file loop makes batched_calls equal reference_calls while every ordinary
+# detector assertion remains green.
+mkdir -p "$FIX/credbatch" "$FIX/jqbatchshim"
+for batch_i in 01 02 03 04 05 06 07 08 09 10 11 12; do
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"ordinary record %s"}]}}\n' \
+    "$batch_i" > "$FIX/credbatch/plain-${batch_i}.jsonl"
+done
+cat > "$FIX/credbatch/escaped.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"config says api_key=\"__GEN__\""}]}}
+EOF
+cat > "$FIX/credbatch/token.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"example __GHPB__"}]}}
+EOF
+subst "$FIX/credbatch/escaped.jsonl" "$FIX/credbatch/token.jsonl"
+
+real_jq=$(command -v jq)
+real_date=$(command -v date)
+cat > "$FIX/jqbatchshim/jq" <<'EOF'
+#!/usr/bin/env bash
+for jq_arg in "$@"; do
+  case "$jq_arg" in
+    *'def decoded_strings:'*) printf 'credential-table\n' >> "$JQ_BATCH_TRACE" ;;
+  esac
+done
+exec "$REAL_JQ" "$@"
+EOF
+cat > "$FIX/jqbatchshim/date" <<'EOF'
+#!/usr/bin/env bash
+if [ "$#" -eq 2 ] && [ "$1" = "-u" ] && [ "$2" = "+%Y-%m-%dT%H:%M:%SZ" ]; then
+  printf '%s\n' '2026-07-29T05:00:00Z'
+else
+  exec "$REAL_DATE" "$@"
+fi
+EOF
+chmod +x "$FIX/jqbatchshim/jq"
+chmod +x "$FIX/jqbatchshim/date"
+
+: > "$FIX/jq-batch-trace"
+REFERENCE=$(PATH="$FIX/jqbatchshim:$PATH" REAL_JQ="$real_jq" REAL_DATE="$real_date" \
+  JQ_BATCH_TRACE="$FIX/jq-batch-trace" \
+  CREDENTIAL_SCAN_BATCH_FILES=1 \
+  CLAUDE_PROJECTS_DIR="$FIX/credbatch" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+reference_calls=$(grep -c '^credential-table$' "$FIX/jq-batch-trace")
+
+: > "$FIX/jq-batch-trace"
+BATCHED=$(PATH="$FIX/jqbatchshim:$PATH" REAL_JQ="$real_jq" REAL_DATE="$real_date" \
+  JQ_BATCH_TRACE="$FIX/jq-batch-trace" \
+  CREDENTIAL_SCAN_BATCH_FILES=64 \
+  CLAUDE_PROJECTS_DIR="$FIX/credbatch" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+batched_calls=$(grep -c '^credential-table$' "$FIX/jq-batch-trace")
+
+if [ "$REFERENCE" = "$BATCHED" ]; then
+  ok "credential batching preserves the complete safety output byte-for-byte"
+else
+  bad "credential batching preserves the complete safety output byte-for-byte" \
+    "$(diff -u <(printf '%s\n' "$REFERENCE") <(printf '%s\n' "$BATCHED") | head -40)"; fi
+if [ "$reference_calls" -gt 1 ] && [ "$batched_calls" -eq 1 ]; then
+  ok "credential batching replaces per-file decoded-string jq startups"
+else
+  bad "credential batching replaces per-file decoded-string jq startups" \
+    "reference calls=$reference_calls batched calls=$batched_calls"; fi
+
 # Interrupts must come from the structured flag, not prose quoting it.
 mkdir -p "$FIX/interrupt"
 cat > "$FIX/interrupt/s.jsonl" <<'EOF'

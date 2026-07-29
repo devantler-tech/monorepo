@@ -21,6 +21,7 @@ MAX_FILES=400
 SECTION=all
 INJECTION_PROVENANCE=0
 CREDENTIAL_PROVENANCE=0
+CREDENTIAL_SCAN_BATCH_FILES="${CREDENTIAL_SCAN_BATCH_FILES:-128}"
 
 # Require a value before shifting past it. `shift 2` with only one arg left is a
 # no-op error under `set +e`, which spins the loop on the same $1 forever — a
@@ -46,6 +47,9 @@ done
 
 case "$SINCE_DAYS" in ''|*[!0-9]*) echo "--since-days must be an integer" >&2; exit 2 ;; esac
 case "$MAX_FILES"  in ''|*[!0-9]*) echo "--max-files must be an integer"  >&2; exit 2 ;; esac
+case "$CREDENTIAL_SCAN_BATCH_FILES" in
+  ''|*[!0-9]*|0) echo "CREDENTIAL_SCAN_BATCH_FILES must be a positive integer" >&2; exit 2 ;;
+esac
 # Lowercase letters AND digits — section names include `a2a`, which a
 # letters-only class silently rejected.
 # Validate against the REAL section names. A misspelling like `effciency` used
@@ -1447,8 +1451,60 @@ if want safety; then
     # the shapes are counted separately, the weak-signal generic bucket is
     # labelled as such, and the counts are of DISTINCT matched values (one leak
     # pasted into fifty transcripts is one credential to rotate, not fifty).
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      # Dedupe per file before the portfolio-wide distinct-value reduction.
+    # One jq process per session dominated the live seven-day runtime (thousands
+    # of startups). Feed bounded NUL-delimited file batches to the SAME decoder
+    # instead. jq applies the filter independently to every input line, and the
+    # portfolio-wide `sort -u` below already makes file order and per-file
+    # boundaries irrelevant. Batch size 1 is therefore the byte-identical
+    # reference path used by the contract test; no raw pre-filter is introduced,
+    # so JSON-escaped matches remain visible.
+    CRED_DECODE_FILTER='
+        def image_payload_entry($parent):
+          if (($parent.type? // "") == "input_image"
+              and .key == "image_url"
+              and (.value | type) == "string")
+          then (.value | test("^data:image/[^,]*;base64,[A-Za-z0-9+/]*={0,2}$"; "i"))
+          else false
+          end;
+
+        def decoded_strings:
+          if type == "object" then
+            . as $parent
+            | (
+                keys_unsorted[],
+                (to_entries[]
+                 # Preserve the key/value association only where the generic
+                 # credential regex needs it; duplicating every large text
+                 # field as `key=value` would double the scan volume.
+                 | select((.key | test("(secret|token|password|passwd|api[_-]?key)"; "i"))
+                          and ((.value | type) == "string")
+                          and (image_payload_entry($parent) | not))
+                 | "\(.key)=\(.value)"),
+                (to_entries[]
+                 | select(image_payload_entry($parent) | not)
+                 | .value
+                 | decoded_strings)
+              )
+          elif type == "array" then .[] | decoded_strings
+          elif type == "string" then .
+          else empty
+          end;
+
+        select(length > 0) as $raw
+        | try (
+            $raw | fromjson | decoded_strings
+          ) catch $raw
+      '
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
+      | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" jq -Rr "$CRED_DECODE_FILTER" -- 2>/dev/null \
+      | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
+      | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
+      | tr ';&|' '\n' | grep -v '^$' \
+      | sed -E -e 's/^[^A-Za-z0-9_-]//' \
+        -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
+        -e "s/^[^:=]*[:=][[:space:]]*[\"']?([^=].*)$/\1/" \
+        -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
+      | grep -E . | sort -u |
       # Normalise every match to its UNDERLYING VALUE before any dedup:
       # (1) split compound assignments on `;` — the generic alternative's value
       #     class includes `;`, so `GITHUB_TOKEN=ghp_…;AWS_…=AKIA…` is ONE
@@ -1486,52 +1542,7 @@ if want safety; then
       #     weak-bucket rows; the asymmetry is chosen — a splittable fragment
       #     only ever reaches a high-signal row by passing a FULL shape regex,
       #     while not splitting silently drops a real second credential.
-      jq -Rr '
-        def image_payload_entry($parent):
-          if (($parent.type? // "") == "input_image"
-              and .key == "image_url"
-              and (.value | type) == "string")
-          then (.value | test("^data:image/[^,]*;base64,[A-Za-z0-9+/]*={0,2}$"; "i"))
-          else false
-          end;
-
-        def decoded_strings:
-          if type == "object" then
-            . as $parent
-            | (
-                keys_unsorted[],
-                (to_entries[]
-                 # Preserve the key/value association only where the generic
-                 # credential regex needs it; duplicating every large text
-                 # field as `key=value` would double the scan volume.
-                 | select((.key | test("(secret|token|password|passwd|api[_-]?key)"; "i"))
-                          and ((.value | type) == "string")
-                          and (image_payload_entry($parent) | not))
-                 | "\(.key)=\(.value)"),
-                (to_entries[]
-                 | select(image_payload_entry($parent) | not)
-                 | .value
-                 | decoded_strings)
-              )
-          elif type == "array" then .[] | decoded_strings
-          elif type == "string" then .
-          else empty
-          end;
-
-        select(length > 0) as $raw
-        | try (
-            $raw | fromjson | decoded_strings
-          ) catch $raw
-      ' "$f" 2>/dev/null \
-        | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
-        | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
-        | tr ';&|' '\n' | grep -v '^$' \
-        | sed -E -e 's/^[^A-Za-z0-9_-]//' \
-        -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
-        -e "s/^[^:=]*[:=][[:space:]]*[\"']?([^=].*)$/\1/" \
-        -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
-        | grep -E . | sort -u
-    done | sort -u | awk '
+    awk '
       # FULL-shape validation, not prefix sniffing: a generic value that merely
       # BEGINS like a token (`token=ghp_abcdefgh`, too short to be one) must
       # stay in the weak bucket, or the high-signal rows inherit false
