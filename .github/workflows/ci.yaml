@@ -27,6 +27,7 @@ jobs:
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
       agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
+      merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
