@@ -108,18 +108,20 @@ assert_prose 'rejects the **whole** `--json` request when any single field is un
 # (The join is awk, not `tr`+`sed`: BSD sed ignores a `\001` escape, so that repair silently no-opped
 # and the probe still evaded.)
 normalise_and_extract() {           # $1 = file; emits one `--json <fields>` per line
-  awk '
-    { line = $0
-      sub(/^[[:space:]]+/, "", line)
-      # a trailing backslash is a shell continuation — drop it and join
-      if (line ~ /\\$/) { sub(/\\$/, "", line); hold = hold line; next }
-      hold = hold line
-      if (hold ~ /,$/) next         # list continues on the next line — keep accumulating
-      print hold; hold = "" }
-    END { if (hold != "") print hold }
-  ' "$1" \
-    | sed -E -e 's/--json[[:space:]]*=?[[:space:]]*["'"'"']?/--json /g' \
-             -e 's/…/,/g' -e 's/\.\.\./,/g' \
+  # ONE canonicalisation, not a rule per formatting. Eight distinct formattings were found evading a
+  # shape-by-shape extractor on this PR — plain, `=`, quoted, wrapped after a comma, backslash
+  # continuation, ellipsis elision, wrapped immediately after the flag, and a JSON `\n` escape — and
+  # each patch only revealed the next one. Chasing shapes does not converge; canonicalising does.
+  #
+  # So flatten everything that can separate `--json` from its field list into a single space, then read
+  # the fields. Order matters: comma/space collapse must precede the `--json` separator rule, or an
+  # elision leaves `--json,field` and the extractor misses it (measured — it read 7/8 until reordered).
+  sed -E -e 's/\\[nrt]/ /g' -e 's/\\/ /g' "$1" \
+    | tr '\n' ' ' \
+    | sed -E -e 's/…/,/g' -e 's/\.\.\./,/g' -e 's/[`"'"'"']/ /g' \
+             -e 's/[[:space:]]+/ /g' \
+             -e 's/[[:space:]]*,[[:space:]]*/,/g' \
+             -e 's/--json[[:space:]]*[=,]*[[:space:]]*/--json /g' \
     | grep -o -- '--json [A-Za-z,]*' | sort -u
 }
 
@@ -161,6 +163,9 @@ wrapped:    `gh pr view <n> --json state,
 merged,comments`
 continued:  gh pr view <n> --json \
   merged,commits
+wrap-after-flag: `gh pr view <n> --json
+state,merged,body`
+json-escape: "bootstrapPrompt": "gh pr view <n> --json\nstate,merged,author"
 FIXTURE
 
 cat > "${self_test_dir}/good.md" <<'FIXTURE'
@@ -173,11 +178,14 @@ cat > "${self_test_dir}/good.md" <<'FIXTURE'
 mergedAt,mergeCommit`
 gh pr view <n> --json \
   state,mergedAt
+`gh pr view <n> --json
+state,mergedAt,closed`
+prose: run it, then confirm the merged state separately
 FIXTURE
 
 bad_caught="$(bad_lists_in "${self_test_dir}/bad.md" | grep -c . || true)"
-[ "${bad_caught}" -ge 8 ] ||
-  fail "extractor self-test: caught only ${bad_caught}/8 known-bad \`--json\` forms — the negative control is not working, so its OK would be meaningless"
+[ "${bad_caught}" -ge 10 ] ||
+  fail "extractor self-test: caught only ${bad_caught}/10 known-bad \`--json\` forms — the negative control is not working, so its OK would be meaningless"
 
 good_flagged="$(bad_lists_in "${self_test_dir}/good.md" | grep -c . || true)"
 [ "${good_flagged}" -eq 0 ] ||
@@ -252,4 +260,4 @@ if [ -n "${offenders}" ]; then
   exit 1
 fi
 
-echo "merge-confirmation read: OK — self-test caught ${bad_caught}/8 bad forms and flagged ${good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces"
+echo "merge-confirmation read: OK — self-test caught ${bad_caught}/10 bad forms and flagged ${good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces"
