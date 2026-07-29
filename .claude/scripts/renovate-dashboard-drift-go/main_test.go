@@ -453,6 +453,45 @@ func TestIgnorePresetsIsAnError(t *testing.T) {
 	}
 }
 
+// ...but ignorePresets only matters when presets decide the verdict. An explicit
+// dependencyDashboard key overrides every preset, so refusing those configs
+// would reject input this check can resolve perfectly well — the over-tightening
+// control for the guard above.
+func TestIgnorePresetsIsIrrelevantBesideAnExplicitKey(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want dashboardState
+	}{
+		{
+			name: "explicit false wins, so ignorePresets cannot change it",
+			body: `{"extends":["config:recommended"],"ignorePresets":[":disableDependencyDashboard"],"dependencyDashboard":false}`,
+			want: dashboardDisabled,
+		},
+		{
+			name: "explicit true is still drift, not an unresolvable config",
+			body: `{"extends":[":disableDependencyDashboard"],"ignorePresets":[":disableDependencyDashboard"],"dependencyDashboard":true}`,
+			want: dashboardEnabled,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "renovate.json"), tc.body)
+
+			got, err := resolveDashboard(root, "renovate.json")
+			if err != nil {
+				t.Fatalf("unexpected error — the explicit key settles this without any preset: %v", err)
+			}
+
+			if got != tc.want {
+				t.Errorf("state = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // Renovate reads a "renovate" key in package.json as a config location. The file
 // comment promises this check fails closed on it; without that, such a config is
 // invisible and the repository reads as config-less.

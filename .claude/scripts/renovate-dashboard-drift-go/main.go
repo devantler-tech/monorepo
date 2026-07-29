@@ -471,18 +471,9 @@ func resolveDashboard(root, rel string) (dashboardState, error) {
 				" more of JSON5 needs a real JSON5 parser here before it can be verified", err)
 	}
 
-	// ignorePresets can cancel the very opt-out preset this check reads, so a
-	// config carrying it cannot be resolved by preset names alone.
-	if len(cfg.IgnorePresets) > 0 {
-		return dashboardDisabled, fmt.Errorf(
-			"sets ignorePresets (%s), which can cancel a preset this check relies on —"+
-				" including `:disableDependencyDashboard` itself. Resolving that needs the"+
-				" preset bodies, which this offline check does not have, so the config is"+
-				" reported as unverifiable rather than assumed compliant",
-			strings.Join(cfg.IgnorePresets, ", "))
-	}
-
-	// An explicit top-level key wins over every preset, so it is decided first.
+	// An explicit top-level key wins over every preset, so it is decided first —
+	// and deciding it first is also what keeps the ignorePresets refusal below
+	// from rejecting a config whose verdict presets cannot affect at all.
 	if cfg.DependencyDashboard != nil {
 		if *cfg.DependencyDashboard {
 			return dashboardEnabled, nil
@@ -491,7 +482,21 @@ func resolveDashboard(root, rel string) (dashboardState, error) {
 		return dashboardDisabled, nil
 	}
 
-	// Otherwise the presets decide, and a later one overrides an earlier one.
+	// From here the presets decide the verdict, so ignorePresets — which can
+	// cancel the very `:disableDependencyDashboard` opt-out this check reads —
+	// makes the config unresolvable by preset names alone.
+	if len(cfg.IgnorePresets) > 0 {
+		return dashboardDisabled, fmt.Errorf(
+			"sets ignorePresets (%s) with no explicit dependencyDashboard key, so the"+
+				" verdict rests on presets that ignorePresets can cancel — including"+
+				" `:disableDependencyDashboard` itself. Resolving that needs the preset"+
+				" bodies, which this offline check does not have, so the config is"+
+				" reported as unverifiable rather than assumed compliant."+
+				" Setting `\"dependencyDashboard\": false` explicitly settles it",
+			strings.Join(cfg.IgnorePresets, ", "))
+	}
+
+	// A later preset overrides an earlier one.
 	state := dashboardDisabled
 
 	for _, preset := range cfg.Extends {
