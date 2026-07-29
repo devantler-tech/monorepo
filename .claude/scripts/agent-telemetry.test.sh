@@ -1259,6 +1259,16 @@ for batch_i in 01 02 03 04 05 06 07 08 09 10 11 12; do
   printf '{"type":"user","message":{"content":[{"type":"text","text":"ordinary record %s"}]}}\n' \
     "$batch_i" > "$FIX/credbatch/plain-${batch_i}.jsonl"
 done
+# A live session is concurrently written and can end on an unterminated record
+# while the scan reads it. These names sort newest-first in z→y order when their
+# mtimes tie, so batch mode must keep the file boundary between them.
+printf '%s' '{"type":"user","message":{"content":[{"type":"text","text":"unterminated record"}]}}' \
+  > "$FIX/credbatch/boundary-z.jsonl"
+cat > "$FIX/credbatch/boundary-y.jsonl" <<'EOF'
+{"type":"user","message":{"content":[{"type":"text","text":"boundary api_key=\"__GENPAD__\""}]}}
+EOF
+subst "$FIX/credbatch/boundary-y.jsonl"
+touch -t 202607290500 "$FIX/credbatch/boundary-z.jsonl" "$FIX/credbatch/boundary-y.jsonl"
 cat > "$FIX/credbatch/escaped.jsonl" <<'EOF'
 {"type":"user","message":{"content":[{"type":"text","text":"config says api_key=\"__GEN__\""}]}}
 EOF
@@ -1312,6 +1322,12 @@ if [ "$REFERENCE" = "$BATCHED" ]; then
 else
   bad "credential batching preserves the complete safety output byte-for-byte" \
     "$(diff -u <(printf '%s\n' "$REFERENCE") <(printf '%s\n' "$BATCHED") | head -40)"; fi
+if printf '%s' "$BATCHED" | sed -n '/credential-shaped/,/rotate the credential/p' \
+   | grep -q '2 generic-assignment'; then
+  ok "credential batching preserves a decoded secret after an unterminated file"
+else
+  bad "credential batching preserves a decoded secret after an unterminated file" \
+    "$(printf '%s' "$BATCHED" | sed -n '/credential-shaped/,/rotate the credential/p')"; fi
 if [ "$reference_calls" -gt 1 ] && [ "$batched_calls" -eq 1 ]; then
   ok "credential batching replaces per-file decoded-string jq startups"
 else

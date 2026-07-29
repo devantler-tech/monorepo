@@ -1457,7 +1457,9 @@ if want safety; then
     # portfolio-wide `sort -u` below already makes file order and per-file
     # boundaries irrelevant. Batch size 1 is therefore the byte-identical
     # reference path used by the contract test; no raw pre-filter is introduced,
-    # so JSON-escaped matches remain visible.
+    # so JSON-escaped matches remain visible. One awk process per batch restores
+    # a trailing record separator at every file boundary; without it, jq -R
+    # joins an unterminated live-session record to the next file.
     CRED_DECODE_FILTER='
         def image_payload_entry($parent):
           if (($parent.type? // "") == "input_image"
@@ -1495,8 +1497,10 @@ if want safety; then
             $raw | fromjson | decoded_strings
           ) catch $raw
       '
+    export CRED_DECODE_FILTER
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
-      | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" jq -Rr "$CRED_DECODE_FILTER" -- 2>/dev/null \
+      | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
+          'awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
       | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
       | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
       | tr ';&|' '\n' | grep -v '^$' \
