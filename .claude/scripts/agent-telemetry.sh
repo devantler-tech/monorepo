@@ -228,7 +228,7 @@ emit_injection_hits() {
 # both. Classify the matched STRING path, never the whole record. If parsing or
 # reconciliation is uncertain, retain every raw occurrence as other content.
 emit_injection_classes() {
-  local f="$1" session line raw raw_count class_count classified i
+  local f="$1" session line raw raw_count runtime_count other_count i
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
@@ -237,62 +237,51 @@ emit_injection_classes() {
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
         raw_count=$(printf '%s' "$raw" | grep -hoiE "$INJ_PHRASE_RE" | wc -l | tr -d ' ')
-        classified=$(printf '%s' "$raw" | jq -r \
-          --arg re "$INJ_PHRASE_RE" --arg session "$session" --arg line "$line" '
-            def starts_with_path($path; $prefix):
-              $path[0:($prefix | length)] == $prefix;
-            . as $record
-            | paths(strings) as $path
-            | getpath($path) as $text
-            | ($text | scan($re; "i")) as $_match
-            | [
-                $session,
-                $line,
-                (if
-                   ($record.type == "response_item"
-                    and $record.payload.type == "message"
-                    and $record.payload.role == "developer")
-                   or
-                   ($record.type == "turn_context"
-                    and starts_with_path(
-                      $path;
-                      ["payload", "collaboration_mode", "settings", "developer_instructions"]
-                    ))
-                   or
-                   ($record.type == "event_msg"
-                    and $record.payload.type == "thread_settings_applied"
-                    and starts_with_path(
-                      $path;
-                      [
-                        "payload",
-                        "thread_settings",
-                        "collaboration_mode",
-                        "settings",
-                        "developer_instructions"
-                      ]
-                    ))
-                   or
-                   ($record.type == "compacted"
-                    and starts_with_path($path; ["payload", "replacement_history"])
-                    and ($path[2] | type) == "number"
-                    and $record.payload.replacement_history[$path[2]].type == "message"
-                    and $record.payload.replacement_history[$path[2]].role == "developer")
-                 then "runtime-developer"
-                 else "other-content"
-                 end)
-              ]
-            | @tsv
-          ' 2>/dev/null || true)
-        class_count=$(printf '%s\n' "$classified" | grep -c . || true)
-        if [ "$raw_count" -gt 0 ] && [ "$class_count" -eq "$raw_count" ]; then
-          printf '%s\n' "$classified"
-        else
-          i=0
-          while [ "$i" -lt "$raw_count" ]; do
-            printf '%s\t%s\tother-content\n' "$session" "$line"
-            i=$((i + 1))
-          done
-        fi
+        runtime_count=$(printf '%s' "$raw" | jq -r --arg re "$INJ_PHRASE_RE" '
+          def match_count:
+            if type == "string" then [scan($re; "i")] | length else 0 end;
+          if
+            (.type == "response_item"
+             and .payload.type == "message"
+             and .payload.role == "developer")
+          then
+            ([.payload.content[]?.text | match_count] | add // 0)
+          elif
+            (.type == "turn_context")
+          then
+            (.payload.collaboration_mode.settings.developer_instructions | match_count)
+          elif
+            (.type == "event_msg" and .payload.type == "thread_settings_applied")
+          then
+            (.payload.thread_settings.collaboration_mode.settings.developer_instructions | match_count)
+          elif
+            (.type == "compacted")
+          then
+            ([
+              .payload.replacement_history[]?
+              | select(.type == "message" and .role == "developer")
+              | .content[]?.text
+              | match_count
+            ] | add // 0)
+          else
+            0
+          end
+        ' 2>/dev/null || true)
+        case "$runtime_count" in
+          ''|*[!0-9]*) runtime_count=0 ;;
+          *) [ "$runtime_count" -le "$raw_count" ] || runtime_count=0 ;;
+        esac
+        other_count=$((raw_count - runtime_count))
+        i=0
+        while [ "$i" -lt "$runtime_count" ]; do
+          printf '%s\t%s\truntime-developer\n' "$session" "$line"
+          i=$((i + 1))
+        done
+        i=0
+        while [ "$i" -lt "$other_count" ]; do
+          printf '%s\t%s\tother-content\n' "$session" "$line"
+          i=$((i + 1))
+        done
       done
 }
 
