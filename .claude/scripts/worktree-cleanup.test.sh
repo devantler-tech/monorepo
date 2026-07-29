@@ -276,6 +276,10 @@ t_keeps_locked() {
 t_keeps_staged_gitlink_update() {
   # A STAGED gitlink update lives only in this worktree's index — reaping the worktree
   # destroys it with no commit to recover from. Only unstaged drift (` M`) is noise.
+  # Built with `update-index --cacheinfo` rather than `git submodule add`: the latter
+  # depends on protocol.file.allow and silently produced NO submodule on the CI
+  # runners, so the fixture emitted an empty porcelain and the test passed on nothing.
+  # This form is hermetic and identical from the script's point of view.
   local root; root=$(make_repo)
   local sub="$root/sub.git"
   git init -q --bare "$sub"
@@ -283,22 +287,23 @@ t_keeps_staged_gitlink_update() {
   git init -q -b main "$seed/s"; git -C "$seed/s" config user.email t@t.t
   git -C "$seed/s" config user.name t
   echo one > "$seed/s/f"; git -C "$seed/s" add f; git -C "$seed/s" commit -qm one
-  local first; first=$(git -C "$seed/s" rev-parse HEAD)
+  local subA; subA=$(git -C "$seed/s" rev-parse HEAD)
   echo two > "$seed/s/f"; git -C "$seed/s" commit -qam two
+  local subB; subB=$(git -C "$seed/s" rev-parse HEAD)
   git -C "$seed/s" push -q "$sub" main
-  # `submodule add` pins the parent at the branch tip (two), so moving the worktree's
-  # submodule back to `first` is what actually produces a gitlink delta to stage.
 
-  git -C "$root/repo" -c protocol.file.allow=always submodule add -q "$sub" sub 2>/dev/null
-  git -C "$root/repo" commit -qm "add sub"
-  git -C "$root/repo" push -q origin main
   add_wt "$root" staged pushed
-  git -C "$root/repo/.claude/worktrees/staged" -c protocol.file.allow=always \
-      submodule update -q --init sub 2>/dev/null
-  git -C "$root/repo/.claude/worktrees/staged/sub" checkout -q "$first"
-  git -C "$root/repo/.claude/worktrees/staged" add sub          # STAGE the gitlink
-  touch -t 202001010000 "$root/repo/.claude/worktrees/staged"
-  local st; st=$(git -C "$root/repo/.claude/worktrees/staged" status --porcelain | head -1)
+  local wt="$root/repo/.claude/worktrees/staged"
+  # A real, clean, fully-pushed submodule checkout at B — so the OLD code would judge
+  # this gitlink to be mere drift and reap the worktree.
+  git clone -q "$sub" "$wt/sub"
+  # Parent tracks A and that commit is pushed; then stage the move to B.
+  git -C "$wt" update-index --add --cacheinfo "160000,$subA,sub"
+  git -C "$wt" commit -qm "track sub at A"
+  git -C "$wt" push -q origin claude/staged
+  git -C "$wt" update-index --cacheinfo "160000,$subB,sub"     # STAGED gitlink update
+  touch -t 202001010000 "$wt"
+  local st; st=$(git -C "$wt" status --porcelain | head -1)
   local out; out=$(run "$root")
   if printf '%s' "$out" | grep -q 'KEEP .*staged .*uncommitted change'; then
     ok "KEEPs a STAGED submodule gitlink update"
