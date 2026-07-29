@@ -228,11 +228,17 @@ t_age_gate_works_with_gnu_stat() {
   local shim="$root/shim"; mkdir -p "$shim"
   cat > "$shim/stat" <<'SHIM'
 #!/usr/bin/env bash
-# GNU-flavoured stat: supports -c, and treats -f as filesystem-status (NOT a failure).
-if [ "${1:-}" = "-c" ]; then
-  case "$2" in %Y) exec /usr/bin/stat -f %m "$3" 2>/dev/null || exit 1 ;; esac
-fi
-if [ "${1:-}" = "-f" ]; then printf '  File: "%s"\n    ID: 0\n' "${3:-$2}"; exit 0; fi
+# GNU-flavoured stat: -c %Y yields the real mtime, while -f is filesystem-status and
+# SUCCEEDS with a `File: ...` block instead of failing. That combination is what broke
+# the age gate on Linux.
+# The real mtime is fetched flavour-agnostically so this shim runs on a BSD host too.
+real_mtime() {
+  /usr/bin/stat -c %Y "$1" 2>/dev/null && return 0
+  /usr/bin/stat -f %m "$1" 2>/dev/null && return 0
+  return 1
+}
+if [ "${1:-}" = "-c" ] && [ "${2:-}" = "%Y" ]; then real_mtime "$3"; exit $?; fi
+if [ "${1:-}" = "-f" ]; then printf '  File: "%s"\n    ID: 0\n' "${3:-${2:-}}"; exit 0; fi
 exit 1
 SHIM
   chmod +x "$shim/stat"
