@@ -207,6 +207,45 @@ is_locked_now() {
   return 1
 }
 
+# recheck_mutable_gates <worktree> <resolved-path> -> 0 = still safe to remove,
+# 1 = KEEP (already reported). Aborts on any unverifiable state.
+#
+# Every gate here reads state that another process can change WHILE the sweep runs, so
+# it must be re-evaluated as late as possible — and, critically, called again before the
+# `rm -rf` fallback: the first `worktree remove` attempt can fail slowly, and a session
+# may enter the worktree in that window. One function, called at both points, is what
+# keeps the two paths from drifting apart.
+recheck_mutable_gates() {
+  local wt=$1 target=$2 rc st idx
+  is_locked_now "$target"; rc=$?
+  case "$rc" in
+    0) keep "$wt" "locked (acquired during the sweep)"; return 1 ;;
+    2) die "cannot query worktree locks for $target — refusing to remove on an unverifiable lock state" ;;
+  esac
+
+  is_live_now "$target"; rc=$?
+  case "$rc" in
+    0) keep "$wt" "live process CWD (started during the sweep)"; return 1 ;;
+    2) die "lsof re-check failed for $target — refusing to continue on an unverifiable live set" ;;
+  esac
+
+  st=$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) \
+    || { keep "$wt" "cannot re-read status before removal"; return 1; }
+  count_real_changes "$wt" "$st"
+  if [ "$REAL_CHANGES" -gt 0 ]; then
+    keep "$wt" "$REAL_CHANGES uncommitted change(s) appeared during the sweep"; return 1
+  fi
+
+  # Status alone cannot cover this: not being visible to status is exactly what the
+  # assume-unchanged and skip-worktree bits do.
+  idx=$(git -C "$wt" ls-files -v 2>/dev/null) \
+    || { keep "$wt" "cannot re-read index flags before removal"; return 1; }
+  if grep -q '^[a-zS]' <<< "$idx"; then
+    keep "$wt" "assume-unchanged/skip-worktree flags appeared during the sweep"; return 1
+  fi
+  return 0
+}
+
 # count_real_changes <worktree> <porcelain-status> -> sets $REAL_CHANGES
 # Counts porcelain entries that represent AUTHORED work. Submodule gitlink drift and
 # known tool-noise dirs are excluded — but a gitlink counts as real work the moment the
@@ -254,6 +293,15 @@ count_real_changes() {
           if [ "$sub_status_rc" -ne 0 ] || [ -n "$sub_status" ] \
              || [ -z "$sub_unpushed" ] || [ "$sub_unpushed" -gt 0 ]; then
             REAL_CHANGES=$((REAL_CHANGES+1))
+          else
+            # Disposable only because the commit is reachable from a remote-tracking ref
+            # — which can be STALE (upstream branch deleted or force-pushed). Preserve it
+            # in the submodule the same way the parent's HEAD is preserved, so a later
+            # fetch --prune + gc cannot collect the only copy. Failure to preserve makes
+            # it authored work again rather than silently disposable.
+            if ! git -C "$wt/$path" update-ref "refs/reaped/$sub_sha" "$sub_sha" 2>/dev/null; then
+              REAL_CHANGES=$((REAL_CHANGES+1))
+            fi
           fi
         else
           REAL_CHANGES=$((REAL_CHANGES+1))
@@ -396,47 +444,7 @@ for wt in "$WT_ROOT"/*/; do
     *) keep "$wt" "REFUSING to remove: '$wt_real' is not under '$WT_ROOT'"; continue ;;
   esac
 
-  # Re-check the lock against LIVE state, not the snapshot taken at startup. A lock
-  # acquired while this sweep was running would otherwise be overridden by --force,
-  # which git documents as "force removal even if worktree is dirty or locked".
-  is_locked_now "$wt_real"; lock_rc=$?
-  case "$lock_rc" in
-    0) keep "$wt" "locked (acquired since the startup snapshot)"; continue ;;
-    2) die "cannot re-query worktree locks for $wt_real — refusing to remove on an unverifiable lock state" ;;
-  esac
-
-  # Same re-check for liveness: a session may have started here since the snapshot.
-  is_live_now "$wt_real"; live_rc=$?
-  case "$live_rc" in
-    0) keep "$wt" "live process CWD (started since the startup snapshot)"; continue ;;
-    2) die "lsof re-check failed for $wt_real — refusing to continue on an unverifiable live set" ;;
-  esac
-
-  # And re-check the working tree: a session may have written files between the status
-  # gate above and this point, and `--force` would delete them regardless.
-  recheck_status=$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null)
-  recheck_rc=$?
-  if [ "$recheck_rc" -ne 0 ]; then
-    keep "$wt" "cannot re-read status before removal"; continue
-  fi
-  count_real_changes "$wt" "$recheck_status"
-  if [ "$REAL_CHANGES" -gt 0 ]; then
-    keep "$wt" "$REAL_CHANGES uncommitted change(s) appeared since the status gate"
-    continue
-  fi
-
-  # Re-check the index flags too. Re-running status alone is not enough: the whole point
-  # of assume-unchanged / skip-worktree is that status cannot see those edits, so a flag
-  # set (by a process whose CWD is outside this worktree) after the earlier gate would
-  # leave the re-checked status clean while hiding a real edit.
-  recheck_idx=$(git -C "$wt" ls-files -v 2>/dev/null); recheck_idx_rc=$?
-  if [ "$recheck_idx_rc" -ne 0 ]; then
-    keep "$wt" "cannot re-read index flags before removal"; continue
-  fi
-  if grep -q '^[a-zS]' <<< "$recheck_idx"; then
-    keep "$wt" "assume-unchanged/skip-worktree flags appeared since the index gate"
-    continue
-  fi
+  if ! recheck_mutable_gates "$wt" "$wt_real"; then continue; fi
 
   # Keep the reaped commit reachable so the manifest's SHA stays restorable. Without
   # this, a stale remote-tracking ref can make a commit look pushed, and a later
@@ -465,12 +473,11 @@ for wt in "$WT_ROOT"/*/; do
   # run then exited 0 leaving a `pending` row for a path that is already gone.
   # Deletion success is judged by the directory being absent; a failed prune is a
   # separate, loud error.
-  # `unlocked_now` requires the explicit "unlocked" answer (1). Using `! is_locked_now`
-  # here would treat "could not determine" (2) as unlocked, since both are non-zero.
-  unlocked_now() { is_locked_now "$1"; [ "$?" -eq 1 ]; }
-
+  # The fallback re-runs the FULL mutable-gate set, not just the lock: the failed
+  # `worktree remove` above can take time, and a session entering the worktree in that
+  # window must still stop the recursive delete.
   if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
-     || { unlocked_now "$wt_real" && rm -rf "$wt_real" && [ ! -e "$wt_real" ] \
+     || { recheck_mutable_gates "$wt" "$wt_real" && rm -rf "$wt_real" && [ ! -e "$wt_real" ] \
           && { git -C "$TOPLEVEL" worktree prune 2>/dev/null \
                || die "REMOVED $wt_real but 'git worktree prune' failed — the deletion DID happen; run 'git -C $TOPLEVEL worktree prune' to clear its admin entry (restore ref: refs/reaped/$sha)"; }; }; then
     # Completion row — written only now that the directory is actually gone.

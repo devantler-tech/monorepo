@@ -36,6 +36,14 @@ make_root() {
   git -C "$root/repo/nested" push -q origin main
   printf '[submodule "nested"]\n\tpath = nested\n\turl = %s\n' "$root/sub.git" \
     > "$root/repo/.gitmodules"
+  # Register it as a REAL gitlink (mode 160000). The orchestrator requires this: a
+  # .gitmodules entry alone can name an ordinary nested repository, which is not a
+  # portfolio submodule and must not be swept.
+  local nsha; nsha=$(git -C "$root/repo/nested" rev-parse HEAD)
+  git -C "$root/repo" update-index --add --cacheinfo "160000,$nsha,nested"
+  git -C "$root/repo" add .gitmodules
+  git -C "$root/repo" commit -qm "register nested as a submodule"
+  git -C "$root/repo" push -q origin main
 
   for pair in "repo:spent-root" "repo/nested:spent-sub"; do
     local r=${pair%%:*} n=${pair##*:}
@@ -168,6 +176,26 @@ t_aborts_on_malformed_gitmodules() {
   rm -rf "$root"
 }
 
+t_skips_a_gitmodules_entry_that_is_not_a_gitlink() {
+  # Containment is not sufficient: a stale or malformed .gitmodules entry can name an
+  # ordinary nested repository INSIDE the root, which is not a portfolio submodule and
+  # must never be swept destructively.
+  local root; root=$(make_root)
+  git -C "$root/repo" rm -q --cached nested >/dev/null 2>&1   # drop the gitlink, keep the dir
+  git -C "$root/repo" commit -qm "de-register nested" >/dev/null 2>&1
+  local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+                   bash "$SUT" apply 24 2>&1)
+  if printf '%s' "$out" | grep -q 'SKIP nested (not a gitlink' \
+     && [ -d "$root/repo/nested/.claude/worktrees/spent-sub" ] \
+     && printf '%s' "$out" | grep -q 'REAPED .*spent-root'; then
+    ok "SKIPs a .gitmodules entry that is not a real gitlink"
+  else
+    bad "SKIPs a .gitmodules entry that is not a real gitlink" \
+        "sub_present=$([ -d "$root/repo/nested/.claude/worktrees/spent-sub" ] && echo yes || echo NO) $out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup-all.sh contract tests\n'
 t_sweeps_root_and_submodules
 t_rewrites_session_worktree_root
@@ -176,6 +204,7 @@ t_aborts_and_exits_nonzero_on_sweep_failure
 t_per_repo_manifest_isolation
 t_validates_args_even_with_no_worktree_dirs
 t_aborts_on_malformed_gitmodules
+t_skips_a_gitmodules_entry_that_is_not_a_gitlink
 t_rejects_bad_mode
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

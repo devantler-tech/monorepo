@@ -155,6 +155,14 @@ if [ -f "$ROOT/.gitmodules" ]; then
       *) printf '\n### SKIP %s (escapes the portfolio root: %s)\n' "$sub" "$sub_real"
          continue ;;
     esac
+    # Containment is necessary but not sufficient: a stale or malformed .gitmodules entry
+    # can name an ordinary nested repository inside ROOT, which is not a portfolio
+    # submodule and must not be swept. Require the path to be a real gitlink (mode
+    # 160000) in the parent's index.
+    if [ "$(git -C "$ROOT" ls-files --stage -- "$sub" 2>/dev/null | cut -c1-6)" != "160000" ]; then
+      printf '\n### SKIP %s (not a gitlink in the index — not a portfolio submodule)\n' "$sub"
+      continue
+    fi
     sweep "$sub_real"
   done <<< "$submodules"
 fi

@@ -2318,10 +2318,14 @@ cleanup too, and this sweep is what unblocks it.
 (maintainer direction 2026-07-16: *"You never clean up old branches locally or on the remote. I expect
 you to always clean up and switch back to the default branch after a tick."*). Left unswept, every run's
 worktree branch survives it: the first sweep found **~1,140 spent branches** (monorepo alone had **589**
-local; `.github` had **35** stale remote). **Remove your own per-run worktree FIRST, then run**
+local; `.github` had **35** stale remote). Run
 [`.claude/scripts/branch-cleanup.sh <repo_path> <repo-name> <manifest> [apply|dry-run] [namespace]`](.claude/scripts/branch-cleanup.sh)
-for each repo touched — a branch still checked out by your own worktree sits in the keep-set, so a
-sweep run before the worktree removal silently spares the very branch the tick just spent.
+for each repo touched. **If you created an EXTRA worktree of your own during the run — one you are not
+running inside — remove that first**, because a branch still checked out by a worktree sits in the
+keep-set and would be spared. **Your own SESSION worktree is the exception and needs no action here:**
+you cannot remove the directory you are running in, and per *Worktree hygiene is SCHEDULED* above the
+LaunchAgent reaps it (and frees its branch for a later sweep) once it is idle and aged. Expect your own
+session branch to survive the tick that spent it; that is the scheduled sweep's job, not yours.
 **`<repo-name>` is the BARE repository name** (`monorepo`, `platform`) — the script prepends
 `devantler-tech/` itself. It is **not** your session/worktree slug and **not** `owner/repo`; both are
 rejected, and passing the owner-qualified form is the likelier mistake because the first rejection
