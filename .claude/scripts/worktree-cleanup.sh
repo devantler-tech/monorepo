@@ -375,6 +375,23 @@ for wt in "$WT_ROOT"/*/; do
     keep "$wt" "age ${age_h}h < ${MIN_AGE_HOURS}h"; continue
   fi
 
+  # KEEP: an in-progress git operation. A worktree mid-rebase, -merge, -cherry-pick,
+  # -revert or -bisect holds that operation's state (and often a stash of conflicted
+  # work) only in its own admin directory, so removing it destroys work that no commit
+  # and no reflog entry accounts for. `git rev-parse --git-path` resolves these per
+  # worktree, which is what makes the check correct for a linked worktree.
+  gitdir=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null); gitdir_rc=$?
+  if [ "$gitdir_rc" -ne 0 ] || [ -z "$gitdir" ]; then
+    keep "$wt" "cannot resolve its git dir"; continue
+  fi
+  inprogress=""
+  for marker in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+    if [ -e "$gitdir/$marker" ]; then inprogress=$marker; break; fi
+  done
+  if [ -n "$inprogress" ]; then
+    keep "$wt" "git operation in progress ($inprogress)"; continue
+  fi
+
   # KEEP: unresolvable HEAD
   sha=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || { keep "$wt" "no HEAD"; continue; }
   branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached)")

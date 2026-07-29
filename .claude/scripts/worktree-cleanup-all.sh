@@ -73,7 +73,11 @@ printf '=== worktree-cleanup-all  mode=%s  min_age=%sh  root=%s ===\n' \
 
 sweep() { # <repo_path>
   local path=$1 label toplevel expected
-  [ -d "$path/.claude/worktrees" ] || return 0
+  # NOTE: no early return for a missing .claude/worktrees. The per-repo script has its
+  # own no-root path that still prunes stale registrations — returning here made that
+  # path unreachable through the wrapper, the only way it is ever invoked. A path that is
+  # not a repository at all is handled by the toplevel check below (it resolves to the
+  # parent, so the mismatch SKIPs it) rather than by a guard that pre-empts that report.
   # Only sweep a repo whose toplevel resolves to ITSELF. A submodule with broken
   # worktree isolation resolves into the main checkout, and sweeping through that
   # alias would operate on the wrong tree (AGENTS.md, Execution model).

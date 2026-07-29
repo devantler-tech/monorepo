@@ -610,6 +610,33 @@ t_keeps_worktree_with_orphaned_reflog_commit() {
   rm -rf "$root"
 }
 
+t_keeps_worktree_with_operation_in_progress() {
+  # A worktree mid-rebase holds that operation's state only in its own admin dir, so
+  # reaping it destroys work no commit or reflog accounts for.
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  add_wt "$root" rebasing pushed
+  local w="$root/repo/.claude/worktrees/rebasing"
+  # Build a genuine conflicting rebase rather than faking the marker file.
+  echo one > "$w/file.txt"; git -C "$w" commit -qam "side"
+  git -C "$w" branch -q other main
+  git -C "$w" checkout -q other
+  echo two > "$w/file.txt"; git -C "$w" commit -qam "other side"
+  git -C "$w" rebase "claude/rebasing" >/dev/null 2>&1 || true   # expected to conflict
+  local gd; gd=$(git -C "$w" rev-parse --absolute-git-dir 2>/dev/null)
+  touch -t 202001010000 "$w"
+  local out; out=$(run "$root")
+  if [ ! -e "$gd/rebase-merge" ] && [ ! -e "$gd/rebase-apply" ]; then
+    bad "KEEPs a worktree with a git operation in progress" \
+        "FIXTURE produced no rebase state in $gd"
+  elif printf '%s' "$out" | grep -q 'KEEP .*rebasing .*operation in progress'; then
+    ok "KEEPs a worktree with a git operation in progress"
+  else
+    bad "KEEPs a worktree with a git operation in progress" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_dry_run_writes_no_manifest_and_removes_nothing() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -682,6 +709,7 @@ t_index_flag_gate_survives_a_large_index
 t_keeps_untracked_when_showUntrackedFiles_is_no
 t_keeps_parent_of_nested_worktree_even_when_ignored
 t_keeps_worktree_with_orphaned_reflog_commit
+t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode
