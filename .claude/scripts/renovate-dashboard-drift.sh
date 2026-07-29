@@ -35,9 +35,7 @@ if ! go -C "$script_dir/renovate-dashboard-drift-go" build -o "$drift_binary" .;
   exit 2
 fi
 
-set +e
-"$drift_binary" "$@"
-drift_exit_code=$?
-set -e
+drift_exit_code=0
+"$drift_binary" "$@" || drift_exit_code=$?
 
 exit "$drift_exit_code"

@@ -568,6 +568,56 @@ func TestUnparseablePackageJSONIsAnError(t *testing.T) {
 	}
 }
 
+// "Not checked out" is only one reason os.Stat can fail. A root that IS present
+// but cannot be read — a permission error, an I/O error, a path whose parent is
+// not a directory — was never inspected either, but it is not the ordinary
+// absent state and must not be filed under it: for an undeclared root that would
+// turn a real failure into a pass.
+//
+// ENOTDIR is used rather than a chmod because it is deterministic and does not
+// depend on the test user (a root-owned CI runner ignores mode 000).
+func TestAnUnreadableUndeclaredRootIsAnErrorNotMerelyUninspected(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// "applications" is a FILE, so stating applications/ksail fails with ENOTDIR
+	// rather than "does not exist".
+	writeFile(t, filepath.Join(root, "applications"), "not a directory\n")
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 — an unreadable root was not inspected and must not pass\n%s", code, out)
+	}
+
+	if strings.Contains(out, "NOT inspected") && !strings.Contains(out, "::error::") {
+		t.Errorf("an unreadable root was reported as merely uninspected:\n%s", out)
+	}
+}
+
+// ...and the control: a genuinely ABSENT undeclared root is still the ordinary
+// case, reported as uninspected rather than escalated to a failure. Most of the
+// portfolio is in this state on every run, so escalating it would make the check
+// permanently red.
+func TestAnAbsentUndeclaredRootIsStillJustUninspected(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// applications/ksail simply absent.
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 — an absent submodule is the normal state\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "applications/ksail") {
+		t.Errorf("expected the absent root to be named as uninspected, got:\n%s", out)
+	}
+}
+
 // --- saying what the green result actually covers --------------------------
 
 // Most mapped repositories are not checked out when this runs, and an

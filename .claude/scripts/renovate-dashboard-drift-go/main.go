@@ -379,7 +379,15 @@ func findConfigs(root, rel string) ([]string, error) {
 
 	info, err := os.Stat(dir)
 	if err != nil {
-		return nil, fmt.Errorf("%w (%v)", errRootAbsent, err)
+		// Only a genuinely missing directory is the ordinary "not checked out"
+		// state. A permission error, an I/O error, or a path whose parent is not
+		// a directory means the root is there and could not be read — reporting
+		// that as merely uninspected would let a real failure pass.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w (%v)", errRootAbsent, err)
+		}
+
+		return nil, fmt.Errorf("could not be inspected (%v)", err)
 	}
 
 	if !info.IsDir() {

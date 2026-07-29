@@ -458,8 +458,24 @@ jobs:
                       libraries/kyverno-policies \
                       libraries/provider-upjet-unifi \
                       templates/platform-template; do
-            name="${path##*/}"
-            git submodule set-url "$path" "https://github.com/devantler-tech/${name}.git"
+            # Derive the HTTPS URL from the recorded SSH one rather than
+            # rebuilding it as devantler-tech/<last path segment>. A repository
+            # whose GitHub name differs from its directory would silently get the
+            # wrong remote — this file already carries one such mapping, where
+            # github/devantler-tech/github-actions/actions is devantler-tech/actions.
+            name="$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' \
+                    | awk -v p="$path" '$2 == p { print substr($1, 11, length($1) - 15) }')"
+            if [ -z "$name" ]; then
+              echo "::error::no .gitmodules entry for $path" >&2
+              exit 1
+            fi
+            url="$(git config -f .gitmodules --get "submodule.${name}.url")"
+            https_url="$(printf '%s' "$url" | sed -e 's#^git@github\.com:#https://github.com/#')"
+            case "$https_url" in
+              https://github.com/*) ;;
+              *) echo "::error::unexpected submodule URL for $path" >&2; exit 1 ;;
+            esac
+            git submodule set-url "$path" "$https_url"
             git submodule update --init --depth 1 "$path"
           done
       - name: Check Renovate configs for Dependency Dashboard drift
