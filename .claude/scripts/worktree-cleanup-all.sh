@@ -109,7 +109,11 @@ sweep() { # <repo_path>
   # dry-run writes no manifest, so its per-worktree REAP/KEEP lines are the ONLY record
   # of what an apply run would touch — never truncate them. apply has the manifest, so
   # a summary is enough there.
-  if [ "$MODE" = "dry-run" ]; then
+  # On FAILURE always print the full output. The summary is the last few lines, but an
+  # abort's reason is on stderr somewhere above it — truncating to `tail -3` hid exactly
+  # the message needed to diagnose a failing scheduled run (observed: the log showed the
+  # repo heading and then nothing but a non-zero exit).
+  if [ "$MODE" = "dry-run" ] || [ "$rc" -ne 0 ]; then
     printf '%s\n' "$out"
   else
     printf '%s\n' "$out" | tail -3
