@@ -222,6 +222,69 @@ emit_injection_hits() {
       done
 }
 
+# Emit one safe class row per occurrence without suppressing anything from the
+# fail-closed raw total. Runtime-supplied developer context is structurally
+# distinguishable from user/tool content, but a compacted record can contain
+# both. Classify the matched STRING path, never the whole record. If parsing or
+# reconciliation is uncertain, retain every raw occurrence as other content.
+emit_injection_classes() {
+  local f="$1" session line raw raw_count runtime_count other_count i
+  session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
+  [ -n "$session" ] || session=unknown
+
+  grep -niE "$INJ_PHRASE_RE" "$f" 2>/dev/null \
+    | while IFS=: read -r line raw; do
+        case "$line" in ''|*[!0-9]*) continue ;; esac
+        line=$(printf '%s' "$line" | cut -c1-12)
+        raw_count=$(printf '%s' "$raw" | grep -hoiE "$INJ_PHRASE_RE" | wc -l | tr -d ' ')
+        runtime_count=$(printf '%s' "$raw" | jq -r --arg re "$INJ_PHRASE_RE" '
+          def match_count:
+            if type == "string" then [scan($re; "i")] | length else 0 end;
+          if
+            (.type == "response_item"
+             and .payload.type == "message"
+             and .payload.role == "developer")
+          then
+            ([.payload.content[]?.text | match_count] | add // 0)
+          elif
+            (.type == "turn_context")
+          then
+            (.payload.collaboration_mode.settings.developer_instructions | match_count)
+          elif
+            (.type == "event_msg" and .payload.type == "thread_settings_applied")
+          then
+            (.payload.thread_settings.collaboration_mode.settings.developer_instructions | match_count)
+          elif
+            (.type == "compacted")
+          then
+            ([
+              .payload.replacement_history[]?
+              | select(.type == "message" and .role == "developer")
+              | .content[]?.text
+              | match_count
+            ] | add // 0)
+          else
+            0
+          end
+        ' 2>/dev/null || true)
+        case "$runtime_count" in
+          ''|*[!0-9]*) runtime_count=0 ;;
+          *) [ "$runtime_count" -le "$raw_count" ] || runtime_count=0 ;;
+        esac
+        other_count=$((raw_count - runtime_count))
+        i=0
+        while [ "$i" -lt "$runtime_count" ]; do
+          printf '%s\t%s\truntime-developer\n' "$session" "$line"
+          i=$((i + 1))
+        done
+        i=0
+        while [ "$i" -lt "$other_count" ]; do
+          printf '%s\t%s\tother-content\n' "$session" "$line"
+          i=$((i + 1))
+        done
+      done
+}
+
 # Locator for a credential-shaped match: session, line, record type and SHAPE.
 # Deliberately weaker than emit_injection_hits, which prints the matched phrase:
 # a phrase is evidence, a credential is the secret itself, so the value NEVER
@@ -1377,18 +1440,34 @@ if want safety; then
     # self-referential can suppress a real hit that shares it, which is why
     # PR #2364 was closed. Disclosure keeps the count fail-closed and still
     # makes the echo visible.
-    # jq-free by construction: one grep pass, line numbers via -n, so this adds
-    # no per-record parse to the default scan.
+    # Parse only records the unchanged raw detector already matched. This is
+    # necessary to classify each occurrence by its JSON path rather than by the
+    # whole record; malformed or unreconciled records stay fail-closed in the
+    # other-content bucket.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      inj_sess=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
-      [ -n "$inj_sess" ] || inj_sess=unknown
-      grep -noiE "$INJ_PHRASE_RE" "$f" 2>/dev/null \
-        | awk -F: -v s="$inj_sess" '$1 ~ /^[0-9]+$/ {print s "\t" substr($1,1,12)}'
+      emit_injection_classes "$f"
     done > "$CONCTMP"
-    inj_records=$(sort -u "$CONCTMP" | grep -c . || true)
+    inj_records=$(cut -f1,2 "$CONCTMP" | sort -u | grep -c . || true)
     inj_sessions=$(cut -f1 "$CONCTMP" | sort -u | grep -c . || true)
-    inj_top=$(sort "$CONCTMP" | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
+    inj_top=$(cut -f1,2 "$CONCTMP" | sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
+    inj_runtime_occurrences=$(awk -F '\t' '$3 == "runtime-developer" {count++} END {print count+0}' "$CONCTMP")
+    inj_runtime_records=$(awk -F '\t' '$3 == "runtime-developer" {print $1 "\t" $2}' "$CONCTMP" \
+      | sort -u | grep -c . || true)
+    inj_runtime_sessions=$(awk -F '\t' '$3 == "runtime-developer" {print $1}' "$CONCTMP" \
+      | sort -u | grep -c . || true)
+    inj_other_occurrences=$(awk -F '\t' '$3 == "other-content" {count++} END {print count+0}' "$CONCTMP")
+    inj_other_records=$(awk -F '\t' '$3 == "other-content" {print $1 "\t" $2}' "$CONCTMP" \
+      | sort -u | grep -c . || true)
+    inj_other_sessions=$(awk -F '\t' '$3 == "other-content" {print $1}' "$CONCTMP" \
+      | sort -u | grep -c . || true)
+    runtime_session_word=sessions
+    [ "$inj_runtime_sessions" -eq 1 ] && runtime_session_word=session
+    other_session_word=sessions
+    [ "$inj_other_sessions" -eq 1 ] && other_session_word=session
     echo "      across ${inj_records:-0} transcript records in ${inj_sessions:-0} sessions; largest single record: ${inj_top:-0}"
+    echo "      runtime-supplied developer context: ${inj_runtime_occurrences:-0} occurrences across ${inj_runtime_records:-0} records in ${inj_runtime_sessions:-0} $runtime_session_word"
+    echo "      other content locations: ${inj_other_occurrences:-0} occurrences across ${inj_other_records:-0} records in ${inj_other_sessions:-0} $other_session_word"
+    echo "      (class-specific records/sessions may overlap; occurrences sum to TOTAL)"
     echo "      (concentration is CONTEXT, not a verdict. A rising total with flat"
     echo "       records MAY be echo — a previous report re-counted by the NEXT run —"
     echo "       but flat record/session counts do NOT rule out a new hit: a real"
