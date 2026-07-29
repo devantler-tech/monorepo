@@ -177,9 +177,15 @@ for wt in "$WT_ROOT"/*/; do
     keep "$wt" "locked"; continue
   fi
 
-  # KEEP: too young
-  mtime=$(stat -f %m "$wt" 2>/dev/null || stat -c %Y "$wt" 2>/dev/null) || {
-    keep "$wt" "cannot stat"; continue; }
+  # KEEP: too young.
+  # Validate that mtime is NUMERIC rather than trusting stat's exit status. GNU stat
+  # reads `-f` as "filesystem status", so `stat -f %m` does not fail on Linux — it
+  # SUCCEEDS and prints a `File: ...` block, the `||` fallback never fires, and the
+  # arithmetic below then treats `File:` as a variable name (unbound under set -u).
+  # GNU form first, BSD second, each accepted only if it yields digits.
+  mtime=$(stat -c %Y "$wt" 2>/dev/null || true)
+  case "$mtime" in ''|*[!0-9]*) mtime=$(stat -f %m "$wt" 2>/dev/null || true) ;; esac
+  case "$mtime" in ''|*[!0-9]*) keep "$wt" "cannot stat"; continue ;; esac
   age_h=$(( (now - mtime) / 3600 ))
   if [ "$age_h" -lt "$MIN_AGE_HOURS" ]; then
     keep "$wt" "age ${age_h}h < ${MIN_AGE_HOURS}h"; continue

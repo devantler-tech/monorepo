@@ -215,6 +215,38 @@ t_keeps_live_cwd_in_subdir_with_regex_metachars() {
   rm -rf "$root"
 }
 
+t_age_gate_works_with_gnu_stat() {
+  # Regression: mtime resolution used `stat -f %m || stat -c %Y`. GNU stat reads -f as
+  # "filesystem status", so on Linux the first form SUCCEEDS with a `File: ...` block
+  # instead of failing, the fallback never ran, and the age arithmetic died with
+  # "File: unbound variable" — taking every gate down with it.
+  # Shims a GNU-only stat (no -f support) so the contract is provable on any host.
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  add_wt "$root" fresh pushed
+  touch "$root/repo/.claude/worktrees/fresh"
+  local shim="$root/shim"; mkdir -p "$shim"
+  cat > "$shim/stat" <<'SHIM'
+#!/usr/bin/env bash
+# GNU-flavoured stat: supports -c, and treats -f as filesystem-status (NOT a failure).
+if [ "${1:-}" = "-c" ]; then
+  case "$2" in %Y) exec /usr/bin/stat -f %m "$3" 2>/dev/null || exit 1 ;; esac
+fi
+if [ "${1:-}" = "-f" ]; then printf '  File: "%s"\n    ID: 0\n' "${3:-$2}"; exit 0; fi
+exit 1
+SHIM
+  chmod +x "$shim/stat"
+  local out; out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" dry-run 24 2>&1)
+  if printf '%s' "$out" | grep -q '^REAP  .*spent' \
+     && printf '%s' "$out" | grep -q 'KEEP .*fresh .*age .*< 24h' \
+     && ! printf '%s' "$out" | grep -qi 'unbound variable'; then
+    ok "age gate resolves mtime under GNU-style stat"
+  else
+    bad "age gate resolves mtime under GNU-style stat" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_dry_run_writes_no_manifest_and_removes_nothing() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -270,6 +302,7 @@ t_keeps_dirty
 t_ignores_tool_noise
 t_keeps_untracked_real_file
 t_keeps_young
+t_age_gate_works_with_gnu_stat
 t_keeps_live_cwd
 t_keeps_live_cwd_in_subdir_with_regex_metachars
 t_dry_run_writes_no_manifest_and_removes_nothing
