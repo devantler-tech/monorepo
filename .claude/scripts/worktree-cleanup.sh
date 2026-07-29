@@ -49,8 +49,18 @@
 # write is verified — no restore record, no removal. dry-run never touches the manifest.
 # Rows are `path -> branch -> sha -> evidence -> outcome`, where outcome is `pending`
 # (written before deleting) or `reaped` (appended only once the directory is gone).
-# A `pending` with no matching `reaped` is an ABORTED attempt, not a deletion — restore
-# and audit tooling must key on `reaped`.
+#
+# READING THE LEDGER — the rule is TOTAL, because the completion write can itself fail
+# after a successful removal (disk full, permissions changed mid-run). Outcome alone is
+# therefore not sufficient; reconcile it against the path:
+#
+#   reaped                      -> deleted
+#   pending + path EXISTS       -> aborted attempt (nothing was removed)
+#   pending + path ABSENT       -> deleted; the completion write failed
+#
+# The third case exits NON-ZERO so the failure is never silent, and the wrapper
+# propagates it. Tooling that keys solely on `reaped` would misread that case as an
+# abort and leave a real deletion unaccounted for.
 set -uo pipefail
 
 REPO_PATH=${1:-}
@@ -345,8 +355,11 @@ for wt in "$WT_ROOT"/*/; do
   if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
      || { ! is_locked_now "$wt_real" && rm -rf "$wt_real" && git -C "$TOPLEVEL" worktree prune; }; then
     # Completion row — written only now that the directory is actually gone.
+    # The directory is already gone at this point, so a failed completion write cannot
+    # be undone. Exit non-zero and say exactly how to read the resulting ledger, rather
+    # than leaving an unmatched `pending` that looks like an aborted attempt.
     record "$wt_real" "$branch" "$sha" "removed" reaped \
-      || die "removed $wt_real but could not record its completion — aborting"
+      || die "REMOVED $wt_real but could not append its 'reaped' row. The deletion DID happen: a 'pending' row whose path no longer exists means deleted, not aborted (restore ref: refs/reaped/$sha)"
     printf 'REAPED %-52s %s (%s MB)\n' "$name" "$branch" "$((sz_kb/1024))"
     reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
   else

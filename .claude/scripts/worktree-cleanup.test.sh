@@ -412,6 +412,47 @@ t_no_reaped_row_when_removal_is_aborted_after_recording() {
   rm -rf "$root"
 }
 
+t_completion_write_failure_after_removal_is_loud() {
+  # The completion record can fail AFTER the directory is gone, which would otherwise
+  # leave a real deletion looking like an aborted attempt.
+  #
+  # SCOPE — what this forces and what it does not. record() appends with a shell
+  # redirect and then VERIFIES with grep -qxF; only the verification is shimmable from
+  # outside (the append is a builtin redirect, and permission tricks cannot be timed
+  # between the pending and completion writes). So this drives the completion record to
+  # FAIL and asserts the property that matters operationally: the run exits non-zero
+  # with the directory gone, so a real deletion can never pass silently as an abort.
+  # The narrower "append physically lost" variant is covered by the documented
+  # reconciliation rule (pending + absent path == deleted), not by this test.
+  local root; root=$(make_repo)
+  add_wt "$root" gone pushed
+  local shim="$root/shim"; mkdir -p "$shim"
+  cat > "$shim/grep" <<'SHIM'
+#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in *"	reaped") exit 1 ;; esac      # tab-reaped: the completion verify only
+done
+exec /usr/bin/grep "$@"
+SHIM
+  chmod +x "$shim/grep"
+  local rc
+  PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" apply 24 >/dev/null 2>&1; rc=$?
+  local pending_rows reaped_rows
+  pending_rows=$(awk -F'\t' '$5=="pending"' "$root/manifest.tsv" 2>/dev/null | wc -l | tr -d ' ')
+  reaped_rows=$(awk -F'\t' '$5=="reaped"' "$root/manifest.tsv" 2>/dev/null | wc -l | tr -d ' ')
+  # Directory gone + a durable `pending` row + NON-ZERO exit. The pending row must be
+  # present: without it the deletion would be entirely unrecorded, which is the state
+  # the pre-delete durability rule exists to prevent.
+  if [ ! -d "$root/repo/.claude/worktrees/gone" ] && [ "$rc" -ne 0 ] \
+     && [ "${pending_rows:-0}" -eq 1 ]; then
+    ok "a failed completion record after removal exits non-zero and stays reconcilable"
+  else
+    bad "a failed completion record after removal exits non-zero and stays reconcilable" \
+        "rc=$rc dir=$([ -d "$root/repo/.claude/worktrees/gone" ] && echo present || echo GONE) pending=$pending_rows reaped=$reaped_rows"
+  fi
+  rm -rf "$root"
+}
+
 t_dry_run_writes_no_manifest_and_removes_nothing() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -477,6 +518,7 @@ t_keeps_live_cwd_in_subdir_with_regex_metachars
 t_keeps_parent_of_a_nested_worktree
 t_aborts_when_the_manifest_cannot_be_written
 t_no_reaped_row_when_removal_is_aborted_after_recording
+t_completion_write_failure_after_removal_is_loud
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode
