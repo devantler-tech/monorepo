@@ -333,6 +333,58 @@ t_reap_leaves_a_restorable_ref() {
   rm -rf "$root"
 }
 
+t_keeps_parent_of_a_nested_worktree() {
+  # `?? .claude/worktrees/` was in the ignore set, so a session worktree containing a
+  # NESTED worktree read as clean — and reaping the parent recursively deleted the
+  # nested one along with the only copy of its uncommitted work.
+  local root; root=$(make_repo)
+  # `.claude/` must be TRACKED for this to reproduce the real layout: with nothing
+  # tracked under it git collapses the report to `?? .claude/`, and the fixture then
+  # passes for the wrong reason (it did — the ablation caught it). The monorepo tracks
+  # .claude/scripts, so a nested worktree really does surface as `?? .claude/worktrees/`.
+  mkdir -p "$root/repo/.claude/scripts"
+  echo tracked > "$root/repo/.claude/scripts/keep.sh"
+  git -C "$root/repo" add .claude/scripts/keep.sh
+  git -C "$root/repo" commit -qm "track .claude"
+  git -C "$root/repo" push -q origin main
+  add_wt "$root" spent pushed
+  add_wt "$root" parent pushed
+  local p="$root/repo/.claude/worktrees/parent"
+  git -C "$root/repo" worktree add -q -b claude/nested "$p/.claude/worktrees/nested" main
+  echo "sole copy" > "$p/.claude/worktrees/nested/precious.txt"
+  touch -t 202001010000 "$p"
+  local st; st=$(git -C "$p" status --porcelain)
+  case "$st" in
+    *".claude/worktrees/"*) ;;
+    *) bad "KEEPs a worktree that contains a nested worktree" \
+           "FIXTURE did not reproduce '?? .claude/worktrees/': [$st]"; rm -rf "$root"; return ;;
+  esac
+  local out; out=$(run "$root")
+  if printf '%s' "$out" | grep -q 'KEEP .*parent .*uncommitted change' \
+     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+    ok "KEEPs a worktree that contains a nested worktree"
+  else
+    bad "KEEPs a worktree that contains a nested worktree" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_aborts_when_the_manifest_cannot_be_written() {
+  # A manifest failure is infrastructure, not a per-worktree verdict: it must abort with
+  # a nonzero status, not keep the candidate and let the run report success.
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  mkdir -p "$root/manifest.tsv"        # a DIRECTORY — the append can never succeed
+  local out rc
+  out=$("$SUT" "$root/repo" "$root/manifest.tsv" apply 24 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && [ -d "$root/repo/.claude/worktrees/spent" ]; then
+    ok "aborts nonzero when the restore manifest cannot be written"
+  else
+    bad "aborts nonzero when the restore manifest cannot be written" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
 t_dry_run_writes_no_manifest_and_removes_nothing() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -394,6 +446,8 @@ t_keeps_staged_gitlink_update
 t_reap_leaves_a_restorable_ref
 t_keeps_live_cwd
 t_keeps_live_cwd_in_subdir_with_regex_metachars
+t_keeps_parent_of_a_nested_worktree
+t_aborts_when_the_manifest_cannot_be_written
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode

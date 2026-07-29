@@ -137,12 +137,45 @@ t_rejects_bad_mode() {
   rm -rf "$root"
 }
 
+t_validates_args_even_with_no_worktree_dirs() {
+  # With no .claude/worktrees/ anywhere, every per-repo call returns before validating,
+  # so a malformed launcher invocation used to print "done" and exit 0.
+  local root; root=$(make_root)
+  rm -rf "$root/repo/.claude/worktrees" "$root/repo/nested/.claude/worktrees"
+  local out rc
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" alpply 24 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'invalid MODE'; then
+    ok "validates MODE even when no repository has a worktree dir"
+  else
+    bad "validates MODE even when no repository has a worktree dir" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
+t_aborts_on_malformed_gitmodules() {
+  # Both the --get-regexp and the --list probe fail on a malformed file, producing no
+  # output; testing only the probe's emptiness read that as "no submodules" and
+  # silently degraded the sweep to the root repo.
+  local root; root=$(make_root)
+  printf '[submodule "broken"\n\tpath =\n' > "$root/repo/.gitmodules"
+  local out rc
+  out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ABORTING'; then
+    ok "aborts on a malformed .gitmodules instead of sweeping only the root"
+  else
+    bad "aborts on a malformed .gitmodules instead of sweeping only the root" "rc=$rc $out"
+  fi
+  rm -rf "$root"
+}
+
 printf 'worktree-cleanup-all.sh contract tests\n'
 t_sweeps_root_and_submodules
 t_rewrites_session_worktree_root
 t_skips_broken_isolation
 t_aborts_and_exits_nonzero_on_sweep_failure
 t_per_repo_manifest_isolation
+t_validates_args_even_with_no_worktree_dirs
+t_aborts_on_malformed_gitmodules
 t_rejects_bad_mode
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -130,6 +130,28 @@ keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(basename "$1")" "$2"; }
 # as they were recorded at `worktree add` time, while $wt_real is pwd -P normalised; if
 # the repo was ever reached through a symlinked prefix the two differ and a plain
 # comparison would silently miss the lock.
+# is_live_now <resolved-worktree-path> — re-enumerates live CWDs instead of trusting
+# the startup snapshot. A multi-repo sweep runs for minutes, so a session can start or
+# resume inside an eligible worktree after the snapshot was taken; removing its CWD
+# out from under it is exactly what the live gate exists to prevent.
+# FAILS CLOSED: an lsof failure means "live", never "safe to delete". ~0.7s per call,
+# paid only for worktrees that have already passed every other gate.
+is_live_now() {
+  local target=$1 raw rc cwd
+  raw=$(lsof -a -d cwd -F n 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || return 0          # cannot prove it is idle
+  [ -n "$raw" ] || return 0
+  while IFS= read -r cwd; do
+    case "$cwd" in
+      n*) cwd=${cwd#n} ;;
+      *) continue ;;
+    esac
+    [ "$cwd" = "$target" ] && return 0
+    [ "${cwd#"$target"/}" != "$cwd" ] && return 0
+  done <<< "$raw"
+  return 1
+}
+
 is_locked_now() {
   local target=$1 out rc line p resolved
   out=$(git -C "$TOPLEVEL" worktree list --porcelain 2>/dev/null); rc=$?
@@ -168,7 +190,12 @@ count_real_changes() {
     case "$code" in
       '??')
         case "$path" in
-          .codex/|.agents/|.DS_Store|.claude/worktrees/) ;;
+          .codex/|.agents/|.DS_Store) ;;
+          # NOTE: `.claude/worktrees/` is deliberately NOT in this set. A session
+          # worktree can itself contain nested worktrees, and an untracked
+          # `?? .claude/worktrees/` is the parent's ONLY signal that they exist —
+          # ignoring it let a reap of the parent recursively delete a nested worktree
+          # holding the sole copy of uncommitted work.
           *) REAL_CHANGES=$((REAL_CHANGES+1)) ;;
         esac
         ;;
@@ -267,8 +294,12 @@ for wt in "$WT_ROOT"/*/; do
     continue
   fi
 
+  # A manifest write failure is an INFRASTRUCTURE failure, not a per-worktree verdict:
+  # the ledger is unwritable, so every subsequent removal would be unrecorded too.
+  # Aborting (rather than keeping and carrying on) is what stops the wrapper reporting
+  # a healthy sweep — which matters most under the disk pressure this tool exists for.
   if ! record "$wt_real" "$branch" "$sha" "reachable-from-remote;no-live-process;age=${age_h}h"; then
-    keep "$wt" "MANIFEST WRITE FAILED — refusing to remove"; continue
+    die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"
   fi
   # Containment assertion before ANY recursive delete. $wt_real is derived from a glob
   # under $WT_ROOT and should always sit beneath it, but `rm -rf` is unforgiving enough
@@ -284,6 +315,11 @@ for wt in "$WT_ROOT"/*/; do
   # which git documents as "force removal even if worktree is dirty or locked".
   if is_locked_now "$wt_real"; then
     keep "$wt" "locked (acquired since the startup snapshot)"; continue
+  fi
+
+  # Same re-check for liveness: a session may have started here since the snapshot.
+  if is_live_now "$wt_real"; then
+    keep "$wt" "live process CWD (started since the startup snapshot)"; continue
   fi
 
   # Keep the reaped commit reachable so the manifest's SHA stays restorable. Without

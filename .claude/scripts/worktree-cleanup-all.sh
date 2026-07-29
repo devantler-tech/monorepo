@@ -21,6 +21,20 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SUT="$SCRIPT_DIR/worktree-cleanup.sh"
 [ -x "$SUT" ] || { printf 'worktree-cleanup-all: missing %s\n' "$SUT" >&2; exit 2; }
 
+# Validate arguments HERE, not only in the per-repo script. If no repository happens to
+# have a .claude/worktrees/ directory, every per-repo call returns before validating,
+# and a malformed launcher invocation (`worktree-cleanup-all.sh alpply 24`) would print
+# "done" and exit 0 — a misconfigured scheduled job that looks healthy.
+case "$MODE" in
+  apply|dry-run) ;;
+  *) printf "worktree-cleanup-all: invalid MODE '%s' (expected 'apply' or 'dry-run')\n" \
+       "$MODE" >&2; exit 2 ;;
+esac
+case "$MIN_AGE_HOURS" in
+  ''|*[!0-9]*) printf "worktree-cleanup-all: min_age_hours must be a non-negative integer, got '%s'\n" \
+                 "$MIN_AGE_HOURS" >&2; exit 2 ;;
+esac
+
 # Repo root. WORKTREE_CLEANUP_ROOT lets the script run from outside the checkout
 # (the scheduled launcher does exactly that); otherwise it is two levels up from
 # .claude/scripts.
@@ -86,13 +100,24 @@ sweep "$ROOT"
 # root-only sweep while still reporting success. `cut -d' ' -f2-` (not `awk '{print $2}'`)
 # so a submodule path containing whitespace is not truncated.
 if [ -f "$ROOT/.gitmodules" ]; then
-  submodules=$(git -C "$ROOT" config -f "$ROOT/.gitmodules" \
-                 --get-regexp '^submodule\..*\.path$' 2>/dev/null | cut -d' ' -f2-)
-  rc=$?
-  if [ "$rc" -ne 0 ] && [ -n "$(git -C "$ROOT" config -f "$ROOT/.gitmodules" --list 2>/dev/null)" ]; then
+  # Two distinct statuses, checked INDEPENDENTLY. `--get-regexp` exits nonzero both when
+  # the file is unparseable AND when it simply matches nothing, so it cannot distinguish
+  # them alone. The probe below settles it — but its own status must be captured too:
+  # on a malformed .gitmodules BOTH commands fail and produce no output, and testing
+  # only the probe's emptiness would read that as "no submodules" and silently degrade
+  # the scheduled sweep to the root repository.
+  raw=$(git -C "$ROOT" config -f "$ROOT/.gitmodules" \
+          --get-regexp '^submodule\..*\.path$' 2>/dev/null); get_rc=$?
+  probe=$(git -C "$ROOT" config -f "$ROOT/.gitmodules" --list 2>/dev/null); probe_rc=$?
+  if [ "$probe_rc" -ne 0 ]; then
+    printf 'worktree-cleanup-all: ABORTING — .gitmodules is unreadable or malformed\n' >&2
+    exit 2
+  fi
+  if [ "$get_rc" -ne 0 ] && [ -n "$probe" ]; then
     printf 'worktree-cleanup-all: ABORTING — cannot read submodule paths from .gitmodules\n' >&2
     exit 2
   fi
+  submodules=$(printf '%s\n' "$raw" | cut -d' ' -f2-)
   while IFS= read -r sub; do
     [ -n "$sub" ] || continue
     sweep "$ROOT/$sub"
