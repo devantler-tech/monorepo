@@ -113,15 +113,21 @@ normalise_and_extract() {           # $1 = file; emits one `--json <fields>` per
   # continuation, ellipsis elision, wrapped immediately after the flag, and a JSON `\n` escape — and
   # each patch only revealed the next one. Chasing shapes does not converge; canonicalising does.
   #
+  # Code delimiters are NOT flattened: a backtick or quote must TERMINATE a field list, because
+  # Markdown routinely follows an inline command with comma-led prose — ``--json comments`, merged PRs
+  # …`` flattened to a space then collapsed across the comma yields `--json comments,merged`, a FALSE
+  # POSITIVE on correct content (measured). An opening quote is absorbed only where it directly follows
+  # `--json`, so the quoted argument form still parses.
+  #
   # So flatten everything that can separate `--json` from its field list into a single space, then read
   # the fields. Order matters: comma/space collapse must precede the `--json` separator rule, or an
   # elision leaves `--json,field` and the extractor misses it (measured — it read 7/8 until reordered).
   sed -E -e 's/\\[nrt]/ /g' -e 's/\\/ /g' "$1" \
     | tr '\n' ' ' \
-    | sed -E -e 's/…/,/g' -e 's/\.\.\./,/g' -e 's/[`"'"'"']/ /g' \
+    | sed -E -e 's/…/,/g' -e 's/\.\.\./,/g' \
              -e 's/[[:space:]]+/ /g' \
              -e 's/[[:space:]]*,[[:space:]]*/,/g' \
-             -e 's/--json[[:space:]]*[=,]*[[:space:]]*/--json /g' \
+             -e 's/--json[[:space:]]*[=,]*[[:space:]]*[`"'"'"']?[[:space:]]*/--json /g' \
     | grep -o -- '--json [A-Za-z,]*' | sort -u
 }
 
@@ -181,6 +187,8 @@ gh pr view <n> --json \
 `gh pr view <n> --json
 state,mergedAt,closed`
 prose: run it, then confirm the merged state separately
+boundary: see `gh pr view <n> --json comments`, merged PRs need no polling
+boundary2: `gh pr view <n> --json state`, and merged ones are done
 FIXTURE
 
 bad_caught="$(bad_lists_in "${self_test_dir}/bad.md" | grep -c . || true)"
