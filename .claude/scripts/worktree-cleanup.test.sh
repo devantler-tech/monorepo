@@ -253,6 +253,75 @@ SHIM
   rm -rf "$root"
 }
 
+t_keeps_locked() {
+  # COVERAGE NOTE: this locks BEFORE the sweep starts, so it exercises the startup
+  # snapshot. The mid-sweep re-check (is_locked_now, which stops --force overriding a
+  # lock acquired while the sweep runs) is defense-in-depth against a real race and is
+  # deliberately NOT claimed as covered here — ablating it leaves this test green.
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  add_wt "$root" held pushed
+  git -C "$root/repo" worktree lock "$root/repo/.claude/worktrees/held"
+  local out; out=$(run "$root")
+  git -C "$root/repo" worktree unlock "$root/repo/.claude/worktrees/held" 2>/dev/null
+  if printf '%s' "$out" | grep -q 'KEEP .*held .*locked' \
+     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+    ok "KEEPs a locked worktree"
+  else
+    bad "KEEPs a locked worktree" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_staged_gitlink_update() {
+  # A STAGED gitlink update lives only in this worktree's index — reaping the worktree
+  # destroys it with no commit to recover from. Only unstaged drift (` M`) is noise.
+  local root; root=$(make_repo)
+  local sub="$root/sub.git"
+  git init -q --bare "$sub"
+  local seed; seed=$(mktemp -d)
+  git init -q -b main "$seed/s"; git -C "$seed/s" config user.email t@t.t
+  git -C "$seed/s" config user.name t
+  echo one > "$seed/s/f"; git -C "$seed/s" add f; git -C "$seed/s" commit -qm one
+  local first; first=$(git -C "$seed/s" rev-parse HEAD)
+  echo two > "$seed/s/f"; git -C "$seed/s" commit -qam two
+  git -C "$seed/s" push -q "$sub" main
+  # `submodule add` pins the parent at the branch tip (two), so moving the worktree's
+  # submodule back to `first` is what actually produces a gitlink delta to stage.
+
+  git -C "$root/repo" -c protocol.file.allow=always submodule add -q "$sub" sub 2>/dev/null
+  git -C "$root/repo" commit -qm "add sub"
+  git -C "$root/repo" push -q origin main
+  add_wt "$root" staged pushed
+  git -C "$root/repo/.claude/worktrees/staged" -c protocol.file.allow=always \
+      submodule update -q --init sub 2>/dev/null
+  git -C "$root/repo/.claude/worktrees/staged/sub" checkout -q "$first"
+  git -C "$root/repo/.claude/worktrees/staged" add sub          # STAGE the gitlink
+  touch -t 202001010000 "$root/repo/.claude/worktrees/staged"
+  local st; st=$(git -C "$root/repo/.claude/worktrees/staged" status --porcelain | head -1)
+  local out; out=$(run "$root")
+  if printf '%s' "$out" | grep -q 'KEEP .*staged .*uncommitted change'; then
+    ok "KEEPs a STAGED submodule gitlink update"
+  else
+    bad "KEEPs a STAGED submodule gitlink update" "porcelain=[$st] $out"
+  fi
+  rm -rf "$root" "$seed"
+}
+
+t_reap_leaves_a_restorable_ref() {
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  local sha; sha=$(git -C "$root/repo/.claude/worktrees/spent" rev-parse HEAD)
+  run "$root" apply >/dev/null
+  if [ "$(git -C "$root/repo" rev-parse --verify --quiet "refs/reaped/$sha")" = "$sha" ]; then
+    ok "reaping leaves refs/reaped/<sha> so the manifest SHA stays restorable"
+  else
+    bad "reaping leaves refs/reaped/<sha> so the manifest SHA stays restorable" \
+        "$(git -C "$root/repo" for-each-ref refs/reaped)"
+  fi
+  rm -rf "$root"
+}
+
 t_dry_run_writes_no_manifest_and_removes_nothing() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -309,6 +378,9 @@ t_ignores_tool_noise
 t_keeps_untracked_real_file
 t_keeps_young
 t_age_gate_works_with_gnu_stat
+t_keeps_locked
+t_keeps_staged_gitlink_update
+t_reap_leaves_a_restorable_ref
 t_keeps_live_cwd
 t_keeps_live_cwd_in_subdir_with_regex_metachars
 t_dry_run_writes_no_manifest_and_removes_nothing

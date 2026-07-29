@@ -28,10 +28,17 @@
 #           (`git rev-list <head> --not --remotes`) covers both an unpushed branch and a
 #           detached HEAD left on an orphan commit — the only states where removing the
 #           directory would destroy the sole copy of real work.
-#   KEEP  - a worktree with modified TRACKED files, other than submodule gitlinks
+#   KEEP  - a worktree with modified TRACKED files, other than UNSTAGED gitlink drift
 #   KEEP  - a worktree with untracked files outside the known tool-noise set
 #   KEEP  - a worktree whose modified submodule itself has uncommitted or unpushed work
-#   ABORT - on any infrastructure failure (worktree list, lsof, manifest write)
+#   KEEP  - a worktree locked at removal time, re-checked live (never overridden by
+#           --force, and never removed by the rm -rf fallback either)
+#   ABORT - on any infrastructure failure (worktree list, lsof — including a partial
+#           enumeration that exits nonzero — or a manifest write), and the multi-repo
+#           wrapper propagates that abort instead of reporting a successful sweep
+#
+# Every reaped commit also gets a refs/reaped/<sha> ref, so the manifest's SHA stays
+# restorable even if a stale remote-tracking ref is later pruned and gc runs.
 #
 # Submodule gitlink drift (` M applications/ksail`) and stray tool dirs (`?? .codex/`)
 # are NOT authored work — they are an artifact of the submodule checkout sitting at a
@@ -79,7 +86,15 @@ fi
 # --- infrastructure: the live-process CWD set -------------------------------------
 # A failure here must ABORT, never yield an empty set: an empty set would read as
 # "no session is live" and reap every worktree currently in use.
-LIVE_CWDS=$(lsof -a -d cwd -F n 2>/dev/null | grep '^n' | sed 's/^n//' | sort -u)
+# lsof's own exit status is checked SEPARATELY from the filtering pipeline. A partial
+# enumeration (permission/scan failure) can still print plenty of CWDs while exiting
+# nonzero; treating that truncated list as complete would silently drop a live session
+# and reap it. Non-empty is NOT the same as complete.
+LIVE_RAW=$(lsof -a -d cwd -F n 2>/dev/null); lsof_rc=$?
+if [ "$lsof_rc" -ne 0 ]; then
+  die "lsof exited $lsof_rc — refusing to run on a possibly partial CWD list"
+fi
+LIVE_CWDS=$(printf '%s\n' "$LIVE_RAW" | grep '^n' | sed 's/^n//' | sort -u)
 if [ -z "$LIVE_CWDS" ]; then
   die "lsof returned no CWDs at all — refusing to run (cannot prove which worktrees are live)"
 fi
@@ -109,6 +124,16 @@ record() { # path branch sha evidence
 
 keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(basename "$1")" "$2"; }
 
+# is_locked_now <resolved-worktree-path> — re-queries git rather than consulting the
+# startup snapshot, so a lock taken DURING the sweep is still honoured.
+is_locked_now() {
+  git -C "$TOPLEVEL" worktree list --porcelain 2>/dev/null \
+    | awk -v target="$1" '
+        /^worktree /{p=substr($0,10)}
+        /^locked/{if (p==target) found=1}
+        END{exit found?0:1}'
+}
+
 # count_real_changes <worktree> <porcelain-status> -> sets $REAL_CHANGES
 # Counts porcelain entries that represent AUTHORED work. Submodule gitlink drift and
 # known tool-noise dirs are excluded — but a gitlink counts as real work the moment the
@@ -131,7 +156,11 @@ count_real_changes() {
           *) REAL_CHANGES=$((REAL_CHANGES+1)) ;;
         esac
         ;;
-      ' M'|'M '|'MM')
+      ' M')
+        # ONLY the unstaged form is drift. A STAGED gitlink update (`M ` / `MM`) is
+        # deliberate authored intent, and it lives solely in this worktree's own index —
+        # removing the worktree destroys it with no commit to recover from. Those fall
+        # through to the default branch below and count as real work.
         if [ -e "$wt/$path/.git" ]; then
           sub_status=$(git -C "$wt/$path" status --porcelain 2>/dev/null)
           sub_sha=$(git -C "$wt/$path" rev-parse HEAD 2>/dev/null)
@@ -234,8 +263,21 @@ for wt in "$WT_ROOT"/*/; do
     *) keep "$wt" "REFUSING to remove: '$wt_real' is not under '$WT_ROOT'"; continue ;;
   esac
 
+  # Re-check the lock against LIVE state, not the snapshot taken at startup. A lock
+  # acquired while this sweep was running would otherwise be overridden by --force,
+  # which git documents as "force removal even if worktree is dirty or locked".
+  if is_locked_now "$wt_real"; then
+    keep "$wt" "locked (acquired since the startup snapshot)"; continue
+  fi
+
+  # Keep the reaped commit reachable so the manifest's SHA stays restorable. Without
+  # this, a stale remote-tracking ref can make a commit look pushed, and a later
+  # fetch --prune + gc would collect the only copy — leaving a manifest entry that
+  # cannot be restored. One ref per commit; the name is the SHA, so it is idempotent.
+  git -C "$TOPLEVEL" update-ref "refs/reaped/$sha" "$sha" 2>/dev/null || true
+
   if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
-     || { rm -rf "$wt_real" && git -C "$TOPLEVEL" worktree prune; }; then
+     || { ! is_locked_now "$wt_real" && rm -rf "$wt_real" && git -C "$TOPLEVEL" worktree prune; }; then
     printf 'REAPED %-52s %s (%s MB)\n' "$name" "$branch" "$((sz_kb/1024))"
     reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
   else

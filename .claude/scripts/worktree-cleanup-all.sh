@@ -62,7 +62,17 @@ sweep() { # <repo_path>
   if [ "$path" = "$ROOT" ]; then rel="(root)"; label=monorepo
   else label=$(printf '%s' "$rel" | tr '/' '-'); fi
   printf '\n### %s\n' "$rel"
-  "$SUT" "$path" "$MANIFEST_DIR/$label-$TS.tsv" "$MODE" "$MIN_AGE_HOURS" 2>&1 | tail -3
+  # Capture the sweep's OWN status, not the pipeline's tail. An infrastructure abort
+  # (lsof, worktree list, manifest write) must not be reported as a successful sweep by
+  # the scheduled entrypoint — and must stop the run rather than continuing into the
+  # remaining repositories, since the same failure very likely applies to them too.
+  local out rc
+  out=$("$SUT" "$path" "$MANIFEST_DIR/$label-$TS.tsv" "$MODE" "$MIN_AGE_HOURS" 2>&1); rc=$?
+  printf '%s\n' "$out" | tail -3
+  if [ "$rc" -ne 0 ]; then
+    printf 'worktree-cleanup-all: ABORTING — sweep of %s failed (exit %d)\n' "$rel" "$rc" >&2
+    exit "$rc"
+  fi
 }
 
 sweep "$ROOT"
