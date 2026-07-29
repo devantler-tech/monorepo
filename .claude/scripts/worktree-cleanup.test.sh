@@ -453,6 +453,62 @@ SHIM
   rm -rf "$root"
 }
 
+t_never_touches_an_unregistered_directory() {
+  # An ordinary directory under .claude/worktrees/ is NOT a worktree. Having no .git
+  # file, every `git -C` call walks up to the main checkout, whose clean+pushed state
+  # made it look eligible — and the rm -rf fallback would delete its contents.
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  local junk="$root/repo/.claude/worktrees/not-a-worktree"
+  mkdir -p "$junk"; echo "important" > "$junk/data.txt"
+  touch -t 202001010000 "$junk"
+  local out; out=$(run "$root" apply)
+  if [ -f "$junk/data.txt" ] \
+     && printf '%s' "$out" | grep -q 'KEEP .*not-a-worktree .*not a registered worktree'; then
+    ok "never deletes an unregistered directory under the worktree root"
+  else
+    bad "never deletes an unregistered directory under the worktree root" \
+        "data=$([ -f "$junk/data.txt" ] && echo present || echo GONE) $out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_files_hidden_by_index_flags() {
+  # `git status` cannot see edits to assume-unchanged / skip-worktree files, so a
+  # worktree holding only such edits reads as clean and would be reaped.
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  add_wt "$root" hidden pushed
+  local h="$root/repo/.claude/worktrees/hidden"
+  git -C "$h" update-index --assume-unchanged file.txt
+  echo "edited invisibly" >> "$h/file.txt"
+  local out; out=$(run "$root")
+  if printf '%s' "$out" | grep -q 'KEEP .*hidden .*assume-unchanged' \
+     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+    ok "KEEPs a worktree whose edits are hidden by index flags"
+  else
+    bad "KEEPs a worktree whose edits are hidden by index flags" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_untracked_when_showUntrackedFiles_is_no() {
+  # status.showUntrackedFiles=no would otherwise hide authored untracked files entirely.
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  add_wt "$root" hushed pushed
+  git -C "$root/repo" config status.showUntrackedFiles no
+  echo "only copy" > "$root/repo/.claude/worktrees/hushed/notes.md"
+  touch -t 202001010000 "$root/repo/.claude/worktrees/hushed"
+  local out; out=$(run "$root")
+  if printf '%s' "$out" | grep -q 'KEEP .*hushed .*uncommitted change'; then
+    ok "KEEPs untracked files even under status.showUntrackedFiles=no"
+  else
+    bad "KEEPs untracked files even under status.showUntrackedFiles=no" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_dry_run_writes_no_manifest_and_removes_nothing() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -519,6 +575,9 @@ t_keeps_parent_of_a_nested_worktree
 t_aborts_when_the_manifest_cannot_be_written
 t_no_reaped_row_when_removal_is_aborted_after_recording
 t_completion_write_failure_after_removal_is_loud
+t_never_touches_an_unregistered_directory
+t_keeps_files_hidden_by_index_flags
+t_keeps_untracked_when_showUntrackedFiles_is_no
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode

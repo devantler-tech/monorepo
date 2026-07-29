@@ -120,7 +120,17 @@ if [ -f "$ROOT/.gitmodules" ]; then
   submodules=$(printf '%s\n' "$raw" | cut -d' ' -f2-)
   while IFS= read -r sub; do
     [ -n "$sub" ] || continue
-    sweep "$ROOT/$sub"
+    # .gitmodules is repository content, and the config parser happily accepts a path
+    # like `../outside`. Concatenating that escapes ROOT, and if the resulting location
+    # is another repository with .claude/worktrees the scheduled apply run would reap
+    # worktrees outside the portfolio entirely. Resolve and require containment.
+    sub_real=$(cd "$ROOT/$sub" 2>/dev/null && pwd -P) || continue
+    case "$sub_real" in
+      "$ROOT"/?*) ;;
+      *) printf '\n### SKIP %s (escapes the portfolio root: %s)\n' "$sub" "$sub_real"
+         continue ;;
+    esac
+    sweep "$sub_real"
   done <<< "$submodules"
 fi
 

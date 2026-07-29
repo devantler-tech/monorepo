@@ -117,6 +117,14 @@ WT_LIST=$(git -C "$TOPLEVEL" worktree list --porcelain 2>/dev/null) \
   || die "cannot list worktrees for $TOPLEVEL"
 [ -n "$WT_LIST" ] || die "empty worktree list for $TOPLEVEL"
 
+# The set of paths git actually knows as worktrees, symlink-resolved. ONLY these are
+# ever candidates. Without this filter any ordinary directory placed under
+# .claude/worktrees/ enters the loop; having no .git file, every `git -C "$dir"` call
+# walks up to the main checkout, whose clean+pushed state then makes the directory look
+# eligible — and the rm -rf fallback deletes its arbitrary contents.
+REGISTERED=$(printf '%s\n' "$WT_LIST" | awk '/^worktree /{print substr($0,10)}' \
+  | while IFS= read -r p; do (cd "$p" 2>/dev/null && pwd -P); done)
+
 now=$(date +%s)
 reaped=0; kept=0; freed_kb=0
 
@@ -210,7 +218,11 @@ count_real_changes() {
     case "$code" in
       '??')
         case "$path" in
-          .codex/|.agents/|.DS_Store) ;;
+          # Both shapes must be matched: without --untracked-files=all git collapses an
+          # untracked directory to `.codex/`, and with it every file is listed
+          # individually (`.codex/x`). Matching only the collapsed form silently turned
+          # these into "real work" once the flag was added.
+          .codex/|.codex/*|.agents/|.agents/*|.DS_Store|*/.DS_Store) ;;
           # NOTE: `.claude/worktrees/` is deliberately NOT in this set. A session
           # worktree can itself contain nested worktrees, and an untracked
           # `?? .claude/worktrees/` is the parent's ONLY signal that they exist —
@@ -225,10 +237,15 @@ count_real_changes() {
         # removing the worktree destroys it with no commit to recover from. Those fall
         # through to the default branch below and count as real work.
         if [ -e "$wt/$path/.git" ]; then
-          sub_status=$(git -C "$wt/$path" status --porcelain 2>/dev/null)
+          # Capture the QUERY's status too: a failed `git status` yields an empty
+          # sub_status, which would otherwise read as "submodule is clean" and permit
+          # deleting its uncommitted files.
+          sub_status=$(git -C "$wt/$path" status --porcelain --untracked-files=all 2>/dev/null)
+          sub_status_rc=$?
           sub_sha=$(git -C "$wt/$path" rev-parse HEAD 2>/dev/null)
           sub_unpushed=$(git -C "$wt/$path" rev-list --count "$sub_sha" --not --remotes 2>/dev/null)
-          if [ -n "$sub_status" ] || [ -z "$sub_unpushed" ] || [ "$sub_unpushed" -gt 0 ]; then
+          if [ "$sub_status_rc" -ne 0 ] || [ -n "$sub_status" ] \
+             || [ -z "$sub_unpushed" ] || [ "$sub_unpushed" -gt 0 ]; then
             REAL_CHANGES=$((REAL_CHANGES+1))
           fi
         else
@@ -246,6 +263,11 @@ for wt in "$WT_ROOT"/*/; do
   wt=${wt%/}
   wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || { keep "$wt" "unreadable"; continue; }
   name=$(basename "$wt")
+
+  # KEEP: anything git does not know as a worktree. Never a deletion candidate.
+  if ! printf '%s\n' "$REGISTERED" | grep -qxF "$wt_real"; then
+    keep "$wt" "not a registered worktree"; continue
+  fi
 
   # KEEP: a live session's CWD (the worktree itself, or any directory inside it).
   # Both comparisons are LITERAL. An earlier version matched descendants with
@@ -299,8 +321,25 @@ for wt in "$WT_ROOT"/*/; do
 
   # KEEP: real working-tree changes. Submodule gitlinks and known tool-noise dirs are
   # filtered out; everything else counts as authored work.
-  status=$(git -C "$wt" status --porcelain 2>/dev/null) || {
+  # --untracked-files=all is EXPLICIT: a repo inheriting status.showUntrackedFiles=no
+  # reports a clean worktree while holding non-ignored untracked authored files, and
+  # apply mode would delete their only copy.
+  status=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null) || {
     keep "$wt" "cannot read status"; continue; }
+
+  # `git status` cannot see edits to files carrying the assume-unchanged or
+  # skip-worktree index bits, so a worktree holding only such edits reads as clean.
+  # Their presence alone is enough to keep it — the restore ref would preserve just the
+  # committed version. `ls-files -v` marks them lowercase (assume-unchanged) or S/s
+  # (skip-worktree).
+  idx_flags=$(git -C "$wt" ls-files -v 2>/dev/null); idx_rc=$?
+  if [ "$idx_rc" -ne 0 ]; then
+    keep "$wt" "cannot read index flags"; continue
+  fi
+  if printf '%s\n' "$idx_flags" | grep -q '^[a-z]'; then
+    keep "$wt" "assume-unchanged/skip-worktree files present (status cannot see edits)"
+    continue
+  fi
   count_real_changes "$wt" "$status"
   if [ "$REAL_CHANGES" -gt 0 ]; then
     keep "$wt" "$REAL_CHANGES uncommitted change(s)"; continue
@@ -352,8 +391,16 @@ for wt in "$WT_ROOT"/*/; do
     keep "$wt" "could not write refs/reaped/$sha — refusing to remove"; continue
   fi
 
+  # The fallback's prune is deliberately OUTSIDE the success condition: `rm -rf` can
+  # succeed while `prune` fails (git's admin dir unwritable), and folding prune into the
+  # condition sent an actually-deleted worktree down the "removal FAILED" branch — the
+  # run then exited 0 leaving a `pending` row for a path that is already gone.
+  # Deletion success is judged by the directory being absent; a failed prune is a
+  # separate, loud error.
   if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
-     || { ! is_locked_now "$wt_real" && rm -rf "$wt_real" && git -C "$TOPLEVEL" worktree prune; }; then
+     || { ! is_locked_now "$wt_real" && rm -rf "$wt_real" && [ ! -e "$wt_real" ] \
+          && { git -C "$TOPLEVEL" worktree prune 2>/dev/null \
+               || die "REMOVED $wt_real but 'git worktree prune' failed — the deletion DID happen; run 'git -C $TOPLEVEL worktree prune' to clear its admin entry (restore ref: refs/reaped/$sha)"; }; }; then
     # Completion row — written only now that the directory is actually gone.
     # The directory is already gone at this point, so a failed completion write cannot
     # be undone. Exit non-zero and say exactly how to read the resulting ledger, rather
