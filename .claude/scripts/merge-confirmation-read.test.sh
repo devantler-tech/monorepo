@@ -103,7 +103,14 @@ while IFS= read -r surface; do
     case ",${fields}," in
       *,merged,*) offenders="${offenders}  ${surface#"${repo_root}/"}: --json ${fields}"$'\n' ;;
     esac
-  done < <(printf '%s\n' "${rejoined}" | grep -o -- '--json [A-Za-z,]*' | sort -u)
+    # Normalise the separator before extracting. `gh` accepts BOTH `--json a,b` and `--json=a,b`
+    # (verified against the live API), and prose may quote the list — so `--json=state,merged`,
+    # `--json "state,merged"` and `--json='state,merged'` are all reachable prescriptions that a
+    # space-only extractor lets through. Collapse `=`, surrounding whitespace and an opening quote
+    # into the single space form first.
+  done < <(printf '%s\n' "${rejoined}" \
+    | sed -E 's/--json[[:space:]]*=?[[:space:]]*["'"'"']?/--json /g' \
+    | grep -o -- '--json [A-Za-z,]*' | sort -u)
 done <<EOF
 ${scan_surfaces}
 EOF
