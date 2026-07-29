@@ -187,8 +187,13 @@ check_remote_identity() {
   _nwo=$(github_nwo "$_url")
   if [ -n "$_nwo" ]; then
     if [ "$_nwo" != "$slug_lc" ]; then
-      echo "$SLUG: ABORT — slug '$SLUG' does not match the checkout at '$REPO_PATH', whose" >&2
-      echo "  $_kind is '$_nwo'. The keep-set would be fetched for the wrong repository." >&2
+      # Name the value actually COMPARED ($slug_lc), not just the raw argument.
+      # <slug> is a bare repo name and the owner is prepended, so an
+      # owner-qualified argument prints an identical-looking pair otherwise:
+      #   slug 'devantler-tech/x' ... whose origin is 'devantler-tech/x'
+      echo "$SLUG: ABORT — slug '$SLUG' (resolved to '$slug_lc') does not match the checkout" >&2
+      echo "  at '$REPO_PATH', whose $_kind is '$_nwo'. The keep-set would be fetched for the" >&2
+      echo "  wrong repository. <slug> is a BARE repo name — 'devantler-tech/' is prepended." >&2
       exit 2
     fi
   elif [ "$MODE" = "apply" ] && [ "${BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN:-}" != "1" ]; then
