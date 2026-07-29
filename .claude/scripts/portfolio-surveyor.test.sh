@@ -1081,4 +1081,71 @@ done <<EOF
 ${json_specs}
 EOF
 
+# --- GitHub-managed code scanning is not repository breakage (#2536) ----------
+#
+# A default-setup code-scanning run has no workflow file to fix and GitHub refuses to re-run it, so
+# ranking it at rung 0 — which preempts everything — burns a run's opening minutes on something
+# structurally unactionable that self-heals. It must still be REPORTED, because a failure persisting
+# across several scheduled ticks is a real signal.
+
+grep -Fq 'dynamic/github-code-scanning/' "${surveyor}" ||
+  fail "surveyor must classify runs whose path starts 'dynamic/github-code-scanning/' as GitHub-managed (#2536)"
+
+grep -Fq 'GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed' "${surveyor}" ||
+  fail "surveyor must define the GITHUB-MANAGED-SCAN (NO-ACTION) digest line (#2536)"
+
+grep -Fq 'a GITHUB-MANAGED-SCAN (NO-ACTION) line never makes this false' "${surveyor}" ||
+  fail "surveyor must state that a one-off GitHub-managed scan never sets nothing_on_fire: false (#2536)"
+
+# ESCALATION — the exemption covers only the FIRST failure of a streak. A scan still failing on the
+# next scheduled run is ours to repair (build, code-scanning config, or advanced setup), and must not
+# sit behind a permanent NO-ACTION line while security coverage is silently dead.
+grep -Fq 'GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE)' "${surveyor}" ||
+  fail "surveyor must escalate a GitHub-managed scan that fails on consecutive scheduled runs (#2536)"
+
+grep -Fq 'Only the **first** failure of a streak is exempt' "${surveyor}" ||
+  fail "surveyor must bound the GitHub-managed exemption to the first failure of a streak (#2536)"
+
+grep -Fq 'but a (REPEATED — ACTIONABLE) one does' "${surveyor}" ||
+  fail "surveyor must count a repeated GitHub-managed failure against nothing_on_fire (#2536)"
+
+# NEGATIVE CONTROL — the repository's own failing workflow must remain rung-0 breakage. Without this,
+# a future edit could exempt runs wholesale and every assertion above would still pass.
+#
+# Two assertions, because the digest LINE and the CLASSIFICATION are separable: an edit could keep the
+# `CI red on main` template while quietly detaching it from `nothing_on_fire`, and the line's presence
+# alone would not notice.
+grep -Fq '<repo>: CI red on main @<sha>' "${surveyor}" ||
+  fail "surveyor must still report a repository-owned failing workflow as CI red on main (#2536)"
+
+grep -Fq 'true only if NO CI red on main' "${surveyor}" ||
+  fail "surveyor must keep a repository-owned red on main driving nothing_on_fire: false — the GitHub-managed exemption must not detach the general rule (#2536)"
+
+# The rung-0 definition in the constitution must carry the same carve-out, or the two surfaces
+# disagree about what preempts a run.
+grep -Fq 'A failing GitHub-*managed* run is NOT breakage' "${constitution}" ||
+  fail "AGENTS.md rung-0 must state that a GitHub-managed run is not breakage (#2536)"
+
+# The constitution must carry the STREAK BOUND too. Without this, AGENTS.md could be edited to exempt
+# every repeated failure while the overlay still escalates — the two surfaces would then disagree about
+# whether dead security scanning is breakage, and only the overlay assertion above would notice.
+grep -Fq 'Only the first failure of a streak' "${constitution}" ||
+  fail "AGENTS.md must bound the GitHub-managed exemption to the first failure of a streak (#2536)"
+
+# The streak walk must use the same red set and the same branch filter as the red-set query, or it
+# misclassifies timeout streaks and lets pull-request scans pollute the history.
+grep -Fq 'Red means `failure` OR `timed_out`' "${surveyor}" ||
+  fail "surveyor's streak walk must treat timed_out as red, matching the red set (#2536)"
+
+grep -Fq 'runs?branch=main&per_page=100' "${surveyor}" ||
+  fail "surveyor's streak walk must filter to main, or a PR-triggered managed run pollutes it (#2536)"
+
+# The exemption must key on the run PATH, not on `event: dynamic`, or it would exempt every future
+# GitHub-managed run type — including actionable ones. `dynamic` stays a main-branch event.
+grep -Fq 'never on `event: dynamic` alone' "${surveyor}" ||
+  fail "surveyor must key the GitHub-managed exemption on the run path, not the dynamic event (#2536)"
+
+grep -Fq '`workflow_dispatch`, `dynamic`' "${surveyor}" ||
+  fail "surveyor must keep 'dynamic' in the main-branch event list — the exemption is by path (#2536)"
+
 echo "portfolio surveyor contract: all assertions passed"

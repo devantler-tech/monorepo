@@ -420,6 +420,69 @@ public and private — no per-repo loop needed to enumerate):
      and its `push`/`workflow_dispatch` runs then pass both filters above while failing for reasons
      that are not main's health.
 
+   **Split GitHub-MANAGED runs out of that red set before reporting it.** A run whose `path` begins
+   with `dynamic/github-code-scanning/` (default-setup code scanning; `event: dynamic`, no workflow
+   file in the repository) is **not** repository breakage and never counts toward `nothing_on_fire`.
+   There is nothing to root-cause-fix — no workflow file exists — and GitHub refuses to re-run one
+   outright (`POST .../rerun-failed-jobs` → `403 This workflow run cannot be retried`), so it is
+   structurally unactionable and self-heals on the next scheduled tick. Ranking it at rung 0, which
+   preempts everything, has twice cost a run its opening minutes.
+
+   Report it on its own line instead, so it stays visible without being ranked as a fire:
+
+   ```text
+   GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>
+   ```
+
+   Keep reporting it every run rather than suppressing it: a *persistent* failure across several
+   scheduled ticks is a real signal, and only a line that keeps appearing can show that.
+
+   **A REPEATED failure is actionable, and the exemption must not swallow it.** The single-occurrence
+   case is unactionable because it is GitHub's to fix and it clears itself. A scan that fails again on
+   the *next* scheduled run is a different condition: default setup fails repeatedly when the
+   repository cannot be built or analyzed, or when its language/config no longer suits default setup —
+   all of which are ours to repair, by fixing the build, adjusting the code-scanning configuration, or
+   moving that repository to advanced setup. Left as a permanent `NO-ACTION` line, the portfolio would
+   keep reporting `nothing_on_fire: true` while its security coverage is silently dead — the exact
+   failure the *liveness-first* rule exists to prevent elsewhere in this survey.
+
+   So walk that workflow's own run history on `main`:
+
+   ```sh
+   gh api --paginate \
+     "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100"
+   ```
+
+   Walk it newest-first and count consecutive **red** runs, stopping at the first run that is not red.
+   Three details are each load-bearing:
+   - **`branch=main`** — default setup also runs on pull requests, and an unfiltered history mixes
+     those in. A failed PR scan would then turn a *first* main failure into `REPEATED`, and an
+     intervening successful PR scan would hide two genuinely consecutive main failures. This is the
+     same filter, for the same reason, as the `branch=main` on the red-set query above.
+   - **Red means `failure` OR `timed_out`** — exactly the red set defined above, never `failure`
+     alone. A scan that times out repeatedly is as broken as one that fails, and a mixed
+     `failure`/`timed_out` streak is still a streak.
+   - **`--paginate`, not a two-run peek** — the digest names the streak's start date and length, so it
+     must walk back to the first non-red run to know them. Reading only the newest two would report a
+     start date that is merely the previous run, and a count that is almost always `2`, understating
+     how long coverage has been dead.
+
+   Two or more consecutive red runs escalate: it counts toward `nothing_on_fire` and is reported as
+   actionable, naming the judged sha (as every red claim in this survey must) and the streak's real
+   age:
+
+   ```text
+   GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)
+   ```
+
+   Only the **first** failure of a streak is exempt. That keeps the fix from becoming a way to ignore
+   broken security scanning indefinitely, which is a worse outcome than the false rung-0 it replaced.
+
+   ⚠️ **Match on the `path` prefix, never on `event: dynamic` alone.** `dynamic` stays in the
+   main-branch event list above because it is how GitHub-managed runs legitimately reach `main`, so
+   keying the exemption on the event would exempt future managed run types wholesale — including any
+   that *are* actionable. The `path` is what identifies default-setup code scanning specifically.
+
    Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
 5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
@@ -546,7 +609,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken
+nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken; a GITHUB-MANAGED-SCAN (NO-ACTION) line never makes this false, but a (REPEATED — ACTIONABLE) one does
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
@@ -558,6 +621,8 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
+- GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `path` starts `dynamic/github-code-scanning/`: no workflow file to fix, not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only
+- GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out) runs on main: ours to repair (build, code-scanning config, or move to advanced setup) — DOES count against nothing_on_fire
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
