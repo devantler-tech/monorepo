@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# Reap abandoned per-session worktrees under <repo>/.claude/worktrees/.
+#
+# Usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours]
+#   dry-run (default) — report what WOULD be reaped; write NOTHING to the manifest
+#   apply             — record each removal to the manifest, then remove
+#   Any other MODE value exits non-zero: a typo must not silently mean "delete", and
+#   must not pollute the restore ledger (same contract as branch-cleanup.sh).
+#   min_age_hours (default 24) — never reap a worktree younger than this.
+#
+# WHY THIS EXISTS
+#   The harness creates a per-session worktree at <repo>/.claude/worktrees/<slug> and
+#   nothing ever removes it. The owning session structurally CANNOT remove it — that
+#   directory is the session's own working directory, and sessions frequently end
+#   abruptly (crash, timeout, closed window) with no teardown. So cleanup must come
+#   from OUTSIDE the session. Left unswept the directories accumulate without bound
+#   until the disk fills and new sessions cannot start at all.
+#   It also silently disables branch-cleanup.sh: a branch checked out by a worktree is
+#   permanently in that script's KEEP set, so every leaked worktree pins its branch too.
+#
+# SAFETY CONTRACT (fail-closed — every ambiguity resolves to KEEP, every
+# infrastructure failure ABORTS before anything is removed):
+#   KEEP  - the main worktree, and anything outside <repo>/.claude/worktrees/
+#   KEEP  - a worktree that is the CWD of a LIVE process (a running session)
+#   KEEP  - a worktree younger than min_age_hours
+#   KEEP  - a LOCKED worktree (git locks mean "in use"; we never override)
+#   KEEP  - ANY worktree holding commits not reachable from a remote ref. This one test
+#           (`git rev-list <head> --not --remotes`) covers both an unpushed branch and a
+#           detached HEAD left on an orphan commit — the only states where removing the
+#           directory would destroy the sole copy of real work.
+#   KEEP  - a worktree with modified TRACKED files, other than submodule gitlinks
+#   KEEP  - a worktree with untracked files outside the known tool-noise set
+#   KEEP  - a worktree whose modified submodule itself has uncommitted or unpushed work
+#   ABORT - on any infrastructure failure (worktree list, lsof, manifest write)
+#
+# Submodule gitlink drift (` M applications/ksail`) and stray tool dirs (`?? .codex/`)
+# are NOT authored work — they are an artifact of the submodule checkout sitting at a
+# different, already-committed commit. They are treated as noise ONLY after the
+# submodule itself is confirmed clean and fully pushed.
+#
+# In apply mode every removal is recorded (path -> branch -> sha -> evidence) to the
+# manifest BEFORE the removal, and the write is verified — no restore record, no
+# removal. dry-run never touches the manifest.
+set -uo pipefail
+
+REPO_PATH=${1:-}
+MANIFEST=${2:-}
+MODE=${3:-dry-run}
+MIN_AGE_HOURS=${4:-24}
+
+die() { printf 'worktree-cleanup: %s\n' "$1" >&2; exit 2; }
+
+[ -n "$REPO_PATH" ] || die "usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours]"
+[ -n "$MANIFEST" ] || die "usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours]"
+[ -d "$REPO_PATH" ] || die "repo_path is not a directory: $REPO_PATH"
+
+case "$MODE" in
+  apply|dry-run) ;;
+  *) die "invalid MODE '$MODE' (expected 'apply' or 'dry-run')" ;;
+esac
+
+case "$MIN_AGE_HOURS" in
+  ''|*[!0-9]*) die "min_age_hours must be a non-negative integer, got '$MIN_AGE_HOURS'" ;;
+esac
+
+TOPLEVEL=$(git -C "$REPO_PATH" rev-parse --show-toplevel 2>/dev/null) \
+  || die "not a git repository: $REPO_PATH"
+# Resolve through symlinks so the lsof CWD comparison below is apples-to-apples
+# (/tmp is a symlink to /private/tmp on macOS; an unresolved prefix would silently
+# match nothing and every worktree would read as "no live process").
+TOPLEVEL=$(cd "$TOPLEVEL" && pwd -P) || die "cannot resolve toplevel"
+WT_ROOT="$TOPLEVEL/.claude/worktrees"
+
+if [ ! -d "$WT_ROOT" ]; then
+  printf 'worktree-cleanup: no worktree root at %s — nothing to do\n' "$WT_ROOT"
+  exit 0
+fi
+
+# --- infrastructure: the live-process CWD set -------------------------------------
+# A failure here must ABORT, never yield an empty set: an empty set would read as
+# "no session is live" and reap every worktree currently in use.
+LIVE_CWDS=$(lsof -a -d cwd -F n 2>/dev/null | grep '^n' | sed 's/^n//' | sort -u)
+if [ -z "$LIVE_CWDS" ]; then
+  die "lsof returned no CWDs at all — refusing to run (cannot prove which worktrees are live)"
+fi
+
+# --- infrastructure: the registered-worktree list ----------------------------------
+WT_LIST=$(git -C "$TOPLEVEL" worktree list --porcelain 2>/dev/null) \
+  || die "cannot list worktrees for $TOPLEVEL"
+[ -n "$WT_LIST" ] || die "empty worktree list for $TOPLEVEL"
+
+# Locked worktrees are in use by definition; never override a lock.
+LOCKED=$(printf '%s\n' "$WT_LIST" | awk '
+  /^worktree /{p=substr($0,10)} /^locked/{print p}')
+
+now=$(date +%s)
+reaped=0; kept=0; freed_kb=0
+
+record() { # path branch sha evidence
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$MANIFEST" || return 1
+  grep -qF "$1" "$MANIFEST" || return 1   # verify the write landed
+  return 0
+}
+
+keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(basename "$1")" "$2"; }
+
+# count_real_changes <worktree> <porcelain-status> -> sets $REAL_CHANGES
+# Counts porcelain entries that represent AUTHORED work. Submodule gitlink drift and
+# known tool-noise dirs are excluded — but a gitlink counts as real work the moment the
+# submodule itself is dirty or holds unpushed commits (fail-closed on any doubt).
+#
+# NOTE: this is a top-level function on purpose. macOS ships bash 3.2, which cannot
+# parse a `case` inside a $( ) command substitution ("syntax error near `;;'"), so this
+# logic must NOT be inlined into a command substitution.
+count_real_changes() {
+  local wt=$1 status=$2 line code path sub_status sub_sha sub_unpushed
+  REAL_CHANGES=0
+  [ -n "$status" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    code=${line:0:2}; path=${line:3}
+    case "$code" in
+      '??')
+        case "$path" in
+          .codex/|.agents/|.DS_Store|.claude/worktrees/) ;;
+          *) REAL_CHANGES=$((REAL_CHANGES+1)) ;;
+        esac
+        ;;
+      ' M'|'M '|'MM')
+        if [ -e "$wt/$path/.git" ]; then
+          sub_status=$(git -C "$wt/$path" status --porcelain 2>/dev/null)
+          sub_sha=$(git -C "$wt/$path" rev-parse HEAD 2>/dev/null)
+          sub_unpushed=$(git -C "$wt/$path" rev-list --count "$sub_sha" --not --remotes 2>/dev/null)
+          if [ -n "$sub_status" ] || [ -z "$sub_unpushed" ] || [ "$sub_unpushed" -gt 0 ]; then
+            REAL_CHANGES=$((REAL_CHANGES+1))
+          fi
+        else
+          REAL_CHANGES=$((REAL_CHANGES+1))
+        fi
+        ;;
+      *) REAL_CHANGES=$((REAL_CHANGES+1)) ;;
+    esac
+  done <<< "$status"
+  return 0
+}
+
+for wt in "$WT_ROOT"/*/; do
+  [ -d "$wt" ] || continue
+  wt=${wt%/}
+  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || { keep "$wt" "unreadable"; continue; }
+  name=$(basename "$wt")
+
+  # KEEP: a live session's CWD (exact dir, or any descendant of it)
+  if printf '%s\n' "$LIVE_CWDS" | grep -qxF "$wt_real" \
+     || printf '%s\n' "$LIVE_CWDS" | grep -q "^$wt_real/"; then
+    keep "$wt" "live process CWD"; continue
+  fi
+
+  # KEEP: locked
+  if printf '%s\n' "$LOCKED" | grep -qxF "$wt_real"; then
+    keep "$wt" "locked"; continue
+  fi
+
+  # KEEP: too young
+  mtime=$(stat -f %m "$wt" 2>/dev/null || stat -c %Y "$wt" 2>/dev/null) || {
+    keep "$wt" "cannot stat"; continue; }
+  age_h=$(( (now - mtime) / 3600 ))
+  if [ "$age_h" -lt "$MIN_AGE_HOURS" ]; then
+    keep "$wt" "age ${age_h}h < ${MIN_AGE_HOURS}h"; continue
+  fi
+
+  # KEEP: unresolvable HEAD
+  sha=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || { keep "$wt" "no HEAD"; continue; }
+  branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached)")
+
+  # KEEP: commits not reachable from any remote — the sole-copy-of-real-work test.
+  # Covers an unpushed branch and an orphan detached HEAD in one call.
+  unpushed=$(git -C "$TOPLEVEL" rev-list --count "$sha" --not --remotes 2>/dev/null)
+  if [ -z "$unpushed" ]; then
+    keep "$wt" "cannot determine push state"; continue      # fail closed
+  fi
+  if [ "$unpushed" -gt 0 ]; then
+    keep "$wt" "$unpushed unpushed commit(s) on $branch"; continue
+  fi
+
+  # KEEP: real working-tree changes. Submodule gitlinks and known tool-noise dirs are
+  # filtered out; everything else counts as authored work.
+  status=$(git -C "$wt" status --porcelain 2>/dev/null) || {
+    keep "$wt" "cannot read status"; continue; }
+  count_real_changes "$wt" "$status"
+  if [ "$REAL_CHANGES" -gt 0 ]; then
+    keep "$wt" "$REAL_CHANGES uncommitted change(s)"; continue
+  fi
+
+  # --- REAP ------------------------------------------------------------------------
+  sz_kb=$(du -sk "$wt" 2>/dev/null | cut -f1); sz_kb=${sz_kb:-0}
+  if [ "$MODE" = "dry-run" ]; then
+    printf 'REAP   %-52s %s (%s MB)\n' "$name" "$branch" "$((sz_kb/1024))"
+    reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
+    continue
+  fi
+
+  if ! record "$wt_real" "$branch" "$sha" "reachable-from-remote;no-live-process;age=${age_h}h"; then
+    keep "$wt" "MANIFEST WRITE FAILED — refusing to remove"; continue
+  fi
+  if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
+     || { rm -rf "$wt_real" && git -C "$TOPLEVEL" worktree prune; }; then
+    printf 'REAPED %-52s %s (%s MB)\n' "$name" "$branch" "$((sz_kb/1024))"
+    reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
+  else
+    keep "$wt" "removal FAILED"
+  fi
+done
+
+# Drop admin entries whose directory is already gone.
+if [ "$MODE" = "apply" ]; then
+  git -C "$TOPLEVEL" worktree prune 2>/dev/null || true
+fi
+
+printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d freed=%d MB\n' \
+  "$MODE" "$reaped" "$kept" "$((freed_kb/1024))"

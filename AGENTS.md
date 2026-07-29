@@ -2289,6 +2289,29 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
+**Worktree hygiene is SCHEDULED, not per-run — never rely on a session to remove its own worktree.**
+The harness creates a per-session worktree at `<repo>/.claude/worktrees/<slug>`, and the owning
+session **structurally cannot remove it**: that directory is the session's own working directory, and
+sessions routinely end abruptly (crash, timeout, closed window) with no teardown. So the sweep must
+come from **outside** any session. It does, via the `tech.devantler.worktree-cleanup` LaunchAgent
+(runtime-local, `~/Library/LaunchAgents/`), which runs
+[`.claude/scripts/worktree-cleanup-all.sh [apply|dry-run] [min_age_hours]`](.claude/scripts/worktree-cleanup-all.sh)
+every 6 hours and at login across the monorepo and every submodule discovered from `.gitmodules`.
+Per-repo safety lives in [`worktree-cleanup.sh`](.claude/scripts/worktree-cleanup.sh) and is
+**fail-closed**: it KEEPs any worktree that is a **live process CWD**, is **locked**, is **younger
+than `min_age_hours`**, holds **commits not reachable from any remote** (one
+`git rev-list --not --remotes` test covering both an unpushed branch and an orphan detached HEAD), or
+has **uncommitted work** — where submodule gitlink drift and `?? .codex/` / `?? .agents/` count as
+noise only once the submodule itself is proven clean and pushed. Every removal is recorded to a
+restore manifest **outside the repo** (`~/.claude/worktree-cleanup-manifests/`) before it happens, and
+any infrastructure failure aborts rather than reaping. **Do not add a per-run worktree sweep** to
+compensate; a session removing its *own* worktree is exactly the thing that cannot work.
+Measured 2026-07-29, the run that introduced this: **124 leaked monorepo worktrees, ~15.7 GB across
+`.claude` and `.codex`, disk at 99%, and new sessions failing to start** for want of 5.4 GB. Because a
+branch checked out by a worktree is permanently in `branch-cleanup.sh`'s keep-set, the same leak had
+also pinned **84 of 422** local `claude/*` branches — so leaked worktrees silently disable branch
+cleanup too, and this sweep is what unblocks it.
+
 **End-of-tick branch hygiene — reap spent branches and return to the default branch, EVERY run**
 (maintainer direction 2026-07-16: *"You never clean up old branches locally or on the remote. I expect
 you to always clean up and switch back to the default branch after a tick."*). Left unswept, every run's
