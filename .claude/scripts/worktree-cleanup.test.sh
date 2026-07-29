@@ -476,19 +476,25 @@ t_never_touches_an_unregistered_directory() {
 t_keeps_files_hidden_by_index_flags() {
   # `git status` cannot see edits to assume-unchanged / skip-worktree files, so a
   # worktree holding only such edits reads as clean and would be reaped.
+  # BOTH bits are covered: ls-files -v marks assume-unchanged lowercase and
+  # skip-worktree uppercase `S`, and a lowercase-only pattern missed the latter.
   local root; root=$(make_repo)
-  add_wt "$root" spent pushed
-  add_wt "$root" hidden pushed
-  local h="$root/repo/.claude/worktrees/hidden"
-  git -C "$h" update-index --assume-unchanged file.txt
-  echo "edited invisibly" >> "$h/file.txt"
-  local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*hidden .*assume-unchanged' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
-    ok "KEEPs a worktree whose edits are hidden by index flags"
-  else
-    bad "KEEPs a worktree whose edits are hidden by index flags" "$out"
-  fi
+  local flag pass_all=1
+  for flag in assume-unchanged skip-worktree; do
+    add_wt "$root" spent pushed
+    add_wt "$root" "hidden-$flag" pushed
+    local h="$root/repo/.claude/worktrees/hidden-$flag"
+    git -C "$h" update-index "--$flag" file.txt
+    echo "edited invisibly" >> "$h/file.txt"
+    local out; out=$(run "$root")
+    if ! printf '%s' "$out" | grep -q "KEEP .*hidden-$flag .*assume-unchanged" \
+       || ! printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+      pass_all=0
+      bad "KEEPs a worktree whose edits are hidden by index flags ($flag)" "$out"
+    fi
+    rm -rf "$root"; root=$(make_repo)
+  done
+  [ "$pass_all" -eq 1 ] && ok "KEEPs worktrees hidden by BOTH assume-unchanged and skip-worktree"
   rm -rf "$root"
 }
 

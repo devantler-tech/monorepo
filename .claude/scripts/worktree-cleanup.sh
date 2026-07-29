@@ -336,7 +336,9 @@ for wt in "$WT_ROOT"/*/; do
   if [ "$idx_rc" -ne 0 ]; then
     keep "$wt" "cannot read index flags"; continue
   fi
-  if printf '%s\n' "$idx_flags" | grep -q '^[a-z]'; then
+  # `S` (uppercase) is skip-worktree — the comment above said so while the pattern
+  # matched lowercase only, so the very case that motivated this gate slipped through.
+  if printf '%s\n' "$idx_flags" | grep -q '^[a-zS]'; then
     keep "$wt" "assume-unchanged/skip-worktree files present (status cannot see edits)"
     continue
   fi
@@ -379,6 +381,19 @@ for wt in "$WT_ROOT"/*/; do
   # Same re-check for liveness: a session may have started here since the snapshot.
   if is_live_now "$wt_real"; then
     keep "$wt" "live process CWD (started since the startup snapshot)"; continue
+  fi
+
+  # And re-check the working tree: a session may have written files between the status
+  # gate above and this point, and `--force` would delete them regardless.
+  recheck_status=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)
+  recheck_rc=$?
+  if [ "$recheck_rc" -ne 0 ]; then
+    keep "$wt" "cannot re-read status before removal"; continue
+  fi
+  count_real_changes "$wt" "$recheck_status"
+  if [ "$REAL_CHANGES" -gt 0 ]; then
+    keep "$wt" "$REAL_CHANGES uncommitted change(s) appeared since the status gate"
+    continue
   fi
 
   # Keep the reaped commit reachable so the manifest's SHA stays restorable. Without

@@ -50,8 +50,19 @@ fi
 case "$ROOT" in
   */.claude/worktrees/*) ROOT=${ROOT%%/.claude/worktrees/*} ;;
 esac
-git -C "$ROOT" rev-parse --show-toplevel >/dev/null 2>&1 \
+# Use rev-parse's OUTPUT, not just its status. It walks upward, so a root pointing at
+# some subdirectory of the checkout passes the check while ROOT stays wrong — the
+# wrapper then finds no worktree dir and no .gitmodules, prints "done" and exits 0
+# having swept nothing.
+ROOT_TOPLEVEL=$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null) \
   || { printf 'worktree-cleanup-all: not a git repository: %s\n' "$ROOT" >&2; exit 2; }
+ROOT_TOPLEVEL=$(cd "$ROOT_TOPLEVEL" && pwd -P) \
+  || { printf 'worktree-cleanup-all: cannot resolve toplevel of %s\n' "$ROOT" >&2; exit 2; }
+if [ "$ROOT_TOPLEVEL" != "$ROOT" ]; then
+  printf 'worktree-cleanup-all: %s is not a repository root (its root is %s) — using the root\n' \
+    "$ROOT" "$ROOT_TOPLEVEL" >&2
+  ROOT="$ROOT_TOPLEVEL"
+fi
 
 MANIFEST_DIR="$HOME/.claude/worktree-cleanup-manifests"
 mkdir -p "$MANIFEST_DIR" || { printf 'cannot create %s\n' "$MANIFEST_DIR" >&2; exit 2; }
@@ -84,7 +95,14 @@ sweep() { # <repo_path>
   # remaining repositories, since the same failure very likely applies to them too.
   local out rc
   out=$("$SUT" "$path" "$MANIFEST_DIR/$label-$TS.tsv" "$MODE" "$MIN_AGE_HOURS" 2>&1); rc=$?
-  printf '%s\n' "$out" | tail -3
+  # dry-run writes no manifest, so its per-worktree REAP/KEEP lines are the ONLY record
+  # of what an apply run would touch — never truncate them. apply has the manifest, so
+  # a summary is enough there.
+  if [ "$MODE" = "dry-run" ]; then
+    printf '%s\n' "$out"
+  else
+    printf '%s\n' "$out" | tail -3
+  fi
   if [ "$rc" -ne 0 ]; then
     printf 'worktree-cleanup-all: ABORTING — sweep of %s failed (exit %d)\n' "$rel" "$rc" >&2
     exit "$rc"
