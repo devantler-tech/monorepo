@@ -159,7 +159,15 @@ if [ -f "$ROOT/.gitmodules" ]; then
     # can name an ordinary nested repository inside ROOT, which is not a portfolio
     # submodule and must not be swept. Require the path to be a real gitlink (mode
     # 160000) in the parent's index.
-    if [ "$(git -C "$ROOT" ls-files --stage -- "$sub" 2>/dev/null | cut -c1-6)" != "160000" ]; then
+    # The query's status is captured separately: an unreadable or corrupt index makes the
+    # substitution empty, which would read as "not a gitlink" and silently skip a real
+    # submodule while the run still reported success.
+    stage=$(git -C "$ROOT" ls-files --stage -- "$sub" 2>/dev/null); stage_rc=$?
+    if [ "$stage_rc" -ne 0 ]; then
+      printf 'worktree-cleanup-all: ABORTING — cannot read the index to validate %s\n' "$sub" >&2
+      exit 2
+    fi
+    if [ "$(printf '%s' "$stage" | cut -c1-6)" != "160000" ]; then
       printf '\n### SKIP %s (not a gitlink in the index — not a portfolio submodule)\n' "$sub"
       continue
     fi

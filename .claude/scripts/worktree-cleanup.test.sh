@@ -555,6 +555,61 @@ t_keeps_untracked_when_showUntrackedFiles_is_no() {
   rm -rf "$root"
 }
 
+t_keeps_parent_of_nested_worktree_even_when_ignored() {
+  # The untracked-directory signal is defeated by a .gitignore covering
+  # .claude/worktrees/ — status then emits nothing at all for the nested worktree, and
+  # reaping the parent would recursively delete it. The registered-worktree list is the
+  # authoritative signal and owes nothing to ignore rules.
+  local root; root=$(make_repo)
+  printf '.claude/worktrees/\n' > "$root/repo/.gitignore"
+  git -C "$root/repo" add .gitignore
+  git -C "$root/repo" commit -qm "ignore worktrees"
+  git -C "$root/repo" push -q origin main
+  add_wt "$root" spent pushed
+  add_wt "$root" parent2 pushed
+  local p="$root/repo/.claude/worktrees/parent2"
+  git -C "$root/repo" worktree add -q -b claude/nested2 "$p/.claude/worktrees/nested2" main
+  echo "sole copy" > "$p/.claude/worktrees/nested2/precious.txt"
+  touch -t 202001010000 "$p"
+  # Prove the fixture really does hide it from status, or the test proves nothing.
+  local st; st=$(git -C "$p" status --porcelain --untracked-files=all)
+  local out; out=$(run "$root")
+  if [ -n "$st" ]; then
+    bad "KEEPs a parent whose nested worktree is hidden by .gitignore" \
+        "FIXTURE did not hide it: [$st]"
+  elif printf '%s' "$out" | grep -q 'KEEP .*parent2 .*contains a registered worktree'; then
+    ok "KEEPs a parent whose nested worktree is hidden by .gitignore"
+  else
+    bad "KEEPs a parent whose nested worktree is hidden by .gitignore" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_worktree_with_orphaned_reflog_commit() {
+  # HEAD can be remotely reachable while the reflog still holds an earlier UNPUSHED
+  # commit (commit, then reset back to the pushed one). The per-worktree reflog dies
+  # with the directory, so that commit's only reference goes with it.
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  add_wt "$root" reflog pushed
+  local w="$root/repo/.claude/worktrees/reflog"
+  echo "work in progress" > "$w/wip.txt"
+  git -C "$w" add wip.txt
+  git -C "$w" commit -qm "unpushed wip"
+  local lost; lost=$(git -C "$w" rev-parse HEAD)
+  git -C "$w" reset -q --hard HEAD~1          # HEAD back to the pushed commit
+  touch -t 202001010000 "$w"
+  local out; out=$(run "$root")
+  if printf '%s' "$out" | grep -q 'KEEP .*reflog .*reflog holds commit' \
+     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+    ok "KEEPs a worktree whose reflog holds an otherwise-unreachable commit"
+  else
+    bad "KEEPs a worktree whose reflog holds an otherwise-unreachable commit" \
+        "lost=$lost $out"
+  fi
+  rm -rf "$root"
+}
+
 t_dry_run_writes_no_manifest_and_removes_nothing() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -625,6 +680,8 @@ t_never_touches_an_unregistered_directory
 t_keeps_files_hidden_by_index_flags
 t_index_flag_gate_survives_a_large_index
 t_keeps_untracked_when_showUntrackedFiles_is_no
+t_keeps_parent_of_nested_worktree_even_when_ignored
+t_keeps_worktree_with_orphaned_reflog_commit
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode

@@ -92,7 +92,15 @@ TOPLEVEL=$(cd "$TOPLEVEL" && pwd -P) || die "cannot resolve toplevel"
 WT_ROOT="$TOPLEVEL/.claude/worktrees"
 
 if [ ! -d "$WT_ROOT" ]; then
-  printf 'worktree-cleanup: no worktree root at %s — nothing to do\n' "$WT_ROOT"
+  # Still prune. A repository whose worktree directories (and .claude/worktrees itself)
+  # are already gone can retain STALE registrations, and those keep pinning their
+  # branches in branch-cleanup.sh's keep-set — the coupling this tool exists to break.
+  # Returning early here left exactly that state unrepairable.
+  if [ "$MODE" = "apply" ]; then
+    git -C "$TOPLEVEL" worktree prune 2>/dev/null \
+      || die "no worktree root at $WT_ROOT and 'git worktree prune' failed — stale registrations remain"
+  fi
+  printf 'worktree-cleanup: no worktree root at %s — pruned stale registrations only\n' "$WT_ROOT"
   exit 0
 fi
 
@@ -293,16 +301,19 @@ count_real_changes() {
           if [ "$sub_status_rc" -ne 0 ] || [ -n "$sub_status" ] \
              || [ -z "$sub_unpushed" ] || [ "$sub_unpushed" -gt 0 ]; then
             REAL_CHANGES=$((REAL_CHANGES+1))
-          else
-            # Disposable only because the commit is reachable from a remote-tracking ref
-            # — which can be STALE (upstream branch deleted or force-pushed). Preserve it
-            # in the submodule the same way the parent's HEAD is preserved, so a later
-            # fetch --prune + gc cannot collect the only copy. Failure to preserve makes
-            # it authored work again rather than silently disposable.
-            if ! git -C "$wt/$path" update-ref "refs/reaped/$sub_sha" "$sub_sha" 2>/dev/null; then
-              REAL_CHANGES=$((REAL_CHANGES+1))
-            fi
           fi
+          # ACCEPTED LIMITATION, stated rather than papered over: this treats the drift as
+          # disposable because the submodule commit is reachable from a remote-tracking
+          # ref, and that ref can be STALE (upstream deleted or force-pushed).
+          # An earlier attempt to mitigate it with a refs/reaped ref inside the submodule
+          # was WRONG twice over and is deliberately not reinstated: for a linked
+          # worktree the submodule repository lives under
+          # .git/worktrees/<id>/modules/..., which `worktree remove` deletes — so the ref
+          # died with the thing it was meant to outlive — and because this function also
+          # runs in dry-run, it made "report only" mutate the repository.
+          # There is no durable place to preserve a linked worktree's submodule object
+          # from here, so the exposure is documented instead of hidden behind an
+          # ineffective write.
         else
           REAL_CHANGES=$((REAL_CHANGES+1))
         fi
@@ -409,6 +420,29 @@ for wt in "$WT_ROOT"/*/; do
   count_real_changes "$wt" "$status"
   if [ "$REAL_CHANGES" -gt 0 ]; then
     keep "$wt" "$REAL_CHANGES uncommitted change(s)"; continue
+  fi
+
+  # KEEP: a registered worktree nested INSIDE this one. The untracked-directory signal
+  # is not enough — a repository that gitignores .claude/worktrees/ emits no status entry
+  # for it at all, and reaping the parent would recursively delete the nested worktree
+  # and any uncommitted work only it holds. The registered list is authoritative here and
+  # owes nothing to ignore rules.
+  nested=$(awk -v p="$wt_real/" 'index($0,p)==1' <<< "$REGISTERED" | head -1)
+  if [ -n "$nested" ]; then
+    keep "$wt" "contains a registered worktree ($(basename "$nested"))"; continue
+  fi
+
+  # KEEP: commits in this worktree's own HEAD reflog that exist nowhere else. HEAD may be
+  # remotely reachable while the reflog still holds an earlier unpushed commit (commit,
+  # then reset back to a pushed one). The per-worktree reflog dies with the directory, so
+  # that commit's only reference would go with it.
+  reflog_shas=$(git -C "$wt" reflog show --format=%H HEAD 2>/dev/null); reflog_rc=$?
+  if [ "$reflog_rc" -eq 0 ] && [ -n "$reflog_shas" ]; then
+    orphaned=$(git -C "$TOPLEVEL" rev-list --no-walk $reflog_shas --not --remotes 2>/dev/null | head -1)
+    if [ -n "$orphaned" ]; then
+      keep "$wt" "HEAD reflog holds commit(s) reachable from nowhere else (${orphaned:0:12})"
+      continue
+    fi
   fi
 
   # --- REAP ------------------------------------------------------------------------
