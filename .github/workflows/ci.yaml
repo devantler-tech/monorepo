@@ -109,6 +109,14 @@ jobs:
               - '.gitmodules'
               # The monorepo's own config is one of the configs under test.
               - '.github/renovate.json'
+              # A submodule bump can carry a changed Renovate config in, so the
+              # gitlinks of the roots that carry one have to re-trigger this.
+              # Without these the check would only run when the monorepo itself
+              # changed, and a drift introduced upstream would land unexamined.
+              - 'platform'
+              - 'libraries/kyverno-policies'
+              - 'libraries/provider-upjet-unifi'
+              - 'templates/platform-template'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the check it gates.
               - '.github/workflows/ci.yaml'
