@@ -122,7 +122,9 @@ normalise_and_extract() {           # $1 = file; emits one `--json <fields>` per
   # So flatten everything that can separate `--json` from its field list into a single space, then read
   # the fields. Order matters: comma/space collapse must precede the `--json` separator rule, or an
   # elision leaves `--json,field` and the extractor misses it (measured — it read 7/8 until reordered).
-  sed -E -e 's/\\[nrt]/ /g' -e 's/\\/ /g' "$1" \
+  # `\uXXXX` first: a legal JSON escape can encode the separator itself (`--json\u0020state,merged`),
+  # and the generic backslash rule alone leaves `u0020state,...`, where extraction stops at the digit.
+  sed -E -e 's/\\u[0-9A-Fa-f]{4}/ /g' -e 's/\\[nrt]/ /g' -e 's/\\/ /g' "$1" \
     | tr '\n' ' ' \
     | sed -E -e 's/…/,/g' -e 's/\.\.\./,/g' \
              -e 's/[[:space:]]+/ /g' \
@@ -172,6 +174,7 @@ continued:  gh pr view <n> --json \
 wrap-after-flag: `gh pr view <n> --json
 state,merged,body`
 json-escape: "bootstrapPrompt": "gh pr view <n> --json\nstate,merged,author"
+unicode-escape: "prompt": "gh pr view <n> --json\u0020state,merged,closed"
 FIXTURE
 
 cat > "${self_test_dir}/good.md" <<'FIXTURE'
@@ -192,8 +195,8 @@ boundary2: `gh pr view <n> --json state`, and merged ones are done
 FIXTURE
 
 bad_caught="$(bad_lists_in "${self_test_dir}/bad.md" | grep -c . || true)"
-[ "${bad_caught}" -ge 10 ] ||
-  fail "extractor self-test: caught only ${bad_caught}/10 known-bad \`--json\` forms — the negative control is not working, so its OK would be meaningless"
+[ "${bad_caught}" -ge 11 ] ||
+  fail "extractor self-test: caught only ${bad_caught}/11 known-bad \`--json\` forms — the negative control is not working, so its OK would be meaningless"
 
 good_flagged="$(bad_lists_in "${self_test_dir}/good.md" | grep -c . || true)"
 [ "${good_flagged}" -eq 0 ] ||
@@ -257,9 +260,16 @@ for wiring in \
     fail "ci.yaml is missing this job's ${what} — the guard would not gate"
 done
 # the filter must cover every surface the scan discovers, or a change to an unlisted one skips the job
-for glob in "              - '.claude/**/*.md'" "              - '.claude/**/*.json'"; do
-  grep -Fqx -- "${glob}" "${workflow}" ||
-    fail "ci.yaml filter is missing ${glob# *} though the scan covers it — a change to an unlisted surface would skip this check"
+# Both the discovery globs AND the three explicit trigger paths. Dropping `AGENTS.md` alone left the
+# control green while a merge-policy edit no longer ran the guard at all — the globs are not sufficient.
+for trigger in \
+  "              - 'AGENTS.md'" \
+  "              - '.claude/**/*.md'" \
+  "              - '.claude/**/*.json'" \
+  "              - '.claude/scripts/merge-confirmation-read.test.sh'" \
+  "              - '.github/workflows/ci.yaml'"; do
+  grep -Fqx -- "${trigger}" "${workflow}" ||
+    fail "ci.yaml filter is missing ${trigger# *} — an edit there would not run this guard"
 done
 if [ -n "${offenders}" ]; then
   printf 'merge-confirmation read: FAIL — an invalid `merged` field is prescribed:\n%s' "${offenders}" >&2
@@ -268,4 +278,4 @@ if [ -n "${offenders}" ]; then
   exit 1
 fi
 
-echo "merge-confirmation read: OK — self-test caught ${bad_caught}/10 bad forms and flagged ${good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces"
+echo "merge-confirmation read: OK — self-test caught ${bad_caught}/11 bad forms and flagged ${good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces"
