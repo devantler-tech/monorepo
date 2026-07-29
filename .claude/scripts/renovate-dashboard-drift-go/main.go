@@ -269,8 +269,18 @@ func run(root string, stdout, stderr io.Writer) int {
 		}
 
 		if len(paths) == 0 {
-			// Checked out and genuinely config-less. A repository without a
-			// Renovate config cannot enable a dashboard.
+			// "No config found" only means something if the root was actually
+			// checked out. git materialises every gitlink as an EMPTY directory
+			// when it checks out the tree, so an uninitialised submodule stats
+			// fine and yields no config — indistinguishable from a clean one,
+			// and it is the state most of the portfolio is in whenever this
+			// runs.
+			if !isCheckedOut(root, r) {
+				uninspected = append(uninspected, r)
+			}
+
+			// Otherwise: checked out and genuinely config-less. A repository
+			// without a Renovate config cannot enable a dashboard.
 			continue
 		}
 
@@ -419,6 +429,22 @@ func findConfigs(root, rel string) ([]string, error) {
 	return found, nil
 }
 
+// isCheckedOut reports whether a submodule root actually has content, as
+// opposed to being the empty directory git leaves for an uninitialised gitlink.
+//
+// The signal is the `.git` entry: git writes one (a file pointing at the real
+// gitdir) into every checked-out submodule, and an uninitialised gitlink has
+// nothing at all. Existence of the DIRECTORY proves nothing, which is the trap
+// this exists to avoid.
+//
+// Anything ambiguous resolves to "not checked out", because that direction only
+// over-reports what was skipped; the opposite direction silently claims coverage.
+func isCheckedOut(root, rel string) bool {
+	_, err := os.Stat(filepath.Join(root, rel, ".git"))
+
+	return err == nil
+}
+
 // packageJSONConfig reports whether a package.json carries a "renovate" key,
 // which Renovate reads as a config location.
 //
@@ -469,6 +495,25 @@ func resolveDashboard(root, rel string) (dashboardState, error) {
 	stripped, err := stripJSON5(raw)
 	if err != nil {
 		return dashboardDisabled, err
+	}
+
+	// Decode the top level first. `null` is valid JSON and unmarshals into the
+	// struct WITHOUT error, leaving every field zero — which would resolve to a
+	// comfortable "disabled" for a file carrying no configuration at all. So the
+	// top-level value has to be proven to be an object before it is read.
+	var top any
+	if err := json.Unmarshal(stripped, &top); err != nil {
+		return dashboardDisabled, fmt.Errorf(
+			"could not parse after removing JSON5 comments and trailing commas (%v)."+
+				" This check supports JSON plus those two JSON5 features; a config using"+
+				" more of JSON5 needs a real JSON5 parser here before it can be verified", err)
+	}
+
+	if _, isObject := top.(map[string]any); !isObject {
+		return dashboardDisabled, fmt.Errorf(
+			"parses, but its top-level value is %T rather than a JSON object, so it carries"+
+				" no Renovate configuration to resolve. Treating that as a disabled dashboard"+
+				" would pass a file Renovate cannot use", top)
 	}
 
 	var cfg renovateConfig
@@ -613,6 +658,14 @@ func stripJSON5(src []byte) ([]byte, error) {
 							" Renovate cannot parse it. Close the comment; this check will not" +
 							" verify a document it had to repair first")
 				}
+
+				// A block comment is token-SEPARATING whitespace in JSON5, so it
+				// leaves a space behind. Deleting it outright welds the tokens
+				// either side together: `f/**/alse` would become the keyword
+				// `false`, turning a document Renovate rejects into one that
+				// parses — repaired and then certified, the failure mode this
+				// whole file exists to avoid.
+				out = append(out, ' ')
 
 				i++ // land on the '/' so the loop's i++ moves past it
 

@@ -107,8 +107,20 @@ jobs:
               # The declared roots are checked against .gitmodules, so a
               # submodule added or removed changes what this must verify.
               - '.gitmodules'
-              # The monorepo's own config is one of the configs under test.
+              # The monorepo's own config is one of the configs under test — and
+              # every location the checker recognises has to be watched, not just
+              # the one in use today. A PR that ADDS a root renovate.json, or a
+              # root package.json carrying a "renovate" key, would otherwise
+              # change none of these paths, skip the job, and land the config
+              # the checker exists to adjudicate.
               - '.github/renovate.json'
+              - '.github/renovate.json5'
+              - 'renovate.json'
+              - 'renovate.json5'
+              - '.renovaterc'
+              - '.renovaterc.json'
+              - '.renovaterc.json5'
+              - 'package.json'
               # A submodule bump can carry a changed Renovate config in, so the
               # gitlinks of the roots that carry one have to re-trigger this.
               # Without these the check would only run when the monorepo itself
@@ -454,28 +466,24 @@ jobs:
       - name: Check out the submodules that carry a Renovate config
         run: |
           set -euo pipefail
-          for path in platform \
-                      libraries/kyverno-policies \
-                      libraries/provider-upjet-unifi \
-                      templates/platform-template; do
-            # Derive the HTTPS URL from the recorded SSH one rather than
-            # rebuilding it as devantler-tech/<last path segment>. A repository
-            # whose GitHub name differs from its directory would silently get the
-            # wrong remote — this file already carries one such mapping, where
-            # github/devantler-tech/github-actions/actions is devantler-tech/actions.
-            name="$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' \
-                    | awk -v p="$path" '$2 == p { print substr($1, 11, length($1) - 15) }')"
-            if [ -z "$name" ]; then
-              echo "::error::no .gitmodules entry for $path" >&2
-              exit 1
-            fi
-            url="$(git config -f .gitmodules --get "submodule.${name}.url")"
-            https_url="$(printf '%s' "$url" | sed -e 's#^git@github\.com:#https://github.com/#')"
-            case "$https_url" in
-              https://github.com/*) ;;
-              *) echo "::error::unexpected submodule URL for $path" >&2; exit 1 ;;
-            esac
-            git submodule set-url "$path" "$https_url"
+          # path:repository, both sides hardcoded HERE and nowhere else.
+          #
+          # Deliberately NOT derived from .gitmodules: that file is part of the
+          # pull request, so reading a clone target out of it would let a PR
+          # choose what this job fetches — untrusted input selecting a tool's
+          # argument, which the repository's own boundary forbids. It is also
+          # deliberately not rebuilt as devantler-tech/<last path segment>: a
+          # repository whose GitHub name differs from its directory would get the
+          # wrong remote silently, and .gitmodules already contains such a case
+          # (github/personal/profile is devantler/devantler). An explicit mapping
+          # is the only form that is both trusted and exact.
+          for entry in platform:devantler-tech/platform \
+                       libraries/kyverno-policies:devantler-tech/kyverno-policies \
+                       libraries/provider-upjet-unifi:devantler-tech/provider-upjet-unifi \
+                       templates/platform-template:devantler-tech/platform-template; do
+            path="${entry%%:*}"
+            repo="${entry##*:}"
+            git submodule set-url "$path" "https://github.com/${repo}.git"
             git submodule update --init --depth 1 "$path"
           done
       - name: Check Renovate configs for Dependency Dashboard drift

@@ -367,6 +367,7 @@ func TestIgnoresUndeclaredRepoWithoutAConfig(t *testing.T) {
 	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
 	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
 	writeFile(t, filepath.Join(root, "applications/ksail/README.md"), "no renovate config here\n")
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
 
 	if code, out := runIn(t, root); code != 0 {
 		t.Fatalf("exit = %d, want 0\n%s", code, out)
@@ -618,6 +619,98 @@ func TestAnAbsentUndeclaredRootIsStillJustUninspected(t *testing.T) {
 	}
 }
 
+// An UNINITIALISED submodule is an empty directory, not a missing one: git
+// materialises every gitlink when it checks out the tree. So os.Stat succeeds,
+// no config is found, and the root reads as "checked out and genuinely
+// config-less" — the exact opposite of the truth, and it silently empties the
+// uninspected list precisely where it matters most (CI initialises only the
+// declared roots).
+func TestAnEmptyUninitialisedSubmoduleIsUninspectedNotClean(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// The gitlink directory exists but nothing was checked out into it.
+	if err := os.MkdirAll(filepath.Join(root, "applications/ksail"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "applications/ksail") {
+		t.Errorf("an uninitialised submodule was counted as inspected-and-clean; it must be listed as uninspected:\n%s", out)
+	}
+}
+
+// ...and the control: a root that really IS checked out and really has no
+// config must NOT be reported as uninspected, or the warning becomes noise that
+// names most of the portfolio forever.
+func TestACheckedOutRootWithoutAConfigIsNotUninspected(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// A real checkout: content plus the .git pointer git writes for a submodule.
+	writeFile(t, filepath.Join(root, "applications/ksail/README.md"), "no renovate config here\n")
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s", code, out)
+	}
+
+	if strings.Contains(out, "applications/ksail") {
+		t.Errorf("a genuinely checked-out, config-less root was reported as uninspected:\n%s", out)
+	}
+}
+
+// A standalone config whose top-level value is the JSON token `null` unmarshals
+// into the struct without error and leaves every field zero, so it resolves to
+// "disabled" while carrying no Renovate configuration at all.
+func TestANullTopLevelConfigIsAnError(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "renovate.json"), `null`)
+
+	if _, err := resolveDashboard(root, "renovate.json"); err == nil {
+		t.Fatal("want an error: `null` is valid JSON but not a Renovate config object," +
+			" and unmarshalling it succeeds with every field left at its zero value")
+	}
+}
+
+// A block comment is token-separating whitespace in JSON5. Deleting it without
+// leaving a separator welds the tokens either side together, so a document
+// Renovate rejects can be repaired into one that parses — and certified.
+func TestABlockCommentSeparatesTokens(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "renovate.json"), `{"dependencyDashboard": f/**/alse}`)
+
+	if _, err := resolveDashboard(root, "renovate.json"); err == nil {
+		t.Fatal("want an error: `f/**/alse` is not the keyword false to any JSON5 parser," +
+			" so resolving it means certifying a document Renovate cannot read")
+	}
+}
+
+// ...and the control: a block comment in a position where it legitimately
+// separates tokens must still be removed and the document still resolve.
+func TestABlockCommentBetweenTokensStillResolves(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "renovate.json"), `{"dependencyDashboard"/**/: /**/false}`)
+
+	got, err := resolveDashboard(root, "renovate.json")
+	if err != nil {
+		t.Fatalf("unexpected error on a well-placed block comment: %v", err)
+	}
+
+	if got != dashboardDisabled {
+		t.Errorf("state = %v, want disabled", got)
+	}
+}
+
 // --- saying what the green result actually covers --------------------------
 
 // Most mapped repositories are not checked out when this runs, and an
@@ -630,9 +723,12 @@ func TestSuccessOutputNamesTheRepositoriesItCouldNotInspect(t *testing.T) {
 
 	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
 	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
-	// ksail is checked out and clean; wedding-app is absent, like a submodule
-	// CI cannot clone.
+	// ksail is genuinely checked out and clean — content AND the .git pointer
+	// git writes into a real submodule checkout, without which it is
+	// indistinguishable from an uninitialised gitlink. wedding-app is absent,
+	// like a submodule CI cannot clone.
 	writeFile(t, filepath.Join(root, "applications/ksail/README.md"), "no renovate config here\n")
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
 
 	code, out := runIn(t, root)
 	if code != 0 {
