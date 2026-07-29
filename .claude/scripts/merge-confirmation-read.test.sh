@@ -216,22 +216,24 @@ EOF
 # from the `status` job's `needs:`/`job-results:` would let it run and print OK while its failures no
 # longer gated the required aggregate check. Assert all five here so this test guards its own wiring.
 workflow="${repo_root}/.github/workflows/ci.yaml"
-if [ -r "${workflow}" ]; then
-  for wiring in \
-    '            merge-confirmation-read:|paths-filter entry' \
-    '      merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}|changes-job outputs declaration (its absence makes the job skip silently)' \
-    '  test-merge-confirmation-read:|job definition' \
-    '      - test-merge-confirmation-read|status job needs: entry (its absence stops the job gating the merge)' \
-    '            ${{ needs.test-merge-confirmation-read.result }}|status job job-results entry'; do
-    needle="${wiring%%|*}"; what="${wiring#*|}"
-    grep -Fqx -- "${needle}" "${workflow}" ||
-      fail "ci.yaml is missing this job's ${what} — the guard would not gate"
-  done
-  # the filter must cover every surface the scan discovers, or a change to an unlisted one skips the job
-  grep -Fq -- "              - '.claude/**/*.md'" "${workflow}" ||
-    fail "ci.yaml filter does not cover all .claude Markdown surfaces, but the scan does — a change to an unlisted surface would skip this check"
-fi
-
+# FAIL, never skip. `ci.yaml` is a fixed path; guarding these assertions with `if [ -r ... ]` meant a
+# renamed or unreadable workflow bypassed all five and still printed OK — the same vacuous-success mode
+# 4a and the scanned/lists_seen floors exist to prevent, reintroduced in the fix for it.
+[ -r "${workflow}" ] ||
+  fail "ci.yaml is missing or unreadable at ${workflow} — this job's own wiring cannot be verified, so an OK here would be vacuous"
+for wiring in \
+  '            merge-confirmation-read:|paths-filter entry' \
+  '      merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}|changes-job outputs declaration (its absence makes the job skip silently)' \
+  '  test-merge-confirmation-read:|job definition' \
+  '      - test-merge-confirmation-read|status job needs: entry (its absence stops the job gating the merge)' \
+  '            ${{ needs.test-merge-confirmation-read.result }}|status job job-results entry'; do
+  needle="${wiring%%|*}"; what="${wiring#*|}"
+  grep -Fqx -- "${needle}" "${workflow}" ||
+    fail "ci.yaml is missing this job's ${what} — the guard would not gate"
+done
+# the filter must cover every surface the scan discovers, or a change to an unlisted one skips the job
+grep -Fq -- "              - '.claude/**/*.md'" "${workflow}" ||
+  fail "ci.yaml filter does not cover all .claude Markdown surfaces, but the scan does — a change to an unlisted surface would skip this check"
 if [ -n "${offenders}" ]; then
   printf 'merge-confirmation read: FAIL — an invalid `merged` field is prescribed:\n%s' "${offenders}" >&2
   echo "  \`merged\` exists on none of gh pr view / gh pr list / gh search prs, and one unknown" >&2
