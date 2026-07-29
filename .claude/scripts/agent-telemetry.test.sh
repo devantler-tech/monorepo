@@ -1299,6 +1299,19 @@ EOF
 chmod +x "$FIX/jqbatchshim/jq"
 chmod +x "$FIX/jqbatchshim/date"
 
+INVALID_BATCH=$(CREDENTIAL_SCAN_BATCH_FILES=00 \
+  CLAUDE_PROJECTS_DIR="$FIX/credbatch" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+invalid_batch_status=$?
+if [ "$invalid_batch_status" -eq 2 ] \
+   && printf '%s' "$INVALID_BATCH" | grep -qF 'CREDENTIAL_SCAN_BATCH_FILES must be a positive integer'; then
+  ok "zero-padded zero credential batch size fails closed"
+else
+  bad "zero-padded zero credential batch size fails closed" \
+    "status=$invalid_batch_status output=$INVALID_BATCH"
+fi
+
 : > "$FIX/jq-batch-trace"
 REFERENCE=$(PATH="$FIX/jqbatchshim:$PATH" REAL_JQ="$real_jq" REAL_DATE="$real_date" \
   JQ_BATCH_TRACE="$FIX/jq-batch-trace" \

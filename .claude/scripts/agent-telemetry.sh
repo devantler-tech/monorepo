@@ -48,7 +48,9 @@ done
 case "$SINCE_DAYS" in ''|*[!0-9]*) echo "--since-days must be an integer" >&2; exit 2 ;; esac
 case "$MAX_FILES"  in ''|*[!0-9]*) echo "--max-files must be an integer"  >&2; exit 2 ;; esac
 case "$CREDENTIAL_SCAN_BATCH_FILES" in
-  ''|*[!0-9]*|0) echo "CREDENTIAL_SCAN_BATCH_FILES must be a positive integer" >&2; exit 2 ;;
+  ''|*[!0-9]*) echo "CREDENTIAL_SCAN_BATCH_FILES must be a positive integer" >&2; exit 2 ;;
+  *[1-9]*) ;;
+  *) echo "CREDENTIAL_SCAN_BATCH_FILES must be a positive integer" >&2; exit 2 ;;
 esac
 # Lowercase letters AND digits — section names include `a2a`, which a
 # letters-only class silently rejected.
