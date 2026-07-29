@@ -187,6 +187,34 @@ t_keeps_live_cwd() {
   rm -rf "$root"
 }
 
+t_keeps_live_cwd_in_subdir_with_regex_metachars() {
+  # Regression: the descendant check once used the worktree path as a grep REGEX.
+  # A name containing '[' made grep error, the check reported "no match", and a live
+  # session working in a SUBDIRECTORY was eligible for reaping. Both properties are
+  # pinned here — descendant CWD, and a name full of regex metacharacters.
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  local odd='we[ird.na*me'
+  git -C "$root/repo" worktree add -q -b "claude/odd" \
+      "$root/repo/.claude/worktrees/$odd" main 2>/dev/null
+  git -C "$root/repo" push -q origin "claude/odd"
+  mkdir -p "$root/repo/.claude/worktrees/$odd/nested/deep"
+  touch -t 202001010000 "$root/repo/.claude/worktrees/$odd"
+  ( cd "$root/repo/.claude/worktrees/$odd/nested/deep" && exec sleep 30 ) &
+  local pid=$!
+  sleep 1
+  local out; out=$(run "$root")
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  if printf '%s' "$out" | grep -qF 'live process CWD' \
+     && ! printf '%s' "$out" | grep -qF "REAP   $odd" \
+     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+    ok "KEEPs a live CWD in a SUBDIR of a regex-metachar-named worktree"
+  else
+    bad "KEEPs a live CWD in a SUBDIR of a regex-metachar-named worktree" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_dry_run_writes_no_manifest_and_removes_nothing() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -243,6 +271,7 @@ t_ignores_tool_noise
 t_keeps_untracked_real_file
 t_keeps_young
 t_keeps_live_cwd
+t_keeps_live_cwd_in_subdir_with_regex_metachars
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records
 t_rejects_bad_mode

@@ -155,9 +155,20 @@ for wt in "$WT_ROOT"/*/; do
   wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || { keep "$wt" "unreadable"; continue; }
   name=$(basename "$wt")
 
-  # KEEP: a live session's CWD (exact dir, or any descendant of it)
-  if printf '%s\n' "$LIVE_CWDS" | grep -qxF "$wt_real" \
-     || printf '%s\n' "$LIVE_CWDS" | grep -q "^$wt_real/"; then
+  # KEEP: a live session's CWD (the worktree itself, or any directory inside it).
+  # Both comparisons are LITERAL. An earlier version matched descendants with
+  # `grep "^$wt_real/"`, which treats the path as a REGEX: a worktree name containing
+  # an unbalanced '[' made grep error out, the descendant check silently reported "no
+  # match", and a live session working in a SUBDIRECTORY fell through to the reap
+  # gates — a fail-OPEN on the one signal that protects running sessions.
+  live=0
+  while IFS= read -r cwd; do
+    [ -n "$cwd" ] || continue
+    if [ "$cwd" = "$wt_real" ] || [ "${cwd#"$wt_real"/}" != "$cwd" ]; then
+      live=1; break
+    fi
+  done <<< "$LIVE_CWDS"
+  if [ "$live" -eq 1 ]; then
     keep "$wt" "live process CWD"; continue
   fi
 
