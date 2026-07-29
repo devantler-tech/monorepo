@@ -498,6 +498,43 @@ t_keeps_files_hidden_by_index_flags() {
   rm -rf "$root"
 }
 
+t_index_flag_gate_survives_a_large_index() {
+  # The gate was `printf ... | grep -q`. grep -q exits at its FIRST match, printf then
+  # takes SIGPIPE, and under `set -o pipefail` the pipeline reports failure — so the
+  # condition evaluated FALSE and the gate silently failed open. It only manifests once
+  # ls-files -v output exceeds the pipe buffer, which the small fixtures never did.
+  # This builds a large index with the flagged file sorted FIRST, so grep matches early
+  # and leaves a lot of unread output behind it.
+  local root; root=$(make_repo)
+  add_wt "$root" bigidx pushed
+  local b="$root/repo/.claude/worktrees/bigidx"
+  mkdir -p "$b/bulk"
+  ( cd "$b" && for i in $(seq 1 3000); do
+      printf 'x\n' > "bulk/padding-file-with-a-longish-name-$i.txt"
+    done )
+  # The flagged path must sort FIRST. ls-files -v emits in index (path) order, so a
+  # match on line 1 is what makes grep -q exit early and hand printf a SIGPIPE with
+  # most of the output still unread — flagging a late-sorting path (file.txt sorts
+  # after bulk/) lets grep drain the whole stream and reproduces nothing.
+  printf 'flagged\n' > "$b/000-flagged.txt"
+  git -C "$b" add -A >/dev/null 2>&1
+  git -C "$b" commit -qm "bulk" >/dev/null 2>&1
+  git -C "$b" push -q origin claude/bigidx >/dev/null 2>&1
+  git -C "$b" update-index --skip-worktree 000-flagged.txt
+  echo "invisible edit" >> "$b/000-flagged.txt"
+  touch -t 202001010000 "$b"
+  local bytes; bytes=$(git -C "$b" ls-files -v | wc -c | tr -d ' ')
+  local out; out=$(run "$root")
+  if [ "${bytes:-0}" -lt 65536 ]; then
+    bad "index-flag gate survives a large index" "FIXTURE too small: ls-files -v = ${bytes}B (<64K pipe buffer)"
+  elif printf '%s' "$out" | grep -q 'KEEP .*bigidx .*assume-unchanged'; then
+    ok "index-flag gate survives a large index (${bytes}B of ls-files output)"
+  else
+    bad "index-flag gate survives a large index" "bytes=$bytes $(printf '%s' "$out" | grep bigidx)"
+  fi
+  rm -rf "$root"
+}
+
 t_keeps_untracked_when_showUntrackedFiles_is_no() {
   # status.showUntrackedFiles=no would otherwise hide authored untracked files entirely.
   local root; root=$(make_repo)
@@ -583,6 +620,7 @@ t_no_reaped_row_when_removal_is_aborted_after_recording
 t_completion_write_failure_after_removal_is_loud
 t_never_touches_an_unregistered_directory
 t_keeps_files_hidden_by_index_flags
+t_index_flag_gate_survives_a_large_index
 t_keeps_untracked_when_showUntrackedFiles_is_no
 t_dry_run_writes_no_manifest_and_removes_nothing
 t_apply_removes_and_records

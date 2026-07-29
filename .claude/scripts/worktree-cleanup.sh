@@ -164,11 +164,14 @@ keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(basename "$1")" "$2"; }
 # out from under it is exactly what the live gate exists to prevent.
 # FAILS CLOSED: an lsof failure means "live", never "safe to delete". ~0.7s per call,
 # paid only for worktrees that have already passed every other gate.
+# Returns 0 = live, 1 = idle, 2 = COULD NOT DETERMINE. The third state matters: folding
+# it into "live" made an infrastructure failure indistinguishable from a running session,
+# so the run reported KEEP and exited 0 looking healthy while the sweep was blind.
 is_live_now() {
   local target=$1 raw rc cwd
   raw=$(lsof -a -d cwd -F n 2>/dev/null); rc=$?
-  [ "$rc" -eq 0 ] || return 0          # cannot prove it is idle
-  [ -n "$raw" ] || return 0
+  [ "$rc" -eq 0 ] || return 2
+  [ -n "$raw" ] || return 2
   while IFS= read -r cwd; do
     case "$cwd" in
       n*) cwd=${cwd#n} ;;
@@ -240,7 +243,7 @@ count_real_changes() {
           # Capture the QUERY's status too: a failed `git status` yields an empty
           # sub_status, which would otherwise read as "submodule is clean" and permit
           # deleting its uncommitted files.
-          sub_status=$(git -C "$wt/$path" status --porcelain --untracked-files=all 2>/dev/null)
+          sub_status=$(git -C "$wt/$path" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null)
           sub_status_rc=$?
           sub_sha=$(git -C "$wt/$path" rev-parse HEAD 2>/dev/null)
           sub_unpushed=$(git -C "$wt/$path" rev-list --count "$sub_sha" --not --remotes 2>/dev/null)
@@ -265,7 +268,9 @@ for wt in "$WT_ROOT"/*/; do
   name=$(basename "$wt")
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
-  if ! printf '%s\n' "$REGISTERED" | grep -qxF "$wt_real"; then
+  # here-string, NOT a pipe: grep -q exits at its first match, printf then takes SIGPIPE,
+  # and under pipefail the pipeline reports failure — inverting this very test.
+  if ! grep -qxF -- "$wt_real" <<< "$REGISTERED"; then
     keep "$wt" "not a registered worktree"; continue
   fi
 
@@ -321,10 +326,13 @@ for wt in "$WT_ROOT"/*/; do
 
   # KEEP: real working-tree changes. Submodule gitlinks and known tool-noise dirs are
   # filtered out; everything else counts as authored work.
+  # --ignore-submodules=none is EXPLICIT too: submodule.<name>.ignore=all in .gitmodules
+  # or local config makes status report a clean PARENT even when the submodule holds
+  # uncommitted changes, so the submodule-cleanliness branch below never runs.
   # --untracked-files=all is EXPLICIT: a repo inheriting status.showUntrackedFiles=no
   # reports a clean worktree while holding non-ignored untracked authored files, and
   # apply mode would delete their only copy.
-  status=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null) || {
+  status=$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null) || {
     keep "$wt" "cannot read status"; continue; }
 
   # `git status` cannot see edits to files carrying the assume-unchanged or
@@ -338,7 +346,9 @@ for wt in "$WT_ROOT"/*/; do
   fi
   # `S` (uppercase) is skip-worktree — the comment above said so while the pattern
   # matched lowercase only, so the very case that motivated this gate slipped through.
-  if printf '%s\n' "$idx_flags" | grep -q '^[a-zS]'; then
+  # here-string for the same SIGPIPE+pipefail reason — as a pipe this gate silently
+  # FAILED OPEN whenever ls-files -v output exceeded the pipe buffer.
+  if grep -q '^[a-zS]' <<< "$idx_flags"; then
     keep "$wt" "assume-unchanged/skip-worktree files present (status cannot see edits)"
     continue
   fi
@@ -388,13 +398,15 @@ for wt in "$WT_ROOT"/*/; do
   fi
 
   # Same re-check for liveness: a session may have started here since the snapshot.
-  if is_live_now "$wt_real"; then
-    keep "$wt" "live process CWD (started since the startup snapshot)"; continue
-  fi
+  is_live_now "$wt_real"; live_rc=$?
+  case "$live_rc" in
+    0) keep "$wt" "live process CWD (started since the startup snapshot)"; continue ;;
+    2) die "lsof re-check failed for $wt_real — refusing to continue on an unverifiable live set" ;;
+  esac
 
   # And re-check the working tree: a session may have written files between the status
   # gate above and this point, and `--force` would delete them regardless.
-  recheck_status=$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)
+  recheck_status=$(git -C "$wt" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null)
   recheck_rc=$?
   if [ "$recheck_rc" -ne 0 ]; then
     keep "$wt" "cannot re-read status before removal"; continue
