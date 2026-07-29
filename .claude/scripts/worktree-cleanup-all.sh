@@ -77,8 +77,15 @@ sweep() { # <repo_path>
   # Only sweep a repo whose toplevel resolves to ITSELF. A submodule with broken
   # worktree isolation resolves into the main checkout, and sweeping through that
   # alias would operate on the wrong tree (AGENTS.md, Execution model).
-  toplevel=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || return 0
-  expected=$(cd "$path" && pwd -P) || return 0
+  # These ABORT rather than `return 0`. A repository that has a .claude/worktrees/ but
+  # whose metadata cannot be read is an infrastructure failure, and silently skipping it
+  # let the scheduled wrapper print "done" and exit 0 with that repo never swept.
+  toplevel=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || {
+    printf 'worktree-cleanup-all: ABORTING — cannot resolve repository at %s\n' "$path" >&2
+    exit 2; }
+  expected=$(cd "$path" && pwd -P) || {
+    printf 'worktree-cleanup-all: ABORTING — cannot resolve physical path of %s\n' "$path" >&2
+    exit 2; }
   if [ "$toplevel" != "$expected" ]; then
     printf '\n### SKIP %s (broken isolation: toplevel=%s)\n' "$path" "$toplevel"
     return 0

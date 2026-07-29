@@ -349,8 +349,17 @@ for wt in "$WT_ROOT"/*/; do
 
   # --- REAP ------------------------------------------------------------------------
   sz_kb=$(du -sk "$wt" 2>/dev/null | cut -f1); sz_kb=${sz_kb:-0}
+  # Ignored files are NOT a KEEP reason — 70 of 80 worktrees on the reference host carry
+  # build output or caches, so keeping on them would make the sweep reclaim nothing and
+  # leave the disk-full condition this tool exists for unresolved. They are counted and
+  # surfaced instead, so what a reap discards is visible in the output and the manifest
+  # rather than silent. (min_age_hours, the live/lock re-checks, the manifest and
+  # refs/reaped are what bound the residual risk.)
+  ign=$(git -C "$wt" status --porcelain --ignored=matching --untracked-files=all 2>/dev/null \
+        | grep -c '^!!' ) || ign=0
+  ign_note=""; [ "${ign:-0}" -gt 0 ] && ign_note=" +${ign} ignored"
   if [ "$MODE" = "dry-run" ]; then
-    printf 'REAP   %-52s %s (%s MB)\n' "$name" "$branch" "$((sz_kb/1024))"
+    printf 'REAP   %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
     reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
     continue
   fi
@@ -359,7 +368,7 @@ for wt in "$WT_ROOT"/*/; do
   # the ledger is unwritable, so every subsequent removal would be unrecorded too.
   # Aborting (rather than keeping and carrying on) is what stops the wrapper reporting
   # a healthy sweep — which matters most under the disk pressure this tool exists for.
-  if ! record "$wt_real" "$branch" "$sha" "reachable-from-remote;no-live-process;age=${age_h}h" pending; then
+  if ! record "$wt_real" "$branch" "$sha" "reachable-from-remote;no-live-process;age=${age_h}h;ignored=${ign:-0}" pending; then
     die "cannot write the restore manifest ($MANIFEST) — aborting before any removal"
   fi
   # Containment assertion before ANY recursive delete. $wt_real is derived from a glob
@@ -402,6 +411,17 @@ for wt in "$WT_ROOT"/*/; do
   # cannot be restored. One ref per commit; the name is the SHA, so it is idempotent.
   # This is a PRECONDITION of removal, not best-effort: no restore ref, no deletion —
   # the same rule the manifest write already follows.
+  # HEAD is re-read immediately before it is preserved. A commit made between the
+  # reachability check and here (a concurrent `git -C` whose CWD is outside the
+  # worktree, so the liveness gate does not see it) leaves the working tree clean while
+  # $sha still names the OLD commit — preserving that and deleting the worktree would
+  # discard the new one.
+  sha_now=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || {
+    keep "$wt" "cannot re-read HEAD before removal"; continue; }
+  if [ "$sha_now" != "$sha" ]; then
+    keep "$wt" "HEAD moved during the sweep ($sha -> $sha_now)"; continue
+  fi
+
   if ! git -C "$TOPLEVEL" update-ref "refs/reaped/$sha" "$sha" 2>/dev/null; then
     keep "$wt" "could not write refs/reaped/$sha — refusing to remove"; continue
   fi
@@ -422,7 +442,7 @@ for wt in "$WT_ROOT"/*/; do
     # than leaving an unmatched `pending` that looks like an aborted attempt.
     record "$wt_real" "$branch" "$sha" "removed" reaped \
       || die "REMOVED $wt_real but could not append its 'reaped' row. The deletion DID happen: a 'pending' row whose path no longer exists means deleted, not aborted (restore ref: refs/reaped/$sha)"
-    printf 'REAPED %-52s %s (%s MB)\n' "$name" "$branch" "$((sz_kb/1024))"
+    printf 'REAPED %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
     reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
   else
     keep "$wt" "removal FAILED"
@@ -431,7 +451,11 @@ done
 
 # Drop admin entries whose directory is already gone.
 if [ "$MODE" = "apply" ]; then
-  git -C "$TOPLEVEL" worktree prune 2>/dev/null || true
+  # Not best-effort: this prune is what clears missing-worktree registrations, and
+  # branch-cleanup.sh builds its keep-set from `git worktree list`. A silently failed
+  # prune therefore leaves stale entries pinning branches that should be sweepable.
+  git -C "$TOPLEVEL" worktree prune 2>/dev/null \
+    || die "reaped $reaped worktree(s) but 'git worktree prune' failed — stale registrations remain and will pin their branches in branch-cleanup.sh"
 fi
 
 printf '\nworktree-cleanup: mode=%s reaped=%d kept=%d freed=%d MB\n' \
