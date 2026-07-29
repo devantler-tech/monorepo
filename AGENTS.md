@@ -2294,9 +2294,13 @@ a task explicitly calls for it. Leave every checkout/worktree clean when done.
 you to always clean up and switch back to the default branch after a tick."*). Left unswept, every run's
 worktree branch survives it: the first sweep found **~1,140 spent branches** (monorepo alone had **589**
 local; `.github` had **35** stale remote). **Remove your own per-run worktree FIRST, then run**
-[`.claude/scripts/branch-cleanup.sh <repo_path> <slug> <manifest> [apply|dry-run] [namespace]`](.claude/scripts/branch-cleanup.sh)
+[`.claude/scripts/branch-cleanup.sh <repo_path> <repo-name> <manifest> [apply|dry-run] [namespace]`](.claude/scripts/branch-cleanup.sh)
 for each repo touched — a branch still checked out by your own worktree sits in the keep-set, so a
 sweep run before the worktree removal silently spares the very branch the tick just spent.
+**`<repo-name>` is the BARE repository name** (`monorepo`, `platform`) — the script prepends
+`devantler-tech/` itself. It is **not** your session/worktree slug and **not** `owner/repo`; both are
+rejected, and passing the owner-qualified form is the likelier mistake because the first rejection
+names the origin.
 **Namespace:** default `claude` sweeps local + remote `claude/*`. Pass `cursor` as the fifth argument
 for a **remote-only** sweep of spent `cursor/*` (the cloud lane has no local checkout on this host;
 local instances run that pass so cursor remotes do not accumulate forever — monorepo#2298). Never pass
