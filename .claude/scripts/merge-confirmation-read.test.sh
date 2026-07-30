@@ -122,9 +122,22 @@ normalise_and_extract() {           # $1 = file; emits one `--json <fields>` per
   # So flatten everything that can separate `--json` from its field list into a single space, then read
   # the fields. Order matters: comma/space collapse must precede the `--json` separator rule, or an
   # elision leaves `--json,field` and the extractor misses it (measured — it read 7/8 until reordered).
-  # `\uXXXX` first: a legal JSON escape can encode the separator itself (`--json\u0020state,merged`),
-  # and the generic backslash rule alone leaves `u0020state,...`, where extraction stops at the digit.
-  sed -E -e 's/\\u[0-9A-Fa-f]{4}/ /g' -e 's/\\[nrt]/ /g' -e 's/\\/ /g' "$1" \
+  # A JSON surface is DECODED with jq, never pattern-matched. Erasing `\uXXXX` is the wrong operation:
+  # `\u006d` IS the letter `m`, so `--json state,\u006derged` decodes to `state,merged` and erasing the
+  # escape hides exactly the field being looked for. Any escape form is handled correctly by decoding and
+  # by nothing else, so `jq -r '.. | strings'` emits every decoded string value and the text pipeline runs
+  # over those. Fails closed when jq cannot parse the file, rather than silently scanning it raw.
+  local src="$1"
+  case "$1" in
+    *.json)
+      src="$(mktemp)"
+      # NOTE: no `fail` here — this function runs inside command substitution, so an `exit` would only
+      # leave the subshell and the script would carry on with an empty result (verified: a malformed
+      # JSON surface produced exit 0). The main-shell preflight below is what fails closed.
+      jq -r '.. | strings' "$1" > "${src}" 2>/dev/null || : > "${src}"
+      ;;
+  esac
+  sed -E -e 's/\\[nrt]/ /g' -e 's/\\/ /g' "${src}" \
     | tr '\n' ' ' \
     | sed -E -e 's/…/,/g' -e 's/\.\.\./,/g' \
              -e 's/[[:space:]]+/ /g' \
@@ -174,7 +187,6 @@ continued:  gh pr view <n> --json \
 wrap-after-flag: `gh pr view <n> --json
 state,merged,body`
 json-escape: "bootstrapPrompt": "gh pr view <n> --json\nstate,merged,author"
-unicode-escape: "prompt": "gh pr view <n> --json\u0020state,merged,closed"
 FIXTURE
 
 cat > "${self_test_dir}/good.md" <<'FIXTURE'
@@ -194,9 +206,34 @@ boundary: see `gh pr view <n> --json comments`, merged PRs need no polling
 boundary2: `gh pr view <n> --json state`, and merged ones are done
 FIXTURE
 
+# JSON surfaces are decoded, so the escape forms that matter live in a JSON fixture — `\u0020` as the
+# separator and `\u006d` as the letter `m` inside the field name itself. In Markdown these are literal
+# text and not a threat, which is why they are not in bad.md.
+cat > "${self_test_dir}/bad.json" <<'FIXTURE'
+{"prompts":[
+  "gh pr view <n> --json\u0020state,merged,closed",
+  "gh pr view <n> --json state,\u006derged,mergedAt"
+]}
+FIXTURE
+
+cat > "${self_test_dir}/good.json" <<'FIXTURE'
+{"prompts":[
+  "gh pr view <n> --json state,mergedAt,mergeCommit",
+  "gh pr view <n> --json\u0020state,mergedAt"
+]}
+FIXTURE
+
+json_bad_caught="$(bad_lists_in "${self_test_dir}/bad.json" | grep -c . || true)"
+[ "${json_bad_caught}" -ge 2 ] ||
+  fail "extractor self-test: caught only ${json_bad_caught}/2 escaped JSON forms — JSON decoding is not working, so a \\uXXXX-escaped field would pass"
+
+json_good_flagged="$(bad_lists_in "${self_test_dir}/good.json" | grep -c . || true)"
+[ "${json_good_flagged}" -eq 0 ] ||
+  fail "extractor self-test: flagged ${json_good_flagged} valid JSON form(s)"
+
 bad_caught="$(bad_lists_in "${self_test_dir}/bad.md" | grep -c . || true)"
-[ "${bad_caught}" -ge 11 ] ||
-  fail "extractor self-test: caught only ${bad_caught}/11 known-bad \`--json\` forms — the negative control is not working, so its OK would be meaningless"
+[ "${bad_caught}" -ge 10 ] ||
+  fail "extractor self-test: caught only ${bad_caught}/10 known-bad \`--json\` forms — the negative control is not working, so its OK would be meaningless"
 
 good_flagged="$(bad_lists_in "${self_test_dir}/good.md" | grep -c . || true)"
 [ "${good_flagged}" -eq 0 ] ||
@@ -216,6 +253,21 @@ scan_surfaces="$(
   printf '%s\n' "${constitution}"
   find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null | sort
 )"
+
+# PREFLIGHT, in the main shell: every JSON surface must actually parse. This cannot live inside
+# `normalise_and_extract`, which runs inside command substitution where `exit` only leaves the subshell.
+# An unparseable surface must fail the run, never be scanned as an empty string.
+while IFS= read -r surface; do
+  case "${surface}" in
+    *.json)
+      [ -r "${surface}" ] || continue
+      jq empty "${surface}" >/dev/null 2>&1 ||
+        fail "JSON surface ${surface#"${repo_root}/"} does not parse — refusing to scan it, since an unparseable surface would silently contribute nothing and hide any escaped field"
+      ;;
+  esac
+done <<EOF
+${scan_surfaces}
+EOF
 
 offenders=""
 scanned=0
@@ -278,4 +330,4 @@ if [ -n "${offenders}" ]; then
   exit 1
 fi
 
-echo "merge-confirmation read: OK — self-test caught ${bad_caught}/11 bad forms and flagged ${good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces"
+echo "merge-confirmation read: OK — self-test caught ${bad_caught}/10 markdown + ${json_bad_caught}/2 escaped-JSON bad forms, flagged ${good_flagged}+${json_good_flagged} valid; no invalid \`merged\` field in ${lists_seen} --json list(s) across ${scanned} surfaces"
