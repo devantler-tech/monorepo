@@ -19,6 +19,16 @@ fail() {
   exit 1
 }
 
+# Prose in these files is hard-wrapped, so a line-based grep cannot see a phrase that straddles a
+# wrap — and a reflow would silently disarm the assertion (the wrap evasion recorded on #2566, here
+# in the false-failure direction). Match against a whitespace-normalised stream so the guard tracks
+# the words, not the column at which someone happened to break the line.
+assert_prose() {
+  local file="$1" phrase="$2" message="$3"
+  tr '\n' ' ' <"${file}" | tr -s '[:space:]' ' ' | grep -Fq -- "${phrase}" ||
+    fail "${message}"
+}
+
 grep -Fq 'CodeRabbit > Codex > Cursor Bugbot' "${constitution}" ||
   fail "constitution does not preserve the provider order"
 grep -Fq 'STOP on the first successful current-head review' "${constitution}" ||
@@ -110,6 +120,50 @@ grep -Fq 'a successful current-head review from any one provider completes the r
   fail "portfolio-surveyor still requires CodeRabbit output in addition to another green provider"
 grep -Fq 'stop after the first provider succeeds' "${daily_maintainer}" ||
   fail "daily-maintainer still asks for redundant reviews after one provider succeeds"
+
+# Codex publishes findings in COMMENT form as well as as review objects (monorepo#2577, measured on
+# monorepo#2559 head 948bb06f73): a `## Review finding` issue comment carried an open P2 while the
+# clean-pass comment landed 41s later at the same head, with zero review objects and zero threads at
+# that head. Every pentad item therefore read clear over a live finding. These guards keep item (c)
+# covering that surface.
+assert_prose "${constitution}" 'its green and its findings in comment form' \
+  "constitution still claims Codex findings are only ever review objects"
+assert_prose "${constitution}" '`## Review finding` section is a non-thread review finding' \
+  "a Codex comment-form finding does not count toward the non-thread finding gate"
+assert_prose "${surveyor}" '`## Review finding` section is a non-thread review finding' \
+  "surveyor item (c) is blind to a Codex comment-form finding"
+assert_prose "${surveyor}" 'full 40-character sha in its blob permalinks' \
+  "surveyor has no way to attribute a Codex comment-form finding to a head"
+assert_prose "${surveyor}" 'counts as CURRENT-HEAD until an authenticated disclosed resolution reply clears it' \
+  "an unattributable Codex comment finding fails OPEN instead of closed"
+assert_prose "${surveyor}" 'A newer Codex clean-pass comment never clears an older same-head comment finding' \
+  "the 41-second ordering trap can clear an open Codex comment finding"
+assert_prose "${maintenance_skill}" '`## Review finding` section is a non-thread review finding' \
+  "portfolio-maintenance does not sweep the Codex comment-finding surface"
+
+# Behavioural: the documented attribution mechanism must actually recover the reviewed head from a
+# REAL Codex comment-form finding. Fixture is the verbatim monorepo#2559 pair, so a change in what
+# Codex posts breaks this test rather than silently disarming the rule.
+fixture="${repo_root}/.claude/scripts/fixtures/codex-comment-finding-2559.json"
+[ -r "${fixture}" ] || fail "the monorepo#2559 Codex comment fixture is missing"
+finding_body="$(jq -r '.[]|select(.body|test("^## Review finding"))|.body' "${fixture}")"
+[ -n "${finding_body}" ] || fail "fixture carries no Codex comment-form finding"
+green_body="$(jq -r '.[]|select(.body|test("Didn.t find any major issues"))|.body' "${fixture}")"
+[ -n "${green_body}" ] || fail "fixture carries no Codex clean-pass comment"
+# The defect itself: the finding comment carries NO `**Reviewed commit:**` marker, which is why the
+# marker-based sweep could not see it. If that ever changes, this rule needs revisiting.
+if printf '%s' "${finding_body}" | grep -Fq '**Reviewed commit:**'; then
+  fail "fixture finding comment now carries a Reviewed-commit marker; re-derive the attribution rule"
+fi
+expected_head='948bb06f73809c3aee43501ed81a0904d0fa218e'
+attributed="$(printf '%s' "${finding_body}" |
+  grep -oE '/blob/[0-9a-f]{40}/' | head -1 |
+  sed -E 's#^/blob/([0-9a-f]{40})/$#\1#')" || true
+[ "${attributed}" = "${expected_head}" ] ||
+  fail "documented blob-permalink attribution did not recover the reviewed head (got '${attributed}')"
+# The clean pass names the SAME head 41s later, so recency must never decide between them.
+printf '%s' "${green_body}" | grep -Fq "${expected_head:0:10}" ||
+  fail "fixture clean-pass comment no longer names the same head; ordering trap not reproduced"
 
 # The contract must be a required PR check, including when its own workflow wiring changes.
 grep -Fq 'review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}' "${workflow}" ||
