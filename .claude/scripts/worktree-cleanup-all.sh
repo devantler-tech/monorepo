@@ -157,7 +157,21 @@ if [ -f "$ROOT/.gitmodules" ]; then
     # like `../outside`. Concatenating that escapes ROOT, and if the resulting location
     # is another repository with .claude/worktrees the scheduled apply run would reap
     # worktrees outside the portfolio entirely. Resolve and require containment.
-    sub_real=$(cd "$ROOT/$sub" 2>/dev/null && pwd -P) || continue
+    # An absent path is an uninitialised submodule — nothing to sweep, skip quietly.
+    # A path that EXISTS but cannot be resolved is an infrastructure failure (permissions,
+    # a broken mount), and skipping it silently let the wrapper still print "done" and
+    # exit 0 with that repository never swept.
+    [ -e "$ROOT/$sub" ] || continue
+    # A SYMLINK at the gitlink path resolves elsewhere: `pwd -P` would follow it to an
+    # unrelated repository while the index query still validates the original lexical
+    # path as a genuine gitlink, so the sweep would run against the link target.
+    if [ -L "$ROOT/$sub" ]; then
+      printf '\n### SKIP %s (gitlink path is a symlink — refusing to follow it)\n' "$sub"
+      continue
+    fi
+    sub_real=$(cd "$ROOT/$sub" 2>/dev/null && pwd -P) || {
+      printf 'worktree-cleanup-all: ABORTING — %s exists but cannot be resolved\n' "$sub" >&2
+      exit 2; }
     case "$sub_real" in
       "$ROOT"/?*) ;;
       *) printf '\n### SKIP %s (escapes the portfolio root: %s)\n' "$sub" "$sub_real"

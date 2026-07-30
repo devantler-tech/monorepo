@@ -527,25 +527,30 @@ for wt in "$WT_ROOT"/*/; do
   # The fallback re-runs the FULL mutable-gate set, not just the lock: the failed
   # `worktree remove` above can take time, and a session entering the worktree in that
   # window must still stop the recursive delete.
-  if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null \
-     || { recheck_mutable_gates "$wt" "$wt_real" && rm -rf "$wt_real" && [ ! -e "$wt_real" ] \
-          && { git -C "$TOPLEVEL" worktree prune 2>/dev/null \
-               || die "REMOVED $wt_real but 'git worktree prune' failed — the deletion DID happen; run 'git -C $TOPLEVEL worktree prune' to clear its admin entry (restore ref: refs/reaped/$sha)"; }; }; then
-    # Completion row — written only now that the directory is actually gone.
-    # The directory is already gone at this point, so a failed completion write cannot
-    # be undone. Exit non-zero and say exactly how to read the resulting ledger, rather
-    # than leaving an unmatched `pending` that looks like an aborted attempt.
-    record "$wt_real" "$branch" "$sha" "removed" reaped \
-      || die "REMOVED $wt_real but could not append its 'reaped' row. The deletion DID happen: a 'pending' row whose path no longer exists means deleted, not aborted (restore ref: refs/reaped/$sha)"
-    printf 'REAPED %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
-    reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
+  # Written as a branch chain, NOT a && chain. Folded into one condition, a legitimate
+  # KEEP from the fallback re-check (the worktree became locked/live/dirty since the
+  # gates ran) made the whole condition false and fell into the `removal FAILED` abort —
+  # so an ordinary, correct decision to spare a worktree would have killed the entire
+  # scheduled sweep. "Keep it" and "could not remove it" must stay distinguishable.
+  if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null; then
+    : # removed
+  elif ! recheck_mutable_gates "$wt" "$wt_real"; then
+    continue    # legitimately KEPT and already reported by the gate
+  elif rm -rf "$wt_real" && [ ! -e "$wt_real" ]; then
+    git -C "$TOPLEVEL" worktree prune 2>/dev/null \
+      || die "REMOVED $wt_real but 'git worktree prune' failed — the deletion DID happen; run 'git -C $TOPLEVEL worktree prune' to clear its admin entry (restore ref: refs/reaped/$sha)"
   else
-    # A removal that got this far passed every safety gate and still could not be
-    # deleted — a filesystem or permission failure, not a verdict about this worktree.
-    # Reporting it as an ordinary KEEP let the run exit 0 with a `pending` row and no
-    # deletion, which reads as a healthy sweep.
     die "removal FAILED for $wt_real after all gates passed (its manifest row is 'pending' and the directory still exists)"
   fi
+  # Reached only when the directory is genuinely gone: every other path above either
+  # continued (kept) or died (failed).
+  # A failed completion write cannot be undone at this point, so exit non-zero and say
+  # exactly how to read the resulting ledger rather than leaving an unmatched `pending`
+  # that looks like an aborted attempt.
+  record "$wt_real" "$branch" "$sha" "removed" reaped \
+    || die "REMOVED $wt_real but could not append its 'reaped' row. The deletion DID happen: a 'pending' row whose path no longer exists means deleted, not aborted (restore ref: refs/reaped/$sha)"
+  printf 'REAPED %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
+  reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
 done
 
 # Drop admin entries whose directory is already gone.
