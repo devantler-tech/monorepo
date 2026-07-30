@@ -76,10 +76,18 @@ assert_prose 'scoping below bounds the merge COMMAND, never the SWEEP' \
 # ── 3. rung 1 drains the oldest work before the freshest ──────────────────────
 assert_prose 'oldest-updated first across the whole lane' \
   "${constitution_flat}" "rung 1 does not order drafts oldest-updated first across the lane"
+# Markdown backticks are literal prose, not command substitution.
+# shellcheck disable=SC2016
+assert_prose 'Sort the actionable own/trusted set by `updatedAt` ascending' \
+  "${constitution_flat}" "rung 1 does not specify the normative updatedAt ascending sort"
+assert_prose 'a stale draft is not worth reviving' \
+  "${constitution_flat}" "rung 1 allows close-and-refile for a draft still worth reviving"
 assert_prose 'closed with every still-valid finding re-filed as an issue' \
   "${constitution_flat}" "rung 1 does not name close-and-refile as a legitimate terminal state"
 assert_prose "the lane's total open own-PR count must not rise while the oldest cohort drains" \
   "${constitution_flat}" "rung 1 lets old-draft disposal finance replacement intake"
+assert_prose 'no replacement draft may be opened merely because an old one was disposed of' \
+  "${constitution_flat}" "rung 1 permits replacement drafts after old-draft disposal"
 
 # ── 4. severity outranks age ──────────────────────────────────────────────────
 assert_prose 'Severity outranks age at rungs 2–3; age decides only *within* a rung' \
