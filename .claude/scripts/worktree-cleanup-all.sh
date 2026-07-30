@@ -170,26 +170,23 @@ if [ -f "$ROOT/.gitmodules" ]; then
     # The query's status is captured separately: an unreadable or corrupt index makes the
     # substitution empty, which would read as "not a gitlink" and silently skip a real
     # submodule while the run still reported success.
-    # --literal-pathspecs, and the returned pathname is compared EXACTLY. Without it the
-    # path is a pathspec with wildcard magic: `mods/[ab]` matches a real `mods/a` gitlink,
-    # so the check would pass while the literal `mods/[ab]` directory — an ordinary nested
-    # repository — is what actually gets swept. Same metacharacter class as the live-CWD
-    # regex bug, in pathspec form.
-    # --literal-pathspecs is a GIT-LEVEL option; passing it to ls-files is "unknown
-    # option" and yields empty output, which then reads as "not a gitlink" for every
-    # submodule. It must come before the subcommand.
-    stage=$(git -C "$ROOT" --literal-pathspecs ls-files --stage -- "$sub" 2>/dev/null)
-    stage_rc=$?
+    # `:(literal)` because a pathspec is a GLOB by default: a .gitmodules path containing
+    # pathspec metacharacters would otherwise validate a DIFFERENT index entry — `mods/[ab]`
+    # matches a real `mods/a` gitlink — so the check would pass on one path while apply mode
+    # swept the ordinary nested repository at the literal path.
+    stage=$(git -C "$ROOT" ls-files --stage -- ":(literal)$sub" 2>/dev/null); stage_rc=$?
     if [ "$stage_rc" -ne 0 ]; then
       printf 'worktree-cleanup-all: ABORTING — cannot read the index to validate %s\n' "$sub" >&2
       exit 2
     fi
-    stage_path=$(printf '%s' "$stage" | head -1 | cut -f2-)
-    if [ "$stage_path" != "$sub" ]; then
-      printf '\n### SKIP %s (index entry resolved to a different path: %s)\n' "$sub" "${stage_path:-<none>}"
-      continue
-    fi
-    if [ "$(printf '%s' "$stage" | cut -c1-6)" != "160000" ]; then
+    # Exactly one entry, whose RECORDED path is exactly $sub, and it is a gitlink. The literal
+    # pathspec above already prevents the glob match; comparing the returned pathname is the
+    # belt-and-braces half, and it also rejects the multi-line result a future pathspec change
+    # could reintroduce — `cut -c1-6` reads only the first line, so two entries would be judged
+    # by whichever sorted first.
+    if [ "$(printf '%s\n' "$stage" | grep -c .)" -ne 1 ] ||
+      [ "$(printf '%s' "$stage" | cut -f2-)" != "$sub" ] ||
+      [ "$(printf '%s' "$stage" | cut -c1-6)" != "160000" ]; then
       printf '\n### SKIP %s (not a gitlink in the index — not a portfolio submodule)\n' "$sub"
       continue
     fi
