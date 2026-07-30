@@ -2314,14 +2314,43 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
+**Worktree hygiene is SCHEDULED, not per-run — never rely on a session to remove its own worktree.**
+The harness creates a per-session worktree at `<repo>/.claude/worktrees/<slug>`, and the owning
+session **structurally cannot remove it**: that directory is the session's own working directory, and
+sessions routinely end abruptly (crash, timeout, closed window) with no teardown. So the sweep must
+come from **outside** any session. It does, via the `tech.devantler.worktree-cleanup` LaunchAgent
+(runtime-local, `~/Library/LaunchAgents/`), which runs
+[`.claude/scripts/worktree-cleanup-all.sh [apply|dry-run] [min_age_hours]`](.claude/scripts/worktree-cleanup-all.sh)
+every 6 hours and at login across the monorepo and every submodule discovered from `.gitmodules`.
+Per-repo safety lives in [`worktree-cleanup.sh`](.claude/scripts/worktree-cleanup.sh) and is
+**fail-closed**: it KEEPs any worktree that is a **live process CWD**, is **locked**, is **younger
+than `min_age_hours`**, holds **commits not reachable from any remote** (one
+`git rev-list --not --remotes` test covering both an unpushed branch and an orphan detached HEAD), or
+has **uncommitted work**. Two things are treated as noise rather than work: **unstaged** submodule
+gitlink drift — and only once that submodule is itself proven clean and pushed (a *staged* gitlink is
+authored intent living solely in that worktree's index, so it always counts as work) — and the stray
+tool dirs `?? .codex/` / `?? .agents/`, which are filtered unconditionally. Every removal is recorded to a
+restore manifest **outside the repo** (`~/.claude/worktree-cleanup-manifests/`) before it happens, and
+any infrastructure failure aborts rather than reaping. **Do not add a per-run worktree sweep** to
+compensate; a session removing its *own* worktree is exactly the thing that cannot work.
+Measured 2026-07-29, the run that introduced this: **124 leaked monorepo worktrees, ~15.7 GB across
+`.claude` and `.codex`, disk at 99%, and new sessions failing to start** for want of 5.4 GB. Because a
+branch checked out by a worktree is permanently in `branch-cleanup.sh`'s keep-set, the same leak had
+also pinned **84 of 422** local `claude/*` branches — so leaked worktrees silently disable branch
+cleanup too, and this sweep is what unblocks it.
+
 **End-of-tick branch hygiene — reap spent branches and return to the default branch, EVERY run**
 (maintainer direction 2026-07-16: *"You never clean up old branches locally or on the remote. I expect
 you to always clean up and switch back to the default branch after a tick."*). Left unswept, every run's
 worktree branch survives it: the first sweep found **~1,140 spent branches** (monorepo alone had **589**
-local; `.github` had **35** stale remote). **Remove your own per-run worktree FIRST, then run**
+local; `.github` had **35** stale remote). Run
 [`.claude/scripts/branch-cleanup.sh <repo_path> <repo-name> <manifest> [apply|dry-run] [namespace]`](.claude/scripts/branch-cleanup.sh)
-for each repo touched — a branch still checked out by your own worktree sits in the keep-set, so a
-sweep run before the worktree removal silently spares the very branch the tick just spent.
+for each repo touched. **If you created an EXTRA worktree of your own during the run — one you are not
+running inside — remove that first**, because a branch still checked out by a worktree sits in the
+keep-set and would be spared. **Your own SESSION worktree is the exception and needs no action here:**
+you cannot remove the directory you are running in, and per *Worktree hygiene is SCHEDULED* above the
+LaunchAgent reaps it (and frees its branch for a later sweep) once it is idle and aged. Expect your own
+session branch to survive the tick that spent it; that is the scheduled sweep's job, not yours.
 **`<repo-name>` is the BARE repository name** (`monorepo`, `platform`) — the script prepends
 `devantler-tech/` itself. It is **not** your session/worktree slug and **not** `owner/repo`; both are
 rejected, and passing the owner-qualified form is the likelier mistake because the first rejection

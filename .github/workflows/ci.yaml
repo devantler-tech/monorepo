@@ -21,6 +21,7 @@ jobs:
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
       branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
+      worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
@@ -87,6 +88,11 @@ jobs:
             branch-cleanup:
               - '.claude/scripts/branch-cleanup.sh'
               - '.claude/scripts/branch-cleanup.test.sh'
+            worktree-cleanup:
+              - '.claude/scripts/worktree-cleanup.sh'
+              - '.claude/scripts/worktree-cleanup-all.sh'
+              - '.claude/scripts/worktree-cleanup.test.sh'
+              - '.claude/scripts/worktree-cleanup-all.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -410,6 +416,33 @@ jobs:
       - name: Self-test branch-cleanup namespaces
         run: bash .claude/scripts/branch-cleanup.test.sh
 
+  test-worktree-cleanup:
+    name: Test worktree cleanup
+    needs: changes
+    if: needs.changes.outputs.worktree-cleanup == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hermetic bare-origin fixture — no network, no token. Pins every fail-closed
+      # KEEP gate (live process CWD, lock, age, unreachable-from-remote commits,
+      # uncommitted work) against a reaped-baseline control, so a run that reaps
+      # nothing cannot pass the gate assertions vacuously.
+      # The macos leg is load-bearing: the host ships bash 3.2, which cannot parse
+      # `case` inside $( ), and the age/stat probes are BSD-flavoured there.
+      - name: Self-test worktree-cleanup safety gates
+        run: bash .claude/scripts/worktree-cleanup.test.sh
+      - name: Self-test the multi-repo orchestrator
+        run: bash .claude/scripts/worktree-cleanup-all.test.sh
+
   test-submodule-init:
     needs: changes
     if: needs.changes.outputs.submodule-init == 'true'
@@ -656,6 +689,7 @@ jobs:
       - test-flow-scorecard
       - test-safe-clone
       - test-branch-cleanup
+      - test-worktree-cleanup
       - test-submodule-init
       - test-maintainer-preflight
       - test-memory-hygiene
@@ -682,6 +716,7 @@ jobs:
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-branch-cleanup.result }}
+            ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
