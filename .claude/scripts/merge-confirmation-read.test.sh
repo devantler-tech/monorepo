@@ -127,23 +127,40 @@ normalise_and_extract() {           # $1 = file; emits one `--json <fields>` per
   # escape hides exactly the field being looked for. Any escape form is handled correctly by decoding and
   # by nothing else, so `jq -r '.. | strings'` emits every decoded string value and the text pipeline runs
   # over those. Fails closed when jq cannot parse the file, rather than silently scanning it raw.
-  local src="$1"
-  case "$1" in
-    *.json)
-      src="$(mktemp)"
-      # NOTE: no `fail` here — this function runs inside command substitution, so an `exit` would only
-      # leave the subshell and the script would carry on with an empty result (verified: a malformed
-      # JSON surface produced exit 0). The main-shell preflight below is what fails closed.
-      jq -r '.. | strings' "$1" > "${src}" 2>/dev/null || : > "${src}"
-      ;;
-  esac
-  sed -E -e 's/\\[nrt]/ /g' -e 's/\\/ /g' "${src}" \
+  # A comma is joined to what follows it ONLY across a line break. That is the one place a real field
+  # list is ever split — `--json state,` then the rest on the next line — whereas a comma followed by a
+  # space on the SAME line is prose, and `gh` could not receive it as one argument anyway. Collapsing
+  # both alike is what made `--json state, merged PRs need no polling.` read as `--json state,merged`
+  # and fail a VALID string. Markdown was already safe here because a backtick terminates the list; a
+  # JSON surface has no delimiter to lean on, so the distinction has to be made from the line break
+  # itself — which means joining BEFORE the whole file is flattened, not after.
+  decode_surface "$1" \
+    | sed -E -e 's/\\[nrt]/ /g' -e 's/\\/ /g' \
+    | awk '{
+        line = $0; sub(/[[:space:]]+$/, "", line)
+        if (NR > 1 && buf ~ /,$/) { sub(/^[[:space:]]+/, "", line); buf = buf line }
+        else { if (NR > 1) print buf; buf = line }
+      } END { if (NR > 0) print buf }' \
     | tr '\n' ' ' \
     | sed -E -e 's/…/,/g' -e 's/\.\.\./,/g' \
              -e 's/[[:space:]]+/ /g' \
-             -e 's/[[:space:]]*,[[:space:]]*/,/g' \
              -e 's/--json[[:space:]]*[=,]*[[:space:]]*[`"'"'"']?[[:space:]]*/--json /g' \
     | grep -o -- '--json [A-Za-z,]*' | sort -u
+}
+
+# Emit a surface as plain text. A JSON surface is DECODED rather than pattern-matched, and the decoded
+# text is PIPED rather than parked in a temp file: `normalise_and_extract` runs once per surface per
+# scan, so a per-call `mktemp` that the single EXIT trap never removed left a scratch file holding
+# decoded definition text behind on every run.
+#
+# NOTE: no `fail` here — this runs inside command substitution, so an `exit` would only leave the
+# subshell and the script would carry on with an empty result (verified: a malformed JSON surface
+# produced exit 0). The main-shell preflight below is what fails closed.
+decode_surface() {
+  case "$1" in
+    *.json) jq -r '.. | strings' "$1" 2>/dev/null || true ;;
+    *)      cat "$1" ;;
+  esac
 }
 
 # Report every `--json` list in $1 that names a bare `merged`.
@@ -219,7 +236,10 @@ FIXTURE
 cat > "${self_test_dir}/good.json" <<'FIXTURE'
 {"prompts":[
   "gh pr view <n> --json state,mergedAt,mergeCommit",
-  "gh pr view <n> --json\u0020state,mergedAt"
+  "gh pr view <n> --json\u0020state,mergedAt",
+  "gh pr view <n> --json state,\nmergedAt,mergeCommit",
+  "Run gh pr view <n> --json state, merged PRs need no polling.",
+  "Read gh pr view <n> --json mergedAt, merged work is already done."
 ]}
 FIXTURE
 
