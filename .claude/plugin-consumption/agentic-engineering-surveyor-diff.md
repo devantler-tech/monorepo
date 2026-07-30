@@ -44,6 +44,12 @@ plugin carries them (or an explicit, tested subset):
    never a separate readiness state.
 4. **Green-review surfaces for three lanes** — a finding-free CodeRabbit completion without requiring `APPROVED`, Codex comment-shaped green, and **Cursor Bugbot check-run** (`success` vs
    `neutral`+title disambiguation).
+4b. **Codex comment-shaped FINDINGS** (monorepo#2577) — a `chatgpt-codex-connector[bot]` issue
+   comment carrying a `## Review finding` section counts in the non-thread finding gate, is
+   attributed to a head by the full 40-char sha in its blob permalinks (it has no
+   `**Reviewed commit:**` marker), fails closed when unattributable, and is **not** cleared by a
+   newer `Didn't find any major issues` comment. Without this the pentad reads fully clear over an
+   open P2 — measured on monorepo#2559.
 5. **Sequential review coordination state** — authenticated single-phase request marker posted with
    the trigger (the two-phase reservation was retired on measurement 2026-07-25), pending request,
    monotonic artifact-backed or evidenced-expiry no-gate progression,

@@ -927,8 +927,22 @@ green reads as "no review". Rows are in lane-priority order:**
 | Lane | Clean/green artifact | Findings artifact | Key to match |
 |---|---|---|---|
 | **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head, or the auto-generated summary comment updated after the authenticated request, naming the head, and carrying no rate-limit/service marker |
-| **Codex** (`chatgpt-codex-connector[bot]`) | **issue COMMENT** — `Codex Review: Didn't find any major issues` + `**Reviewed commit:** <sha>` (10-char, no `commit_id` field) | review object, `state: COMMENTED`, inline threads | comment body sha vs `headRefOid[0:10]` |
+| **Codex** (`chatgpt-codex-connector[bot]`) | **issue COMMENT** — `Codex Review: Didn't find any major issues` + `**Reviewed commit:** <sha>` (10-char, no `commit_id` field) | review object, `state: COMMENTED`, inline threads — **OR an issue COMMENT carrying a `## Review finding` section** (see below) | clean pass: comment body sha vs `headRefOid[0:10]`; comment-form finding: full 40-char sha in its blob permalinks |
 | **Cursor Bugbot** (`cursor[bot]`) | **CHECK-RUN named `Cursor Bugbot`** (app slug `cursor`), `conclusion: success` — *no review object, no comment* | same check-run with **`conclusion: neutral` AND `output.title: "Bugbot Review"`**, findings as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments` | check-run at `commits/<headRefOid>/check-runs` |
+
+🔴 **Codex publishes BOTH its green and its findings in comment form — so a sweep of review objects
+and threads is structurally blind to half of what it says.** Measured on monorepo#2559 at head
+`948bb06f73` (monorepo#2577): a `## Review finding` issue comment carried an open **P2** at 19:44:35Z
+and the clean-pass comment landed **41 seconds later** at that same head, while the head carried
+**zero Codex review objects and zero threads**. Codex counts only P0/P1 as "major", so its green and
+an open P2 coexist by design. Every pentad item read clear over a live finding, and a run following
+the procedure literally promotes and merges it.
+So: **a `chatgpt-codex-connector[bot]` issue comment containing a `## Review finding` section is a
+non-thread review finding** and blocks promotion exactly as a CodeRabbit body finding does, until
+fixed-or-refuted with a disclosed resolution reply. Attribute it to a head by the **full 40-character
+sha in its blob permalinks** — the finding comment carries **no** `**Reviewed commit:**` marker, which
+is precisely why the marker-based sweep missed it. **`Didn't find any major issues` never clears a P2**:
+the green can be newer than the finding, so recency decides nothing here.
 
 **CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request and naming the head. Reject auto-generated command replies/acknowledgements and any summary carrying a rate-limit, quota, or service marker saying the review did not run. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
 

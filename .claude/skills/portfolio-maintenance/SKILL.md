@@ -241,7 +241,14 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   `body_findings=0-resolved@<sha>` only when it links the finding and records specific reasoning; a
   generic or externally-authored comment does not. An identical repeated same-head finding
   fingerprint (category + path/range + normalized text) remains resolved; a new/changed fingerprint
-  reopens it. CodeRabbit is first and foremost a reviewer. Do not wait for, parse, or persist its
+  reopens it.
+  **The Codex lane has a second finding surface: a `chatgpt-codex-connector[bot]` issue comment whose
+  `## Review finding` section is a non-thread review finding**, counted in `body_findings` like a
+  CodeRabbit body section. It carries no `**Reviewed commit:**` marker — attribute it by the full
+  40-character sha in its blob permalinks, and fail closed (count it as current-head) when the head
+  cannot be determined. A newer `Didn't find any major issues` comment never clears it: Codex scores
+  only P0/P1 as "major", so its green and an open P2 legitimately coexist at one head (monorepo#2577).
+  CodeRabbit is first and foremost a reviewer. Do not wait for, parse, or persist its
   ancillary pre-merge evaluator as a readiness state. Missing or delayed output never blocks. Only
   an explicit concrete problem CodeRabbit reports while selected for the current head counts; fold
   it into the non-thread `body_findings` count, fix or refute it, then
