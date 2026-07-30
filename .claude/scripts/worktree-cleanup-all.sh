@@ -170,12 +170,23 @@ if [ -f "$ROOT/.gitmodules" ]; then
     # The query's status is captured separately: an unreadable or corrupt index makes the
     # substitution empty, which would read as "not a gitlink" and silently skip a real
     # submodule while the run still reported success.
-    stage=$(git -C "$ROOT" ls-files --stage -- "$sub" 2>/dev/null); stage_rc=$?
+    # `:(literal)` because a pathspec is a GLOB by default: a .gitmodules path containing
+    # pathspec metacharacters would otherwise validate a DIFFERENT index entry — `mods/[ab]`
+    # matches a real `mods/a` gitlink — so the check would pass on one path while apply mode
+    # swept the ordinary nested repository at the literal path.
+    stage=$(git -C "$ROOT" ls-files --stage -- ":(literal)$sub" 2>/dev/null); stage_rc=$?
     if [ "$stage_rc" -ne 0 ]; then
       printf 'worktree-cleanup-all: ABORTING — cannot read the index to validate %s\n' "$sub" >&2
       exit 2
     fi
-    if [ "$(printf '%s' "$stage" | cut -c1-6)" != "160000" ]; then
+    # Exactly one entry, whose RECORDED path is exactly $sub, and it is a gitlink. The literal
+    # pathspec above already prevents the glob match; comparing the returned pathname is the
+    # belt-and-braces half, and it also rejects the multi-line result a future pathspec change
+    # could reintroduce — `cut -c1-6` reads only the first line, so two entries would be judged
+    # by whichever sorted first.
+    if [ "$(printf '%s\n' "$stage" | grep -c .)" -ne 1 ] ||
+      [ "$(printf '%s' "$stage" | cut -f2-)" != "$sub" ] ||
+      [ "$(printf '%s' "$stage" | cut -c1-6)" != "160000" ]; then
       printf '\n### SKIP %s (not a gitlink in the index — not a portfolio submodule)\n' "$sub"
       continue
     fi
