@@ -669,6 +669,86 @@ func TestACheckedOutRootWithoutAConfigIsNotUninspected(t *testing.T) {
 	}
 }
 
+// The same fail-closed rule one level down, on the config FILES rather than the
+// root directory. A checked-out root whose config location cannot be stat'd was
+// not inspected either: reading "no config found" off an unreadable path lets an
+// undeclared repository that may well carry a dashboard config pass as clean.
+//
+// ENOTDIR again, for the same determinism reason as the root case: ".github" is
+// a file, so stating ".github/renovate.json" fails with ENOTDIR rather than
+// "does not exist".
+func TestAnUnreadableConfigLocationIsAnErrorNotAConfiglessRoot(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// A real checkout — so the uninitialised-submodule path cannot be what
+	// catches this — whose ".github" config location is unreadable.
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
+	writeFile(t, filepath.Join(root, "applications/ksail/.github"), "not a directory\n")
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 — a config location that could not be read must not read as no config\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "applications/ksail") {
+		t.Errorf("expected the root with the unreadable config location to be named, got:\n%s", out)
+	}
+}
+
+// ...and the control that keeps the rule above from swallowing the ordinary
+// case: a checked-out root whose config locations are genuinely ABSENT — an
+// existing .github directory with nothing in it, and no standalone config — is
+// still accepted as config-less. Without this, every config-less repository in
+// the portfolio would start erroring.
+func TestAbsentConfigLocationsAreStillAcceptedAsConfigless(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
+	// .github exists and is a directory, but holds no Renovate config.
+	writeFile(t, filepath.Join(root, "applications/ksail/.github/workflows/ci.yaml"), "on: push\n")
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 — absent config locations are the ordinary case\n%s", code, out)
+	}
+
+	if strings.Contains(out, "::error::") {
+		t.Errorf("a genuinely config-less root was escalated to an error:\n%s", out)
+	}
+}
+
+// A DIRECTORY sitting where a config file belongs is the third stat outcome, and
+// it is neither "present" nor "absent": Renovate cannot read it, and neither can
+// this check. Silently skipping it would classify the root as config-less on the
+// strength of a path it demonstrably failed to resolve — the same fail-open the
+// root-level `!info.IsDir()` guard already refuses.
+func TestADirectoryAtAConfigLocationIsAnError(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
+	if err := os.MkdirAll(filepath.Join(root, "applications/ksail/renovate.json"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 — a directory at a config path is not an absent config\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "renovate.json") {
+		t.Errorf("expected the unresolvable config location to be named, got:\n%s", out)
+	}
+}
+
 // A standalone config whose top-level value is the JSON token `null` unmarshals
 // into the struct without error and leaves every field zero, so it resolves to
 // "disabled" while carrying no Renovate configuration at all.

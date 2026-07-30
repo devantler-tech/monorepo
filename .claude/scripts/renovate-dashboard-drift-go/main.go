@@ -408,9 +408,31 @@ func findConfigs(root, rel string) ([]string, error) {
 
 	for _, name := range configFileNames {
 		p := filepath.Join(dir, name)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			found = append(found, filepath.ToSlash(filepath.Join(rel, name)))
+		loc := filepath.ToSlash(filepath.Join(rel, name))
+
+		st, err := os.Stat(p)
+		if err != nil {
+			// Same rule as the directory stat above, one level down: only a
+			// genuinely missing path means "no config here". Every other
+			// failure — EACCES, EIO, ELOOP, ENOTDIR — means a config location
+			// could not be read, and an unread location is not an absent one.
+			// Skipping it here would let the caller see an empty result, decide
+			// the root is checked out and genuinely config-less, and pass.
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+
+			return nil, fmt.Errorf("has a Renovate config location (%s) that could not be inspected (%v)", loc, err)
 		}
+
+		if st.IsDir() {
+			// Neither present nor absent: Renovate cannot read a directory as
+			// config, and neither can this check, so it must not be resolved
+			// silently in either direction.
+			return nil, fmt.Errorf("has a directory at the Renovate config location %s, so its config could not be determined", loc)
+		}
+
+		found = append(found, loc)
 	}
 
 	hasPackageConfig, err := packageJSONConfig(filepath.Join(dir, "package.json"))
