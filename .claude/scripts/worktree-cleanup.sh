@@ -327,7 +327,12 @@ count_real_changes() {
 for wt in "$WT_ROOT"/*/; do
   [ -d "$wt" ] || continue
   wt=${wt%/}
-  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || { keep "$wt" "unreadable"; continue; }
+  # A candidate that EXISTS (the glob matched a directory) but cannot be resolved is an
+  # infrastructure failure — permissions, a broken mount — not a verdict about this
+  # worktree. Reporting it as an ordinary KEEP let the run exit 0 while silently unable
+  # to inspect part of the tree.
+  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) \
+    || die "cannot resolve candidate worktree $wt — refusing to continue on an uninspectable tree"
   name=$(basename "$wt")
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
