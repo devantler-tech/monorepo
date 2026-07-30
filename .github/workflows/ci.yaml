@@ -27,6 +27,7 @@ jobs:
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
       agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
+      merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
@@ -179,6 +180,14 @@ jobs:
               - 'AGENTS.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/work-priority-ladder.test.sh'
+              - '.github/workflows/ci.yaml'
+            merge-confirmation-read:
+              - 'AGENTS.md'
+              # every Markdown definition surface, matching the test's own discovery — an enumerated
+              # subset would let a change to an unlisted surface skip the check that guards it
+              - '.claude/**/*.md'
+              - '.claude/**/*.json'
+              - '.claude/scripts/merge-confirmation-read.test.sh'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
@@ -602,6 +611,21 @@ jobs:
       - name: Verify the work-priority ladder
         run: bash .claude/scripts/work-priority-ladder.test.sh
 
+  test-merge-confirmation-read:
+    name: Test merge-confirmation read contract
+    needs: changes
+    if: needs.changes.outputs.merge-confirmation-read == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the merge-confirmation read contract
+        run: bash .claude/scripts/merge-confirmation-read.test.sh
+
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
     needs: changes
@@ -639,6 +663,7 @@ jobs:
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
       - test-work-priority-ladder
+      - test-merge-confirmation-read
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
@@ -664,5 +689,6 @@ jobs:
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}
             ${{ needs.test-work-priority-ladder.result }}
+            ${{ needs.test-merge-confirmation-read.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}
