@@ -160,7 +160,9 @@ public and private — no per-repo loop needed to enumerate):
      finding sections means the findings are cleared and `body_findings=0`; never fall back to an
      older review that still had sections (that re-reports what the newest review already cleared).
      From that single newest review, extract each matching section's numeric `(N)` excluding `🔇`, and report
-     `body_findings=<n>@<sha>` where `<sha>` is that review's `commit_id`. When `<sha>` differs from
+     `body_findings=<n>@<sha>` where `<sha>` is that review's `commit_id` (for a **Codex comment-form
+     finding** — see below — `<sha>` is instead the head recovered from its blob permalinks, since
+     such a comment carries no `commit_id` and no `**Reviewed commit:**` marker). When `<sha>` differs from
      the current `headRefOid`, the count is historical — report it as `body_findings=<n>-stale@<sha>`
      so the orchestrator re-verifies against the head instead of treating it as open. A same-head
      finding is cleared as `body_findings=0-resolved@<sha>` only when a later resolution reply from
