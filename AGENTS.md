@@ -614,6 +614,15 @@ promoted**, median age **6.9 days** — of which **18 were already `CLEAN`** (me
 were opened**. Throughput was never the problem: ~27 own PRs merged per day that same week. The pile
 is what *starting* outruns *finishing* looks like, and closing it is rung 1's job.
 
+**Within rung 1, work oldest-updated first across the whole lane, not per repository.** Sort the
+actionable own/trusted set by `updatedAt` ascending; choosing the freshest or easiest PR first is not
+following the rung. A PR reaches a terminal state when it is merged, parked on a named live-verified
+blocker, or—when a stale draft is not worth reviving—closed with every still-valid finding re-filed
+as an issue (an invalid or superseded finding may instead be closed with the reason recorded).
+Closing old work creates no intake credit: the lane's total open own-PR count must not rise while the
+oldest cohort drains, and no replacement draft may be opened merely because an old one was disposed
+of.
+
 **Severity outranks age at rungs 2–3; age decides only *within* a rung.** A three-week-old `Docs`
 issue never precedes an open `Security` one. Rungs 2 and 3 are otherwise ordinary issue work under
 *Drain oldest-first* — the same actionability test, the same claim protocol, the same
