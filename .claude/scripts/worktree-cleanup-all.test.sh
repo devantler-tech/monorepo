@@ -185,13 +185,50 @@ t_skips_a_gitmodules_entry_that_is_not_a_gitlink() {
   git -C "$root/repo" commit -qm "de-register nested" >/dev/null 2>&1
   local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
                    bash "$SUT" apply 24 2>&1)
-  if printf '%s' "$out" | grep -q 'SKIP nested (not a gitlink' \
+  # Assert the SAFETY PROPERTY, not one reason string: de-registering the gitlink can be
+  # caught either by the exact-path check (index entry resolves to nothing) or by the
+  # mode check. Both are correct SKIPs; what must hold is that the nested repository is
+  # left alone while the root is still swept.
+  if printf '%s' "$out" | grep -q '### SKIP nested' \
      && [ -d "$root/repo/nested/.claude/worktrees/spent-sub" ] \
      && printf '%s' "$out" | grep -q 'REAPED .*spent-root'; then
     ok "SKIPs a .gitmodules entry that is not a real gitlink"
   else
     bad "SKIPs a .gitmodules entry that is not a real gitlink" \
         "sub_present=$([ -d "$root/repo/nested/.claude/worktrees/spent-sub" ] && echo yes || echo NO) $out"
+  fi
+  rm -rf "$root"
+}
+
+t_gitlink_validation_uses_a_literal_pathspec() {
+  # A .gitmodules path containing pathspec metacharacters must not validate against a
+  # DIFFERENT index entry: `nested[12]` matches the real `nested` gitlink under wildcard
+  # magic, which would let an ordinary nested repository be swept.
+  local root; root=$(make_root)
+  # Point .gitmodules at a metacharacter path that glob-matches the real gitlink, and
+  # make that literal path a real (non-submodule) repository with a spent worktree.
+  printf '[submodule "x"]\n\tpath = nested[12]\n\turl = %s\n' "$root/sub.git" \
+    > "$root/repo/.gitmodules"
+  git init -q -b main "$root/repo/nested[12]"
+  git -C "$root/repo/nested[12]" config user.email t@t.t
+  git -C "$root/repo/nested[12]" config user.name t
+  echo z > "$root/repo/nested[12]/z"; git -C "$root/repo/nested[12]" add z
+  git -C "$root/repo/nested[12]" commit -qm base
+  git -C "$root/repo/nested[12]" remote add origin "$root/sub.git"
+  git -C "$root/repo/nested[12]" fetch -q origin 2>/dev/null || true
+  mkdir -p "$root/repo/nested[12]/.claude/worktrees"
+  git -C "$root/repo/nested[12]" worktree add -q -b claude/victim \
+      "$root/repo/nested[12]/.claude/worktrees/victim" main 2>/dev/null
+  echo "only copy" > "$root/repo/nested[12]/.claude/worktrees/victim/precious.txt"
+  touch -t 202001010000 "$root/repo/nested[12]/.claude/worktrees/victim"
+  local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+                   bash "$SUT" apply 24 2>&1)
+  if [ -f "$root/repo/nested[12]/.claude/worktrees/victim/precious.txt" ] \
+     && printf '%s' "$out" | grep -q 'SKIP nested\[12\]'; then
+    ok "gitlink validation uses a literal pathspec (metacharacter path is SKIPped)"
+  else
+    bad "gitlink validation uses a literal pathspec (metacharacter path is SKIPped)" \
+        "victim=$([ -f "$root/repo/nested[12]/.claude/worktrees/victim/precious.txt" ] && echo present || echo GONE) $out"
   fi
   rm -rf "$root"
 }
@@ -205,6 +242,7 @@ t_per_repo_manifest_isolation
 t_validates_args_even_with_no_worktree_dirs
 t_aborts_on_malformed_gitmodules
 t_skips_a_gitmodules_entry_that_is_not_a_gitlink
+t_gitlink_validation_uses_a_literal_pathspec
 t_rejects_bad_mode
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
