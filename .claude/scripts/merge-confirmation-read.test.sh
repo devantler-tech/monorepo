@@ -158,7 +158,14 @@ normalise_and_extract() {           # $1 = file; emits one `--json <fields>` per
 # produced exit 0). The main-shell preflight below is what fails closed.
 decode_surface() {
   case "$1" in
-    *.json) jq -r '.. | strings' "$1" 2>/dev/null || true ;;
+    # A scalar boundary is a HARD boundary. `jq -r ".. | strings"` emits one line per decoded
+    # value, and the flattening below would otherwise weld the end of one value onto the start
+    # of the next: {"label":"CLI option --json","description":"merged is not a valid field"}
+    # is two unrelated fields that join into `--json merged`, failing a VALID definition
+    # (reproduced). `%` is outside `[A-Za-z,]`, so it terminates a field list wherever it lands,
+    # and the `--json` separator rule cannot absorb it — that rule eats only whitespace, `=`,
+    # `,` and one opening quote.
+    *.json) jq -r '.. | strings | ., "%"' "$1" 2>/dev/null || true ;;
     *)      cat "$1" ;;
   esac
 }
@@ -239,7 +246,9 @@ cat > "${self_test_dir}/good.json" <<'FIXTURE'
   "gh pr view <n> --json\u0020state,mergedAt",
   "gh pr view <n> --json state,\nmergedAt,mergeCommit",
   "Run gh pr view <n> --json state, merged PRs need no polling.",
-  "Read gh pr view <n> --json mergedAt, merged work is already done."
+  "Read gh pr view <n> --json mergedAt, merged work is already done.",
+  "CLI option --json",
+  "merged is not a valid field"
 ]}
 FIXTURE
 
