@@ -172,6 +172,8 @@ assert_prose 'The reviewed plugin is canonical for portable role behaviour; this
   "consumer does not distinguish the plugin role from the deployment contract"
 assert_prose 'Never use the bare word *constitution* as an edit destination' \
   "consumer permits an ambiguous constitution reference to bypass definition routing"
+assert_prose 'is migration inventory, not a second canonical source' \
+  "consumer can mistake unextracted generic prose for a local authoring source"
 assert_engineer_prose 'compatibility alias, not a second role definition' \
   "legacy daily-maintainer agent does not declare itself a thin compatibility alias"
 assert_engineer_prose 'Generic role behaviour belongs in the reviewed plugin' \

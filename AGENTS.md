@@ -216,6 +216,11 @@ only point at those sources. When one change spans both layers, merge upstream f
 reviewed content at the pinned plugin revision, then update the consumer without copying the generic
 text.
 
+Legacy generic prose that has not yet been extracted under
+[#2363](https://github.com/devantler-tech/monorepo/issues/2363) is migration inventory, not a second
+canonical source. Do not extend it locally: change the owning upstream, prove parity at the reviewed
+plugin revision, then remove or reduce the consumer copy in a focused rollout slice.
+
 The deployed brain is therefore version-controlled across the reviewed plugin and this consumer's
 contract plus declared overlays; no single local file is the whole constitution. The machine-local
 scheduled-task entry is only a **thin pointer** that hands off to those sources.
