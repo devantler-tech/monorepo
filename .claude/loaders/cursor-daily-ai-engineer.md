@@ -50,12 +50,18 @@ machine-local engineer.
 > 2. **Bootstrap guard:** if `AGENTS.md` is missing, **STOP and report** "consumer contract not on
 >    main; no action taken." If
 >    `libraries/agent-plugins/plugins/agentic-engineering/agents/agentic-engineer.agent.md` is absent,
->    initialise `libraries/agent-plugins` with `.claude/scripts/submodule-init.sh`; if the agent still
->    does not resolve, **STOP and report** "reviewed plugin definition unavailable; no action taken."
+>    initialise it with `.claude/scripts/submodule-init.sh libraries/agent-plugins`; if the agent
+>    still does not resolve, **STOP and report** "reviewed plugin definition unavailable; no action
+>    taken."
 > 3. **Read and follow `AGENTS.md`, then the reviewed plugin's
 >    `agentic-engineer.agent.md`.** The former supplies deployment facts; the latter supplies the
->    portable operate→advance→spend role. Never reconstruct either from the legacy local
->    `daily-maintainer` compatibility alias.
+>    portable operate→advance→spend role.
+> 4. **Load the deployment compatibility overlays:**
+>    `.claude/skills/portfolio-maintenance/SKILL.md`,
+>    `.claude/skills/product-engineering/SKILL.md`, and
+>    `.claude/skills/self-improvement/SKILL.md`. Apply their devantler-tech procedure deltas, with
+>    this loader's cloud capability bounds replacing any machine-local assumptions. Never
+>    reconstruct the role from the legacy local `daily-maintainer` compatibility alias.
 >
 > **Your lane, which differs from the local instances' — these bounds are part of the contract for
 > you:**

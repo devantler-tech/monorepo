@@ -193,6 +193,13 @@ for deployment_skill in \
     "${engineer_agent}" >/dev/null ||
     fail "legacy daily-maintainer alias does not attach deployment skill ${deployment_skill}"
 done
+memory_hygiene_line="$(grep -nF '.claude/scripts/memory-hygiene.sh --layout legacy --dir' \
+  "${engineer_agent}" | head -n 1 | cut -d: -f1 || true)"
+memory_load_line="$(grep -nF "Load the runtime's native persistent memory" \
+  "${engineer_agent}" | head -n 1 | cut -d: -f1 || true)"
+[ -n "${memory_hygiene_line}" ] && [ -n "${memory_load_line}" ] &&
+  [ "${memory_hygiene_line}" -lt "${memory_load_line}" ] ||
+  fail "legacy daily-maintainer alias must run legacy memory hygiene before loading persistent memory"
 for compatibility_overlay in \
   "${maintenance_overlay}" \
   "${engineering_overlay}" \
@@ -203,6 +210,15 @@ for compatibility_overlay in \
 done
 grep -Fq 'agentic-engineer.agent.md' "${cursor_loader}" ||
   fail "Cursor adapter does not resolve the canonical plugin role"
+grep -Fq '.claude/scripts/submodule-init.sh libraries/agent-plugins' "${cursor_loader}" ||
+  fail "Cursor adapter does not pass the plugin path to submodule-init"
+for cursor_overlay in \
+  '.claude/skills/portfolio-maintenance/SKILL.md' \
+  '.claude/skills/product-engineering/SKILL.md' \
+  '.claude/skills/self-improvement/SKILL.md'; do
+  grep -Fq "${cursor_overlay}" "${cursor_loader}" ||
+    fail "Cursor adapter does not load deployment overlay ${cursor_overlay}"
+done
 if grep -Fq '.claude/agents/daily-maintainer.md' "${cursor_loader}"; then
   fail "Cursor adapter still boots from the legacy local alias"
 fi
