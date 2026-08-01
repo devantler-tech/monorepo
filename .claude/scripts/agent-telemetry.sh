@@ -749,6 +749,25 @@ newest_first() {
     | while IFS= read -r p; do stat_mtime "$p"; done
 }
 
+# Root transcripts only, capped AFTER the subagent filter. Filtering downstream
+# of `head -n MAX_FILES` lets sidechains evict eligible root runs before the
+# classifier ever sees them — with subagents routinely outnumbering roots here,
+# the published dispatch count could reach zero while root runs existed.
+root_session_files() {
+  [ -d "$CLAUDE_PROJECTS" ] || return 0
+  if store_root_in_scope; then
+    newest_first "$CLAUDE_PROJECTS" | sort -rn | cut -d' ' -f2- \
+      | grep -v '/subagents/' | head -n "$MAX_FILES"
+    return 0
+  fi
+  ls -1 "$CLAUDE_PROJECTS" 2>/dev/null \
+  | grep -E "^($PORTFOLIO_DIR_RE)$" \
+  | while IFS= read -r d; do
+      newest_first "$CLAUDE_PROJECTS/$d"
+    done \
+  | sort -rn | cut -d' ' -f2- | grep -v '/subagents/' | head -n "$MAX_FILES"
+}
+
 session_files() {
   # Filter PROJECT DIRECTORIES first, then walk only the in-scope ones. The
   # contract forbids discovering or enumerating excluded repositories at all —
@@ -888,24 +907,22 @@ if want dispatch; then
     # ANCHORED at the start of the turn. A real refusal IS the whole turn; a live
     # run that merely ends on "Confirmed the account is out of credits; filed an
     # issue." must stay live, and an unanchored substring match would take it.
-    DH_RE='^(you.?ve hit your [a-z0-9 -]*limit|.{0,40}usage limit reached|.{0,40}limit · resets|the (account|api) is out of (credits|usage)|.{0,40}capacity constraints)'
+    # Each alternative must START the turn. A leading .{0,40} wildcard silently
+    # reopens the substring hole the ^ anchor exists to close.
+    DH_RE='^(you.?ve hit your [a-z0-9 -]*limit|usage limit reached|claude usage limit reached|this (account|organization) is out of (credits|usage)|capacity constraints prevent)'
     DH_NOT_RE='(rate limit|rate-limit|review limit|quota exceeded for)'
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      # A DISPATCH is a scheduled run, not a transcript. Subagent sidechains live
-      # under .../subagents/ and are separate JSONL files, so counting them here
-      # would let ONE tick satisfy a volume floor several times over — this
-      # deployment delegates surveys and broad investigation to subagents, so the
-      # inflation is routine, not hypothetical. Other sections still scan them.
+      # Defence in depth: root_session_files already excluded these BEFORE the
+      # cap, but a DISPATCH is a scheduled run and never a sidechain, so the
+      # classifier asserts that itself rather than trusting its input.
       case "$f" in */subagents/*) continue ;; esac
       # The outage timestamp must come from the REFUSAL record, not the
       # transcript's first record: a resumed session that later hits a refusal
       # would otherwise date the outage to when the session originally began.
       row=$(jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty))
         | (map(select(.type=="assistant")|.message.content[]?|select(.type=="tool_use"))|length) as $tu
-        | [.[] | select(.type=="assistant"
-            and ((.message.content[]?|select(.type=="text")|.text) != null))] as $arecs
-        | (($arecs|last) // {}) as $lastrec
+        | (([.[] | select(.type=="assistant")] | last) // {}) as $lastrec
         | ((($lastrec.message.content[]?|select(.type=="text")|.text) // "")) as $lastt
         | (($lastrec.timestamp) // (map(select(.timestamp)|.timestamp)|last) // "") as $ts
         | "\($tu)\t\($ts)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
@@ -939,7 +956,7 @@ if want dispatch; then
         DH_INERT=$((DH_INERT+1))
       fi
     done <<EOF
-$SF_CACHE
+$(root_session_files)
 EOF
     DH_TOTAL=$((DH_LIVE + DH_DEAD + DH_TRUNC + DH_INERT))
     printf '  claude dispatches classified: %s   (root transcripts only; subagents excluded)\n' "$DH_TOTAL"

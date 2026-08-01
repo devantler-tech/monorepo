@@ -2726,6 +2726,45 @@ cat > "$FIX/dispatch-clean/ok.jsonl" <<'EOF'
 EOF
 COUT=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch-clean" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+# CONTROL G pins the CAP ORDER: two sidechains newer than the only root run,
+# with the cap set to 2. Filtering after the cap evicts the root entirely and
+# publishes zero dispatches while a root run existed.
+mkdir -p "$FIX/dh-cap/subagents"
+cat > "$FIX/dh-cap/root.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T12:00:00.000Z","message":{"content":[{"type":"tool_use","id":"g1","name":"Bash","input":{"command":"echo root"}}]}}
+EOF
+sleep 1
+cat > "$FIX/dh-cap/subagents/a.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T12:01:00.000Z","message":{"content":[{"type":"tool_use","id":"g2","name":"Bash","input":{"command":"echo sub"}}]}}
+EOF
+cat > "$FIX/dh-cap/subagents/b.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T12:02:00.000Z","message":{"content":[{"type":"tool_use","id":"g3","name":"Bash","input":{"command":"echo sub"}}]}}
+EOF
+GOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-cap" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --max-files 2 --section dispatch 2>&1)
+check "sidechains do not evict the root run under the cap" "$GOUT" "classified: 1"
+# CONTROL H pins the WHOLE-TURN anchor against a leading wildcard: a live summary
+# that BEGINS with other words before the refusal phrase.
+mkdir -p "$FIX/dh-prefix"
+cat > "$FIX/dh-prefix/s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T19:00:00.000Z","message":{"content":[{"type":"tool_use","id":"h1","name":"Bash","input":{"command":"echo x"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T19:00:05.000Z","message":{"content":[{"type":"text","text":"Confirmed usage limit reached; filed an issue."}]}}
+EOF
+POUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-prefix" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a prefixed refusal phrase stays live" "$POUT" "live ......... 1"
+# CONTROL I pins FINAL-RECORD selection: an old refusal followed by NEW tool
+# activity that emits no further text. Selecting the last text-bearing record
+# would resurrect the historical refusal and date a current outage to it.
+mkdir -p "$FIX/dh-resumed2"
+cat > "$FIX/dh-resumed2/s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-05-01T00:00:00.000Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+{"type":"assistant","timestamp":"2026-08-01T09:00:00.000Z","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"echo resumed"}}]}}
+EOF
+IOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-resumed2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a resumed run ending on tool activity stays live" "$IOUT" "live ......... 1"
+nocheck "a historical refusal does not date a current outage" "$IOUT" "2026-05-01"
 check "a healthy corpus reports no dead dispatches" "$COUT" "dead ......... 0"
 check "a healthy corpus reports no outage span"     "$COUT" "outage span: none"
 
