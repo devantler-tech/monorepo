@@ -155,7 +155,7 @@ rrule = "RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0"
 updated_at = 1785222863850
 EOF
 CODEX_AUTOMATION_STORE="$FIX/codex/codex-dev.db"
-sqlite3 "$CODEX_AUTOMATION_STORE" <<'SQL'
+if ! sqlite3 "$CODEX_AUTOMATION_STORE" <<'SQL'
 CREATE TABLE automations (
   id TEXT PRIMARY KEY,
   rrule TEXT NOT NULL,
@@ -165,6 +165,10 @@ INSERT INTO automations (id, rrule, last_run_at) VALUES
   ('daily-ai-engineer', 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0', 1785238560676),
   ('agent-improver', 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0', 1785222864850);
 SQL
+then
+  echo "failed to create Codex automation store fixture" >&2
+  exit 1
+fi
 cat > "$FIX/monorepo/AGENTS.md" <<'EOF'
 Definition PRs: their separate human promotion gate was retired by maintainer direction 2026-07-18.
 
@@ -203,6 +207,18 @@ echo
 echo "syntax"
 if bash -n "$TARGET" 2>/dev/null; then ok "parses"; else bad "parses" "bash -n failed"; fi
 if [ -x "$TARGET" ]; then ok "executable"; else bad "executable" "chmod +x missing"; fi
+if [ "$(grep -Fc "escaped_id=\${id//\\'/\\'\\'}" "$TARGET")" -eq 2 ]; then
+  ok "escapes both Codex automation ids before SQL interpolation"
+else
+  bad "escapes both Codex automation ids before SQL interpolation" \
+    "expected two defensive single-quote substitutions"
+fi
+if [ "$(grep -Fc "WHERE id = '\$escaped_id';" "$TARGET")" -eq 2 ]; then
+  ok "uses escaped ids in both Codex scheduler queries"
+else
+  bad "uses escaped ids in both Codex scheduler queries" \
+    "expected both queries to interpolate escaped_id"
+fi
 
 # ── 2. reliability: errors attributed to the right tool ───────────────────────
 echo

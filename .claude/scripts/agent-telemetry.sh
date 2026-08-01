@@ -2012,10 +2012,11 @@ if want drift; then
   }
 
   codex_store_schedule() {
-    local store="$1" id="$2" rule
+    local store="$1" id="$2" rule escaped_id
     [ -f "$store" ] || return 0
+    escaped_id=${id//\'/\'\'}
     rule=$(sqlite3 -readonly "$store" \
-      "SELECT rrule FROM automations WHERE id = '$id';" 2>/dev/null \
+      "SELECT rrule FROM automations WHERE id = '$escaped_id';" 2>/dev/null \
       | awk 'NF { print; exit }')
     codex_rrule_schedule "$rule"
   }
@@ -2056,10 +2057,11 @@ if want drift; then
   }
 
   codex_dispatch_marker() {
-    local store="$1" id="$2"
+    local store="$1" id="$2" escaped_id
     [ -f "$store" ] || return 0
+    escaped_id=${id//\'/\'\'}
     sqlite3 -readonly "$store" \
-      "SELECT last_run_at FROM automations WHERE id = '$id';" 2>/dev/null \
+      "SELECT last_run_at FROM automations WHERE id = '$escaped_id';" 2>/dev/null \
       | awk 'NF { print; exit }'
   }
 
