@@ -5,6 +5,11 @@ description: The run procedure for the Agentic Engineer (the products' primary e
 
 # Portfolio engineering — the run loop
 
+> **Deployment compatibility overlay — not a generic authoring source.** Portable procedure changes
+> belong in the bundled `portfolio-maintenance` skill's provenance-recorded upstream and reach this
+> repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
+> deltas here; never add a second copy of generic behaviour.
+
 This is the procedure the `daily-maintainer` agent follows each run. The **shared contract** lives in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) — the maintain-*and*-advance mandate, autonomy, merge
 policy, product strategy & roadmaps, enhancement work, trust gate, untrusted input, per-run worktrees,

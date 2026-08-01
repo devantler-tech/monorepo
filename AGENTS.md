@@ -129,16 +129,19 @@ and it **hardens** them as it goes, on the standing principle that good develope
 > close. The machine-local identifiers (the `daily-maintainer` agent slug and file path, the
 > scheduled-task ids) are likewise unchanged so the deployed instances keep booting.
 
-Its definition lives here as standard primitives:
-- **Agent:** [`.claude/agents/daily-maintainer.md`](.claude/agents/daily-maintainer.md) — the actor.
-- **Run-loop skill:** [`.claude/skills/portfolio-maintenance/`](.claude/skills/portfolio-maintenance/SKILL.md)
-  — the survey → select → act → report procedure (covers both operate and advance work).
-- **Engineering skill:** [`.claude/skills/product-engineering/`](.claude/skills/product-engineering/SKILL.md)
-  — the *advance* playbook: strategy/roadmaps, issue triage & decomposition, planning & implementing,
-  coverage, benchmarking/performance, refactoring & code quality, and security hardening that never
-  taxes developer experience.
-- **Self-improvement skill:** [`.claude/skills/self-improvement/`](.claude/skills/self-improvement/SKILL.md)
-  — how it improves its own definition over time (evidence-driven, guard-railed).
+Its deployed definition is assembled from deliberately separate primitives:
+- **Generic role:** the reviewed plugin's
+  [`agentic-engineer`](libraries/agent-plugins/plugins/agentic-engineering/agents/agentic-engineer.agent.md)
+  entrypoint — the portable actor and generic behaviour.
+- **Consumer contract:** this `AGENTS.md` — portfolio, trust, cadence, memory, channels, authority,
+  spend facts, and other deployment-specific rules.
+- **Legacy Claude alias:** [`.claude/agents/daily-maintainer.md`](.claude/agents/daily-maintainer.md) —
+  a thin compatibility pointer that preserves the deployed slug; never a second role definition.
+- **Deployment procedure overlays:**
+  [`.claude/skills/portfolio-maintenance/`](.claude/skills/portfolio-maintenance/SKILL.md),
+  [`.claude/skills/product-engineering/`](.claude/skills/product-engineering/SKILL.md), and
+  [`.claude/skills/self-improvement/`](.claude/skills/self-improvement/SKILL.md) — retained only for
+  devantler-tech-specific deltas while migration to the generic plugin procedures remains open.
 - **Spend skill:** [`.claude/skills/finops/`](.claude/skills/finops/SKILL.md) — the cost-pass procedure
   for the same engineer's *spend* mandate (see *Spend contract*), on the heavy-task cadence.
 - **Per-product skills:** [`.claude/skills/products/`](.claude/skills/products/) — thin cards that
@@ -198,11 +201,24 @@ Two rules shape *how* the engineer is built:
 1. **Stay native to first-class Claude capabilities** — use the **memory tool** for durable memory,
    plus skills, subagents, slash-commands and the `.claude/` layout — rather than re-inventing them.
 2. **Build anything generic to AI assistants to industry standards** so the suite stays portable and a
-   switch between Claude / Copilot / ChatGPT is as painless as possible. The canonical instructions
-   live in **`AGENTS.md`** (the cross-tool standard read by Copilot, Cursor, Codex, …); the `.claude/`
-   primitives are thin Claude-native wrappers that point back to it.
-The **brain is version-controlled here** (this file + `.claude/`), so the self-improvement loop can keep
-improving it; the machine-local scheduled-task entry is only a **thin pointer** that hands off to it.
+   switch between Claude / Copilot / ChatGPT is as painless as possible. The reviewed plugin is
+   canonical for portable role behaviour; this `AGENTS.md` is canonical only for this deployment's
+   cross-tool contract and facts. Declared `.claude/` overlays and loaders carry provider or
+   deployment deltas; they do not become generic authoring sources merely because they are local.
+
+**Definition routing has two layers.** Never use the bare word *constitution* as an edit destination:
+name the concern and its owner. Portable role or procedure behaviour changes in the file's canonical
+upstream first — `agent-plugins` for plugin-authored agents, or the provenance-recorded skills
+repository for a synced skill — and reaches this deployment through the reviewed plugin rollout.
+Portfolio membership, trusted identities, cadence, runtime paths, channels, and other deployment facts
+change in this consumer contract or a specifically declared local overlay. A provider bootstrap may
+only point at those sources. When one change spans both layers, merge upstream first, verify the
+reviewed content at the pinned plugin revision, then update the consumer without copying the generic
+text.
+
+The deployed brain is therefore version-controlled across the reviewed plugin and this consumer's
+contract plus declared overlays; no single local file is the whole constitution. The machine-local
+scheduled-task entry is only a **thin pointer** that hands off to those sources.
 This brain is deployed as **more than one agent instance** — currently the Claude Code scheduled task,
 the **sibling ChatGPT/Codex routine**, and the **Cursor Automation cloud instance** (`:30` past uneven
 hours); the hourly minute offsets across the two machine-local lanes are the table in
@@ -264,15 +280,18 @@ definition surface, and an installed/cache copy is never an authoring target.
 
 - This consumer contract (`AGENTS.md`) and its enforcement tests under `.claude/scripts/*.test.sh`
   plus `.github/workflows/ci.yaml`.
-- Deployment configuration and overlays under `.claude/`: the primary-engineer/surveyor agents and
-  skills, the spend run loop at `.claude/skills/finops/SKILL.md` with its lifestyle floor and evidence
-  script, the provider-neutral desired state, plugin settings, and the Cursor loader source. The local
-  Agent Improver agent/skill forks are retired, and so is the standalone FinOps agent fork — the
-  reviewed plugin is the source for both roles.
+- Deployment configuration and declared compatibility surfaces under `.claude/`: the thin
+  `daily-maintainer` alias, the explicitly temporary surveyor and procedure overlays, the spend run
+  loop at `.claude/skills/finops/SKILL.md` with its lifestyle floor and evidence script, the
+  provider-neutral desired state, plugin settings, and the Cursor loader source. These surfaces may
+  carry only their named deployment/provider delta; generic role logic changes at its owning upstream.
+  The local Agent Improver agent/skill forks are retired, and so is the standalone FinOps agent fork —
+  the reviewed plugin is the source for both roles.
 - The generic upstream source, which is **NOT one repository**. **Check the file's own provenance
   before editing it — the question is per-FILE, never per-directory**, because one plugin directory
   mixes locally-authored files with copies synced from *several different* upstreams:
   - **`devantler-tech/agent-plugins`** authors
+    `plugins/agentic-engineering/agents/agentic-engineer.agent.md`,
     `plugins/agentic-engineering/agents/agent-improver.agent.md`, the plugin README/desired state, and
     their manifest/contract validation. These carry **no** `metadata.github-repo`.
   - **`devantler-tech/agent-skills`** authors `agent-improvement/`, **and that one skill is the only
@@ -2828,14 +2847,14 @@ step:
    per-product status is derivable from `gh pr list` / `gh run list`, so it is never duplicated into a file.
 
 ### Self-improvement (continuous, evidence-driven)
-Your definition is version-controlled, so you continuously improve it to get better at maintaining
-and enhancing the products. Your "definition" = everything that shapes how you work: this contract,
-the [`daily-maintainer`](.claude/agents/daily-maintainer.md) agent, the
-[`portfolio-maintenance`](.claude/skills/portfolio-maintenance/SKILL.md) /
-[`product-engineering`](.claude/skills/product-engineering/SKILL.md) / `products/*` /
-[`self-improvement`](.claude/skills/self-improvement/SKILL.md) skills, the scheduled-task loader, and
-each submodule's `AGENTS.md ## Maintenance`. Treat it as a product you maintain — for capability,
-performance, security, and reliability. The `self-improvement` skill is the procedure; the rules:
+Your deployed definition is version-controlled across two ownership layers, so you continuously
+improve it without making a second copy. Portable role behaviour lives in the reviewed plugin or a
+skill's provenance-recorded upstream; deployment facts live in this contract, `products/*`, declared
+compatibility overlays, the scheduled-task loaders, and each submodule's `AGENTS.md ## Maintenance`.
+The [`daily-maintainer`](.claude/agents/daily-maintainer.md) file is a legacy provider alias only.
+Treat the assembled definition as a product you maintain — for capability, performance, security,
+and reliability — and route every edit by *Definition routing* above. The `self-improvement` skill is
+the procedure; the rules:
 
 - **Evidence from your OWN runs only.** Propose a definition change only from observed operational
   evidence (recurring failures, friction, wasted effort, coverage gaps, slow/flaky steps, a

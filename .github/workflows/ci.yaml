@@ -169,6 +169,7 @@ jobs:
             agent-role-delivery-contract:
               - 'AGENTS.md'
               - '.claude/agents/daily-maintainer.md'
+              - '.claude/loaders/cursor-daily-ai-engineer.md'
               # The two retired agent forks stay listed deliberately: the test asserts they
               # do NOT exist, so re-adding either must trigger the job that rejects it.
               - '.claude/agents/agent-improver.md'
@@ -176,6 +177,9 @@ jobs:
               - '.claude/plugin-consumption/agentic-engineering.desired-state.json'
               - '.claude/settings.json'
               - '.claude/skills/agent-improvement/**'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/product-engineering/SKILL.md'
+              - '.claude/skills/self-improvement/SKILL.md'
               - '.claude/skills/finops/SKILL.md'
               - '.claude/finops/**'
               - '.claude/scripts/finops-snapshot.sh'

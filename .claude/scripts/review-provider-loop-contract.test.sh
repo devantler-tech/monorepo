@@ -10,7 +10,6 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
-daily_maintainer="${repo_root}/.claude/agents/daily-maintainer.md"
 parity_checklist="${repo_root}/.claude/plugin-consumption/agentic-engineering-surveyor-diff.md"
 workflow="${repo_root}/.github/workflows/ci.yaml"
 
@@ -99,7 +98,7 @@ grep -Fq 'Missing or delayed pre-merge output never blocks promotion' "${constit
   fail "absent ancillary CodeRabbit output can still block a reviewed PR"
 grep -Fq 'fold it into `body_findings`' "${surveyor}" ||
   fail "an explicit CodeRabbit pre-merge problem is not preserved as a review finding"
-for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}" "${daily_maintainer}"; do
+for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
   if grep -Fq 'premerge=' "${contract_file}"; then
     fail "standalone CodeRabbit pre-merge readiness state remains in ${contract_file}"
   fi
@@ -110,16 +109,15 @@ fi
 grep -Fq 'finding-free CodeRabbit completion without requiring `APPROVED`' "${parity_checklist}" ||
   fail "plugin-parity checklist does not recognize CodeRabbit review completions"
 
-# The two maintained Claude entry points must remain independently followable without recreating the
-# superseded multi-provider interpretation.
+# The consumer contract, surveyor overlay, and deployment run-loop overlay must remain independently
+# followable without recreating the superseded multi-provider interpretation. The legacy Claude alias
+# is deliberately excluded: it routes to the plugin and must not duplicate review policy.
 grep -Fq 'stop on its first successful current-head review' "${maintenance_skill}" ||
   fail "portfolio-maintenance does not stop after the first provider succeeds"
 grep -Fq 'one provider request at a time' "${maintenance_skill}" ||
   fail "portfolio-maintenance permits concurrent provider requests"
 grep -Fq 'a successful current-head review from any one provider completes the review gate' "${surveyor}" ||
   fail "portfolio-surveyor still requires CodeRabbit output in addition to another green provider"
-grep -Fq 'stop after the first provider succeeds' "${daily_maintainer}" ||
-  fail "daily-maintainer still asks for redundant reviews after one provider succeeds"
 
 # Codex publishes findings in COMMENT form as well as as review objects (monorepo#2577, measured on
 # monorepo#2559 head 948bb06f73): a `## Review finding` issue comment carried an open P2 while the

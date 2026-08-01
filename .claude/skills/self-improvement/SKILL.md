@@ -1,9 +1,14 @@
 ---
 name: self-improvement
-description: How the Agentic Engineer improves its OWN definition (the shared contract, the daily-maintainer agent, the portfolio-maintenance + product-engineering + products skills, and each submodule's AGENTS.md ## Maintenance) over time — capturing operational learnings each run and distilling them into evidence-based, guard-railed draft PRs. Use at the end of every run (to log learnings) and on the weekly distil pass.
+description: Devantler-tech compatibility overlay for the Agentic Engineer's self-improvement procedure. Routes portable changes to their canonical plugin or provenance-recorded skills upstream and deployment facts to the consumer contract.
 ---
 
 # Self-improvement loop
+
+> **Deployment compatibility overlay — not a generic authoring source.** Portable procedure changes
+> belong in the bundled `self-improvement` skill's provenance-recorded upstream and reach this
+> repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
+> deltas here; never add a second copy of generic behaviour.
 
 The assistant's definition is version-controlled, so it can make itself better at maintaining and
 enhancing devantler-tech's products. Read the **### Self-improvement** section of the monorepo
