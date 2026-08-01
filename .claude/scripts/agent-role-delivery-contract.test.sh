@@ -13,6 +13,10 @@ constitution="${repo_root}/AGENTS.md"
 settings="${repo_root}/.claude/settings.json"
 desired_state="${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.json"
 engineer_agent="${repo_root}/.claude/agents/daily-maintainer.md"
+cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
+maintenance_overlay="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
+engineering_overlay="${repo_root}/.claude/skills/product-engineering/SKILL.md"
+self_improvement_overlay="${repo_root}/.claude/skills/self-improvement/SKILL.md"
 finops_skill="${repo_root}/.claude/skills/finops/SKILL.md"
 lifestyle_floor="${repo_root}/.claude/finops/lifestyle-floor.md"
 snapshot="${repo_root}/.claude/scripts/finops-snapshot.sh"
@@ -137,16 +141,105 @@ entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
        (CI does this in the workflow step before this test)."
 [ -f "${plugin_agents}/${entrypoint}.agent.md" ] ||
   fail "desired state entrypoint '${entrypoint}' does not resolve to a bundled agent in ${plugin_agents}"
+canonical_engineer="${plugin_agents}/${entrypoint}.agent.md"
+canonical_engineer_flat="$(flatten "${canonical_engineer}")"
+assert_canonical_engineer_prose() {
+  case "${canonical_engineer_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
 jq -e --arg e "${entrypoint}" '
   (.spec.roles | has($e))
   and .spec.runtime.scheduler.schedules[$e].definitionFrom
       == ("plugin:agentic-engineering/" + $e)
+  and .spec.source.updatePolicy == "latest-reviewed-default-branch"
+  and .spec.source.refreshTiming == "before-starting-each-run"
 ' "${desired_state}" > /dev/null ||
-  fail "desired state role and schedule keys must match its declared entrypoint '${entrypoint}'"
+  fail "desired state role, schedule, and reviewed-plugin refresh policy must match its declared entrypoint '${entrypoint}'"
 # Backticks are literal Markdown, not command substitution.
 # shellcheck disable=SC2016
 assert_prose "entrypoint **\`${entrypoint}\`**" \
   "consumer prose names an entrypoint other than the declared '${entrypoint}'"
+
+# Definition ownership has two layers. Portable role behaviour belongs in the reviewed
+# plugin (or a bundled skill's provenance-recorded upstream); deployment facts belong in
+# this consumer's AGENTS.md. A local provider wrapper may route to those sources, but must
+# not become a second generic definition. This is the drift shape that left the legacy
+# daily-maintainer agent carrying a near-complete copy of agentic-engineer after the plugin
+# became canonical.
+# Markdown backticks are literal; no shell expansion is intended.
+# shellcheck disable=SC2016
+assert_prose 'The reviewed plugin is canonical for portable role behaviour; this `AGENTS.md` is canonical only for this deployment' \
+  "consumer does not distinguish the plugin role from the deployment contract"
+assert_prose 'Never use the bare word *constitution* as an edit destination' \
+  "consumer permits an ambiguous constitution reference to bypass definition routing"
+assert_prose 'is migration inventory, not a second canonical source' \
+  "consumer can mistake unextracted generic prose for a local authoring source"
+assert_engineer_prose 'compatibility alias, not a second role definition' \
+  "legacy daily-maintainer agent does not declare itself a thin compatibility alias"
+assert_engineer_prose 'Generic role behaviour belongs in the reviewed plugin' \
+  "legacy daily-maintainer agent does not route generic changes to the plugin"
+assert_engineer_prose 'latest-reviewed-default-branch' \
+  "legacy daily-maintainer agent does not declare the reviewed-plugin refresh policy"
+if grep -Eq '^## (How you operate|Spend stewardship)' "${engineer_agent}"; then
+  fail "legacy daily-maintainer agent duplicates canonical plugin role sections"
+fi
+[ "$(wc -l < "${engineer_agent}")" -le 45 ] ||
+  fail "legacy daily-maintainer agent is no longer a thin provider compatibility alias"
+for deployment_skill in \
+  portfolio-maintenance \
+  product-engineering \
+  self-improvement \
+  finops; do
+  DEPLOYMENT_SKILL="${deployment_skill}" yq --front-matter=extract -e \
+    '[ (.skills // [])[] | select(. == strenv(DEPLOYMENT_SKILL)) ] | length == 1' \
+    "${engineer_agent}" >/dev/null ||
+    fail "legacy daily-maintainer alias does not attach deployment skill ${deployment_skill}"
+done
+memory_hygiene_line="$(grep -nF '.claude/scripts/memory-hygiene.sh --layout legacy --dir' \
+  "${engineer_agent}" | head -n 1 | cut -d: -f1 || true)"
+memory_load_line="$(grep -nF "Load the runtime's native persistent memory" \
+  "${engineer_agent}" | head -n 1 | cut -d: -f1 || true)"
+[ -n "${memory_hygiene_line}" ] && [ -n "${memory_load_line}" ] &&
+  [ "${memory_hygiene_line}" -lt "${memory_load_line}" ] ||
+  fail "legacy daily-maintainer alias must run legacy memory hygiene before loading persistent memory"
+for compatibility_overlay in \
+  "${maintenance_overlay}" \
+  "${engineering_overlay}" \
+  "${self_improvement_overlay}"; do
+  grep -Fq 'Deployment compatibility overlay — not a generic authoring source' \
+    "${compatibility_overlay}" ||
+    fail "${compatibility_overlay#"${repo_root}/"} does not route portable changes upstream"
+done
+grep -Fq 'Classify each target by the file-level ownership and authority rules' \
+  "${self_improvement_overlay}" ||
+  fail "self-improvement distillation does not classify definition ownership before choosing a repository"
+grep -Fq 'metadata.github-repo' "${self_improvement_overlay}" ||
+  fail "self-improvement distillation does not route synced skills by structured provenance"
+if grep -Fq '`.claude/agents/*`, `.claude/skills/*`' "${self_improvement_overlay}"; then
+  fail "self-improvement distillation still routes every local agent or skill change to the monorepo"
+fi
+grep -Fq 'agentic-engineer.agent.md' "${cursor_loader}" ||
+  fail "Cursor adapter does not resolve the canonical plugin role"
+grep -Fq '.claude/scripts/submodule-init.sh libraries/agent-plugins' "${cursor_loader}" ||
+  fail "Cursor adapter does not pass the plugin path to submodule-init"
+grep -Fq 'git -C libraries/agent-plugins fetch origin main' "${cursor_loader}" ||
+  fail "Cursor adapter does not refresh the reviewed plugin default branch before loading it"
+grep -Fq 'git -C libraries/agent-plugins show origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md' \
+  "${cursor_loader}" ||
+  fail "Cursor adapter does not load the agent from the refreshed reviewed plugin ref"
+for cursor_overlay in \
+  '.claude/skills/portfolio-maintenance/SKILL.md' \
+  '.claude/skills/product-engineering/SKILL.md' \
+  '.claude/skills/self-improvement/SKILL.md'; do
+  grep -Fq "${cursor_overlay}" "${cursor_loader}" ||
+    fail "Cursor adapter does not load deployment overlay ${cursor_overlay}"
+done
+if grep -Fq '.claude/agents/daily-maintainer.md' "${cursor_loader}"; then
+  fail "Cursor adapter still boots from the legacy local alias"
+fi
+
 grep -Fq 'Agent Improver scorecard store' "${constitution}" ||
   fail "Memory does not name the Agent Improver scorecard store"
 grep -Fq 'open verification-hypothesis store' "${constitution}" ||
@@ -248,14 +341,12 @@ for spend_source in "${finops_skill}" "${lifestyle_floor}" "${snapshot}"; do
     fail "Spend contract names a source that does not exist: ${spend_source}"
 done
 
-# The deployed local actor must actually carry the merged mandate. Retiring the standalone
-# agent without teaching the surviving one to do spend work would silently drop the role.
-assert_engineer_prose 'Steward the spend' \
-  "local engineer agent does not carry the merged spend mandate"
-assert_engineer_prose 'never move money' \
-  "local engineer agent does not carry the never-move-money boundary"
-grep -Eq '^[[:space:]]*-[[:space:]]+finops[[:space:]]*$' "${engineer_agent}" ||
-  fail "local engineer agent does not load the finops cost-pass skill"
+# The canonical plugin actor must carry the merged mandate. The local alias deliberately does
+# not repeat it; asserting these boundaries there would force the duplication this contract bans.
+assert_canonical_engineer_prose 'Spend stewardship — the money side of the same portfolio' \
+  "canonical plugin engineer does not carry the merged spend mandate"
+assert_canonical_engineer_prose 'You never move money' \
+  "canonical plugin engineer does not carry the never-move-money boundary"
 grep -Fq 'drive the reviewed head to merge' "${finops_skill}" ||
   fail "spend run loop does not drive its engineering PR through merge"
 

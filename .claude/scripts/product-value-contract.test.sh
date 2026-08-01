@@ -4,7 +4,6 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 contract="${repo_root}/AGENTS.md"
-agent="${repo_root}/.claude/agents/daily-maintainer.md"
 run_loop="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 engineering="${repo_root}/.claude/skills/product-engineering/SKILL.md"
 site_card="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
@@ -64,8 +63,6 @@ if git -C "${repo_root}" ls-files |
   fail "tracked ADRs remain outside docs/adr"
 fi
 
-grep -Fq 'evidence-led' "${agent}" ||
-  fail "daily maintainer summary does not route evidence-led selection"
 grep -Fq 'Value & evidence loop' "${engineering}" ||
   fail "product engineering lacks the value-measurement procedure"
 grep -Fq 'measure → learn → iterate, stop, or reverse' "${engineering}" ||

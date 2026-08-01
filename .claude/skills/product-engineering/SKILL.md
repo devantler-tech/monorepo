@@ -5,6 +5,11 @@ description: The ADVANCE playbook for the Agentic Engineer (the products' primar
 
 # Product engineering — moving products forward
 
+> **Deployment compatibility overlay — not a generic authoring source.** Portable procedure changes
+> belong in the bundled `product-engineering` skill's provenance-recorded upstream and reach this
+> repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
+> deltas here; never add a second copy of generic behaviour.
+
 This is the *advance* half of the role. The **operate** half (keep everything healthy) and the run
 loop live in [`portfolio-maintenance`](../portfolio-maintenance/SKILL.md); the binding rules live in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) (*Mandate*, *Product strategy & roadmaps*, *Enhancement

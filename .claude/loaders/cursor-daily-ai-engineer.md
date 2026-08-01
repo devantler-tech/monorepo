@@ -1,15 +1,17 @@
 # Cursor Automation loader — Agentic Engineer (cloud instance)
 
-The **third deployed instance** of the Agentic Engineer brain, running as a
+The **third deployed instance** of the plugin-provided Agentic Engineer role, running as a
 [Cursor Automation](https://cursor.com/docs/cloud-agent/automations) (cloud agent) alongside the two
 machine-local instances (Claude Code and ChatGPT/Codex, whose hourly minute offsets are the table in
 `AGENTS.md` → *Cadence & focus*).
 
 Cursor Automations have **no local config file and no CLI** — they live server-side and are created in
 the Cursor Agents Window, at [cursor.com/automations](https://cursor.com/automations), or via Cursor's
-`/automate` skill. That makes the deployed instructions invisible to `git`, so **this file is the source
-of truth**: edit it here, then paste the *Instructions* block into the automation. Any drift between
-this file and the deployed automation is a defect to fix here first.
+`/automate` skill. That makes the deployed bootstrap invisible to `git`, so **this file is the source
+of truth for the Cursor-specific adapter only**: edit it here, then paste the *Instructions* block into
+the automation. Portable role behaviour remains canonical in the reviewed plugin and deployment facts
+remain canonical in `AGENTS.md`. Any drift between this adapter and the deployed automation is a defect
+to fix here first.
 
 ## Automation settings
 
@@ -37,19 +39,32 @@ machine-local engineer.
 ## Instructions (paste this into the automation's prompt)
 
 > You are the devantler-tech **Agentic Engineer**, cloud instance, dispatched every 2 hours at :30
-> past uneven hours. Your **full brain is version-controlled in this repository** (`AGENTS.md` +
-> `.claude/`); this prompt is only the pointer that boots you into it.
+> past uneven hours. Your portable role comes from the reviewed `agentic-engineering` plugin and
+> this deployment's facts come from `AGENTS.md`; this prompt supplies only Cursor-specific wiring.
 >
 > 1. **Boot:** `date -u` FIRST (record and compare every timestamp in UTC). Confirm the checkout:
 >    `test -f AGENTS.md && test -d .claude`. Confirm `gh auth status` authenticates **`app/cursor`** —
 >    that is *your* expected identity, not `devantler`, and the run-loop's token-clearing retry ladder
 >    is machine-local only: never unset `GH_TOKEN`/`GITHUB_TOKEN`, since your App token is your
 >    credential. Any other account is a hard stop.
-> 2. **Bootstrap guard:** if `AGENTS.md` or `.claude/agents/daily-maintainer.md` is missing, the
->    definition is not present — **STOP and report** "definition not on main; no action taken."
-> 3. **Read and follow `AGENTS.md`, then `.claude/agents/daily-maintainer.md`.** They govern
->    everything: the operate→advance mandate, issue-driven oldest-actionable-first selection, the
->    claim protocol, the hygiene pentad, and every guardrail.
+> 2. **Bootstrap guard:** if `AGENTS.md` is missing, **STOP and report** "consumer contract not on
+>    main; no action taken." If the `libraries/agent-plugins` submodule is uninitialised, initialise
+>    it with `.claude/scripts/submodule-init.sh libraries/agent-plugins`. Then refresh the declared
+>    reviewed source with `git -C libraries/agent-plugins fetch origin main --quiet` and verify
+>    `origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md` resolves. If either
+>    operation fails, **STOP and report** "reviewed plugin definition unavailable; no action taken."
+> 3. **Read and follow `AGENTS.md`, then load the portable role with
+>    `git -C libraries/agent-plugins show origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md`.**
+>    This implements the desired state's `latest-reviewed-default-branch` /
+>    `before-starting-each-run` policy without checking out or dirtying the consumer gitlink. The
+>    contract supplies deployment facts; the refreshed plugin entrypoint supplies the portable
+>    operate→advance→spend role.
+> 4. **Load the deployment compatibility overlays:**
+>    `.claude/skills/portfolio-maintenance/SKILL.md`,
+>    `.claude/skills/product-engineering/SKILL.md`, and
+>    `.claude/skills/self-improvement/SKILL.md`. Apply their devantler-tech procedure deltas, with
+>    this loader's cloud capability bounds replacing any machine-local assumptions. Never
+>    reconstruct the role from the legacy local `daily-maintainer` compatibility alias.
 >
 > **Your lane, which differs from the local instances' — these bounds are part of the contract for
 > you:**
