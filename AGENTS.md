@@ -205,7 +205,7 @@ The **brain is version-controlled here** (this file + `.claude/`), so the self-i
 improving it; the machine-local scheduled-task entry is only a **thin pointer** that hands off to it.
 This brain is deployed as **more than one agent instance** — currently the Claude Code scheduled task,
 the **sibling ChatGPT/Codex routine**, and the **Cursor Automation cloud instance** (`:30` past uneven
-hours); the per-hour split across the two machine-local lanes is the table in
+hours); the hourly minute offsets across the two machine-local lanes are the table in
 *Cadence & focus* — each booted by its own routine/scheduler prompt. Those prompts
 are part of the definition too: **each instance monitors and enhances its own dispatch prompt** (see
 *Self-improvement → Routine-prompt stewardship*). The first two are machine-local and their prompts are
@@ -2597,45 +2597,42 @@ schedule; see *Agentic engineering plugin contract*). Times are the agent host's
 runtime-local scheduler entries are **thin pointers that must match this table**; when the two
 disagree, the scheduler is the defect — reconcile it there, per *Agent definition locations*.
 
-**The parity invariant IS the schedule: Claude takes EVEN hours, Codex takes UNEVEN hours, and no two
-local instances ever share a dispatch hour.** Read your lane's row for your own slots; read the
-invariant to know that whatever else is running, it did not start when you did.
+**The stagger invariant IS the schedule: both machine-local Agentic Engineer lanes dispatch every
+hour, at distinct minute offsets — Codex at `:10`, Cursor at `:30` on uneven hours, and Claude at
+`:50`; the four Agent Improver starts remain at `:00`.** No two scheduled roles share an exact start
+time. Read your lane's row for your own slots, and treat runtime jitter plus long-running siblings as
+normal overlap rather than evidence that a slot is free.
 
 | Lane | Agentic Engineer | Agent Improver |
 |---|---|---|
-| **Claude** — `claude/*`, even hours | 02, 04, 06, 08, 10, 14, 16, 18, 20, 22 | 00, 12 |
-| **Codex** — `codex/*`, uneven hours | 01, 03, 05, 09, 11, 13, 15, 17, 21, 23 | 07, 19 |
+| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 12:00 |
+| **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 07:00, 19:00 |
 | **Cursor** — `cursor/*`, uneven hours at `:30` | 01:30 … 23:30 | — |
 
-Each lane dispatches **every 2 hours**, uniformly, and the three lanes interleave so that consecutive
-dispatches are **never less than 30 minutes apart** (the Claude runtime adds a few minutes of dispatch
-jitter, which only widens the gaps). The Agent
-Improver keeps its 4×/day rotation, alternating lanes (00 Claude, 07 Codex, 12 Claude, 19 Codex).
-This table covers the two scheduled engineering roles only — spend stewardship has no dispatch slot
-of its own (see *Spend contract*).
+Both machine-local Agentic Engineer lanes dispatch **every hour**. Cursor keeps its every-2-hours
+cloud cadence, centered between the two machine-local offsets on uneven hours. The Agent Improver
+keeps its 4×/day rotation (00 Claude, 07 Codex, 12 Claude, 19 Codex) as additional `:00` starts; those
+slots no longer replace an Agentic Engineer tick. This table covers the two scheduled engineering
+roles only — spend stewardship has no dispatch slot of its own (see *Spend contract*).
 
 **Two properties of this schedule change how you plan a run.**
 ⚠️ **A sibling being mid-run is the NORMAL case — scan cross-lane on EVERY run, never at one special
-hour.** The parity invariant removes simultaneous *starts*, which is the window where two instances
-select the same issue; it does **not** remove overlap, because runs outlive their hour. Measured over
+hour.** The stagger invariant removes identical scheduled *start times*; it does **not** remove
+overlap, because runtimes add jitter and runs outlive their hour. Measured over
 the 7 days to 2026-07-28 (n=26 completed Claude dispatches): **median 51 min, p75 79 min, 46% ran
 longer than 60 minutes, max 377**. So a sibling lane is very often still working when you start.
 *Claim protocol* rule 4 records that claim arbitration does **not** work across lanes — each instance
 writes its own namespace, so both pushes succeed and both believe they won. Scan `codex/*`,
 `claude/*` **and** `cursor/*` branches and open PRs before claiming, always.
-**Same-lane overlap is expected, and it IS arbitrated.** With 2-hour spacing and ~12% of runs
-exceeding 120 minutes, your own lane's next dispatch can start before you finish. That case is safe
-by construction — same namespace, same deterministic branch name, and a non-forced push is refused
-(see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim branch.
+**Same-lane overlap is expected, and it IS arbitrated.** With hourly spacing and 46% of measured
+Claude runs exceeding 60 minutes, your own lane's next dispatch often starts before you finish. That
+case is safe by construction — same namespace, same deterministic branch name, and a non-forced push
+is refused (see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim
+branch.
 
-**Your LANE fires every 2 hours; your own ROLE's next slot is sometimes 4.** Two of each lane's twelve
-slots belong to the Agent Improver, so an Agentic Engineer's own next tick is **2 hours away eight
-times a day and 4 hours away twice** — Claude across its 12:00 and 00:00 improver slots (10→14, 22→02),
-Codex across its 07:00 and 19:00 ones (05→09, 17→21). That interval is the gap **between
-runs, not a per-run time
-budget** — and it is the *instance's* own gap that bounds a carry-forward, so **check which slot you
-are in before deferring**: a watch item handed to "the next tick" from a Claude **10:00/22:00** or a
-Codex **05:00/17:00** run waits four hours, not two. Each run works
+**Your Agentic Engineer's next scheduled tick is always one hour later.** The Agent Improver's four
+daily starts are additional work, not replacement slots. That hour is the gap **between runs, not a
+per-run time budget**; it bounds a carry-forward without telling an active run to stop early. Each run works
 *The work-selection ladder* top-down — **breakage → every open PR you own or trust, drafts included →
 security issues → bugs → the oldest actionable issue** — capturing new
 non-trivial finds as issues (see *Issue-driven*).
