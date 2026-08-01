@@ -153,8 +153,10 @@ jq -e --arg e "${entrypoint}" '
   (.spec.roles | has($e))
   and .spec.runtime.scheduler.schedules[$e].definitionFrom
       == ("plugin:agentic-engineering/" + $e)
+  and .spec.source.updatePolicy == "latest-reviewed-default-branch"
+  and .spec.source.refreshTiming == "before-starting-each-run"
 ' "${desired_state}" > /dev/null ||
-  fail "desired state role and schedule keys must match its declared entrypoint '${entrypoint}'"
+  fail "desired state role, schedule, and reviewed-plugin refresh policy must match its declared entrypoint '${entrypoint}'"
 # Backticks are literal Markdown, not command substitution.
 # shellcheck disable=SC2016
 assert_prose "entrypoint **\`${entrypoint}\`**" \
@@ -178,6 +180,8 @@ assert_engineer_prose 'compatibility alias, not a second role definition' \
   "legacy daily-maintainer agent does not declare itself a thin compatibility alias"
 assert_engineer_prose 'Generic role behaviour belongs in the reviewed plugin' \
   "legacy daily-maintainer agent does not route generic changes to the plugin"
+assert_engineer_prose 'latest-reviewed-default-branch' \
+  "legacy daily-maintainer agent does not declare the reviewed-plugin refresh policy"
 if grep -Eq '^## (How you operate|Spend stewardship)' "${engineer_agent}"; then
   fail "legacy daily-maintainer agent duplicates canonical plugin role sections"
 fi
@@ -208,6 +212,14 @@ for compatibility_overlay in \
     "${compatibility_overlay}" ||
     fail "${compatibility_overlay#"${repo_root}/"} does not route portable changes upstream"
 done
+grep -Fq 'Classify each target by the file-level ownership and authority rules' \
+  "${self_improvement_overlay}" ||
+  fail "self-improvement distillation does not classify definition ownership before choosing a repository"
+grep -Fq 'metadata.github-repo' "${self_improvement_overlay}" ||
+  fail "self-improvement distillation does not route synced skills by structured provenance"
+if grep -Fq '`.claude/agents/*`, `.claude/skills/*`' "${self_improvement_overlay}"; then
+  fail "self-improvement distillation still routes every local agent or skill change to the monorepo"
+fi
 grep -Fq 'agentic-engineer.agent.md' "${cursor_loader}" ||
   fail "Cursor adapter does not resolve the canonical plugin role"
 grep -Fq '.claude/scripts/submodule-init.sh libraries/agent-plugins' "${cursor_loader}" ||

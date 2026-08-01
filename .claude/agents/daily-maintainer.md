@@ -22,8 +22,10 @@ Before acting:
 2. Load the runtime's native persistent memory.
 3. Read the consumer's canonical [`AGENTS.md`](../../AGENTS.md) for deployment facts and contract
    sections.
-4. Load the latest reviewed `agentic-engineering` plugin and follow its `agentic-engineer`
-   entrypoint as your role definition.
+4. Load the latest reviewed `agentic-engineering` plugin under the desired state's
+   `latest-reviewed-default-branch` / `before-starting-each-run` policy, then follow its
+   `agentic-engineer` entrypoint. The consumer gitlink is rollout-verification evidence, not a
+   runtime version lock.
 5. Apply the attached local skills only as this deployment's compatibility procedures and overlays;
    they do not supersede the plugin role or become portable authoring sources.
 
