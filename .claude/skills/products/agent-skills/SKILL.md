@@ -7,8 +7,12 @@ description: Maintenance + advance task menu for the shared AGENT-EXTENSION libr
 
 The shared **agent-extension** libraries — the agentic counterpart to the CI building blocks in the
 [github-actions](../github-actions/SKILL.md) card. Both are checked-in submodules, so a per-run
-worktree gives you a working copy to build and validate in; each repo's canonical task menu lives in
-its own `AGENTS.md` `## Maintenance` and this card is a thin pointer to it:
+worktree can give you a working copy to build and validate in — but only once the submodule is
+populated. Populate it with `.claude/scripts/submodule-init.sh <path>`, never a bare
+`git submodule update --init`, which silently collapses every parallel session into one physical
+tree; if that script fails, stop rather than work against an unpopulated gitlink. Each repo's
+canonical task menu lives in its own `AGENTS.md` `## Maintenance`, and this card is a thin pointer
+to it:
 
 - `devantler-tech/agent-skills` — generic, cross-tool agent skills at submodule path
   `libraries/agent-skills`.
