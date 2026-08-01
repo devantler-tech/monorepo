@@ -2637,12 +2637,21 @@ cat > "$FIX/dispatch/discuss-long.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T23:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d3","name":"Bash","input":{"command":"echo analysing"}}]}}
 {"type":"assistant","timestamp":"2026-08-01T23:00:10.000Z","message":{"content":[{"type":"text","text":"Sixteen scheduled dispatches died over roughly forty-five hours, and the assistant turn in every one of them was exactly the string You've hit your weekly limit, quoted here as evidence so a later reader can audit the classification for themselves rather than taking the count on trust alone."}]}}
 EOF
+# CONTROL C pins the tool-rate-limit EXCLUSION. Its final block is short and
+# matches the refusal wording, so neither the length gate nor the last-block
+# rule can save it; only "a tool rate limit is not a provider refusal" keeps it
+# live. Misfiling this inflates the outage and shrinks the live denominator.
+cat > "$FIX/dispatch/toolrate.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T21:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d4","name":"Bash","input":{"command":"gh api rate_limit"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T21:00:05.000Z","message":{"content":[{"type":"text","text":"You've hit your tool rate limit; retrying via REST."}]}}
+EOF
 DOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
-check "counts live dispatches"       "$DOUT" "live ......... 2"
+check "counts live dispatches"       "$DOUT" "live ......... 3"
 check "counts dead dispatches"       "$DOUT" "dead ......... 2"
 check "counts truncated dispatches"  "$DOUT" "truncated .... 1"
-check "reports the outage span"      "$DOUT" "2026-07-31T22:01:50"
+# Assert BOTH bounds: a first-bound-only check stays green with DH_LAST empty.
+check "reports the outage span"      "$DOUT" "outage span: 2026-07-31T22:01:50.003Z -> 2026-08-01T10:59:46.787Z"
 check "names live as the denominator" "$DOUT" "volume floors"
 # The control, stated as its own assertion: discussing the phrase is not an outage.
 # Each control is ALSO run in its own corpus, because in the combined corpus the
@@ -2663,6 +2672,14 @@ check "an early quote is not called truncated"    "$EOUT" "truncated .... 0"
 # last-block restriction cannot be what saves it.
 check "a long final block quoting it stays live"  "$LOUT" "live ......... 1"
 check "a long final block is not called truncated" "$LOUT" "truncated .... 0"
+# Pins the tool-rate-limit EXCLUSION alone: short final block that DOES match the
+# refusal wording, so only the negative screen can keep it live.
+mkdir -p "$FIX/dh-toolrate"
+cp "$FIX/dispatch/toolrate.jsonl" "$FIX/dh-toolrate/s.jsonl"
+TOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-toolrate" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a tool rate limit is not a provider refusal" "$TOUT" "live ......... 1"
+check "a tool rate limit is not called truncated"   "$TOUT" "truncated .... 0"
 # ...and the classifier is not vacuous: an all-healthy corpus reports zero dead.
 mkdir -p "$FIX/dispatch-clean"
 cat > "$FIX/dispatch-clean/ok.jsonl" <<'EOF'

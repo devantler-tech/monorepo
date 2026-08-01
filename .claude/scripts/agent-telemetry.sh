@@ -882,7 +882,11 @@ if want dispatch; then
     DH_FIRST=""; DH_LAST=""
     # Provider refusals only — a quota/capacity message from the model provider
     # that ENDS the session. Not a tool rate limit, not a review-lane quota.
-    DH_RE='(hit your [a-z0-9 -]*limit|usage limit reached|limit · resets|out of (credits|usage)|capacity constraints)'
+    # That exclusion is ENFORCED, not just asserted: the positive pattern alone
+    # matches 'hit your tool rate limit', which would misfile a live dispatch as
+    # truncated and corrupt the very denominator this section exists to protect.
+    DH_RE='(you.?ve hit your [a-z0-9 -]*limit|usage limit reached|limit · resets|out of (credits|usage)|capacity constraints)'
+    DH_NOT_RE='(rate limit|rate-limit|review limit|quota exceeded for)'
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       row=$(jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty))
@@ -900,7 +904,9 @@ if want dispatch; then
       # Length gate FIRST: the refusal is the entire turn (~60 chars observed).
       # Prose that merely quotes it is far longer, which is what keeps this
       # tool's own evidence out of its own count.
-      if [ "${#lastt}" -le 200 ] && printf '%s' "$lastt" | grep -qiE "$DH_RE"; then
+      if [ "${#lastt}" -le 200 ] \
+         && printf '%s' "$lastt" | grep -qiE "$DH_RE" \
+         && ! printf '%s' "$lastt" | grep -qiE "$DH_NOT_RE"; then
         ended_on_refusal=1
       fi
       if [ "$ended_on_refusal" -eq 1 ]; then
