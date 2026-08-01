@@ -903,16 +903,16 @@ if want dispatch; then
       if [ "${#lastt}" -le 200 ] && printf '%s' "$lastt" | grep -qiE "$DH_RE"; then
         ended_on_refusal=1
       fi
-      if [ "$ended_on_refusal" -eq 1 ] && [ "$tu" -eq 0 ]; then
-        DH_DEAD=$((DH_DEAD+1))
-        [ -n "$ts" ] && { [ -z "$DH_FIRST" ] && DH_FIRST="$ts"; }
-        [ -n "$ts" ] && [ "$ts" \< "$DH_FIRST" ] && DH_FIRST="$ts"
-        [ -n "$ts" ] && [ "$ts" \> "$DH_LAST" ] && DH_LAST="$ts"
-      elif [ "$ended_on_refusal" -eq 1 ]; then
-        DH_TRUNC=$((DH_TRUNC+1))
-        [ -n "$ts" ] && { [ -z "$DH_FIRST" ] && DH_FIRST="$ts"; }
-        [ -n "$ts" ] && [ "$ts" \< "$DH_FIRST" ] && DH_FIRST="$ts"
-        [ -n "$ts" ] && [ "$ts" \> "$DH_LAST" ] && DH_LAST="$ts"
+      if [ "$ended_on_refusal" -eq 1 ]; then
+        if [ "$tu" -eq 0 ]; then DH_DEAD=$((DH_DEAD+1)); else DH_TRUNC=$((DH_TRUNC+1)); fi
+        # Widen the outage span over every refusal-ended dispatch, dead or not:
+        # a truncated run is part of the same outage and must not be excluded
+        # from its bounds just because it got some work done first.
+        if [ -n "$ts" ]; then
+          [ -z "$DH_FIRST" ] && DH_FIRST="$ts"
+          [ "$ts" \< "$DH_FIRST" ] && DH_FIRST="$ts"
+          [ "$ts" \> "$DH_LAST" ] && DH_LAST="$ts"
+        fi
       elif [ "$tu" -gt 0 ]; then
         DH_LIVE=$((DH_LIVE+1))
       else
