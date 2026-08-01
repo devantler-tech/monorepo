@@ -909,7 +909,9 @@ if want dispatch; then
     # issue." must stay live, and an unanchored substring match would take it.
     # Each alternative must START the turn. A leading .{0,40} wildcard silently
     # reopens the substring hole the ^ anchor exists to close.
-    DH_RE='^(you.?ve hit your [a-z0-9 -]*limit|usage limit reached|claude usage limit reached|this (account|organization) is out of (credits|usage)|capacity constraints prevent)'
+    # Apostrophe forms are ENUMERATED, not wildcarded: `you.?ve` would accept
+    # "youXve" and any other separator, which is a substring hole in miniature.
+    DH_RE="^(you've hit your [a-z0-9 -]*limit|you’ve hit your [a-z0-9 -]*limit|youve hit your [a-z0-9 -]*limit|usage limit reached|claude usage limit reached|this (account|organization) is out of (credits|usage)|capacity constraints prevent)"
     DH_NOT_RE='(rate limit|rate-limit|review limit|quota exceeded for)'
     while IFS= read -r f; do
       [ -n "$f" ] || continue
@@ -923,7 +925,7 @@ if want dispatch; then
       row=$(jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty))
         | (map(select(.type=="assistant")|.message.content[]?|select(.type=="tool_use"))|length) as $tu
         | (([.[] | select(.type=="assistant")] | last) // {}) as $lastrec
-        | ((($lastrec.message.content[]?|select(.type=="text")|.text) // "")) as $lastt
+        | (([$lastrec.message.content[]?|select(.type=="text")|.text] | last) // "") as $lastt
         | (($lastrec.timestamp) // (map(select(.timestamp)|.timestamp)|last) // "") as $ts
         | "\($tu)\t\($ts)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
       ' "$f" 2>/dev/null | head -1)

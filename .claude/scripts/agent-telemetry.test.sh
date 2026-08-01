@@ -2650,7 +2650,7 @@ EOF
 # and the phrase is in the final block, so only anchoring at the start keeps it live.
 cat > "$FIX/dispatch/short-summary.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T20:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d5","name":"Bash","input":{"command":"echo checking"}}]}}
-{"type":"assistant","timestamp":"2026-08-01T20:00:05.000Z","message":{"content":[{"type":"text","text":"Confirmed the account is out of credits; I filed an issue."}]}}
+{"type":"assistant","timestamp":"2026-08-01T20:00:05.000Z","message":{"content":[{"type":"text","text":"Confirmed this account is out of credits; I filed an issue."}]}}
 EOF
 # CONTROL E pins the SUBAGENT EXCLUSION: a dispatch is a scheduled run, not a
 # transcript. This dead sidechain must not add a dispatch of its own.
@@ -2765,6 +2765,23 @@ IOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-resumed2" CODEX_HOME="$FIX/nocodex" MONOREPO
        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a resumed run ending on tool activity stays live" "$IOUT" "live ......... 1"
 nocheck "a historical refusal does not date a current outage" "$IOUT" "2026-05-01"
+# CONTROL J pins MULTI-BLOCK final records: the refusal is the LAST text block
+# of a record whose first block is ordinary prose. Reading only the first block
+# misses the refusal entirely.
+mkdir -p "$FIX/dh-multiblock"
+cat > "$FIX/dh-multiblock/s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T18:00:00.000Z","message":{"content":[{"type":"text","text":"Working."},{"type":"text","text":"You've hit your weekly limit"}]}}
+EOF
+MOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-multiblock" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a refusal in the LAST text block of a record is seen" "$MOUT" "dead ......... 1"
+# CONTROL K pins the APOSTROPHE ENUMERATION: the U+2019 typographic form must
+# classify identically to the ASCII one.
+mkdir -p "$FIX/dh-curly"
+printf '{"type":"assistant","timestamp":"2026-08-01T18:30:00.000Z","message":{"content":[{"type":"text","text":"You\u2019ve hit your weekly limit"}]}}\n' > "$FIX/dh-curly/s.jsonl"
+KOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-curly" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a typographic apostrophe classifies as a refusal" "$KOUT" "dead ......... 1"
 check "a healthy corpus reports no dead dispatches" "$COUT" "dead ......... 0"
 check "a healthy corpus reports no outage span"     "$COUT" "outage span: none"
 
