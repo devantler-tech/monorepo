@@ -120,7 +120,7 @@ subst "$FIX/projects/proj-a/s1.jsonl"
 
 # Loader fixtures: Codex asserts the RETIRED gate; the constitution records it retired.
 cat > "$FIX/claude-sched/daily-ai-assistant/SKILL.md" <<'EOF'
-description: Thin scheduler pointer for the Agentic Engineer (claude/* lane: EVEN hours 02–22, minus the 00/12 Agent Improver slots).
+description: Thin scheduler pointer for the Agentic Engineer (claude/* lane: hourly at :50).
 EOF
 cat > "$FIX/claude-sched/agent-improver/SKILL.md" <<'EOF'
 description: Thin scheduler pointer for the Agent Improver (claude/* lane: 00 and 12 local).
@@ -132,7 +132,7 @@ cat > "$FIX/claude-store/scheduled-tasks.json" <<EOF
       "id": "daily-ai-assistant",
       "enabled": true,
       "filePath": "$FIX/claude-sched/daily-ai-assistant/SKILL.md",
-      "cronExpression": "0 2,4,6,8,10,14,16,18,20,22 * * *",
+      "cronExpression": "50 * * * *",
       "lastRunAt": "2026-07-25T20:00:00.000Z"
     },
     {
@@ -147,13 +147,28 @@ cat > "$FIX/claude-store/scheduled-tasks.json" <<EOF
 EOF
 cat > "$FIX/codex/automations/daily-ai-engineer/automation.toml" <<'EOF'
 prompt = "definition/self-improvement PRs are the one exception: NEVER self-promote those"
-rrule = "RRULE:FREQ=HOURLY;INTERVAL=1;BYHOUR=1,3,5,9,11,13,15,17,21,23;BYMINUTE=0;BYSECOND=0"
+rrule = "RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0"
 updated_at = 1785238559676
 EOF
 cat > "$FIX/codex/automations/agent-improver/automation.toml" <<'EOF'
 rrule = "RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0"
 updated_at = 1785222863850
 EOF
+CODEX_AUTOMATION_STORE="$FIX/codex/codex-dev.db"
+if ! sqlite3 "$CODEX_AUTOMATION_STORE" <<'SQL'
+CREATE TABLE automations (
+  id TEXT PRIMARY KEY,
+  rrule TEXT NOT NULL,
+  last_run_at INTEGER
+);
+INSERT INTO automations (id, rrule, last_run_at) VALUES
+  ('daily-ai-engineer', 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0', 1785238560676),
+  ('agent-improver', 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0', 1785222864850);
+SQL
+then
+  echo "failed to create Codex automation store fixture" >&2
+  exit 1
+fi
 cat > "$FIX/monorepo/AGENTS.md" <<'EOF'
 Definition PRs: their separate human promotion gate was retired by maintainer direction 2026-07-18.
 
@@ -164,8 +179,8 @@ Definition PRs: their separate human promotion gate was retired by maintainer di
 ### Cadence & focus
 | Lane | Agentic Engineer | Agent Improver |
 |---|---|---|
-| **Claude** — `claude/*`, even hours | 02, 04, 06, 08, 10, 14, 16, 18, 20, 22 | 00, 12 |
-| **Codex** — `codex/*`, uneven hours | 01, 03, 05, 09, 11, 13, 15, 17, 21, 23 | 07, 19 |
+| **Claude** — `claude/*`, hourly at `:50` | Every hour at `:50` | 00:00, 12:00 |
+| **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 07:00, 19:00 |
 EOF
 mkdir -p "$FIX/monorepo/.claude"
 
@@ -177,6 +192,7 @@ run() {
   CLAUDE_IMPROVER_LOADER_PATH="$FIX/claude-sched/agent-improver/SKILL.md" \
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
   CODEX_IMPROVER_LOADER_PATH="$FIX/codex/automations/agent-improver/automation.toml" \
+  CODEX_AUTOMATION_STORE_PATH="$CODEX_AUTOMATION_STORE" \
   CLAUDE_ENGINEER_MARKER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-1750000000}" \
   CLAUDE_IMPROVER_MARKER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-1750000000}" \
   CODEX_ENGINEER_MARKER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-1785238559000}" \
@@ -191,6 +207,18 @@ echo
 echo "syntax"
 if bash -n "$TARGET" 2>/dev/null; then ok "parses"; else bad "parses" "bash -n failed"; fi
 if [ -x "$TARGET" ]; then ok "executable"; else bad "executable" "chmod +x missing"; fi
+if [ "$(grep -Fc "escaped_id=\${id//\\'/\\'\\'}" "$TARGET")" -eq 2 ]; then
+  ok "escapes both Codex automation ids before SQL interpolation"
+else
+  bad "escapes both Codex automation ids before SQL interpolation" \
+    "expected two defensive single-quote substitutions"
+fi
+if [ "$(grep -Fc "WHERE id = '\$escaped_id';" "$TARGET")" -eq 2 ]; then
+  ok "uses escaped ids in both Codex scheduler queries"
+else
+  bad "uses escaped ids in both Codex scheduler queries" \
+    "expected both queries to interpolate escaped_id"
+fi
 
 # ── 2. reliability: errors attributed to the right tool ───────────────────────
 echo
@@ -226,14 +254,14 @@ echo
 echo "drift"
 OUT=$(run --section drift)
 check "detects retired-rule residue"   "$OUT" "DRIFT"
-check "compares Claude engineer schedule" "$OUT" "claude engineer: expected=2,4,6,8,10,14,16,18,20,22 actual=2,4,6,8,10,14,16,18,20,22 MATCH"
-check "compares Claude improver schedule" "$OUT" "claude improver: expected=0,12 actual=0,12 MATCH"
-check "compares Codex engineer schedule"  "$OUT" "codex engineer:  expected=1,3,5,9,11,13,15,17,21,23 actual=1,3,5,9,11,13,15,17,21,23 MATCH"
-check "compares Codex improver schedule"  "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
-check "reports Codex engineer marker advance" "$OUT" "MATCH marker=1785238559676 baseline=1785238559000"
-check "reports Codex improver marker advance" "$OUT" "MATCH marker=1785222863850 baseline=1785222863000"
-check "proves local start parity"         "$OUT" "local simultaneous starts/day: 0"
-check "proves engineer dispatch volume"   "$OUT" "local engineer dispatches/day: 20"
+check "compares Claude engineer schedule" "$OUT" "claude engineer: expected=*@50 actual=*@50 MATCH"
+check "compares Claude improver schedule" "$OUT" "claude improver: expected=0,12@0 actual=0,12@0 MATCH"
+check "compares Codex engineer schedule"  "$OUT" "codex engineer:  expected=*@10 actual=*@10 MATCH"
+check "compares Codex improver schedule"  "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
+check "reports Codex engineer dispatch advance" "$OUT" "MATCH marker=1785238560676 baseline=1785238559000"
+check "reports Codex improver dispatch advance" "$OUT" "MATCH marker=1785222864850 baseline=1785222863000"
+check "proves staggered local starts"      "$OUT" "local simultaneous starts/day: 0"
+check "proves hourly engineer dispatches"  "$OUT" "local engineer dispatches/day: 48"
 
 # Removing one pointer must fail closed rather than leaving the schedule surface
 # silently unmeasured. This is the exact blind spot that hid the reverted Codex
@@ -245,30 +273,56 @@ check "missing improver pointer is explicit" "$OUT" "UNKNOWN: codex improver sch
 mv "$FIX/codex/automations/agent-improver/automation.toml.missing" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
-# A matching value without the runtime's own write marker cannot prove that a
+# A matching value without the runtime's own dispatch marker cannot prove that a
 # dispatch occurred after the edit, so persistence remains explicitly unknown.
-sed -i.bak '/^updated_at = /d' \
-  "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET last_run_at = NULL WHERE id = 'agent-improver';"
 OUT=$(run --section drift)
 check "missing runtime marker is explicit" "$OUT" "UNKNOWN: codex improver change marker missing"
-nocheck "missing runtime marker never claims persistence" "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
+nocheck "missing runtime marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 check "missing runtime marker invalidates parity total" "$OUT" "local simultaneous starts/day: UNKNOWN"
 check "missing runtime marker invalidates dispatch total" "$OUT" "local engineer dispatches/day: UNKNOWN"
-mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
-   "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET last_run_at = 1785222864850 WHERE id = 'agent-improver';"
 
 # An unchanged marker is the in-session read-back, not persistence proof.
-OUT=$(CODEX_IMPROVER_MARKER_BASELINE=1785222863850 run --section drift)
+OUT=$(CODEX_IMPROVER_MARKER_BASELINE=1785222864850 run --section drift)
 check "unchanged marker is not persistence proof" "$OUT" "UNKNOWN: codex improver change marker did not advance"
-nocheck "unchanged marker never claims persistence" "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
+nocheck "unchanged marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 
-# RRULE parity includes minute, second, frequency, interval, and filters, not
-# merely the set of hours.
+# The dispatch marker and recurrence must come from one correlated scheduler
+# record. A database-side rewrite cannot be hidden by the desired pointer while
+# last_run_at continues advancing.
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=6,18;BYMINUTE=50;BYSECOND=0' WHERE id = 'agent-improver';"
+OUT=$(run --section drift)
+check "scheduler-store rewrite is detected" "$OUT" "DRIFT: codex improver schedule pointer=7,19@0 scheduler=6,18@50"
+nocheck "scheduler-store rewrite never claims MATCH" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
+check "scheduler-store rewrite invalidates collision total" "$OUT" "local simultaneous starts/day: UNKNOWN"
+check "scheduler-store rewrite invalidates dispatch total" "$OUT" "local engineer dispatches/day: UNKNOWN"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0' WHERE id = 'agent-improver';"
+
+# RRULE comparison includes minute, second, frequency, interval, and filters,
+# not merely the set of hours. A valid alternate minute is concrete drift, not
+# an unreadable schedule.
 sed -i.bak 's/BYMINUTE=0/BYMINUTE=30/' \
   "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=30;BYSECOND=0' WHERE id = 'agent-improver';"
 OUT=$(run --section drift)
-check "minute drift invalidates recurrence" "$OUT" "UNKNOWN: codex improver recurrence rule is incomplete or unsupported"
-check "minute drift invalidates aggregate parity" "$OUT" "local simultaneous starts/day: UNKNOWN"
+check "minute drift is reported concretely" "$OUT" "DRIFT: codex improver schedule expected=7,19@0 actual=7,19@30"
+check "valid minute drift remains measurable" "$OUT" "local simultaneous starts/day: 0"
+mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
+   "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0' WHERE id = 'agent-improver';"
+
+# An out-of-range minute is malformed and must fail closed.
+sed -i.bak 's/BYMINUTE=0/BYMINUTE=60/' \
+  "$FIX/codex/automations/agent-improver/automation.toml"
+OUT=$(run --section drift)
+check "out-of-range minute invalidates recurrence" "$OUT" "UNKNOWN: codex improver recurrence rule is incomplete or unsupported"
 mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
@@ -277,7 +331,7 @@ sed -i.bak 's/BYHOUR=7,19/BYHOUR=7,19,24/' \
   "$FIX/codex/automations/agent-improver/automation.toml"
 OUT=$(run --section drift)
 check "out-of-range hour invalidates recurrence" "$OUT" "UNKNOWN: codex improver recurrence rule is incomplete or unsupported"
-nocheck "out-of-range hour never normalizes to MATCH" "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
+nocheck "out-of-range hour never normalizes to MATCH" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
@@ -285,21 +339,21 @@ mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
 sed -i.bak 's/BYHOUR=7,19/BYHOUR=19,7/' \
   "$FIX/codex/automations/agent-improver/automation.toml"
 OUT=$(run --section drift)
-check "hour sets are sorted before comparison" "$OUT" "codex improver:  expected=7,19 actual=7,19 MATCH"
+check "hour sets are sorted before comparison" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
 # Loader prose is not scheduler state. A stale description must not override the
 # authoritative cron record.
-sed -i.bak -e 's/02–22/00–22/' -e 's|00/12|02/04|' \
+sed -i.bak -e 's/hourly at :50/hourly at :40/' \
   "$FIX/claude-sched/daily-ai-assistant/SKILL.md"
 OUT=$(run --section drift)
-check "Claude cadence comes from scheduler store" "$OUT" "claude engineer: expected=2,4,6,8,10,14,16,18,20,22 actual=2,4,6,8,10,14,16,18,20,22 MATCH"
+check "Claude cadence comes from scheduler store" "$OUT" "claude engineer: expected=*@50 actual=*@50 MATCH"
 mv "$FIX/claude-sched/daily-ai-assistant/SKILL.md.bak" \
    "$FIX/claude-sched/daily-ai-assistant/SKILL.md"
 
 # Same-provider overlaps in the authoritative store are collisions too.
-sed -i.bak 's/"cronExpression": "0 0,12/"cronExpression": "0 0,10/' \
+sed -i.bak 's/"cronExpression": "0 0,12/"cronExpression": "50 0/' \
   "$FIX/claude-store/scheduled-tasks.json"
 OUT=$(run --section drift)
 check "same-provider overlap is counted" "$OUT" "local simultaneous starts/day: 1"
@@ -307,13 +361,17 @@ mv "$FIX/claude-store/scheduled-tasks.json.bak" \
    "$FIX/claude-store/scheduled-tasks.json"
 
 # A persisted runtime rewrite must report the concrete expected/actual delta.
-sed -i.bak 's/BYHOUR=7,19/BYHOUR=6,18/' \
+sed -i.bak 's/BYHOUR=7,19;BYMINUTE=0/BYHOUR=6,18;BYMINUTE=50/' \
   "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=6,18;BYMINUTE=50;BYSECOND=0' WHERE id = 'agent-improver';"
 OUT=$(run --section drift)
-check "runtime schedule rewrite is detected" "$OUT" "DRIFT: codex improver schedule expected=7,19 actual=6,18"
+check "runtime schedule rewrite is detected" "$OUT" "DRIFT: codex improver schedule expected=7,19@0 actual=6,18@50"
 check "runtime rewrite exposes collisions"   "$OUT" "local simultaneous starts/day: 2"
 mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
    "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0' WHERE id = 'agent-improver';"
 
 # ── 6. clean-state: no false positives when nothing is wrong ──────────────────
 echo

@@ -2,7 +2,7 @@
 
 The **third deployed instance** of the Agentic Engineer brain, running as a
 [Cursor Automation](https://cursor.com/docs/cloud-agent/automations) (cloud agent) alongside the two
-machine-local instances (Claude Code and ChatGPT/Codex, whose per-hour split is the table in
+machine-local instances (Claude Code and ChatGPT/Codex, whose hourly minute offsets are the table in
 `AGENTS.md` → *Cadence & focus*).
 
 Cursor Automations have **no local config file and no CLI** — they live server-side and are created in
@@ -23,20 +23,16 @@ this file and the deployed automation is a defect to fix here first.
 | Tools | `prComment` — add others only when a run demonstrably needs them |
 | Scope | **Private** automation (not team-scoped) — see *Identity* below |
 
-**Why that cron.** The machine-local lanes split by parity — **Claude on even hours, Codex on uneven
-hours** (see the *Cadence & focus* table) — so `:30` past **uneven** hours drops Cursor into the one
-remaining gap: 30 minutes after the Codex dispatch it follows, and ~38 minutes before the next Claude
-one. No two consecutive dispatches land less than 30 minutes apart, and Cursor is **never simultaneous
-with a sibling**. The 30-minute trail behind Codex is deliberate and sufficient: the claim protocol requires a
-claim to be pushed *before* building, within the first minutes of a run, so a claim Codex just took is
-already visible when Cursor selects its issue.
+**Why that cron.** The machine-local Agentic Engineer lanes run every hour — Codex at `:10` and Claude
+at `:50` (see the *Cadence & focus* table) — so `:30` past uneven hours centers Cursor between their
+scheduled starts. The claim protocol requires a claim to be pushed *before* building, within the first
+minutes of a run, so a claim Codex just took is visible when Cursor selects its issue. Runtime jitter
+and long-running work still make overlap normal, which is why every lane scans sibling branches and
+PRs before claiming.
 
-**This cron did not change when the local lanes densified — do not re-paste the automation for it.**
-The value is still `30 1-23/2 * * *` and the prompt below still describes it correctly; only the
-*rationale* above was rewritten, because the premise it used to give ("both local lanes dispatch on
-even hours", and a local gap at 18:00) is no longer true. Changing the cron is a one-field edit in the
-Automations UI — but keep the offset, since a third instance selecting simultaneously with a sibling is
-exactly what the claim protocol cannot arbitrate across lanes.
+Keep the Cursor value at `30 1-23/2 * * *`; changing an existing Cursor Automation remains a UI-only
+operation, and the cloud lane's distinct offset avoids an identical scheduled start with either
+machine-local engineer.
 
 ## Instructions (paste this into the automation's prompt)
 

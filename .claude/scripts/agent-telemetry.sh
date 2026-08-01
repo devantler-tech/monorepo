@@ -1835,6 +1835,7 @@ if want drift; then
   CLAUDE_IMPROVER_LOADER="${CLAUDE_IMPROVER_LOADER_PATH:-$HOME/.claude/scheduled-tasks/agent-improver/SKILL.md}"
   CODEX_LOADER="${CODEX_LOADER_PATH:-$CODEX_HOME/automations/daily-ai-engineer/automation.toml}"
   CODEX_IMPROVER_LOADER="${CODEX_IMPROVER_LOADER_PATH:-$CODEX_HOME/automations/agent-improver/automation.toml}"
+  CODEX_AUTOMATION_STORE="${CODEX_AUTOMATION_STORE_PATH:-$CODEX_HOME/sqlite/codex-dev.db}"
   AGENTS_MD="$MONOREPO/AGENTS.md"
 
   discover_claude_schedule_store() {
@@ -1877,9 +1878,10 @@ if want drift; then
   echo
   echo "  cadence table vs all four runtime schedule pointers:"
 
-  # Canonicalise an hour set for exact comparison. The contract prints zero-
-  # padded hours while RRULE uses integers; comparing the raw strings would
-  # report false drift for equivalent schedules.
+  # Canonicalise schedule slots for exact comparison. The compact form is
+  # "hours@minute" (for example 0,12@0), with * representing every hour.
+  # This keeps the output readable while still distinguishing staggered
+  # schedules that share the same hour set.
   normalise_hours() {
     awk -F',' '
       {
@@ -1913,22 +1915,64 @@ if want drift; then
     ' | normalise_hours
   }
 
-  cadence_expected() {
-    local provider="$1" column="$2" lane
-    [ -f "$AGENTS_MD" ] || return 0
-    lane=$(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]')
-    awk -F'|' -v p="$provider" -v lane="$lane/*" -v c="$column" '
-      index($2, "**" p "**") && index($2, lane) { print $c; exit }
-    ' "$AGENTS_MD" 2>/dev/null | tr -cd '0-9, \n' | normalise_hours
+  schedule_from_parts() {
+    local hours="$1" minute="$2" normalised all_hours
+    [[ "$minute" =~ ^[0-9][0-9]?$ ]] || return 0
+    [ "$minute" -ge 0 ] && [ "$minute" -le 59 ] || return 0
+    if [ "$hours" = "*" ]; then
+      normalised="*"
+    else
+      normalised=$(printf '%s\n' "$hours" | validated_hours)
+      [ -n "$normalised" ] || return 0
+      all_hours="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      [ "$normalised" = "$all_hours" ] && normalised="*"
+    fi
+    printf '%s@%s\n' "$normalised" "$((10#$minute))"
   }
 
-  codex_pointer_hours() {
-    local rule
-    [ -f "$1" ] || return 0
-    rule=$(sed -nE 's/^rrule[[:space:]]*=[[:space:]]*"RRULE:([^"]+)".*/\1/p' "$1" \
-      | head -1)
+  cadence_expected() {
+    local provider="$1" column="$2" lane cell minute parsed hours
+    [ -f "$AGENTS_MD" ] || return 0
+    lane=$(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]')
+    cell=$(awk -F'|' -v p="$provider" -v lane="$lane/*" -v c="$column" '
+      index($2, "**" p "**") && index($2, lane) { print $c; exit }
+    ' "$AGENTS_MD" 2>/dev/null)
+    [ -n "$cell" ] || return 0
+    if printf '%s\n' "$cell" | grep -qi 'every hour'; then
+      minute=$(printf '%s\n' "$cell" | sed -nE 's/.*:([0-9][0-9]?).*/\1/p')
+      schedule_from_parts "*" "$minute"
+      return 0
+    fi
+    parsed=$(printf '%s\n' "$cell" | awk '
+      {
+        value = $0
+        while (match(value, /[0-9][0-9]?:[0-9][0-9]/)) {
+          token = substr(value, RSTART, RLENGTH)
+          split(token, pair, ":")
+          if (pair[1] + 0 < 0 || pair[1] + 0 > 23 ||
+              pair[2] + 0 < 0 || pair[2] + 0 > 59) exit 1
+          if (minute != "" && minute != pair[2] + 0) exit 1
+          minute = pair[2] + 0
+          hours = hours (hours == "" ? "" : ",") pair[1]
+          value = substr(value, RSTART + RLENGTH)
+        }
+      }
+      END {
+        if (hours == "" || minute == "") exit 1
+        print hours "|" minute
+      }
+    ')
+    [ -n "$parsed" ] || return 0
+    hours=${parsed%%|*}
+    minute=${parsed#*|}
+    schedule_from_parts "$hours" "$minute"
+  }
+
+  codex_rrule_schedule() {
+    local rule="$1" parsed hours minute
+    rule=${rule#RRULE:}
     [ -n "$rule" ] || return 0
-    printf '%s\n' "$rule" | awk -F';' '
+    parsed=$(printf '%s\n' "$rule" | awk -F';' '
       {
         for (i = 1; i <= NF; i++) {
           split($i, pair, "=")
@@ -1946,11 +1990,35 @@ if want drift; then
       END {
         if (invalid || (freq != "DAILY" && freq != "HOURLY") ||
             (interval != "" && interval != "1") ||
-            hours !~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/ ||
-            minute != "0" || second != "0") exit 1
-        print hours
+            (hours != "" && hours !~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/) ||
+            (freq == "DAILY" && hours == "") ||
+            minute !~ /^[0-9][0-9]?$/ || minute + 0 > 59 ||
+            second != "0") exit 1
+        print (hours == "" ? "*" : hours) "|" minute
       }
-    ' | validated_hours
+    ')
+    [ -n "$parsed" ] || return 0
+    hours=${parsed%%|*}
+    minute=${parsed#*|}
+    schedule_from_parts "$hours" "$minute"
+  }
+
+  codex_pointer_schedule() {
+    local rule
+    [ -f "$1" ] || return 0
+    rule=$(sed -nE 's/^rrule[[:space:]]*=[[:space:]]*"(RRULE:[^"]+)".*/\1/p' "$1" \
+      | head -1)
+    codex_rrule_schedule "$rule"
+  }
+
+  codex_store_schedule() {
+    local store="$1" id="$2" rule escaped_id
+    [ -f "$store" ] || return 0
+    escaped_id=${id//\'/\'\'}
+    rule=$(sqlite3 -readonly "$store" \
+      "SELECT rrule FROM automations WHERE id = '$escaped_id';" 2>/dev/null \
+      | awk 'NF { print; exit }')
+    codex_rrule_schedule "$rule"
   }
 
   claude_store_field() {
@@ -1964,13 +2032,19 @@ if want drift; then
     ' "$store" 2>/dev/null
   }
 
-  claude_store_hours() {
-    local store="$1" id="$2" pointer="$3" cron
+  claude_store_schedule() {
+    local store="$1" id="$2" pointer="$3" cron parsed hours minute
     cron=$(claude_store_field "$store" "$id" "$pointer" cronExpression)
     [ -n "$cron" ] || return 0
-    printf '%s\n' "$cron" | awk '
-      NF == 5 && $1 == "0" && $3 == "*" && $4 == "*" && $5 == "*" { print $2 }
-    ' | validated_hours
+    parsed=$(printf '%s\n' "$cron" | awk '
+      NF == 5 && $1 ~ /^[0-9][0-9]?$/ && $1 + 0 <= 59 &&
+        ($2 == "*" || $2 ~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/) &&
+        $3 == "*" && $4 == "*" && $5 == "*" { print $2 "|" $1 }
+    ')
+    [ -n "$parsed" ] || return 0
+    hours=${parsed%%|*}
+    minute=${parsed#*|}
+    schedule_from_parts "$hours" "$minute"
   }
 
   claude_store_marker() {
@@ -1982,15 +2056,13 @@ if want drift; then
     ' 2>/dev/null
   }
 
-  codex_change_marker() {
-    [ -f "$1" ] || return 0
-    awk -F'=' '
-      /^updated_at[[:space:]]*=/ {
-        gsub(/[[:space:]]/, "", $2)
-        print $2
-        exit
-      }
-    ' "$1" 2>/dev/null
+  codex_dispatch_marker() {
+    local store="$1" id="$2" escaped_id
+    [ -f "$store" ] || return 0
+    escaped_id=${id//\'/\'\'}
+    sqlite3 -readonly "$store" \
+      "SELECT last_run_at FROM automations WHERE id = '$escaped_id';" 2>/dev/null \
+      | awk 'NF { print; exit }'
   }
 
   marker_advanced() {
@@ -2026,6 +2098,25 @@ if want drift; then
     fi
   }
 
+  compare_codex_schedule() {
+    local label="$1" expected="$2" pointer_actual="$3" scheduler_actual="$4"
+    local pointer="$5" store="$6" marker="$7" baseline="$8"
+    if [ ! -f "$pointer" ]; then
+      echo "    UNKNOWN: $label schedule pointer missing"
+    elif [ ! -f "$store" ]; then
+      echo "    UNKNOWN: $label authoritative scheduler store missing"
+    elif [ -z "$pointer_actual" ]; then
+      echo "    UNKNOWN: $label recurrence rule is incomplete or unsupported"
+    elif [ -z "$scheduler_actual" ]; then
+      echo "    UNKNOWN: $label authoritative scheduler recurrence is missing or unsupported"
+    elif [ "$pointer_actual" != "$scheduler_actual" ]; then
+      echo "    ⚠️  DRIFT: $label schedule pointer=$pointer_actual scheduler=$scheduler_actual marker=${marker:-missing} baseline=${baseline:-missing}"
+    else
+      compare_schedule "$label" "$expected" "$scheduler_actual" "$pointer" \
+        "$marker" "$baseline" recurrence
+    fi
+  }
+
   schedule_measured() {
     local file="$1" expected="$2" actual="$3" marker="$4" baseline="$5"
     [ -f "$file" ] && [ -n "$expected" ] && [ -n "$actual" ] \
@@ -2036,14 +2127,24 @@ if want drift; then
   CLAUDE_IMPROVER_EXPECTED=$(cadence_expected Claude 4)
   CODEX_ENGINEER_EXPECTED=$(cadence_expected Codex 3)
   CODEX_IMPROVER_EXPECTED=$(cadence_expected Codex 4)
-  CLAUDE_ENGINEER_ACTUAL=$(claude_store_hours "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
-  CLAUDE_IMPROVER_ACTUAL=$(claude_store_hours "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
-  CODEX_ENGINEER_ACTUAL=$(codex_pointer_hours "$CODEX_LOADER")
-  CODEX_IMPROVER_ACTUAL=$(codex_pointer_hours "$CODEX_IMPROVER_LOADER")
+  CLAUDE_ENGINEER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
+  CLAUDE_IMPROVER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
+  CODEX_ENGINEER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_LOADER")
+  CODEX_IMPROVER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_IMPROVER_LOADER")
+  CODEX_ENGINEER_STORE_ACTUAL=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" daily-ai-engineer)
+  CODEX_IMPROVER_STORE_ACTUAL=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" agent-improver)
+  CODEX_ENGINEER_ACTUAL=""
+  CODEX_IMPROVER_ACTUAL=""
+  [ -n "$CODEX_ENGINEER_POINTER_ACTUAL" ] \
+    && [ "$CODEX_ENGINEER_POINTER_ACTUAL" = "$CODEX_ENGINEER_STORE_ACTUAL" ] \
+    && CODEX_ENGINEER_ACTUAL="$CODEX_ENGINEER_STORE_ACTUAL"
+  [ -n "$CODEX_IMPROVER_POINTER_ACTUAL" ] \
+    && [ "$CODEX_IMPROVER_POINTER_ACTUAL" = "$CODEX_IMPROVER_STORE_ACTUAL" ] \
+    && CODEX_IMPROVER_ACTUAL="$CODEX_IMPROVER_STORE_ACTUAL"
   CLAUDE_ENGINEER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
   CLAUDE_IMPROVER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
-  CODEX_ENGINEER_MARKER=$(codex_change_marker "$CODEX_LOADER")
-  CODEX_IMPROVER_MARKER=$(codex_change_marker "$CODEX_IMPROVER_LOADER")
+  CODEX_ENGINEER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" daily-ai-engineer)
+  CODEX_IMPROVER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" agent-improver)
   CLAUDE_ENGINEER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-}"
   CLAUDE_IMPROVER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-}"
   CODEX_ENGINEER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-}"
@@ -2053,10 +2154,12 @@ if want drift; then
     "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" cron
   compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
     "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE" cron
-  compare_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
-    "$CODEX_LOADER" "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" recurrence
-  compare_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
-    "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE" recurrence
+  compare_codex_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" \
+    "$CODEX_ENGINEER_POINTER_ACTUAL" "$CODEX_ENGINEER_STORE_ACTUAL" \
+    "$CODEX_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE"
+  compare_codex_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" \
+    "$CODEX_IMPROVER_POINTER_ACTUAL" "$CODEX_IMPROVER_STORE_ACTUAL" \
+    "$CODEX_IMPROVER_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"
 
   if schedule_measured "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
        "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" \
@@ -2066,25 +2169,31 @@ if want drift; then
        "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" \
      && schedule_measured "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
        "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"; then
-    COLLISIONS=$(awk -v schedules="$CLAUDE_ENGINEER_ACTUAL,$CLAUDE_IMPROVER_ACTUAL,$CODEX_ENGINEER_ACTUAL,$CODEX_IMPROVER_ACTUAL" '
-      BEGIN {
-        count = split(schedules, slots, ",")
-        for (i = 1; i <= count; i++) {
-          if (slots[i] != "") starts[slots[i]]++
+    expand_schedules() {
+      awk -F'@' '
+        NF == 2 {
+          if ($1 == "*") {
+            for (hour = 0; hour <= 23; hour++) print hour ":" $2
+          } else {
+            count = split($1, hours, ",")
+            for (i = 1; i <= count; i++) print hours[i] ":" $2
+          }
         }
-        for (hour in starts) {
-          if (starts[hour] > 1) collisions += starts[hour] - 1
+      '
+    }
+    ALL_SLOTS=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CLAUDE_IMPROVER_ACTUAL" \
+      "$CODEX_ENGINEER_ACTUAL" "$CODEX_IMPROVER_ACTUAL" | expand_schedules)
+    COLLISIONS=$(printf '%s\n' "$ALL_SLOTS" | awk '
+      NF { starts[$0]++ }
+      END {
+        for (slot in starts) {
+          if (starts[slot] > 1) collisions += starts[slot] - 1
         }
         print collisions + 0
       }
     ')
-    ENGINEER_DISPATCHES=$(awk -v a="$CLAUDE_ENGINEER_ACTUAL" -v b="$CODEX_ENGINEER_ACTUAL" '
-      BEGIN {
-        na = split(a, aa, ",")
-        nb = split(b, bb, ",")
-        print (a == "" ? 0 : na) + (b == "" ? 0 : nb)
-      }
-    ')
+    ENGINEER_DISPATCHES=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CODEX_ENGINEER_ACTUAL" \
+      | expand_schedules | awk 'NF { count++ } END { print count + 0 }')
     echo "    local simultaneous starts/day: $COLLISIONS"
     echo "    local engineer dispatches/day: $ENGINEER_DISPATCHES"
   else
