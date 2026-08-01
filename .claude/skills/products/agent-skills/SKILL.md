@@ -1,19 +1,23 @@
 ---
 name: maintain-skills
-description: Maintenance + advance task menu for the shared AGENT-EXTENSION libraries — devantler-tech/agent-skills (generic Copilot/agent skills, gh-skill-installable) and devantler-tech/agent-plugins (tool-neutral marketplace). Generic, cross-tool, industry-standard building blocks reused across the suite; high-care and backward-compatible. Use when the daily maintainer selects skills/plugins or runs the holistic shared-library review.
+description: Maintenance + advance task menu for the shared AGENT-EXTENSION libraries — devantler-tech/agent-skills (generic, cross-tool agent skills) and devantler-tech/agent-plugins (a tool-neutral marketplace bundling those skills for VS Code / Copilot CLI / Claude Code). Generic, cross-tool, industry-standard building blocks reused across the suite; high-care and backward-compatible. Use when the Agentic Engineer selects skills/plugins or runs the holistic shared-library review.
 ---
 
 # Maintain: Skills + Plugins (shared agent extensions)
 
 The shared **agent-extension** libraries — the agentic counterpart to the CI building blocks in the
-[github-actions](../github-actions/SKILL.md) card:
-- `devantler-tech/agent-skills` — generic Copilot/agent skills, `gh skill`-installable. **Not a submodule** —
-  work via the GitHub API, or clone it standalone into a per-run worktree if you need to build/validate.
-  Read its `## Maintenance` in <https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md> (create
-  that section if missing — align it with the others).
-- `devantler-tech/agent-plugins` — tool-neutral marketplace at submodule path `libraries/agent-plugins`.
+[github-actions](../github-actions/SKILL.md) card. Both are checked-in submodules, so a per-run
+worktree gives you a working copy to build and validate in; each repo's canonical task menu lives in
+its own `AGENTS.md` `## Maintenance` and this card is a thin pointer to it:
+
+- `devantler-tech/agent-skills` — generic, cross-tool agent skills at submodule path
+  `libraries/agent-skills`.
+  Task menu: <https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md>.
+- `devantler-tech/agent-plugins` — the tool-neutral marketplace at submodule path
+  `libraries/agent-plugins`.
+  Task menu: <https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md>.
   This monorepo consumes `agentic-engineering@devantler-plugins` via
-  [`.claude/settings.json`](../../../settings.json) (see monorepo#2363 / #2403). Keep plugins
+  [`.claude/settings.json`](../../../settings.json) (see monorepo#2363). Keep plugins
   additive & backward-compatible; generic role improvements land here so every consumer inherits them.
 
 **These are shared libraries — design for reuse, not for one product.** Keep them **generic and
@@ -30,9 +34,14 @@ contract only when `.claude/scripts/programmed-bot-review-exemption.sh` classifi
 let required CI and auto-merge decide accepted exemptions, and never spend a review lane on them.
 Route classifier failures, non-matching PRs, and lookalikes through the normal review process.
 
-Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a pointer
-by design.
+Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md).
 
 ## Roadmap & enhancement
-Roadmap lives in **GitHub Issues** on `devantler-tech/agent-skills` (`roadmap` label). The strategic frame:
-*what generic capability would most help the suite next?* — surface candidates from the holistic review.
+
+The two libraries keep separate issue queues — do not conflate them:
+
+- Skills: GitHub Issues on `devantler-tech/agent-skills` (`roadmap` label)
+- Plugins: GitHub Issues on `devantler-tech/agent-plugins` (`roadmap` label)
+
+Strategic frame for both: *what generic capability would most help the suite next?* — surface
+candidates from the holistic review.
