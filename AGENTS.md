@@ -347,7 +347,9 @@ post-dispatch check passes. Supply that post-apply baseline to the drift check a
 `CODEX_ENGINEER_MARKER_BASELINE`, or `CODEX_IMPROVER_MARKER_BASELINE`. Claude cadence comes from the
 authoritative `scheduled-tasks.json` record selected by exact task id plus pointer path, with
 `lastRunAt` as its marker; the `SKILL.md` description is not scheduler state. Codex cadence and
-markers come from `automation.toml`'s complete RRULE and `updated_at`. A missing or ambiguous store,
+markers come respectively from `automation.toml`'s complete RRULE and the exact automation id's
+`last_run_at` in Codex's local `sqlite/codex-dev.db` scheduler store; `automation.toml.updated_at` is
+an apply marker and does not advance on dispatch. A missing or ambiguous store,
 missing baseline, marker that did not advance, or incomplete recurrence rule is `UNKNOWN`, never
 `MATCH`.
 

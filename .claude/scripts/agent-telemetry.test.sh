@@ -154,6 +154,17 @@ cat > "$FIX/codex/automations/agent-improver/automation.toml" <<'EOF'
 rrule = "RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0"
 updated_at = 1785222863850
 EOF
+CODEX_AUTOMATION_STORE="$FIX/codex/codex-dev.db"
+sqlite3 "$CODEX_AUTOMATION_STORE" <<'SQL'
+CREATE TABLE automations (
+  id TEXT PRIMARY KEY,
+  rrule TEXT NOT NULL,
+  last_run_at INTEGER
+);
+INSERT INTO automations (id, rrule, last_run_at) VALUES
+  ('daily-ai-engineer', 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0', 1785238560676),
+  ('agent-improver', 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0', 1785222864850);
+SQL
 cat > "$FIX/monorepo/AGENTS.md" <<'EOF'
 Definition PRs: their separate human promotion gate was retired by maintainer direction 2026-07-18.
 
@@ -177,6 +188,7 @@ run() {
   CLAUDE_IMPROVER_LOADER_PATH="$FIX/claude-sched/agent-improver/SKILL.md" \
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
   CODEX_IMPROVER_LOADER_PATH="$FIX/codex/automations/agent-improver/automation.toml" \
+  CODEX_AUTOMATION_STORE_PATH="$CODEX_AUTOMATION_STORE" \
   CLAUDE_ENGINEER_MARKER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-1750000000}" \
   CLAUDE_IMPROVER_MARKER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-1750000000}" \
   CODEX_ENGINEER_MARKER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-1785238559000}" \
@@ -230,8 +242,8 @@ check "compares Claude engineer schedule" "$OUT" "claude engineer: expected=*@50
 check "compares Claude improver schedule" "$OUT" "claude improver: expected=0,12@0 actual=0,12@0 MATCH"
 check "compares Codex engineer schedule"  "$OUT" "codex engineer:  expected=*@10 actual=*@10 MATCH"
 check "compares Codex improver schedule"  "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
-check "reports Codex engineer marker advance" "$OUT" "MATCH marker=1785238559676 baseline=1785238559000"
-check "reports Codex improver marker advance" "$OUT" "MATCH marker=1785222863850 baseline=1785222863000"
+check "reports Codex engineer dispatch advance" "$OUT" "MATCH marker=1785238560676 baseline=1785238559000"
+check "reports Codex improver dispatch advance" "$OUT" "MATCH marker=1785222864850 baseline=1785222863000"
 check "proves staggered local starts"      "$OUT" "local simultaneous starts/day: 0"
 check "proves hourly engineer dispatches"  "$OUT" "local engineer dispatches/day: 48"
 
@@ -245,20 +257,20 @@ check "missing improver pointer is explicit" "$OUT" "UNKNOWN: codex improver sch
 mv "$FIX/codex/automations/agent-improver/automation.toml.missing" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
-# A matching value without the runtime's own write marker cannot prove that a
+# A matching value without the runtime's own dispatch marker cannot prove that a
 # dispatch occurred after the edit, so persistence remains explicitly unknown.
-sed -i.bak '/^updated_at = /d' \
-  "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET last_run_at = NULL WHERE id = 'agent-improver';"
 OUT=$(run --section drift)
 check "missing runtime marker is explicit" "$OUT" "UNKNOWN: codex improver change marker missing"
 nocheck "missing runtime marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 check "missing runtime marker invalidates parity total" "$OUT" "local simultaneous starts/day: UNKNOWN"
 check "missing runtime marker invalidates dispatch total" "$OUT" "local engineer dispatches/day: UNKNOWN"
-mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
-   "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET last_run_at = 1785222864850 WHERE id = 'agent-improver';"
 
 # An unchanged marker is the in-session read-back, not persistence proof.
-OUT=$(CODEX_IMPROVER_MARKER_BASELINE=1785222863850 run --section drift)
+OUT=$(CODEX_IMPROVER_MARKER_BASELINE=1785222864850 run --section drift)
 check "unchanged marker is not persistence proof" "$OUT" "UNKNOWN: codex improver change marker did not advance"
 nocheck "unchanged marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 

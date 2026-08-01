@@ -1835,6 +1835,7 @@ if want drift; then
   CLAUDE_IMPROVER_LOADER="${CLAUDE_IMPROVER_LOADER_PATH:-$HOME/.claude/scheduled-tasks/agent-improver/SKILL.md}"
   CODEX_LOADER="${CODEX_LOADER_PATH:-$CODEX_HOME/automations/daily-ai-engineer/automation.toml}"
   CODEX_IMPROVER_LOADER="${CODEX_IMPROVER_LOADER_PATH:-$CODEX_HOME/automations/agent-improver/automation.toml}"
+  CODEX_AUTOMATION_STORE="${CODEX_AUTOMATION_STORE_PATH:-$CODEX_HOME/sqlite/codex-dev.db}"
   AGENTS_MD="$MONOREPO/AGENTS.md"
 
   discover_claude_schedule_store() {
@@ -2039,15 +2040,12 @@ if want drift; then
     ' 2>/dev/null
   }
 
-  codex_change_marker() {
-    [ -f "$1" ] || return 0
-    awk -F'=' '
-      /^updated_at[[:space:]]*=/ {
-        gsub(/[[:space:]]/, "", $2)
-        print $2
-        exit
-      }
-    ' "$1" 2>/dev/null
+  codex_dispatch_marker() {
+    local store="$1" id="$2"
+    [ -f "$store" ] || return 0
+    sqlite3 -readonly "$store" \
+      "SELECT last_run_at FROM automations WHERE id = '$id';" 2>/dev/null \
+      | awk 'NF { print; exit }'
   }
 
   marker_advanced() {
@@ -2099,8 +2097,8 @@ if want drift; then
   CODEX_IMPROVER_ACTUAL=$(codex_pointer_schedule "$CODEX_IMPROVER_LOADER")
   CLAUDE_ENGINEER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
   CLAUDE_IMPROVER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
-  CODEX_ENGINEER_MARKER=$(codex_change_marker "$CODEX_LOADER")
-  CODEX_IMPROVER_MARKER=$(codex_change_marker "$CODEX_IMPROVER_LOADER")
+  CODEX_ENGINEER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" daily-ai-engineer)
+  CODEX_IMPROVER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" agent-improver)
   CLAUDE_ENGINEER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-}"
   CLAUDE_IMPROVER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-}"
   CODEX_ENGINEER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-}"
