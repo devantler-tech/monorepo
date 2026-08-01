@@ -2726,6 +2726,13 @@ cat > "$FIX/dispatch-clean/ok.jsonl" <<'EOF'
 EOF
 COUT=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch-clean" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+# Asserted IMMEDIATELY after capture. These four are the vacuity control: without
+# them a classifier that marks every dispatch dead still passes, because every
+# other control asserts against a corpus that contains a real refusal.
+check   "a healthy corpus reports one live dispatch" "$COUT" "live ......... 1"
+check   "a healthy corpus reports no dead dispatches" "$COUT" "dead ......... 0"
+check   "a healthy corpus reports zero truncated"    "$COUT" "truncated .... 0"
+check   "a healthy corpus reports no outage span"    "$COUT" "outage span: none"
 # CONTROL G pins the CAP ORDER: two sidechains newer than the only root run,
 # with the cap set to 2. Filtering after the cap evicts the root entirely and
 # publishes zero dispatches while a root run existed.
@@ -2782,8 +2789,7 @@ printf '{"type":"assistant","timestamp":"2026-08-01T18:30:00.000Z","message":{"c
 KOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-curly" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a typographic apostrophe classifies as a refusal" "$KOUT" "dead ......... 1"
-check "a healthy corpus reports no dead dispatches" "$COUT" "dead ......... 0"
-check "a healthy corpus reports no outage span"     "$COUT" "outage span: none"
+
 
 echo
 echo "──────────────────────────────"
