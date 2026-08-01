@@ -224,6 +224,11 @@ grep -Fq 'agentic-engineer.agent.md' "${cursor_loader}" ||
   fail "Cursor adapter does not resolve the canonical plugin role"
 grep -Fq '.claude/scripts/submodule-init.sh libraries/agent-plugins' "${cursor_loader}" ||
   fail "Cursor adapter does not pass the plugin path to submodule-init"
+grep -Fq 'git -C libraries/agent-plugins fetch origin main' "${cursor_loader}" ||
+  fail "Cursor adapter does not refresh the reviewed plugin default branch before loading it"
+grep -Fq 'git -C libraries/agent-plugins show origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md' \
+  "${cursor_loader}" ||
+  fail "Cursor adapter does not load the agent from the refreshed reviewed plugin ref"
 for cursor_overlay in \
   '.claude/skills/portfolio-maintenance/SKILL.md' \
   '.claude/skills/product-engineering/SKILL.md' \

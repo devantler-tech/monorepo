@@ -48,14 +48,17 @@ machine-local engineer.
 >    is machine-local only: never unset `GH_TOKEN`/`GITHUB_TOKEN`, since your App token is your
 >    credential. Any other account is a hard stop.
 > 2. **Bootstrap guard:** if `AGENTS.md` is missing, **STOP and report** "consumer contract not on
->    main; no action taken." If
->    `libraries/agent-plugins/plugins/agentic-engineering/agents/agentic-engineer.agent.md` is absent,
->    initialise it with `.claude/scripts/submodule-init.sh libraries/agent-plugins`; if the agent
->    still does not resolve, **STOP and report** "reviewed plugin definition unavailable; no action
->    taken."
-> 3. **Read and follow `AGENTS.md`, then the reviewed plugin's
->    `agentic-engineer.agent.md`.** The former supplies deployment facts; the latter supplies the
->    portable operate→advance→spend role.
+>    main; no action taken." If the `libraries/agent-plugins` submodule is uninitialised, initialise
+>    it with `.claude/scripts/submodule-init.sh libraries/agent-plugins`. Then refresh the declared
+>    reviewed source with `git -C libraries/agent-plugins fetch origin main --quiet` and verify
+>    `origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md` resolves. If either
+>    operation fails, **STOP and report** "reviewed plugin definition unavailable; no action taken."
+> 3. **Read and follow `AGENTS.md`, then load the portable role with
+>    `git -C libraries/agent-plugins show origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md`.**
+>    This implements the desired state's `latest-reviewed-default-branch` /
+>    `before-starting-each-run` policy without checking out or dirtying the consumer gitlink. The
+>    contract supplies deployment facts; the refreshed plugin entrypoint supplies the portable
+>    operate→advance→spend role.
 > 4. **Load the deployment compatibility overlays:**
 >    `.claude/skills/portfolio-maintenance/SKILL.md`,
 >    `.claude/skills/product-engineering/SKILL.md`, and
