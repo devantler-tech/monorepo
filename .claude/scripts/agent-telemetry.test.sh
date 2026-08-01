@@ -2595,6 +2595,84 @@ if printf '%s' "$OUT" | grep -qE 'session=s\.jsonl line=[0-9]+ record=user shape
 else bad "a styled credential still emits a full provenance locator" \
   "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
 
+# ── dispatch health: a run that never ran must not count as evidence ──────────
+# A provider usage-limit outage kills a scheduled dispatch in ~1s. Those sessions
+# add 1 to the session count that every per-session rate divides by, while adding
+# 0 to every numerator — so an outage silently IMPROVES the scorecard, and a
+# hypothesis volume floor stated in "dispatches" is satisfied by dispatches that
+# generated no evidence at all. Measured live: 16 such dispatches over 44.9h
+# (2026-07-30T14:08:52Z → 2026-08-01T10:59:46Z), 15 of them with zero tool calls.
+echo
+echo "dispatch health"
+mkdir -p "$FIX/dispatch"
+# DEAD: provider refusal is the whole assistant turn, and no tool ever ran.
+cat > "$FIX/dispatch/dead-a.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-07-31T22:01:50.003Z","message":{"content":[{"type":"text","text":"go"}]}}
+{"type":"assistant","timestamp":"2026-07-31T22:01:51.115Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+cat > "$FIX/dispatch/dead-b.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:01:48.264Z","message":{"content":[{"type":"text","text":"go"}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:01:49.591Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+# TRUNCATED: real work started, then the same refusal ended the session.
+cat > "$FIX/dispatch/trunc.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T10:59:46.787Z","message":{"content":[{"type":"tool_use","id":"d1","name":"Bash","input":{"command":"echo hi"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:59:59.000Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+# CONTROLS, one per guard. The two guards mask each other if a single fixture
+# tries to pin both: ablating either one alone then leaves the test green, which
+# is a guard that never fires. So each gets a fixture that ONLY it can save.
+#
+# CONTROL A pins the LAST-BLOCK restriction. Its whole transcript is short, so
+# the length gate cannot rescue it; only "look at the final block" keeps it live.
+cat > "$FIX/dispatch/discuss-early.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T22:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d2","name":"Bash","input":{"command":"echo investigating"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T22:00:10.000Z","message":{"content":[{"type":"text","text":"The refusal read: You've hit your weekly limit"}]}}
+{"type":"assistant","timestamp":"2026-08-01T22:00:20.000Z","message":{"content":[{"type":"text","text":"Filed it and moved on."}]}}
+EOF
+# CONTROL B pins the LENGTH GATE. Its FINAL block contains the phrase, so the
+# last-block restriction cannot rescue it; only "the refusal is the whole turn"
+# keeps it live. This is the shape this tool's own findings take.
+cat > "$FIX/dispatch/discuss-long.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T23:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d3","name":"Bash","input":{"command":"echo analysing"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T23:00:10.000Z","message":{"content":[{"type":"text","text":"Sixteen scheduled dispatches died over roughly forty-five hours, and the assistant turn in every one of them was exactly the string You've hit your weekly limit, quoted here as evidence so a later reader can audit the classification for themselves rather than taking the count on trust alone."}]}}
+EOF
+DOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "counts live dispatches"       "$DOUT" "live ......... 2"
+check "counts dead dispatches"       "$DOUT" "dead ......... 2"
+check "counts truncated dispatches"  "$DOUT" "truncated .... 1"
+check "reports the outage span"      "$DOUT" "2026-07-31T22:01:50"
+check "names live as the denominator" "$DOUT" "volume floors"
+# The control, stated as its own assertion: discussing the phrase is not an outage.
+# Each control is ALSO run in its own corpus, because in the combined corpus the
+# two guards fail with identical counts — coverage without attribution. Isolated,
+# each one names exactly which guard saved it.
+mkdir -p "$FIX/dh-early" "$FIX/dh-long"
+cp "$FIX/dispatch/discuss-early.jsonl" "$FIX/dh-early/s.jsonl"
+cp "$FIX/dispatch/discuss-long.jsonl"  "$FIX/dh-long/s.jsonl"
+EOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-early" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+LOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-long" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+# Pins the LAST-BLOCK restriction alone: short transcript, so the length gate
+# cannot be what saves it.
+check "an early quote of the refusal stays live"  "$EOUT" "live ......... 1"
+check "an early quote is not called truncated"    "$EOUT" "truncated .... 0"
+# Pins the LENGTH GATE alone: the phrase IS in the final block, so the
+# last-block restriction cannot be what saves it.
+check "a long final block quoting it stays live"  "$LOUT" "live ......... 1"
+check "a long final block is not called truncated" "$LOUT" "truncated .... 0"
+# ...and the classifier is not vacuous: an all-healthy corpus reports zero dead.
+mkdir -p "$FIX/dispatch-clean"
+cat > "$FIX/dispatch-clean/ok.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T12:00:00.000Z","message":{"content":[{"type":"tool_use","id":"e1","name":"Bash","input":{"command":"echo ok"}}]}}
+EOF
+COUT=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch-clean" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a healthy corpus reports no dead dispatches" "$COUT" "dead ......... 0"
+check "a healthy corpus reports no outage span"     "$COUT" "outage span: none"
+
 echo
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
