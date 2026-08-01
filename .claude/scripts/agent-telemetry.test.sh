@@ -2645,13 +2645,39 @@ cat > "$FIX/dispatch/toolrate.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T21:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d4","name":"Bash","input":{"command":"gh api rate_limit"}}]}}
 {"type":"assistant","timestamp":"2026-08-01T21:00:05.000Z","message":{"content":[{"type":"text","text":"You've hit your tool rate limit; retrying via REST."}]}}
 EOF
+# CONTROL D pins the START ANCHOR: a live run ending on a SHORT summary that
+# merely mentions a refusal phrase. The length gate cannot save it (it is short)
+# and the phrase is in the final block, so only anchoring at the start keeps it live.
+cat > "$FIX/dispatch/short-summary.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T20:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d5","name":"Bash","input":{"command":"echo checking"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T20:00:05.000Z","message":{"content":[{"type":"text","text":"Confirmed the account is out of credits; I filed an issue."}]}}
+EOF
+# CONTROL E pins the SUBAGENT EXCLUSION: a dispatch is a scheduled run, not a
+# transcript. This dead sidechain must not add a dispatch of its own.
+mkdir -p "$FIX/dispatch/subagents"
+cat > "$FIX/dispatch/subagents/agent-aaa.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-07-31T23:00:00.000Z","message":{"content":[{"type":"text","text":"go"}]}}
+{"type":"assistant","timestamp":"2026-07-31T23:00:01.000Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+# CONTROL F pins the REFUSAL-RECORD TIMESTAMP: a long-running session whose FIRST
+# record is old and whose refusal is recent. Dating the outage from the first
+# record would report it as starting months early.
+mkdir -p "$FIX/dh-resumed"
+cat > "$FIX/dh-resumed/s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-05-01T00:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d6","name":"Bash","input":{"command":"echo old"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T09:00:00.000Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
 DOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
-check "counts live dispatches"       "$DOUT" "live ......... 3"
+check "counts live dispatches"       "$DOUT" "live ......... 4"
 check "counts dead dispatches"       "$DOUT" "dead ......... 2"
+check "a subagent sidechain is not a dispatch" "$DOUT" "classified: 7"
 check "counts truncated dispatches"  "$DOUT" "truncated .... 1"
 # Assert BOTH bounds: a first-bound-only check stays green with DH_LAST empty.
-check "reports the outage span"      "$DOUT" "outage span: 2026-07-31T22:01:50.003Z -> 2026-08-01T10:59:46.787Z"
+# Both bounds, and both are REFUSAL-record timestamps (…51.115Z, not the
+# session-start …50.003Z): dating an outage from the first record would report
+# a resumed session's outage as starting whenever that session began.
+check "reports the outage span"      "$DOUT" "outage span: 2026-07-31T22:01:51.115Z -> 2026-08-01T10:59:59.000Z"
 check "names live as the denominator" "$DOUT" "volume floors"
 # The control, stated as its own assertion: discussing the phrase is not an outage.
 # Each control is ALSO run in its own corpus, because in the combined corpus the
@@ -2680,6 +2706,19 @@ TOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-toolrate" CODEX_HOME="$FIX/nocodex" MONOREPO
        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a tool rate limit is not a provider refusal" "$TOUT" "live ......... 1"
 check "a tool rate limit is not called truncated"   "$TOUT" "truncated .... 0"
+# Pins the START ANCHOR alone.
+mkdir -p "$FIX/dh-short"
+cp "$FIX/dispatch/short-summary.jsonl" "$FIX/dh-short/s.jsonl"
+SOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-short" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a short summary mentioning a refusal stays live" "$SOUT" "live ......... 1"
+check "a short summary is not called truncated"         "$SOUT" "truncated .... 0"
+# Pins the REFUSAL-RECORD TIMESTAMP alone: span must start at the refusal, not
+# at the transcript's first record three months earlier.
+ROUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-resumed" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "outage is dated from the refusal record" "$ROUT" "outage span: 2026-08-01T09:00:00.000Z"
+nocheck "outage is NOT dated from the first record" "$ROUT" "2026-05-01"
 # ...and the classifier is not vacuous: an all-healthy corpus reports zero dead.
 mkdir -p "$FIX/dispatch-clean"
 cat > "$FIX/dispatch-clean/ok.jsonl" <<'EOF'

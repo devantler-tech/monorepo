@@ -885,15 +885,29 @@ if want dispatch; then
     # That exclusion is ENFORCED, not just asserted: the positive pattern alone
     # matches 'hit your tool rate limit', which would misfile a live dispatch as
     # truncated and corrupt the very denominator this section exists to protect.
-    DH_RE='(you.?ve hit your [a-z0-9 -]*limit|usage limit reached|limit · resets|out of (credits|usage)|capacity constraints)'
+    # ANCHORED at the start of the turn. A real refusal IS the whole turn; a live
+    # run that merely ends on "Confirmed the account is out of credits; filed an
+    # issue." must stay live, and an unanchored substring match would take it.
+    DH_RE='^(you.?ve hit your [a-z0-9 -]*limit|.{0,40}usage limit reached|.{0,40}limit · resets|the (account|api) is out of (credits|usage)|.{0,40}capacity constraints)'
     DH_NOT_RE='(rate limit|rate-limit|review limit|quota exceeded for)'
     while IFS= read -r f; do
       [ -n "$f" ] || continue
+      # A DISPATCH is a scheduled run, not a transcript. Subagent sidechains live
+      # under .../subagents/ and are separate JSONL files, so counting them here
+      # would let ONE tick satisfy a volume floor several times over — this
+      # deployment delegates surveys and broad investigation to subagents, so the
+      # inflation is routine, not hypothetical. Other sections still scan them.
+      case "$f" in */subagents/*) continue ;; esac
+      # The outage timestamp must come from the REFUSAL record, not the
+      # transcript's first record: a resumed session that later hits a refusal
+      # would otherwise date the outage to when the session originally began.
       row=$(jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty))
         | (map(select(.type=="assistant")|.message.content[]?|select(.type=="tool_use"))|length) as $tu
-        | (map(select(.type=="assistant")|.message.content[]?|select(.type=="text")|.text)) as $txt
-        | (($txt|last) // "") as $lastt
-        | ((map(select(.timestamp)|.timestamp)|first) // "") as $ts
+        | [.[] | select(.type=="assistant"
+            and ((.message.content[]?|select(.type=="text")|.text) != null))] as $arecs
+        | (($arecs|last) // {}) as $lastrec
+        | ((($lastrec.message.content[]?|select(.type=="text")|.text) // "")) as $lastt
+        | (($lastrec.timestamp) // (map(select(.timestamp)|.timestamp)|last) // "") as $ts
         | "\($tu)\t\($ts)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
       ' "$f" 2>/dev/null | head -1)
       [ -n "$row" ] || continue
@@ -928,8 +942,8 @@ if want dispatch; then
 $SF_CACHE
 EOF
     DH_TOTAL=$((DH_LIVE + DH_DEAD + DH_TRUNC + DH_INERT))
-    printf '  claude dispatches classified: %s\n' "$DH_TOTAL"
-    printf '    live ......... %s   <- the denominator per-session rates and volume floors MUST use\n' "$DH_LIVE"
+    printf '  claude dispatches classified: %s   (root transcripts only; subagents excluded)\n' "$DH_TOTAL"
+    printf '    live ......... %s   <- complete evidence\n' "$DH_LIVE"
     printf '    truncated .... %s   (work started, then a provider refusal ended it: partial evidence)\n' "$DH_TRUNC"
     printf '    dead ......... %s   (provider refusal, zero tool calls: no evidence at all)\n' "$DH_DEAD"
     printf '    inert ........ %s   (no tool calls and no refusal: cause unknown)\n' "$DH_INERT"
@@ -942,10 +956,15 @@ EOF
     if [ "$DH_NOEV" -gt 0 ]; then
       echo
       printf '  WARNING: %s of %s dispatches produced no evidence.\n' "$DH_NOEV" "$DH_TOTAL"
-      echo "    Every per-session rate in this report divides by the RAW session count,"
+      echo "    Every per-session rate in this report divides by the RAW transcript count,"
       echo "    so those dispatches push each rate DOWN without anything improving."
-      echo "    Re-base any rate you intend to trend on the live count above, and count"
-      echo "    hypothesis volume floors in live dispatches only."
+      echo "    Re-base a rate on live + truncated: a truncated dispatch DID contribute"
+      echo "    tool calls to the numerators, so dropping it from the denominator"
+      echo "    over-states the rate as surely as counting a dead one under-states it."
+      echo "    Count hypothesis volume floors in LIVE dispatches only — those need"
+      echo "    complete evidence, which a truncated dispatch by definition lacks."
+      echo "    SCOPE: Claude lane only. Codex transcripts are not classified here and"
+      echo "    the Codex rate still divides by raw CX_COUNT — same blind spot, open."
     fi
   fi
 fi
