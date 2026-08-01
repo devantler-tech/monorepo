@@ -1968,11 +1968,9 @@ if want drift; then
     schedule_from_parts "$hours" "$minute"
   }
 
-  codex_pointer_schedule() {
-    local rule parsed hours minute
-    [ -f "$1" ] || return 0
-    rule=$(sed -nE 's/^rrule[[:space:]]*=[[:space:]]*"RRULE:([^"]+)".*/\1/p' "$1" \
-      | head -1)
+  codex_rrule_schedule() {
+    local rule="$1" parsed hours minute
+    rule=${rule#RRULE:}
     [ -n "$rule" ] || return 0
     parsed=$(printf '%s\n' "$rule" | awk -F';' '
       {
@@ -2003,6 +2001,23 @@ if want drift; then
     hours=${parsed%%|*}
     minute=${parsed#*|}
     schedule_from_parts "$hours" "$minute"
+  }
+
+  codex_pointer_schedule() {
+    local rule
+    [ -f "$1" ] || return 0
+    rule=$(sed -nE 's/^rrule[[:space:]]*=[[:space:]]*"(RRULE:[^"]+)".*/\1/p' "$1" \
+      | head -1)
+    codex_rrule_schedule "$rule"
+  }
+
+  codex_store_schedule() {
+    local store="$1" id="$2" rule
+    [ -f "$store" ] || return 0
+    rule=$(sqlite3 -readonly "$store" \
+      "SELECT rrule FROM automations WHERE id = '$id';" 2>/dev/null \
+      | awk 'NF { print; exit }')
+    codex_rrule_schedule "$rule"
   }
 
   claude_store_field() {
@@ -2081,6 +2096,25 @@ if want drift; then
     fi
   }
 
+  compare_codex_schedule() {
+    local label="$1" expected="$2" pointer_actual="$3" scheduler_actual="$4"
+    local pointer="$5" store="$6" marker="$7" baseline="$8"
+    if [ ! -f "$pointer" ]; then
+      echo "    UNKNOWN: $label schedule pointer missing"
+    elif [ ! -f "$store" ]; then
+      echo "    UNKNOWN: $label authoritative scheduler store missing"
+    elif [ -z "$pointer_actual" ]; then
+      echo "    UNKNOWN: $label recurrence rule is incomplete or unsupported"
+    elif [ -z "$scheduler_actual" ]; then
+      echo "    UNKNOWN: $label authoritative scheduler recurrence is missing or unsupported"
+    elif [ "$pointer_actual" != "$scheduler_actual" ]; then
+      echo "    ⚠️  DRIFT: $label schedule pointer=$pointer_actual scheduler=$scheduler_actual marker=${marker:-missing} baseline=${baseline:-missing}"
+    else
+      compare_schedule "$label" "$expected" "$scheduler_actual" "$pointer" \
+        "$marker" "$baseline" recurrence
+    fi
+  }
+
   schedule_measured() {
     local file="$1" expected="$2" actual="$3" marker="$4" baseline="$5"
     [ -f "$file" ] && [ -n "$expected" ] && [ -n "$actual" ] \
@@ -2093,8 +2127,18 @@ if want drift; then
   CODEX_IMPROVER_EXPECTED=$(cadence_expected Codex 4)
   CLAUDE_ENGINEER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
   CLAUDE_IMPROVER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
-  CODEX_ENGINEER_ACTUAL=$(codex_pointer_schedule "$CODEX_LOADER")
-  CODEX_IMPROVER_ACTUAL=$(codex_pointer_schedule "$CODEX_IMPROVER_LOADER")
+  CODEX_ENGINEER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_LOADER")
+  CODEX_IMPROVER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_IMPROVER_LOADER")
+  CODEX_ENGINEER_STORE_ACTUAL=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" daily-ai-engineer)
+  CODEX_IMPROVER_STORE_ACTUAL=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" agent-improver)
+  CODEX_ENGINEER_ACTUAL=""
+  CODEX_IMPROVER_ACTUAL=""
+  [ -n "$CODEX_ENGINEER_POINTER_ACTUAL" ] \
+    && [ "$CODEX_ENGINEER_POINTER_ACTUAL" = "$CODEX_ENGINEER_STORE_ACTUAL" ] \
+    && CODEX_ENGINEER_ACTUAL="$CODEX_ENGINEER_STORE_ACTUAL"
+  [ -n "$CODEX_IMPROVER_POINTER_ACTUAL" ] \
+    && [ "$CODEX_IMPROVER_POINTER_ACTUAL" = "$CODEX_IMPROVER_STORE_ACTUAL" ] \
+    && CODEX_IMPROVER_ACTUAL="$CODEX_IMPROVER_STORE_ACTUAL"
   CLAUDE_ENGINEER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
   CLAUDE_IMPROVER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
   CODEX_ENGINEER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" daily-ai-engineer)
@@ -2108,10 +2152,12 @@ if want drift; then
     "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" cron
   compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
     "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE" cron
-  compare_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
-    "$CODEX_LOADER" "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" recurrence
-  compare_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
-    "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE" recurrence
+  compare_codex_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" \
+    "$CODEX_ENGINEER_POINTER_ACTUAL" "$CODEX_ENGINEER_STORE_ACTUAL" \
+    "$CODEX_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE"
+  compare_codex_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" \
+    "$CODEX_IMPROVER_POINTER_ACTUAL" "$CODEX_IMPROVER_STORE_ACTUAL" \
+    "$CODEX_IMPROVER_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"
 
   if schedule_measured "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
        "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" \

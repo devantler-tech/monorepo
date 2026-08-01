@@ -274,16 +274,33 @@ OUT=$(CODEX_IMPROVER_MARKER_BASELINE=1785222864850 run --section drift)
 check "unchanged marker is not persistence proof" "$OUT" "UNKNOWN: codex improver change marker did not advance"
 nocheck "unchanged marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 
+# The dispatch marker and recurrence must come from one correlated scheduler
+# record. A database-side rewrite cannot be hidden by the desired pointer while
+# last_run_at continues advancing.
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=6,18;BYMINUTE=50;BYSECOND=0' WHERE id = 'agent-improver';"
+OUT=$(run --section drift)
+check "scheduler-store rewrite is detected" "$OUT" "DRIFT: codex improver schedule pointer=7,19@0 scheduler=6,18@50"
+nocheck "scheduler-store rewrite never claims MATCH" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
+check "scheduler-store rewrite invalidates collision total" "$OUT" "local simultaneous starts/day: UNKNOWN"
+check "scheduler-store rewrite invalidates dispatch total" "$OUT" "local engineer dispatches/day: UNKNOWN"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0' WHERE id = 'agent-improver';"
+
 # RRULE comparison includes minute, second, frequency, interval, and filters,
 # not merely the set of hours. A valid alternate minute is concrete drift, not
 # an unreadable schedule.
 sed -i.bak 's/BYMINUTE=0/BYMINUTE=30/' \
   "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=30;BYSECOND=0' WHERE id = 'agent-improver';"
 OUT=$(run --section drift)
 check "minute drift is reported concretely" "$OUT" "DRIFT: codex improver schedule expected=7,19@0 actual=7,19@30"
 check "valid minute drift remains measurable" "$OUT" "local simultaneous starts/day: 0"
 mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
    "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0' WHERE id = 'agent-improver';"
 
 # An out-of-range minute is malformed and must fail closed.
 sed -i.bak 's/BYMINUTE=0/BYMINUTE=60/' \
@@ -330,11 +347,15 @@ mv "$FIX/claude-store/scheduled-tasks.json.bak" \
 # A persisted runtime rewrite must report the concrete expected/actual delta.
 sed -i.bak 's/BYHOUR=7,19;BYMINUTE=0/BYHOUR=6,18;BYMINUTE=50/' \
   "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=6,18;BYMINUTE=50;BYSECOND=0' WHERE id = 'agent-improver';"
 OUT=$(run --section drift)
 check "runtime schedule rewrite is detected" "$OUT" "DRIFT: codex improver schedule expected=7,19@0 actual=6,18@50"
 check "runtime rewrite exposes collisions"   "$OUT" "local simultaneous starts/day: 2"
 mv "$FIX/codex/automations/agent-improver/automation.toml.bak" \
    "$FIX/codex/automations/agent-improver/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0' WHERE id = 'agent-improver';"
 
 # ── 6. clean-state: no false positives when nothing is wrong ──────────────────
 echo
