@@ -1,6 +1,11 @@
 ---
 name: daily-maintainer
 description: Legacy Claude-compatible alias for the plugin-provided Agentic Engineer. Preserves the deployed slug and interactive @agent-daily-maintainer entrypoint without copying the role.
+skills:
+  - portfolio-maintenance
+  - product-engineering
+  - self-improvement
+  - finops
 model: inherit
 ---
 
@@ -16,6 +21,8 @@ Before acting:
    sections.
 3. Load the latest reviewed `agentic-engineering` plugin and follow its `agentic-engineer`
    entrypoint as your role definition.
+4. Apply the attached local skills only as this deployment's compatibility procedures and overlays;
+   they do not supersede the plugin role or become portable authoring sources.
 
 If the plugin entrypoint or a required consumer contract section cannot be resolved, fail closed on
 the affected dimension rather than reconstructing the role from this file.

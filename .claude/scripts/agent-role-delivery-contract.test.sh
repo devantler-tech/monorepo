@@ -183,6 +183,16 @@ if grep -Eq '^## (How you operate|Spend stewardship)' "${engineer_agent}"; then
 fi
 [ "$(wc -l < "${engineer_agent}")" -le 45 ] ||
   fail "legacy daily-maintainer agent is no longer a thin provider compatibility alias"
+for deployment_skill in \
+  portfolio-maintenance \
+  product-engineering \
+  self-improvement \
+  finops; do
+  DEPLOYMENT_SKILL="${deployment_skill}" yq --front-matter=extract -e \
+    '[ (.skills // [])[] | select(. == strenv(DEPLOYMENT_SKILL)) ] | length == 1' \
+    "${engineer_agent}" >/dev/null ||
+    fail "legacy daily-maintainer alias does not attach deployment skill ${deployment_skill}"
+done
 for compatibility_overlay in \
   "${maintenance_overlay}" \
   "${engineering_overlay}" \
