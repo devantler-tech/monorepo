@@ -13,12 +13,15 @@
 #   `agentic-engineering` plugin's `agent-improver` → "Ingestion boundary".
 #
 # Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME]
+#                           [--signature STRING]
 #                           [--injection-provenance] [--credential-provenance]
 set -uo pipefail
 
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
+SIGNATURE=""
+SIGNATURE_SET=0
 INJECTION_PROVENANCE=0
 CREDENTIAL_PROVENANCE=0
 CREDENTIAL_SCAN_BATCH_FILES="${CREDENTIAL_SCAN_BATCH_FILES:-128}"
@@ -38,15 +41,32 @@ while [ $# -gt 0 ]; do
     --since-days) need_val "$@"; SINCE_DAYS="$2"; shift 2 ;;
     --max-files)  need_val "$@"; MAX_FILES="$2";  shift 2 ;;
     --section)    need_val "$@"; SECTION="$2";    shift 2 ;;
+    # An EMPTY signature is rejected below rather than treated as absent: an
+    # empty needle matches every record, which would report the whole corpus as
+    # occurrences of a defect. SIGNATURE_SET distinguishes "not asked for" from
+    # "asked for with a bad value" so the empty case fails loudly.
+    --signature)  need_val "$@"; SIGNATURE="$2"; SIGNATURE_SET=1; shift 2 ;;
     --injection-provenance) INJECTION_PROVENANCE=1; shift ;;
     --credential-provenance) CREDENTIAL_PROVENANCE=1; shift ;;
-    -h|--help)    sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
 done
 
 case "$SINCE_DAYS" in ''|*[!0-9]*) echo "--since-days must be an integer" >&2; exit 2 ;; esac
 case "$MAX_FILES"  in ''|*[!0-9]*) echo "--max-files must be an integer"  >&2; exit 2 ;; esac
+# A ZERO cap is accepted by the integer test and then empties every file set via
+# `head -n 0`, so all five call sites scan nothing and each section reports
+# "(no sessions in window)" — an explicitly empty scan rendered as evidence that
+# nothing happened. Reject it: this tool must never present absence of evidence
+# as evidence of absence.
+# Compared NUMERICALLY, not against the literal "0": `00` passes the digit test,
+# and an exact-string guard missed it while `head -n 00` still empties every file
+# set. Any zero-valued form must be rejected, however it is spelled.
+if [ "$MAX_FILES" -eq 0 ] 2>/dev/null; then
+  echo "--max-files must be at least 1 (a zero cap scans nothing and would report an empty corpus as 'no sessions')" >&2
+  exit 2
+fi
 case "$CREDENTIAL_SCAN_BATCH_FILES" in
   ''|*[!0-9]*) echo "CREDENTIAL_SCAN_BATCH_FILES must be a positive integer" >&2; exit 2 ;;
   *[1-9]*) ;;
@@ -59,8 +79,47 @@ esac
 # printing just the banner — a scheduled run looking successful while producing
 # no metrics at all.
 case "$SECTION" in
-  all|dispatch|reliability|efficiency|safety|a2a|drift|outcomes) ;;
-  *) echo "unknown --section (expected: all dispatch reliability efficiency safety a2a drift outcomes)" >&2; exit 2 ;;
+  all|dispatch|reliability|efficiency|safety|a2a|drift|outcomes|signature) ;;
+  *) echo "unknown --section (expected: all dispatch reliability efficiency safety a2a drift outcomes signature)" >&2; exit 2 ;;
+esac
+
+# `signature` is the one section that cannot run on defaults — it scores a needle
+# the caller supplies. Asking for it without one is a usage error, NOT an empty
+# report: a hypothesis scored against a silently-absent signature would read
+# `0 occurrences` and be recorded as a fix that worked.
+if [ "$SECTION" = signature ] && [ "$SIGNATURE_SET" -eq 0 ]; then
+  echo "--section signature requires --signature STRING" >&2; exit 2
+fi
+if [ "$SIGNATURE_SET" -eq 1 ] && [ -z "$SIGNATURE" ]; then
+  echo "--signature must not be empty" >&2; exit 2
+fi
+# Bound the signature BEFORE any scan. An oversized value makes the `jq` exec
+# fail outright (Linux caps a single argv/env entry at 128 KiB regardless of
+# ARG_MAX); this call site discards stderr and ends in `|| true`, so the scan
+# would exit 0 with both counts at ZERO — a large multiline error turned into
+# false evidence that it never occurred. Fail loudly instead. 4 KiB is far above
+# any real error signature and far below the exec limit.
+SIG_MAX_BYTES=4096
+if [ "$SIGNATURE_SET" -eq 1 ]; then
+  _siglen=$(printf '%s' "$SIGNATURE" | wc -c | tr -d ' ')
+  if [ "$_siglen" -gt "$SIG_MAX_BYTES" ]; then
+    echo "--signature is ${_siglen} bytes; the limit is ${SIG_MAX_BYTES}. A larger value cannot be" >&2
+    echo "passed to the scanner and would silently report zero occurrences. Use a shorter, more" >&2
+    echo "distinctive fragment of the signature." >&2
+    exit 2
+  fi
+fi
+# A signature handed to a section that cannot score it is the SAME failure as a
+# missing one: `--section reliability --signature X` used to exit 0 having
+# silently scored nothing, so a caller asking for a verdict got a clean run and
+# no verdict. Reject it rather than ignore it — absent evidence must never look
+# like evidence of absence, which is the whole point of this section.
+case "$SECTION" in
+  all|signature) ;;
+  *) if [ "$SIGNATURE_SET" -eq 1 ]; then
+       echo "--signature is only scored by --section signature (or all); got --section $SECTION" >&2
+       exit 2
+     fi ;;
 esac
 
 CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
@@ -185,10 +244,13 @@ PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot creat
 CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDCONC=$(mktemp "${TMPDIR:-/tmp}/.agtel_credconc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Its OWN scratch, never $CONCTMP. The injection-concentration pass owns that
+# one, and sharing it would make two sections' results depend on which ran last.
+SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV"' EXIT
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$SIGTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$SIGTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -1199,6 +1261,209 @@ EOF
       echo "    SCOPE: Claude lane only. Codex transcripts are not classified here and"
       echo "    the Codex rate still divides by raw CX_COUNT — same blind spot, open."
     fi
+  fi
+fi
+
+# ── 0b. SIGNATURE SCORING ─────────────────────────────────────────────────────
+# Score ONE named error signature the way a hypothesis verdict needs it.
+#
+# WHY THIS EXISTS (monorepo#2622): hypotheses were scored by ad-hoc `grep` over
+# the transcript store, which matches three different things and counts all of
+# them as occurrences of the defect:
+#   1. the real tool error                      <- the only one that is an occurrence
+#   2. the agent's own PROSE about it           (PR bodies, run reports, replies)
+#   3. DOCUMENTATION READS. `AGENTS.md` and the memory files quote these
+#      signatures verbatim, and every run reads them. A `Read` returns file
+#      content inside a `tool_result` record, so the quoted signature lands in
+#      the corpus in a record shaped almost exactly like the thing being detected.
+# (3) is self-reinforcing: the better a defect is documented, the more
+# occurrences its detector reports, so a FIXED defect can never read as fixed.
+# Measured here on the live corpus, 7d window, `Unknown JSON field: "merged"`:
+# 58 records contain the string, 2 are real failures — 97% of the naive count is
+# noise, in the direction that HIDES a successful fix.
+#
+# Two filters make the count mean what it says:
+#   * `is_error==true` on a `tool_result` — a documentation read that merely
+#     CONTAINS the string is a successful result, so it is structurally excluded.
+#   * the RECORD's own timestamp, not the file's mtime. A resumed session
+#     rewrites an old file, which had attributed 6 pre-merge occurrences to a
+#     post-merge window.
+# The file set is still mtime-selected, and that stays correct as a SUPERSET: a
+# record inside the window cannot live in a file last written before it. The cap
+# is the real limit — see the note printed below.
+if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -eq 1 ]; }; then
+  echo
+  echo "── SIGNATURE SCORING (hypothesis verdicts) ──────────────────────"
+  # Same portable pair as the outcomes section: BSD `date -v` first, GNU `-d`
+  # second. Full second precision, so the comparison against a record timestamp
+  # is not truncated to a whole day.
+  #
+  # ⚠️ The cutoff carries `.000` because the comparison against a record's
+  # timestamp is LEXICAL. Claude records use the fractional form
+  # `…T10:00:00.500Z`, and against a plain `…T10:00:00Z` cutoff that sorts
+  # BEFORE it — `.` (0x2E) < `Z` (0x5A) — so a record half a second INSIDE the
+  # window was excluded. Verified: `".500Z" >= "…:00Z"` is false, `>= "…:00.000Z"`
+  # is true, and a plain at-cutoff record still compares >= `.000`. Both walks
+  # share this cutoff, so the boundary record vanished from the metric AND its
+  # control together — invisible, and in the under-reporting direction.
+  SIG_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
+              || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
+  if [ -z "$SIG_SINCE" ]; then
+    echo "  UNKNOWN: cannot compute window start (no usable \`date\`) — refusing to score."
+  elif [ "$SF_COUNT" -eq 0 ]; then
+    echo "  (no Claude sessions in window)"
+  else
+    # One row per REAL occurrence: "<record timestamp>\t<sessionId>".
+    #
+    # The unit is the RECORD, not the content block. One transcript record can
+    # carry several `tool_result` blocks, so a per-block count could exceed the
+    # unfiltered per-record control below and break the superset invariant the
+    # two numbers are compared on — a "control" smaller than its own subset is
+    # the confound this section exists to remove, so both sides count records.
+    # `any` short-circuits at the first matching block, which is also what makes
+    # the record the unit rather than merely deduplicating one.
+    #
+    # `contains` is a fixed-string test, never a regex — a signature carrying
+    # regex metacharacters (`"` and `:` are common in these) must match itself
+    # literally rather than being reinterpreted.
+    printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      SIG_ENV="$SIGNATURE" jq -Rr --arg since "$SIG_SINCE" '
+        ($ENV.SIG_ENV) as $sig
+        | select(length>0)|(try fromjson catch empty)
+        | select(.type=="user")
+        | (.timestamp // "") as $ts
+        | select($ts != "" and $ts >= $since)
+        | (.sessionId // "unknown") as $sid
+        | select(
+            (.message.content // empty)
+            | select(type=="array")
+            | any(
+                # `objects` FIRST. A content array can mix plain strings with
+                # blocks, and indexing a string with `.type` makes jq abort the
+                # whole input line — which this call site swallows via
+                # `2>/dev/null`, so a record holding a REAL errored tool_result
+                # would vanish silently. That under-reports, the same direction
+                # as the contamination this section exists to remove.
+                objects
+                | .type=="tool_result" and .is_error==true
+                and ((.content | if type=="array" then (map(objects|select(.type=="text")|.text|strings)|join(" "))
+                                 elif type=="string" then . else (.|tostring) end)
+                     | contains($sig))
+              )
+          )
+        | "\($ts)\t\($sid)"
+      ' "$f" 2>/dev/null
+    done | redact > "$SIGTMP" || true
+
+    SIG_OCC=$(wc -l < "$SIGTMP" | tr -d ' ')
+    SIG_SESS=$(cut -f2 "$SIGTMP" | sort -u | grep -c . || true)
+    # The naive number this replaces, printed for contrast so the contamination
+    # is visible rather than merely asserted. Deliberately UNFILTERED — prose,
+    # documentation reads and real errors all count, which is exactly the point.
+    #
+    # ⚠️ It is computed on the DECODED record, not by `grep` over raw bytes, and
+    # that is load-bearing rather than stylistic. These signatures routinely
+    # carry `"` (`Unknown JSON field: "merged"`), which the transcript stores
+    # escaped as `\"` — so a raw `grep -F` finds NOTHING while the decoded walk
+    # finds the real errors, and the "control" printed 0 against 2 real
+    # occurrences. A control that cannot exceed the thing it is a superset of is
+    # measuring a different population, which is the very confound this section
+    # exists to remove. Decoding both sides leaves `is_error` as the ONLY
+    # variable between the two numbers.
+    SIG_NAIVE=$(printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      SIG_ENV="$SIGNATURE" jq -Rr --arg since "$SIG_SINCE" '
+        ($ENV.SIG_ENV) as $sig
+        | select(length>0)|(try fromjson catch empty)
+        | (.timestamp // "") as $ts
+        | select($ts != "" and $ts >= $since)
+        | select(
+            # UNION, so the control contains every match of the filtered walk by
+            # CONSTRUCTION rather than by totals happening to line up. Comparing
+            # totals cannot prove set inclusion: one split-across-blocks error
+            # (seen only by the joined walk) plus one prose record carrying the
+            # whole string (seen only by the leaf walk) gives 1 and 1 with the
+            # superset missing the subset entirely, and no warning.
+            ([.. | strings] | any(contains($sig)))
+            or (
+              (.message.content // empty)
+              | if type=="array" then
+                  any(objects | .type=="tool_result"
+                      and ((.content | if type=="array" then (map(objects|select(.type=="text")|.text|strings)|join(" "))
+                                       elif type=="string" then . else (.|tostring) end)
+                           | contains($sig)))
+                else false end
+            )
+          )
+        | "1"
+      ' "$f" 2>/dev/null
+    done | wc -l | tr -d ' ')
+
+
+    # FLATTEN FIRST. `sed` works line by line, so `[[:cntrl:]]` never sees a
+    # newline and `cut -c` bounds each line rather than the whole value — a
+    # multiline signature therefore printed several bounded lines, and a second
+    # line reading `REAL occurrences ...: 999` lands directly above the real
+    # metric. This output is explicitly consumed by an agent, so a value that
+    # can forge a scorecard row is an integrity bug, not cosmetics.
+    # Emitted on the SAME LINE as its label, deliberately. Flattening alone still
+    # leaves the value at the start of a line, so a signature reading
+    # `REAL occurrences ...: 999` produced a line indistinguishable from a metric
+    # row to a line-oriented consumer. With the label first, no line can BEGIN
+    # with a metric shape unless it is one, so a consumer can anchor (`^  REAL`)
+    # and the value can never masquerade as a row.
+    # ⚠️ `--signature` places the value in this process's ARGV, which any local
+    # user can read. That is acceptable for an error-shape needle and is the
+    # documented tradeoff; a protected input path belongs with the Go migration
+    # (#2629), where a file or FD can be handled with real error handling. A
+    # Bash `--signature-file` was tried here and generated more defects than it
+    # closed (see #2624 rounds 4-6), so it was removed rather than patched again.
+    printf '  signature scored (fixed string, case-sensitive): %s\n' \
+      "$(printf '%s' "$SIGNATURE" | tr '\n\r\t' '   ' | redact \
+         | sed -E 's/[[:cntrl:]]+/ /g' | tr -d '\n' | cut -c1-100)"
+    echo "  window: records at or after ${SIG_SINCE}   (record timestamps, not file mtime)"
+    echo
+    echo "  REAL occurrences (tool_result with is_error==true): ${SIG_OCC}"
+    echo "  distinct sessions ................................: ${SIG_SESS}"
+    if [ "$SIG_OCC" -gt 0 ]; then
+      echo "  first / last occurrence:"
+      printf '    first %s\n' "$(cut -f1 "$SIGTMP" | sort | head -1)"
+      printf '    last  %s\n' "$(cut -f1 "$SIGTMP" | sort | tail -1)"
+      echo "  busiest sessions:"
+      cut -f2 "$SIGTMP" | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
+    fi
+    echo
+    echo "  records containing the string, any context ......: ${SIG_NAIVE}   <- NOT the metric"
+    if [ "$SIG_NAIVE" -gt "$SIG_OCC" ]; then
+      echo "    ${SIG_NAIVE} - ${SIG_OCC} of these are prose or DOCUMENTATION READS, not failures."
+      echo "    Scoring a hypothesis on the unfiltered number counts the agent's own"
+      echo "    writing about a defect as instances of it — see monorepo#2622."
+    elif [ "$SIG_NAIVE" -lt "$SIG_OCC" ]; then
+      # The invariant is asserted in the test suite, so the SCRIPT must state it
+      # too — otherwise the one run where it breaks prints a quietly impossible
+      # pair of numbers. It can break legitimately: the filtered walk JOINS a
+      # record's text blocks before matching, while the control tests each
+      # decoded string leaf on its own, so a signature straddling two adjacent
+      # blocks matches the filtered walk and not the control. That is two
+      # populations again — the exact confound this section exists to remove —
+      # so say so loudly rather than publishing the smaller-superset silently.
+      echo "    ⚠️  INVARIANT BROKEN: the control (${SIG_NAIVE}) is BELOW the filtered"
+      echo "    count (${SIG_OCC}), so the two walks matched different populations."
+      echo "    Treat BOTH numbers as unreliable for this signature — most likely it"
+      echo "    straddles two adjacent text blocks, which only the joined walk sees."
+    fi
+    : > "$SIGTMP"
+    echo
+    echo "  READ THIS BEFORE QUOTING THE NUMBER:"
+    echo "    * Claude lane only. Codex uses response_item/function_call_output with"
+    echo "      no is_error flag, so a Codex occurrence is NOT counted here."
+    echo "    * The file set is capped at ${MAX_FILES} files. Records inside the window"
+    echo "      that live in an evicted file are missed, so a LOW number over a long"
+    echo "      window may be a cap artifact — raise --max-files before concluding."
+    echo "    * Baseline and verdict must be taken with THIS tool, not one by hand:"
+    echo "      two methods produce two populations, which is how a working fix was"
+    echo "      first recorded as a failure."
   fi
 fi
 

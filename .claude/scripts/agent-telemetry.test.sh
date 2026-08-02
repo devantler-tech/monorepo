@@ -3243,6 +3243,337 @@ check "the caveat fires on cap divergence with no other roles" "$CDOUT" "POPULAT
 # warn about, or the caveat degenerates into unconditional noise.
 nocheck "no caveat when neither cap nor other roles diverge" "$COUT" "POPULATION MISMATCH"
 
+# ── SIGNATURE SCORING (monorepo#2622) ─────────────────────────────────────────
+# A hypothesis verdict is only as good as the count behind it. These prove the
+# two filters that make the count mean "the defect happened" rather than "the
+# defect is well documented".
+echo
+echo "signature scoring"
+
+mkdir -p "$FIX/sigscore"
+SIG_NEEDLE='SIGFIXTURE: no such flag "merged"'
+# The needle deliberately CONTAINS a double quote, because that is what the real
+# signatures look like (`Unknown JSON field: "merged"`) and it is exactly what
+# broke the first implementation. Its JSON-escaped form is derived mechanically
+# rather than written by hand — hand-escaping it wrong produced a fixture whose
+# records `fromjson` silently DROPPED, so every count read 0 and the fixture,
+# not the code, was the thing under test.
+SIG_NEEDLE_J=$(printf '%s' "$SIG_NEEDLE" | jq -Rr @json | sed 's/^"//; s/"$//')
+SIG_NOW=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+{
+  # 1. a REAL failure carrying the signature — the only shape that is an occurrence
+  printf '{"type":"user","timestamp":"%s","sessionId":"s-live","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":[{"type":"text","text":"%s"}]}]}}\n' \
+    "$SIG_NOW" "$SIG_NEEDLE_J"
+  # 2. a DOCUMENTATION READ — a SUCCESSFUL tool_result whose content quotes the
+  #    signature, exactly as reading AGENTS.md or a memory file returns it.
+  printf '{"type":"user","timestamp":"%s","sessionId":"s-live","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":[{"type":"text","text":"AGENTS.md line: avoid %s"}]}]}}\n' \
+    "$SIG_NOW" "$SIG_NEEDLE_J"
+  # 3. the agent's own PROSE about the signature (a PR body / run report)
+  printf '{"type":"assistant","timestamp":"%s","sessionId":"s-live","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"I fixed %s this run"}]}}\n' \
+    "$SIG_NOW" "$SIG_NEEDLE_J"
+  # 4. a real failure from LONG ago, in this same fresh-mtime file. A resumed
+  #    session rewrites the file, so mtime windowing drags it into every window.
+  printf '{"type":"user","timestamp":"2026-06-01T10:00:00.000Z","sessionId":"s-old","message":{"content":[{"type":"tool_result","tool_use_id":"t3","is_error":true,"content":[{"type":"text","text":"%s"}]}]}}\n' \
+    "$SIG_NEEDLE_J"
+} > "$FIX/sigscore/sess.jsonl"
+
+sigrun() {
+  CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "${1:-$TARGET}" --since-days "${2:-3650}" --max-files 50 \
+    --section signature --signature "$SIG_NEEDLE" 2>&1
+}
+
+OUT=$(sigrun)
+check "counts ONLY real errors, not the doc read or the prose" "$OUT" \
+  "REAL occurrences (tool_result with is_error==true): 2"
+check "reports the unfiltered number for contrast"            "$OUT" \
+  "records containing the string, any context ......: 4"
+check "counts distinct sessions"                              "$OUT" \
+  "distinct sessions ................................: 2"
+check "names the contamination in the output"                 "$OUT" \
+  "DOCUMENTATION READS, not failures"
+
+# The superset invariant. If the control can be SMALLER than the thing it is a
+# superset of, the two numbers are measuring different populations — which is
+# how the first version of this section printed 0 against 2 real occurrences,
+# because the signature's `"` is escaped in the raw store and a byte-level grep
+# missed what the decoded walk found.
+SIG_REAL_N=$(printf '%s' "$OUT" | sed -n 's/.*is_error==true): //p')
+SIG_ANY_N=$(printf '%s' "$OUT"  | sed -n 's/.*any context \.*: \([0-9]*\).*/\1/p')
+if [ -n "$SIG_REAL_N" ] && [ -n "$SIG_ANY_N" ] \
+   && [ "$SIG_REAL_N" -gt 0 ] && [ "$SIG_ANY_N" -ge "$SIG_REAL_N" ]; then
+  ok "unfiltered count is a true superset of the real-error count"
+else
+  bad "unfiltered count is a true superset of the real-error count" \
+      "any=$SIG_ANY_N real=$SIG_REAL_N — a control below its subset (or a vacuous 0>=0) proves nothing"
+fi
+
+# Record-timestamp windowing: the 2026-06-01 failure lives in a file whose mtime
+# is NOW, so mtime windowing would report it as today's.
+OUT=$(sigrun "$TARGET" 1)
+check "buckets by RECORD timestamp, not file mtime" "$OUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+
+# Usage errors fail LOUDLY. A silently-absent signature scores every hypothesis
+# as 0 occurrences, i.e. as a fix that worked.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" HOME="$FIX" bash "$TARGET" --section signature 2>&1)
+check "--section signature without --signature is an error" "$OUT" \
+  "requires --signature"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" HOME="$FIX" bash "$TARGET" --section signature --signature '' 2>&1)
+check "an empty --signature is rejected" "$OUT" "must not be empty"
+# A signature handed to a section that cannot score it is the same absent-evidence
+# failure as omitting it: it used to exit 0 having scored nothing (Codex finding).
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" HOME="$FIX" bash "$TARGET" --section reliability --signature 'x' 2>&1)
+check "--signature with an incompatible --section is rejected" "$OUT" \
+  "only scored by --section signature"
+# Paired control: the COMPATIBLE combinations must still be accepted, or the new
+# rejection would simply break the feature.
+OUT=$(sigrun); check "--section signature still accepted" "$OUT" "SIGNATURE SCORING"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+      HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 --signature "$SIG_NEEDLE" 2>&1)
+check "--signature under the default (all) section still scores" "$OUT" "SIGNATURE SCORING"
+
+# A single record can carry SEVERAL tool_result blocks. Counting blocks while
+# the control counts records lets the "superset" fall BELOW its own subset — the
+# exact confound this section exists to remove. Self-review caught this; the
+# original fixture had one block per record and could never have shown it.
+mkdir -p "$FIX/sigmulti"
+printf '{"type":"user","timestamp":"%s","sessionId":"s-multi","message":{"content":[{"type":"tool_result","tool_use_id":"m1","is_error":true,"content":[{"type":"text","text":"%s"}]},{"type":"tool_result","tool_use_id":"m2","is_error":true,"content":[{"type":"text","text":"%s"}]}]}}\n' \
+  "$SIG_NOW" "$SIG_NEEDLE_J" "$SIG_NEEDLE_J" > "$FIX/sigmulti/sess.jsonl"
+MOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigmulti" CODEX_HOME="$FIX/nocodex" \
+       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature "$SIG_NEEDLE" 2>&1)
+check "two errored blocks in ONE record count as one occurrence" "$MOUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+M_REAL=$(printf '%s' "$MOUT" | sed -n 's/.*is_error==true): //p')
+M_ANY=$(printf '%s' "$MOUT"  | sed -n 's/.*any context \.*: \([0-9]*\).*/\1/p')
+if [ "$M_ANY" -ge "$M_REAL" ] && [ "$M_REAL" -gt 0 ]; then
+  ok "superset invariant survives a multi-block record"
+else
+  bad "superset invariant survives a multi-block record" "any=$M_ANY real=$M_REAL"
+fi
+
+# CodeRabbit finding (#2624): a content array can mix plain strings with blocks,
+# and `.type` on a string aborts the whole jq input line — swallowed by the call
+# site's 2>/dev/null, so a record holding a REAL errored tool_result vanished.
+# Without the `objects` guard this fixture scores 0.
+mkdir -p "$FIX/sigmixed"
+printf '{"type":"user","timestamp":"%s","sessionId":"s-mix","message":{"content":["stray plain string",{"type":"tool_result","tool_use_id":"x1","is_error":true,"content":[{"type":"text","text":"%s"}]}]}}\n' \
+  "$SIG_NOW" "$SIG_NEEDLE_J" > "$FIX/sigmixed/sess.jsonl"
+XOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigmixed" CODEX_HOME="$FIX/nocodex" \
+       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature "$SIG_NEEDLE" 2>&1)
+check "a string element in the content array does not hide a real error" "$XOUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+
+# CodeRabbit finding (#2624): the filtered walk JOINS a record's text blocks
+# before matching; the control tests each decoded string leaf alone. A signature
+# straddling two adjacent blocks therefore matches the filtered walk only, and
+# the control drops BELOW its own subset. The script must say so rather than
+# print an impossible pair silently.
+mkdir -p "$FIX/sigsplit"
+printf '{"type":"user","timestamp":"%s","sessionId":"s-split","message":{"content":[{"type":"tool_result","tool_use_id":"y1","is_error":true,"content":[{"type":"text","text":"STRADDLE-LEFT"},{"type":"text","text":"STRADDLE-RIGHT"}]}]}}\n' \
+  "$SIG_NOW" > "$FIX/sigsplit/sess.jsonl"
+SOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigsplit" CODEX_HOME="$FIX/nocodex" \
+       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature 'STRADDLE-LEFT STRADDLE-RIGHT' 2>&1)
+# ⚠️ This ASSERTED `INVARIANT BROKEN` until Codex finding A. Making the control a
+# UNION removes the inversion by construction, which is strictly better than
+# warning about it — so the straddling case must now come out CONSISTENT. The
+# warning branch is kept as defence in depth and should never fire.
+nocheck "a straddling signature no longer inverts the invariant" "$SOUT" "INVARIANT BROKEN"
+check   "the straddling error is still counted" "$SOUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+# Paired control: the ordinary case must NOT print the warning, or it degenerates
+# into unconditional noise.
+# ⚠️ Take a FRESH ordinary run — do not reuse $OUT. By this point $OUT holds the
+# EMPTY-SIGNATURE usage error, which of course lacks the warning string, so the
+# assertion passed no matter what the ordinary report did. A control that cannot
+# fail is not a control (Codex finding, #2624).
+NORMOUT=$(sigrun)
+check   "the paired control ran a real signature report" "$NORMOUT" \
+  "REAL occurrences (tool_result with is_error==true): 2"
+nocheck "the inversion warning stays silent in the ordinary case" "$NORMOUT" "INVARIANT BROKEN"
+
+# Codex finding (#2624): the window comparison is LEXICAL, so a record with
+# Claude's normal fractional timestamp falling in the SAME SECOND as the cutoff
+# sorted BEFORE a plain `…:00Z` cutoff and was dropped from BOTH numbers.
+#
+# ⚠️ This is deliberately NOT tested through a fixture. The first attempt built a
+# record at `now-1d` plus a fraction and asserted it was counted — but the script
+# computes its own cutoff moments later, so the record landed a second or two
+# clear of the boundary and the test passed with OR without the fix. Ablation
+# caught it: a vacuous arm. Hitting the exact same second is inherently racy, so
+# the property is asserted two deterministic ways instead.
+#
+# (a) the cutoff the script actually emits must carry sub-second precision.
+#     ⚠️ Scoped to the WINDOW LINE, not the whole report: a fixture record is
+#     itself dated `2026-06-01T10:00:00.000Z` and the report echoes it as the
+#     first occurrence, so a whole-output match found `.000Z` no matter what the
+#     cutoff looked like — the ablated build passed too. Assert on the one line
+#     that carries the value under test.
+OUT=$(sigrun)
+WINLINE=$(printf '%s\n' "$OUT" | grep 'window: records at or after')
+check "the window cutoff carries sub-second precision" "$WINLINE" ".000Z"
+# (b) the comparison semantics that makes that necessary, pinned directly:
+#     a fractional record must sort AFTER a same-second cutoff.
+BCMP=$(jq -nr '[
+  ("2026-08-01T10:00:00.500Z" >= "2026-08-01T10:00:00Z"),
+  ("2026-08-01T10:00:00.500Z" >= "2026-08-01T10:00:00.000Z"),
+  ("2026-08-01T10:00:00Z"     >= "2026-08-01T10:00:00.000Z"),
+  ("2026-08-01T09:59:59.999Z" >= "2026-08-01T10:00:00.000Z")
+] | @tsv')
+if [ "$BCMP" = "$(printf 'false\ttrue\ttrue\tfalse')" ]; then
+  ok "a plain-second cutoff would drop a same-second fractional record"
+else
+  bad "a plain-second cutoff would drop a same-second fractional record" \
+      "lexical comparison changed: got [$BCMP]"
+fi
+
+# Codex finding A (#2624): comparing TOTALS cannot prove set inclusion. One error
+# split across adjacent blocks (seen only by the joined walk) plus one prose
+# record carrying the whole string (seen only by the leaf walk) gave 1 and 1 with
+# the "superset" missing the subset entirely, and no warning. The control is now
+# a UNION, so it contains every match of the filtered walk by construction.
+mkdir -p "$FIX/sigset"
+{
+  printf '{"type":"user","timestamp":"%s","sessionId":"s-set","message":{"content":[{"type":"tool_result","tool_use_id":"z1","is_error":true,"content":[{"type":"text","text":"SPLITME-LEFT"},{"type":"text","text":"SPLITME-RIGHT"}]}]}}\n' "$SIG_NOW"
+  printf '{"type":"assistant","timestamp":"%s","sessionId":"s-set","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"prose about SPLITME-LEFT SPLITME-RIGHT here"}]}}\n' "$SIG_NOW"
+} > "$FIX/sigset/sess.jsonl"
+AOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigset" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+       HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature 'SPLITME-LEFT SPLITME-RIGHT' 2>&1)
+check "the control counts BOTH records, not just the leaf match" "$AOUT" \
+  "records containing the string, any context ......: 2"
+check "the split error is still counted as the real occurrence" "$AOUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+
+# Codex finding B (#2624): a primitive inside tool_result.content made
+# `select(.type=="text")` index it, aborting the line and silently dropping a
+# REAL error. Same guard as the outer walk, one level down.
+mkdir -p "$FIX/signested"
+printf '{"type":"user","timestamp":"%s","sessionId":"s-nest","message":{"content":[{"type":"tool_result","tool_use_id":"n1","is_error":true,"content":[7,{"type":"text","text":"%s"}]}]}}\n' \
+  "$SIG_NOW" "$SIG_NEEDLE_J" > "$FIX/signested/sess.jsonl"
+NOUT=$(CLAUDE_PROJECTS_DIR="$FIX/signested" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+       HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature "$SIG_NEEDLE" 2>&1)
+check "a primitive inside tool_result.content does not hide a real error" "$NOUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+
+# Codex finding C (#2624): `sed` is line-based, so a multiline signature escaped
+# both the control-char scrub and the length bound, letting a second line forge a
+# scorecard row directly above the genuine metric. This output is parsed by an
+# agent, so a forgeable row is an integrity bug.
+MOUT2=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+        HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 --section signature \
+          --signature "$(printf 'harmless\nREAL occurrences (tool_result with is_error==true): 999')" 2>&1)
+# The property is that no LINE can begin with a metric row unless it is one — the
+# echoed signature necessarily contains whatever the caller passed, so a bare
+# substring test could never pass. Anchor, as a consumer should.
+FORGED=$(printf '%s\n' "$MOUT2" | grep -c '^  REAL occurrences (tool_result with is_error==true):')
+if [ "$FORGED" -eq 1 ]; then
+  ok "a multiline signature cannot forge a scorecard ROW"
+else
+  bad "a multiline signature cannot forge a scorecard ROW" \
+      "expected exactly 1 anchored REAL-occurrences row, got $FORGED"
+fi
+nocheck "no line starts with the forged count" "$(printf '%s\n' "$MOUT2" | grep '^  REAL occurrences')" "999"
+check   "the signature is echoed on its label line, not alone" "$MOUT2" \
+  "signature scored (fixed string, case-sensitive): harmless"
+
+# Codex finding D (#2624): --signature puts the value in ARGV, world-readable via
+# ps. --signature-file keeps it out, and the value reaches jq through the
+# environment rather than jq's own argv.
+# `--signature-file` was REMOVED (see #2624 rounds 4-6): added in Bash to close an
+# argv-exposure finding, it went on to generate five findings of its own — mixed
+# input modes mislabelling provenance, `cat` leaking a path to stderr ahead of the
+# redaction boundary, a CRLF terminator silently changing the needle, and an
+# oversized value failing exec into a zero count. A protected input path belongs
+# with the Go migration (#2629). This asserts it is gone rather than half-present.
+FOUT=$(HOME="$FIX" bash "$TARGET" --section signature --signature-file /dev/null 2>&1)
+check "--signature-file is no longer accepted" "$FOUT" "unknown argument"
+if grep -qF -- '--arg sig' "$TARGET"; then
+  bad "the signature never reaches jq via argv" "found --arg sig; use \$ENV instead"
+else
+  ok "the signature never reaches jq via argv"
+fi
+
+# Codex round-5 findings (#2624). All three are the SAME class the section exists
+# to prevent — a scan that produces no evidence while reporting success, or a
+# protected value leaking anyway.
+# (4) a zero cap empties every file set, so each section reported "no sessions"
+#     for an explicitly empty scan. Affects all five call sites, not just this one.
+# NUMERIC comparison: `00` passes the digit test and an exact-string guard missed
+# it, while `head -n 00` still empties every file set (Codex round 6).
+for _z in 0 00 000; do
+  OUT=$(HOME="$FIX" bash "$TARGET" --max-files "$_z" --section signature --signature 'x' 2>&1)
+  check "--max-files $_z is rejected, not reported as an empty corpus" "$OUT" "must be at least 1"
+done
+# paired control: a positive cap still works
+OUT=$(sigrun); check "a positive --max-files still scans" "$OUT" \
+  "REAL occurrences (tool_result with is_error==true): 2"
+# (2) an oversized signature makes the jq exec fail; stderr is discarded and the
+#     pipeline ends in `|| true`, so the scan would exit 0 with both counts ZERO.
+BIG=$(head -c 5000 /dev/zero | tr '\0' 'a')
+OUT=$(HOME="$FIX" bash "$TARGET" --section signature --signature "$BIG" 2>&1)
+check "an oversized signature is rejected before scanning" "$OUT" "the limit is 4096"
+nocheck "an oversized signature never reports a zero count" "$OUT" "REAL occurrences"
+# (1) --signature-file exists so a sensitive value need not be exposed; echoing
+#     it back defeats that, and `redact` only knows a fixed set of shapes.
+OUT=$(sigrun); check "an inline signature is echoed on its label line" "$OUT" \
+  "signature scored (fixed string, case-sensitive):"
+
+# ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
+# A guard that passes when removed is not a guard. Each arm copies the target,
+# removes exactly one filter, asserts the copy actually CHANGED, and requires the
+# count to move. `cp` only — never git — so a failed arm cannot lose work.
+ablate() { # $1=sed-expr $2=label $3=expected-count-after $4=days $5=expected-changed-lines
+  local ab="$FIX/ablate.sh" changed
+  cp "$TARGET" "$ab"
+  sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
+  if cmp -s "$TARGET" "$ab"; then
+    bad "ablation: $2" "sed changed nothing — the arm proves nothing"
+    return
+  fi
+  # An arm must remove THE filter under test, not merely change the file. The
+  # first version of arm A matched a line in another section after this jq was
+  # reshaped: the copy differed, so the arm looked live, while the filter it
+  # claimed to ablate was untouched and the count never moved. Requiring exactly
+  # one changed line makes a mis-aimed sed fail loudly instead of passing.
+  # The expected line count is stated per arm, never assumed: a filter can
+  # legitimately live in more than one walk (the timestamp filter guards both
+  # the real count and its control), and "1" would then be wrong rather than
+  # strict. Stating it is what makes a mis-aimed sed distinguishable from a
+  # filter that genuinely appears twice.
+  changed=$(diff "$TARGET" "$ab" | grep -c '^<')
+  if [ "$changed" -ne "${5:-1}" ]; then
+    bad "ablation: $2" "sed changed $changed lines, expected ${5:-1} — arm is mis-aimed"
+    return
+  fi
+  local aout; aout=$(sigrun "$ab" "${4:-3650}")
+  if printf '%s' "$aout" | grep -qF "is_error==true): $3"; then
+    ok "ablation: $2"
+  else
+    bad "ablation: $2" "expected count $3 after removing the filter; got: $(printf '%s' "$aout" | grep 'is_error==true)' || echo none)"
+  fi
+}
+# Arm A — drop the is_error filter: the documentation read must become counted
+# (2 -> 3). This is the contamination the section exists to exclude.
+# Anchored at end-of-line so it hits ONLY the signature walk's own filter — the
+# reliability section's `... and .is_error==true)` ends in a paren and is spared.
+ablate 's/\.type=="tool_result" and \.is_error==true$/.type=="tool_result"/' \
+  "removing is_error lets a documentation read count" 3
+# Arm B — drop the record-timestamp filter in the 1-day window: the 2026-06-01
+# failure must reappear (1 -> 2), proving mtime is not what bounds the window.
+# The timestamp filter guards BOTH the real walk and its unfiltered control, so
+# this arm legitimately touches two lines — stated, not assumed.
+ablate 's/select($ts != "" and $ts >= $since)/select($ts != "" or true)/' \
+  "removing the timestamp filter lets an out-of-window record count" 2 1 2
+
 echo
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
