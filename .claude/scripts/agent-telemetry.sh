@@ -1052,7 +1052,7 @@ if want dispatch; then
       if [ "${#lastt}" -le 200 ] \
          && printf '%s' "$lastt" | grep -qiE "$DH_RE" \
          && ! printf '%s' "$lastt" | grep -qiE "$DH_NOT_RE" \
-         && [ "$sr" != "end_turn" ]; then
+         && { [ "$sr" = "stop_sequence" ] || [ -z "$sr" ]; }; then
         ended_on_refusal=1
       fi
       if [ "$ended_on_refusal" -eq 1 ]; then
@@ -1123,7 +1123,16 @@ EOF
     # Selecting by role means a changed marker format publishes ZERO dispatches
     # while root runs exist — the same silent-zero shape the cap ordering fixed.
     # A zero must be loud and attributable, never read as an outage.
-    if [ "$DH_TOTAL" -eq 0 ] && [ "$DH_ROOTS" -gt 0 ]; then
+    # A zero is only UNKNOWN when it is UNATTRIBUTABLE. If every root parsed to a
+    # different role, parsing demonstrably worked and the engineer simply did not
+    # run — a scheduler-absence signal. Reporting that as a possible format change
+    # would hide a real absence behind a warning about the wrong thing.
+    if [ "$DH_TOTAL" -eq 0 ] && [ "$DH_ROOTS" -gt 0 ] \
+       && [ $((DH_NOREC + DH_UNREADABLE)) -eq 0 ] && [ "$DH_OTHERROLE" -gt 0 ]; then
+      printf '  Role "%s" did not run in this window — no dispatch of it exists.\n' "$DH_ROLE"
+      printf '    All %s root transcripts parsed cleanly to other roles, so this is a real\n' "$DH_ROOTS"
+      echo "    absence of the scheduled run, not an unreadable count."
+    elif [ "$DH_TOTAL" -eq 0 ] && [ "$DH_ROOTS" -gt 0 ]; then
       printf '  WARNING: role selection matched 0 of %s root transcripts.\n' "$DH_ROOTS"
       echo "    Treat the dispatch count as UNKNOWN, not as an outage: this is what a"
       echo "    changed dispatch-record format looks like, and it is indistinguishable"

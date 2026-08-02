@@ -3122,6 +3122,41 @@ check "a real refusal terminating stop_sequence is still dead" "$RSOUT" "dead ..
 # classified — the requirement applies only where the field exists.
 check "a refusal with NO stop_reason is still classified" "$KOUT" "dead ......... 1"
 
+# CONTROL Z pins the POSITIVE terminal state. Accepting "anything but end_turn"
+# is not the same claim as the corpus supports: a run cut off mid-tool carries
+# `tool_use` and can carry refusal-shaped text beside the tool request, so an
+# exclusion test labels an interrupted run a provider refusal and adds a false
+# refusal observation. The measurement says `stop_sequence`, so require it.
+mkdir -p "$FIX/dh-toolstop"
+{ dispatch_rec daily-ai-assistant 2026-08-01T13:30:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T13:30:05.000Z","message":{"stop_reason":"tool_use","content":[{"type":"text","text":"You've hit your weekly limit"},{"type":"tool_use","id":"z1","name":"Bash","input":{"command":"gh issue create"}}]}}
+EOF
+} > "$FIX/dh-toolstop/s.jsonl"
+TSOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-toolstop" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+nocheck "a mid-tool cutoff is not a provider refusal" "$TSOUT" "truncated .... 1"
+check   "a mid-tool cutoff is reported incomplete"    "$TSOUT" "incomplete ... 1"
+check   "a mid-tool cutoff adds no refusal observation" "$TSOUT" "refusals observed: none"
+
+# CONTROL AA pins ABSENT vs UNPARSEABLE. A window holding only correctly-parsed
+# other-role transcripts is a genuine zero — role parsing demonstrably worked and
+# the engineer simply did not run. Calling that UNKNOWN hides a real scheduler
+# absence behind a format-change warning, which is the opposite of attributable.
+mkdir -p "$FIX/dh-onlyother"
+{ dispatch_rec agent-improver 2026-08-01T12:30:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T12:30:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"aa1","name":"Bash","input":{"command":"echo improver"}}]}}
+EOF
+} > "$FIX/dh-onlyother/improver.jsonl"
+OOOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-onlyother" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+nocheck "a parsed other-role window is not called UNKNOWN" "$OOOUT" "role selection matched 0"
+check   "it is reported as a genuine absence instead"      "$OOOUT" "did not run in this window"
+# Paired control: an UNPARSEABLE zero must STILL warn, or the fix degenerates
+# into never warning — which is the silent-zero CONTROL O exists to prevent.
+check   "an unattributable zero still warns" "$QOUT" "role selection matched 0 of 1"
+
 # CONTROL X pins the CAP-DIVERGENCE trigger. The population caveat was
 # conditional on other ROLES being present, but the two populations are capped
 # INDEPENDENTLY — so sidechains alone can evict roots from the numerator corpus
