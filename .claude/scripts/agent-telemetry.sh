@@ -930,11 +930,19 @@ if want dispatch; then
     # detector exists to catch. The tail is therefore admitted by GRAMMAR, not by
     # wildcard: it must open with the provider's own separator and carry no
     # sentence punctuation, which is precisely what a prose continuation has and
-    # a machine-generated suffix does not. Separators are alternated literals
-    # rather than a bracket class — a multi-byte character inside `[...]` is not
-    # portable across BSD and GNU grep.
+    # a machine-generated suffix does not.
+    #
+    # The separator set is EXACTLY the one observed — the middle dot, and nothing
+    # else. An earlier version also admitted an em- and en-dash "for symmetry",
+    # which nothing in the corpus called for, and that alone reopened the hole
+    # the end anchor exists to close: `Usage limit reached — filed an issue.` is
+    # ordinary prose whose dash-led continuation carries no internal period or
+    # semicolon, so it satisfied the tail. Widening a grammar past the evidence
+    # is how a precise rule silently becomes a substring match again.
+    # It is a literal rather than a bracket class — a multi-byte character inside
+    # `[...]` is not portable across BSD and GNU grep.
     DH_TPL="you've hit your [a-z0-9 -]*limit|you’ve hit your [a-z0-9 -]*limit|youve hit your [a-z0-9 -]*limit|usage limit reached|claude usage limit reached|this (account|organization) is out of (credits|usage)|capacity constraints prevent[a-z ]*"
-    DH_TAIL='([[:space:]]*(·|—|–)[^.;]*)?[[:space:]]*\.?$'
+    DH_TAIL='([[:space:]]*·[^.;]*)?[[:space:]]*\.?$'
     DH_RE="^($DH_TPL)$DH_TAIL"
     DH_NOT_RE='(rate limit|rate-limit|review limit|quota exceeded for)'
     # The scheduled role this report's dispatch count belongs to. The Agent
@@ -974,7 +982,8 @@ if want dispatch; then
         | (([$lastrec.message.content[]?|select(.type=="text")|.text] | last) // "") as $lastt
         | (($lastrec.timestamp) // ([$recs[]|select(.timestamp)|.timestamp]|last) // "") as $ts
         | (($lastrec.message.stop_reason) // "") as $sr
-        | "\($role)\t\($recs|length)\t\($tu)\t\($ts)\t\($sr)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
+        | ([$recs[] | select(.type=="assistant")] | length) as $na
+        | "\($role)\t\($recs|length)\t\($na)\t\($tu)\t\($ts)\t\($sr)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
       ' "$f" 2>/dev/null | head -1)
       # jq emitting nothing at all (an I/O error, a shape no branch handles) is
       # the same class as a file with no parsable records, and it lands in the
@@ -984,11 +993,13 @@ if want dispatch; then
       if [ -z "$row" ]; then DH_UNREADABLE=$((DH_UNREADABLE+1)); continue; fi
       role=${row%%$'\t'*}; rest=${row#*$'\t'}
       nrec=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+      na=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       tu=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       ts=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       sr=${rest%%$'\t'*}; lastt=${rest#*$'\t'}
       case "$tu" in ''|*[!0-9]*) tu=0 ;; esac
       case "$nrec" in ''|*[!0-9]*) nrec=0 ;; esac
+      case "$na" in ''|*[!0-9]*) na=0 ;; esac
       # Select by role BEFORE classifying, and account for what was set aside so
       # a zero is attributable rather than silent. EVERY root transcript lands in
       # exactly one bucket — the breakdown is only worth printing if it sums.
@@ -1043,8 +1054,16 @@ if want dispatch; then
           # would recreate this section's own denominator distortion, inverted.
           [ "$tu" -eq 0 ] && DH_INCOMPLETE_NOWORK=$((DH_INCOMPLETE_NOWORK+1))
         fi
-        [ -n "$ts" ] && DH_EVENTS="${DH_EVENTS}${ts}	H
+        # An interval may only be CLOSED by a dispatch the provider demonstrably
+        # answered. A run that crashed before any assistant record proves nothing
+        # about provider health — counting it as healthy splits one incident in
+        # two and reports that the fleet was working during an outage that never
+        # lifted. Such a dispatch stays NEUTRAL: it is still classified and still
+        # counted, it just casts no vote on whether the provider was serving.
+        if [ "$na" -gt 0 ]; then
+          [ -n "$ts" ] && DH_EVENTS="${DH_EVENTS}${ts}	H
 "
+        fi
       fi
     done <<EOF
 $(root_session_files)
@@ -1055,6 +1074,20 @@ EOF
     printf '    other scheduled roles ....................: %s   (another agent, not this one)\n' "$DH_OTHERROLE"
     printf '    no dispatch record .......................: %s   (interactive session)\n' "$DH_NOREC"
     printf '    unreadable transcript ....................: %s   (empty or no parsable records)\n' "$DH_UNREADABLE"
+    # The buckets are role-filtered; every numerator in this report is NOT.
+    # Recommending live+truncated without saying so divides all-role activity by
+    # engineer-only dispatches — the very numerator/denominator mismatch this
+    # section exists to warn about, reintroduced by the role filter itself.
+    # Stated wherever the mismatch EXISTS, not only alongside the no-evidence
+    # warning: the denominator guidance is equally wrong in a healthy window, and
+    # that is exactly where a reader trusts the rates without re-deriving them.
+    if [ $((DH_OTHERROLE + DH_NOREC)) -gt 0 ]; then
+      printf '  POPULATION MISMATCH: every numerator in this report is NOT role-filtered.\n'
+      printf '    Numerators cover all %s root transcripts (plus subagent sidechains);\n' "$DH_ROOTS"
+      printf '    these buckets cover only the %s of role "%s".\n' "$DH_TOTAL" "$DH_ROLE"
+      echo "    Re-basing a rate on live + truncated is only valid against a numerator"
+      echo "    filtered the same way; otherwise divide by the full root count."
+    fi
     # Selecting by role means a changed marker format publishes ZERO dispatches
     # while root runs exist — the same silent-zero shape the cap ordering fixed.
     # A zero must be loud and attributable, never read as an outage.

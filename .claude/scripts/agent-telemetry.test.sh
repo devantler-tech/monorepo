@@ -2997,6 +2997,58 @@ WOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-twospans" CODEX_HOME="$FIX/nocodex" MONOREPO
 check "refusals split by a healthy run are two outages" "$WOUT" "outage spans: 2 distinct"
 nocheck "the healthy interval is not inside an outage"  "$WOUT" "2026-08-01T01:00:01.000Z -> 2026-08-01T09:00:01.000Z"
 
+# CONTROL S pins the SEPARATOR SET. The provider tail is admitted by grammar, and
+# that grammar must be the one actually observed: only the middle dot appears in
+# the corpus. Admitting dashes as well — which nothing measured called for — lets
+# an ordinary em-dash summary through, because a dash followed by prose with no
+# internal period or semicolon satisfies the tail. CONTROL L's semicolon case
+# cannot catch it: the punctuation that saves L is absent here.
+mkdir -p "$FIX/dh-dash"
+{ dispatch_rec daily-ai-assistant 2026-08-01T17:30:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T17:30:00.000Z","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"s1","name":"Bash","input":{"command":"echo x"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T17:30:05.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Usage limit reached — filed an issue."}]}}
+EOF
+} > "$FIX/dh-dash/s.jsonl"
+DAOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-dash" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "an em-dash prose summary stays live"    "$DAOUT" "live ......... 1"
+check "an em-dash summary is not truncated"    "$DAOUT" "truncated .... 0"
+
+# CONTROL T pins WHAT COUNTS AS EVIDENCE THE FLEET WAS SERVED. An outage interval
+# may only be closed by a dispatch the provider demonstrably answered. A run that
+# crashed before any assistant response proves nothing about provider health, so
+# it must stay NEUTRAL — otherwise it splits one incident into two and reports
+# that healthy dispatches ran during an outage that never lifted.
+mkdir -p "$FIX/dh-unserved"
+{ dispatch_rec daily-ai-assistant 2026-08-01T01:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T01:00:01.000Z","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+} > "$FIX/dh-unserved/r1.jsonl"
+# Only the dispatch record — the process died before the provider answered.
+dispatch_rec daily-ai-assistant 2026-08-01T05:00:00.000Z > "$FIX/dh-unserved/unserved.jsonl"
+{ dispatch_rec daily-ai-assistant 2026-08-01T09:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T09:00:01.000Z","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+} > "$FIX/dh-unserved/r2.jsonl"
+NSOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-unserved" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "an unserved dispatch does not split an outage" "$NSOUT" "outage span: 2026-08-01T01:00:01.000Z -> 2026-08-01T09:00:01.000Z"
+nocheck "an unserved dispatch is not called healthy"  "$NSOUT" "outage spans: 2 distinct"
+# CONTROL T2, the paired over-tightening control: a dispatch the provider DID
+# answer must still split, or the fix above degenerates into "never split".
+check "a served run still splits the outage" "$WOUT" "outage spans: 2 distinct"
+
+# CONTROL U pins the DENOMINATOR POPULATION CAVEAT. The buckets are role-filtered;
+# every numerator in this report is not. Telling a reader to re-base a rate on
+# live+truncated without saying so divides all-role activity by engineer-only
+# dispatches — the same numerator/denominator mismatch this section exists to
+# warn about, reintroduced by the role filter itself.
+check "the population mismatch is stated when other roles are present" "$ROUT2" "POPULATION MISMATCH: every numerator in this report is NOT role-filtered."
+check "the mismatch names both populations"                            "$ROUT2" "Numerators cover all 3 root transcripts"
+
 echo
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
