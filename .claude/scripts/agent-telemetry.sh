@@ -898,7 +898,7 @@ if want dispatch; then
     echo "  (no claude sessions in window)"
   else
     DH_LIVE=0; DH_DEAD=0; DH_TRUNC=0; DH_INCOMPLETE=0
-    DH_ROOTS=0; DH_OTHERROLE=0; DH_NOREC=0
+    DH_ROOTS=0; DH_OTHERROLE=0; DH_NOREC=0; DH_UNREADABLE=0
     # One event per classified dispatch: "<timestamp>\t<R|H>". Sorted and walked
     # at the end so refusals separated by a HEALTHY dispatch report as separate
     # incidents; min->max over all refusals describes a single continuous outage
@@ -974,18 +974,33 @@ if want dispatch; then
         | (([$lastrec.message.content[]?|select(.type=="text")|.text] | last) // "") as $lastt
         | (($lastrec.timestamp) // ([$recs[]|select(.timestamp)|.timestamp]|last) // "") as $ts
         | (($lastrec.message.stop_reason) // "") as $sr
-        | "\($role)\t\($tu)\t\($ts)\t\($sr)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
+        | "\($role)\t\($recs|length)\t\($tu)\t\($ts)\t\($sr)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
       ' "$f" 2>/dev/null | head -1)
-      [ -n "$row" ] || continue
+      # jq emitting nothing at all (an I/O error, a shape no branch handles) is
+      # the same class as a file with no parsable records, and it lands in the
+      # same bucket rather than vanishing from the breakdown. No input reached
+      # here in testing — empty, malformed and binary files all still produce a
+      # row — so this is the invariant held by construction, not a live case.
+      if [ -z "$row" ]; then DH_UNREADABLE=$((DH_UNREADABLE+1)); continue; fi
       role=${row%%$'\t'*}; rest=${row#*$'\t'}
+      nrec=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       tu=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       ts=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       sr=${rest%%$'\t'*}; lastt=${rest#*$'\t'}
       case "$tu" in ''|*[!0-9]*) tu=0 ;; esac
+      case "$nrec" in ''|*[!0-9]*) nrec=0 ;; esac
       # Select by role BEFORE classifying, and account for what was set aside so
-      # a zero is attributable rather than silent.
+      # a zero is attributable rather than silent. EVERY root transcript lands in
+      # exactly one bucket — the breakdown is only worth printing if it sums.
+      #
+      # A file with no parsable records is NOT an interactive session: an empty
+      # or corrupt transcript yields the same empty role as a genuine unscheduled
+      # run, and lumping them together attributes a parse failure to a category
+      # of real human work. The record count is what separates them.
       if [ "$role" != "$DH_ROLE" ]; then
-        if [ -n "$role" ]; then DH_OTHERROLE=$((DH_OTHERROLE+1)); else DH_NOREC=$((DH_NOREC+1)); fi
+        if [ -n "$role" ]; then DH_OTHERROLE=$((DH_OTHERROLE+1))
+        elif [ "$nrec" -eq 0 ]; then DH_UNREADABLE=$((DH_UNREADABLE+1))
+        else DH_NOREC=$((DH_NOREC+1)); fi
         continue
       fi
       ended_on_refusal=0
@@ -1032,6 +1047,7 @@ EOF
     printf '    dispatches of role "%s": %s   <- classified below\n' "$DH_ROLE" "$DH_TOTAL"
     printf '    other scheduled roles ....................: %s   (another agent, not this one)\n' "$DH_OTHERROLE"
     printf '    no dispatch record .......................: %s   (interactive session)\n' "$DH_NOREC"
+    printf '    unreadable transcript ....................: %s   (empty or no parsable records)\n' "$DH_UNREADABLE"
     # Selecting by role means a changed marker format publishes ZERO dispatches
     # while root runs exist — the same silent-zero shape the cap ordering fixed.
     # A zero must be loud and attributable, never read as an outage.

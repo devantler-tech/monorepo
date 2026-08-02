@@ -2887,6 +2887,43 @@ QOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-norole" CODEX_HOME="$FIX/nocodex" MONOREPO_D
        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "matching no root transcript is reported loudly" "$QOUT" "role selection matched 0 of 1"
 
+# CONTROL O2 pins ROLE-ACCOUNTING COMPLETENESS. Every root transcript must land
+# in exactly one bucket, because the whole point of printing the breakdown is
+# that a set-aside transcript stays attributable. An empty or unreadable file
+# yields no records at all, which is NOT the same thing as a session that ran
+# without a dispatch record — calling it "interactive" attributes a parse failure
+# to a category of real human work.
+mkdir -p "$FIX/dh-account"
+{ dispatch_rec daily-ai-assistant 2026-08-01T10:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T10:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"z1","name":"Bash","input":{"command":"echo ok"}}]}}
+EOF
+} > "$FIX/dh-account/engineer.jsonl"
+: > "$FIX/dh-account/empty.jsonl"
+printf 'not json at all\n{"broken":\n' > "$FIX/dh-account/malformed.jsonl"
+cat > "$FIX/dh-account/interactive.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T13:00:00.000Z","message":{"content":[{"type":"text","text":"have a look at this"}]}}
+{"type":"assistant","timestamp":"2026-08-01T13:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"z2","name":"Bash","input":{"command":"echo hi"}}]}}
+EOF
+AOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-account" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "an unreadable transcript is not called interactive" "$AOUT" "unreadable transcript ....................: 2"
+check "a real interactive session is still counted as one" "$AOUT" "no dispatch record .......................: 1"
+check "the engineer dispatch is still classified"          "$AOUT" "classified: 1"
+# The invariant itself, computed from the report rather than asserted per-line:
+# roots must equal the sum of every bucket, or the breakdown is lying.
+A_ROOTS=$(printf '%s' "$AOUT" | sed -n 's/.*root transcripts in window: \([0-9]*\).*/\1/p' | head -1)
+A_SUM=$(printf '%s' "$AOUT" | sed -n \
+  -e 's/.*dispatches of role "[^"]*": \([0-9]*\).*/\1/p' \
+  -e 's/.*other scheduled roles [ .]*: \([0-9]*\).*/\1/p' \
+  -e 's/.*no dispatch record [ .]*: \([0-9]*\).*/\1/p' \
+  -e 's/.*unreadable transcript [ .]*: \([0-9]*\).*/\1/p' | awk '{s+=$1} END{print s+0}')
+if [ "$A_ROOTS" = "$A_SUM" ] && [ "$A_ROOTS" = "4" ]; then
+  ok "every root transcript lands in exactly one bucket (4 = 4)"
+else
+  bad "every root transcript lands in exactly one bucket" "roots=$A_ROOTS sum=$A_SUM (expected both 4)"
+fi
+
 # CONTROL P pins COMPLETION-BY-SESSION-STATE, first half: a run that ends its
 # turn normally is COMPLETE evidence even though it called no tool. Tool-call
 # presence is not a completion signal, and treating it as one drops a finished
