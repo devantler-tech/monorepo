@@ -2685,7 +2685,7 @@ cat >> "$FIX/dh-resumed/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T09:00:00.000Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
 EOF
 DOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "counts live dispatches"       "$DOUT" "live ......... 4"
 check "counts dead dispatches"       "$DOUT" "dead ......... 2"
 check "a subagent sidechain is not a dispatch" "$DOUT" "classified: 7"
@@ -2694,7 +2694,7 @@ check "counts truncated dispatches"  "$DOUT" "truncated .... 1"
 # Both bounds, and both are REFUSAL-record timestamps (…51.115Z, not the
 # session-start …50.003Z): dating an outage from the first record would report
 # a resumed session's outage as starting whenever that session began.
-check "reports the outage span"      "$DOUT" "outage span: 2026-07-31T22:01:51.115Z -> 2026-08-01T10:59:59.000Z"
+check "reports first and last refusal observed" "$DOUT" "refusals observed: 3 dispatch(es), first 2026-07-31T22:01:51.115Z, last 2026-08-01T10:59:59.000Z"
 check "names live as the denominator" "$DOUT" "volume floors"
 # The control, stated as its own assertion: discussing the phrase is not an outage.
 # Each control is ALSO run in its own corpus, because in the combined corpus the
@@ -2704,9 +2704,9 @@ mkdir -p "$FIX/dh-early" "$FIX/dh-long"
 cp "$FIX/dispatch/discuss-early.jsonl" "$FIX/dh-early/s.jsonl"
 cp "$FIX/dispatch/discuss-long.jsonl"  "$FIX/dh-long/s.jsonl"
 EOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-early" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 LOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-long" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 # Pins the LAST-BLOCK restriction alone: short transcript, so the length gate
 # cannot be what saves it.
 check "an early quote of the refusal stays live"  "$EOUT" "live ......... 1"
@@ -2720,21 +2720,21 @@ check "a long final block is not called truncated" "$LOUT" "truncated .... 0"
 mkdir -p "$FIX/dh-toolrate"
 cp "$FIX/dispatch/toolrate.jsonl" "$FIX/dh-toolrate/s.jsonl"
 TOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-toolrate" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a tool rate limit is not a provider refusal" "$TOUT" "live ......... 1"
 check "a tool rate limit is not called truncated"   "$TOUT" "truncated .... 0"
 # Pins the START ANCHOR alone.
 mkdir -p "$FIX/dh-short"
 cp "$FIX/dispatch/short-summary.jsonl" "$FIX/dh-short/s.jsonl"
 SOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-short" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a short summary mentioning a refusal stays live" "$SOUT" "live ......... 1"
 check "a short summary is not called truncated"         "$SOUT" "truncated .... 0"
 # Pins the REFUSAL-RECORD TIMESTAMP alone: span must start at the refusal, not
 # at the transcript's first record three months earlier.
 ROUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-resumed" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
-check "outage is dated from the refusal record" "$ROUT" "outage span: 2026-08-01T09:00:00.000Z"
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "the observation is dated from the refusal record" "$ROUT" "first 2026-08-01T09:00:00.000Z"
 nocheck "outage is NOT dated from the first record" "$ROUT" "2026-05-01"
 # ...and the classifier is not vacuous: an all-healthy corpus reports zero dead.
 mkdir -p "$FIX/dispatch-clean"
@@ -2743,14 +2743,14 @@ cat >> "$FIX/dispatch-clean/ok.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T12:00:00.000Z","message":{"content":[{"type":"tool_use","id":"e1","name":"Bash","input":{"command":"echo ok"}}]}}
 EOF
 COUT=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch-clean" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 # Asserted IMMEDIATELY after capture. These four are the vacuity control: without
 # them a classifier that marks every dispatch dead still passes, because every
 # other control asserts against a corpus that contains a real refusal.
 check   "a healthy corpus reports one live dispatch" "$COUT" "live ......... 1"
 check   "a healthy corpus reports no dead dispatches" "$COUT" "dead ......... 0"
 check   "a healthy corpus reports zero truncated"    "$COUT" "truncated .... 0"
-check   "a healthy corpus reports no outage span"    "$COUT" "outage span: none"
+check   "a healthy corpus reports no refusals"    "$COUT" "refusals observed: none"
 # CONTROL G pins the CAP ORDER: two sidechains newer than the only root run,
 # with the cap set to 2. Filtering after the cap evicts the root entirely and
 # publishes zero dispatches while a root run existed.
@@ -2767,7 +2767,7 @@ cat > "$FIX/dh-cap/subagents/b.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T12:02:00.000Z","message":{"content":[{"type":"tool_use","id":"g3","name":"Bash","input":{"command":"echo sub"}}]}}
 EOF
 GOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-cap" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --max-files 2 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --max-files 2 --section dispatch 2>&1)
 check "sidechains do not evict the root run under the cap" "$GOUT" "classified: 1"
 # CONTROL H pins the WHOLE-TURN anchor against a leading wildcard: a live summary
 # that BEGINS with other words before the refusal phrase.
@@ -2778,7 +2778,7 @@ cat >> "$FIX/dh-prefix/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T19:00:05.000Z","message":{"content":[{"type":"text","text":"Confirmed usage limit reached; filed an issue."}]}}
 EOF
 POUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-prefix" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a prefixed refusal phrase stays live" "$POUT" "live ......... 1"
 # CONTROL I pins FINAL-RECORD selection: an old refusal followed by NEW tool
 # activity that emits no further text. Selecting the last text-bearing record
@@ -2790,7 +2790,7 @@ cat >> "$FIX/dh-resumed2/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T09:00:00.000Z","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"echo resumed"}}]}}
 EOF
 IOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-resumed2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a resumed run ending on tool activity stays live" "$IOUT" "live ......... 1"
 nocheck "a historical refusal does not date a current outage" "$IOUT" "2026-05-01"
 # CONTROL J pins MULTI-BLOCK final records: the refusal is the LAST text block
@@ -2802,7 +2802,7 @@ cat >> "$FIX/dh-multiblock/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T18:00:00.000Z","message":{"content":[{"type":"text","text":"Working."},{"type":"text","text":"You've hit your weekly limit"}]}}
 EOF
 MOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-multiblock" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a refusal in the LAST text block of a record is seen" "$MOUT" "dead ......... 1"
 # CONTROL K pins the APOSTROPHE ENUMERATION: the U+2019 typographic form must
 # classify identically to the ASCII one.
@@ -2810,7 +2810,7 @@ mkdir -p "$FIX/dh-curly"
 dispatch_rec daily-ai-assistant 2026-08-01T18:29:50.000Z > "$FIX/dh-curly/s.jsonl"
 printf '{"type":"assistant","timestamp":"2026-08-01T18:30:00.000Z","message":{"content":[{"type":"text","text":"You\u2019ve hit your weekly limit"}]}}\n' >> "$FIX/dh-curly/s.jsonl"
 KOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-curly" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a typographic apostrophe classifies as a refusal" "$KOUT" "dead ......... 1"
 
 # CONTROL L pins the END anchor. CONTROL H already covers a refusal phrase with
@@ -2824,7 +2824,7 @@ mkdir -p "$FIX/dh-suffix"
 EOF
 } > "$FIX/dh-suffix/s.jsonl"
 XOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-suffix" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a refusal phrase with a prose SUFFIX stays live" "$XOUT" "live ......... 1"
 check "a suffixed refusal phrase is not truncated"      "$XOUT" "truncated .... 0"
 
@@ -2841,7 +2841,7 @@ mkdir -p "$FIX/dh-realtail"
 EOF
 } > "$FIX/dh-realtail/s.jsonl"
 NOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-realtail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "the real refusal WITH its provider tail is still dead" "$NOUT" "dead ......... 1"
 
 # CONTROL N pins the ROLE selector. The Agent Improver is separately scheduled
@@ -2865,7 +2865,7 @@ cat > "$FIX/dh-role/interactive.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T13:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"n3","name":"Bash","input":{"command":"echo interactive"}}]}}
 EOF
 ROUT2=$(CLAUDE_PROJECTS_DIR="$FIX/dh-role" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 # Assert the COUNTS, not the labels. The first version of these two checked only
 # that the words appeared, and the labels print unconditionally — so both stayed
 # green with role selection disabled entirely. Ablation is what exposed that:
@@ -2884,7 +2884,7 @@ cat > "$FIX/dh-norole/a.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T14:00:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"o1","name":"Bash","input":{"command":"echo a"}}]}}
 EOF
 QOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-norole" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "matching no root transcript is reported loudly" "$QOUT" "role selection matched 0 of 1"
 
 # CONTROL O2 pins ROLE-ACCOUNTING COMPLETENESS. Every root transcript must land
@@ -2906,7 +2906,7 @@ cat > "$FIX/dh-account/interactive.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T13:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"z2","name":"Bash","input":{"command":"echo hi"}}]}}
 EOF
 AOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-account" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "an unreadable transcript is not called interactive" "$AOUT" "unreadable transcript ....................: 2"
 check "a real interactive session is still counted as one" "$AOUT" "no dispatch record .......................: 1"
 check "the engineer dispatch is still classified"          "$AOUT" "classified: 1"
@@ -2935,7 +2935,7 @@ mkdir -p "$FIX/dh-textonly"
 EOF
 } > "$FIX/dh-textonly/s.jsonl"
 TOUT2=$(CLAUDE_PROJECTS_DIR="$FIX/dh-textonly" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a text-only run that ended its turn is complete" "$TOUT2" "live ......... 1"
 
 # CONTROL Q pins the same rule's second half, and it is the direction that
@@ -2949,7 +2949,7 @@ mkdir -p "$FIX/dh-cutoff"
 EOF
 } > "$FIX/dh-cutoff/s.jsonl"
 UOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-cutoff" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a run cut off mid-turn is not complete evidence" "$UOUT" "live ......... 0"
 check "a run cut off mid-turn is reported as incomplete" "$UOUT" "incomplete ... 1"
 # ...but it is NOT "no evidence". The old `inert` bucket was zero-tool-calls by
@@ -2969,7 +2969,7 @@ mkdir -p "$FIX/dh-cutoff-nowork"
 EOF
 } > "$FIX/dh-cutoff-nowork/s.jsonl"
 VOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-cutoff-nowork" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "an interrupted run that did NO work is evidence-free" "$VOUT" "1 of 1 dispatches produced no evidence"
 
 # CONTROL R pins OUTAGE INTERVAL SPLITTING. Two refusals with a healthy dispatch
@@ -2993,8 +2993,8 @@ EOF
 EOF
 } > "$FIX/dh-twospans/r2.jsonl"
 WOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-twospans" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
-check "refusals split by a healthy run are two outages" "$WOUT" "outage spans: 2 distinct"
+       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "both refusals are counted as observations" "$WOUT" "refusals observed: 2 dispatch(es)"
 nocheck "the healthy interval is not inside an outage"  "$WOUT" "2026-08-01T01:00:01.000Z -> 2026-08-01T09:00:01.000Z"
 
 # CONTROL S pins the SEPARATOR SET. The provider tail is admitted by grammar, and
@@ -3011,7 +3011,7 @@ mkdir -p "$FIX/dh-dash"
 EOF
 } > "$FIX/dh-dash/s.jsonl"
 DAOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-dash" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "an em-dash prose summary stays live"    "$DAOUT" "live ......... 1"
 check "an em-dash summary is not truncated"    "$DAOUT" "truncated .... 0"
 
@@ -3034,12 +3034,12 @@ dispatch_rec daily-ai-assistant 2026-08-01T05:00:00.000Z > "$FIX/dh-unserved/uns
 EOF
 } > "$FIX/dh-unserved/r2.jsonl"
 NSOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-unserved" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
-check "an unserved dispatch does not split an outage" "$NSOUT" "outage span: 2026-08-01T01:00:01.000Z -> 2026-08-01T09:00:01.000Z"
-nocheck "an unserved dispatch is not called healthy"  "$NSOUT" "outage spans: 2 distinct"
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "an unserved dispatch changes no observation" "$NSOUT" "refusals observed: 2 dispatch(es), first 2026-08-01T01:00:01.000Z, last 2026-08-01T09:00:01.000Z"
+nocheck "no outage SPAN is claimed at all"  "$NSOUT" "outage span"
 # CONTROL T2, the paired over-tightening control: a dispatch the provider DID
 # answer must still split, or the fix above degenerates into "never split".
-check "a served run still splits the outage" "$WOUT" "outage spans: 2 distinct"
+check "the report says these are observations, not a timeline" "$WOUT" "These are OBSERVATIONS, not an incident timeline"
 
 # CONTROL U pins the DENOMINATOR POPULATION CAVEAT. The buckets are role-filtered;
 # every numerator in this report is not. Telling a reader to re-base a rate on
@@ -3047,7 +3047,28 @@ check "a served run still splits the outage" "$WOUT" "outage spans: 2 distinct"
 # dispatches — the same numerator/denominator mismatch this section exists to
 # warn about, reintroduced by the role filter itself.
 check "the population mismatch is stated when other roles are present" "$ROUT2" "POPULATION MISMATCH: every numerator in this report is NOT role-filtered."
-check "the mismatch names both populations"                            "$ROUT2" "Numerators cover all 3 root transcripts"
+check "the mismatch names both populations"                            "$ROUT2" "cover only the 1 dispatches of role"
+check "the mismatch names the independent cap"                         "$ROUT2" "SEPARATELY capped set"
+
+# CONTROL V pins the FEATURE GATE in BOTH states, which is what the flag rule
+# requires and what makes activation a separate, reversible step. This classifier
+# is new capability whose denominator advice another agent consumes as evidence,
+# and this PR's own review history is the argument FOR the gate rather than
+# against it: the advice and the incident model were each wrong in ways that read
+# as authoritative, across several rounds.
+GATE_OFF=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+           bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check   "OFF by default: the section says so"          "$GATE_OFF" "(disabled — set DISPATCH_HEALTH=on to activate)"
+nocheck "OFF by default: nothing is classified"        "$GATE_OFF" "dispatches classified"
+nocheck "OFF by default: no denominator advice"        "$GATE_OFF" "Re-base a rate"
+GATE_ON=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+          DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check   "ON: the classification appears"               "$GATE_ON" "dispatches classified"
+nocheck "ON: the disabled notice is gone"              "$GATE_ON" "set DISPATCH_HEALTH=on to activate"
+# An explicit --section request must NOT activate the capability by itself, or the
+# gate is decorative: which sections run and whether a new capability is live are
+# deliberately different knobs.
+nocheck "an explicit --section cannot activate it"     "$GATE_OFF" "live ........."
 
 echo
 echo "──────────────────────────────"

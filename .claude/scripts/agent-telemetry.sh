@@ -894,7 +894,20 @@ echo "════════════════════════�
 if want dispatch; then
   echo
   echo "── DISPATCH HEALTH (did the run actually run?) ──────────────────"
-  if [ "$SF_COUNT" -eq 0 ]; then
+  # DEFAULT-OFF. This is a substantive new capability whose output another agent
+  # consumes as evidence, so it ships latent and is activated as a separate,
+  # reversible step once its numbers have been checked against a known window.
+  # `--section dispatch` chooses WHICH sections run; this chooses whether the
+  # capability is active at all, and the two are deliberately not the same knob.
+  #
+  # The review history is the argument for the gate rather than against it: the
+  # classifier's denominator advice and incident model were each wrong in ways
+  # that read as authoritative, and a wrong recommendation consumed by the Agent
+  # Improver is worse than no recommendation.
+  if [ "${DISPATCH_HEALTH:-off}" != "on" ]; then
+    echo "  (disabled — set DISPATCH_HEALTH=on to activate)"
+    echo "  New capability, default-off pending validation against a known window."
+  elif [ "$SF_COUNT" -eq 0 ]; then
     echo "  (no claude sessions in window)"
   else
     DH_LIVE=0; DH_DEAD=0; DH_TRUNC=0; DH_INCOMPLETE=0
@@ -1054,16 +1067,10 @@ if want dispatch; then
           # would recreate this section's own denominator distortion, inverted.
           [ "$tu" -eq 0 ] && DH_INCOMPLETE_NOWORK=$((DH_INCOMPLETE_NOWORK+1))
         fi
-        # An interval may only be CLOSED by a dispatch the provider demonstrably
-        # answered. A run that crashed before any assistant record proves nothing
-        # about provider health — counting it as healthy splits one incident in
-        # two and reports that the fleet was working during an outage that never
-        # lifted. Such a dispatch stays NEUTRAL: it is still classified and still
-        # counted, it just casts no vote on whether the provider was serving.
-        if [ "$na" -gt 0 ]; then
-          [ -n "$ts" ] && DH_EVENTS="${DH_EVENTS}${ts}	H
-"
-        fi
+        # No "healthy" event is recorded. The report no longer claims incidents,
+        # so nothing needs to vote on whether the provider was serving — see the
+        # observations block below for why that question was abandoned.
+        :
       fi
     done <<EOF
 $(root_session_files)
@@ -1083,10 +1090,12 @@ EOF
     # that is exactly where a reader trusts the rates without re-deriving them.
     if [ $((DH_OTHERROLE + DH_NOREC)) -gt 0 ]; then
       printf '  POPULATION MISMATCH: every numerator in this report is NOT role-filtered.\n'
-      printf '    Numerators cover all %s root transcripts (plus subagent sidechains);\n' "$DH_ROOTS"
-      printf '    these buckets cover only the %s of role "%s".\n' "$DH_TOTAL" "$DH_ROLE"
-      echo "    Re-basing a rate on live + truncated is only valid against a numerator"
-      echo "    filtered the same way; otherwise divide by the full root count."
+      printf '    These buckets cover only the %s dispatches of role "%s";\n' "$DH_TOTAL" "$DH_ROLE"
+      printf '    the numerators cover a SEPARATELY capped set of up to %s files mixing\n' "$MAX_FILES"
+      printf '    roots and subagent sidechains, of which %s roots were seen here.\n' "$DH_ROOTS"
+      echo "    The two populations are selected independently, so at the cap they are"
+      echo "    not merely different sizes — they can cover different transcripts."
+      echo "    Re-base only against a numerator filtered the same way."
     fi
     # Selecting by role means a changed marker format publishes ZERO dispatches
     # while root runs exist — the same silent-zero shape the cap ordering fixed.
@@ -1108,24 +1117,32 @@ EOF
     # share a bucket. Observed live: this bucket's first real occupant was the
     # very run that produced the report.
     printf '    incomplete ... %s   (no natural end: cut off, crashed, or STILL RUNNING)\n' "$DH_INCOMPLETE"
-    # Group refusal-ended dispatches into incidents, breaking the run wherever a
-    # HEALTHY dispatch sits between two refusals. Reporting min->max instead
-    # would describe one continuous outage covering the healthy interval.
-    DH_SPANS=$(printf '%s' "$DH_EVENTS" | grep -v '^[[:space:]]*$' | sort | awk -F'\t' '
-      $2=="R" { if (s=="") s=$1; e=$1; next }
-              { if (s!="") { print s "\t" e; s=""; e="" } }
-      END     { if (s!="") print s "\t" e }')
-    DH_NSPANS=$(printf '%s' "$DH_SPANS" | grep -c . || true)
-    if [ "$DH_NSPANS" -eq 0 ]; then
-      echo "  outage span: none"
-    elif [ "$DH_NSPANS" -eq 1 ]; then
-      printf '  outage span: %s -> %s\n' \
-        "$(printf '%s' "$DH_SPANS" | cut -f1)" "$(printf '%s' "$DH_SPANS" | cut -f2)"
+    # OBSERVATIONS, not incidents. An earlier version grouped refusals into
+    # intervals and split them wherever a "healthy" dispatch sat in between —
+    # and every review round since found another thing that does or does not
+    # count as evidence the provider was serving: a run that crashed before any
+    # response, a truncated run whose earlier tool calls prove service, another
+    # scheduled role on the same provider whose success is equally probative.
+    #
+    # Each of those was a real defect, and together they say the model was wrong.
+    # These transcripts record what OUR dispatches saw; they do not observe the
+    # provider, and no amount of per-dispatch voting turns a sample into an
+    # incident timeline. So the report states exactly what the data supports —
+    # the first and last refusal SEEN, and how many dispatches saw one — and
+    # leaves inferring incidents to a reader who can see the provider's own
+    # status. Under-claiming here is the honest failure direction: a reader who
+    # wants incidents can derive them, whereas a fabricated span cannot be undone.
+    DH_RTIMES=$(printf '%s' "$DH_EVENTS" | grep -v '^[[:space:]]*$' | awk -F'\t' '$2=="R"{print $1}' | sort)
+    DH_NREF=$(printf '%s' "$DH_RTIMES" | grep -c . || true)
+    if [ "$DH_NREF" -eq 0 ]; then
+      echo "  refusals observed: none"
     else
-      printf '  outage spans: %s distinct (healthy dispatches ran in between)\n' "$DH_NSPANS"
-      printf '%s\n' "$DH_SPANS" | while IFS="$(printf '\t')" read -r a b; do
-        [ -n "$a" ] && printf '    %s -> %s\n' "$a" "$b"
-      done
+      printf '  refusals observed: %s dispatch(es), first %s, last %s\n' \
+        "$DH_NREF" \
+        "$(printf '%s' "$DH_RTIMES" | head -1)" \
+        "$(printf '%s' "$DH_RTIMES" | tail -1)"
+      echo "    These are OBSERVATIONS, not an incident timeline: the window between"
+      echo "    the first and last may contain dispatches the provider served normally."
     fi
     DH_NOEV=$((DH_DEAD + DH_INCOMPLETE_NOWORK))
     if [ "$DH_NOEV" -gt 0 ]; then
@@ -1133,9 +1150,12 @@ EOF
       printf '  WARNING: %s of %s dispatches produced no evidence.\n' "$DH_NOEV" "$DH_TOTAL"
       echo "    Every per-session rate in this report divides by the RAW transcript count,"
       echo "    so those dispatches push each rate DOWN without anything improving."
-      echo "    Re-base a rate on live + truncated: a truncated dispatch DID contribute"
-      echo "    tool calls to the numerators, so dropping it from the denominator"
-      echo "    over-states the rate as surely as counting a dead one under-states it."
+      echo "    Re-base a rate on the dispatches that CONTRIBUTED tool calls —"
+      echo "    live + truncated + the incomplete ones that did work. A truncated or"
+      echo "    interrupted dispatch still fed the numerators, so dropping it from the"
+      echo "    denominator over-states the rate as surely as counting a dead one"
+      printf '    under-states it. That contributing count is %s here.\n' \
+        "$((DH_LIVE + DH_TRUNC + DH_INCOMPLETE - DH_INCOMPLETE_NOWORK))"
       echo "    Count hypothesis volume floors in LIVE dispatches only — those need"
       echo "    complete evidence, which a truncated dispatch by definition lacks."
       echo "    SCOPE: Claude lane only. Codex transcripts are not classified here and"
