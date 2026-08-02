@@ -24,6 +24,8 @@
 #   KEEP  - a worktree that is the CWD of a LIVE process (a running session)
 #   KEEP  - a worktree younger than min_age_hours
 #   KEEP  - a LOCKED worktree (git locks mean "in use"; we never override)
+#   KEEP  - a worktree with an unexpired Agentic Engineer ownership claim
+#   KEEP  - a worktree whose ownership mutex is held while a claim is acquired/renewed
 #   KEEP  - ANY worktree holding commits not reachable from a remote ref. This one test
 #           (`git rev-list <head> --not --remotes`) covers both an unpushed branch and a
 #           detached HEAD left on an orphan commit — the only states where removing the
@@ -69,6 +71,11 @@ MODE=${3:-dry-run}
 MIN_AGE_HOURS=${4:-24}
 
 die() { printf 'worktree-cleanup: %s\n' "$1" >&2; exit 2; }
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) \
+  || die "cannot resolve script directory"
+# shellcheck source=worktree-claim-lib.sh
+. "$SCRIPT_DIR/worktree-claim-lib.sh" || die "cannot load shared claim protocol"
 
 [ -n "$REPO_PATH" ] || die "usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours]"
 [ -n "$MANIFEST" ] || die "usage: worktree-cleanup.sh <repo_path> <manifest> [dry-run|apply] [min_age_hours]"
@@ -156,6 +163,39 @@ record() { # path branch sha evidence outcome
 
 keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(basename "$1")" "$2"; }
 
+trap 'worktree_claim_lock_release >/dev/null 2>&1 || true' EXIT
+trap 'exit 2' HUP INT TERM
+
+# ownership_claim_state <worktree> -> 0 active, 1 absent/expired, 2 malformed.
+# A malformed marker is ambiguous session state and therefore a KEEP, never a reap.
+ownership_claim_state() {
+  local wt=$1 marker="$1/$WORKTREE_CLAIM_MARKER_NAME" owner="" created_at="" key val created_epoch now_epoch age
+  CLAIM_DETAIL=""
+  [ -e "$marker" ] || return 1
+  [ -f "$marker" ] || { CLAIM_DETAIL="marker is not a regular file"; return 2; }
+  while IFS='=' read -r key val; do
+    case "$key" in
+      owner) owner=$val ;;
+      created_at) created_at=$val ;;
+    esac
+  done < "$marker"
+  if [ -z "$owner" ] || [ -z "$created_at" ]; then
+    CLAIM_DETAIL="marker lacks owner or created_at"
+    return 2
+  fi
+  created_epoch=$(worktree_claim_iso_to_epoch "$created_at") || {
+    CLAIM_DETAIL="marker has unparseable created_at"
+    return 2
+  }
+  now_epoch=$(date -u +%s)
+  age=$((now_epoch - created_epoch))
+  if [ "$age" -lt "$WORKTREE_CLAIM_TTL_SECS" ]; then
+    CLAIM_DETAIL="owner=$owner created_at=$created_at"
+    return 0
+  fi
+  return 1
+}
+
 # is_locked_now <resolved-worktree-path> — re-queries git rather than consulting a
 # startup snapshot, so a lock taken DURING the sweep is still honoured.
 #
@@ -225,6 +265,12 @@ is_locked_now() {
 # keeps the two paths from drifting apart.
 recheck_mutable_gates() {
   local wt=$1 target=$2 rc st idx
+  ownership_claim_state "$wt"; rc=$?
+  case "$rc" in
+    0) keep "$wt" "active ownership claim ($CLAIM_DETAIL)"; return 1 ;;
+    2) keep "$wt" "ambiguous ownership claim ($CLAIM_DETAIL)"; return 1 ;;
+  esac
+
   is_locked_now "$target"; rc=$?
   case "$rc" in
     0) keep "$wt" "locked (acquired during the sweep)"; return 1 ;;
@@ -341,6 +387,14 @@ for wt in "$WT_ROOT"/*/; do
   if ! grep -qxF -- "$wt_real" <<< "$REGISTERED"; then
     keep "$wt" "not a registered worktree"; continue
   fi
+
+  # KEEP: a live per-run owner may use a clean tree without holding a process CWD.
+  # Re-checked again immediately before removal by recheck_mutable_gates.
+  ownership_claim_state "$wt"; claim_rc=$?
+  case "$claim_rc" in
+    0) keep "$wt" "active ownership claim ($CLAIM_DETAIL)"; continue ;;
+    2) keep "$wt" "ambiguous ownership claim ($CLAIM_DETAIL)"; continue ;;
+  esac
 
   # KEEP: a live session's CWD (the worktree itself, or any directory inside it).
   # Both comparisons are LITERAL. An earlier version matched descendants with
@@ -484,6 +538,13 @@ for wt in "$WT_ROOT"/*/; do
     continue
   fi
 
+  worktree_claim_lock_acquire "$wt_real"; claim_lock_rc=$?
+  case "$claim_lock_rc" in
+    0) ;;
+    1) keep "$wt" "ownership mutex held by another process"; continue ;;
+    2) keep "$wt" "cannot verify/acquire ownership mutex"; continue ;;
+  esac
+
   # A manifest write failure is an INFRASTRUCTURE failure, not a per-worktree verdict:
   # the ledger is unwritable, so every subsequent removal would be unrecorded too.
   # Aborting (rather than keeping and carrying on) is what stops the wrapper reporting
@@ -497,10 +558,16 @@ for wt in "$WT_ROOT"/*/; do
   # (belt-and-braces; the glob already constrains it)
   case "$wt_real" in
     "$WT_ROOT"/?*) : ;;
-    *) keep "$wt" "REFUSING to remove: '$wt_real' is not under '$WT_ROOT'"; continue ;;
+    *)
+      worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+      keep "$wt" "REFUSING to remove: '$wt_real' is not under '$WT_ROOT'"; continue
+      ;;
   esac
 
-  if ! recheck_mutable_gates "$wt" "$wt_real"; then continue; fi
+  if ! recheck_mutable_gates "$wt" "$wt_real"; then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
+    continue
+  fi
 
   # Keep the reaped commit reachable so the manifest's SHA stays restorable. Without
   # this, a stale remote-tracking ref can make a commit look pushed, and a later
@@ -514,12 +581,15 @@ for wt in "$WT_ROOT"/*/; do
   # $sha still names the OLD commit — preserving that and deleting the worktree would
   # discard the new one.
   sha_now=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || {
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     keep "$wt" "cannot re-read HEAD before removal"; continue; }
   if [ "$sha_now" != "$sha" ]; then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     keep "$wt" "HEAD moved during the sweep ($sha -> $sha_now)"; continue
   fi
 
   if ! git -C "$TOPLEVEL" update-ref "refs/reaped/$sha" "$sha" 2>/dev/null; then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     keep "$wt" "could not write refs/reaped/$sha — refusing to remove"; continue
   fi
 
@@ -538,13 +608,17 @@ for wt in "$WT_ROOT"/*/; do
   # so an ordinary, correct decision to spare a worktree would have killed the entire
   # scheduled sweep. "Keep it" and "could not remove it" must stay distinguishable.
   if git -C "$TOPLEVEL" worktree remove --force "$wt_real" 2>/dev/null; then
-    : # removed
+    # The per-worktree ref and gitdir were removed atomically with the worktree.
+    worktree_claim_lock_forget
   elif ! recheck_mutable_gates "$wt" "$wt_real"; then
+    worktree_claim_lock_release || die "cannot release ownership mutex for $wt_real"
     continue    # legitimately KEPT and already reported by the gate
   elif rm -rf "$wt_real" && [ ! -e "$wt_real" ]; then
+    worktree_claim_lock_release || die "REMOVED $wt_real but could not release its ownership mutex"
     git -C "$TOPLEVEL" worktree prune 2>/dev/null \
       || die "REMOVED $wt_real but 'git worktree prune' failed — the deletion DID happen; run 'git -C $TOPLEVEL worktree prune' to clear its admin entry (restore ref: refs/reaped/$sha)"
   else
+    worktree_claim_lock_release || true
     die "removal FAILED for $wt_real after all gates passed (its manifest row is 'pending' and the directory still exists)"
   fi
   # Reached only when the directory is genuinely gone: every other path above either

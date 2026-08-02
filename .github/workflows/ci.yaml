@@ -35,6 +35,7 @@ jobs:
       board-add: ${{ steps.filter.outputs.board-add }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
+      worktree-claim: ${{ steps.filter.outputs.worktree-claim }}
       renovate-dashboard: ${{ steps.filter.outputs.renovate-dashboard }}
     steps:
       - name: Checkout
@@ -76,6 +77,16 @@ jobs:
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
+            worktree-claim:
+              - '.claude/scripts/worktree-claim-lib.sh'
+              - '.claude/scripts/worktree-claim.sh'
+              - '.claude/scripts/worktree-claim.test.sh'
+              - '.claude/scripts/worktree-cleanup.sh'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - 'AGENTS.md'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             flow-scorecard:
               - '.claude/scripts/flow-scorecard.sh'
               - '.claude/scripts/flow-scorecard.test.sh'
@@ -89,6 +100,7 @@ jobs:
               - '.claude/scripts/branch-cleanup.sh'
               - '.claude/scripts/branch-cleanup.test.sh'
             worktree-cleanup:
+              - '.claude/scripts/worktree-claim-lib.sh'
               - '.claude/scripts/worktree-cleanup.sh'
               - '.claude/scripts/worktree-cleanup-all.sh'
               - '.claude/scripts/worktree-cleanup.test.sh'
@@ -355,6 +367,28 @@ jobs:
       # while CI defaults to Linux, and bash/jq portability is what this pins.
       - name: Self-test board-add
         run: bash .claude/scripts/board-add.test.sh
+
+  test-worktree-claim:
+    name: Test worktree claim
+    needs: changes
+    if: needs.changes.outputs.worktree-claim == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hermetic throwaway git repo + worktrees — no network. Both OSes because
+      # daily runs are on macOS while CI defaults to Linux, and date(1) parsing
+      # of the marker's ISO timestamp is the portability pin (#2284).
+      - name: Self-test worktree-claim
+        run: bash .claude/scripts/worktree-claim.test.sh
 
   test-flow-scorecard:
     name: Test flow scorecard
@@ -690,6 +724,7 @@ jobs:
       - drift-check-renovate-dashboard
       - test-agent-telemetry
       - test-board-add
+      - test-worktree-claim
       - test-flow-scorecard
       - test-safe-clone
       - test-branch-cleanup
@@ -717,6 +752,7 @@ jobs:
             ${{ needs.drift-check-renovate-dashboard.result }}
             ${{ needs.test-agent-telemetry.result }}
             ${{ needs.test-board-add.result }}
+            ${{ needs.test-worktree-claim.result }}
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-branch-cleanup.result }}

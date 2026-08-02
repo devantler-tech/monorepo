@@ -568,21 +568,35 @@ For each selected product:
    .claude/scripts/submodule-init.sh <path>   # init at the pinned commit + repair + probe (fail-closed)
    ```
 
-   Then `git -C <path> worktree add .claude/worktrees/maint-<runid> -b <lane>/<area>-<desc>-<issue>`,
-   where **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*` (see
-   *Execution model*). Never write a sibling's lane: it breaks draft ownership, and a `claude/*`
-   branch from another instance would be swept by the Claude tick's cleanup.
-   (Issue-less hotfixes and trivial obvious fixes keep plain `<lane>/<area>-<desc>` — they go straight
-   to a PR, so no claim window applies.) Work
-   **in that worktree**. A stray `core.worktree` makes the worktree resolve back into
-   `.git/modules/<name>`, silently collapsing every parallel session into one physical tree — so on any
-   submodule you did **not** initialise through the wrapper (a tree someone else populated), **probe
-   before you trust it**: `git -C <wt> rev-parse --show-toplevel` must print the worktree's own path,
-   not a `.git/modules/<name>` path. `.claude/scripts/submodule-init.sh --check` probes every
-   initialised submodule (a non-destructive probe — it never touches content or other sessions'
-   trees, but adds/removes its own throwaway worktree) and exits non-zero on a break; repair in place
-   before editing anything. Background, diagnosis, and the regression watch:
-   [`worktree-isolation.md`](../../worktree-isolation.md).
+   Then create the worktree **with the ownership marker** (contract *Execution model* / #2284) —
+   never a bare `git worktree add`:
+
+   ```sh
+   .claude/scripts/worktree-claim.sh add <path> .claude/worktrees/maint-<runid> \
+     <lane>/<area>-<desc>-<issue> <session-owner-token>
+   ```
+
+   The `<session-owner-token>` is **unique to one runtime invocation** and stable only for renewals
+   within that run: derive it as `<lane>-<trusted-runtime-run-or-thread-id>`. Never use a stable
+   agent, schedule, or lane slug, because overlapping ticks would then impersonate the same owner.
+   **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*`. Never write
+   a sibling's lane: it breaks draft ownership, and a `claude/*` branch from another instance would
+   be swept by the Claude tick's cleanup. (Issue-less hotfixes and trivial obvious fixes keep plain
+   `<lane>/<area>-<desc>` — they go straight to a PR, so no claim window applies.) **Immediately
+   before editing a worktree this session did not create**, atomically reserve it with
+   `.claude/scripts/worktree-claim.sh acquire <wt> <session-owner-token>`. **Only exit 0 authorizes
+   editing; every non-zero status means stand down**, whether exit 3 (live foreign claim, ~2h expiry)
+   or an acquisition/validation failure. `check` is read-only diagnosis and does not reserve the tree. Renew a
+   long-running claim by calling `acquire` with the same owner at least hourly. Work **in that
+   worktree**. A stray `core.worktree` makes the worktree
+   resolve back into `.git/modules/<name>`, silently collapsing every parallel session into one
+   physical tree — so on any submodule you did **not** initialise through the wrapper (a tree someone
+   else populated), **probe before you trust it**: `git -C <wt> rev-parse --show-toplevel` must
+   print the worktree's own path, not a `.git/modules/<name>` path.
+   `.claude/scripts/submodule-init.sh --check` probes every initialised submodule (a non-destructive
+   probe — it never touches content or other sessions' trees, but adds/removes its own throwaway
+   worktree) and exits non-zero on a break; repair in place before editing anything. Background,
+   diagnosis, and the regression watch: [`worktree-isolation.md`](../../worktree-isolation.md).
    If the tree is unexpectedly dirty / not isolable, do GitHub-API-only work and skip diff work.
 2. **Load the product card** (`products/<name>`) + that submodule's `AGENTS.md` `## Maintenance`.
    Follow them; they carry validate commands, protected/generated files, label set, task menu, and the
