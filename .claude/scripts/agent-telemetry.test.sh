@@ -3243,6 +3243,113 @@ check "the caveat fires on cap divergence with no other roles" "$CDOUT" "POPULAT
 # warn about, or the caveat degenerates into unconditional noise.
 nocheck "no caveat when neither cap nor other roles diverge" "$COUT" "POPULATION MISMATCH"
 
+# ── SIGNATURE SCORING (monorepo#2622) ─────────────────────────────────────────
+# A hypothesis verdict is only as good as the count behind it. These prove the
+# two filters that make the count mean "the defect happened" rather than "the
+# defect is well documented".
+echo
+echo "signature scoring"
+
+mkdir -p "$FIX/sigscore"
+SIG_NEEDLE='SIGFIXTURE: no such flag "merged"'
+# The needle deliberately CONTAINS a double quote, because that is what the real
+# signatures look like (`Unknown JSON field: "merged"`) and it is exactly what
+# broke the first implementation. Its JSON-escaped form is derived mechanically
+# rather than written by hand — hand-escaping it wrong produced a fixture whose
+# records `fromjson` silently DROPPED, so every count read 0 and the fixture,
+# not the code, was the thing under test.
+SIG_NEEDLE_J=$(printf '%s' "$SIG_NEEDLE" | jq -Rr @json | sed 's/^"//; s/"$//')
+SIG_NOW=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+{
+  # 1. a REAL failure carrying the signature — the only shape that is an occurrence
+  printf '{"type":"user","timestamp":"%s","sessionId":"s-live","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":[{"type":"text","text":"%s"}]}]}}\n' \
+    "$SIG_NOW" "$SIG_NEEDLE_J"
+  # 2. a DOCUMENTATION READ — a SUCCESSFUL tool_result whose content quotes the
+  #    signature, exactly as reading AGENTS.md or a memory file returns it.
+  printf '{"type":"user","timestamp":"%s","sessionId":"s-live","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":[{"type":"text","text":"AGENTS.md line: avoid %s"}]}]}}\n' \
+    "$SIG_NOW" "$SIG_NEEDLE_J"
+  # 3. the agent's own PROSE about the signature (a PR body / run report)
+  printf '{"type":"assistant","timestamp":"%s","sessionId":"s-live","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"I fixed %s this run"}]}}\n' \
+    "$SIG_NOW" "$SIG_NEEDLE_J"
+  # 4. a real failure from LONG ago, in this same fresh-mtime file. A resumed
+  #    session rewrites the file, so mtime windowing drags it into every window.
+  printf '{"type":"user","timestamp":"2026-06-01T10:00:00.000Z","sessionId":"s-old","message":{"content":[{"type":"tool_result","tool_use_id":"t3","is_error":true,"content":[{"type":"text","text":"%s"}]}]}}\n' \
+    "$SIG_NEEDLE_J"
+} > "$FIX/sigscore/sess.jsonl"
+
+sigrun() {
+  CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "${1:-$TARGET}" --since-days "${2:-3650}" --max-files 50 \
+    --section signature --signature "$SIG_NEEDLE" 2>&1
+}
+
+OUT=$(sigrun)
+check "counts ONLY real errors, not the doc read or the prose" "$OUT" \
+  "REAL occurrences (tool_result with is_error==true): 2"
+check "reports the unfiltered number for contrast"            "$OUT" \
+  "records containing the string, any context ......: 4"
+check "counts distinct sessions"                              "$OUT" \
+  "distinct sessions ................................: 2"
+check "names the contamination in the output"                 "$OUT" \
+  "DOCUMENTATION READS, not failures"
+
+# The superset invariant. If the control can be SMALLER than the thing it is a
+# superset of, the two numbers are measuring different populations — which is
+# how the first version of this section printed 0 against 2 real occurrences,
+# because the signature's `"` is escaped in the raw store and a byte-level grep
+# missed what the decoded walk found.
+SIG_REAL_N=$(printf '%s' "$OUT" | sed -n 's/.*is_error==true): //p')
+SIG_ANY_N=$(printf '%s' "$OUT"  | sed -n 's/.*any context \.*: \([0-9]*\).*/\1/p')
+if [ -n "$SIG_REAL_N" ] && [ -n "$SIG_ANY_N" ] \
+   && [ "$SIG_REAL_N" -gt 0 ] && [ "$SIG_ANY_N" -ge "$SIG_REAL_N" ]; then
+  ok "unfiltered count is a true superset of the real-error count"
+else
+  bad "unfiltered count is a true superset of the real-error count" \
+      "any=$SIG_ANY_N real=$SIG_REAL_N — a control below its subset (or a vacuous 0>=0) proves nothing"
+fi
+
+# Record-timestamp windowing: the 2026-06-01 failure lives in a file whose mtime
+# is NOW, so mtime windowing would report it as today's.
+OUT=$(sigrun "$TARGET" 1)
+check "buckets by RECORD timestamp, not file mtime" "$OUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+
+# Usage errors fail LOUDLY. A silently-absent signature scores every hypothesis
+# as 0 occurrences, i.e. as a fix that worked.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" HOME="$FIX" bash "$TARGET" --section signature 2>&1)
+check "--section signature without --signature is an error" "$OUT" \
+  "requires --signature"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" HOME="$FIX" bash "$TARGET" --section signature --signature '' 2>&1)
+check "an empty --signature is rejected" "$OUT" "must not be empty"
+
+# ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
+# A guard that passes when removed is not a guard. Each arm copies the target,
+# removes exactly one filter, asserts the copy actually CHANGED, and requires the
+# count to move. `cp` only — never git — so a failed arm cannot lose work.
+ablate() { # $1=label  $2=sed-expr  $3=expected-count-after  $4=days
+  local lbl="$2" ab="$FIX/ablate.sh"
+  cp "$TARGET" "$ab"
+  sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
+  if cmp -s "$TARGET" "$ab"; then
+    bad "ablation[$2]" "sed changed nothing — the arm proves nothing"
+    return
+  fi
+  local aout; aout=$(sigrun "$ab" "${4:-3650}")
+  if printf '%s' "$aout" | grep -qF "is_error==true): $3"; then
+    ok "ablation: $2"
+  else
+    bad "ablation: $2" "expected count $3 after removing the filter; got: $(printf '%s' "$aout" | grep 'is_error==true)' || echo none)"
+  fi
+}
+# Arm A — drop the is_error filter: the documentation read must become counted
+# (2 -> 3). This is the contamination the section exists to exclude.
+ablate 's/and \.is_error==true)/)/' "removing is_error lets a documentation read count" 3
+# Arm B — drop the record-timestamp filter in the 1-day window: the 2026-06-01
+# failure must reappear (1 -> 2), proving mtime is not what bounds the window.
+ablate 's/select($ts != "" and $ts >= $since)/select($ts != "" or true)/' \
+  "removing the timestamp filter lets an out-of-window record count" 2 1
+
 echo
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"

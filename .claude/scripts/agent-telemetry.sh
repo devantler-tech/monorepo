@@ -13,12 +13,15 @@
 #   `agentic-engineering` plugin's `agent-improver` → "Ingestion boundary".
 #
 # Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME]
+#                           [--signature STRING]
 #                           [--injection-provenance] [--credential-provenance]
 set -uo pipefail
 
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
+SIGNATURE=""
+SIGNATURE_SET=0
 INJECTION_PROVENANCE=0
 CREDENTIAL_PROVENANCE=0
 CREDENTIAL_SCAN_BATCH_FILES="${CREDENTIAL_SCAN_BATCH_FILES:-128}"
@@ -38,9 +41,14 @@ while [ $# -gt 0 ]; do
     --since-days) need_val "$@"; SINCE_DAYS="$2"; shift 2 ;;
     --max-files)  need_val "$@"; MAX_FILES="$2";  shift 2 ;;
     --section)    need_val "$@"; SECTION="$2";    shift 2 ;;
+    # An EMPTY signature is rejected below rather than treated as absent: an
+    # empty needle matches every record, which would report the whole corpus as
+    # occurrences of a defect. SIGNATURE_SET distinguishes "not asked for" from
+    # "asked for with a bad value" so the empty case fails loudly.
+    --signature)  need_val "$@"; SIGNATURE="$2"; SIGNATURE_SET=1; shift 2 ;;
     --injection-provenance) INJECTION_PROVENANCE=1; shift ;;
     --credential-provenance) CREDENTIAL_PROVENANCE=1; shift ;;
-    -h|--help)    sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help)    sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
 done
@@ -59,9 +67,20 @@ esac
 # printing just the banner — a scheduled run looking successful while producing
 # no metrics at all.
 case "$SECTION" in
-  all|dispatch|reliability|efficiency|safety|a2a|drift|outcomes) ;;
-  *) echo "unknown --section (expected: all dispatch reliability efficiency safety a2a drift outcomes)" >&2; exit 2 ;;
+  all|dispatch|reliability|efficiency|safety|a2a|drift|outcomes|signature) ;;
+  *) echo "unknown --section (expected: all dispatch reliability efficiency safety a2a drift outcomes signature)" >&2; exit 2 ;;
 esac
+
+# `signature` is the one section that cannot run on defaults — it scores a needle
+# the caller supplies. Asking for it without one is a usage error, NOT an empty
+# report: a hypothesis scored against a silently-absent signature would read
+# `0 occurrences` and be recorded as a fix that worked.
+if [ "$SECTION" = signature ] && [ "$SIGNATURE_SET" -eq 0 ]; then
+  echo "--section signature requires --signature STRING" >&2; exit 2
+fi
+if [ "$SIGNATURE_SET" -eq 1 ] && [ -z "$SIGNATURE" ]; then
+  echo "--signature must not be empty" >&2; exit 2
+fi
 
 CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
@@ -185,10 +204,13 @@ PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot creat
 CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDCONC=$(mktemp "${TMPDIR:-/tmp}/.agtel_credconc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Its OWN scratch, never $CONCTMP. The injection-concentration pass owns that
+# one, and sharing it would make two sections' results depend on which ran last.
+SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV"' EXIT
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$SIGTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$SIGTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -1199,6 +1221,128 @@ EOF
       echo "    SCOPE: Claude lane only. Codex transcripts are not classified here and"
       echo "    the Codex rate still divides by raw CX_COUNT — same blind spot, open."
     fi
+  fi
+fi
+
+# ── 0b. SIGNATURE SCORING ─────────────────────────────────────────────────────
+# Score ONE named error signature the way a hypothesis verdict needs it.
+#
+# WHY THIS EXISTS (monorepo#2622): hypotheses were scored by ad-hoc `grep` over
+# the transcript store, which matches three different things and counts all of
+# them as occurrences of the defect:
+#   1. the real tool error                      <- the only one that is an occurrence
+#   2. the agent's own PROSE about it           (PR bodies, run reports, replies)
+#   3. DOCUMENTATION READS. `AGENTS.md` and the memory files quote these
+#      signatures verbatim, and every run reads them. A `Read` returns file
+#      content inside a `tool_result` record, so the quoted signature lands in
+#      the corpus in a record shaped almost exactly like the thing being detected.
+# (3) is self-reinforcing: the better a defect is documented, the more
+# occurrences its detector reports, so a FIXED defect can never read as fixed.
+# Measured on `Unknown JSON field`: 80 bare-grep records vs 5 real errors — 94%
+# contamination, in the direction that HIDES a successful fix.
+#
+# Two filters make the count mean what it says:
+#   * `is_error==true` on a `tool_result` — a documentation read that merely
+#     CONTAINS the string is a successful result, so it is structurally excluded.
+#   * the RECORD's own timestamp, not the file's mtime. A resumed session
+#     rewrites an old file, which had attributed 6 pre-merge occurrences to a
+#     post-merge window.
+# The file set is still mtime-selected, and that stays correct as a SUPERSET: a
+# record inside the window cannot live in a file last written before it. The cap
+# is the real limit — see the note printed below.
+if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -eq 1 ]; }; then
+  echo
+  echo "── SIGNATURE SCORING (hypothesis verdicts) ──────────────────────"
+  # Same portable pair as the outcomes section: BSD `date -v` first, GNU `-d`
+  # second. Full second precision, so the comparison against a record timestamp
+  # is not truncated to a whole day.
+  SIG_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+              || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
+  if [ -z "$SIG_SINCE" ]; then
+    echo "  UNKNOWN: cannot compute window start (no usable \`date\`) — refusing to score."
+  elif [ "$SF_COUNT" -eq 0 ]; then
+    echo "  (no Claude sessions in window)"
+  else
+    # One row per REAL occurrence: "<record timestamp>\t<sessionId>".
+    # `contains` is a fixed-string test, never a regex — a signature carrying
+    # regex metacharacters (`"` and `:` are common in these) must match itself
+    # literally rather than being reinterpreted.
+    printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      jq -Rr --arg sig "$SIGNATURE" --arg since "$SIG_SINCE" '
+        select(length>0)|(try fromjson catch empty)
+        | select(.type=="user")
+        | (.timestamp // "") as $ts
+        | select($ts != "" and $ts >= $since)
+        | (.sessionId // "unknown") as $sid
+        | .message.content
+        | select(type=="array")
+        | .[]
+        | select(.type=="tool_result" and .is_error==true)
+        | (.content | if type=="array" then (map(select(.type=="text").text)|join(" "))
+                      elif type=="string" then . else (.|tostring) end) as $msg
+        | select($msg | contains($sig))
+        | "\($ts)\t\($sid)"
+      ' "$f" 2>/dev/null
+    done | redact > "$SIGTMP" || true
+
+    SIG_OCC=$(wc -l < "$SIGTMP" | tr -d ' ')
+    SIG_SESS=$(cut -f2 "$SIGTMP" | sort -u | grep -c . || true)
+    # The naive number this replaces, printed for contrast so the contamination
+    # is visible rather than merely asserted. Deliberately UNFILTERED — prose,
+    # documentation reads and real errors all count, which is exactly the point.
+    #
+    # ⚠️ It is computed on the DECODED record, not by `grep` over raw bytes, and
+    # that is load-bearing rather than stylistic. These signatures routinely
+    # carry `"` (`Unknown JSON field: "merged"`), which the transcript stores
+    # escaped as `\"` — so a raw `grep -F` finds NOTHING while the decoded walk
+    # finds the real errors, and the "control" printed 0 against 2 real
+    # occurrences. A control that cannot exceed the thing it is a superset of is
+    # measuring a different population, which is the very confound this section
+    # exists to remove. Decoding both sides leaves `is_error` as the ONLY
+    # variable between the two numbers.
+    SIG_NAIVE=$(printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      jq -Rr --arg sig "$SIGNATURE" --arg since "$SIG_SINCE" '
+        select(length>0)|(try fromjson catch empty)
+        | (.timestamp // "") as $ts
+        | select($ts != "" and $ts >= $since)
+        | select([.. | strings] | any(contains($sig)))
+        | "1"
+      ' "$f" 2>/dev/null
+    done | wc -l | tr -d ' ')
+
+    echo "  signature scored (fixed string, case-sensitive):"
+    printf '    %s\n' "$(printf '%s' "$SIGNATURE" | redact | sed -E 's/[[:cntrl:]]+/ /g' | cut -c1-100)"
+    echo "  window: records at or after ${SIG_SINCE}   (record timestamps, not file mtime)"
+    echo
+    echo "  REAL occurrences (tool_result with is_error==true): ${SIG_OCC}"
+    echo "  distinct sessions ................................: ${SIG_SESS}"
+    if [ "$SIG_OCC" -gt 0 ]; then
+      echo "  first / last occurrence:"
+      printf '    first %s\n' "$(cut -f1 "$SIGTMP" | sort | head -1)"
+      printf '    last  %s\n' "$(cut -f1 "$SIGTMP" | sort | tail -1)"
+      echo "  busiest sessions:"
+      cut -f2 "$SIGTMP" | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
+    fi
+    echo
+    echo "  records containing the string, any context ......: ${SIG_NAIVE}   <- NOT the metric"
+    if [ "$SIG_NAIVE" -gt "$SIG_OCC" ]; then
+      echo "    ${SIG_NAIVE} - ${SIG_OCC} of these are prose or DOCUMENTATION READS, not failures."
+      echo "    Scoring a hypothesis on the unfiltered number counts the agent's own"
+      echo "    writing about a defect as instances of it — see monorepo#2622."
+    fi
+    : > "$SIGTMP"
+    echo
+    echo "  READ THIS BEFORE QUOTING THE NUMBER:"
+    echo "    * Claude lane only. Codex uses response_item/function_call_output with"
+    echo "      no is_error flag, so a Codex occurrence is NOT counted here."
+    echo "    * The file set is capped at ${MAX_FILES} files. Records inside the window"
+    echo "      that live in an evicted file are missed, so a LOW number over a long"
+    echo "      window may be a cap artifact — raise --max-files before concluding."
+    echo "    * Baseline and verdict must be taken with THIS tool, not one by hand:"
+    echo "      two methods produce two populations, which is how a working fix was"
+    echo "      first recorded as a failure."
   fi
 fi
 
