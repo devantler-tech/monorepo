@@ -1289,7 +1289,14 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
             (.message.content // empty)
             | select(type=="array")
             | any(
-                .type=="tool_result" and .is_error==true
+                # `objects` FIRST. A content array can mix plain strings with
+                # blocks, and indexing a string with `.type` makes jq abort the
+                # whole input line — which this call site swallows via
+                # `2>/dev/null`, so a record holding a REAL errored tool_result
+                # would vanish silently. That under-reports, the same direction
+                # as the contamination this section exists to remove.
+                objects
+                | .type=="tool_result" and .is_error==true
                 and ((.content | if type=="array" then (map(select(.type=="text").text)|join(" "))
                                  elif type=="string" then . else (.|tostring) end)
                      | contains($sig))
@@ -1344,6 +1351,19 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
       echo "    ${SIG_NAIVE} - ${SIG_OCC} of these are prose or DOCUMENTATION READS, not failures."
       echo "    Scoring a hypothesis on the unfiltered number counts the agent's own"
       echo "    writing about a defect as instances of it — see monorepo#2622."
+    elif [ "$SIG_NAIVE" -lt "$SIG_OCC" ]; then
+      # The invariant is asserted in the test suite, so the SCRIPT must state it
+      # too — otherwise the one run where it breaks prints a quietly impossible
+      # pair of numbers. It can break legitimately: the filtered walk JOINS a
+      # record's text blocks before matching, while the control tests each
+      # decoded string leaf on its own, so a signature straddling two adjacent
+      # blocks matches the filtered walk and not the control. That is two
+      # populations again — the exact confound this section exists to remove —
+      # so say so loudly rather than publishing the smaller-superset silently.
+      echo "    ⚠️  INVARIANT BROKEN: the control (${SIG_NAIVE}) is BELOW the filtered"
+      echo "    count (${SIG_OCC}), so the two walks matched different populations."
+      echo "    Treat BOTH numbers as unreliable for this signature — most likely it"
+      echo "    straddles two adjacent text blocks, which only the joined walk sees."
     fi
     : > "$SIGTMP"
     echo

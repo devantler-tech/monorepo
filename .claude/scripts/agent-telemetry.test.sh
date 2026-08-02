@@ -3344,6 +3344,38 @@ else
   bad "superset invariant survives a multi-block record" "any=$M_ANY real=$M_REAL"
 fi
 
+# CodeRabbit finding (#2624): a content array can mix plain strings with blocks,
+# and `.type` on a string aborts the whole jq input line — swallowed by the call
+# site's 2>/dev/null, so a record holding a REAL errored tool_result vanished.
+# Without the `objects` guard this fixture scores 0.
+mkdir -p "$FIX/sigmixed"
+printf '{"type":"user","timestamp":"%s","sessionId":"s-mix","message":{"content":["stray plain string",{"type":"tool_result","tool_use_id":"x1","is_error":true,"content":[{"type":"text","text":"%s"}]}]}}\n' \
+  "$SIG_NOW" "$SIG_NEEDLE_J" > "$FIX/sigmixed/sess.jsonl"
+XOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigmixed" CODEX_HOME="$FIX/nocodex" \
+       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature "$SIG_NEEDLE" 2>&1)
+check "a string element in the content array does not hide a real error" "$XOUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+
+# CodeRabbit finding (#2624): the filtered walk JOINS a record's text blocks
+# before matching; the control tests each decoded string leaf alone. A signature
+# straddling two adjacent blocks therefore matches the filtered walk only, and
+# the control drops BELOW its own subset. The script must say so rather than
+# print an impossible pair silently.
+mkdir -p "$FIX/sigsplit"
+printf '{"type":"user","timestamp":"%s","sessionId":"s-split","message":{"content":[{"type":"tool_result","tool_use_id":"y1","is_error":true,"content":[{"type":"text","text":"STRADDLE-LEFT"},{"type":"text","text":"STRADDLE-RIGHT"}]}]}}\n' \
+  "$SIG_NOW" > "$FIX/sigsplit/sess.jsonl"
+SOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigsplit" CODEX_HOME="$FIX/nocodex" \
+       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature 'STRADDLE-LEFT STRADDLE-RIGHT' 2>&1)
+check "a straddling signature is reported as an inverted invariant" "$SOUT" \
+  "INVARIANT BROKEN"
+# Paired control: the ordinary case must NOT print the warning, or it degenerates
+# into unconditional noise.
+nocheck "the inversion warning stays silent in the ordinary case" "$OUT" "INVARIANT BROKEN"
+
 # ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
 # A guard that passes when removed is not a guard. Each arm copies the target,
 # removes exactly one filter, asserts the copy actually CHANGED, and requires the
