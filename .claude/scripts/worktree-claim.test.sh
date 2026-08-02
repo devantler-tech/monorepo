@@ -164,9 +164,15 @@ check "check absent path" 0 "$rc" "$out" "path absent"
 # ── mark on existing tree ──────────────────────────────────────────────────
 bare="$tmp/bare-wt"
 git -C "$repo" worktree add -q -b "claim-branch-b" "$bare"
+# A pre-existing exclude file need not end with a newline. The marker rule must
+# still become a distinct pattern rather than concatenate with the last one.
+exclude_path="$(git -C "$bare" rev-parse --git-path info/exclude)"
+printf 'existing-rule' >"$exclude_path"
 rc=0
 out="$("$script" mark "$bare" "session-gamma" 2>&1)" || rc=$?
 check "mark succeeds" 0 "$rc" "$out" "owner=session-gamma"
+bare_status="$(git -C "$bare" status --porcelain --untracked-files=all)"
+check "newline-less exclude still ignores marker" "" "$bare_status"
 rc=0
 out="$("$script" check "$bare" "session-other" 2>&1)" || rc=$?
 check "mark then foreign check" 3 "$rc" "$out" "LIVE foreign claim"

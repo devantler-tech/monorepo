@@ -201,6 +201,9 @@ ignore_marker() {
     fail "cannot resolve git exclude file for worktree: $wt"
   mkdir -p "$(dirname "$exclude")"
   if ! grep -qxF "/$MARKER_NAME*" "$exclude" 2>/dev/null; then
+    if [ -s "$exclude" ] && [ -n "$(tail -c 1 "$exclude")" ]; then
+      printf '\n' >>"$exclude"
+    fi
     printf '/%s*\n' "$MARKER_NAME" >>"$exclude"
   fi
 }

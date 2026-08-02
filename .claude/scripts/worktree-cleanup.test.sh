@@ -209,6 +209,29 @@ t_reaps_expired_ownership_claim() {
   rm -rf "$root"
 }
 
+t_keeps_active_claim_mutex() {
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  add_wt "$root" mutex-held pushed
+  local w="$root/repo/.claude/worktrees/mutex-held" real hash ref blob now_utc
+  real=$(cd "$w" && pwd -P)
+  hash=$(printf '%s' "$real" | git -C "$w" hash-object --stdin)
+  ref="refs/worktree/claim-locks/$hash"
+  now_utc=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  blob=$(printf 'pid=%s\ncreated_at=%s\n' "$$" "$now_utc" | git -C "$w" hash-object -w --stdin)
+  git -C "$w" update-ref "$ref" "$blob"
+  touch -t 202001010000 "$w"
+  local out; out=$(run "$root" apply)
+  if [ -d "$w" ] \
+     && printf '%s' "$out" | grep -q 'KEEP .*mutex-held .*ownership mutex' \
+     && [ ! -d "$root/repo/.claude/worktrees/spent" ]; then
+    ok "KEEPs a worktree while its claim mutex is held"
+  else
+    bad "KEEPs a worktree while its claim mutex is held" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_keeps_live_cwd() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
@@ -729,6 +752,7 @@ t_keeps_untracked_real_file
 t_keeps_young
 t_keeps_active_ownership_claim
 t_reaps_expired_ownership_claim
+t_keeps_active_claim_mutex
 t_age_gate_works_with_gnu_stat
 t_keeps_locked
 t_keeps_staged_gitlink_update
