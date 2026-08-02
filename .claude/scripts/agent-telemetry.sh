@@ -638,12 +638,14 @@ def content_blocks:
   | objects;
 def block_text:
   .content
-  | if type=="array" then [.[] | objects | select(.type=="text") | .text | strings] | join(" ")
+  | if type=="array" then
+      [ .[] | (strings), (objects | select(.type=="text") | .text | strings) ] | join(" ")
     elif type=="string" then .
     else tostring end;
 def output_text:
   .output
-  | if type=="array" then [.[] | objects | .text | strings] | join(" ")
+  | if type=="array" then
+      [ .[] | (strings), (objects | .text | strings) ] | join(" ")
     elif type=="string" then .
     else tostring end;
 def message_text:

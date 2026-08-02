@@ -3631,6 +3631,21 @@ OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/strfinal" CODEX_HOME="$FIX/co
 check "a string-form final refusal is classified dead"   "$OUT" "dead ......... 1"
 nocheck "it is not misfiled as incomplete"               "$OUT" "incomplete ... 1"
 
+# (4) A bare string as an ELEMENT of a tool_result's content array. Filtering
+#     array members through `objects` alone dropped it, so a timeout whose message
+#     is stored that way vanished from the efficiency metric. Note this one is an
+#     improvement over origin/main rather than a regression repair: base filtered
+#     the same array through `select(.type=="text")`, which aborts on a bare
+#     string, so base scored it 0 too. Measured base 0 · objects-only 0 · fixed 1.
+mkdir -p "$FIX/barearray/q"
+cat > "$FIX/barearray/q/s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"tool_use","id":"q1","name":"Bash","input":{"command":"sleep 300","description":"poll CI"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"q1","is_error":true,"content":["Command timed out after 5m 0s"]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/barearray" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
+  HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 5 --section efficiency 2>&1)
+check "a bare-string element of a result array is still text" "$OUT" "bash timeouts .............. 1"
+
 # A guard in a SHARED accessor must be load-bearing in MORE THAN ONE section —
 # that is what proves the call sites really are shared rather than merely similar.
 # Each arm removes exactly one guard from one accessor and requires two different
@@ -3665,7 +3680,11 @@ shared_ablate 's/(def content_blocks:.*?)\n  \| objects;/$1;/s' \
   "content_blocks objects guard is load-bearing in two sections" 0 2
 # Drop `strings` from block_text: the object-valued .text reaches join(), which
 # refuses to join an object, aborting the line in every walk that flattens text.
-shared_ablate 's/(def block_text:.*?select\(\.type=="text"\) \| \.text) \| strings\]/$1]/s' \
+# Re-aimed after `block_text` gained its bare-string branch: the old expression
+# matched `| strings]` at the end of the comprehension, which no longer exists.
+# The harness caught that as "perl changed nothing" rather than passing a vacuous
+# arm — a green control is not a live control, so re-ablate after every reshape.
+shared_ablate 's/(def block_text:.*?select\(\.type=="text"\) \| \.text) \| strings\)/$1)/s' \
   "block_text strings guard is load-bearing in two sections" 2 2
 
 # ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
