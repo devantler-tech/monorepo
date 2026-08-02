@@ -3670,6 +3670,29 @@ check "lattice: a numeric .text payload is preserved" "$OUT" "Bash: <n>"
 check "lattice: an object .text payload is preserved" "$OUT" 'Edit: {"k":"v"}'
 check "lattice: a bare array element is preserved"    "$OUT" "Read: bare elem"
 
+# (5b) The remaining two cells of the `.text` axis: NULL and ABSENT. These are the
+#      one place `element_text` deliberately emits nothing, and that is not a
+#      "drop" — the RECORD is still counted, only the payload text is empty,
+#      because there is no payload. Coercing them would put the literal string
+#      "null" into the message and make a payload-less result look like it
+#      carried content, which is fabrication rather than evidence. Measured:
+#      origin/main counts these 3 records too, so this matches base behaviour.
+#      Pinned in both directions — the records survive, and no "null" is invented.
+mkdir -p "$FIX/nulltext/z"
+cat > "$FIX/nulltext/z/s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"tool_use","id":"z1","name":"Bash","input":{"command":"a"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"z1","is_error":true,"content":[{"type":"text","text":null}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:02Z","message":{"content":[{"type":"tool_use","id":"z2","name":"Edit","input":{"file_path":"/b"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"z2","is_error":true,"content":[{"type":"text"}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:04Z","message":{"content":[{"type":"tool_use","id":"z3","name":"Read","input":{"file_path":"/c"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"z3","is_error":true,"content":[{"type":"text","text":null},{"type":"text","text":"real payload"}]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulltext" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
+  HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 5 --section reliability 2>&1)
+check   "null and absent .text keep their records counted" "$OUT" "tool errors in window: 3"
+check   "a sibling payload beside a null .text survives"   "$OUT" "Read: real payload"
+nocheck "an absent .text is not invented as \"null\""      "$OUT" "Edit: null"
+
 # (6) A bare-string provider refusal inside a final assistant ARRAY. Same rule at
 #     the record position: routing through `content_blocks` discarded it, so a
 #     dead dispatch was filed as `incomplete`.
