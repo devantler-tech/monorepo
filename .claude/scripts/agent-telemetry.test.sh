@@ -3139,6 +3139,34 @@ nocheck "a mid-tool cutoff is not a provider refusal" "$TSOUT" "truncated .... 1
 check   "a mid-tool cutoff is reported incomplete"    "$TSOUT" "incomplete ... 1"
 check   "a mid-tool cutoff adds no refusal observation" "$TSOUT" "refusals observed: none"
 
+# CONTROL Z2 pins the RECOMMENDED DENOMINATOR against the label it carries.
+# The advice named "dispatches that CONTRIBUTED tool calls" while the count
+# summed every live dispatch, and CONTROL P deliberately classifies a completed
+# text-only run as live — so a corpus of one text-only live run plus one dead
+# one reported a contributing count of 1 with no tool call anywhere in it. The
+# number is right and the label was wrong: a completed run that called no tool
+# still had the opportunity to, so it belongs in the denominator; only a refusal
+# never got that opportunity. Gating the count on tool calls would over-state
+# every rate, the same error as dropping a truncated run. This pins BOTH halves,
+# because fixing only the wording leaves the arithmetic free to drift back.
+mkdir -p "$FIX/dh-textonly-mixed"
+{ dispatch_rec daily-ai-assistant 2026-08-01T11:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T11:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Surveyed every product; nothing actionable this tick."}]}}
+EOF
+} > "$FIX/dh-textonly-mixed/live.jsonl"
+{ dispatch_rec daily-ai-assistant 2026-08-01T11:30:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T11:30:01.000Z","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+} > "$FIX/dh-textonly-mixed/dead.jsonl"
+Z2OUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-textonly-mixed" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check   "the mixed text-only corpus still warns"            "$Z2OUT" "1 of 2 dispatches produced no evidence"
+check   "the served text-only run stays in the denominator" "$Z2OUT" "running count is 1"
+nocheck "the denominator no longer claims a tool call"      "$Z2OUT" "CONTRIBUTED tool calls"
+check   "and it says why a text-only run counts"            "$Z2OUT" "still had the opportunity to"
+
 # CONTROL AA pins ABSENT vs UNPARSEABLE. A window holding only correctly-parsed
 # other-role transcripts is a genuine zero — role parsing demonstrably worked and
 # the engineer simply did not run. Calling that UNKNOWN hides a real scheduler
