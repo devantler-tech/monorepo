@@ -573,15 +573,18 @@ For each selected product:
 
    ```sh
    .claude/scripts/worktree-claim.sh add <path> .claude/worktrees/maint-<runid> \
-     <lane>/<area>-<desc>-<issue> <session-slug>
+     <lane>/<area>-<desc>-<issue> <session-owner-token>
    ```
 
-   where **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*`. Never write
+   The `<session-owner-token>` is **unique to one runtime invocation** and stable only for renewals
+   within that run: derive it as `<lane>-<trusted-runtime-run-or-thread-id>`. Never use a stable
+   agent, schedule, or lane slug, because overlapping ticks would then impersonate the same owner.
+   **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*`. Never write
    a sibling's lane: it breaks draft ownership, and a `claude/*` branch from another instance would
    be swept by the Claude tick's cleanup. (Issue-less hotfixes and trivial obvious fixes keep plain
    `<lane>/<area>-<desc>` — they go straight to a PR, so no claim window applies.) **Immediately
    before editing a worktree this session did not create**, atomically reserve it with
-   `.claude/scripts/worktree-claim.sh acquire <wt> <session-slug>` and stand down on exit 3 (live
+   `.claude/scripts/worktree-claim.sh acquire <wt> <session-owner-token>` and stand down on exit 3 (live
    foreign claim, ~2h expiry). `check` is read-only diagnosis and does not reserve the tree. Renew a
    long-running claim by calling `acquire` with the same owner at least hourly. Work **in that
    worktree**. A stray `core.worktree` makes the worktree

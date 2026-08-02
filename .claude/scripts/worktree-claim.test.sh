@@ -6,6 +6,8 @@ set -Eeuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script="$here/worktree-claim.sh"
+root_contract="$here/../../AGENTS.md"
+maintenance_contract="$here/../skills/portfolio-maintenance/SKILL.md"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -99,13 +101,38 @@ check "malformed foreign marker fails closed" 2 "$rc" "$out" "unparseable"
 # ── acquire recovers a lock whose owner process is gone ────────────────────────────
 stale="$tmp/stale-lock-wt"
 git -C "$repo" worktree add -q -b "claim-branch-stale-lock" "$stale"
-mkdir "$stale/.claude-worktree-owner.lock"
-printf '999999999\n' >"$stale/.claude-worktree-owner.lock/pid"
-printf '%s\n' "$old" >"$stale/.claude-worktree-owner.lock/created_at"
+stale_real="$(cd "$stale" && pwd -P)"
+stale_hash="$(printf '%s' "$stale_real" | git -C "$stale" hash-object --stdin)"
+stale_ref="refs/worktree/claim-locks/$stale_hash"
+stale_blob="$(printf 'pid=999999999\ncreated_at=%s\n' "$old" | git -C "$stale" hash-object -w --stdin)"
+git -C "$stale" update-ref "$stale_ref" "$stale_blob"
 rc=0
 out="$("$script" acquire "$stale" "session-after-crash" 2>&1)" || rc=$?
 check "acquire recovers stale process lock" 0 "$rc" "$out" "owner=session-after-crash"
-check "recovered lock is released" 0 "$([ ! -e "$stale/.claude-worktree-owner.lock" ] && echo 0 || echo 1)"
+check "recovered lock ref is released" 1 "$(git -C "$stale" rev-parse -q --verify "$stale_ref" >/dev/null 2>&1; echo $?)"
+
+# ── concurrent stale-lock recovery is compare-and-swap safe ────────────────────────
+stale_race="$tmp/stale-race-wt"
+git -C "$repo" worktree add -q -b "claim-branch-stale-race" "$stale_race"
+stale_race_real="$(cd "$stale_race" && pwd -P)"
+stale_race_hash="$(printf '%s' "$stale_race_real" | git -C "$stale_race" hash-object --stdin)"
+stale_race_ref="refs/worktree/claim-locks/$stale_race_hash"
+stale_race_blob="$(printf 'pid=999999999\ncreated_at=%s\n' "$old" | git -C "$stale_race" hash-object -w --stdin)"
+git -C "$stale_race" update-ref "$stale_race_ref" "$stale_race_blob"
+"$script" acquire "$stale_race" "session-stale-racer-a" >"$tmp/stale-racer-a.out" 2>&1 &
+stale_pid_a=$!
+"$script" acquire "$stale_race" "session-stale-racer-b" >"$tmp/stale-racer-b.out" 2>&1 &
+stale_pid_b=$!
+stale_rc_a=0
+wait "$stale_pid_a" || stale_rc_a=$?
+stale_rc_b=0
+wait "$stale_pid_b" || stale_rc_b=$?
+stale_race_result=1
+if { [ "$stale_rc_a" -eq 0 ] && [ "$stale_rc_b" -eq 3 ]; } ||
+  { [ "$stale_rc_a" -eq 3 ] && [ "$stale_rc_b" -eq 0 ]; }; then
+  stale_race_result=0
+fi
+check "concurrent stale recovery has one winner" 0 "$stale_race_result"
 
 # ── acquire: concurrent claimants have exactly one winner ────────────────────────
 race="$tmp/race-wt"
@@ -148,6 +175,12 @@ check "mark then foreign check" 3 "$rc" "$out" "LIVE foreign claim"
 rc=0
 out="$("$script" 2>&1)" || rc=$?
 check "usage no args" 1 "$rc"
+
+# ── caller contract requires a per-run unique renewal token ────────────────────────
+contract_rc=0
+grep -qF 'unique to one runtime invocation' "$root_contract" || contract_rc=1
+grep -qF 'unique to one runtime invocation' "$maintenance_contract" || contract_rc=1
+check "contracts require a per-run unique owner token" 0 "$contract_rc"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -9,6 +9,7 @@ set -uo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SUT="$SCRIPT_DIR/worktree-cleanup.sh"
+CLAIM_SUT="$SCRIPT_DIR/worktree-claim.sh"
 
 pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
@@ -171,6 +172,39 @@ t_keeps_young() {
     ok "KEEPs a worktree younger than min_age_hours"
   else
     bad "KEEPs a worktree younger than min_age_hours" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_keeps_active_ownership_claim() {
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed
+  add_wt "$root" claimed pushed
+  local w="$root/repo/.claude/worktrees/claimed"
+  "$CLAIM_SUT" mark "$w" "codex-run-unique-123" >/dev/null
+  touch -t 202001010000 "$w"
+  local out; out=$(run "$root")
+  if printf '%s' "$out" | grep -q 'KEEP .*claimed .*active ownership claim' \
+     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+    ok "KEEPs a clean old worktree with an active ownership claim"
+  else
+    bad "KEEPs a clean old worktree with an active ownership claim" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_reaps_expired_ownership_claim() {
+  local root; root=$(make_repo)
+  add_wt "$root" expired-claim pushed
+  local w="$root/repo/.claude/worktrees/expired-claim"
+  "$CLAIM_SUT" mark "$w" "codex-run-expired-123" >/dev/null
+  printf 'owner=codex-run-expired-123\ncreated_at=2020-01-01T00:00:00Z\n' >"$w/.claude-worktree-owner"
+  touch -t 202001010000 "$w"
+  local out; out=$(run "$root")
+  if printf '%s' "$out" | grep -q '^REAP  .*expired-claim'; then
+    ok "allows an expired ownership claim to be reaped"
+  else
+    bad "allows an expired ownership claim to be reaped" "$out"
   fi
   rm -rf "$root"
 }
@@ -693,6 +727,8 @@ t_keeps_dirty
 t_ignores_tool_noise
 t_keeps_untracked_real_file
 t_keeps_young
+t_keeps_active_ownership_claim
+t_reaps_expired_ownership_claim
 t_age_gate_works_with_gnu_stat
 t_keeps_locked
 t_keeps_staged_gitlink_update

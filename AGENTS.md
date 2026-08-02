@@ -2304,10 +2304,13 @@ helper** (not a bare `git worktree add`) so the directory carries an ownership m
 
 ```sh
 .claude/scripts/worktree-claim.sh add <repo_path> .claude/worktrees/maint-<runid> \
-  <lane>/<area>-<desc>-<issue> <session-slug>
+  <lane>/<area>-<desc>-<issue> <session-owner-token>
 ```
 
-(`<lane>` is YOUR instance's namespace — `claude/*`, `codex/*` or `cursor/*`; the trailing issue
+(The `<session-owner-token>` is **unique to one runtime invocation** and stable only for renewals
+within that run: derive it as `<lane>-<trusted-runtime-run-or-thread-id>`. Never use a stable agent,
+schedule, or lane slug, because overlapping ticks would then impersonate the same owner. `<lane>` is
+YOUR instance's namespace — `claude/*`, `codex/*` or `cursor/*`; the trailing issue
 number is what makes a pre-PR claim matchable — see *Claim protocol*; for the legitimate
 **issue-less** flows the contract allows, a hotfix or a trivial obvious fix, there is no number to
 append, so use plain `<lane>/<area>-<desc>` — those go straight to a PR, so the PR body is the
@@ -2315,7 +2318,7 @@ discoverable signal and no claim window applies.) Work there, open the PR, then
 `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local filesystem path such as
 `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the slug only for `gh`
 commands). **Immediately before editing any worktree this session did not create**, atomically
-reserve it with `.claude/scripts/worktree-claim.sh acquire <wt> <session-slug>`: exit 3 means a
+reserve it with `.claude/scripts/worktree-claim.sh acquire <wt> <session-owner-token>`: exit 3 means a
 **live foreign claim** (marker owner ≠ you, `created_at` within ~2h — the same window as an issue
 claim) → stand down and pick another lane; exit 0 means the caller now owns the marker. `check` is
 read-only diagnosis and does not reserve the worktree. Renew a long-running claim by calling

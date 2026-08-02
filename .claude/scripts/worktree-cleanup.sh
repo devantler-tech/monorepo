@@ -24,6 +24,7 @@
 #   KEEP  - a worktree that is the CWD of a LIVE process (a running session)
 #   KEEP  - a worktree younger than min_age_hours
 #   KEEP  - a LOCKED worktree (git locks mean "in use"; we never override)
+#   KEEP  - a worktree with an unexpired Agentic Engineer ownership claim
 #   KEEP  - ANY worktree holding commits not reachable from a remote ref. This one test
 #           (`git rev-list <head> --not --remotes`) covers both an unpushed branch and a
 #           detached HEAD left on an orphan commit — the only states where removing the
@@ -134,6 +135,8 @@ REGISTERED=$(printf '%s\n' "$WT_LIST" | awk '/^worktree /{print substr($0,10)}' 
   | while IFS= read -r p; do (cd "$p" 2>/dev/null && pwd -P); done)
 
 now=$(date +%s)
+readonly CLAIM_MARKER_NAME=".claude-worktree-owner"
+readonly CLAIM_TTL_SECS=$((2 * 60 * 60))
 reaped=0; kept=0; freed_kb=0
 
 # record <path> <branch> <sha> <evidence> <outcome>
@@ -155,6 +158,42 @@ record() { # path branch sha evidence outcome
 }
 
 keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(basename "$1")" "$2"; }
+
+claim_iso_to_epoch() {
+  local iso=$1
+  date -u -d "$iso" +%s 2>/dev/null ||
+    date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$iso" +%s 2>/dev/null
+}
+
+# ownership_claim_state <worktree> -> 0 active, 1 absent/expired, 2 malformed.
+# A malformed marker is ambiguous session state and therefore a KEEP, never a reap.
+ownership_claim_state() {
+  local wt=$1 marker="$1/$CLAIM_MARKER_NAME" owner="" created_at="" key val created_epoch now_epoch age
+  CLAIM_DETAIL=""
+  [ -e "$marker" ] || return 1
+  [ -f "$marker" ] || { CLAIM_DETAIL="marker is not a regular file"; return 2; }
+  while IFS='=' read -r key val; do
+    case "$key" in
+      owner) owner=$val ;;
+      created_at) created_at=$val ;;
+    esac
+  done < "$marker"
+  if [ -z "$owner" ] || [ -z "$created_at" ]; then
+    CLAIM_DETAIL="marker lacks owner or created_at"
+    return 2
+  fi
+  created_epoch=$(claim_iso_to_epoch "$created_at") || {
+    CLAIM_DETAIL="marker has unparseable created_at"
+    return 2
+  }
+  now_epoch=$(date -u +%s)
+  age=$((now_epoch - created_epoch))
+  if [ "$age" -lt "$CLAIM_TTL_SECS" ]; then
+    CLAIM_DETAIL="owner=$owner created_at=$created_at"
+    return 0
+  fi
+  return 1
+}
 
 # is_locked_now <resolved-worktree-path> — re-queries git rather than consulting a
 # startup snapshot, so a lock taken DURING the sweep is still honoured.
@@ -225,6 +264,12 @@ is_locked_now() {
 # keeps the two paths from drifting apart.
 recheck_mutable_gates() {
   local wt=$1 target=$2 rc st idx
+  ownership_claim_state "$wt"; rc=$?
+  case "$rc" in
+    0) keep "$wt" "active ownership claim ($CLAIM_DETAIL)"; return 1 ;;
+    2) keep "$wt" "ambiguous ownership claim ($CLAIM_DETAIL)"; return 1 ;;
+  esac
+
   is_locked_now "$target"; rc=$?
   case "$rc" in
     0) keep "$wt" "locked (acquired during the sweep)"; return 1 ;;
@@ -341,6 +386,14 @@ for wt in "$WT_ROOT"/*/; do
   if ! grep -qxF -- "$wt_real" <<< "$REGISTERED"; then
     keep "$wt" "not a registered worktree"; continue
   fi
+
+  # KEEP: a live per-run owner may use a clean tree without holding a process CWD.
+  # Re-checked again immediately before removal by recheck_mutable_gates.
+  ownership_claim_state "$wt"; claim_rc=$?
+  case "$claim_rc" in
+    0) keep "$wt" "active ownership claim ($CLAIM_DETAIL)"; continue ;;
+    2) keep "$wt" "ambiguous ownership claim ($CLAIM_DETAIL)"; continue ;;
+  esac
 
   # KEEP: a live session's CWD (the worktree itself, or any directory inside it).
   # Both comparisons are LITERAL. An earlier version matched descendants with
