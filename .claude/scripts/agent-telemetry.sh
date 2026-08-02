@@ -637,18 +637,21 @@ def content_blocks:
   | if type=="array" then .[] elif type=="object" then . else empty end
   | objects;
 def block_text:
-  (.content? // empty)
+  .content
   | if type=="array" then [.[] | objects | select(.type=="text") | .text | strings] | join(" ")
     elif type=="string" then .
     else tostring end;
 def output_text:
-  (.output? // empty)
+  .output
   | if type=="array" then [.[] | objects | .text | strings] | join(" ")
     elif type=="string" then .
     else tostring end;
 def message_text:
-  if ((.message.content? | type) == "string") then .message.content
-  else [content_blocks | select(.type=="text") | .text | strings] | join("") end;
+  (.message.content? // empty)
+  | if type=="string" then .
+    elif type=="array" then
+      [ .[] | (strings), (objects | select(.type=="text") | .text | strings) ] | join("")
+    else "" end;
 '
 
 # tool_use ids whose result shows the call never ran, resolved once per file.
@@ -1090,7 +1093,9 @@ if want dispatch; then
         | ([$recs[] | select(.type=="assistant") | content_blocks
             | select(.type=="tool_use")] | length) as $tu
         | (([$recs[] | select(.type=="assistant")] | last) // {}) as $lastrec
-        | (([$lastrec | content_blocks | select(.type=="text") | .text | strings] | last) // "") as $lastt
+        | (($lastrec
+            | if ((.message.content? | type) == "string") then .message.content
+              else ([content_blocks | select(.type=="text") | .text | strings] | last) end) // "") as $lastt
         | (($lastrec.timestamp) // ([$recs[]|select(.timestamp)|.timestamp]|last) // "") as $ts
         | (($lastrec.message.stop_reason) // "") as $sr
         | ([$recs[] | select(.type=="assistant")] | length) as $na

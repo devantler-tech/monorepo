@@ -3577,6 +3577,60 @@ check "awkward shapes: the dispatch is classified"     "$OUT" 'dispatches of rol
 check "awkward shapes: the dispatch counts as live"    "$OUT" "live ......... 1"
 nocheck "awkward shapes: transcript is not unreadable" "$OUT" "unreadable transcript ....................: 1"
 
+# ── Three shapes the FIRST version of the accessors got wrong (Codex review) ──
+# All three are silent and downward — the exact failure direction these accessors
+# exist to remove — so each is pinned with its own fixture.
+
+# (1) A tool_result whose `content` is null or false. `(.content? // empty)` made
+#     jq emit nothing, so the walk dropped the entire errored result rather than
+#     reaching the scalar `tostring` fallback. Measured: base counted 2, the first
+#     accessor version counted 0. Reading `.content` directly restores it.
+mkdir -p "$FIX/nullcontent/n"
+cat > "$FIX/nullcontent/n/s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"tool_use","id":"n1","name":"Bash","input":{"command":"x","description":"d"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"n1","is_error":true,"content":null}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:02Z","message":{"content":[{"type":"tool_use","id":"n2","name":"Edit","input":{"file_path":"/y"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"n2","is_error":true,"content":false}]}}
+EOF
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/nullcontent" CODEX_HOME="$FIX/codex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
+  --since-days 3650 --max-files 5 --section reliability 2>&1)
+check "null/false tool_result content stays observable" "$OUT" "tool errors in window: 2"
+
+# (2) A bare string BEFORE the dispatch marker in a content array. Filtering bare
+#     strings out reduced the message to the marker alone, so an interactive
+#     session was falsely classified as a scheduled dispatch — corrupting the
+#     denominator of every per-dispatch rate. Order must be preserved.
+mkdir -p "$FIX/barestring/m"
+cat > "$FIX/barestring/m/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":["please look at this: ",{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"x"}}]}}
+EOF
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/barestring" CODEX_HOME="$FIX/codex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
+  --since-days 3650 --max-files 5 --section dispatch 2>&1)
+check "a bare-string prefix is not read as a dispatch marker" "$OUT" \
+  'dispatches of role "daily-ai-assistant": 0'
+check "that session is reported as interactive instead" "$OUT" \
+  "no dispatch record .......................: 1"
+
+# (3) A final assistant record using the documented STRING form of
+#     `message.content` and carrying the provider refusal. `content_blocks`
+#     yields only objects, so the refusal text never reached the classifier and a
+#     dead dispatch was filed as `incomplete` — an outage rendered as "maybe still
+#     running", which is a fail-OPEN in the health signal every other number here
+#     is re-based on.
+mkdir -p "$FIX/strfinal/p"
+cat > "$FIX/strfinal/p/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"stop_reason":"stop_sequence","content":"You've hit your weekly limit · resets Aug 1 at 1pm (Europe/Copenhagen)"}}
+EOF
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/strfinal" CODEX_HOME="$FIX/codex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
+  --since-days 3650 --max-files 5 --section dispatch 2>&1)
+check "a string-form final refusal is classified dead"   "$OUT" "dead ......... 1"
+nocheck "it is not misfiled as incomplete"               "$OUT" "incomplete ... 1"
+
 # A guard in a SHARED accessor must be load-bearing in MORE THAN ONE section —
 # that is what proves the call sites really are shared rather than merely similar.
 # Each arm removes exactly one guard from one accessor and requires two different
