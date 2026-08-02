@@ -898,7 +898,7 @@ if want dispatch; then
     echo "  (no claude sessions in window)"
   else
     DH_LIVE=0; DH_DEAD=0; DH_TRUNC=0; DH_INCOMPLETE=0
-    DH_ROOTS=0; DH_OTHERROLE=0; DH_NOREC=0; DH_UNREADABLE=0
+    DH_ROOTS=0; DH_OTHERROLE=0; DH_NOREC=0; DH_UNREADABLE=0; DH_INCOMPLETE_NOWORK=0
     # One event per classified dispatch: "<timestamp>\t<R|H>". Sorted and walked
     # at the end so refusals separated by a HEALTHY dispatch report as separate
     # incidents; min->max over all refusals describes a single continuous outage
@@ -1035,6 +1035,13 @@ if want dispatch; then
           DH_LIVE=$((DH_LIVE+1))
         else
           DH_INCOMPLETE=$((DH_INCOMPLETE+1))
+          # Only an incomplete run that did NO work is evidence-free. The bucket
+          # this replaced (`inert`) was zero-tool-calls BY DEFINITION, so the
+          # no-evidence warning could fold the whole of it in; `incomplete`
+          # cannot be folded in the same way, because a run interrupted after
+          # real work still fed every numerator. Counting it as evidence-free
+          # would recreate this section's own denominator distortion, inverted.
+          [ "$tu" -eq 0 ] && DH_INCOMPLETE_NOWORK=$((DH_INCOMPLETE_NOWORK+1))
         fi
         [ -n "$ts" ] && DH_EVENTS="${DH_EVENTS}${ts}	H
 "
@@ -1087,7 +1094,7 @@ EOF
         [ -n "$a" ] && printf '    %s -> %s\n' "$a" "$b"
       done
     fi
-    DH_NOEV=$((DH_DEAD + DH_INCOMPLETE))
+    DH_NOEV=$((DH_DEAD + DH_INCOMPLETE_NOWORK))
     if [ "$DH_NOEV" -gt 0 ]; then
       echo
       printf '  WARNING: %s of %s dispatches produced no evidence.\n' "$DH_NOEV" "$DH_TOTAL"

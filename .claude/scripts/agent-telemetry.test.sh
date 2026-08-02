@@ -2952,6 +2952,25 @@ UOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-cutoff" CODEX_HOME="$FIX/nocodex" MONOREPO_D
        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a run cut off mid-turn is not complete evidence" "$UOUT" "live ......... 0"
 check "a run cut off mid-turn is reported as incomplete" "$UOUT" "incomplete ... 1"
+# ...but it is NOT "no evidence". The old `inert` bucket was zero-tool-calls by
+# definition, so folding it into the no-evidence warning was sound. `incomplete`
+# is not: a run interrupted after real work still fed every numerator, and
+# calling it evidence-free would recreate the exact denominator distortion this
+# section exists to warn about — in the opposite direction.
+nocheck "an interrupted run that DID work is not called evidence-free" "$UOUT" "dispatches produced no evidence"
+
+# CONTROL Q2: the other side of it — an interrupted run that did NO work is
+# genuinely evidence-free and must still raise the warning, so the fix above
+# cannot be "stop warning".
+mkdir -p "$FIX/dh-cutoff-nowork"
+{ dispatch_rec daily-ai-assistant 2026-08-01T15:45:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T15:45:01.000Z","message":{"stop_reason":"tool_use","content":[{"type":"text","text":"Starting."}]}}
+EOF
+} > "$FIX/dh-cutoff-nowork/s.jsonl"
+VOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-cutoff-nowork" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "an interrupted run that did NO work is evidence-free" "$VOUT" "1 of 1 dispatches produced no evidence"
 
 # CONTROL R pins OUTAGE INTERVAL SPLITTING. Two refusals with a healthy dispatch
 # BETWEEN them are two incidents; reporting min->max describes one continuous
