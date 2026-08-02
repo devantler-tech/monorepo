@@ -3502,6 +3502,35 @@ else
   ok "the signature never reaches jq via argv"
 fi
 
+# Codex round-5 findings (#2624). All three are the SAME class the section exists
+# to prevent — a scan that produces no evidence while reporting success, or a
+# protected value leaking anyway.
+# (4) a zero cap empties every file set, so each section reported "no sessions"
+#     for an explicitly empty scan. Affects all five call sites, not just this one.
+OUT=$(HOME="$FIX" bash "$TARGET" --max-files 0 --section signature --signature 'x' 2>&1)
+check "--max-files 0 is rejected, not reported as an empty corpus" "$OUT" "must be at least 1"
+# paired control: a positive cap still works
+OUT=$(sigrun); check "a positive --max-files still scans" "$OUT" \
+  "REAL occurrences (tool_result with is_error==true): 2"
+# (2) an oversized signature makes the jq exec fail; stderr is discarded and the
+#     pipeline ends in `|| true`, so the scan would exit 0 with both counts ZERO.
+BIG=$(head -c 5000 /dev/zero | tr '\0' 'a')
+OUT=$(HOME="$FIX" bash "$TARGET" --section signature --signature "$BIG" 2>&1)
+check "an oversized signature is rejected before scanning" "$OUT" "the limit is 4096"
+nocheck "an oversized signature never reports a zero count" "$OUT" "REAL occurrences"
+# (1) --signature-file exists so a sensitive value need not be exposed; echoing
+#     it back defeats that, and `redact` only knows a fixed set of shapes.
+printf 'hunter2-not-a-known-credential-shape' > "$FIX/secret.txt"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+      HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 \
+        --section signature --signature-file "$FIX/secret.txt" 2>&1)
+nocheck "a file-supplied signature is never echoed" "$OUT" "hunter2"
+check   "a file-supplied signature is identified by digest" "$OUT" "<from file, not echoed> sha256:"
+# paired control: an inline signature IS still echoed, or the digest path would
+# silently swallow the ordinary case too.
+OUT=$(sigrun); check "an inline signature is still echoed" "$OUT" \
+  "signature scored (fixed string, case-sensitive):"
+
 # ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
 # A guard that passes when removed is not a guard. Each arm copies the target,
 # removes exactly one filter, asserts the copy actually CHANGED, and requires the

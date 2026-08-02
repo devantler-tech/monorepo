@@ -22,6 +22,7 @@ MAX_FILES=400
 SECTION=all
 SIGNATURE=""
 SIGNATURE_SET=0
+SIGNATURE_FROM_FILE=0
 INJECTION_PROVENANCE=0
 CREDENTIAL_PROVENANCE=0
 CREDENTIAL_SCAN_BATCH_FILES="${CREDENTIAL_SCAN_BATCH_FILES:-128}"
@@ -55,6 +56,7 @@ while [ $# -gt 0 ]; do
     --signature-file)
       need_val "$@"
       [ -r "$2" ] || { echo "--signature-file is not readable" >&2; exit 2; }
+      SIGNATURE_FROM_FILE=1
       # Command substitution strips ALL trailing newlines, which is the wanted
       # behaviour for a file an editor terminated. Interior bytes are preserved,
       # so a genuinely multi-line signature still matches exactly.
@@ -68,6 +70,12 @@ done
 
 case "$SINCE_DAYS" in ''|*[!0-9]*) echo "--since-days must be an integer" >&2; exit 2 ;; esac
 case "$MAX_FILES"  in ''|*[!0-9]*) echo "--max-files must be an integer"  >&2; exit 2 ;; esac
+# A ZERO cap is accepted by the integer test and then empties every file set via
+# `head -n 0`, so all five call sites scan nothing and each section reports
+# "(no sessions in window)" — an explicitly empty scan rendered as evidence that
+# nothing happened. Reject it: this tool must never present absence of evidence
+# as evidence of absence.
+case "$MAX_FILES" in 0) echo "--max-files must be at least 1 (0 scans nothing and would report an empty corpus as 'no sessions')" >&2; exit 2 ;; esac
 case "$CREDENTIAL_SCAN_BATCH_FILES" in
   ''|*[!0-9]*) echo "CREDENTIAL_SCAN_BATCH_FILES must be a positive integer" >&2; exit 2 ;;
   *[1-9]*) ;;
@@ -93,6 +101,22 @@ if [ "$SECTION" = signature ] && [ "$SIGNATURE_SET" -eq 0 ]; then
 fi
 if [ "$SIGNATURE_SET" -eq 1 ] && [ -z "$SIGNATURE" ]; then
   echo "--signature must not be empty" >&2; exit 2
+fi
+# Bound the signature BEFORE any scan. An oversized value makes the `jq` exec
+# fail outright (Linux caps a single argv/env entry at 128 KiB regardless of
+# ARG_MAX); this call site discards stderr and ends in `|| true`, so the scan
+# would exit 0 with both counts at ZERO — a large multiline error turned into
+# false evidence that it never occurred. Fail loudly instead. 4 KiB is far above
+# any real error signature and far below the exec limit.
+SIG_MAX_BYTES=4096
+if [ "$SIGNATURE_SET" -eq 1 ]; then
+  _siglen=$(printf '%s' "$SIGNATURE" | wc -c | tr -d ' ')
+  if [ "$_siglen" -gt "$SIG_MAX_BYTES" ]; then
+    echo "--signature is ${_siglen} bytes; the limit is ${SIG_MAX_BYTES}. A larger value cannot be" >&2
+    echo "passed to the scanner and would silently report zero occurrences. Use a shorter, more" >&2
+    echo "distinctive fragment of the signature." >&2
+    exit 2
+  fi
 fi
 # A signature handed to a section that cannot score it is the SAME failure as a
 # missing one: `--section reliability --signature X` used to exit 0 having
@@ -1398,9 +1422,20 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
     # row to a line-oriented consumer. With the label first, no line can BEGIN
     # with a metric shape unless it is one, so a consumer can anchor (`^  REAL`)
     # and the value can never masquerade as a row.
-    printf '  signature scored (fixed string, case-sensitive): %s\n' \
-      "$(printf '%s' "$SIGNATURE" | tr '\n\r\t' '   ' | redact \
-         | sed -E 's/[[:cntrl:]]+/ /g' | tr -d '\n' | cut -c1-100)"
+    # A file-supplied signature is NEVER echoed. `--signature-file` exists so a
+    # caller need not expose a sensitive value, and `redact` only recognises a
+    # fixed set of credential shapes — an arbitrary password or unsupported
+    # token format would pass through unchanged. Identify it by digest instead,
+    # which still lets two runs be compared without disclosing the needle.
+    if [ "$SIGNATURE_FROM_FILE" -eq 1 ]; then
+      _sigdig=$(printf '%s' "$SIGNATURE" | shasum -a 256 2>/dev/null | cut -c1-12)
+      printf '  signature scored: <from file, not echoed> sha256:%s len=%s\n' \
+        "${_sigdig:-unavailable}" "$(printf '%s' "$SIGNATURE" | wc -c | tr -d ' ')"
+    else
+      printf '  signature scored (fixed string, case-sensitive): %s\n' \
+        "$(printf '%s' "$SIGNATURE" | tr '\n\r\t' '   ' | redact \
+           | sed -E 's/[[:cntrl:]]+/ /g' | tr -d '\n' | cut -c1-100)"
+    fi
     echo "  window: records at or after ${SIG_SINCE}   (record timestamps, not file mtime)"
     echo
     echo "  REAL occurrences (tool_result with is_error==true): ${SIG_OCC}"
