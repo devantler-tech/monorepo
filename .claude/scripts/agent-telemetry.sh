@@ -81,6 +81,18 @@ fi
 if [ "$SIGNATURE_SET" -eq 1 ] && [ -z "$SIGNATURE" ]; then
   echo "--signature must not be empty" >&2; exit 2
 fi
+# A signature handed to a section that cannot score it is the SAME failure as a
+# missing one: `--section reliability --signature X` used to exit 0 having
+# silently scored nothing, so a caller asking for a verdict got a clean run and
+# no verdict. Reject it rather than ignore it — absent evidence must never look
+# like evidence of absence, which is the whole point of this section.
+case "$SECTION" in
+  all|signature) ;;
+  *) if [ "$SIGNATURE_SET" -eq 1 ]; then
+       echo "--signature is only scored by --section signature (or all); got --section $SECTION" >&2
+       exit 2
+     fi ;;
+esac
 
 CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
@@ -1257,8 +1269,17 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
   # Same portable pair as the outcomes section: BSD `date -v` first, GNU `-d`
   # second. Full second precision, so the comparison against a record timestamp
   # is not truncated to a whole day.
-  SIG_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
-              || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
+  #
+  # ⚠️ The cutoff carries `.000` because the comparison against a record's
+  # timestamp is LEXICAL. Claude records use the fractional form
+  # `…T10:00:00.500Z`, and against a plain `…T10:00:00Z` cutoff that sorts
+  # BEFORE it — `.` (0x2E) < `Z` (0x5A) — so a record half a second INSIDE the
+  # window was excluded. Verified: `".500Z" >= "…:00Z"` is false, `>= "…:00.000Z"`
+  # is true, and a plain at-cutoff record still compares >= `.000`. Both walks
+  # share this cutoff, so the boundary record vanished from the metric AND its
+  # control together — invisible, and in the under-reporting direction.
+  SIG_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
+              || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
   if [ -z "$SIG_SINCE" ]; then
     echo "  UNKNOWN: cannot compute window start (no usable \`date\`) — refusing to score."
   elif [ "$SF_COUNT" -eq 0 ]; then

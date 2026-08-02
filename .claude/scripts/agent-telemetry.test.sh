@@ -3322,6 +3322,17 @@ check "--section signature without --signature is an error" "$OUT" \
   "requires --signature"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" HOME="$FIX" bash "$TARGET" --section signature --signature '' 2>&1)
 check "an empty --signature is rejected" "$OUT" "must not be empty"
+# A signature handed to a section that cannot score it is the same absent-evidence
+# failure as omitting it: it used to exit 0 having scored nothing (Codex finding).
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" HOME="$FIX" bash "$TARGET" --section reliability --signature 'x' 2>&1)
+check "--signature with an incompatible --section is rejected" "$OUT" \
+  "only scored by --section signature"
+# Paired control: the COMPATIBLE combinations must still be accepted, or the new
+# rejection would simply break the feature.
+OUT=$(sigrun); check "--section signature still accepted" "$OUT" "SIGNATURE SCORING"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+      HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 --signature "$SIG_NEEDLE" 2>&1)
+check "--signature under the default (all) section still scores" "$OUT" "SIGNATURE SCORING"
 
 # A single record can carry SEVERAL tool_result blocks. Counting blocks while
 # the control counts records lets the "superset" fall BELOW its own subset — the
@@ -3374,7 +3385,49 @@ check "a straddling signature is reported as an inverted invariant" "$SOUT" \
   "INVARIANT BROKEN"
 # Paired control: the ordinary case must NOT print the warning, or it degenerates
 # into unconditional noise.
-nocheck "the inversion warning stays silent in the ordinary case" "$OUT" "INVARIANT BROKEN"
+# ⚠️ Take a FRESH ordinary run — do not reuse $OUT. By this point $OUT holds the
+# EMPTY-SIGNATURE usage error, which of course lacks the warning string, so the
+# assertion passed no matter what the ordinary report did. A control that cannot
+# fail is not a control (Codex finding, #2624).
+NORMOUT=$(sigrun)
+check   "the paired control ran a real signature report" "$NORMOUT" \
+  "REAL occurrences (tool_result with is_error==true): 2"
+nocheck "the inversion warning stays silent in the ordinary case" "$NORMOUT" "INVARIANT BROKEN"
+
+# Codex finding (#2624): the window comparison is LEXICAL, so a record with
+# Claude's normal fractional timestamp falling in the SAME SECOND as the cutoff
+# sorted BEFORE a plain `…:00Z` cutoff and was dropped from BOTH numbers.
+#
+# ⚠️ This is deliberately NOT tested through a fixture. The first attempt built a
+# record at `now-1d` plus a fraction and asserted it was counted — but the script
+# computes its own cutoff moments later, so the record landed a second or two
+# clear of the boundary and the test passed with OR without the fix. Ablation
+# caught it: a vacuous arm. Hitting the exact same second is inherently racy, so
+# the property is asserted two deterministic ways instead.
+#
+# (a) the cutoff the script actually emits must carry sub-second precision.
+#     ⚠️ Scoped to the WINDOW LINE, not the whole report: a fixture record is
+#     itself dated `2026-06-01T10:00:00.000Z` and the report echoes it as the
+#     first occurrence, so a whole-output match found `.000Z` no matter what the
+#     cutoff looked like — the ablated build passed too. Assert on the one line
+#     that carries the value under test.
+OUT=$(sigrun)
+WINLINE=$(printf '%s\n' "$OUT" | grep 'window: records at or after')
+check "the window cutoff carries sub-second precision" "$WINLINE" ".000Z"
+# (b) the comparison semantics that makes that necessary, pinned directly:
+#     a fractional record must sort AFTER a same-second cutoff.
+BCMP=$(jq -nr '[
+  ("2026-08-01T10:00:00.500Z" >= "2026-08-01T10:00:00Z"),
+  ("2026-08-01T10:00:00.500Z" >= "2026-08-01T10:00:00.000Z"),
+  ("2026-08-01T10:00:00Z"     >= "2026-08-01T10:00:00.000Z"),
+  ("2026-08-01T09:59:59.999Z" >= "2026-08-01T10:00:00.000Z")
+] | @tsv')
+if [ "$BCMP" = "$(printf 'false\ttrue\ttrue\tfalse')" ]; then
+  ok "a plain-second cutoff would drop a same-second fractional record"
+else
+  bad "a plain-second cutoff would drop a same-second fractional record" \
+      "lexical comparison changed: got [$BCMP]"
+fi
 
 # ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
 # A guard that passes when removed is not a guard. Each arm copies the target,
