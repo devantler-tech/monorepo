@@ -13,7 +13,7 @@
 #   `agentic-engineering` plugin's `agent-improver` → "Ingestion boundary".
 #
 # Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME]
-#                           [--signature STRING]
+#                           [--signature STRING | --signature-file PATH]
 #                           [--injection-provenance] [--credential-provenance]
 set -uo pipefail
 
@@ -46,6 +46,19 @@ while [ $# -gt 0 ]; do
     # occurrences of a defect. SIGNATURE_SET distinguishes "not asked for" from
     # "asked for with a bad value" so the empty case fails loudly.
     --signature)  need_val "$@"; SIGNATURE="$2"; SIGNATURE_SET=1; shift 2 ;;
+    # ⚠️ `--signature` puts the value in this process's ARGV, which is readable
+    # by any local user (`ps`, /proc/<pid>/cmdline). Failed tool results can
+    # carry commands and tokens, so a caller scoring one must not be forced to
+    # expose it: `--signature-file` reads it from a file instead, and the value
+    # reaches jq through the ENVIRONMENT rather than jq's own argv. Neither
+    # stdout redaction nor the 0600 scratch file protects process arguments.
+    --signature-file)
+      need_val "$@"
+      [ -r "$2" ] || { echo "--signature-file is not readable" >&2; exit 2; }
+      # Command substitution strips ALL trailing newlines, which is the wanted
+      # behaviour for a file an editor terminated. Interior bytes are preserved,
+      # so a genuinely multi-line signature still matches exactly.
+      SIGNATURE=$(printf '%s' "$(cat -- "$2")"); SIGNATURE_SET=1; shift 2 ;;
     --injection-provenance) INJECTION_PROVENANCE=1; shift ;;
     --credential-provenance) CREDENTIAL_PROVENANCE=1; shift ;;
     -h|--help)    sed -n '2,17p' "$0"; exit 0 ;;
@@ -76,7 +89,7 @@ esac
 # report: a hypothesis scored against a silently-absent signature would read
 # `0 occurrences` and be recorded as a fix that worked.
 if [ "$SECTION" = signature ] && [ "$SIGNATURE_SET" -eq 0 ]; then
-  echo "--section signature requires --signature STRING" >&2; exit 2
+  echo "--section signature requires --signature STRING or --signature-file PATH" >&2; exit 2
 fi
 if [ "$SIGNATURE_SET" -eq 1 ] && [ -z "$SIGNATURE" ]; then
   echo "--signature must not be empty" >&2; exit 2
@@ -1300,8 +1313,9 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
     # literally rather than being reinterpreted.
     printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      jq -Rr --arg sig "$SIGNATURE" --arg since "$SIG_SINCE" '
-        select(length>0)|(try fromjson catch empty)
+      SIG_ENV="$SIGNATURE" jq -Rr --arg since "$SIG_SINCE" '
+        ($ENV.SIG_ENV) as $sig
+        | select(length>0)|(try fromjson catch empty)
         | select(.type=="user")
         | (.timestamp // "") as $ts
         | select($ts != "" and $ts >= $since)
@@ -1318,7 +1332,7 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
                 # as the contamination this section exists to remove.
                 objects
                 | .type=="tool_result" and .is_error==true
-                and ((.content | if type=="array" then (map(select(.type=="text").text)|join(" "))
+                and ((.content | if type=="array" then (map(objects|select(.type=="text")|.text|strings)|join(" "))
                                  elif type=="string" then . else (.|tostring) end)
                      | contains($sig))
               )
@@ -1344,17 +1358,49 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
     # variable between the two numbers.
     SIG_NAIVE=$(printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      jq -Rr --arg sig "$SIGNATURE" --arg since "$SIG_SINCE" '
-        select(length>0)|(try fromjson catch empty)
+      SIG_ENV="$SIGNATURE" jq -Rr --arg since "$SIG_SINCE" '
+        ($ENV.SIG_ENV) as $sig
+        | select(length>0)|(try fromjson catch empty)
         | (.timestamp // "") as $ts
         | select($ts != "" and $ts >= $since)
-        | select([.. | strings] | any(contains($sig)))
+        | select(
+            # UNION, so the control contains every match of the filtered walk by
+            # CONSTRUCTION rather than by totals happening to line up. Comparing
+            # totals cannot prove set inclusion: one split-across-blocks error
+            # (seen only by the joined walk) plus one prose record carrying the
+            # whole string (seen only by the leaf walk) gives 1 and 1 with the
+            # superset missing the subset entirely, and no warning.
+            ([.. | strings] | any(contains($sig)))
+            or (
+              (.message.content // empty)
+              | if type=="array" then
+                  any(objects | .type=="tool_result"
+                      and ((.content | if type=="array" then (map(objects|select(.type=="text")|.text|strings)|join(" "))
+                                       elif type=="string" then . else (.|tostring) end)
+                           | contains($sig)))
+                else false end
+            )
+          )
         | "1"
       ' "$f" 2>/dev/null
     done | wc -l | tr -d ' ')
 
-    echo "  signature scored (fixed string, case-sensitive):"
-    printf '    %s\n' "$(printf '%s' "$SIGNATURE" | redact | sed -E 's/[[:cntrl:]]+/ /g' | cut -c1-100)"
+
+    # FLATTEN FIRST. `sed` works line by line, so `[[:cntrl:]]` never sees a
+    # newline and `cut -c` bounds each line rather than the whole value — a
+    # multiline signature therefore printed several bounded lines, and a second
+    # line reading `REAL occurrences ...: 999` lands directly above the real
+    # metric. This output is explicitly consumed by an agent, so a value that
+    # can forge a scorecard row is an integrity bug, not cosmetics.
+    # Emitted on the SAME LINE as its label, deliberately. Flattening alone still
+    # leaves the value at the start of a line, so a signature reading
+    # `REAL occurrences ...: 999` produced a line indistinguishable from a metric
+    # row to a line-oriented consumer. With the label first, no line can BEGIN
+    # with a metric shape unless it is one, so a consumer can anchor (`^  REAL`)
+    # and the value can never masquerade as a row.
+    printf '  signature scored (fixed string, case-sensitive): %s\n' \
+      "$(printf '%s' "$SIGNATURE" | tr '\n\r\t' '   ' | redact \
+         | sed -E 's/[[:cntrl:]]+/ /g' | tr -d '\n' | cut -c1-100)"
     echo "  window: records at or after ${SIG_SINCE}   (record timestamps, not file mtime)"
     echo
     echo "  REAL occurrences (tool_result with is_error==true): ${SIG_OCC}"

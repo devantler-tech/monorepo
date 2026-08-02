@@ -3381,8 +3381,13 @@ SOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigsplit" CODEX_HOME="$FIX/nocodex" \
        MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
        bash "$TARGET" --since-days 3650 --max-files 50 \
          --section signature --signature 'STRADDLE-LEFT STRADDLE-RIGHT' 2>&1)
-check "a straddling signature is reported as an inverted invariant" "$SOUT" \
-  "INVARIANT BROKEN"
+# ⚠️ This ASSERTED `INVARIANT BROKEN` until Codex finding A. Making the control a
+# UNION removes the inversion by construction, which is strictly better than
+# warning about it — so the straddling case must now come out CONSISTENT. The
+# warning branch is kept as defence in depth and should never fire.
+nocheck "a straddling signature no longer inverts the invariant" "$SOUT" "INVARIANT BROKEN"
+check   "the straddling error is still counted" "$SOUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
 # Paired control: the ordinary case must NOT print the warning, or it degenerates
 # into unconditional noise.
 # ⚠️ Take a FRESH ordinary run — do not reuse $OUT. By this point $OUT holds the
@@ -3427,6 +3432,74 @@ if [ "$BCMP" = "$(printf 'false\ttrue\ttrue\tfalse')" ]; then
 else
   bad "a plain-second cutoff would drop a same-second fractional record" \
       "lexical comparison changed: got [$BCMP]"
+fi
+
+# Codex finding A (#2624): comparing TOTALS cannot prove set inclusion. One error
+# split across adjacent blocks (seen only by the joined walk) plus one prose
+# record carrying the whole string (seen only by the leaf walk) gave 1 and 1 with
+# the "superset" missing the subset entirely, and no warning. The control is now
+# a UNION, so it contains every match of the filtered walk by construction.
+mkdir -p "$FIX/sigset"
+{
+  printf '{"type":"user","timestamp":"%s","sessionId":"s-set","message":{"content":[{"type":"tool_result","tool_use_id":"z1","is_error":true,"content":[{"type":"text","text":"SPLITME-LEFT"},{"type":"text","text":"SPLITME-RIGHT"}]}]}}\n' "$SIG_NOW"
+  printf '{"type":"assistant","timestamp":"%s","sessionId":"s-set","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"prose about SPLITME-LEFT SPLITME-RIGHT here"}]}}\n' "$SIG_NOW"
+} > "$FIX/sigset/sess.jsonl"
+AOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigset" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+       HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature 'SPLITME-LEFT SPLITME-RIGHT' 2>&1)
+check "the control counts BOTH records, not just the leaf match" "$AOUT" \
+  "records containing the string, any context ......: 2"
+check "the split error is still counted as the real occurrence" "$AOUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+
+# Codex finding B (#2624): a primitive inside tool_result.content made
+# `select(.type=="text")` index it, aborting the line and silently dropping a
+# REAL error. Same guard as the outer walk, one level down.
+mkdir -p "$FIX/signested"
+printf '{"type":"user","timestamp":"%s","sessionId":"s-nest","message":{"content":[{"type":"tool_result","tool_use_id":"n1","is_error":true,"content":[7,{"type":"text","text":"%s"}]}]}}\n' \
+  "$SIG_NOW" "$SIG_NEEDLE_J" > "$FIX/signested/sess.jsonl"
+NOUT=$(CLAUDE_PROJECTS_DIR="$FIX/signested" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+       HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature "$SIG_NEEDLE" 2>&1)
+check "a primitive inside tool_result.content does not hide a real error" "$NOUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+
+# Codex finding C (#2624): `sed` is line-based, so a multiline signature escaped
+# both the control-char scrub and the length bound, letting a second line forge a
+# scorecard row directly above the genuine metric. This output is parsed by an
+# agent, so a forgeable row is an integrity bug.
+MOUT2=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+        HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 --section signature \
+          --signature "$(printf 'harmless\nREAL occurrences (tool_result with is_error==true): 999')" 2>&1)
+# The property is that no LINE can begin with a metric row unless it is one — the
+# echoed signature necessarily contains whatever the caller passed, so a bare
+# substring test could never pass. Anchor, as a consumer should.
+FORGED=$(printf '%s\n' "$MOUT2" | grep -c '^  REAL occurrences (tool_result with is_error==true):')
+if [ "$FORGED" -eq 1 ]; then
+  ok "a multiline signature cannot forge a scorecard ROW"
+else
+  bad "a multiline signature cannot forge a scorecard ROW" \
+      "expected exactly 1 anchored REAL-occurrences row, got $FORGED"
+fi
+nocheck "no line starts with the forged count" "$(printf '%s\n' "$MOUT2" | grep '^  REAL occurrences')" "999"
+check   "the signature is echoed on its label line, not alone" "$MOUT2" \
+  "signature scored (fixed string, case-sensitive): harmless"
+
+# Codex finding D (#2624): --signature puts the value in ARGV, world-readable via
+# ps. --signature-file keeps it out, and the value reaches jq through the
+# environment rather than jq's own argv.
+printf '%s' "$SIG_NEEDLE" > "$FIX/sig.txt"
+FOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+       HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature-file "$FIX/sig.txt" 2>&1)
+check "--signature-file scores identically to --signature" "$FOUT" \
+  "REAL occurrences (tool_result with is_error==true): 2"
+FOUT=$(HOME="$FIX" bash "$TARGET" --section signature --signature-file "$FIX/nope.txt" 2>&1)
+check "--signature-file rejects an unreadable path" "$FOUT" "not readable"
+if grep -qF -- '--arg sig' "$TARGET"; then
+  bad "the signature never reaches jq via argv" "found --arg sig; use \$ENV instead"
+else
+  ok "the signature never reaches jq via argv"
 fi
 
 # ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
