@@ -42,14 +42,12 @@
 
 set -euo pipefail
 
-readonly MARKER_NAME=".claude-worktree-owner"
-readonly LOCK_REF_PREFIX="refs/worktree/claim-locks"
-# Same ~2h window as the issue Claim protocol lease.
-readonly CLAIM_TTL_SECS=$((2 * 60 * 60))
-readonly LOCK_ATTEMPTS=50
-CLAIM_LOCK_WORKTREE=""
-CLAIM_LOCK_REF=""
-CLAIM_LOCK_OID=""
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source=worktree-claim-lib.sh
+. "$SCRIPT_DIR/worktree-claim-lib.sh" || {
+  echo "worktree-claim: cannot load shared claim protocol" >&2
+  exit 2
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -67,131 +65,36 @@ fail() {
   exit 2
 }
 
-utc_now() {
-  date -u +"%Y-%m-%dT%H:%M:%SZ"
-}
-
-# Parse ISO-8601 UTC (…Z) to epoch seconds. Portable: prefer GNU date, fall
-# back to python-free parsing via touch+stat only when needed — keep bash-only.
-iso_to_epoch() {
-  local iso="$1"
-  # GNU date: date -u -d '2026-07-21T07:40:00Z' +%s
-  if date -u -d "$iso" +%s 2>/dev/null; then
-    return 0
-  fi
-  # BSD date (macOS): date -u -j -f '%Y-%m-%dT%H:%M:%SZ' …
-  if date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$iso" +%s 2>/dev/null; then
-    return 0
-  fi
-  return 1
-}
-
 write_marker() {
   local wt="$1" owner="$2"
-  local marker="$wt/$MARKER_NAME"
+  local marker="$wt/$WORKTREE_CLAIM_MARKER_NAME"
   # Atomic-ish write: temp then mv, so a concurrent reader never sees a half
   # file. Do not stage this path — it is per-session state.
   local tmp
   tmp="$(mktemp "$wt/.claude-worktree-owner.XXXXXX")"
-  printf 'owner=%s\ncreated_at=%s\n' "$owner" "$(utc_now)" >"$tmp"
+  printf 'owner=%s\ncreated_at=%s\n' "$owner" "$(worktree_claim_utc_now)" >"$tmp"
   mv -f "$tmp" "$marker"
 }
 
-cleanup_lock() {
-  if [ -n "${CLAIM_LOCK_WORKTREE:-}" ] && [ -n "${CLAIM_LOCK_REF:-}" ] && [ -n "${CLAIM_LOCK_OID:-}" ]; then
-    git -C "$CLAIM_LOCK_WORKTREE" update-ref -d "$CLAIM_LOCK_REF" "$CLAIM_LOCK_OID" >/dev/null 2>&1 || true
-  fi
-  CLAIM_LOCK_WORKTREE=""
-  CLAIM_LOCK_REF=""
-  CLAIM_LOCK_OID=""
-}
-
-trap cleanup_lock EXIT
+trap 'worktree_claim_lock_release >/dev/null 2>&1 || true' EXIT
 trap 'exit 2' HUP INT TERM
 
-read_lock_object() {
-  local wt="$1" oid="$2" data key val
-  LOCK_PID=""
-  LOCK_CREATED_AT=""
-  data="$(git -C "$wt" cat-file blob "$oid" 2>/dev/null)" || return 2
-  while IFS='=' read -r key val; do
-    case "$key" in
-      pid) LOCK_PID="$val" ;;
-      created_at) LOCK_CREATED_AT="$val" ;;
-    esac
-  done <<< "$data"
-}
-
-lock_object_is_stale() {
-  local wt="$1" oid="$2" created_epoch now_epoch age
-  read_lock_object "$wt" "$oid" || return 2
-  case "$LOCK_PID" in
-    '' | *[!0-9]*) ;;
-    *)
-      if ! kill -0 "$LOCK_PID" 2>/dev/null; then
-        return 0
-      fi
-      ;;
-  esac
-  created_epoch="$(iso_to_epoch "$LOCK_CREATED_AT")" || return 2
-  now_epoch="$(date -u +%s)"
-  age=$((now_epoch - created_epoch))
-  [ "$age" -ge "$CLAIM_TTL_SECS" ] && return 0
-  return 1
-}
-
 acquire_lock() {
-  local wt="$1" attempt=0 path_hash ref new_oid zero_oid current_oid="" stale_rc recovered=0
-  # A per-worktree Git ref is the mutex. update-ref's expected-old-OID argument
-  # makes both first acquisition and stale-owner replacement compare-and-swap
-  # operations, so two reapers cannot delete or overwrite the winner's lock.
-  path_hash="$(printf '%s' "$wt" | git -C "$wt" hash-object --stdin)" ||
-    fail "cannot derive ownership lock identity for: $wt"
-  ref="$LOCK_REF_PREFIX/$path_hash"
-  new_oid="$(printf 'pid=%s\ncreated_at=%s\n' "$$" "$(utc_now)" | git -C "$wt" hash-object -w --stdin)" ||
-    fail "cannot write ownership lock metadata for: $wt"
-  zero_oid="$(printf '%*s' "${#new_oid}" '' | tr ' ' 0)"
-
-  while true; do
-    current_oid="$(git -C "$wt" rev-parse -q --verify "$ref" 2>/dev/null || true)"
-    if [ -z "$current_oid" ]; then
-      if git -C "$wt" update-ref "$ref" "$new_oid" "$zero_oid" 2>/dev/null; then
-        break
-      fi
-    else
-      stale_rc=0
-      lock_object_is_stale "$wt" "$current_oid" || stale_rc=$?
-      case "$stale_rc" in
-        0)
-          if git -C "$wt" update-ref "$ref" "$new_oid" "$current_oid" 2>/dev/null; then
-            recovered=1
-            break
-          fi
-          ;;
-        1) ;;
-        2) fail "malformed or unreadable ownership lock ref: $ref" ;;
-      esac
-    fi
-    attempt=$((attempt + 1))
-    if [ "$attempt" -ge "$LOCK_ATTEMPTS" ]; then
-      fail "timed out waiting for ownership lock: $ref"
-    fi
-    sleep 0.1
-  done
-  CLAIM_LOCK_WORKTREE="$wt"
-  CLAIM_LOCK_REF="$ref"
-  CLAIM_LOCK_OID="$new_oid"
-  [ "$recovered" -eq 1 ] && echo "worktree-claim: recovered stale ownership lock: $ref" >&2
+  local wt=$1 rc=0
+  worktree_claim_lock_acquire "$wt" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) fail "timed out waiting for ownership lock: $wt" ;;
+    *) fail "malformed, unreadable, or unavailable ownership lock: $wt" ;;
+  esac
+  [ "$WORKTREE_CLAIM_LOCK_RECOVERED" -eq 1 ] &&
+    echo "worktree-claim: recovered stale ownership lock: $WORKTREE_CLAIM_LOCK_REF" >&2
   return 0
 }
 
 release_lock() {
-  [ -n "${CLAIM_LOCK_WORKTREE:-}" ] && [ -n "${CLAIM_LOCK_REF:-}" ] && [ -n "${CLAIM_LOCK_OID:-}" ] || return 0
-  git -C "$CLAIM_LOCK_WORKTREE" update-ref -d "$CLAIM_LOCK_REF" "$CLAIM_LOCK_OID" 2>/dev/null ||
-    fail "ownership lock changed owner before release: $CLAIM_LOCK_REF"
-  CLAIM_LOCK_WORKTREE=""
-  CLAIM_LOCK_REF=""
-  CLAIM_LOCK_OID=""
+  local ref=${WORKTREE_CLAIM_LOCK_REF:-unknown}
+  worktree_claim_lock_release || fail "ownership lock changed owner before release: $ref"
 }
 
 ignore_marker() {
@@ -200,11 +103,11 @@ ignore_marker() {
   exclude="$(git -C "$wt" rev-parse --git-path info/exclude)" ||
     fail "cannot resolve git exclude file for worktree: $wt"
   mkdir -p "$(dirname "$exclude")"
-  if ! grep -qxF "/$MARKER_NAME*" "$exclude" 2>/dev/null; then
+  if ! grep -qxF "/$WORKTREE_CLAIM_MARKER_NAME*" "$exclude" 2>/dev/null; then
     if [ -s "$exclude" ] && [ -n "$(tail -c 1 "$exclude")" ]; then
       printf '\n' >>"$exclude"
     fi
-    printf '/%s*\n' "$MARKER_NAME" >>"$exclude"
+    printf '/%s*\n' "$WORKTREE_CLAIM_MARKER_NAME" >>"$exclude"
   fi
 }
 
@@ -230,7 +133,7 @@ cmd_acquire() {
   wt="$(cd "$wt" && pwd -P)" || fail "cannot resolve worktree path: $wt"
   acquire_lock "$wt"
   ignore_marker "$wt"
-  local marker="$wt/$MARKER_NAME" action="acquired"
+  local marker="$wt/$WORKTREE_CLAIM_MARKER_NAME" action="acquired"
   read_marker "$marker"
   if [ -e "$marker" ]; then
     if [ -z "${MARKER_OWNER:-}" ] || [ -z "${MARKER_CREATED_AT:-}" ]; then
@@ -240,11 +143,11 @@ cmd_acquire() {
       action="renewed"
     else
       local created_epoch now_epoch age
-      created_epoch="$(iso_to_epoch "$MARKER_CREATED_AT")" ||
+      created_epoch="$(worktree_claim_iso_to_epoch "$MARKER_CREATED_AT")" ||
         fail "unparseable ownership marker timestamp: $MARKER_CREATED_AT"
       now_epoch="$(date -u +%s)"
       age=$((now_epoch - created_epoch))
-      if [ "$age" -lt "$CLAIM_TTL_SECS" ]; then
+      if [ "$age" -lt "$WORKTREE_CLAIM_TTL_SECS" ]; then
         echo "worktree-claim: LIVE foreign claim owner=$MARKER_OWNER created_at=$MARKER_CREATED_AT age=${age}s — stand down" >&2
         release_lock
         exit 3
@@ -291,7 +194,7 @@ cmd_check() {
     echo "worktree-claim: free (path absent)"
     exit 0
   fi
-  local marker="$wt/$MARKER_NAME"
+  local marker="$wt/$WORKTREE_CLAIM_MARKER_NAME"
   read_marker "$marker"
   if [ ! -e "$marker" ]; then
     echo "worktree-claim: free (no live marker)"
@@ -305,11 +208,11 @@ cmd_check() {
     exit 0
   fi
   local created_epoch now_epoch age
-  created_epoch="$(iso_to_epoch "$MARKER_CREATED_AT")" ||
+  created_epoch="$(worktree_claim_iso_to_epoch "$MARKER_CREATED_AT")" ||
     fail "unparseable ownership marker timestamp: $MARKER_CREATED_AT"
   now_epoch="$(date -u +%s)"
   age=$((now_epoch - created_epoch))
-  if [ "$age" -ge "$CLAIM_TTL_SECS" ]; then
+  if [ "$age" -ge "$WORKTREE_CLAIM_TTL_SECS" ]; then
     echo "worktree-claim: free (expired age=${age}s owner=$MARKER_OWNER)"
     exit 0
   fi

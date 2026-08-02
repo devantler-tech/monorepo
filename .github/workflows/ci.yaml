@@ -78,6 +78,7 @@ jobs:
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
             worktree-claim:
+              - '.claude/scripts/worktree-claim-lib.sh'
               - '.claude/scripts/worktree-claim.sh'
               - '.claude/scripts/worktree-claim.test.sh'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
@@ -98,6 +99,7 @@ jobs:
               - '.claude/scripts/branch-cleanup.sh'
               - '.claude/scripts/branch-cleanup.test.sh'
             worktree-cleanup:
+              - '.claude/scripts/worktree-claim-lib.sh'
               - '.claude/scripts/worktree-cleanup.sh'
               - '.claude/scripts/worktree-cleanup-all.sh'
               - '.claude/scripts/worktree-cleanup.test.sh'

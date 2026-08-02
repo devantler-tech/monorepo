@@ -6,6 +6,8 @@ set -Eeuo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script="$here/worktree-claim.sh"
+cleanup_script="$here/worktree-cleanup.sh"
+shared_lib="$here/worktree-claim-lib.sh"
 root_contract="$here/../../AGENTS.md"
 maintenance_contract="$here/../skills/portfolio-maintenance/SKILL.md"
 tmp="$(mktemp -d)"
@@ -187,6 +189,23 @@ contract_rc=0
 grep -qF 'unique to one runtime invocation' "$root_contract" || contract_rc=1
 grep -qF 'unique to one runtime invocation' "$maintenance_contract" || contract_rc=1
 check "contracts require a per-run unique owner token" 0 "$contract_rc"
+
+# ── the claim and cleanup commands must share one mutex protocol ──────────────────
+shared_rc=0
+[ -f "$shared_lib" ] || shared_rc=1
+grep -qF 'worktree-claim-lib.sh' "$script" || shared_rc=1
+grep -qF 'worktree-claim-lib.sh' "$cleanup_script" || shared_rc=1
+grep -qF 'WORKTREE_CLAIM_LOCK_REF_PREFIX' "$shared_lib" 2>/dev/null || shared_rc=1
+grep -qF 'worktree_claim_lock_acquire()' "$shared_lib" 2>/dev/null || shared_rc=1
+check "claim and cleanup source one mutex protocol" 0 "$shared_rc"
+
+# ── caller contracts fail closed on every acquisition error ─────────────────────
+fail_closed_rc=0
+grep -qiF 'only exit 0 authorizes' "$root_contract" || fail_closed_rc=1
+grep -qiF 'only exit 0 authorizes' "$maintenance_contract" || fail_closed_rc=1
+grep -qF 'every non-zero status' "$root_contract" || fail_closed_rc=1
+grep -qF 'every non-zero status' "$maintenance_contract" || fail_closed_rc=1
+check "contracts fail closed on every acquisition error" 0 "$fail_closed_rc"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

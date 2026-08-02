@@ -2320,7 +2320,8 @@ discoverable signal and no claim window applies.) Work there, open the PR, then
 commands). **Immediately before editing any worktree this session did not create**, atomically
 reserve it with `.claude/scripts/worktree-claim.sh acquire <wt> <session-owner-token>`: exit 3 means a
 **live foreign claim** (marker owner ≠ you, `created_at` within ~2h — the same window as an issue
-claim) → stand down and pick another lane; exit 0 means the caller now owns the marker. `check` is
+claim) → stand down and pick another lane. **Only exit 0 authorizes editing; every non-zero status
+(exit 3 or an acquisition/validation failure) means stand down.** `check` is
 read-only diagnosis and does not reserve the worktree. Renew a long-running claim by calling
 `acquire` with the same owner at least hourly. A stale marker must not park a worktree permanently
 (#2284). **Submodule worktree isolation breaks whenever a submodule is initialised** — a
