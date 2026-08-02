@@ -1037,12 +1037,22 @@ if want dispatch; then
         continue
       fi
       ended_on_refusal=0
+      # TERMINAL STATE is required as well as wording. The template set still
+      # accepts unobserved limit types by design — narrowing it to the one
+      # measured form would trade a false positive for a false NEGATIVE, and a
+      # missed refusal restores exactly the blindness this section removes.
+      # The terminal state closes the class instead: measured over the live
+      # corpus, all 17 real refusals terminate `stop_sequence` and NONE
+      # terminate `end_turn`, so a run that finished its turn normally is not a
+      # refusal however its prose reads. Transcripts predating the field carry
+      # an empty $sr and are unaffected, keeping the older fallback intact.
       # Length gate FIRST: the refusal is the entire turn (~60 chars observed).
       # Prose that merely quotes it is far longer, which is what keeps this
       # tool's own evidence out of its own count.
       if [ "${#lastt}" -le 200 ] \
          && printf '%s' "$lastt" | grep -qiE "$DH_RE" \
-         && ! printf '%s' "$lastt" | grep -qiE "$DH_NOT_RE"; then
+         && ! printf '%s' "$lastt" | grep -qiE "$DH_NOT_RE" \
+         && [ "$sr" != "end_turn" ]; then
         ended_on_refusal=1
       fi
       if [ "$ended_on_refusal" -eq 1 ]; then

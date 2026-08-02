@@ -3088,6 +3088,40 @@ CAPOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-capacity" CODEX_HOME="$FIX/nocodex" MONORE
 check "a capacity-worded prose summary stays live" "$CAPOUT" "live ......... 1"
 check "a capacity-worded summary is not truncated" "$CAPOUT" "truncated .... 0"
 
+# CONTROL Y pins the TERMINAL-STATE requirement, which closes the whole
+# unobserved-wildcard class rather than one wildcard at a time. `[a-z0-9 -]*limit`
+# accepts any limit type, so an ordinary summary naming some other limit matched
+# the entire turn. Narrowing the wording to the one measured form ("weekly")
+# would trade this false positive for a false NEGATIVE on a real variant, which
+# is the worse direction — a missed refusal restores exactly the blindness this
+# section exists to remove. Measured instead: all 17 real refusals in the live
+# corpus terminate `stop_sequence`, and NONE terminate `end_turn`.
+mkdir -p "$FIX/dh-otherlimit"
+{ dispatch_rec daily-ai-assistant 2026-08-01T14:30:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T14:30:00.000Z","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"y1","name":"Bash","input":{"command":"echo x"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T14:30:05.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"You've hit your deployment limit."}]}}
+EOF
+} > "$FIX/dh-otherlimit/s.jsonl"
+OLOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-otherlimit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a summary naming another limit type stays live" "$OLOUT" "live ......... 1"
+check "a summary naming another limit is not truncated" "$OLOUT" "truncated .... 0"
+# CONTROL Y2, the over-tightening pair: a REAL refusal terminating stop_sequence
+# must still be caught, or the requirement degenerates into "never a refusal".
+mkdir -p "$FIX/dh-realstop"
+{ dispatch_rec daily-ai-assistant 2026-08-01T14:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T14:00:01.000Z","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+} > "$FIX/dh-realstop/s.jsonl"
+RSOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-realstop" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a real refusal terminating stop_sequence is still dead" "$RSOUT" "dead ......... 1"
+# CONTROL Y3: transcripts predating stop_reason must not silently stop being
+# classified — the requirement applies only where the field exists.
+check "a refusal with NO stop_reason is still classified" "$KOUT" "dead ......... 1"
+
 # CONTROL X pins the CAP-DIVERGENCE trigger. The population caveat was
 # conditional on other ROLES being present, but the two populations are capped
 # INDEPENDENTLY — so sidechains alone can evict roots from the numerator corpus
