@@ -17,6 +17,7 @@
 # USAGE
 #   .claude/scripts/worktree-claim.sh add  <repo_path> <worktree_path> <branch> <owner-slug>
 #       Create the worktree (git worktree add -b <branch>) and write the marker.
+#       A relative worktree_path is resolved from repo_path.
 #   .claude/scripts/worktree-claim.sh check <worktree_path> <my-owner-slug>
 #       Read-only diagnostic: exit 0 if free / mine / expired; exit 3 if a live
 #       foreign claim exists. This does not reserve the worktree.
@@ -96,7 +97,12 @@ write_marker() {
 
 cleanup_lock() {
   if [ -n "${CLAIM_LOCK_DIR:-}" ]; then
-    rmdir "$CLAIM_LOCK_DIR" 2>/dev/null || true
+    local lock_pid=""
+    [ -f "$CLAIM_LOCK_DIR/pid" ] && lock_pid="$(sed -n '1p' "$CLAIM_LOCK_DIR/pid")"
+    if [ -z "$lock_pid" ] || [ "$lock_pid" = "$$" ]; then
+      rm -f "$CLAIM_LOCK_DIR/pid" "$CLAIM_LOCK_DIR/created_at" 2>/dev/null || true
+      rmdir "$CLAIM_LOCK_DIR" 2>/dev/null || true
+    fi
     CLAIM_LOCK_DIR=""
   fi
 }
@@ -104,10 +110,72 @@ cleanup_lock() {
 trap cleanup_lock EXIT
 trap 'exit 2' HUP INT TERM
 
+path_mtime_epoch() {
+  local path="$1"
+  stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null
+}
+
+lock_is_stale() {
+  local lock="$1" pid="" created_at="" created_epoch="" now_epoch age mtime_epoch=""
+  [ -f "$lock/pid" ] && pid="$(sed -n '1p' "$lock/pid")"
+  [ -f "$lock/created_at" ] && created_at="$(sed -n '1p' "$lock/created_at")"
+
+  case "$pid" in
+    '' | *[!0-9]*) ;;
+    *)
+      if ! kill -0 "$pid" 2>/dev/null; then
+        return 0
+      fi
+      ;;
+  esac
+
+  if [ -n "$created_at" ]; then
+    created_epoch="$(iso_to_epoch "$created_at")" || created_epoch=""
+  fi
+  now_epoch="$(date -u +%s)"
+  if [ -n "$created_epoch" ]; then
+    age=$((now_epoch - created_epoch))
+    [ "$age" -ge "$CLAIM_TTL_SECS" ] && return 0
+  fi
+
+  # A crash can happen after mkdir and before metadata is written. The lock
+  # directory mtime is the fail-safe lease clock for that narrow window.
+  mtime_epoch="$(path_mtime_epoch "$lock")" || mtime_epoch=""
+  if [ -n "$mtime_epoch" ]; then
+    age=$((now_epoch - mtime_epoch))
+    [ "$age" -ge "$CLAIM_TTL_SECS" ] && return 0
+  fi
+  return 1
+}
+
+reclaim_stale_lock() {
+  local lock="$1" before_pid="" before_created_at="" after_pid="" after_created_at=""
+  lock_is_stale "$lock" || return 1
+  [ -f "$lock/pid" ] && before_pid="$(sed -n '1p' "$lock/pid")"
+  [ -f "$lock/created_at" ] && before_created_at="$(sed -n '1p' "$lock/created_at")"
+
+  # Re-read immediately before removal so a lock replaced by another claimant
+  # is never reaped using an earlier owner's stale observation.
+  lock_is_stale "$lock" || return 1
+  [ -f "$lock/pid" ] && after_pid="$(sed -n '1p' "$lock/pid")"
+  [ -f "$lock/created_at" ] && after_created_at="$(sed -n '1p' "$lock/created_at")"
+  [ "$before_pid" = "$after_pid" ] && [ "$before_created_at" = "$after_created_at" ] || return 1
+
+  rm -f "$lock/pid" "$lock/created_at" 2>/dev/null || return 1
+  if rmdir "$lock" 2>/dev/null; then
+    echo "worktree-claim: recovered stale ownership lock: $lock" >&2
+    return 0
+  fi
+  return 1
+}
+
 acquire_lock() {
   local wt="$1" attempt=0
   local lock="$wt/$LOCK_NAME"
   while ! mkdir "$lock" 2>/dev/null; do
+    if reclaim_stale_lock "$lock"; then
+      continue
+    fi
     attempt=$((attempt + 1))
     if [ "$attempt" -ge "$LOCK_ATTEMPTS" ]; then
       fail "timed out waiting for ownership lock: $lock"
@@ -115,11 +183,17 @@ acquire_lock() {
     sleep 0.1
   done
   CLAIM_LOCK_DIR="$lock"
+  printf '%s\n' "$$" >"$lock/pid"
+  printf '%s\n' "$(utc_now)" >"$lock/created_at"
 }
 
 release_lock() {
   local lock="${CLAIM_LOCK_DIR:-}"
   [ -n "$lock" ] || return 0
+  local lock_pid=""
+  [ -f "$lock/pid" ] && lock_pid="$(sed -n '1p' "$lock/pid")"
+  [ "$lock_pid" = "$$" ] || fail "ownership lock changed owner before release: $lock"
+  rm -f "$lock/pid" "$lock/created_at" || fail "cannot remove ownership lock metadata: $lock"
   rmdir "$lock" || fail "cannot release ownership lock: $lock"
   CLAIM_LOCK_DIR=""
 }
@@ -191,6 +265,12 @@ cmd_add() {
   local repo="$1" wt="$2" branch="$3" owner="$4"
   [ -d "$repo" ] || fail "repo path is not a directory: $repo"
   [ -n "$wt" ] && [ -n "$branch" ] && [ -n "$owner" ] || usage
+  local repo_abs
+  repo_abs="$(cd "$repo" && pwd -P)" || fail "cannot resolve repo path: $repo"
+  case "$wt" in
+    /*) ;;
+    *) wt="$repo_abs/$wt" ;;
+  esac
   if [ -e "$wt" ]; then
     fail "worktree path already exists: $wt"
   fi

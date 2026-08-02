@@ -50,6 +50,13 @@ check "marker created_at present" 0 0 "$created_line" "created_at="
 status_lines="$(git -C "$wt" status --porcelain --untracked-files=all)"
 check "marker leaves worktree clean" "" "$status_lines"
 
+# ── add resolves a relative worktree path from the repository ──────────────────────
+relative_wt=".claim-relative-wt"
+rc=0
+out="$(cd "$tmp" && "$script" add "repo" "$relative_wt" "claim-branch-relative" "session-relative" 2>&1)" || rc=$?
+check "relative add succeeds" 0 "$rc" "$out" "owner=session-relative"
+check "relative marker is repo-relative" 0 "$([ -f "$repo/$relative_wt/.claude-worktree-owner" ] && echo 0 || echo 1)"
+
 # ── check: mine ────────────────────────────────────────────────────────────
 out="$("$script" check "$wt" "session-alpha" 2>&1)"
 rc=$?
@@ -88,6 +95,17 @@ printf 'owner=session-beta\ncreated_at=not-a-timestamp\n' >"$wt/.claude-worktree
 rc=0
 out="$("$script" acquire "$wt" "session-other" 2>&1)" || rc=$?
 check "malformed foreign marker fails closed" 2 "$rc" "$out" "unparseable"
+
+# ── acquire recovers a lock whose owner process is gone ────────────────────────────
+stale="$tmp/stale-lock-wt"
+git -C "$repo" worktree add -q -b "claim-branch-stale-lock" "$stale"
+mkdir "$stale/.claude-worktree-owner.lock"
+printf '999999999\n' >"$stale/.claude-worktree-owner.lock/pid"
+printf '%s\n' "$old" >"$stale/.claude-worktree-owner.lock/created_at"
+rc=0
+out="$("$script" acquire "$stale" "session-after-crash" 2>&1)" || rc=$?
+check "acquire recovers stale process lock" 0 "$rc" "$out" "owner=session-after-crash"
+check "recovered lock is released" 0 "$([ ! -e "$stale/.claude-worktree-owner.lock" ] && echo 0 || echo 1)"
 
 # ── acquire: concurrent claimants have exactly one winner ────────────────────────
 race="$tmp/race-wt"
