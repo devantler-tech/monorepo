@@ -3323,16 +3323,52 @@ check "--section signature without --signature is an error" "$OUT" \
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" HOME="$FIX" bash "$TARGET" --section signature --signature '' 2>&1)
 check "an empty --signature is rejected" "$OUT" "must not be empty"
 
+# A single record can carry SEVERAL tool_result blocks. Counting blocks while
+# the control counts records lets the "superset" fall BELOW its own subset — the
+# exact confound this section exists to remove. Self-review caught this; the
+# original fixture had one block per record and could never have shown it.
+mkdir -p "$FIX/sigmulti"
+printf '{"type":"user","timestamp":"%s","sessionId":"s-multi","message":{"content":[{"type":"tool_result","tool_use_id":"m1","is_error":true,"content":[{"type":"text","text":"%s"}]},{"type":"tool_result","tool_use_id":"m2","is_error":true,"content":[{"type":"text","text":"%s"}]}]}}\n' \
+  "$SIG_NOW" "$SIG_NEEDLE_J" "$SIG_NEEDLE_J" > "$FIX/sigmulti/sess.jsonl"
+MOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigmulti" CODEX_HOME="$FIX/nocodex" \
+       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --max-files 50 \
+         --section signature --signature "$SIG_NEEDLE" 2>&1)
+check "two errored blocks in ONE record count as one occurrence" "$MOUT" \
+  "REAL occurrences (tool_result with is_error==true): 1"
+M_REAL=$(printf '%s' "$MOUT" | sed -n 's/.*is_error==true): //p')
+M_ANY=$(printf '%s' "$MOUT"  | sed -n 's/.*any context \.*: \([0-9]*\).*/\1/p')
+if [ "$M_ANY" -ge "$M_REAL" ] && [ "$M_REAL" -gt 0 ]; then
+  ok "superset invariant survives a multi-block record"
+else
+  bad "superset invariant survives a multi-block record" "any=$M_ANY real=$M_REAL"
+fi
+
 # ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
 # A guard that passes when removed is not a guard. Each arm copies the target,
 # removes exactly one filter, asserts the copy actually CHANGED, and requires the
 # count to move. `cp` only — never git — so a failed arm cannot lose work.
-ablate() { # $1=label  $2=sed-expr  $3=expected-count-after  $4=days
-  local lbl="$2" ab="$FIX/ablate.sh"
+ablate() { # $1=sed-expr $2=label $3=expected-count-after $4=days $5=expected-changed-lines
+  local ab="$FIX/ablate.sh" changed
   cp "$TARGET" "$ab"
   sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
   if cmp -s "$TARGET" "$ab"; then
-    bad "ablation[$2]" "sed changed nothing — the arm proves nothing"
+    bad "ablation: $2" "sed changed nothing — the arm proves nothing"
+    return
+  fi
+  # An arm must remove THE filter under test, not merely change the file. The
+  # first version of arm A matched a line in another section after this jq was
+  # reshaped: the copy differed, so the arm looked live, while the filter it
+  # claimed to ablate was untouched and the count never moved. Requiring exactly
+  # one changed line makes a mis-aimed sed fail loudly instead of passing.
+  # The expected line count is stated per arm, never assumed: a filter can
+  # legitimately live in more than one walk (the timestamp filter guards both
+  # the real count and its control), and "1" would then be wrong rather than
+  # strict. Stating it is what makes a mis-aimed sed distinguishable from a
+  # filter that genuinely appears twice.
+  changed=$(diff "$TARGET" "$ab" | grep -c '^<')
+  if [ "$changed" -ne "${5:-1}" ]; then
+    bad "ablation: $2" "sed changed $changed lines, expected ${5:-1} — arm is mis-aimed"
     return
   fi
   local aout; aout=$(sigrun "$ab" "${4:-3650}")
@@ -3344,11 +3380,16 @@ ablate() { # $1=label  $2=sed-expr  $3=expected-count-after  $4=days
 }
 # Arm A — drop the is_error filter: the documentation read must become counted
 # (2 -> 3). This is the contamination the section exists to exclude.
-ablate 's/and \.is_error==true)/)/' "removing is_error lets a documentation read count" 3
+# Anchored at end-of-line so it hits ONLY the signature walk's own filter — the
+# reliability section's `... and .is_error==true)` ends in a paren and is spared.
+ablate 's/\.type=="tool_result" and \.is_error==true$/.type=="tool_result"/' \
+  "removing is_error lets a documentation read count" 3
 # Arm B — drop the record-timestamp filter in the 1-day window: the 2026-06-01
 # failure must reappear (1 -> 2), proving mtime is not what bounds the window.
+# The timestamp filter guards BOTH the real walk and its unfiltered control, so
+# this arm legitimately touches two lines — stated, not assumed.
 ablate 's/select($ts != "" and $ts >= $since)/select($ts != "" or true)/' \
-  "removing the timestamp filter lets an out-of-window record count" 2 1
+  "removing the timestamp filter lets an out-of-window record count" 2 1 2
 
 echo
 echo "──────────────────────────────"

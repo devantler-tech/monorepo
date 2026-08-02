@@ -1238,8 +1238,9 @@ fi
 #      the corpus in a record shaped almost exactly like the thing being detected.
 # (3) is self-reinforcing: the better a defect is documented, the more
 # occurrences its detector reports, so a FIXED defect can never read as fixed.
-# Measured on `Unknown JSON field`: 80 bare-grep records vs 5 real errors — 94%
-# contamination, in the direction that HIDES a successful fix.
+# Measured here on the live corpus, 7d window, `Unknown JSON field: "merged"`:
+# 58 records contain the string, 2 are real failures — 97% of the naive count is
+# noise, in the direction that HIDES a successful fix.
 #
 # Two filters make the count mean what it says:
 #   * `is_error==true` on a `tool_result` — a documentation read that merely
@@ -1264,6 +1265,15 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
     echo "  (no Claude sessions in window)"
   else
     # One row per REAL occurrence: "<record timestamp>\t<sessionId>".
+    #
+    # The unit is the RECORD, not the content block. One transcript record can
+    # carry several `tool_result` blocks, so a per-block count could exceed the
+    # unfiltered per-record control below and break the superset invariant the
+    # two numbers are compared on — a "control" smaller than its own subset is
+    # the confound this section exists to remove, so both sides count records.
+    # `any` short-circuits at the first matching block, which is also what makes
+    # the record the unit rather than merely deduplicating one.
+    #
     # `contains` is a fixed-string test, never a regex — a signature carrying
     # regex metacharacters (`"` and `:` are common in these) must match itself
     # literally rather than being reinterpreted.
@@ -1275,13 +1285,16 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
         | (.timestamp // "") as $ts
         | select($ts != "" and $ts >= $since)
         | (.sessionId // "unknown") as $sid
-        | .message.content
-        | select(type=="array")
-        | .[]
-        | select(.type=="tool_result" and .is_error==true)
-        | (.content | if type=="array" then (map(select(.type=="text").text)|join(" "))
-                      elif type=="string" then . else (.|tostring) end) as $msg
-        | select($msg | contains($sig))
+        | select(
+            (.message.content // empty)
+            | select(type=="array")
+            | any(
+                .type=="tool_result" and .is_error==true
+                and ((.content | if type=="array" then (map(select(.type=="text").text)|join(" "))
+                                 elif type=="string" then . else (.|tostring) end)
+                     | contains($sig))
+              )
+          )
         | "\($ts)\t\($sid)"
       ' "$f" 2>/dev/null
     done | redact > "$SIGTMP" || true
