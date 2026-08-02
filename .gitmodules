@@ -54,9 +54,9 @@
 	path = libraries/agent-plugins
 	url = git@github.com:devantler-tech/agent-plugins.git
 	branch = main
-[submodule "templates/gitops-tenant-template"]
-	path = templates/gitops-tenant-template
-	url = git@github.com:devantler-tech/gitops-tenant-template.git
+[submodule "templates/platform-tenant-template"]
+	path = templates/platform-tenant-template
+	url = git@github.com:devantler-tech/platform-tenant-template.git
 	branch = main
 [submodule "templates/platform-template"]
 	path = templates/platform-template

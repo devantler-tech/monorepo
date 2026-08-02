@@ -22,7 +22,7 @@ keeping them healthy *and* moving them forward.
 | devantler.tech site | `devantler-tech/monorepo` | `docs/` + repo root | this file |
 | Go template | `devantler-tech/go-template` | `templates/go-template` | [AGENTS.md](https://github.com/devantler-tech/go-template/blob/main/AGENTS.md) |
 | .NET template | `devantler-tech/dotnet-template` | `templates/dotnet-template` | [AGENTS.md](https://github.com/devantler-tech/dotnet-template/blob/main/AGENTS.md) |
-| GitOps-tenant template | `devantler-tech/gitops-tenant-template` | `templates/gitops-tenant-template` | [AGENTS.md](https://github.com/devantler-tech/gitops-tenant-template/blob/main/AGENTS.md) |
+| Platform-tenant template | `devantler-tech/platform-tenant-template` | `templates/platform-tenant-template` | [AGENTS.md](https://github.com/devantler-tech/platform-tenant-template/blob/main/AGENTS.md) |
 | Platform template | `devantler-tech/platform-template` | `templates/platform-template` | [AGENTS.md](https://github.com/devantler-tech/platform-template/blob/main/AGENTS.md) |
 | GitHub Actions | `devantler-tech/actions` | `github/devantler-tech/github-actions/actions` | [AGENTS.md](https://github.com/devantler-tech/actions/blob/main/AGENTS.md) |
 | Reusable Workflows | `devantler-tech/reusable-workflows` (**archived 2026-07-10** — merged into `devantler-tech/actions`, whose `.github/workflows` now hosts them) | — (legacy submodule pin removed 2026-07-11) | [AGENTS.md](https://github.com/devantler-tech/actions/blob/main/AGENTS.md) |
@@ -100,7 +100,7 @@ no row are filed on the **default intake repo** below.
 | AI assistant plugin bundles | Bundling skills into installable plugins / marketplace entries for VS Code, Copilot CLI, Claude Code | `devantler-tech/agent-plugins` |
 | Go project template | The starter template new Go repositories are created from | `devantler-tech/go-template` |
 | .NET project template | The starter template new .NET repositories are created from | `devantler-tech/dotnet-template` |
-| GitOps tenant template | The starter template new platform-tenant (GitOps) repositories are created from | `devantler-tech/gitops-tenant-template` |
+| Platform tenant template | The starter template new platform-tenant repositories are created from | `devantler-tech/platform-tenant-template` |
 | Platform template | The starter template new platform repositories are created from | `devantler-tech/platform-template` |
 | UniFi home network | Changing THIS suite's deployed UniFi network — SSIDs, VLANs, firewall rules, device and VPN config | `devantler-tech/unifi` |
 | UniFi Crossplane provider | Developing the Crossplane provider library itself (new resource support, codegen, provider bugs) | `devantler-tech/provider-upjet-unifi` |
@@ -2361,7 +2361,7 @@ and the same applies to `Write` over a file that already exists there.
 **`git submodule update --init <path>` is what (re-)introduces it** — reproduced 2026-07-14 on a
 submodule that was verified fixed: the key was absent before the command and present after. This is why
 "the fix does not stay fixed" (`applications/ksail` regressed 2026-07-14, silently colliding three live
-worktrees — two of them the sibling agent's; `templates/gitops-tenant-template` regressed the same day).
+worktrees — two of them the sibling agent's; `templates/platform-tenant-template` regressed the same day).
 The init command is *required* to populate a submodule, so **initialising and repairing are one
 operation, never two**:
 
