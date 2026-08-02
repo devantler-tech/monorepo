@@ -3070,6 +3070,49 @@ nocheck "ON: the disabled notice is gone"              "$GATE_ON" "set DISPATCH_
 # deliberately different knobs.
 nocheck "an explicit --section cannot activate it"     "$GATE_OFF" "live ........."
 
+# CONTROL W pins the last WILDCARD in the template set. `capacity constraints
+# prevent[a-z ]*` was inherited, and whole-turn anchoring is what made its
+# trailing wildcard dangerous — with both anchors it still swallows an entire
+# ordinary sentence. It has also never matched a real refusal: every occurrence
+# of that phrase in the live corpus is this tool's own prose ABOUT the pattern,
+# which is exactly the self-reference the length gate exists to survive.
+mkdir -p "$FIX/dh-capacity"
+{ dispatch_rec daily-ai-assistant 2026-08-01T16:30:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T16:30:00.000Z","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"w1","name":"Bash","input":{"command":"echo x"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T16:30:05.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Capacity constraints prevented this deployment."}]}}
+EOF
+} > "$FIX/dh-capacity/s.jsonl"
+CAPOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-capacity" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+         DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a capacity-worded prose summary stays live" "$CAPOUT" "live ......... 1"
+check "a capacity-worded summary is not truncated" "$CAPOUT" "truncated .... 0"
+
+# CONTROL X pins the CAP-DIVERGENCE trigger. The population caveat was
+# conditional on other ROLES being present, but the two populations are capped
+# INDEPENDENTLY — so sidechains alone can evict roots from the numerator corpus
+# with zero other-role transcripts, which is precisely when the caveat was
+# suppressed. One root plus two newer sidechains at --max-files 2 reproduces it.
+mkdir -p "$FIX/dh-capdiv/subagents"
+{ dispatch_rec daily-ai-assistant 2026-08-01T12:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T12:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"echo root"}}]}}
+EOF
+} > "$FIX/dh-capdiv/root.jsonl"
+sleep 1
+cat > "$FIX/dh-capdiv/subagents/a.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T12:01:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"x2","name":"Bash","input":{"command":"echo sub"}}]}}
+EOF
+cat > "$FIX/dh-capdiv/subagents/b.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T12:02:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"x3","name":"Bash","input":{"command":"echo sub"}}]}}
+EOF
+CDOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-capdiv" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --max-files 2 --section dispatch 2>&1)
+check "the caveat fires on cap divergence with no other roles" "$CDOUT" "POPULATION MISMATCH"
+# Paired control: with no cap pressure and no other roles there is nothing to
+# warn about, or the caveat degenerates into unconditional noise.
+nocheck "no caveat when neither cap nor other roles diverge" "$COUT" "POPULATION MISMATCH"
+
 echo
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"

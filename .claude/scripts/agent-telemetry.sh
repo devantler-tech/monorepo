@@ -954,7 +954,16 @@ if want dispatch; then
     # is how a precise rule silently becomes a substring match again.
     # It is a literal rather than a bracket class — a multi-byte character inside
     # `[...]` is not portable across BSD and GNU grep.
-    DH_TPL="you've hit your [a-z0-9 -]*limit|you’ve hit your [a-z0-9 -]*limit|youve hit your [a-z0-9 -]*limit|usage limit reached|claude usage limit reached|this (account|organization) is out of (credits|usage)|capacity constraints prevent[a-z ]*"
+    # `capacity constraints prevent[a-z ]*` was here and is REMOVED. Whole-turn
+    # anchoring is what made its trailing wildcard dangerous — with both anchors
+    # it still swallowed an entire ordinary sentence ("Capacity constraints
+    # prevented this deployment."). And it never earned its place: every
+    # occurrence of that phrase in the live corpus is this tool's own prose about
+    # the pattern, never a terminal refusal. An unobserved template that has
+    # twice been a hole is not defence in depth, it is surface. If the provider
+    # ever emits one, it will show up as a misclassified dispatch and the
+    # measured wording can be added then.
+    DH_TPL="you've hit your [a-z0-9 -]*limit|you’ve hit your [a-z0-9 -]*limit|youve hit your [a-z0-9 -]*limit|usage limit reached|claude usage limit reached|this (account|organization) is out of (credits|usage)"
     DH_TAIL='([[:space:]]*·[^.;]*)?[[:space:]]*\.?$'
     DH_RE="^($DH_TPL)$DH_TAIL"
     DH_NOT_RE='(rate limit|rate-limit|review limit|quota exceeded for)'
@@ -1088,7 +1097,11 @@ EOF
     # Stated wherever the mismatch EXISTS, not only alongside the no-evidence
     # warning: the denominator guidance is equally wrong in a healthy window, and
     # that is exactly where a reader trusts the rates without re-deriving them.
-    if [ $((DH_OTHERROLE + DH_NOREC)) -gt 0 ]; then
+    # Fires on EITHER divergence source. Conditioning it on other roles alone
+    # suppressed it exactly when the independent caps diverge on their own:
+    # sidechains can evict roots from the numerator corpus with zero other-role
+    # transcripts present, which is the case the caveat most needs to cover.
+    if [ $((DH_OTHERROLE + DH_NOREC)) -gt 0 ] || [ "$SF_COUNT" -ge "$MAX_FILES" ] || [ "$DH_ROOTS" -ge "$MAX_FILES" ]; then
       printf '  POPULATION MISMATCH: every numerator in this report is NOT role-filtered.\n'
       printf '    These buckets cover only the %s dispatches of role "%s";\n' "$DH_TOTAL" "$DH_ROLE"
       printf '    the numerators cover a SEPARATELY capped set of up to %s files mixing\n' "$MAX_FILES"
