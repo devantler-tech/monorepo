@@ -13,7 +13,7 @@
 #   `agentic-engineering` plugin's `agent-improver` → "Ingestion boundary".
 #
 # Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME]
-#                           [--signature STRING | --signature-file PATH]
+#                           [--signature STRING]
 #                           [--injection-provenance] [--credential-provenance]
 set -uo pipefail
 
@@ -22,7 +22,6 @@ MAX_FILES=400
 SECTION=all
 SIGNATURE=""
 SIGNATURE_SET=0
-SIGNATURE_FROM_FILE=0
 INJECTION_PROVENANCE=0
 CREDENTIAL_PROVENANCE=0
 CREDENTIAL_SCAN_BATCH_FILES="${CREDENTIAL_SCAN_BATCH_FILES:-128}"
@@ -47,20 +46,6 @@ while [ $# -gt 0 ]; do
     # occurrences of a defect. SIGNATURE_SET distinguishes "not asked for" from
     # "asked for with a bad value" so the empty case fails loudly.
     --signature)  need_val "$@"; SIGNATURE="$2"; SIGNATURE_SET=1; shift 2 ;;
-    # ⚠️ `--signature` puts the value in this process's ARGV, which is readable
-    # by any local user (`ps`, /proc/<pid>/cmdline). Failed tool results can
-    # carry commands and tokens, so a caller scoring one must not be forced to
-    # expose it: `--signature-file` reads it from a file instead, and the value
-    # reaches jq through the ENVIRONMENT rather than jq's own argv. Neither
-    # stdout redaction nor the 0600 scratch file protects process arguments.
-    --signature-file)
-      need_val "$@"
-      [ -r "$2" ] || { echo "--signature-file is not readable" >&2; exit 2; }
-      SIGNATURE_FROM_FILE=1
-      # Command substitution strips ALL trailing newlines, which is the wanted
-      # behaviour for a file an editor terminated. Interior bytes are preserved,
-      # so a genuinely multi-line signature still matches exactly.
-      SIGNATURE=$(printf '%s' "$(cat -- "$2")"); SIGNATURE_SET=1; shift 2 ;;
     --injection-provenance) INJECTION_PROVENANCE=1; shift ;;
     --credential-provenance) CREDENTIAL_PROVENANCE=1; shift ;;
     -h|--help)    sed -n '2,17p' "$0"; exit 0 ;;
@@ -75,7 +60,13 @@ case "$MAX_FILES"  in ''|*[!0-9]*) echo "--max-files must be an integer"  >&2; e
 # "(no sessions in window)" — an explicitly empty scan rendered as evidence that
 # nothing happened. Reject it: this tool must never present absence of evidence
 # as evidence of absence.
-case "$MAX_FILES" in 0) echo "--max-files must be at least 1 (0 scans nothing and would report an empty corpus as 'no sessions')" >&2; exit 2 ;; esac
+# Compared NUMERICALLY, not against the literal "0": `00` passes the digit test,
+# and an exact-string guard missed it while `head -n 00` still empties every file
+# set. Any zero-valued form must be rejected, however it is spelled.
+if [ "$MAX_FILES" -eq 0 ] 2>/dev/null; then
+  echo "--max-files must be at least 1 (a zero cap scans nothing and would report an empty corpus as 'no sessions')" >&2
+  exit 2
+fi
 case "$CREDENTIAL_SCAN_BATCH_FILES" in
   ''|*[!0-9]*) echo "CREDENTIAL_SCAN_BATCH_FILES must be a positive integer" >&2; exit 2 ;;
   *[1-9]*) ;;
@@ -97,7 +88,7 @@ esac
 # report: a hypothesis scored against a silently-absent signature would read
 # `0 occurrences` and be recorded as a fix that worked.
 if [ "$SECTION" = signature ] && [ "$SIGNATURE_SET" -eq 0 ]; then
-  echo "--section signature requires --signature STRING or --signature-file PATH" >&2; exit 2
+  echo "--section signature requires --signature STRING" >&2; exit 2
 fi
 if [ "$SIGNATURE_SET" -eq 1 ] && [ -z "$SIGNATURE" ]; then
   echo "--signature must not be empty" >&2; exit 2
@@ -1422,20 +1413,15 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
     # row to a line-oriented consumer. With the label first, no line can BEGIN
     # with a metric shape unless it is one, so a consumer can anchor (`^  REAL`)
     # and the value can never masquerade as a row.
-    # A file-supplied signature is NEVER echoed. `--signature-file` exists so a
-    # caller need not expose a sensitive value, and `redact` only recognises a
-    # fixed set of credential shapes — an arbitrary password or unsupported
-    # token format would pass through unchanged. Identify it by digest instead,
-    # which still lets two runs be compared without disclosing the needle.
-    if [ "$SIGNATURE_FROM_FILE" -eq 1 ]; then
-      _sigdig=$(printf '%s' "$SIGNATURE" | shasum -a 256 2>/dev/null | cut -c1-12)
-      printf '  signature scored: <from file, not echoed> sha256:%s len=%s\n' \
-        "${_sigdig:-unavailable}" "$(printf '%s' "$SIGNATURE" | wc -c | tr -d ' ')"
-    else
-      printf '  signature scored (fixed string, case-sensitive): %s\n' \
-        "$(printf '%s' "$SIGNATURE" | tr '\n\r\t' '   ' | redact \
-           | sed -E 's/[[:cntrl:]]+/ /g' | tr -d '\n' | cut -c1-100)"
-    fi
+    # ⚠️ `--signature` places the value in this process's ARGV, which any local
+    # user can read. That is acceptable for an error-shape needle and is the
+    # documented tradeoff; a protected input path belongs with the Go migration
+    # (#2629), where a file or FD can be handled with real error handling. A
+    # Bash `--signature-file` was tried here and generated more defects than it
+    # closed (see #2624 rounds 4-6), so it was removed rather than patched again.
+    printf '  signature scored (fixed string, case-sensitive): %s\n' \
+      "$(printf '%s' "$SIGNATURE" | tr '\n\r\t' '   ' | redact \
+         | sed -E 's/[[:cntrl:]]+/ /g' | tr -d '\n' | cut -c1-100)"
     echo "  window: records at or after ${SIG_SINCE}   (record timestamps, not file mtime)"
     echo
     echo "  REAL occurrences (tool_result with is_error==true): ${SIG_OCC}"

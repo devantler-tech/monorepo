@@ -3488,14 +3488,14 @@ check   "the signature is echoed on its label line, not alone" "$MOUT2" \
 # Codex finding D (#2624): --signature puts the value in ARGV, world-readable via
 # ps. --signature-file keeps it out, and the value reaches jq through the
 # environment rather than jq's own argv.
-printf '%s' "$SIG_NEEDLE" > "$FIX/sig.txt"
-FOUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
-       HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 \
-         --section signature --signature-file "$FIX/sig.txt" 2>&1)
-check "--signature-file scores identically to --signature" "$FOUT" \
-  "REAL occurrences (tool_result with is_error==true): 2"
-FOUT=$(HOME="$FIX" bash "$TARGET" --section signature --signature-file "$FIX/nope.txt" 2>&1)
-check "--signature-file rejects an unreadable path" "$FOUT" "not readable"
+# `--signature-file` was REMOVED (see #2624 rounds 4-6): added in Bash to close an
+# argv-exposure finding, it went on to generate five findings of its own — mixed
+# input modes mislabelling provenance, `cat` leaking a path to stderr ahead of the
+# redaction boundary, a CRLF terminator silently changing the needle, and an
+# oversized value failing exec into a zero count. A protected input path belongs
+# with the Go migration (#2629). This asserts it is gone rather than half-present.
+FOUT=$(HOME="$FIX" bash "$TARGET" --section signature --signature-file /dev/null 2>&1)
+check "--signature-file is no longer accepted" "$FOUT" "unknown argument"
 if grep -qF -- '--arg sig' "$TARGET"; then
   bad "the signature never reaches jq via argv" "found --arg sig; use \$ENV instead"
 else
@@ -3507,8 +3507,12 @@ fi
 # protected value leaking anyway.
 # (4) a zero cap empties every file set, so each section reported "no sessions"
 #     for an explicitly empty scan. Affects all five call sites, not just this one.
-OUT=$(HOME="$FIX" bash "$TARGET" --max-files 0 --section signature --signature 'x' 2>&1)
-check "--max-files 0 is rejected, not reported as an empty corpus" "$OUT" "must be at least 1"
+# NUMERIC comparison: `00` passes the digit test and an exact-string guard missed
+# it, while `head -n 00` still empties every file set (Codex round 6).
+for _z in 0 00 000; do
+  OUT=$(HOME="$FIX" bash "$TARGET" --max-files "$_z" --section signature --signature 'x' 2>&1)
+  check "--max-files $_z is rejected, not reported as an empty corpus" "$OUT" "must be at least 1"
+done
 # paired control: a positive cap still works
 OUT=$(sigrun); check "a positive --max-files still scans" "$OUT" \
   "REAL occurrences (tool_result with is_error==true): 2"
@@ -3520,15 +3524,7 @@ check "an oversized signature is rejected before scanning" "$OUT" "the limit is 
 nocheck "an oversized signature never reports a zero count" "$OUT" "REAL occurrences"
 # (1) --signature-file exists so a sensitive value need not be exposed; echoing
 #     it back defeats that, and `redact` only knows a fixed set of shapes.
-printf 'hunter2-not-a-known-credential-shape' > "$FIX/secret.txt"
-OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
-      HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 50 \
-        --section signature --signature-file "$FIX/secret.txt" 2>&1)
-nocheck "a file-supplied signature is never echoed" "$OUT" "hunter2"
-check   "a file-supplied signature is identified by digest" "$OUT" "<from file, not echoed> sha256:"
-# paired control: an inline signature IS still echoed, or the digest path would
-# silently swallow the ordinary case too.
-OUT=$(sigrun); check "an inline signature is still echoed" "$OUT" \
+OUT=$(sigrun); check "an inline signature is echoed on its label line" "$OUT" \
   "signature scored (fixed string, case-sensitive):"
 
 # ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
