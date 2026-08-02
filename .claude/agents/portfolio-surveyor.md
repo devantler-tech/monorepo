@@ -567,7 +567,7 @@ names only products; flag map drift only when a product row's repo is missing or
 set, and a product row the map itself marks **archived** — e.g. `reusable-workflows` — is an
 intentional tombstone, never drift.) The list:
 `ksail`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
-`gitops-tenant-template`, `platform-template`, `actions`, `homebrew-tap`, `agent-skills`,
+`platform-tenant-template`, `platform-template`, `actions`, `homebrew-tap`, `agent-skills`,
 `agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`,
 `world-at-ruin`, `wedding-app` (private), `ascoachingogvaner` (private), `unifi` (private).
 Archived repos (currently `reusable-workflows`, `data-product`) are read-only: skip them entirely —

@@ -13,7 +13,7 @@
     "github.com/devantler-tech/provider-upjet-unifi",
     "github.com/devantler-tech/go-template",
     "github.com/devantler-tech/dotnet-template",
-    "github.com/devantler-tech/gitops-tenant-template",
+    "github.com/devantler-tech/platform-tenant-template",
     "github.com/devantler-tech/platform-template",
     "github.com/devantler-tech/unifi",
     "github.com/devantler-tech/.github",
