@@ -897,8 +897,13 @@ if want dispatch; then
   if [ "$SF_COUNT" -eq 0 ]; then
     echo "  (no claude sessions in window)"
   else
-    DH_LIVE=0; DH_DEAD=0; DH_TRUNC=0; DH_INERT=0
-    DH_FIRST=""; DH_LAST=""
+    DH_LIVE=0; DH_DEAD=0; DH_TRUNC=0; DH_INCOMPLETE=0
+    DH_ROOTS=0; DH_OTHERROLE=0; DH_NOREC=0
+    # One event per classified dispatch: "<timestamp>\t<R|H>". Sorted and walked
+    # at the end so refusals separated by a HEALTHY dispatch report as separate
+    # incidents; min->max over all refusals describes a single continuous outage
+    # covering a period the fleet was demonstrably working.
+    DH_EVENTS=""
     # Provider refusals only — a quota/capacity message from the model provider
     # that ENDS the session. Not a tool rate limit, not a review-lane quota.
     # That exclusion is ENFORCED, not just asserted: the positive pattern alone
@@ -911,28 +916,78 @@ if want dispatch; then
     # reopens the substring hole the ^ anchor exists to close.
     # Apostrophe forms are ENUMERATED, not wildcarded: `you.?ve` would accept
     # "youXve" and any other separator, which is a substring hole in miniature.
-    DH_RE="^(you've hit your [a-z0-9 -]*limit|you’ve hit your [a-z0-9 -]*limit|youve hit your [a-z0-9 -]*limit|usage limit reached|claude usage limit reached|this (account|organization) is out of (credits|usage)|capacity constraints prevent)"
+    #
+    # Anchored at BOTH ends. A start anchor alone is only half the rule: it
+    # rejects "Confirmed usage limit reached; filed an issue." but still accepts
+    # "Usage limit reached; filed an issue." — the same substring hole, mirrored,
+    # and it misfiles a live tool-bearing dispatch as an outage.
+    #
+    # The end anchor cannot simply demand the template BE the whole string: the
+    # real provider refusal carries a structured tail. Measured over the live
+    # corpus, 16 of 17 refusals read
+    #   You've hit your weekly limit · resets Aug 1 at 1pm (Europe/Copenhagen)
+    # so a naive `$` right after the template stops matching the only string this
+    # detector exists to catch. The tail is therefore admitted by GRAMMAR, not by
+    # wildcard: it must open with the provider's own separator and carry no
+    # sentence punctuation, which is precisely what a prose continuation has and
+    # a machine-generated suffix does not. Separators are alternated literals
+    # rather than a bracket class — a multi-byte character inside `[...]` is not
+    # portable across BSD and GNU grep.
+    DH_TPL="you've hit your [a-z0-9 -]*limit|you’ve hit your [a-z0-9 -]*limit|youve hit your [a-z0-9 -]*limit|usage limit reached|claude usage limit reached|this (account|organization) is out of (credits|usage)|capacity constraints prevent[a-z ]*"
+    DH_TAIL='([[:space:]]*(·|—|–)[^.;]*)?[[:space:]]*\.?$'
+    DH_RE="^($DH_TPL)$DH_TAIL"
     DH_NOT_RE='(rate limit|rate-limit|review limit|quota exceeded for)'
+    # The scheduled role this report's dispatch count belongs to. The Agent
+    # Improver is separately scheduled against the SAME project store, so its
+    # root transcripts are indistinguishable from the engineer's by path alone —
+    # counting them lets the observer's own runs satisfy a dispatch volume floor
+    # for the agent it is observing. Measured over a 2-day window: 76 engineer
+    # dispatches, 4 improver, 2 interactive.
+    DH_ROLE="${DH_ROLE:-daily-ai-assistant}"
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       # Defence in depth: root_session_files already excluded these BEFORE the
       # cap, but a DISPATCH is a scheduled run and never a sidechain, so the
       # classifier asserts that itself rather than trusting its input.
       case "$f" in */subagents/*) continue ;; esac
+      DH_ROOTS=$((DH_ROOTS+1))
+      # ONE parse per transcript for every field the classifier needs: the
+      # scheduled role that started it, the tool count, the final assistant
+      # record's timestamp, its terminal stop_reason, and its last text block.
+      #
       # The outage timestamp must come from the REFUSAL record, not the
       # transcript's first record: a resumed session that later hits a refusal
       # would otherwise date the outage to when the session originally began.
-      row=$(jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty))
-        | (map(select(.type=="assistant")|.message.content[]?|select(.type=="tool_use"))|length) as $tu
-        | (([.[] | select(.type=="assistant")] | last) // {}) as $lastrec
+      #
+      # The role comes from the injected dispatch record and must START it. A
+      # substring test would misread this tool's own output, which quotes both
+      # the marker and the refusal wording as evidence, as a dispatch record.
+      row=$(jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty)) as $recs
+        | ([$recs[] | select(.type=="user")
+            | ((.message.content | if type=="string" then .
+                else ((map(select(.type=="text")|.text))|join("")) end) // "")
+            | select(startswith("<scheduled-task"))] | .[0] // "") as $disp
+        | (($disp | capture("name=\"(?<n>[a-z0-9-]+)\"") | .n) // "") as $role
+        | ([$recs[] | select(.type=="assistant") | .message.content[]?
+            | select(.type=="tool_use")] | length) as $tu
+        | (([$recs[] | select(.type=="assistant")] | last) // {}) as $lastrec
         | (([$lastrec.message.content[]?|select(.type=="text")|.text] | last) // "") as $lastt
-        | (($lastrec.timestamp) // (map(select(.timestamp)|.timestamp)|last) // "") as $ts
-        | "\($tu)\t\($ts)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
+        | (($lastrec.timestamp) // ([$recs[]|select(.timestamp)|.timestamp]|last) // "") as $ts
+        | (($lastrec.message.stop_reason) // "") as $sr
+        | "\($role)\t\($tu)\t\($ts)\t\($sr)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
       ' "$f" 2>/dev/null | head -1)
       [ -n "$row" ] || continue
-      tu=${row%%$'\t'*}; rest=${row#*$'\t'}
-      ts=${rest%%$'\t'*}; lastt=${rest#*$'\t'}
+      role=${row%%$'\t'*}; rest=${row#*$'\t'}
+      tu=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+      ts=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+      sr=${rest%%$'\t'*}; lastt=${rest#*$'\t'}
       case "$tu" in ''|*[!0-9]*) tu=0 ;; esac
+      # Select by role BEFORE classifying, and account for what was set aside so
+      # a zero is attributable rather than silent.
+      if [ "$role" != "$DH_ROLE" ]; then
+        if [ -n "$role" ]; then DH_OTHERROLE=$((DH_OTHERROLE+1)); else DH_NOREC=$((DH_NOREC+1)); fi
+        continue
+      fi
       ended_on_refusal=0
       # Length gate FIRST: the refusal is the entire turn (~60 chars observed).
       # Prose that merely quotes it is far longer, which is what keeps this
@@ -944,34 +999,73 @@ if want dispatch; then
       fi
       if [ "$ended_on_refusal" -eq 1 ]; then
         if [ "$tu" -eq 0 ]; then DH_DEAD=$((DH_DEAD+1)); else DH_TRUNC=$((DH_TRUNC+1)); fi
-        # Widen the outage span over every refusal-ended dispatch, dead or not:
-        # a truncated run is part of the same outage and must not be excluded
-        # from its bounds just because it got some work done first.
-        if [ -n "$ts" ]; then
-          [ -z "$DH_FIRST" ] && DH_FIRST="$ts"
-          [ "$ts" \< "$DH_FIRST" ] && DH_FIRST="$ts"
-          [ "$ts" \> "$DH_LAST" ] && DH_LAST="$ts"
-        fi
-      elif [ "$tu" -gt 0 ]; then
-        DH_LIVE=$((DH_LIVE+1))
+        # Every refusal-ended dispatch is an outage event, dead or not: a
+        # truncated run belongs to the same incident and must not be left out of
+        # its bounds just because it got some work done first.
+        [ -n "$ts" ] && DH_EVENTS="${DH_EVENTS}${ts}	R
+"
       else
-        DH_INERT=$((DH_INERT+1))
+        # COMPLETION is a property of how the turn ENDED, not of whether a tool
+        # ran. `end_turn` means the model finished; `tool_use` means the record
+        # is a tool request nothing ever answered, i.e. the run was cut off. The
+        # old tool-count test was wrong in BOTH directions: it dropped a
+        # finished text-only run out of the denominator, and it counted a run
+        # interrupted one record in as complete evidence.
+        #
+        # Transcripts predating the field carry no stop_reason at all, so they
+        # fall back to the tool-count heuristic rather than being swept into
+        # `incomplete` — that fallback is strictly the old behaviour, applied
+        # only where the better signal is absent.
+        if [ "$sr" = "end_turn" ] || { [ -z "$sr" ] && [ "$tu" -gt 0 ]; }; then
+          DH_LIVE=$((DH_LIVE+1))
+        else
+          DH_INCOMPLETE=$((DH_INCOMPLETE+1))
+        fi
+        [ -n "$ts" ] && DH_EVENTS="${DH_EVENTS}${ts}	H
+"
       fi
     done <<EOF
 $(root_session_files)
 EOF
-    DH_TOTAL=$((DH_LIVE + DH_DEAD + DH_TRUNC + DH_INERT))
+    DH_TOTAL=$((DH_LIVE + DH_DEAD + DH_TRUNC + DH_INCOMPLETE))
+    printf '  root transcripts in window: %s\n' "$DH_ROOTS"
+    printf '    dispatches of role "%s": %s   <- classified below\n' "$DH_ROLE" "$DH_TOTAL"
+    printf '    other scheduled roles ....................: %s   (another agent, not this one)\n' "$DH_OTHERROLE"
+    printf '    no dispatch record .......................: %s   (interactive session)\n' "$DH_NOREC"
+    # Selecting by role means a changed marker format publishes ZERO dispatches
+    # while root runs exist — the same silent-zero shape the cap ordering fixed.
+    # A zero must be loud and attributable, never read as an outage.
+    if [ "$DH_TOTAL" -eq 0 ] && [ "$DH_ROOTS" -gt 0 ]; then
+      printf '  WARNING: role selection matched 0 of %s root transcripts.\n' "$DH_ROOTS"
+      echo "    Treat the dispatch count as UNKNOWN, not as an outage: this is what a"
+      echo "    changed dispatch-record format looks like, and it is indistinguishable"
+      echo "    from a fleet that never ran unless you check the record itself."
+    fi
     printf '  claude dispatches classified: %s   (root transcripts only; subagents excluded)\n' "$DH_TOTAL"
-    printf '    live ......... %s   <- complete evidence\n' "$DH_LIVE"
+    printf '    live ......... %s   <- complete evidence (ended its turn normally)\n' "$DH_LIVE"
     printf '    truncated .... %s   (work started, then a provider refusal ended it: partial evidence)\n' "$DH_TRUNC"
     printf '    dead ......... %s   (provider refusal, zero tool calls: no evidence at all)\n' "$DH_DEAD"
-    printf '    inert ........ %s   (no tool calls and no refusal: cause unknown)\n' "$DH_INERT"
-    if [ $((DH_DEAD + DH_TRUNC)) -gt 0 ]; then
-      printf '  outage span: %s -> %s\n' "$DH_FIRST" "$DH_LAST"
-    else
+    printf '    incomplete ... %s   (cut off mid-turn, no refusal: partial evidence, cause unknown)\n' "$DH_INCOMPLETE"
+    # Group refusal-ended dispatches into incidents, breaking the run wherever a
+    # HEALTHY dispatch sits between two refusals. Reporting min->max instead
+    # would describe one continuous outage covering the healthy interval.
+    DH_SPANS=$(printf '%s' "$DH_EVENTS" | grep -v '^[[:space:]]*$' | sort | awk -F'\t' '
+      $2=="R" { if (s=="") s=$1; e=$1; next }
+              { if (s!="") { print s "\t" e; s=""; e="" } }
+      END     { if (s!="") print s "\t" e }')
+    DH_NSPANS=$(printf '%s' "$DH_SPANS" | grep -c . || true)
+    if [ "$DH_NSPANS" -eq 0 ]; then
       echo "  outage span: none"
+    elif [ "$DH_NSPANS" -eq 1 ]; then
+      printf '  outage span: %s -> %s\n' \
+        "$(printf '%s' "$DH_SPANS" | cut -f1)" "$(printf '%s' "$DH_SPANS" | cut -f2)"
+    else
+      printf '  outage spans: %s distinct (healthy dispatches ran in between)\n' "$DH_NSPANS"
+      printf '%s\n' "$DH_SPANS" | while IFS="$(printf '\t')" read -r a b; do
+        [ -n "$a" ] && printf '    %s -> %s\n' "$a" "$b"
+      done
     fi
-    DH_NOEV=$((DH_DEAD + DH_INERT))
+    DH_NOEV=$((DH_DEAD + DH_INCOMPLETE))
     if [ "$DH_NOEV" -gt 0 ]; then
       echo
       printf '  WARNING: %s of %s dispatches produced no evidence.\n' "$DH_NOEV" "$DH_TOTAL"

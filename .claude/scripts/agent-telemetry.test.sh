@@ -14,6 +14,15 @@ bad()  { FAIL=$((FAIL+1)); echo "  ✗ $1"; echo "      $2"; }
 check(){ if printf '%s' "$2" | grep -qF -- "$3"; then ok "$1"; else bad "$1" "expected to find: $3"; fi; }
 nocheck(){ if printf '%s' "$2" | grep -qF -- "$3"; then bad "$1" "should NOT contain: $3"; else ok "$1"; fi; }
 
+# The injected record every scheduled dispatch begins with. Dispatch fixtures
+# carry a real one so the role selector runs against the shape production sees
+# rather than a shape invented for the test: a transcript with no such record is
+# an interactive session, and one naming another role belongs to another agent.
+# $1 = scheduled-task name, $2 = timestamp.
+dispatch_rec() {
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"text","text":"<scheduled-task name=\\"%s\\" file=\\"/x/SKILL.md\\">\\nrun\\n</scheduled-task>"}]}}\n' "$2" "$1"
+}
+
 FIX=$(mktemp -d)
 trap 'rm -rf "$FIX"' EXIT
 
@@ -2605,17 +2614,20 @@ else bad "a styled credential still emits a full provenance locator" \
 echo
 echo "dispatch health"
 mkdir -p "$FIX/dispatch"
+# Every fixture below opens with a real dispatch record, because a root
+# transcript is only this role's dispatch if one names it — see CONTROL N.
 # DEAD: provider refusal is the whole assistant turn, and no tool ever ran.
-cat > "$FIX/dispatch/dead-a.jsonl" <<'EOF'
-{"type":"user","timestamp":"2026-07-31T22:01:50.003Z","message":{"content":[{"type":"text","text":"go"}]}}
+dispatch_rec daily-ai-assistant 2026-07-31T22:01:50.003Z > "$FIX/dispatch/dead-a.jsonl"
+cat >> "$FIX/dispatch/dead-a.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-07-31T22:01:51.115Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
 EOF
-cat > "$FIX/dispatch/dead-b.jsonl" <<'EOF'
-{"type":"user","timestamp":"2026-08-01T10:01:48.264Z","message":{"content":[{"type":"text","text":"go"}]}}
+dispatch_rec daily-ai-assistant 2026-08-01T10:01:48.264Z > "$FIX/dispatch/dead-b.jsonl"
+cat >> "$FIX/dispatch/dead-b.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T10:01:49.591Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
 EOF
 # TRUNCATED: real work started, then the same refusal ended the session.
-cat > "$FIX/dispatch/trunc.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-08-01T10:59:40.000Z > "$FIX/dispatch/trunc.jsonl"
+cat >> "$FIX/dispatch/trunc.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T10:59:46.787Z","message":{"content":[{"type":"tool_use","id":"d1","name":"Bash","input":{"command":"echo hi"}}]}}
 {"type":"assistant","timestamp":"2026-08-01T10:59:59.000Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
 EOF
@@ -2625,7 +2637,8 @@ EOF
 #
 # CONTROL A pins the LAST-BLOCK restriction. Its whole transcript is short, so
 # the length gate cannot rescue it; only "look at the final block" keeps it live.
-cat > "$FIX/dispatch/discuss-early.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-08-01T21:59:50.000Z > "$FIX/dispatch/discuss-early.jsonl"
+cat >> "$FIX/dispatch/discuss-early.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T22:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d2","name":"Bash","input":{"command":"echo investigating"}}]}}
 {"type":"assistant","timestamp":"2026-08-01T22:00:10.000Z","message":{"content":[{"type":"text","text":"The refusal read: You've hit your weekly limit"}]}}
 {"type":"assistant","timestamp":"2026-08-01T22:00:20.000Z","message":{"content":[{"type":"text","text":"Filed it and moved on."}]}}
@@ -2633,7 +2646,8 @@ EOF
 # CONTROL B pins the LENGTH GATE. Its FINAL block contains the phrase, so the
 # last-block restriction cannot rescue it; only "the refusal is the whole turn"
 # keeps it live. This is the shape this tool's own findings take.
-cat > "$FIX/dispatch/discuss-long.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-08-01T22:59:50.000Z > "$FIX/dispatch/discuss-long.jsonl"
+cat >> "$FIX/dispatch/discuss-long.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T23:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d3","name":"Bash","input":{"command":"echo analysing"}}]}}
 {"type":"assistant","timestamp":"2026-08-01T23:00:10.000Z","message":{"content":[{"type":"text","text":"Sixteen scheduled dispatches died over roughly forty-five hours, and the assistant turn in every one of them was exactly the string You've hit your weekly limit, quoted here as evidence so a later reader can audit the classification for themselves rather than taking the count on trust alone."}]}}
 EOF
@@ -2641,14 +2655,16 @@ EOF
 # matches the refusal wording, so neither the length gate nor the last-block
 # rule can save it; only "a tool rate limit is not a provider refusal" keeps it
 # live. Misfiling this inflates the outage and shrinks the live denominator.
-cat > "$FIX/dispatch/toolrate.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-08-01T20:59:50.000Z > "$FIX/dispatch/toolrate.jsonl"
+cat >> "$FIX/dispatch/toolrate.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T21:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d4","name":"Bash","input":{"command":"gh api rate_limit"}}]}}
 {"type":"assistant","timestamp":"2026-08-01T21:00:05.000Z","message":{"content":[{"type":"text","text":"You've hit your tool rate limit; retrying via REST."}]}}
 EOF
 # CONTROL D pins the START ANCHOR: a live run ending on a SHORT summary that
 # merely mentions a refusal phrase. The length gate cannot save it (it is short)
 # and the phrase is in the final block, so only anchoring at the start keeps it live.
-cat > "$FIX/dispatch/short-summary.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-08-01T19:59:50.000Z > "$FIX/dispatch/short-summary.jsonl"
+cat >> "$FIX/dispatch/short-summary.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T20:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d5","name":"Bash","input":{"command":"echo checking"}}]}}
 {"type":"assistant","timestamp":"2026-08-01T20:00:05.000Z","message":{"content":[{"type":"text","text":"Confirmed this account is out of credits; I filed an issue."}]}}
 EOF
@@ -2663,7 +2679,8 @@ EOF
 # record is old and whose refusal is recent. Dating the outage from the first
 # record would report it as starting months early.
 mkdir -p "$FIX/dh-resumed"
-cat > "$FIX/dh-resumed/s.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-04-30T23:59:50.000Z > "$FIX/dh-resumed/s.jsonl"
+cat >> "$FIX/dh-resumed/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-05-01T00:00:00.000Z","message":{"content":[{"type":"tool_use","id":"d6","name":"Bash","input":{"command":"echo old"}}]}}
 {"type":"assistant","timestamp":"2026-08-01T09:00:00.000Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
 EOF
@@ -2721,7 +2738,8 @@ check "outage is dated from the refusal record" "$ROUT" "outage span: 2026-08-01
 nocheck "outage is NOT dated from the first record" "$ROUT" "2026-05-01"
 # ...and the classifier is not vacuous: an all-healthy corpus reports zero dead.
 mkdir -p "$FIX/dispatch-clean"
-cat > "$FIX/dispatch-clean/ok.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-08-01T11:59:50.000Z > "$FIX/dispatch-clean/ok.jsonl"
+cat >> "$FIX/dispatch-clean/ok.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T12:00:00.000Z","message":{"content":[{"type":"tool_use","id":"e1","name":"Bash","input":{"command":"echo ok"}}]}}
 EOF
 COUT=$(CLAUDE_PROJECTS_DIR="$FIX/dispatch-clean" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
@@ -2737,7 +2755,8 @@ check   "a healthy corpus reports no outage span"    "$COUT" "outage span: none"
 # with the cap set to 2. Filtering after the cap evicts the root entirely and
 # publishes zero dispatches while a root run existed.
 mkdir -p "$FIX/dh-cap/subagents"
-cat > "$FIX/dh-cap/root.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-08-01T11:59:50.000Z > "$FIX/dh-cap/root.jsonl"
+cat >> "$FIX/dh-cap/root.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T12:00:00.000Z","message":{"content":[{"type":"tool_use","id":"g1","name":"Bash","input":{"command":"echo root"}}]}}
 EOF
 sleep 1
@@ -2753,7 +2772,8 @@ check "sidechains do not evict the root run under the cap" "$GOUT" "classified: 
 # CONTROL H pins the WHOLE-TURN anchor against a leading wildcard: a live summary
 # that BEGINS with other words before the refusal phrase.
 mkdir -p "$FIX/dh-prefix"
-cat > "$FIX/dh-prefix/s.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-08-01T18:59:50.000Z > "$FIX/dh-prefix/s.jsonl"
+cat >> "$FIX/dh-prefix/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T19:00:00.000Z","message":{"content":[{"type":"tool_use","id":"h1","name":"Bash","input":{"command":"echo x"}}]}}
 {"type":"assistant","timestamp":"2026-08-01T19:00:05.000Z","message":{"content":[{"type":"text","text":"Confirmed usage limit reached; filed an issue."}]}}
 EOF
@@ -2764,7 +2784,8 @@ check "a prefixed refusal phrase stays live" "$POUT" "live ......... 1"
 # activity that emits no further text. Selecting the last text-bearing record
 # would resurrect the historical refusal and date a current outage to it.
 mkdir -p "$FIX/dh-resumed2"
-cat > "$FIX/dh-resumed2/s.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-04-30T23:59:50.000Z > "$FIX/dh-resumed2/s.jsonl"
+cat >> "$FIX/dh-resumed2/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-05-01T00:00:00.000Z","message":{"content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
 {"type":"assistant","timestamp":"2026-08-01T09:00:00.000Z","message":{"content":[{"type":"tool_use","id":"i1","name":"Bash","input":{"command":"echo resumed"}}]}}
 EOF
@@ -2776,7 +2797,8 @@ nocheck "a historical refusal does not date a current outage" "$IOUT" "2026-05-0
 # of a record whose first block is ordinary prose. Reading only the first block
 # misses the refusal entirely.
 mkdir -p "$FIX/dh-multiblock"
-cat > "$FIX/dh-multiblock/s.jsonl" <<'EOF'
+dispatch_rec daily-ai-assistant 2026-08-01T17:59:50.000Z > "$FIX/dh-multiblock/s.jsonl"
+cat >> "$FIX/dh-multiblock/s.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-08-01T18:00:00.000Z","message":{"content":[{"type":"text","text":"Working."},{"type":"text","text":"You've hit your weekly limit"}]}}
 EOF
 MOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-multiblock" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
@@ -2785,11 +2807,134 @@ check "a refusal in the LAST text block of a record is seen" "$MOUT" "dead .....
 # CONTROL K pins the APOSTROPHE ENUMERATION: the U+2019 typographic form must
 # classify identically to the ASCII one.
 mkdir -p "$FIX/dh-curly"
-printf '{"type":"assistant","timestamp":"2026-08-01T18:30:00.000Z","message":{"content":[{"type":"text","text":"You\u2019ve hit your weekly limit"}]}}\n' > "$FIX/dh-curly/s.jsonl"
+dispatch_rec daily-ai-assistant 2026-08-01T18:29:50.000Z > "$FIX/dh-curly/s.jsonl"
+printf '{"type":"assistant","timestamp":"2026-08-01T18:30:00.000Z","message":{"content":[{"type":"text","text":"You\u2019ve hit your weekly limit"}]}}\n' >> "$FIX/dh-curly/s.jsonl"
 KOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-curly" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "a typographic apostrophe classifies as a refusal" "$KOUT" "dead ......... 1"
 
+# CONTROL L pins the END anchor. CONTROL H already covers a refusal phrase with
+# a PREFIX, which the start anchor catches. This is the mirror case the start
+# anchor cannot see: the phrase BEGINS the turn and ordinary prose follows it.
+mkdir -p "$FIX/dh-suffix"
+{ dispatch_rec daily-ai-assistant 2026-08-01T17:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T17:00:00.000Z","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"l1","name":"Bash","input":{"command":"echo x"}}]}}
+{"type":"assistant","timestamp":"2026-08-01T17:00:05.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Usage limit reached; filed an issue."}]}}
+EOF
+} > "$FIX/dh-suffix/s.jsonl"
+XOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-suffix" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a refusal phrase with a prose SUFFIX stays live" "$XOUT" "live ......... 1"
+check "a suffixed refusal phrase is not truncated"      "$XOUT" "truncated .... 0"
+
+# CONTROL M is the OVER-TIGHTENING control for CONTROL L, and it is the one that
+# fails if the end anchor is written naively. The REAL provider refusal is not a
+# bare template — it carries a structured tail (`· resets <when> (<tz>)`), so an
+# anchor that demands the template be the entire string stops matching the only
+# string this detector actually exists to catch. Measured live: 16 of 17 real
+# refusals in the corpus carry that tail.
+mkdir -p "$FIX/dh-realtail"
+{ dispatch_rec daily-ai-assistant 2026-08-01T16:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T16:00:01.000Z","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets Aug 1 at 1pm (Europe/Copenhagen)"}]}}
+EOF
+} > "$FIX/dh-realtail/s.jsonl"
+NOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-realtail" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "the real refusal WITH its provider tail is still dead" "$NOUT" "dead ......... 1"
+
+# CONTROL N pins the ROLE selector. The Agent Improver is separately scheduled
+# against this same project store, so its root transcripts are indistinguishable
+# from the engineer's by path alone — the observer's own runs would be counted as
+# the observed agent's dispatches and would satisfy a dispatch volume floor.
+# Measured live over a 2-day window: 76 engineer, 4 improver, 2 interactive.
+mkdir -p "$FIX/dh-role"
+{ dispatch_rec daily-ai-assistant 2026-08-01T12:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T12:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"n1","name":"Bash","input":{"command":"echo engineer"}}]}}
+EOF
+} > "$FIX/dh-role/engineer.jsonl"
+{ dispatch_rec agent-improver 2026-08-01T12:30:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T12:30:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"n2","name":"Bash","input":{"command":"echo improver"}}]}}
+EOF
+} > "$FIX/dh-role/improver.jsonl"
+cat > "$FIX/dh-role/interactive.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T13:00:00.000Z","message":{"content":[{"type":"text","text":"hey can you look at this"}]}}
+{"type":"assistant","timestamp":"2026-08-01T13:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"n3","name":"Bash","input":{"command":"echo interactive"}}]}}
+EOF
+ROUT2=$(CLAUDE_PROJECTS_DIR="$FIX/dh-role" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "another scheduled role is not this role's dispatch" "$ROUT2" "classified: 1"
+check "the other role is reported, not silently dropped"   "$ROUT2" "other scheduled roles"
+check "an interactive session is not a dispatch"           "$ROUT2" "no dispatch record"
+
+# CONTROL O is the FAIL-CLOSED-SILENTLY control for CONTROL N. Selecting by role
+# means a changed marker format publishes ZERO dispatches while root runs exist —
+# the same silent-zero shape CONTROL G fixed for the cap. A zero must be loud and
+# attributable, never mistaken for an outage.
+mkdir -p "$FIX/dh-norole"
+cat > "$FIX/dh-norole/a.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T14:00:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"o1","name":"Bash","input":{"command":"echo a"}}]}}
+EOF
+QOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-norole" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "matching no root transcript is reported loudly" "$QOUT" "role selection matched 0 of 1"
+
+# CONTROL P pins COMPLETION-BY-SESSION-STATE, first half: a run that ends its
+# turn normally is COMPLETE evidence even though it called no tool. Tool-call
+# presence is not a completion signal, and treating it as one drops a finished
+# run out of the denominator every per-session rate divides by.
+mkdir -p "$FIX/dh-textonly"
+{ dispatch_rec daily-ai-assistant 2026-08-01T15:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T15:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Surveyed every product; nothing actionable this tick."}]}}
+EOF
+} > "$FIX/dh-textonly/s.jsonl"
+TOUT2=$(CLAUDE_PROJECTS_DIR="$FIX/dh-textonly" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a text-only run that ended its turn is complete" "$TOUT2" "live ......... 1"
+
+# CONTROL Q pins the same rule's second half, and it is the direction that
+# INFLATES the live count: a run cut off mid-turn right after asking for a tool
+# never reached a natural end, so it is not complete evidence — but it does have
+# a tool call, which is exactly what the old test read as "live".
+mkdir -p "$FIX/dh-cutoff"
+{ dispatch_rec daily-ai-assistant 2026-08-01T15:30:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T15:30:01.000Z","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"q1","name":"Bash","input":{"command":"echo cut"}}]}}
+EOF
+} > "$FIX/dh-cutoff/s.jsonl"
+UOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-cutoff" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "a run cut off mid-turn is not complete evidence" "$UOUT" "live ......... 0"
+check "a run cut off mid-turn is reported as incomplete" "$UOUT" "incomplete ... 1"
+
+# CONTROL R pins OUTAGE INTERVAL SPLITTING. Two refusals with a healthy dispatch
+# BETWEEN them are two incidents; reporting min->max describes one continuous
+# outage spanning a period the fleet was demonstrably working, which overstates
+# incident duration by the whole healthy interval.
+mkdir -p "$FIX/dh-twospans"
+{ dispatch_rec daily-ai-assistant 2026-08-01T01:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T01:00:01.000Z","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+} > "$FIX/dh-twospans/r1.jsonl"
+{ dispatch_rec daily-ai-assistant 2026-08-01T05:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T05:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"r1","name":"Bash","input":{"command":"echo healthy"}}]}}
+EOF
+} > "$FIX/dh-twospans/ok.jsonl"
+{ dispatch_rec daily-ai-assistant 2026-08-01T09:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T09:00:01.000Z","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+} > "$FIX/dh-twospans/r2.jsonl"
+WOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-twospans" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+       bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "refusals split by a healthy run are two outages" "$WOUT" "outage spans: 2 distinct"
+nocheck "the healthy interval is not inside an outage"  "$WOUT" "2026-08-01T01:00:01.000Z -> 2026-08-01T09:00:01.000Z"
 
 echo
 echo "──────────────────────────────"
