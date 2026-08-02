@@ -81,6 +81,7 @@ jobs:
               - '.claude/scripts/worktree-claim-lib.sh'
               - '.claude/scripts/worktree-claim.sh'
               - '.claude/scripts/worktree-claim.test.sh'
+              - '.claude/scripts/worktree-cleanup.sh'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - 'AGENTS.md'
               # Self-gate on the workflow too, so a change that breaks this

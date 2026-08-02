@@ -10,6 +10,7 @@ cleanup_script="$here/worktree-cleanup.sh"
 shared_lib="$here/worktree-claim-lib.sh"
 root_contract="$here/../../AGENTS.md"
 maintenance_contract="$here/../skills/portfolio-maintenance/SKILL.md"
+workflow_contract="$here/../../.github/workflows/ci.yaml"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -198,6 +199,15 @@ grep -qF 'worktree-claim-lib.sh' "$cleanup_script" || shared_rc=1
 grep -qF 'WORKTREE_CLAIM_LOCK_REF_PREFIX' "$shared_lib" 2>/dev/null || shared_rc=1
 grep -qF 'worktree_claim_lock_acquire()' "$shared_lib" 2>/dev/null || shared_rc=1
 check "claim and cleanup source one mutex protocol" 0 "$shared_rc"
+
+claim_filter=$(awk '
+  /^            worktree-claim:/ { inside=1; next }
+  inside && /^            [a-zA-Z0-9_-]+:/ { exit }
+  inside { print }
+' "$workflow_contract")
+filter_rc=0
+grep -qF ".claude/scripts/worktree-cleanup.sh" <<< "$claim_filter" || filter_rc=1
+check "claim contract runs when cleanup consumer changes" 0 "$filter_rc"
 
 # ── caller contracts fail closed on every acquisition error ─────────────────────
 fail_closed_rc=0
