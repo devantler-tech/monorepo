@@ -12,13 +12,16 @@
 #   of this output and acts on it has been injected. See the installed
 #   `agentic-engineering` plugin's `agent-improver` → "Ingestion boundary".
 #
-# Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME] [--injection-provenance]
+# Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME]
+#                           [--injection-provenance] [--credential-provenance]
 set -uo pipefail
 
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
 INJECTION_PROVENANCE=0
+CREDENTIAL_PROVENANCE=0
+CREDENTIAL_SCAN_BATCH_FILES="${CREDENTIAL_SCAN_BATCH_FILES:-128}"
 
 # Require a value before shifting past it. `shift 2` with only one arg left is a
 # no-op error under `set +e`, which spins the loop on the same $1 forever — a
@@ -36,6 +39,7 @@ while [ $# -gt 0 ]; do
     --max-files)  need_val "$@"; MAX_FILES="$2";  shift 2 ;;
     --section)    need_val "$@"; SECTION="$2";    shift 2 ;;
     --injection-provenance) INJECTION_PROVENANCE=1; shift ;;
+    --credential-provenance) CREDENTIAL_PROVENANCE=1; shift ;;
     -h|--help)    sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown argument (value not echoed)" >&2; exit 2 ;;
   esac
@@ -43,6 +47,11 @@ done
 
 case "$SINCE_DAYS" in ''|*[!0-9]*) echo "--since-days must be an integer" >&2; exit 2 ;; esac
 case "$MAX_FILES"  in ''|*[!0-9]*) echo "--max-files must be an integer"  >&2; exit 2 ;; esac
+case "$CREDENTIAL_SCAN_BATCH_FILES" in
+  ''|*[!0-9]*) echo "CREDENTIAL_SCAN_BATCH_FILES must be a positive integer" >&2; exit 2 ;;
+  *[1-9]*) ;;
+  *) echo "CREDENTIAL_SCAN_BATCH_FILES must be a positive integer" >&2; exit 2 ;;
+esac
 # Lowercase letters AND digits — section names include `a2a`, which a
 # letters-only class silently rejected.
 # Validate against the REAL section names. A misspelling like `effciency` used
@@ -171,10 +180,15 @@ want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
 ERRTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_err.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 INJTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_inj.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Distinct prefix from .agtel_inj so the aggregate-identity width instrumentation
+# in the test suite keeps measuring only the phrase scratch it targets.
+CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+CREDCONC=$(mktemp "${TMPDIR:-/tmp}/.agtel_credconc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV"' EXIT
+trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -204,6 +218,207 @@ emit_injection_hits() {
                        | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)
               [ -n "$phrase" ] || continue
               printf '%s\t%s\t%s\t%s\n' "$session" "$line" "$record" "$phrase"
+            done
+      done
+}
+
+# Emit one safe class row per occurrence without suppressing anything from the
+# fail-closed raw total. Runtime-supplied developer context is structurally
+# distinguishable from user/tool content, but a compacted record can contain
+# both. Classify the matched STRING path, never the whole record. If parsing or
+# reconciliation is uncertain, retain every raw occurrence as other content.
+emit_injection_classes() {
+  local f="$1" session line raw raw_count runtime_count other_count i
+  session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
+  [ -n "$session" ] || session=unknown
+
+  grep -niE "$INJ_PHRASE_RE" "$f" 2>/dev/null \
+    | while IFS=: read -r line raw; do
+        case "$line" in ''|*[!0-9]*) continue ;; esac
+        line=$(printf '%s' "$line" | cut -c1-12)
+        raw_count=$(printf '%s' "$raw" | grep -hoiE "$INJ_PHRASE_RE" | wc -l | tr -d ' ')
+        runtime_count=$(printf '%s' "$raw" | jq -r --arg re "$INJ_PHRASE_RE" '
+          def match_count:
+            if type == "string" then [scan($re; "i")] | length else 0 end;
+          if
+            (.type == "response_item"
+             and .payload.type == "message"
+             and .payload.role == "developer")
+          then
+            ([.payload.content[]?.text | match_count] | add // 0)
+          elif
+            (.type == "turn_context")
+          then
+            (.payload.collaboration_mode.settings.developer_instructions | match_count)
+          elif
+            (.type == "event_msg" and .payload.type == "thread_settings_applied")
+          then
+            (.payload.thread_settings.collaboration_mode.settings.developer_instructions | match_count)
+          elif
+            (.type == "compacted")
+          then
+            ([
+              .payload.replacement_history[]?
+              | select(.type == "message" and .role == "developer")
+              | .content[]?.text
+              | match_count
+            ] | add // 0)
+          else
+            0
+          end
+        ' 2>/dev/null || true)
+        case "$runtime_count" in
+          ''|*[!0-9]*) runtime_count=0 ;;
+          *) [ "$runtime_count" -le "$raw_count" ] || runtime_count=0 ;;
+        esac
+        other_count=$((raw_count - runtime_count))
+        i=0
+        while [ "$i" -lt "$runtime_count" ]; do
+          printf '%s\t%s\truntime-developer\n' "$session" "$line"
+          i=$((i + 1))
+        done
+        i=0
+        while [ "$i" -lt "$other_count" ]; do
+          printf '%s\t%s\tother-content\n' "$session" "$line"
+          i=$((i + 1))
+        done
+      done
+}
+
+# Locator for a credential-shaped match: session, line, record type and SHAPE.
+# Deliberately weaker than emit_injection_hits, which prints the matched phrase:
+# a phrase is evidence, a credential is the secret itself, so the value NEVER
+# leaves this function. Shape classification is duplicated from the table's awk
+# rather than shared because the table consumes normalised values and this
+# consumes raw matches; keep the two prefix sets in step.
+emit_credential_hits() {
+  local f="$1" session line raw record match shape m _pass _c
+  session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
+  [ -n "$session" ] || session=unknown
+
+  # -a is LOAD-BEARING: a single NUL byte anywhere in the file makes grep treat
+  # it as binary and emit nothing at all. The table and concentration scans both
+  # pass -a, so without it here the row is counted while its locator silently
+  # vanishes — provenance disappearing exactly on the odd record most worth
+  # inspecting. Reproduced, not assumed (CodeRabbit finding).
+  # Translating NUL is the second half of the same fix: bash's `read` TRUNCATES a
+  # line at the first NUL, so -a alone gets the line out of grep and then the
+  # match is silently lost from $raw before the inner scan ever sees it.
+  # (Verified under bash specifically — zsh's read does not truncate, so an
+  # interactive spot-check in the wrong shell reports this as working.)
+  # 🔴 It must be `tr '\000' ' '`, NOT `tr -d '\000'`. DELETING the byte welds the
+  # fragments on either side of it into one string, so two short, harmless
+  # token-shaped pieces become a full-length credential that never existed:
+  # `ghp_<8 chars>\0<12 chars>` is correctly NOT counted by the table, but the
+  # deleting form emitted `shape=github-token` for it — a PHANTOM high-signal
+  # locator pointing at a credential nobody ever leaked, which is a false
+  # positive in a leak detector and the exact locator/table disagreement this
+  # provenance work exists to remove. A space is the right replacement because it
+  # appears in no token alphabet and in none of the shape regexes, so it cannot
+  # weld and cannot itself be mistaken for value content; it also keeps `$raw`
+  # parseable for the `jq` call below, which a literal NUL would not.
+  # (Codex P2 on #2520; reproduced before fixing.)
+  # `strip_ansi` runs BEFORE the scan so a styled credential is locatable at all;
+  # it is line-for-line, so grep's `-n` numbering still names the real record.
+  strip_ansi < "$f" 2>/dev/null | grep -naiE "$CRED_TABLE_RE" 2>/dev/null | tr '\000' ' ' \
+    | while IFS=: read -r line raw; do
+        case "$line" in ''|*[!0-9]*) continue ;; esac
+        line=$(printf '%s' "$line" | cut -c1-12)
+        record=$(printf '%s' "$raw" | jq -r '.type // "malformed"' 2>/dev/null \
+                 | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
+        [ -n "$record" ] || record=malformed
+        # Split on `;&|` exactly as the TABLE does before classifying. One raw
+        # field can carry several assignments, and grep's leftmost-longest rule
+        # returns the whole run as a single match — so without this the locator
+        # strips only the first wrapper and reports `generic-assignment` for a
+        # field the table counts as a high-signal key.
+        printf '%s' "$raw" | grep -haoiE "$CRED_TABLE_RE" \
+          | tr ';&|' '\n' | grep -v '^$' \
+          | while IFS= read -r match || [ -n "$match" ]; do
+              # Classify to a SHAPE NAME and discard the value immediately.
+              # These mirror the TABLE's shape_of() including its LENGTH bounds,
+              # not just the prefix: a prefix-only test would report
+              # `shape=github-token` for `token=ghp_short`, which the table
+              # correctly counts as weak generic — a locator disagreeing with
+              # the table it annotates is worse than no locator. Anything
+              # unclassified reports as the weak generic bucket, so an
+              # unrecognised shape is never silently dropped.
+              m=$(printf '%s' "$match" | tr '[:upper:]' '[:lower:]')
+              m=${m#[^a-z0-9_-]}
+              # Strip a `KEY=`/`key: ` wrapper exactly as the table does before
+              # classifying. grep's LEFTMOST-match rule hands `token=ghp_…` to
+              # the generic alternative, so the match begins at the KEY — and
+              # that wrapped form is the commonest real-leak shape. Without
+              # this, every wrapped leak would be located as
+              # `shape=generic-assignment` while the table counted it as a
+              # high-signal token.
+              # TWICE, because the table strips twice. Its sed's `[^:=]*` cannot
+              # cross a separator, so one pass removes exactly ONE wrapper — and
+              # a token stored under a credential-NAMED record field arrives as
+              # two (`secret":"token=ghp_…`). A single strip left `token=ghp_…`
+              # here and reported `generic-assignment` while the table counted a
+              # live github-token, sending the operator to a weak-signal record.
+              # (Codex P2 on #2520.)
+              # The `-n` guard mirrors the sed's `(.+)`, which refuses a
+              # separator that would leave nothing behind — that is what keeps a
+              # value whose own last character is `=` (base64 padding) from being
+              # eaten as a further wrapper and dropped from the report entirely.
+              # That guard only covers a SINGLE trailing `=`. Base64 pads with up
+              # to TWO, and `secret=<b64>==` leaves `=` behind — non-empty, so the
+              # guard passes it, and the whole value collapses to `=`. Distinct
+              # secrets then share one identity and `sort -u` counts them as one
+              # credential: an UNDER-count in a leak detector. So pass 2 also
+              # refuses a remainder that itself begins with `=`, which is padding
+              # rather than a nested wrapper. Kept byte-equivalent to the table's
+              # `([^=].*)` second pass — a locator that disagreed with the table
+              # here would reintroduce exactly the divergence this work removes.
+              # (Codex P2 on #2520; reproduced before fixing.)
+              for _pass in 1 2; do
+                case $m in
+                  *[:=]*)
+                    _c=${m#*[:=]}
+                    _c=${_c#"${_c%%[![:space:]]*}"}
+                    _c=${_c#[\"\']}
+                    if [ "$_pass" = 2 ]; then
+                      case $_c in '='*) _c= ;; esac
+                    fi
+                    [ -n "$_c" ] && m=$_c
+                    ;;
+                esac
+              done
+              if   [[ $m =~ ^github_pat_[a-z0-9_]{20,} ]];        then shape="github-pat"
+              elif [[ $m =~ ^gh[pousr]_[a-z0-9]{16,} ]];          then shape="github-token"
+              elif [[ $m =~ ^akia[0-9a-z]{12,} ]];                then shape="aws-access-key-id"
+              elif [[ $m =~ ^xox[baprs]-[a-z0-9-]{10,} ]];        then shape="slack-token"
+              elif [[ $m =~ ^eyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,} ]]; then shape="jwt-like"
+              elif [[ $m == -----begin* ]];                       then shape="private-key-block"
+              else shape="generic-assignment"
+              fi
+              # Carry the table's [masked-display] qualifier through. Without
+              # it the table shows `github-pat (fine-grained) [masked-display]`
+              # (a tool's own masked rendering, do NOT rotate) while the
+              # locator says plain `shape=github-pat`, so an operator holding
+              # both a masked display and a real token of the same shape cannot
+              # tell which record belongs to the lower-risk row — and may rotate
+              # on the wrong one. Same rule as the wrapper/length agreement
+              # above: a locator that disagrees with the row it annotates is
+              # worse than no locator.
+              # ANCHORED, mirroring the table's `x ~ /^[a-z0-9_-]+\*\*\*/`. A
+              # bash glob cannot express "one-or-more of this class": in
+              # `[a-z0-9_-]*\*\*\**` the middle `*` is an unrestricted wildcard,
+              # so it only required ONE leading class character and `***`
+              # SOMEWHERE later. The shape regexes above are anchored at `^`
+              # only, so `ghp_<16 class chars>.junk***tail` classifies as
+              # github-token and that glob then tagged it `[masked-display]`
+              # while the table — whose regex fails at the `.` — did not.
+              # Wrong in the DANGEROUS direction: `[masked-display]` is
+              # documented as "do NOT rotate", so a live credential was labelled
+              # not-worth-rotating. (CodeRabbit Major on #2520; reproduced
+              # before fixing.)
+              if [ "$shape" != generic-assignment ] && [[ $m =~ $MASK_TAIL_RE ]]; then
+                shape="$shape [masked-display]"
+              fi
+              printf '%s\t%s\t%s\t%s\n' "$session" "$line" "$record" "$shape"
             done
       done
 }
@@ -269,7 +484,33 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # for the leak TABLE; redact() keeps the broad unanchored CRED_RE, so
 # over-redaction is preserved even where the table refuses to count.
 CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN [A-Z ]*PRIVATE KEY-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
-
+# The locator's masked-display test, kept as a REGEX rather than a glob and kept
+# byte-for-byte equivalent to the table's own `x ~ /^[a-z0-9_-]+\*\*\*/`. It must
+# stay anchored and must require the WHOLE run before `***` to be class
+# characters: a glob cannot express that (its `*` is an unrestricted wildcard),
+# and the loose form mislabels a real credential as a tool's masked rendering.
+MASK_TAIL_RE='^[a-z0-9_-]+\*\*\*'
+# ANSI normalization for the RAW scans (the locator and the concentration
+# metric), which read the transcript VERBATIM.
+#
+# 🔴 BOTH forms are load-bearing, and the encoded one is the form that actually
+# occurs. The TABLE decodes with `jq` first, so by the time it normalizes it can
+# only ever see a literal ESC byte. A raw scan never decodes — and a JSON string
+# cannot carry a literal ESC, so a transcript stores it ENCODED as ``.
+# Mirroring only the table's literal-ESC strip here is therefore a NO-OP on real
+# transcript bytes: measured on a realistic fixture, the styled token stayed
+# invisible under the literal-only strip and matched only once both forms went.
+#
+# Without this, a styled credential is counted by the table while the locator
+# cannot find it: the boundary-anchored regex needs a non-`[A-Za-z0-9_-]` char
+# before the prefix, and the CSI terminator `m` sits directly against it. The
+# reported shape is "one high-signal token across 0 transcript records", which
+# reads as a detector fault rather than the leak it is. (Codex P2 on #2520;
+# reproduced before fixing.)
+_ESC=$(printf '\033')
+strip_ansi() {
+  sed -E -e "s/${_ESC}\[[0-9;:]*[A-Za-z]//g" -e 's/\\u001[bB]\[[0-9;:]*[A-Za-z]//g'
+}
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
 # on Linux and its output pollutes the file list — six phantom paths for one
@@ -1186,6 +1427,52 @@ if want safety; then
           printf '%s\t%s\n' "$digest" "$display"
         done > "$INJTMP"
     echo "    TOTAL occurrences: $(wc -l < "$INJTMP" | tr -d ' ')   (distinct phrases: $(cut -f1 "$INJTMP" | sort -u | grep -c . || true))"
+    # Concentration — the same occurrences grouped by the transcript RECORD that
+    # carried them. The total alone cannot separate a real attempt from echo:
+    # this tool PRINTS the phrase list in its own report, that report lands in a
+    # transcript as tool output, and the NEXT run counts it again. Measured
+    # 2026-07-25 on the live corpus: 453 occurrences, but only 11 records in 2
+    # sessions, and 295 of them on ONE record holding a previous report. So the
+    # total tracks this tool's own activity to a degree the total cannot show.
+    # CONCENTRATION IS CONTEXT, NEVER A CLASSIFIER. Flat record/session counts
+    # do NOT rule out a new hit: a real attempt can share an existing record —
+    # the same reason nothing is filtered here. Classifying a record as
+    # self-referential can suppress a real hit that shares it, which is why
+    # PR #2364 was closed. Disclosure keeps the count fail-closed and still
+    # makes the echo visible.
+    # Parse only records the unchanged raw detector already matched. This is
+    # necessary to classify each occurrence by its JSON path rather than by the
+    # whole record; malformed or unreconciled records stay fail-closed in the
+    # other-content bucket.
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      emit_injection_classes "$f"
+    done > "$CONCTMP"
+    inj_records=$(cut -f1,2 "$CONCTMP" | sort -u | grep -c . || true)
+    inj_sessions=$(cut -f1 "$CONCTMP" | sort -u | grep -c . || true)
+    inj_top=$(cut -f1,2 "$CONCTMP" | sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
+    inj_runtime_occurrences=$(awk -F '\t' '$3 == "runtime-developer" {count++} END {print count+0}' "$CONCTMP")
+    inj_runtime_records=$(awk -F '\t' '$3 == "runtime-developer" {print $1 "\t" $2}' "$CONCTMP" \
+      | sort -u | grep -c . || true)
+    inj_runtime_sessions=$(awk -F '\t' '$3 == "runtime-developer" {print $1}' "$CONCTMP" \
+      | sort -u | grep -c . || true)
+    inj_other_occurrences=$(awk -F '\t' '$3 == "other-content" {count++} END {print count+0}' "$CONCTMP")
+    inj_other_records=$(awk -F '\t' '$3 == "other-content" {print $1 "\t" $2}' "$CONCTMP" \
+      | sort -u | grep -c . || true)
+    inj_other_sessions=$(awk -F '\t' '$3 == "other-content" {print $1}' "$CONCTMP" \
+      | sort -u | grep -c . || true)
+    runtime_session_word=sessions
+    [ "$inj_runtime_sessions" -eq 1 ] && runtime_session_word=session
+    other_session_word=sessions
+    [ "$inj_other_sessions" -eq 1 ] && other_session_word=session
+    echo "      across ${inj_records:-0} transcript records in ${inj_sessions:-0} sessions; largest single record: ${inj_top:-0}"
+    echo "      runtime-supplied developer context: ${inj_runtime_occurrences:-0} occurrences across ${inj_runtime_records:-0} records in ${inj_runtime_sessions:-0} $runtime_session_word"
+    echo "      other content locations: ${inj_other_occurrences:-0} occurrences across ${inj_other_records:-0} records in ${inj_other_sessions:-0} $other_session_word"
+    echo "      (class-specific records/sessions may overlap; occurrences sum to TOTAL)"
+    echo "      (concentration is CONTEXT, not a verdict. A rising total with flat"
+    echo "       records MAY be echo — a previous report re-counted by the NEXT run —"
+    echo "       but flat record/session counts do NOT rule out a new hit: a real"
+    echo "       attempt can share an existing record. Read both; classify neither.)"
+    : > "$CONCTMP"
     # Group on the fixed-width digest plus bounded display. If display
     # truncation happens before identity is derived, distinct matches collapse.
     sort "$INJTMP" | uniq -c | sort -rn | head -6 \
@@ -1210,6 +1497,15 @@ if want safety; then
     echo "        as real, check it came from an issue/PR/CI body and NOT from the"
     echo "        definition text itself. A rising count with no new external source"
     echo "        means the docs were read, not that the deployment is under attack."
+    echo "        ⚠️  THE DOMINANT ECHO SOURCE IS THIS REPORT, NOT THE DOCS."
+    echo "        HISTORICAL CONTEXT — one measurement taken 2026-07-25, NOT this"
+    echo "        scan. THIS scan's own figures are the concentration line above."
+    echo "        Then: 453 occurrences resolved to 11 records in 2 sessions, 295"
+    echo "        of them on ONE record — a previous run's telemetry output, which"
+    echo "        prints the phrase list above and is then re-counted here. So the"
+    echo "        total is partly a function of how often THIS TOOL RAN. Trend the"
+    echo "        record and session counts — but flat records never CLEAR a hit,"
+    echo "        because a real attempt can share an existing record."
     echo
     echo "  credential-shaped strings reaching a transcript (distinct values, BY SHAPE):"
     echo "  [BOTH instances — this detector is format-agnostic, so it covers Codex too]"
@@ -1236,8 +1532,64 @@ if want safety; then
     # the shapes are counted separately, the weak-signal generic bucket is
     # labelled as such, and the counts are of DISTINCT matched values (one leak
     # pasted into fifty transcripts is one credential to rotate, not fifty).
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      # Dedupe per file before the portfolio-wide distinct-value reduction.
+    # One jq process per session dominated the live seven-day runtime (thousands
+    # of startups). Feed bounded NUL-delimited file batches to the SAME decoder
+    # instead. jq applies the filter independently to every input line, and the
+    # portfolio-wide `sort -u` below already makes file order and per-file
+    # boundaries irrelevant. Batch size 1 is therefore the byte-identical
+    # reference path used by the contract test; no raw pre-filter is introduced,
+    # so JSON-escaped matches remain visible. One awk process per batch restores
+    # a trailing record separator at every file boundary; without it, jq -R
+    # joins an unterminated live-session record to the next file.
+    CRED_DECODE_FILTER='
+        def image_payload_entry($parent):
+          if (($parent.type? // "") == "input_image"
+              and .key == "image_url"
+              and (.value | type) == "string")
+          then (.value | test("^data:image/[^,]*;base64,[A-Za-z0-9+/]*={0,2}$"; "i"))
+          else false
+          end;
+
+        def decoded_strings:
+          if type == "object" then
+            . as $parent
+            | (
+                keys_unsorted[],
+                (to_entries[]
+                 # Preserve the key/value association only where the generic
+                 # credential regex needs it; duplicating every large text
+                 # field as `key=value` would double the scan volume.
+                 | select((.key | test("(secret|token|password|passwd|api[_-]?key)"; "i"))
+                          and ((.value | type) == "string")
+                          and (image_payload_entry($parent) | not))
+                 | "\(.key)=\(.value)"),
+                (to_entries[]
+                 | select(image_payload_entry($parent) | not)
+                 | .value
+                 | decoded_strings)
+              )
+          elif type == "array" then .[] | decoded_strings
+          elif type == "string" then .
+          else empty
+          end;
+
+        select(length > 0) as $raw
+        | try (
+            $raw | fromjson | decoded_strings
+          ) catch $raw
+      '
+    export CRED_DECODE_FILTER
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
+      | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
+          'awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
+      | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
+      | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
+      | tr ';&|' '\n' | grep -v '^$' \
+      | sed -E -e 's/^[^A-Za-z0-9_-]//' \
+        -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
+        -e "s/^[^:=]*[:=][[:space:]]*[\"']?([^=].*)$/\1/" \
+        -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
+      | grep -E . | sort -u |
       # Normalise every match to its UNDERLYING VALUE before any dedup:
       # (1) split compound assignments on `;` — the generic alternative's value
       #     class includes `;`, so `GITHUB_TOKEN=ghp_…;AWS_…=AKIA…` is ONE
@@ -1275,50 +1627,7 @@ if want safety; then
       #     weak-bucket rows; the asymmetry is chosen — a splittable fragment
       #     only ever reaches a high-signal row by passing a FULL shape regex,
       #     while not splitting silently drops a real second credential.
-      jq -Rr '
-        def image_payload_entry($parent):
-          if (($parent.type? // "") == "input_image"
-              and .key == "image_url"
-              and (.value | type) == "string")
-          then (.value | test("^data:image/[^,]*;base64,[A-Za-z0-9+/]*={0,2}$"; "i"))
-          else false
-          end;
-
-        def decoded_strings:
-          if type == "object" then
-            . as $parent
-            | (
-                keys_unsorted[],
-                (to_entries[]
-                 # Preserve the key/value association only where the generic
-                 # credential regex needs it; duplicating every large text
-                 # field as `key=value` would double the scan volume.
-                 | select((.key | test("(secret|token|password|passwd|api[_-]?key)"; "i"))
-                          and ((.value | type) == "string")
-                          and (image_payload_entry($parent) | not))
-                 | "\(.key)=\(.value)"),
-                (to_entries[]
-                 | select(image_payload_entry($parent) | not)
-                 | .value
-                 | decoded_strings)
-              )
-          elif type == "array" then .[] | decoded_strings
-          elif type == "string" then .
-          else empty
-          end;
-
-        select(length > 0) as $raw
-        | try (
-            $raw | fromjson | decoded_strings
-          ) catch $raw
-      ' "$f" 2>/dev/null \
-        | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
-        | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
-        | tr ';&|' '\n' | grep -v '^$' \
-        | sed -E -e 's/^[^A-Za-z0-9_-]//' -e "s/^[^:=]*[:=][[:space:]]*[\"']?//" \
-        -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
-        | grep -E . | sort -u
-    done | sort -u | awk '
+    awk '
       # FULL-shape validation, not prefix sniffing: a generic value that merely
       # BEGINS like a token (`token=ghp_abcdefgh`, too short to be one) must
       # stay in the weak bucket, or the high-signal rows inherit false
@@ -1351,12 +1660,99 @@ if want safety; then
         else if (x ~ /^[a-z0-9_-]+\*\*\*/) s = s " [masked-display]"
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /'
+    # Concentration, mirroring the injection detector and placed directly under
+    # the table it qualifies. The TABLE counts distinct VALUES on purpose (one
+    # leak pasted into fifty transcripts is one credential to rotate); this
+    # answers the different question the table cannot — WHERE to look — without
+    # printing any value. Triaging the 2026-07-25 report needed four manual
+    # queries precisely because a documentation example, a test constant and a
+    # real leak render as the same integer.
+    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+      cred_sess=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
+      [ -n "$cred_sess" ] || cred_sess=unknown
+      # Redact the basename BEFORE it reaches the scratch file. redact() runs at
+      # the OUTPUT boundary, so a credential-shaped session name would otherwise
+      # sit unmasked in $CREDCONC for the length of the run — and that file
+      # survives a SIGKILL, which the EXIT/HUP/INT/TERM trap cannot cover. The
+      # report would still print it masked, so this buys value minimisation at
+      # rest, not a change in what is displayed. Ordered AFTER the `tr -cd` on
+      # purpose: the mask introduces `…` and `<>`, which that filter strips.
+      # Two distinct real sessions stay distinct (UUID basenames carry no
+      # credential shape and pass through untouched); two DIFFERENT names of the
+      # same shape can merge, which under-counts sessions in a case that cannot
+      # occur outside a fixture and fails safe. (Codex P2 on #2520.)
+      cred_sess=$(printf '%s\n' "$cred_sess" | redact)
+      [ -n "$cred_sess" ] || cred_sess=unknown
+      # Split compound matches on `;&|` exactly as the TABLE does. The generic
+      # alternative's value class admits those separators, so grep's
+      # leftmost-longest rule hands back a whole run of assignments as ONE
+      # match and `grep -o` emits ONE line — reporting `largest single record:
+      # 1` for a record the table counts as three credentials. That is the
+      # amplified record the metric exists to surface, so the count has to
+      # agree with the table. The line locator is carried onto every fragment;
+      # a match consisting only of separators still emits its one row, so a
+      # locator can never be lost. records/sessions reduce through `sort -u`
+      # and are unchanged by construction. (Codex P2 on #2520.)
+      # Normalized exactly as the locator is, and for the same reason: an
+      # unnormalized scan reports a styled leak as `across 0 transcript records`,
+      # which is the metric contradicting the table it qualifies.
+      strip_ansi < "$f" 2>/dev/null | grep -naoEi "$CRED_TABLE_RE" 2>/dev/null \
+        | awk -F: -v s="$cred_sess" '
+            $1 ~ /^[0-9]+$/ {
+              ln = substr($1, 1, 12)
+              rest = substr($0, index($0, ":") + 1)
+              n = split(rest, frag, /[;&|]/)
+              emitted = 0
+              for (i = 1; i <= n; i++) if (frag[i] != "") { print s "\t" ln; emitted = 1 }
+              if (!emitted) print s "\t" ln
+            }'
+    done > "$CREDCONC"
+    cred_records=$(sort -u "$CREDCONC" | grep -c . || true)
+    cred_sessions=$(cut -f1 "$CREDCONC" | sort -u | grep -c . || true)
+    cred_top=$(sort "$CREDCONC" | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
+    echo "      across ${cred_records:-0} transcript records in ${cred_sessions:-0} sessions; largest single record: ${cred_top:-0}"
+    echo "      (raw-line locator — it can DIVERGE FROM THE TABLE IN BOTH"
+    echo "       DIRECTIONS, so read it as a pointer, never as a second count."
+    echo "       UNDER: the table scans DECODED strings, so an escaped-quote"
+    echo "       match is counted there with no locator line here. OVER: the"
+    echo "       table structurally excludes complete base64 image payloads"
+    echo "       (encoded binary manufactures token shapes at random '+'/'/'"
+    echo "       boundaries); this raw scan does not, so a record inside such"
+    echo "       an image can appear here while the table stays empty."
+    echo "       Concentration is CONTEXT, never a verdict.)"
+    : > "$CREDCONC"
     echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"
     echo "     fix the path that logged it — see the cross-system rotation rule; triage"
     echo "     the weak-signal generic bucket before treating it as a leak."
     echo "     [masked-display] = a tool's own prefix+mask token rendering, e.g."
     echo "     gh auth status — the secret segment never reached the transcript;"
     echo "     verify the mask is the tool's own display, don't rotate)"
+    if [ "$CREDENTIAL_PROVENANCE" -eq 1 ]; then
+      printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
+        emit_credential_hits "$f"
+      done | redact > "$CREDPROV"
+      echo "    occurrence provenance (locator + SHAPE only — never the value):"
+      # Collapse identical locators to `Nx`. One record legitimately holds
+      # several matches, so the raw list repeats a location once per match —
+      # measured 171 lines for 100 distinct locations on a 1-day corpus, which
+      # buries the few high-signal rows this exists to surface. The count is
+      # PRINTED, not dropped, so nothing is silently truncated.
+      # NB: do NOT rebuild $0 to drop uniq's count — assigning to a field
+      # re-joins with OFS and turns the TABS into spaces, after which the
+      # split() below finds one field and every value prints empty.
+      sort "$CREDPROV" | uniq -c | sort -rn \
+        | awk '{
+            line = $0
+            sub(/^[[:space:]]*/, "", line)
+            n = line; sub(/[^0-9].*$/, "", n)
+            rest = line; sub(/^[0-9]+[[:space:]]+/, "", rest)
+            split(rest, p, "\t")
+            printf "      %4dx session=%s line=%s record=%s shape=%s\n", n, p[1], p[2], p[3], p[4]
+          }'
+      : > "$CREDPROV"
+    else
+      echo "    provenance: rerun with --section safety --credential-provenance"
+    fi
     echo
     echo "  build/codegen commands run in a session that ALSO checked out a"
     echo "  non-own branch (candidates for untrusted-code execution):"
@@ -1436,49 +1832,379 @@ if want drift; then
   echo
   echo "── DRIFT (loader ↔ constitution ↔ memory) ───────────────────────"
   CLAUDE_LOADER="${CLAUDE_LOADER_PATH:-$HOME/.claude/scheduled-tasks/daily-ai-assistant/SKILL.md}"
+  CLAUDE_IMPROVER_LOADER="${CLAUDE_IMPROVER_LOADER_PATH:-$HOME/.claude/scheduled-tasks/agent-improver/SKILL.md}"
   CODEX_LOADER="${CODEX_LOADER_PATH:-$CODEX_HOME/automations/daily-ai-engineer/automation.toml}"
+  CODEX_IMPROVER_LOADER="${CODEX_IMPROVER_LOADER_PATH:-$CODEX_HOME/automations/agent-improver/automation.toml}"
+  CODEX_AUTOMATION_STORE="${CODEX_AUTOMATION_STORE_PATH:-$CODEX_HOME/sqlite/codex-dev.db}"
   AGENTS_MD="$MONOREPO/AGENTS.md"
 
-  for f in "$CLAUDE_LOADER" "$CODEX_LOADER" "$AGENTS_MD"; do
+  discover_claude_schedule_store() {
+    local root candidate selected="" matches=0
+    if [ -n "${CLAUDE_SCHEDULE_STORE_PATH:-}" ]; then
+      [ -f "$CLAUDE_SCHEDULE_STORE_PATH" ] && printf '%s\n' "$CLAUDE_SCHEDULE_STORE_PATH"
+      return 0
+    fi
+    root="${CLAUDE_SCHEDULE_STORE_ROOT:-$HOME/Library/Application Support/Claude/claude-code-sessions}"
+    for candidate in "$root"/*/*/scheduled-tasks.json; do
+      [ -f "$candidate" ] || continue
+      jq -e --arg engineer "$CLAUDE_LOADER" --arg improver "$CLAUDE_IMPROVER_LOADER" '
+        [.scheduledTasks[]? |
+          select(.enabled == true) |
+          select(
+            (.id == "daily-ai-assistant" and .filePath == $engineer) or
+            (.id == "agent-improver" and .filePath == $improver)
+          ) |
+          .id
+        ] | sort | unique == ["agent-improver", "daily-ai-assistant"]
+      ' "$candidate" >/dev/null 2>&1 || continue
+      selected="$candidate"
+      matches=$((matches + 1))
+    done
+    [ "$matches" -eq 1 ] && printf '%s\n' "$selected"
+  }
+
+  CLAUDE_SCHEDULE_STORE=$(discover_claude_schedule_store)
+
+  for f in "$CLAUDE_LOADER" "$CLAUDE_IMPROVER_LOADER" \
+           "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER" "$AGENTS_MD"; do
     [ -f "$f" ] && echo "  present: $f" || echo "  MISSING: $f"
   done
+  if [ -n "$CLAUDE_SCHEDULE_STORE" ] && [ -f "$CLAUDE_SCHEDULE_STORE" ]; then
+    echo "  present: $CLAUDE_SCHEDULE_STORE"
+  else
+    echo "  MISSING: authoritative Claude scheduled-tasks store"
+  fi
 
   echo
-  echo "  declared cadence vs actual schedule:"
-  # Extract the loader's SELF-description only. Both loaders also describe the
-  # SIBLING's cadence ("You run in parallel with ... dispatched every second hour"),
-  # so an unanchored match reads the wrong agent's schedule back — anchor on the
-  # self-identifying clause instead.
-  # Portable awk rather than a regex: the Codex loader packs the whole prompt onto
-  # ONE line containing both cadences, so a greedy `.*dispatched` picks the sibling's.
-  # index() finds the FIRST "dispatched" after the self-identifying clause. awk also
-  # sidesteps bounded/lazy quantifiers, which differ across grep implementations
-  # (BSD grep vs GNU grep vs ugrep) and would make this pass locally and fail in CI.
-  self_cadence() {
-    awk '
+  echo "  cadence table vs all four runtime schedule pointers:"
+
+  # Canonicalise schedule slots for exact comparison. The compact form is
+  # "hours@minute" (for example 0,12@0), with * representing every hour.
+  # This keeps the output readable while still distinguishing staggered
+  # schedules that share the same hour set.
+  normalise_hours() {
+    awk -F',' '
       {
-        i = index($0, "You are the devantler-tech")
-        if (i > 0) {
-          rest = substr($0, i)
-          j = index(rest, "dispatched")
-          if (j > 0) { print substr(rest, j, 70); exit }
+        for (i = 1; i <= NF; i++) {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+          if ($i !~ /^[0-9][0-9]?$/) continue
+          h = $i + 0
+          if (h >= 0 && h <= 23) seen[h] = 1
         }
-      }' "$1" 2>/dev/null
+      }
+      END {
+        out = ""
+        for (h = 0; h <= 23; h++) {
+          if (!seen[h]) continue
+          out = out (out == "" ? "" : ",") h
+        }
+        print out
+      }
+    '
   }
-  if [ -f "$CODEX_LOADER" ]; then
-    echo "    codex rrule:  $(grep -o 'BYHOUR=[0-9,]*' "$CODEX_LOADER" 2>/dev/null | head -1)"
-    echo "    codex prose:  $(self_cadence "$CODEX_LOADER")"
+
+  validated_hours() {
+    awk -F',' '
+      {
+        if (NF < 1) exit 1
+        for (i = 1; i <= NF; i++) {
+          if ($i !~ /^[0-9][0-9]?$/ || $i + 0 < 0 || $i + 0 > 23) exit 1
+        }
+        print
+      }
+    ' | normalise_hours
+  }
+
+  schedule_from_parts() {
+    local hours="$1" minute="$2" normalised all_hours
+    [[ "$minute" =~ ^[0-9][0-9]?$ ]] || return 0
+    [ "$minute" -ge 0 ] && [ "$minute" -le 59 ] || return 0
+    if [ "$hours" = "*" ]; then
+      normalised="*"
+    else
+      normalised=$(printf '%s\n' "$hours" | validated_hours)
+      [ -n "$normalised" ] || return 0
+      all_hours="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+      [ "$normalised" = "$all_hours" ] && normalised="*"
+    fi
+    printf '%s@%s\n' "$normalised" "$((10#$minute))"
+  }
+
+  cadence_expected() {
+    local provider="$1" column="$2" lane cell minute parsed hours
+    [ -f "$AGENTS_MD" ] || return 0
+    lane=$(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]')
+    cell=$(awk -F'|' -v p="$provider" -v lane="$lane/*" -v c="$column" '
+      index($2, "**" p "**") && index($2, lane) { print $c; exit }
+    ' "$AGENTS_MD" 2>/dev/null)
+    [ -n "$cell" ] || return 0
+    if printf '%s\n' "$cell" | grep -qi 'every hour'; then
+      minute=$(printf '%s\n' "$cell" | sed -nE 's/.*:([0-9][0-9]?).*/\1/p')
+      schedule_from_parts "*" "$minute"
+      return 0
+    fi
+    parsed=$(printf '%s\n' "$cell" | awk '
+      {
+        value = $0
+        while (match(value, /[0-9][0-9]?:[0-9][0-9]/)) {
+          token = substr(value, RSTART, RLENGTH)
+          split(token, pair, ":")
+          if (pair[1] + 0 < 0 || pair[1] + 0 > 23 ||
+              pair[2] + 0 < 0 || pair[2] + 0 > 59) exit 1
+          if (minute != "" && minute != pair[2] + 0) exit 1
+          minute = pair[2] + 0
+          hours = hours (hours == "" ? "" : ",") pair[1]
+          value = substr(value, RSTART + RLENGTH)
+        }
+      }
+      END {
+        if (hours == "" || minute == "") exit 1
+        print hours "|" minute
+      }
+    ')
+    [ -n "$parsed" ] || return 0
+    hours=${parsed%%|*}
+    minute=${parsed#*|}
+    schedule_from_parts "$hours" "$minute"
+  }
+
+  codex_rrule_schedule() {
+    local rule="$1" parsed hours minute
+    rule=${rule#RRULE:}
+    [ -n "$rule" ] || return 0
+    parsed=$(printf '%s\n' "$rule" | awk -F';' '
+      {
+        for (i = 1; i <= NF; i++) {
+          split($i, pair, "=")
+          key = pair[1]
+          value = substr($i, length(key) + 2)
+          if (seen[key]++) invalid = 1
+          if (key == "FREQ") freq = value
+          else if (key == "INTERVAL") interval = value
+          else if (key == "BYHOUR") hours = value
+          else if (key == "BYMINUTE") minute = value
+          else if (key == "BYSECOND") second = value
+          else invalid = 1
+        }
+      }
+      END {
+        if (invalid || (freq != "DAILY" && freq != "HOURLY") ||
+            (interval != "" && interval != "1") ||
+            (hours != "" && hours !~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/) ||
+            (freq == "DAILY" && hours == "") ||
+            minute !~ /^[0-9][0-9]?$/ || minute + 0 > 59 ||
+            second != "0") exit 1
+        print (hours == "" ? "*" : hours) "|" minute
+      }
+    ')
+    [ -n "$parsed" ] || return 0
+    hours=${parsed%%|*}
+    minute=${parsed#*|}
+    schedule_from_parts "$hours" "$minute"
+  }
+
+  codex_pointer_schedule() {
+    local rule
+    [ -f "$1" ] || return 0
+    rule=$(sed -nE 's/^rrule[[:space:]]*=[[:space:]]*"(RRULE:[^"]+)".*/\1/p' "$1" \
+      | head -1)
+    codex_rrule_schedule "$rule"
+  }
+
+  codex_store_schedule() {
+    local store="$1" id="$2" rule escaped_id
+    [ -f "$store" ] || return 0
+    escaped_id=${id//\'/\'\'}
+    rule=$(sqlite3 -readonly "$store" \
+      "SELECT rrule FROM automations WHERE id = '$escaped_id';" 2>/dev/null \
+      | awk 'NF { print; exit }')
+    codex_rrule_schedule "$rule"
+  }
+
+  claude_store_field() {
+    local store="$1" id="$2" pointer="$3" field="$4"
+    [ -f "$store" ] || return 0
+    jq -r --arg id "$id" --arg pointer "$pointer" --arg field "$field" '
+      [.scheduledTasks[]? |
+        select(.enabled == true and .id == $id and .filePath == $pointer)
+      ] |
+      if length == 1 then (.[0][$field] // empty) else empty end
+    ' "$store" 2>/dev/null
+  }
+
+  claude_store_schedule() {
+    local store="$1" id="$2" pointer="$3" cron parsed hours minute
+    cron=$(claude_store_field "$store" "$id" "$pointer" cronExpression)
+    [ -n "$cron" ] || return 0
+    parsed=$(printf '%s\n' "$cron" | awk '
+      NF == 5 && $1 ~ /^[0-9][0-9]?$/ && $1 + 0 <= 59 &&
+        ($2 == "*" || $2 ~ /^[0-9][0-9]?(,[0-9][0-9]?)*$/) &&
+        $3 == "*" && $4 == "*" && $5 == "*" { print $2 "|" $1 }
+    ')
+    [ -n "$parsed" ] || return 0
+    hours=${parsed%%|*}
+    minute=${parsed#*|}
+    schedule_from_parts "$hours" "$minute"
+  }
+
+  claude_store_marker() {
+    local store="$1" id="$2" pointer="$3" last_run
+    last_run=$(claude_store_field "$store" "$id" "$pointer" lastRunAt)
+    [ -n "$last_run" ] || return 0
+    jq -nr --arg value "$last_run" '
+      $value | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor
+    ' 2>/dev/null
+  }
+
+  codex_dispatch_marker() {
+    local store="$1" id="$2" escaped_id
+    [ -f "$store" ] || return 0
+    escaped_id=${id//\'/\'\'}
+    sqlite3 -readonly "$store" \
+      "SELECT last_run_at FROM automations WHERE id = '$escaped_id';" 2>/dev/null \
+      | awk 'NF { print; exit }'
+  }
+
+  marker_advanced() {
+    local current="$1" baseline="$2"
+    [[ "$current" =~ ^[0-9]+$ ]] && [[ "$baseline" =~ ^[0-9]+$ ]] \
+      && [ "$current" -gt "$baseline" ]
+  }
+
+  compare_schedule() {
+    local label="$1" expected="$2" actual="$3" file="$4"
+    local marker="${5:-}" baseline="${6:-}" pointer_kind="${7:-pointer}"
+    if [ ! -f "$file" ]; then
+      echo "    UNKNOWN: $label schedule pointer missing"
+    elif [ -z "$actual" ] && [ "$pointer_kind" = recurrence ]; then
+      echo "    UNKNOWN: $label recurrence rule is incomplete or unsupported"
+    elif [ -z "$actual" ] && [ "$pointer_kind" = cron ]; then
+      echo "    UNKNOWN: $label authoritative scheduler record is missing or unsupported"
+    elif [ -z "$actual" ]; then
+      echo "    UNKNOWN: $label schedule could not be parsed from its pointer"
+    elif [ -z "$expected" ]; then
+      echo "    UNKNOWN: $label schedule absent from AGENTS.md cadence table"
+    elif [ "$expected" != "$actual" ]; then
+      echo "    ⚠️  DRIFT: $label schedule expected=$expected actual=$actual marker=${marker:-missing} baseline=${baseline:-missing}"
+    elif [ -z "$marker" ]; then
+      echo "    UNKNOWN: $label change marker missing"
+    elif [ -z "$baseline" ]; then
+      echo "    UNKNOWN: $label change marker baseline missing"
+    elif ! marker_advanced "$marker" "$baseline"; then
+      echo "    UNKNOWN: $label change marker did not advance (marker=$marker baseline=$baseline)"
+    else
+      printf '    %-16s expected=%s actual=%s MATCH marker=%s baseline=%s\n' \
+        "${label}:" "$expected" "$actual" "$marker" "$baseline"
+    fi
+  }
+
+  compare_codex_schedule() {
+    local label="$1" expected="$2" pointer_actual="$3" scheduler_actual="$4"
+    local pointer="$5" store="$6" marker="$7" baseline="$8"
+    if [ ! -f "$pointer" ]; then
+      echo "    UNKNOWN: $label schedule pointer missing"
+    elif [ ! -f "$store" ]; then
+      echo "    UNKNOWN: $label authoritative scheduler store missing"
+    elif [ -z "$pointer_actual" ]; then
+      echo "    UNKNOWN: $label recurrence rule is incomplete or unsupported"
+    elif [ -z "$scheduler_actual" ]; then
+      echo "    UNKNOWN: $label authoritative scheduler recurrence is missing or unsupported"
+    elif [ "$pointer_actual" != "$scheduler_actual" ]; then
+      echo "    ⚠️  DRIFT: $label schedule pointer=$pointer_actual scheduler=$scheduler_actual marker=${marker:-missing} baseline=${baseline:-missing}"
+    else
+      compare_schedule "$label" "$expected" "$scheduler_actual" "$pointer" \
+        "$marker" "$baseline" recurrence
+    fi
+  }
+
+  schedule_measured() {
+    local file="$1" expected="$2" actual="$3" marker="$4" baseline="$5"
+    [ -f "$file" ] && [ -n "$expected" ] && [ -n "$actual" ] \
+      && marker_advanced "$marker" "$baseline"
+  }
+
+  CLAUDE_ENGINEER_EXPECTED=$(cadence_expected Claude 3)
+  CLAUDE_IMPROVER_EXPECTED=$(cadence_expected Claude 4)
+  CODEX_ENGINEER_EXPECTED=$(cadence_expected Codex 3)
+  CODEX_IMPROVER_EXPECTED=$(cadence_expected Codex 4)
+  CLAUDE_ENGINEER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
+  CLAUDE_IMPROVER_ACTUAL=$(claude_store_schedule "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
+  CODEX_ENGINEER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_LOADER")
+  CODEX_IMPROVER_POINTER_ACTUAL=$(codex_pointer_schedule "$CODEX_IMPROVER_LOADER")
+  CODEX_ENGINEER_STORE_ACTUAL=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" daily-ai-engineer)
+  CODEX_IMPROVER_STORE_ACTUAL=$(codex_store_schedule "$CODEX_AUTOMATION_STORE" agent-improver)
+  CODEX_ENGINEER_ACTUAL=""
+  CODEX_IMPROVER_ACTUAL=""
+  [ -n "$CODEX_ENGINEER_POINTER_ACTUAL" ] \
+    && [ "$CODEX_ENGINEER_POINTER_ACTUAL" = "$CODEX_ENGINEER_STORE_ACTUAL" ] \
+    && CODEX_ENGINEER_ACTUAL="$CODEX_ENGINEER_STORE_ACTUAL"
+  [ -n "$CODEX_IMPROVER_POINTER_ACTUAL" ] \
+    && [ "$CODEX_IMPROVER_POINTER_ACTUAL" = "$CODEX_IMPROVER_STORE_ACTUAL" ] \
+    && CODEX_IMPROVER_ACTUAL="$CODEX_IMPROVER_STORE_ACTUAL"
+  CLAUDE_ENGINEER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant "$CLAUDE_LOADER")
+  CLAUDE_IMPROVER_MARKER=$(claude_store_marker "$CLAUDE_SCHEDULE_STORE" agent-improver "$CLAUDE_IMPROVER_LOADER")
+  CODEX_ENGINEER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" daily-ai-engineer)
+  CODEX_IMPROVER_MARKER=$(codex_dispatch_marker "$CODEX_AUTOMATION_STORE" agent-improver)
+  CLAUDE_ENGINEER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-}"
+  CLAUDE_IMPROVER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-}"
+  CODEX_ENGINEER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-}"
+  CODEX_IMPROVER_BASELINE="${CODEX_IMPROVER_MARKER_BASELINE:-}"
+
+  compare_schedule "claude engineer" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
+    "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" cron
+  compare_schedule "claude improver" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
+    "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE" cron
+  compare_codex_schedule "codex engineer" "$CODEX_ENGINEER_EXPECTED" \
+    "$CODEX_ENGINEER_POINTER_ACTUAL" "$CODEX_ENGINEER_STORE_ACTUAL" \
+    "$CODEX_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE"
+  compare_codex_schedule "codex improver" "$CODEX_IMPROVER_EXPECTED" \
+    "$CODEX_IMPROVER_POINTER_ACTUAL" "$CODEX_IMPROVER_STORE_ACTUAL" \
+    "$CODEX_IMPROVER_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"
+
+  if schedule_measured "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
+       "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" \
+     && schedule_measured "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
+       "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE" \
+     && schedule_measured "$CODEX_LOADER" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
+       "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" \
+     && schedule_measured "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
+       "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"; then
+    expand_schedules() {
+      awk -F'@' '
+        NF == 2 {
+          if ($1 == "*") {
+            for (hour = 0; hour <= 23; hour++) print hour ":" $2
+          } else {
+            count = split($1, hours, ",")
+            for (i = 1; i <= count; i++) print hours[i] ":" $2
+          }
+        }
+      '
+    }
+    ALL_SLOTS=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CLAUDE_IMPROVER_ACTUAL" \
+      "$CODEX_ENGINEER_ACTUAL" "$CODEX_IMPROVER_ACTUAL" | expand_schedules)
+    COLLISIONS=$(printf '%s\n' "$ALL_SLOTS" | awk '
+      NF { starts[$0]++ }
+      END {
+        for (slot in starts) {
+          if (starts[slot] > 1) collisions += starts[slot] - 1
+        }
+        print collisions + 0
+      }
+    ')
+    ENGINEER_DISPATCHES=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CODEX_ENGINEER_ACTUAL" \
+      | expand_schedules | awk 'NF { count++ } END { print count + 0 }')
+    echo "    local simultaneous starts/day: $COLLISIONS"
+    echo "    local engineer dispatches/day: $ENGINEER_DISPATCHES"
+  else
+    echo "    local simultaneous starts/day: UNKNOWN (one or more pointers unmeasured)"
+    echo "    local engineer dispatches/day: UNKNOWN (one or more engineer pointers unmeasured)"
   fi
-  if [ -f "$CLAUDE_LOADER" ]; then
-    echo "    claude prose: $(self_cadence "$CLAUDE_LOADER")"
-    echo "    claude cron:  (loader file holds no cron — cross-check the scheduled-tasks store)"
-  fi
-  echo "    ⇒ compare prose against the ACTUAL schedule; a mismatch means the agent"
-  echo "      is told a cadence it does not run on (affects its own pacing decisions)."
 
   echo
   echo "  retired-rule residue (loader asserts something the constitution dropped):"
-  for L in "$CLAUDE_LOADER" "$CODEX_LOADER"; do
+  for L in "$CLAUDE_LOADER" "$CLAUDE_IMPROVER_LOADER" \
+           "$CODEX_LOADER" "$CODEX_IMPROVER_LOADER"; do
     [ -f "$L" ] || continue
     if grep -qiE 'NEVER self-promote those|promotion stays the maintainer' "$L" 2>/dev/null; then
       if [ -f "$AGENTS_MD" ] && grep -qiE 'promotion gate .{0,40}retired|retired by maintainer direction' "$AGENTS_MD" 2>/dev/null; then

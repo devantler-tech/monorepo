@@ -87,6 +87,17 @@ write_marker() {
   mv -f "$tmp" "$marker"
 }
 
+ignore_marker() {
+  local wt="$1"
+  local exclude
+  exclude="$(git -C "$wt" rev-parse --git-path info/exclude)" ||
+    fail "cannot resolve git exclude file for worktree: $wt"
+  mkdir -p "$(dirname "$exclude")"
+  if ! grep -qxF "/$MARKER_NAME" "$exclude" 2>/dev/null; then
+    printf '/%s\n' "$MARKER_NAME" >>"$exclude"
+  fi
+}
+
 read_marker() {
   # Sets MARKER_OWNER and MARKER_CREATED_AT from the file, or leaves them empty.
   local marker="$1"
@@ -106,6 +117,7 @@ cmd_mark() {
   local wt="$1" owner="$2"
   [ -d "$wt" ] || fail "worktree path is not a directory: $wt"
   [ -n "$owner" ] || usage
+  ignore_marker "$wt"
   write_marker "$wt" "$owner"
   echo "worktree-claim: marked $wt owner=$owner"
 }
@@ -122,6 +134,7 @@ cmd_add() {
   if ! git -C "$repo" worktree add -b "$branch" "$wt"; then
     fail "git worktree add failed for $wt (branch $branch)"
   fi
+  ignore_marker "$wt"
   write_marker "$wt" "$owner"
   echo "worktree-claim: added $wt on $branch owner=$owner"
 }

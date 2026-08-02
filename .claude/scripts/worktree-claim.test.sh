@@ -47,6 +47,8 @@ owner_line="$(grep '^owner=' "$wt/.claude-worktree-owner")"
 check "marker owner line" 0 0 "$owner_line" "owner=session-alpha"
 created_line="$(grep '^created_at=' "$wt/.claude-worktree-owner")"
 check "marker created_at present" 0 0 "$created_line" "created_at="
+status_lines="$(git -C "$wt" status --porcelain --untracked-files=all)"
+check "marker leaves worktree clean" "" "$status_lines"
 
 # ── check: mine ────────────────────────────────────────────────────────────
 out="$("$script" check "$wt" "session-alpha" 2>&1)"
@@ -54,8 +56,6 @@ rc=$?
 check "check mine" 0 "$rc" "$out" "mine"
 
 # ── check: live foreign ────────────────────────────────────────────────────
-out="$("$script" check "$wt" "session-beta" 2>&1)" || rc=$?
-# When exit is non-zero under set -e with ||, capture explicitly:
 rc=0
 out="$("$script" check "$wt" "session-beta" 2>&1)" || rc=$?
 check "check live foreign" 3 "$rc" "$out" "LIVE foreign claim"

@@ -52,6 +52,111 @@ readonly STATUS_LADDER='✅ Done | 📊 Verifying | 🚀 Ready to Merge | 👀 I
 
 die() { printf 'board-add: %s\n' "$1" >&2; exit "${2:-2}"; }
 
+# Every gh call below sends stderr HERE rather than to /dev/null, because that
+# stderr is the only place GitHub says *why* it refused. Discarding it and
+# guessing "auth, network, or scope" named three causes that are fixed by looking
+# at the token, and omitted the one that is fixed by waiting — an exhausted
+# GraphQL budget (#2502). Each `2>` redirect truncates the file, so it always
+# holds the most recent failure and never a stale one.
+GH_ERR="$(mktemp)"
+trap 'rm -f "$GH_ERR"' EXIT
+
+# A SECONDARY limit is a short-term burst guard. It is reported separately
+# because neither primary counter reflects it — quoting a healthy remaining/limit
+# beside it would read as "you have budget", which is the opposite of the truth.
+gh_saw_secondary_limit() {
+  grep -qiE 'secondary rate limit|submitted too quickly' "$GH_ERR" 2>/dev/null
+}
+
+# True when the last captured stderr shows GitHub refused the call on a PRIMARY
+# hourly budget.
+gh_saw_rate_limit() {
+  grep -qiE 'rate.limit|RATE_LIMITED' "$GH_ERR" 2>/dev/null
+}
+
+# stderr is NOT sufficient on its own: `gh` does not reliably say when it was
+# refused for budget reasons. Measured 2026-07-27 with GraphQL at 0/5000 —
+#
+#   $ gh project view 5 --owner devantler-tech --format json
+#   unknown owner type
+#
+# — which names neither a rate limit nor the real cause, and is the single most
+# common failure point in this script. A classifier reading only stderr would
+# stay silent exactly where it is needed most.
+#
+# So ask the API what the budget actually is. `GET /rate_limit` is unmetered, so
+# it answers even when everything else is refused, and it is authoritative in a
+# way an error string is not.
+gh_budget_exhausted() { # <resource>
+  local remaining
+  remaining=$(gh api rate_limit --jq ".resources.${1}.remaining" 2>/dev/null) || return 1
+  case "$remaining" in
+    ''|*[!0-9]*) return 1 ;;   # unparseable — do not guess
+    *) [ "$remaining" -eq 0 ] ;;
+  esac
+}
+
+# die() for a failed gh call: report a rate limit AS a rate limit, and fall back
+# to the caller's original wording for everything else. The fallback matters as
+# much as the detection — a classifier that called every failure a rate limit
+# would be exactly as misleading as the guess it replaces.
+#
+# <resource> must name the budget the FAILED call actually spends. REST and
+# GraphQL are metered separately, so reading the GraphQL counter after a REST
+# refusal can print a healthy allowance as "exhausted" and quote an unrelated
+# reset time — reintroducing the wrong-diagnosis defect this helper exists to fix.
+#
+# <state> says what is true of the board now. It is per-call-site on purpose:
+# once item-add has succeeded, "nothing was written" is false, and repeating it
+# would hide a status-less item that needs repairing.
+die_gh() { # <resource: graphql|core> <context> <state> <message-for-every-other-cause>
+  local resource="$1" context="$2" state="$3" other="$4" label budget
+  case "$resource" in
+    graphql) label="GraphQL" ;;
+    core)    label="REST (core)" ;;
+    *)       label="$resource" ;;
+  esac
+
+  if gh_saw_secondary_limit; then
+    die "${context} — GitHub applied a SECONDARY rate limit (a short-term burst guard).
+          ${state}
+          Neither primary counter reflects this, so no allowance is quoted. Slow the
+          calls down and retry shortly. This is NOT an auth, scope, or network problem."
+  fi
+
+  # Either signal is enough: GitHub said so, OR the budget is provably gone.
+  if gh_saw_rate_limit || gh_budget_exhausted "$resource"; then
+    # `GET /rate_limit` is itself unmetered, so it still answers precisely when
+    # everything else is refused. Never fatal: a missing figure must not turn a
+    # clear diagnosis into a crash.
+    budget=$(gh api rate_limit \
+               --jq "\"\\(.resources.${resource}.remaining)/\\(.resources.${resource}.limit), resets \\(.resources.${resource}.reset|todate)\"" \
+             2>/dev/null) || budget="figure unavailable"
+    die "${context} — GitHub ${label} RATE LIMIT is exhausted (${budget}).
+          ${state}
+          This is NOT an auth, scope, or network problem — the credential is fine.
+          The budget is shared across every agent lane and session, so a survey or
+          bulk sweep in the same hour is the usual cause."
+  fi
+  die "$other"
+}
+
+# The two states the board can be in when a call fails.
+readonly STATE_NOTHING_WRITTEN="Nothing was written: the board add did NOT happen. Retry after the reset."
+# Say only what is actually known. `item-add` is idempotent server-side and
+# returns the EXISTING item for an issue already on the board, so at this point
+# the script cannot distinguish a fresh add from a no-op — which means it cannot
+# claim the Status is unset either. Getting this wrong is harmful, not merely
+# imprecise: the repair is to re-run, a re-run writes the DEFAULT status, and an
+# operator told the card has no Status will re-run and silently overwrite a real
+# one back to Backlog (the clobber measured in monorepo#2506).
+readonly STATE_ITEM_ON_BOARD="The item is ON THE BOARD, but its Status was NOT written. item-add returns the
+          existing item for an issue that was already there, so this cannot tell a
+          fresh add from a no-op: the Status is either unset (new item) or still its
+          previous value (already present). Re-run this script on the same URL after
+          the reset to set it — but look at the card first, because the re-run
+          OVERWRITES whatever Status it currently has."
+
 usage() {
   cat >&2 <<EOF
 usage: board-add.sh <issue-url> [status-name]
@@ -91,11 +196,20 @@ command -v jq >/dev/null 2>&1 || die "jq not found"
 
 # FAIL CLOSED on visibility: project 5 is public, so a private repo's issue must
 # never be swept onto it by an agent. An unreadable repo is treated as private.
-IS_PRIVATE=$(gh api "repos/${REPO_OWNER}/${REPO_NAME}" --jq '.private' 2>/dev/null || echo "unknown")
+IS_PRIVATE=$(gh api "repos/${REPO_OWNER}/${REPO_NAME}" --jq '.private' 2>"$GH_ERR" || echo "unknown")
 case "$IS_PRIVATE" in
   false) : ;;
   true)  die "${REPO_OWNER}/${REPO_NAME} is PRIVATE; project 5 is public — adding it is a maintainer decision, not an agent default" ;;
-  *)     die "could not determine visibility of ${REPO_OWNER}/${REPO_NAME}; refusing (fail-closed)" ;;
+  # Still fail-closed — an undetermined visibility never proceeds. But say WHY:
+  # this probe is on the REST budget, which has its own separate limit, and
+  # "refusing (fail-closed)" alone reads as "this repo is unreadable to you"
+  # when the real answer may be "come back after the reset".
+  # `core`, not `graphql`: this is a REST call, and the two budgets are metered
+  # separately — quoting the GraphQL counter here could print a healthy allowance
+  # as "exhausted" with an unrelated reset time.
+  *)     die_gh core "could not determine visibility of ${REPO_OWNER}/${REPO_NAME}" \
+                "$STATE_NOTHING_WRITTEN" \
+                "could not determine visibility of ${REPO_OWNER}/${REPO_NAME}; refusing (fail-closed)" ;;
 esac
 
 # Field metadata. Resolved live rather than hardcoded: option ids change whenever
@@ -107,15 +221,19 @@ esac
 # here as a *usage* error) and, because stderr is discarded, no diagnostic at
 # all. Binding the failure to `die` keeps operational failures on exit 2 where
 # they belong. An assignment inside a `||` list does not trip `set -e`.
-PROJECT_ID=$(gh project view "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json 2>/dev/null \
+PROJECT_ID=$(gh project view "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json 2>"$GH_ERR" \
              | jq -r '.id // empty') \
-             || die "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER} (auth, network, or scope)"
+             || die_gh graphql "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER}" \
+                       "$STATE_NOTHING_WRITTEN" \
+                       "could not reach the Projects API for ${PROJECT_OWNER}/${PROJECT_NUMBER} (auth, network, or scope)"
 [ -n "$PROJECT_ID" ] || die "could not resolve project ${PROJECT_OWNER}/${PROJECT_NUMBER}"
 
 FIELD_JSON=$(gh project field-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
-               --limit "$FIELD_PAGE_LIMIT" --format json 2>/dev/null \
+               --limit "$FIELD_PAGE_LIMIT" --format json 2>"$GH_ERR" \
              | jq -r '.fields[] | select(.name=="Status")') \
-             || die "could not read the field list of project ${PROJECT_NUMBER} (auth, network, or scope)"
+             || die_gh graphql "could not read the field list of project ${PROJECT_NUMBER}" \
+                       "$STATE_NOTHING_WRITTEN" \
+                       "could not read the field list of project ${PROJECT_NUMBER} (auth, network, or scope)"
 [ -n "$FIELD_JSON" ] || die "could not resolve the Status field on project ${PROJECT_NUMBER}"
 
 FIELD_ID=$(printf '%s' "$FIELD_JSON" | jq -r '.id // empty')
@@ -137,8 +255,10 @@ fi
 # Add. `item-add` is idempotent server-side (an existing item is returned, not
 # duplicated), and prints nothing useful off-TTY, so ask for the id explicitly.
 ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
-            --url "$ISSUE_URL" --format json 2>/dev/null | jq -r '.id // empty') \
-            || die "item-add failed for ${ISSUE_URL} (auth, network, or scope)"
+            --url "$ISSUE_URL" --format json 2>"$GH_ERR" | jq -r '.id // empty') \
+            || die_gh graphql "item-add failed for ${ISSUE_URL}" \
+                      "$STATE_NOTHING_WRITTEN" \
+                      "item-add failed for ${ISSUE_URL} (auth, network, or scope)"
 [ -n "$ITEM_ID" ] || die "item-add returned no item id for ${ISSUE_URL}"
 
 # DELIBERATELY NO ROLLBACK-BY-DELETE. An earlier revision deleted the item when
@@ -148,15 +268,21 @@ ITEM_ID=$(gh project item-add "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" \
 # misreadings ends in DELETING a board card the maintainer already had. That
 # trades a recoverable failure for a destructive one.
 #
-# The failure left behind here is benign and self-healing instead: a status-less
-# item, which is exactly what this script fixes, and re-running it on the same
-# URL sets the Status (item-add is idempotent). So we fail loudly and tell the
-# caller the one thing that resolves it.
+# The failure left behind here is recoverable instead: the item is on the board
+# with its Status unwritten, and re-running this script on the same URL sets it
+# (item-add is idempotent). So we fail loudly and tell the caller what is true.
 if ! gh project item-edit --id "$ITEM_ID" --project-id "$PROJECT_ID" \
-        --field-id "$FIELD_ID" --single-select-option-id "$OPTION_ID" >/dev/null 2>&1; then
-  die "could not set the Status for ${ISSUE_URL} (item ${ITEM_ID}).
-          The item may now be on the board WITHOUT a Status — re-run this script
-          on the same URL to finish it; it is idempotent and will not duplicate."
+        --field-id "$FIELD_ID" --single-select-option-id "$OPTION_ID" >/dev/null 2>"$GH_ERR"; then
+  # item-add has ALREADY succeeded here, so "nothing was written" would be false.
+  # It does NOT follow that the item is new or status-less — item-add returns the
+  # existing item too — so neither message may promise an unset Status.
+  die_gh graphql "could not set the Status for ${ISSUE_URL} (item ${ITEM_ID})" \
+         "$STATE_ITEM_ON_BOARD" \
+         "could not set the Status for ${ISSUE_URL} (item ${ITEM_ID}).
+          The item is on the board and its Status was not written — it is either
+          unset, or unchanged if the issue was already there.
+          To set it, re-run this script on the same URL — but look at the card
+          first, because that OVERWRITES whatever Status it currently has."
 fi
 
 # VERIFY BY READ-BACK — the whole point of the script. An exit-0 from item-edit is
@@ -165,7 +291,14 @@ fi
 # Fetch the ONE item by node id. Do NOT use `gh project item-list`: it walks all
 # ~4,300 board items over the shared 5k/hr GraphQL budget and has already died on
 # that here — an unaffordable read for a single-field check.
-ACTUAL=$(gh api graphql -f id="$ITEM_ID" -f query='
+#
+# The read-back must distinguish "the board says something else" from "the query
+# never ran". It used to swallow both with `|| true`, so an unrun query left
+# $ACTUAL empty and the script announced "board shows no Status at all" — a
+# statement of fact about a board it had not managed to read. Under a rate limit
+# that is exactly what happened, and it is the most misleading of the five sites:
+# the other four report a failure, this one reported a wrong answer.
+if ! ACTUAL=$(gh api graphql -f id="$ITEM_ID" -f query='
   query($id: ID!) {
     node(id: $id) {
       ... on ProjectV2Item {
@@ -174,7 +307,31 @@ ACTUAL=$(gh api graphql -f id="$ITEM_ID" -f query='
         }
       }
     }
-  }' --jq '.data.node.fieldValueByName.name // empty' 2>/dev/null || true)
+  }' --jq '.data.node.fieldValueByName.name // empty' 2>"$GH_ERR"); then
+  # Both writes have already been attempted; only the confirmation failed. Saying
+  # "nothing was written" here would be the most wrong of all six sites.
+  #
+  # But the opposite overclaim is just as wrong, and this site used to make it
+  # ("the Status write already succeeded … most likely set"). The contract stated
+  # at the top of this read-back is the whole reason it exists: an exit-0 from
+  # item-edit is NOT evidence the value landed. Once the read is what failed, the
+  # final state is genuinely unknown — so report the write as UNVERIFIED, and warn
+  # about the overwrite, because the repair instruction is "re-run" and a re-run
+  # writes the DEFAULT status over whatever is actually there (monorepo#2506).
+  die_gh graphql "could not read the Status back for ${ISSUE_URL} (item ${ITEM_ID})" \
+         "The item is on the board. The Status write command returned success, but
+          that is not evidence it persisted — only this read-back establishes that,
+          and the read-back is what failed. The Status is therefore UNVERIFIED: it
+          may or may not be set. To confirm it, re-run this script on the same URL
+          after the reset — but look at the card first, because that OVERWRITES
+          whatever Status it currently has." \
+         "could not read the Status back for ${ISSUE_URL} (item ${ITEM_ID}) (auth, network, or scope).
+          This is a failed VERIFICATION rather than a failed write — but the write is
+          not confirmed either: the command returned success, and only this read-back
+          could establish that it persisted. The Status is UNVERIFIED. To confirm it,
+          re-run this script on the same URL — but look at the card first, because
+          that OVERWRITES whatever Status it currently has."
+fi
 
 if [ "$ACTUAL" != "$STATUS_NAME" ]; then
   # Do NOT echo $ACTUAL — it is board-controlled text, the same untrusted class

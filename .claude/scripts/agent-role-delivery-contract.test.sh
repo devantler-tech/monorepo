@@ -13,6 +13,10 @@ constitution="${repo_root}/AGENTS.md"
 settings="${repo_root}/.claude/settings.json"
 desired_state="${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.json"
 engineer_agent="${repo_root}/.claude/agents/daily-maintainer.md"
+cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
+maintenance_overlay="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
+engineering_overlay="${repo_root}/.claude/skills/product-engineering/SKILL.md"
+self_improvement_overlay="${repo_root}/.claude/skills/self-improvement/SKILL.md"
 finops_skill="${repo_root}/.claude/skills/finops/SKILL.md"
 lifestyle_floor="${repo_root}/.claude/finops/lifestyle-floor.md"
 snapshot="${repo_root}/.claude/scripts/finops-snapshot.sh"
@@ -50,6 +54,77 @@ grep -Fq '### Authority model' "${constitution}" ||
 grep -Fq 'plugins/agentic-engineering/agents/agent-improver.agent.md' "${constitution}" ||
   fail "consumer does not name the upstream Agent Improver source"
 
+# The bundled SKILL.md is SYNCED from devantler-tech/agent-skills (it carries
+# metadata.github-repo and the update-agent-skills workflow re-pulls it), so an edit there
+# is silently reverted. The consumer listed it as an authoring surface until 2026-07-25,
+# which would route a generic fix into a file that discards it.
+#
+skill_path='plugins/agentic-engineering/skills/agent-improvement/SKILL.md'
+
+# Owner, path, provenance value and the non-authoring rule must all appear in ONE bullet.
+# Asserting any of them against the whole contract is a scope hole — verified: changing the
+# real owner to agent-plugins and appending an unrelated copy of the expected phrase
+# elsewhere satisfied a global check. Extraction therefore starts at the OWNER line (the
+# bullet's first line), not at the path line, so the owner declaration is bound to this skill.
+# Stop at the next SIBLING BULLET as well as at a blank line. Markdown bullets are normally
+# consecutive with no blank line between them, so a blank-line-only terminator swallowed the
+# following bullet too — and the "same bullet" binding this guard claims could then be
+# satisfied by text that had moved into that sibling.
+skill_bullet="$(awk '
+  !inb && /\*\*`devantler-tech\/agent-skills`\*\* authors `agent-improvement\/`/ { inb = 1; print; next }
+  inb {
+    if ($0 ~ /^[[:space:]]*$/) exit
+    if ($0 ~ /^[[:space:]]*[-*+] /) exit
+    print
+  }
+' "${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' ')"
+[ -n "${skill_bullet}" ] ||
+  fail "consumer does not name agent-skills as the owner of bundled skills"
+assert_bullet() {
+  case "${skill_bullet}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+assert_bullet "${skill_path}\` carries" \
+  "the agent-skills owner bullet does not name the bundled agent-improvement/SKILL.md"
+assert_bullet 'github-repo: https://github.com/devantler-tech/agent-skills' \
+  "the agent-skills owner bullet does not name devantler-tech/agent-skills as the upstream"
+assert_bullet 'It is a synced artifact, **not** an authoring surface' \
+  "the agent-skills owner bullet does not mark that copy a non-authoring surface"
+
+# Provenance is a per-FILE question: the same plugin directory holds synced skills and
+# locally-authored agents, so a per-directory rule is wrong in one direction or the other.
+#
+# An UNINITIALISED submodule is a normal local state, not contract drift. Detect it first, or
+# a fresh checkout reports "the skill is missing upstream" and hides the actionable fix.
+plugin_root="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering"
+[ -d "${plugin_root}" ] ||
+  fail "libraries/agent-plugins is not initialised, so the bundled skill cannot be checked. Initialise it with
+       .claude/scripts/submodule-init.sh libraries/agent-plugins"
+
+bundled_skill="${plugin_root}/skills/agent-improvement/SKILL.md"
+[ -f "${bundled_skill}" ] ||
+  fail "bundled agent-improvement/SKILL.md is missing at the pinned plugin revision — AGENTS.md routes generic skill edits through this path, so its absence invalidates the contract text"
+
+# Query the frontmatter STRUCTURALLY, at the exact YAML path `metadata.github-repo`.
+#
+# A line-oriented grep cannot express this and kept failing in new ways: it accepted the value
+# under a different mapping (`examples.github-repo`), accepted a body example after the real
+# field was deleted, and treated frontmatter with no closing delimiter as valid. yq resolves
+# the real path or returns null, which is the property actually wanted — and it is SHORTER than
+# the hand-rolled extraction it replaces, so this closes the hole while cutting complexity.
+command -v yq >/dev/null ||
+  fail "yq is required to verify the bundled skill's provenance structurally. Install it (brew install yq; it is preinstalled on GitHub ubuntu runners)"
+# `|| skill_upstream=''` is load-bearing under `set -e`: yq exits non-zero on unparseable
+# frontmatter (e.g. no closing delimiter), which would abort the script SILENTLY — a failing
+# test with no message, indistinguishable from a crash. Capture the failure and let the
+# assertion below report it with the actionable text.
+skill_upstream="$(yq --front-matter=extract '.metadata.github-repo // ""' "${bundled_skill}" 2>/dev/null)" ||
+  skill_upstream=''
+[ "${skill_upstream}" = 'https://github.com/devantler-tech/agent-skills' ] ||
+  fail "bundled agent-improvement/SKILL.md does not declare metadata.github-repo = https://github.com/devantler-tech/agent-skills (got: '${skill_upstream:-<none or unparseable frontmatter>}') — re-check the owning repository before trusting the contract text"
+
 # Every machine-readable entrypoint pointer must resolve to an agent the pinned plugin
 # actually BUNDLES. Derived from the submodule rather than hard-coded, so the next upstream
 # rename cannot leave this consumer pointing at a file that no longer exists — which is
@@ -66,16 +141,105 @@ entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
        (CI does this in the workflow step before this test)."
 [ -f "${plugin_agents}/${entrypoint}.agent.md" ] ||
   fail "desired state entrypoint '${entrypoint}' does not resolve to a bundled agent in ${plugin_agents}"
+canonical_engineer="${plugin_agents}/${entrypoint}.agent.md"
+canonical_engineer_flat="$(flatten "${canonical_engineer}")"
+assert_canonical_engineer_prose() {
+  case "${canonical_engineer_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
 jq -e --arg e "${entrypoint}" '
   (.spec.roles | has($e))
   and .spec.runtime.scheduler.schedules[$e].definitionFrom
       == ("plugin:agentic-engineering/" + $e)
+  and .spec.source.updatePolicy == "latest-reviewed-default-branch"
+  and .spec.source.refreshTiming == "before-starting-each-run"
 ' "${desired_state}" > /dev/null ||
-  fail "desired state role and schedule keys must match its declared entrypoint '${entrypoint}'"
+  fail "desired state role, schedule, and reviewed-plugin refresh policy must match its declared entrypoint '${entrypoint}'"
 # Backticks are literal Markdown, not command substitution.
 # shellcheck disable=SC2016
 assert_prose "entrypoint **\`${entrypoint}\`**" \
   "consumer prose names an entrypoint other than the declared '${entrypoint}'"
+
+# Definition ownership has two layers. Portable role behaviour belongs in the reviewed
+# plugin (or a bundled skill's provenance-recorded upstream); deployment facts belong in
+# this consumer's AGENTS.md. A local provider wrapper may route to those sources, but must
+# not become a second generic definition. This is the drift shape that left the legacy
+# daily-maintainer agent carrying a near-complete copy of agentic-engineer after the plugin
+# became canonical.
+# Markdown backticks are literal; no shell expansion is intended.
+# shellcheck disable=SC2016
+assert_prose 'The reviewed plugin is canonical for portable role behaviour; this `AGENTS.md` is canonical only for this deployment' \
+  "consumer does not distinguish the plugin role from the deployment contract"
+assert_prose 'Never use the bare word *constitution* as an edit destination' \
+  "consumer permits an ambiguous constitution reference to bypass definition routing"
+assert_prose 'is migration inventory, not a second canonical source' \
+  "consumer can mistake unextracted generic prose for a local authoring source"
+assert_engineer_prose 'compatibility alias, not a second role definition' \
+  "legacy daily-maintainer agent does not declare itself a thin compatibility alias"
+assert_engineer_prose 'Generic role behaviour belongs in the reviewed plugin' \
+  "legacy daily-maintainer agent does not route generic changes to the plugin"
+assert_engineer_prose 'latest-reviewed-default-branch' \
+  "legacy daily-maintainer agent does not declare the reviewed-plugin refresh policy"
+if grep -Eq '^## (How you operate|Spend stewardship)' "${engineer_agent}"; then
+  fail "legacy daily-maintainer agent duplicates canonical plugin role sections"
+fi
+[ "$(wc -l < "${engineer_agent}")" -le 45 ] ||
+  fail "legacy daily-maintainer agent is no longer a thin provider compatibility alias"
+for deployment_skill in \
+  portfolio-maintenance \
+  product-engineering \
+  self-improvement \
+  finops; do
+  DEPLOYMENT_SKILL="${deployment_skill}" yq --front-matter=extract -e \
+    '[ (.skills // [])[] | select(. == strenv(DEPLOYMENT_SKILL)) ] | length == 1' \
+    "${engineer_agent}" >/dev/null ||
+    fail "legacy daily-maintainer alias does not attach deployment skill ${deployment_skill}"
+done
+memory_hygiene_line="$(grep -nF '.claude/scripts/memory-hygiene.sh --layout legacy --dir' \
+  "${engineer_agent}" | head -n 1 | cut -d: -f1 || true)"
+memory_load_line="$(grep -nF "Load the runtime's native persistent memory" \
+  "${engineer_agent}" | head -n 1 | cut -d: -f1 || true)"
+[ -n "${memory_hygiene_line}" ] && [ -n "${memory_load_line}" ] &&
+  [ "${memory_hygiene_line}" -lt "${memory_load_line}" ] ||
+  fail "legacy daily-maintainer alias must run legacy memory hygiene before loading persistent memory"
+for compatibility_overlay in \
+  "${maintenance_overlay}" \
+  "${engineering_overlay}" \
+  "${self_improvement_overlay}"; do
+  grep -Fq 'Deployment compatibility overlay — not a generic authoring source' \
+    "${compatibility_overlay}" ||
+    fail "${compatibility_overlay#"${repo_root}/"} does not route portable changes upstream"
+done
+grep -Fq 'Classify each target by the file-level ownership and authority rules' \
+  "${self_improvement_overlay}" ||
+  fail "self-improvement distillation does not classify definition ownership before choosing a repository"
+grep -Fq 'metadata.github-repo' "${self_improvement_overlay}" ||
+  fail "self-improvement distillation does not route synced skills by structured provenance"
+if grep -Fq '`.claude/agents/*`, `.claude/skills/*`' "${self_improvement_overlay}"; then
+  fail "self-improvement distillation still routes every local agent or skill change to the monorepo"
+fi
+grep -Fq 'agentic-engineer.agent.md' "${cursor_loader}" ||
+  fail "Cursor adapter does not resolve the canonical plugin role"
+grep -Fq '.claude/scripts/submodule-init.sh libraries/agent-plugins' "${cursor_loader}" ||
+  fail "Cursor adapter does not pass the plugin path to submodule-init"
+grep -Fq 'git -C libraries/agent-plugins fetch origin main' "${cursor_loader}" ||
+  fail "Cursor adapter does not refresh the reviewed plugin default branch before loading it"
+grep -Fq 'git -C libraries/agent-plugins show origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md' \
+  "${cursor_loader}" ||
+  fail "Cursor adapter does not load the agent from the refreshed reviewed plugin ref"
+for cursor_overlay in \
+  '.claude/skills/portfolio-maintenance/SKILL.md' \
+  '.claude/skills/product-engineering/SKILL.md' \
+  '.claude/skills/self-improvement/SKILL.md'; do
+  grep -Fq "${cursor_overlay}" "${cursor_loader}" ||
+    fail "Cursor adapter does not load deployment overlay ${cursor_overlay}"
+done
+if grep -Fq '.claude/agents/daily-maintainer.md' "${cursor_loader}"; then
+  fail "Cursor adapter still boots from the legacy local alias"
+fi
+
 grep -Fq 'Agent Improver scorecard store' "${constitution}" ||
   fail "Memory does not name the Agent Improver scorecard store"
 grep -Fq 'open verification-hypothesis store' "${constitution}" ||
@@ -91,6 +255,15 @@ for authority_row in \
 done
 grep -Fq 'FULL SYMMETRIC AUTHORITY' "${constitution}" ||
   fail "consumer does not preserve the maintainer-granted symmetric authority"
+# The never-widen-enforcement prohibition is ACTOR-SCOPED. Stated unconditionally it
+# contradicts the Authority model row above, which grants the agent-improver autonomous
+# enforcement loosening — and a scheduled improver reading it would defer a fix it is
+# mandated to apply. Both halves are pinned: the scoping AND the exception, because
+# deleting either one alone silently recreates the contradiction (#2248).
+assert_prose "for *this* engineer that edit is the maintainer's alone" \
+  "the never-widen-enforcement prohibition is no longer scoped to the Agentic Engineer"
+assert_prose 'holds a different grant, and *Authority model* authorises it to loosen enforcement' \
+  "consumer no longer exempts the agent-improver from the never-widen-enforcement prohibition"
 grep -Fq 'An issue, recommendation, or draft PR is not completion' "${constitution}" ||
   fail "consumer permits a write-capable role to stop before merge"
 grep -Fq '### Writer namespaces' "${constitution}" ||
@@ -107,6 +280,26 @@ for writer_namespace in '`claude/*`' '`codex/*`' '`cursor/*`'; do
 done
 grep -Fq 'remain undeployed and read-only' "${constitution}" ||
   fail "consumer does not fail closed for unmapped Cursor role schedules"
+assert_prose 'the in-session read-back is necessary but not sufficient' \
+  "runtime-local delivery incorrectly treats an in-session read-back as persistence proof"
+assert_prose 're-read after at least one dispatch of that schedule' \
+  "runtime-local delivery does not require a post-dispatch persistence check"
+assert_prose 'a reverted value with an advanced marker means the runtime overwrote the file' \
+  "runtime-local delivery does not recognise the dispatch-time rewrite failure mode"
+for marker_baseline in \
+  '`CLAUDE_ENGINEER_MARKER_BASELINE`' \
+  '`CLAUDE_IMPROVER_MARKER_BASELINE`' \
+  '`CODEX_ENGINEER_MARKER_BASELINE`' \
+  '`CODEX_IMPROVER_MARKER_BASELINE`'; do
+  assert_prose "${marker_baseline}" \
+    "runtime-local delivery does not name ${marker_baseline} for persistence verification"
+done
+assert_prose 'authoritative `scheduled-tasks.json` record selected by exact task id plus pointer path' \
+  "runtime-local delivery does not require the authoritative Claude scheduler record"
+assert_prose '`lastRunAt` as its marker; the `SKILL.md` description is not scheduler state' \
+  "runtime-local delivery can mistake Claude loader prose for deployed cadence"
+assert_prose 'A missing or ambiguous store, missing baseline, marker that did not advance, or incomplete recurrence rule is `UNKNOWN`, never `MATCH`.' \
+  "runtime-local delivery does not fail closed on incomplete persistence evidence"
 
 # --- The merged spend mandate -------------------------------------------------
 # Spend is a dimension of the Agentic Engineer. The consumer must supply the Spend
@@ -148,14 +341,12 @@ for spend_source in "${finops_skill}" "${lifestyle_floor}" "${snapshot}"; do
     fail "Spend contract names a source that does not exist: ${spend_source}"
 done
 
-# The deployed local actor must actually carry the merged mandate. Retiring the standalone
-# agent without teaching the surviving one to do spend work would silently drop the role.
-assert_engineer_prose 'Steward the spend' \
-  "local engineer agent does not carry the merged spend mandate"
-assert_engineer_prose 'never move money' \
-  "local engineer agent does not carry the never-move-money boundary"
-grep -Eq '^[[:space:]]*-[[:space:]]+finops[[:space:]]*$' "${engineer_agent}" ||
-  fail "local engineer agent does not load the finops cost-pass skill"
+# The canonical plugin actor must carry the merged mandate. The local alias deliberately does
+# not repeat it; asserting these boundaries there would force the duplication this contract bans.
+assert_canonical_engineer_prose 'Spend stewardship — the money side of the same portfolio' \
+  "canonical plugin engineer does not carry the merged spend mandate"
+assert_canonical_engineer_prose 'You never move money' \
+  "canonical plugin engineer does not carry the never-move-money boundary"
 grep -Fq 'drive the reviewed head to merge' "${finops_skill}" ||
   fail "spend run loop does not drive its engineering PR through merge"
 

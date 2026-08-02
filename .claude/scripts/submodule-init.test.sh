@@ -322,6 +322,56 @@ report "scoped cleanup: a pre-existing sibling worktree still exists afterwards"
 report "scoped cleanup: that sibling worktree is still FUNCTIONAL (not just present)" \
   "$(git -C "$c10_sib" rev-parse --show-toplevel >/dev/null 2>&1 && echo yes || echo no)"
 
+# 11. #2492 — init mode must FAIL when `git submodule update --init` exits 0 without populating.
+#     Observed running from a linked superproject worktree while a sibling worktree already held the
+#     submodule: git printed `checked out '<sha>'`, exited 0, left the directory EMPTY, and the script
+#     still reported `isolated ✓` with exit 0 — `probe` verifies isolation, not content, so it passes
+#     vacuously on an empty tree. Simulated here with the same PATH-shim technique as case 10 so the
+#     reproduction is deterministic on every platform rather than depending on that git quirk.
+#
+#     ⚠️ HONEST LIMIT — the production symptom was a false SUCCESS (`isolated ✓`, exit 0). That exact
+#     state could NOT be reproduced hermetically: in a fixture, an empty submodule has no gitdir, so
+#     `probe` rejects it on its own and the run already fails without the guard. Two of the four
+#     assertions below are therefore non-discriminating and are labelled as such. What IS proven RED
+#     is the guard's real contribution — failing AT the init step with an accurate message, instead of
+#     continuing into `repair` and emerging with a benign-sounding "nothing to probe". The guard is a
+#     fail-closed POST-CONDITION, so it holds whatever made `update --init` no-op; do not weaken it to
+#     match only the reproducible half.
+c11="$tmp/c11"
+mk_super "$c11"
+git -C "$c11/super" submodule --quiet deinit -f sub >/dev/null
+report "empty-init precondition: the submodule really is empty before the run" \
+  "$([[ -z "$(ls -A "$c11/super/sub" 2>/dev/null)" ]] && echo yes || echo no)"
+noop_shim="$tmp/shim-noop"
+mkdir -p "$noop_shim"
+cat >"$noop_shim/git" <<EOF
+#!/usr/bin/env bash
+# Make ONLY 'submodule update' a silent success; everything else passes through untouched. This is
+# exactly the observed failure: exit 0, nothing populated.
+for a in "\$@"; do [[ "\$a" == "submodule" ]] && seen_sub=1; [[ "\$a" == "update" ]] && seen_upd=1; done
+if [[ -n "\${seen_sub:-}" && -n "\${seen_upd:-}" ]]; then exit 0; fi
+exec "$real_git" "\$@"
+EOF
+chmod +x "$noop_shim/git"
+out="$(cd "$c11/super" && PATH="$noop_shim:$PATH" "$helper" sub 2>&1)" && rc=0 || rc=$?
+# NON-DISCRIMINATING context (both hold with the guard ablated, because `probe` then rejects the
+# empty tree on its own path). Kept because they pin the overall contract, NOT as proof of the guard.
+report "empty-init: init mode FAILS when the submodule is still empty afterwards" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "empty-init: it never reports 'isolated ✓' for an empty submodule" \
+  "$(grep -q 'isolated ✓' <<<"$out" && echo no || echo yes)" "$out"
+# THE discriminating assertion — verified RED with the guard ablated. Without it the run still exits
+# non-zero, but only after `repair`, and the message is `not checked out here; nothing to probe`,
+# which reads as a benign skip rather than a failed init. The guard fails immediately, at the step
+# that actually broke, and says so.
+report "empty-init: the failure NAMES the empty submodule (fails at init, not later as a 'skip')" \
+  "$(grep -q 'STILL EMPTY' <<<"$out" && echo yes || echo no)" "$out"
+# `--check` must be UNCHANGED: an uninitialised submodule is legitimately empty there and is skipped,
+# not failed. Without this, the fix above could be "achieved" by failing on every empty submodule.
+out="$(cd "$c11/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "empty-init: --check still SKIPS a legitimately deinitialised submodule" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

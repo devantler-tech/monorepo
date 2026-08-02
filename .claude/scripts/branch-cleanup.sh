@@ -2,6 +2,10 @@
 # Per-tick branch hygiene: delete spent agent-lane branches locally and/or on the remote.
 #
 # Usage: branch-cleanup.sh <repo_path> <slug> <manifest> [apply|dry-run] [namespace]
+#   apply   (default) — record each deletion to the manifest, then delete
+#   dry-run — report what would be deleted; write NOTHING to the manifest
+#   Any other MODE value exits non-zero (typos must not silently mean "don't delete"
+#   and must not pollute the restore ledger — monorepo#2252 / #2255).
 #   namespace = claude (default) | cursor
 #     claude — local + remote sweep of claude/* (this host's local lane)
 #     cursor — REMOTE-ONLY sweep of cursor/* (cloud lane has no local checkout here;
@@ -27,12 +31,20 @@
 #           concurrent session moves between evidence-gathering and deletion is rejected, and the
 #           open-PR keep-set is re-fetched immediately before the delete loop.
 #
-# Every deletion is recorded (branch -> sha) to the manifest BEFORE the delete, and the write is
-# verified — no restore record, no deletion.
+# In apply mode every deletion is recorded (branch -> sha) to the manifest BEFORE the delete, and
+# the write is verified — no restore record, no deletion. dry-run never touches the manifest.
 set -uo pipefail
 
-REPO_PATH="$1"; SLUG="$2"; MANIFEST="$3"; MODE="${4:-apply}"; NAMESPACE="${5:-claude}"
+REPO_PATH="$1"; SLUG="$2"; MANIFEST="$3"; MODE="${4-apply}"; NAMESPACE="${5:-claude}"
 errors=0
+
+case "$MODE" in
+  apply|dry-run) ;;
+  *)
+    echo "$SLUG: ABORT — MODE must be 'apply' or 'dry-run' (got '$MODE')" >&2
+    exit 1
+    ;;
+esac
 
 case "$NAMESPACE" in
   claude|cursor) ;;
@@ -52,6 +64,164 @@ DO_LOCAL=0
 [ "$NAMESPACE" = "claude" ] && DO_LOCAL=1
 
 cd "$REPO_PATH" || exit 1
+
+# --- <repo_path> and <slug> must describe the SAME repository -------------
+# The tree that gets deleted from comes from <repo_path>; the keep-set that
+# decides what survives is fetched for devantler-tech/<slug>. When they
+# disagree, branches are deleted from repository A against repository B's
+# open-PR evidence — the safety contract's central promise evaluated against
+# the wrong repository. Both checks run BEFORE the checkout is moved and before
+# anything is fetched, so a mismatch costs nothing.
+
+# (a) The path must be that repository's own root. An UNINITIALISED SUBMODULE
+#     directory is empty, so `cd` succeeds and git resolves UPWARD to the
+#     parent — silently, with no error and a zero exit (monorepo#2531).
+if ! toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || [ -z "$toplevel" ]; then
+  echo "$SLUG: ABORT — '$REPO_PATH' is not inside a git repository" >&2
+  exit 2
+fi
+# Compare by FILESYSTEM IDENTITY, not by string. Two spellings of one directory
+# are routine here: git may report an unresolved path where `pwd -P` has followed
+# symlinks (macOS /tmp -> /private/tmp), and on a case-insensitive volume (APFS)
+# the caller's casing survives in `pwd -P` while git reports its own — so a valid
+# sweep reached through a differently-cased path would abort on a string compare.
+# `-ef` compares device+inode and is what submodule-init.sh already uses.
+here_phys=$(pwd -P)
+top_phys=$(cd "$toplevel" 2>/dev/null && pwd -P)
+if [ -z "$top_phys" ] || ! [ "$here_phys" -ef "$top_phys" ]; then
+  echo "$SLUG: ABORT — '$REPO_PATH' is not the repository root; git resolved upward to a" >&2
+  echo "  parent repository, so this sweep would delete from the wrong tree. An" >&2
+  echo "  uninitialised submodule is the usual cause — run .claude/scripts/submodule-init.sh" >&2
+  exit 2
+fi
+
+# (b) Every repository this sweep can reach must be the one the keep-set is
+#     fetched for, and when one cannot be tied to the slug a DESTRUCTIVE sweep
+#     refuses to run. The URL itself is never echoed — it can carry credentials.
+#
+# Reduce a remote URL to "owner/repo", or to the empty string when it is not a
+# GitHub URL at all.
+github_nwo() {
+  url_lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+
+  # The SCHEME decides whether the host means anything. Discarding everything
+  # through "://" without checking it accepts `file://github.com/owner/repo`,
+  # which git resolves as a LOCAL path (/owner/repo) while this script would go
+  # on to fetch its keep-set from GitHub — deleting branches in one repository
+  # against another's evidence. Only GitHub-capable network transports qualify;
+  # every other scheme is left unverifiable, which apply mode already refuses.
+  scan=$url_lc
+  case "$scan" in
+    *://*)
+      case "${scan%%://*}" in
+        https|http|ssh|git) scan=${scan#*://} ;;
+        *) printf '%s' ""; return ;;
+      esac
+      ;;
+  esac
+
+  # Drop any userinfo BEFORE looking for the host. In "scheme://user:token@host/path"
+  # the credential itself may contain "github.com", and a search for the first
+  # occurrence would latch onto THAT — leaving the token inside the value this
+  # script goes on to print in its mismatch message.
+  auth=${scan%%/*}                  # authority: up to the first path slash
+  rest=${scan#"$auth"}
+  case "$auth" in
+    *@*) auth=${auth##*@} ;;        # keep only what follows the LAST '@'
+  esac
+  scan=$auth$rest
+
+  # Match the host at the START of what remains, never as a substring: a
+  # "mygithub.com/owner/repo" origin is a different host and must not be read as
+  # GitHub's, which a substring test would do.
+  nwo=""
+  case "$scan" in
+    github.com:*|github.com/*)
+      nwo=${scan#github.com}
+      case "$nwo" in
+        :*)
+          nwo=${nwo#:}
+          # After ':' this is EITHER an explicit port ("443/owner/repo") or the
+          # scp-style path ("owner/repo"). Only an all-digit first segment is a
+          # port; anything else is the owner and must be kept.
+          case "${nwo%%/*}" in
+            ''|*[!0-9]*) ;;
+            *) nwo=${nwo#*/} ;;
+          esac
+          ;;
+        /*) nwo=${nwo#/} ;;
+      esac
+      # A query or fragment can carry a CREDENTIAL (".../ksail.git?access_token=…").
+      # Left attached it also defeats the .git strip below, so the comparison fails
+      # and the mismatch message prints the token. Cut both before anything else.
+      nwo=${nwo%%\?*}
+      nwo=${nwo%%#*}
+      # Trailing slash BEFORE the .git suffix: ".../ksail.git/" must reduce to
+      # "devantler-tech/ksail", and stripping ".git" first would leave the slash.
+      nwo=${nwo%/}
+      nwo=${nwo%.git}
+      # A GitHub repository is exactly two path components. Anything else is a
+      # URL shape this parser does not understand, and guessing at it is how a
+      # stray suffix reaches the log — leave it unverifiable instead.
+      case "$nwo" in
+        */*/*|*/) nwo="" ;;
+        */*) ;;
+        *) nwo="" ;;
+      esac
+      ;;
+  esac
+  printf '%s' "$nwo"
+}
+
+slug_lc=$(printf 'devantler-tech/%s' "$SLUG" | tr '[:upper:]' '[:lower:]')
+
+# Check the FETCH url and every PUSH url. The keep-set is fetched from the first,
+# but `git push origin --delete` writes to the second, and they diverge whenever
+# `remote.origin.pushurl` or a `pushInsteadOf` rewrite is configured — both of
+# which `get-url --push --all` resolves. Validating only the fetch url would let
+# a sweep delete branches from a repository the keep-set never described.
+# With neither configured, git returns the fetch url here, so this degrades to
+# the same single check.
+check_remote_identity() {
+  _kind="$1"; _url="$2"
+  _nwo=$(github_nwo "$_url")
+  if [ -n "$_nwo" ]; then
+    if [ "$_nwo" != "$slug_lc" ]; then
+      # Name the value actually COMPARED ($slug_lc), not just the raw argument.
+      # <slug> is a bare repo name and the owner is prepended, so an
+      # owner-qualified argument prints an identical-looking pair otherwise:
+      #   slug 'devantler-tech/x' ... whose origin is 'devantler-tech/x'
+      echo "$SLUG: ABORT — slug '$SLUG' (resolved to '$slug_lc') does not match the checkout" >&2
+      echo "  at '$REPO_PATH', whose $_kind is '$_nwo'. The keep-set would be fetched for the" >&2
+      echo "  wrong repository. <slug> is a BARE repo name — 'devantler-tech/' is prepended." >&2
+      exit 2
+    fi
+  elif [ "$MODE" = "apply" ] && [ "${BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN:-}" != "1" ]; then
+    # Check (a) proved the tree is SOME repository's root, but nothing ties this
+    # remote to <slug> while the keep-set is still fetched for
+    # devantler-tech/<slug>. A wrong slug here deletes real branches against
+    # another repository's open-PR evidence — irreversible for an unpushed local
+    # branch, and it CLOSES the PR for a remote one — so the unverifiable case
+    # fails CLOSED rather than proceeding on an unchecked assumption.
+    # dry-run is exempt: it deletes nothing.
+    echo "$SLUG: ABORT — the $_kind of the checkout at '$REPO_PATH' has no GitHub origin," >&2
+    echo "  so it cannot be tied to slug '$SLUG' and a destructive sweep would run against" >&2
+    echo "  unverified evidence. Point it at devantler-tech/$SLUG, or re-run with 'dry-run'." >&2
+    echo "  A hermetic fixture declares itself with BRANCH_CLEANUP_ALLOW_UNVERIFIABLE_ORIGIN=1." >&2
+    exit 2
+  fi
+}
+
+origin_url=$(git remote get-url origin 2>/dev/null) || origin_url=""
+check_remote_identity "origin" "$origin_url"
+
+push_urls=$(git remote get-url --push --all origin 2>/dev/null) || push_urls=""
+while IFS= read -r _push_url; do
+  [ -n "$_push_url" ] || continue
+  check_remote_identity "push destination" "$_push_url"
+done <<EOF
+$push_urls
+EOF
 
 # DEFAULT reads the LOCAL origin/HEAD (set at clone) and needs no fresh fetch,
 # so the checkout-restoration path can be armed BEFORE fetching.
@@ -181,8 +351,10 @@ if [ "$DO_LOCAL" -eq 1 ]; then
        { [ "$st" != "MERGED" ] && [ "$st" != "CLOSED" ] || [ "$ev_sha" != "$sha" ]; }; then
       candidates=$((candidates+1)); l_keep=$((l_keep+1)); continue
     fi
-    manifest_write "$(printf '%s\tlocal\t%s\t%s' "$SLUG" "$b" "$sha")"
     if [ "$MODE" = "apply" ]; then
+      # Record BEFORE delete (and only in apply): dry-run must leave the
+      # restore ledger byte-identical (monorepo#2252 / #2255).
+      manifest_write "$(printf '%s\tlocal\t%s\t%s' "$SLUG" "$b" "$sha")"
       # update-ref -d BYPASSES the checked-out-branch refusal `git branch -D`
       # has, so re-check the live worktree list right before deleting — a
       # concurrent session may have checked the branch out since the keep-set
@@ -230,8 +402,10 @@ while IFS= read -r rb; do
     # current ref carries commits no PR accounts for. Keep it.
     r_keep=$((r_keep+1)); continue
   fi
-  manifest_write "$(printf '%s\tremote\t%s\t%s\t%s' "$SLUG" "$b" "$sha" "$st")"
   if [ "$MODE" = "apply" ]; then
+    # Record BEFORE delete (and only in apply): dry-run must leave the
+    # restore ledger byte-identical (monorepo#2252 / #2255).
+    manifest_write "$(printf '%s\tremote\t%s\t%s\t%s' "$SLUG" "$b" "$sha" "$st")"
     # Final per-branch TOCTOU guard: a PR can open between the loop-level
     # keep-set refresh and this very deletion. Fail closed on query failure.
     # RESIDUAL RISK (accepted, no server-side conditional delete exists): a PR

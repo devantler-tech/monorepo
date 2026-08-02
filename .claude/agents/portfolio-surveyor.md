@@ -41,8 +41,9 @@ public and private — no per-repo loop needed to enumerate):
 
 1. **Open PRs (org-wide, one call):**
    `gh search prs --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
-2. **Open issues (org-wide, one call) — include `assignees`, they are a CLAIM signal:**
-   `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,labels,updatedAt,url,assignees`
+2. **Open issues (org-wide, one call) — include `assignees` (claim signal) and `author`
+   (automation-owned filter):**
+   `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,labels,updatedAt,url,assignees`
    (`--archived=false` keeps archived repos' stale PRs/issues — e.g. `data-product`'s 2025 bot PRs —
    out of every survey; archived repos are read-only and carry no actionable signal.)
    (`gh search issues` returns issues only — not PRs; treat label-less issues as untriaged.)
@@ -55,6 +56,16 @@ public and private — no per-repo loop needed to enumerate):
    ordinary open issues, noting the assignee so the orchestrator can respect a human's in-progress work
    on its own merits. Without these logins the orchestrator selects the oldest issue blind to live
    claims and re-opens the duplicate-build race the protocol exists to close.
+   **Short-circuit dependency-automation ISSUES the same way as their PRs** (live miss 2026-07-21,
+   #2349): an issue whose author is the exact `renovate[bot]` or `dependabot[bot]` identity
+   (org-search/REST; deeper surfaces may show `app/renovate` / `app/dependabot`) is
+   **AUTOMATION-OWNED (NO-ACTION)** — Renovate's Dependency Dashboard is the standing example
+   (`platform#313`, open since 2023-08-24 by design). Match **author login only** — never the title,
+   labels, or age. **Exclude them from every oldest-actionable / Advance ranking**; at most emit one
+   compact Operate `AUTOMATION-OWNED (NO-ACTION)` line. **Never select, triage-as-work, or close
+   them** — closing a Dependency Dashboard changes Renovate's behaviour. Without this filter the
+   dashboard heads a repo's oldest-first queue forever and every run re-derives that it is not real
+   work.
 2b. **Claim branches (one call per repo that has PR-less open issues):**
    `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep -E '^(claude|cursor|codex)/'` —
    report any `claude/*`, `cursor/*`, or `codex/*` branch that ends in `-<issue>`, ends in a
@@ -85,8 +96,11 @@ public and private — no per-repo loop needed to enumerate):
    `cursor[bot]` — **exact login match, never a substring**; `cursor[bot]` is trusted here only on the PR-author surface;
    `Copilot`/`copilot-swe-agent[bot]` are NOT trusted), pull the
    heavy fields one PR at a time:
-   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,reviewThreads,headRefName,headRefOid,author,body,files`
-   — do **not** pull `statusCheckRollup` for every PR in every repo. When the current-head pentad is
+   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,author,body,files`
+   — do **not** pull `statusCheckRollup` for every PR in every repo.
+   ⚠️ **Thread state is NOT available here.** `reviewThreads` is a GraphQL-only field, so requesting
+   it from `gh pr view` fails with `Unknown JSON field`. Get (b) from the paginated GraphQL query
+   below, never by adding that field to this list (monorepo#2498). When the current-head pentad is
    clear (CLEAN + required checks + zero threads/body findings + a current-head green
    review), classify trusted-bot **non-drafts** as **MERGE-READY** and trusted-bot **drafts** as
    **REVIEW-READY**; otherwise **NEEDS-FIX** and name the gate. A `devantler` PR always follows the
@@ -124,7 +138,8 @@ public and private — no per-repo loop needed to enumerate):
      failing checks, (b) unresolved
      review threads — including `coderabbitai`, `copilot-pull-request-reviewer[bot]`, and
      `chatgpt-codex-connector[bot]` — (c) **non-thread review-finding count**, including CodeRabbit
-     review-body findings and any concrete ancillary problem CodeRabbit explicitly reports while it
+     review-body findings, **Codex comment-form findings (below)**, and any concrete ancillary problem
+     CodeRabbit explicitly reports while it
      is the selected current-head reviewer, (d) `mergeStateStatus` conflicts, and (e) **green-review state**
      (see below). Count all unresolved review threads across all pages, regardless of author. Query
      `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}` and
@@ -145,7 +160,9 @@ public and private — no per-repo loop needed to enumerate):
      finding sections means the findings are cleared and `body_findings=0`; never fall back to an
      older review that still had sections (that re-reports what the newest review already cleared).
      From that single newest review, extract each matching section's numeric `(N)` excluding `🔇`, and report
-     `body_findings=<n>@<sha>` where `<sha>` is that review's `commit_id`. When `<sha>` differs from
+     `body_findings=<n>@<sha>` where `<sha>` is that review's `commit_id` (for a **Codex comment-form
+     finding** — see below — `<sha>` is instead the head recovered from its blob permalinks, since
+     such a comment carries no `commit_id` and no `**Reviewed commit:**` marker). When `<sha>` differs from
      the current `headRefOid`, the count is historical — report it as `body_findings=<n>-stale@<sha>`
      so the orchestrator re-verifies against the head instead of treating it as open. A same-head
      finding is cleared as `body_findings=0-resolved@<sha>` only when a later resolution reply from
@@ -163,6 +180,23 @@ public and private — no per-repo loop needed to enumerate):
      unresolved threads are 0, checks are green, it
      is not CONFLICTING, and
      it carries ≥1 green review (below).
+     🔴 **Codex comment-form findings — item (c)'s second surface.** A `chatgpt-codex-connector[bot]`
+     **issue comment** containing a `## Review finding` section is a non-thread review finding and
+     counts in `body_findings` exactly like a CodeRabbit body section. It carries **no**
+     `**Reviewed commit:**` marker, so **attribute it to a head by the full 40-character sha in its
+     blob permalinks** (`/blob/<sha40>/` in its citation links); when that sha equals `headRefOid` it
+     is a current-head finding. **Fail closed on attribution:** a `## Review finding` comment whose
+     head cannot be determined **counts as CURRENT-HEAD until an authenticated disclosed resolution
+     reply clears it** — the whole defect this rule fixes was a real finding silently counting as
+     nothing. Clear one only as `body_findings=0-resolved@<sha>`, on the same terms as a CodeRabbit
+     body finding: a later `devantler` reply carrying the structural `> 🤖 Generated by the`
+     disclosure that links the finding and records specific fix-or-refute reasoning.
+     🔴 **A newer Codex clean-pass comment never clears an older same-head comment finding** that has
+     no such resolution reply. Measured on monorepo#2559 (monorepo#2577): the P2 landed 19:44:35Z and
+     `Didn't find any major issues` at 19:45:16Z — **41 seconds later, same head** — because Codex
+     counts only P0/P1 as "major". "Latest Codex comment wins" is therefore unsafe; the supersession
+     path is the same-SHA one below (all findings resolved, then a later authenticated re-request
+     produces the clean marker), never recency.
    - **(e) Green-review state per open actionable own/trusted PR — no actionable own/trusted PR is promotion- or
      merge-ready without ≥1 green review on top of green CI; a successful current-head review from any one provider completes the review gate**
      (maintainer direction 2026-07-11, clarified 2026-07-22).
@@ -179,8 +213,13 @@ public and private — no per-repo loop needed to enumerate):
      with `gh api --paginate --slurp ... | jq -c 'add | map(...)'` (this `gh` version does not allow
      `--slurp` together with its own `--jq` flag), then normalize every commit into `commits_json` as an ordered compact
      JSON array whose objects contain exactly `sha`, `author_login`, `author_name`, `author_email`,
-     `committer_login`, `committer_name`, `committer_email`, and `message` (use an empty string for a
-     null login). Do not substitute `gh pr view --json commits`: it omits raw committer provenance.
+     `author_date`, `committer_login`, `committer_name`, `committer_email`, `committer_date`, and
+     `message` (use an empty string for a null login). Take both dates from the raw commit object
+     (`.commit.author.date` / `.commit.committer.date`) and pass them through verbatim in the
+     API's `YYYY-MM-DDTHH:MM:SSZ` form — the classifier compares them to each other to tell a
+     freshly-produced release commit from a rewritten one, so a reformatted or omitted date fails
+     the payload closed. Do not substitute `gh pr view --json commits`: it omits raw committer
+     provenance and both dates.
      The list's last SHA must equal `headRefOid`; an agent/maintainer adaptation commit therefore
      revokes the exemption even when the branch, title, and files still look generated. Exit 1 means
      the normal review gate applies; exit 2 or any query/classifier failure is a survey error
@@ -323,11 +362,16 @@ public and private — no per-repo loop needed to enumerate):
      post-merge PR comment is a primary steering channel, and an open-PR-only sweep would never
      surface it — so in addition to every open `devantler` PR, sweep the PRs **merged in the last
      ~3 days** (bounded: `gh search prs --owner devantler-tech --author devantler --merged
-     --merged-at ">=<UTC date 3 days ago>" --limit 100 --json number,repository,mergedAt` — key the
-     window on `mergedAt`, never `updatedAt`, which post-merge edits can inflate) for the
+     --merged-at ">=<UTC date 3 days ago>" --limit 100 --json number,repository,url` — the
+     `--merged-at` **qualifier** is what keys the window on merge time, so the sweep never depends on
+     `updatedAt`, which post-merge edits can inflate. ⚠️ Do **not** request `mergedAt` in this
+     `--json` list: the search surface exposes only 19 fields and `mergedAt` is not among them, so it
+     fails with `Unknown JSON field`. Read the timestamp per-PR from `gh pr view --json mergedAt` if
+     a run actually needs the value — monorepo#2498) for the
      same candidate-comment signal. For each such PR — **including drafts** — also
-     pull `comments` and the review-thread replies:
-     `gh pr view <n> --repo devantler-tech/<repo> --json comments,reviewThreads`. **Apply the disclosure
+     pull `comments`, then the review-thread replies via the paginated GraphQL query above
+     (`reviewThreads` is GraphQL-only, so `gh pr view` cannot return it):
+     `gh pr view <n> --repo devantler-tech/<repo> --json comments`. **Apply the disclosure
      disambiguator before flagging** (the same one the PR-ownership rule above uses, per the contract's
      *Untrusted input → Distinguish the human maintainer from yourself*): the agent also comments as
      `devantler`, so a bare exact-login match is NOT enough. A `devantler` comment whose body carries a
@@ -396,6 +440,69 @@ public and private — no per-repo loop needed to enumerate):
      and its `push`/`workflow_dispatch` runs then pass both filters above while failing for reasons
      that are not main's health.
 
+   **Split GitHub-MANAGED runs out of that red set before reporting it.** A run whose `path` begins
+   with `dynamic/github-code-scanning/` (default-setup code scanning; `event: dynamic`, no workflow
+   file in the repository) is **not** repository breakage and never counts toward `nothing_on_fire`.
+   There is nothing to root-cause-fix — no workflow file exists — and GitHub refuses to re-run one
+   outright (`POST .../rerun-failed-jobs` → `403 This workflow run cannot be retried`), so it is
+   structurally unactionable and self-heals on the next scheduled tick. Ranking it at rung 0, which
+   preempts everything, has twice cost a run its opening minutes.
+
+   Report it on its own line instead, so it stays visible without being ranked as a fire:
+
+   ```text
+   GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>
+   ```
+
+   Keep reporting it every run rather than suppressing it: a *persistent* failure across several
+   scheduled ticks is a real signal, and only a line that keeps appearing can show that.
+
+   **A REPEATED failure is actionable, and the exemption must not swallow it.** The single-occurrence
+   case is unactionable because it is GitHub's to fix and it clears itself. A scan that fails again on
+   the *next* scheduled run is a different condition: default setup fails repeatedly when the
+   repository cannot be built or analyzed, or when its language/config no longer suits default setup —
+   all of which are ours to repair, by fixing the build, adjusting the code-scanning configuration, or
+   moving that repository to advanced setup. Left as a permanent `NO-ACTION` line, the portfolio would
+   keep reporting `nothing_on_fire: true` while its security coverage is silently dead — the exact
+   failure the *liveness-first* rule exists to prevent elsewhere in this survey.
+
+   So walk that workflow's own run history on `main`:
+
+   ```sh
+   gh api --paginate \
+     "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100"
+   ```
+
+   Walk it newest-first and count consecutive **red** runs, stopping at the first run that is not red.
+   Three details are each load-bearing:
+   - **`branch=main`** — default setup also runs on pull requests, and an unfiltered history mixes
+     those in. A failed PR scan would then turn a *first* main failure into `REPEATED`, and an
+     intervening successful PR scan would hide two genuinely consecutive main failures. This is the
+     same filter, for the same reason, as the `branch=main` on the red-set query above.
+   - **Red means `failure` OR `timed_out`** — exactly the red set defined above, never `failure`
+     alone. A scan that times out repeatedly is as broken as one that fails, and a mixed
+     `failure`/`timed_out` streak is still a streak.
+   - **`--paginate`, not a two-run peek** — the digest names the streak's start date and length, so it
+     must walk back to the first non-red run to know them. Reading only the newest two would report a
+     start date that is merely the previous run, and a count that is almost always `2`, understating
+     how long coverage has been dead.
+
+   Two or more consecutive red runs escalate: it counts toward `nothing_on_fire` and is reported as
+   actionable, naming the judged sha (as every red claim in this survey must) and the streak's real
+   age:
+
+   ```text
+   GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)
+   ```
+
+   Only the **first** failure of a streak is exempt. That keeps the fix from becoming a way to ignore
+   broken security scanning indefinitely, which is a worse outcome than the false rung-0 it replaced.
+
+   ⚠️ **Match on the `path` prefix, never on `event: dynamic` alone.** `dynamic` stays in the
+   main-branch event list above because it is how GitHub-managed runs legitimately reach `main`, so
+   keying the exemption on the event would exempt future managed run types wholesale — including any
+   that *are* actionable. The `path` is what identifies default-setup code scanning specifically.
+
    Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
 5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
@@ -404,6 +511,7 @@ public and private — no per-repo loop needed to enumerate):
    the complete and canonical partition; labels are legacy and **provably incomplete** — 8 of 63 open
    Epics carried no `roadmap` label on 2026-07-18, and `Spike`/`Kata`/`Chore` have no label at all, so
    a label sweep silently drops them. Sweep each type once:
+
    ```sh
    # VERIFIED WORKING 2026-07-18 — run it, don't retype it from memory:
    #  · the search QUALIFIER type: works; there is NO issueType JSON field (gh search issues --json
@@ -416,16 +524,24 @@ public and private — no per-repo loop needed to enumerate):
    for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do
      gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate \
        --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10],
-              .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"
+              .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"
    done
    ```
+
    ⚠️ **Type sweeps alone are NOT complete — 65 open issues were untyped on 2026-07-18.** Since
    `no:type` does not work, derive the untyped set as **(the primary org-wide open-issue sweep) minus
    (the union of the type sweeps)** and report it as a **triage** signal: an untyped issue is invisible
    to every type filter on the board and to this selection, so typing it is the fix.
+   Drop any row whose `.user.login` / author column is an exact dependency-automation identity before
+   ranking oldest-actionable (step 2 / the Drop-hits rule below) — without the author column the
+   filter cannot run.
    **Drop hits from archived repos** — this raw Search call has no archived filter (the primary sweep
    does), so an archived repo's open issue surfaces as actionable when it is a read-only tombstone
-   (`reusable-workflows` is the live example). **`security` is REPORTED, not prioritised**: the queue
+   (`reusable-workflows` is the live example). **Drop issues authored by the exact dependency-
+   automation identities** (`renovate[bot]` / `dependabot[bot]`; also `app/renovate` /
+   `app/dependabot` on surfaces that spell them that way) — same author-wide boundary as step 2 /
+   the PR short-circuit; they are never oldest-actionable (verified against `platform#313`).
+   **`security` is REPORTED, not prioritised**: the queue
    stays oldest-actionable-first and a security issue is *not* a reason to skip an older one — only an
    urgent security hotfix jumps, under the normal breakage rule.
    **Exclude a `Kata` whose named measurement date is still in the FUTURE** — contract skip reason (d)
@@ -513,7 +629,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken
+nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken; a GITHUB-MANAGED-SCAN (NO-ACTION) line never makes this false, but a (REPEATED — ACTIONABLE) one does
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
@@ -525,10 +641,12 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
-- <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]> → AUTOMATION-OWNED (NO-ACTION)
-- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL
-- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-CR-DISMISSAL
-- <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none> (orchestrator applies creation-record test before action; NOT asserted mine)
+- GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `path` starts `dynamic/github-code-scanning/`: no workflow file to fix, not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only
+- GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out) runs on main: ours to repair (build, code-scanning config, or move to advanced setup) — DOES count against nothing_on_fire
+- <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
+- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
+- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
+- <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (orchestrator applies creation-record test before action; NOT asserted mine — the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
 
@@ -571,14 +689,78 @@ Digest rules:
   `pulls/<n>/reviews` the body-findings step (b) already fetched (`reviewDecision` alone names no
   author or SHA, and each CHANGES_REQUESTED review blocks merge independently — only-newest would
   hide an older human block behind a newer CodeRabbit one). Report the newest as
-  `rd=CHANGES_REQUESTED:<author>@<sha>` and name any additional CHANGES_REQUESTED authors.
-  Classify the PR **STALE-CR-DISMISSAL** instead of NEEDS-FIX **only when EVERY CHANGES_REQUESTED
-  review is `coderabbitai[bot]`-authored**, none is at the current head, AND the pentad is otherwise
-  clear with a current-head green review — the orchestrator then surfaces the stale-review dismissal
-  one-click rather than spending more review requests (contract → *Merge policy*). A
-  CHANGES_REQUESTED from any **human** reviewer (e.g. `devantler`) — newest or not — is NEVER
-  stale-dismissable: report it NEEDS-FIX with the author named, so the orchestrator addresses the
-  feedback itself.
+  `rd=CHANGES_REQUESTED:<author>@<sha>` and name any additional CHANGES_REQUESTED authors. **The
+  `agent(…)`/`human(…)` qualifier applies to `devantler` reviews ONLY**, where it is decided by the
+  disclosure test below and never by the login; a **bot** reviewer keeps the plain `<author>` form,
+  since `coderabbitai[bot]` is neither a sibling instance nor the maintainer and forcing it into
+  either qualifier would make the CodeRabbit rule directly below unstatable.
+  Classify the PR as **stale-dismissable** rather than NEEDS-FIX **only when EVERY CHANGES_REQUESTED
+  review on the PR is NON-HUMAN** — `coderabbitai[bot]` or an agent-authored `devantler` per the
+  disclosure test below, in any mix — none is at the current head, AND the pentad is otherwise clear
+  with a current-head green review; the orchestrator then surfaces the stale-review dismissal one-click
+  rather than spending more review requests (contract → *Merge policy*). **This paragraph states the
+  shared PRECONDITION only and is deliberately class-NEUTRAL — it never names a class.** The class name
+  is chosen once, by the agent-authorship rule below: `STALE-CR-DISMISSAL` when any CodeRabbit block is
+  in the set, `STALE-AGENT-DISMISSAL` when every block is agent-authored. Naming a class here as well
+  is how this paragraph twice went out of step with that rule — first with a CodeRabbit-ONLY
+  precondition that made the mixed set decidable two ways, then with a CodeRabbit-ONLY *label* that
+  mislabelled an all-agent set. Keep the precondition and the naming in exactly one place each.
+- **A `devantler` CHANGES_REQUESTED is not self-evidently human — apply the disclosure test before
+  calling it one.** Every agent instance reviews as `devantler`, so the login alone cannot separate
+  the maintainer's block from a sibling instance's own superseded review. Apply the SAME two-part
+  test this file already uses for comments. The review is **agent-authored** when its body **BEGINS
+  WITH** the structural `> 🤖 Generated by the` disclosure — **first line only, never merely
+  containing it**, because the maintainer routinely *quotes* an agent's disclosed text when replying
+  to it, and an anywhere-match would read his own block as agent output and hand it to the dismissal
+  path — **or**, the fallback a login-only rule drops, when it **opens with** a leading 🤖
+  first-person automation sender marker naming an agent instance as the SENDER while omitting the
+  canonical prefix. Both branches are **anchored at the start of the body**; a disclosure appearing
+  anywhere later is quoted material and classifies nothing, and a first line that is itself **nested
+  inside a quote** (`> > 🤖 …`, what GitHub's quote-reply produces from an agent's comment) is quoted
+  material too. Report it `rd=CHANGES_REQUESTED:agent(<author>)@<sha>`.
+  ⚠️ **The prefix is a CONVENTION, not authentication — it is public and trivially reproduced.**
+  Measured 2026-07-26: CodeRabbit's own review bodies begin with it verbatim. And every instance
+  authors as `devantler` through one credential, so no GitHub metadata separates them either — which
+  is *why* the contract leans on a convention here. **What makes that tolerable is the failure
+  direction, not the marker's strength:** the marker can only move a review from `human` to `agent`,
+  and `human` is the safe classification, so a missing or imitated marker costs a parked PR, never a
+  discarded control signal. Never reuse this prefix as proof of authorship where that asymmetry does
+  not hold.
+  **The two stale-dismissal classes share ONE precondition set**, so a *mixed* set of stale blocks is
+  still dismissable: **every** CHANGES_REQUESTED on the PR is **non-human** (any mix of
+  `coderabbitai[bot]` and agent-authored `devantler`), **none** is at the current head, and the pentad
+  is otherwise clear with a current-head green review. Without the union a PR carrying an old
+  CodeRabbit block *and* an old agent block satisfies **neither** class — one wants every block
+  CodeRabbit's, the other wants every block an agent's — so it parks forever, the exact failure this
+  rule exists to remove. Report **STALE-CR-DISMISSAL** whenever any CodeRabbit block is in the set
+  (its remedy is the stricter one) and **STALE-AGENT-DISMISSAL** when all are agent-authored.
+  **A single human-authored block anywhere on the PR defeats both classes outright** — otherwise a
+  newer non-human review's classification would hide an older human control signal, which is the
+  precise failure the every-review sweep above exists to prevent.
+  **The remedy is ALWAYS the maintainer one-click — never an autonomous dismissal, draft or not.**
+  The orchestrator re-verifies the finding at head, reports the class, and stops; it never dismisses a
+  review itself. Classifying is the surveyor's job; mutating is not.
+  🔴 **This is what makes the failure-direction claim above TRUE rather than aspirational.** An earlier
+  draft of this rule let the orchestrator self-dismiss on a draft — and that quietly falsified the
+  asymmetry: a maintainer review whose first line imitated the public marker would be classified
+  `agent`, and once stale on a draft it would have been **discarded outright**, not merely parked. With
+  dismissal reserved to the maintainer in every case, a misclassification costs at most a mislabelled
+  row he can overrule, which is the bounded cost the asymmetry actually promises. **Do not reintroduce
+  an autonomous-dismissal path without first replacing the public marker with something a non-author
+  cannot reproduce** — the two are load-bearing together, and this rule is safe only because the
+  mutation is withheld.
+  **An agent-authored block AT the current head is ordinary NEEDS-FIX feedback**, never dismissable:
+  it is a live finding that happens to come from a sibling, and fix-or-refute applies as it would to
+  any lane's. Dropping this staleness test would let the classifier discard findings that still hold.
+  A `devantler` review carrying **neither** marker is the **human maintainer**: report it
+  `rd=CHANGES_REQUESTED:human(<author>)@<sha>` and NEEDS-FIX with the author named, never
+  stale-dismissable, so the orchestrator addresses the feedback itself.
+  **Ambiguity resolves to `human`.** The two errors are not symmetric here: reading a human block as
+  agent output discards the maintainer's own control signal, while reading an agent block as human
+  merely parks a PR the next run can free. Only a review carrying one of the two markers above is
+  reported `agent` — and the prefix match stays **actor-word-agnostic**, so an unfamiliar actor word
+  after `> 🤖 Generated by the` is still own-output (contract → *Untrusted input*). A review carrying
+  **neither** marker is `human`, however machine-like it reads.
 - **No cross-org output:** never discover or report repositories outside the portfolio, regardless of
   author or apparent trust.
 - If a query fails (auth, rate limit), note it in one line under the relevant repo rather than

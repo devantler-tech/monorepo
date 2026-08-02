@@ -5,6 +5,11 @@ description: The run procedure for the Agentic Engineer (the products' primary e
 
 # Portfolio engineering — the run loop
 
+> **Deployment compatibility overlay — not a generic authoring source.** Portable procedure changes
+> belong in the bundled `portfolio-maintenance` skill's provenance-recorded upstream and reach this
+> repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
+> deltas here; never add a second copy of generic behaviour.
+
 This is the procedure the `daily-maintainer` agent follows each run. The **shared contract** lives in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) — the maintain-*and*-advance mandate, autonomy, merge
 policy, product strategy & roadmaps, enhancement work, trust gate, untrusted input, per-run worktrees,
@@ -65,29 +70,48 @@ card.
    the maintainer to replace a credential that was never tested. Keep the injected-token result, saved-login
    result, and `git fetch` result as separate gates, because repository reachability cannot prove GitHub API
    identity (and vice versa); record only these gate classifications in durable memory, never credential output.
-3. **Check the memory store fits in one read — BEFORE you read it.** A file past the Read cap is
+3. **Check the boot memory surface fits in one read — BEFORE you read it.** A boot-loaded file past the Read cap is
    **truncated silently**: the run continues on a partial cursor with no signal that carry-forwards,
    stand-down notes, or `HANDS-OFF` records beyond the cut are missing (the 2026-06-05 blinding;
    breached again 2026-07-18). This check runs **ahead of the `view` below** — running it after would
    let the run ingest the truncated cursor first, which is the exact failure it exists to prevent:
 
    ```sh
-   .claude/scripts/memory-hygiene.sh --dir <memory-dir>   # read-only; exit 1 = consolidate this tick
+   .claude/scripts/memory-hygiene.sh --layout <legacy|codex> --dir <memory-dir>
+   # read-only; exit 1 = repair the boot surface
    ```
 
-   A non-zero exit makes **consolidating the named file this tick** a mandated hygiene item, not an
-   optional courtesy — that is what stops the size rule (prose living inside the file it governs) from
-   being breached over and over. **Consolidate the flagged file FIRST, then run step 4** so the cursor
-   you act on is complete; if you consolidate later in the run, re-`view` the file afterwards. `near`
-   entries are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or an
-   unreadable store — resolve it rather than proceeding on an unchecked memory read.
+   The caller must name the runtime layout; this is deliberate because a minimal Codex store missing
+   its summary is indistinguishable from a valid legacy `MEMORY.md`-only store by file shape. Missing
+   or unknown `--layout` fails closed. For Claude, pass `--layout legacy`: the guard checks `MEMORY.md`
+   plus root topic files, and exit 1 makes **safely consolidating the named author-managed file this
+   tick** mandatory. For Codex, pass `--layout codex`: the guard requires the persistent
+   `memory_summary.md` + `MEMORY.md` pair. Before invoking it, read the trusted current request's
+   `x-codex-turn-metadata.turn_started_at_unix_ms` from `nodeRepl.requestMeta` and pass that value as
+   `--projection-loaded-before-ms`; do not derive this precondition from the current clock or the
+   file itself. The guard fails closed if the file is newer because this session may contain the
+   pre-replacement projection. It checks only the boot-loaded summary and excludes generated
+   registry and temporary consolidation inputs from the boot budget; `--all` makes those exemptions
+   visible. A Codex exit 1 routes to the
+   runtime's supported projection-refresh path — **never rewrite the generated registry or temporary
+   inputs to clear it**. Because the old summary was already injected before this shell step, refresh
+   it and **restart the run; do not continue this session on the replacement file**. For a legacy
+   store, repair the author-managed file, rerun the check, then continue to step 4. `near` entries
+   are next tick's breach; fold them in when cheap. An **exit 2** is a misconfiguration or unreadable
+   store — resolve it rather than proceeding on an unchecked memory read. If a Codex exit 2 names a
+   missing, unreadable, malformed, or post-injection-changed `memory_summary.md`, repair the projection
+   through the runtime's supported path when needed and **restart the run** because this session did
+   not start with the projection the guard checked;
+   other exit-2 causes may rerun the guard in this session after resolution.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
    rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
    concurrent append (the same two-writer discipline as a shared `claude/*` branch). Consolidating a
    large file is read-heavy — **delegate it to a subagent** so the raw content stays out of your context.
-4. **Load durable memory:** **`view` your native memory** (Claude: the memory tool / the project
-   `memory/` dir + `MEMORY.md`) — the single source of truth for cross-run orchestration (rotation
+4. **Load durable memory:** **view the native boot surface** (Claude: the memory tool / project
+   `memory/` dir + `MEMORY.md`; Codex: the supplied `v1` `memory_summary.md`, then search `MEMORY.md`
+   and open referenced rollout summaries, memory skills, or extension resources only for relevant
+   detail) — the single source of truth for cross-run orchestration (rotation
    cursor, per-product `last_worked`/`weekly`/roadmap cursor/`needs_attention`, CI & link caches, recent
    run notes, `learnings`). It may be stale — verify against live GitHub. *(The legacy `state.json` is
    retired; if it still exists, treat it as a read-only archive and migrate anything durable into memory.)*
@@ -222,7 +246,14 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   `body_findings=0-resolved@<sha>` only when it links the finding and records specific reasoning; a
   generic or externally-authored comment does not. An identical repeated same-head finding
   fingerprint (category + path/range + normalized text) remains resolved; a new/changed fingerprint
-  reopens it. CodeRabbit is first and foremost a reviewer. Do not wait for, parse, or persist its
+  reopens it.
+  **The Codex lane has a second finding surface: a `chatgpt-codex-connector[bot]` issue comment whose
+  `## Review finding` section is a non-thread review finding**, counted in `body_findings` like a
+  CodeRabbit body section. It carries no `**Reviewed commit:**` marker — attribute it by the full
+  40-character sha in its blob permalinks, and fail closed (count it as current-head) when the head
+  cannot be determined. A newer `Didn't find any major issues` comment never clears it: Codex scores
+  only P0/P1 as "major", so its green and an open P2 legitimately coexist at one head (monorepo#2577).
+  CodeRabbit is first and foremost a reviewer. Do not wait for, parse, or persist its
   ancillary pre-merge evaluator as a readiness state. Missing or delayed output never blocks. Only
   an explicit concrete problem CodeRabbit reports while selected for the current head counts; fold
   it into the non-thread `body_findings` count, fix or refute it, then
@@ -463,7 +494,10 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    stand down rather than force over them. Check open PRs, remote
    `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
    (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
-   itself. If it **already has an
+   itself. An issue **authored by an exact dependency-automation identity** (`renovate[bot]` /
+   `dependabot[bot]`, `app/renovate` / `app/dependabot`) is skip reason **(f)**: it is
+   automation-owned, **never actionable at all**, and is never selected, worked, or closed — match the
+   author only, never the `automation` label. If it **already has an
    actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
    automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
    **external** PRs static-review-only (trust gate). Otherwise ship it: tests +
@@ -596,7 +630,9 @@ For each selected product:
 - **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
   back what changed so the next run picks up cleanly — `last_run`, `rotation_cursor`, each touched
   product's `last_worked`/`weekly`/roadmap cursor/`last_research`/`needs_attention`, the CI & link caches (prune CI
-  entries >7 days), recent run notes, and any new `learnings`. Keep memory **coherent and organised**:
+  entries >7 days), recent run notes, and any new `learnings`. Use the runtime's supported write path;
+  for Codex, never hand-edit generated `memory_summary.md`, `MEMORY.md`, or `raw_memories.md`.
+  In an author-managed/legacy store, keep memory **coherent and organised**:
   a small set of well-named files (e.g. `portfolio-status.md`, `caches.md`, `learnings.md`, plus
   `feedback_*.md`) with `MEMORY.md` as a true index; **edit in place and prune stale content** rather
   than appending forever; don't create a new file per fact. **Bound the every-run read:** keep the

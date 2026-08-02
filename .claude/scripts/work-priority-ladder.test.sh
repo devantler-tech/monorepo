@@ -16,9 +16,13 @@
 #   1. the ladder exists, is ordered, and names all five rungs;
 #   2. rung 1 explicitly covers OWN DRAFTS, and Merge policy's `non-draft` is explicitly scoped to
 #      the merge command rather than the sweep — the exact misreading that produced the pile;
-#   3. severity outranks age, so a Security issue is not queued behind an older Docs one;
-#   4. the run-loop skill agrees with the contract — three surfaces restate this ordering, and a
-#      silent divergence between them is how the previous wording drifted.
+#   3. rung 1 is oldest-updated first across the whole lane, with explicit terminal states and no
+#      replacement-intake loophole;
+#   4. severity outranks age, so a Security issue is not queued behind an older Docs one;
+#   5. the run-loop skill agrees with the contract — three surfaces restate this ordering, and a
+#      silent divergence between them is how the previous wording drifted;
+#   6. intake is CAPPED and not merely ordered — because fixing (2) still did not drain the pile, and
+#      the re-measurement showed why: ordering is not the binding constraint, review capacity is.
 
 set -euo pipefail
 
@@ -69,17 +73,70 @@ assert_prose 'draft and non-draft alike' \
 assert_prose 'scoping below bounds the merge COMMAND, never the SWEEP' \
   "${constitution_flat}" "Merge policy does not scope its non-draft clause to the merge command"
 
-# ── 3. severity outranks age ──────────────────────────────────────────────────
+# ── 3. rung 1 drains the oldest work before the freshest ──────────────────────
+assert_prose 'oldest-updated first across the whole lane' \
+  "${constitution_flat}" "rung 1 does not order drafts oldest-updated first across the lane"
+# Markdown backticks are literal prose, not command substitution.
+# shellcheck disable=SC2016
+assert_prose 'Sort the actionable own/trusted set by `updatedAt` ascending' \
+  "${constitution_flat}" "rung 1 does not specify the normative updatedAt ascending sort"
+assert_prose 'a stale draft is not worth reviving' \
+  "${constitution_flat}" "rung 1 allows close-and-refile for a draft still worth reviving"
+assert_prose 'closed with every still-valid finding re-filed as an issue' \
+  "${constitution_flat}" "rung 1 does not name close-and-refile as a legitimate terminal state"
+assert_prose "the lane's total open own-PR count must not rise while the oldest cohort drains" \
+  "${constitution_flat}" "rung 1 lets old-draft disposal finance replacement intake"
+assert_prose 'no replacement draft may be opened merely because an old one was disposed of' \
+  "${constitution_flat}" "rung 1 permits replacement drafts after old-draft disposal"
+
+# ── 4. severity outranks age ──────────────────────────────────────────────────
 assert_prose 'Severity outranks age at rungs 2–3; age decides only *within* a rung' \
   "${constitution_flat}" "contract does not state that severity outranks age"
 
-# ── 4. the run-loop skill agrees with the contract ────────────────────────────
+# ── 5. the run-loop skill agrees with the contract ────────────────────────────
 assert_prose 'Your own DRAFTS are rung-1 work' \
   "${skill_flat}" "run-loop skill does not carry the own-drafts rung-1 rule"
 assert_prose 'severity is the primary sort, age the tiebreaker within a tier' \
   "${skill_flat}" "run-loop skill still sorts the issue queue by age alone"
 assert_prose 'Resolve the next issue by the ladder' \
   "${skill_flat}" "run-loop skill's advance step does not follow the ladder"
+
+# ── 6. intake is CAPPED, not merely ordered ──────────────────────────────────
+# Re-measured 2026-07-26, after §2's fix landed: the pile did NOT drain. 99 → 91 open own PRs, still
+# 100% drafts, and median age ROSE 6.9d → 8.0d. Per lane it was 88/91 `codex/*` — and 63 of those 88
+# (72%) were opened on ONE day, all on one repo, all one theme, every sampled one NEVER reviewed and
+# by then BLOCKED or DIRTY. So §2's diagnosis was incomplete: ordering cannot drain a pile, because
+# promotion needs a green review at the current head and the review lanes are metered and shared. A
+# run that opens its whole batch in one pass satisfies "finish before you start more" VACUOUSLY — it
+# had nothing in flight when it started. These guard the cap that closes that, and the carve-outs
+# that keep it from blocking mandated work.
+assert_prose 'The WIP limit is also a CAP ON INTAKE, not only an ordering' \
+  "${constitution_flat}" "contract does not bound draft intake — ordering alone cannot drain a pile"
+assert_prose 'a run that opens its whole batch in one pass satisfies it **vacuously**' \
+  "${constitution_flat}" "contract does not explain why the ordering rule is satisfiable vacuously"
+grep -Fq '| **Per run** | Open at most **5** new own drafts. |' "${constitution}" ||
+  fail "contract does not state the per-run draft intake cap"
+# Assert the WHOLE row, not just the threshold: a prefix match would still pass with the actual
+# instruction ("open no new ones") deleted, leaving a number that binds nothing.
+grep -Fq '| **Per lane** | While your own lane holds **more than 20** open drafts, open **no** new ones — spend the whole run finishing. |' "${constitution}" ||
+  fail "contract does not state the per-lane draft ceiling"
+# The carve-outs are load-bearing: without them the cap would block a hotfix or stop the backlog
+# being captured, which is a guard firing on correct mandated work.
+assert_prose 'Rung-0 live breakage is exempt from both' \
+  "${constitution_flat}" "intake cap does not exempt live breakage — it would block a hotfix"
+assert_prose 'filing an issue is not opening a draft' \
+  "${constitution_flat}" "intake cap does not exempt issue capture — the backlog would stop being capturable"
+# Autonomy must no longer bless an unreviewable burst as "not sprawl".
+assert_prose 'What IS sprawl is a burst that outruns your own review capacity' \
+  "${constitution_flat}" "Autonomy still licenses an unbounded draft set as 'not sprawl'"
+# A cap bounds STARTING, never the run itself — without this the cap reads as permission to idle,
+# which would trade the floor and "work as long as there is work" for the pile fix.
+assert_prose 'A cap is NOT licence to stop early, and it never blocks the floor' \
+  "${constitution_flat}" "intake cap does not say it bounds starting rather than the run — it reads as licence to idle"
+# ...and that it says what a capped run should do INSTEAD. Without this, "don't stop early" states
+# only the prohibition, leaving the redirection to finishing implicit.
+assert_prose 'the cap redirects a run **from starting toward finishing**, and finishing is unbounded' \
+  "${constitution_flat}" "contract does not redirect a capped run toward finishing"
 
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.
