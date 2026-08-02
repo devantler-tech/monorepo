@@ -3527,6 +3527,93 @@ nocheck "an oversized signature never reports a zero count" "$OUT" "REAL occurre
 OUT=$(sigrun); check "an inline signature is echoed on its label line" "$OUT" \
   "signature scored (fixed string, case-sensitive):"
 
+# ── SHARED SHAPE ACCESSORS: one fixture, every awkward shape, every section ───
+# Claude's transcript schema is heterogeneous by design, and every walk used to
+# re-derive its own guards against it — so a walk was correct only if its author
+# remembered every case, and the failure when one was forgotten is SILENT and
+# always downward: jq aborts the input line, the call site's `2>/dev/null` eats
+# the error, and the record is dropped.
+#
+# ONE fixture carries every shape that aborts a naive walk, and EVERY section is
+# asserted against it. Before the shared accessors, the already-hardened
+# signature section scored this fixture while reliability read 0 and dispatch
+# reported the whole transcript "unreadable" — the same corpus, three different
+# answers, which is precisely the divergence a shared accessor removes.
+mkdir -p "$FIX/awkward/aw"
+cat > "$FIX/awkward/aw/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:01Z","message":{"content":"a plain string content record"}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:02Z","message":{"content":["bare string block",{"type":"tool_use","id":"a1","name":"Bash","input":{"command":"gh pr view 1","description":"awkward probe"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:03Z","message":{"content":["bare string block",{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[42,{"type":"text","text":"AWKWARDSIG mixed-array failure"}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:04Z","message":{"content":[{"type":"tool_use","id":"a2","name":"Edit","input":{"file_path":"/y","description":"awkward edit"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"a2","is_error":true,"content":[{"type":"text","text":99},{"type":"text","text":"AWKWARDSIG nonstring-text failure"}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:06Z","message":{"content":[{"type":"tool_use","id":"a3","name":"Read","input":{"file_path":"/z","description":"awkward read"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:07Z","message":{"content":[{"type":"tool_result","tool_use_id":"a3","is_error":true,"content":[{"type":"text","text":{"nested":"object"}},{"type":"text","text":"AWKWARDSIG objtext failure"}]}]}}
+EOF
+
+# $1 = script under test, $2 = section, $3 = optional signature
+awkrun() {
+  DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/awkward" CODEX_HOME="$FIX/codex" \
+    MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    bash "$1" --since-days 3650 --max-files 20 --section "$2" \
+    ${3:+--signature "$3"} 2>&1
+}
+
+echo
+echo "shared shape accessors"
+OUT=$(awkrun "$TARGET" reliability)
+check "awkward shapes: every errored result is counted"    "$OUT" "tool errors in window: 3"
+check "awkward shapes: mixed-array result attributed"      "$OUT" "1 Bash"
+check "awkward shapes: non-string .text result attributed" "$OUT" "1 Edit"
+check "awkward shapes: object .text result attributed"     "$OUT" "1 Read"
+OUT=$(awkrun "$TARGET" signature AWKWARDSIG)
+check "awkward shapes: signature scores all three" "$OUT" "is_error==true): 3"
+# The consequential one. A single bare string in a content array used to abort
+# the dispatch classifier's whole-transcript parse, so a dispatch that really ran
+# was reported as an unreadable transcript — an instrument the improver reads
+# FIRST, to decide whether any other number in the report is trustworthy.
+OUT=$(awkrun "$TARGET" dispatch)
+check "awkward shapes: the dispatch is classified"     "$OUT" 'dispatches of role "daily-ai-assistant": 1'
+check "awkward shapes: the dispatch counts as live"    "$OUT" "live ......... 1"
+nocheck "awkward shapes: transcript is not unreadable" "$OUT" "unreadable transcript ....................: 1"
+
+# A guard in a SHARED accessor must be load-bearing in MORE THAN ONE section —
+# that is what proves the call sites really are shared rather than merely similar.
+# Each arm removes exactly one guard from one accessor and requires two different
+# sections to under-count.
+shared_ablate() { # $1=perl-expr $2=label $3=reliability-after $4=signature-after
+  local ab="$FIX/shared-ablate.sh"
+  cp "$TARGET" "$ab"
+  perl -0pi -e "$1" "$ab"
+  if cmp -s "$TARGET" "$ab"; then
+    bad "shared ablation: $2" "perl changed nothing — the arm proves nothing"
+    return
+  fi
+  local r s
+  r=$(awkrun "$ab" reliability | grep -oE 'tool errors in window: [0-9]+' | head -1)
+  s=$(awkrun "$ab" signature AWKWARDSIG | grep -oE 'is_error==true\): [0-9]+' | head -1)
+  if [ "$r" = "tool errors in window: $3" ] && [ "$s" = "is_error==true): $4" ]; then
+    ok "shared ablation: $2"
+  else
+    bad "shared ablation: $2" "expected reliability=$3 signature=$4; got '$r' / '$s'"
+  fi
+}
+# Drop `objects` from content_blocks: the bare string in the content array is no
+# longer filtered, so indexing it with .type aborts the line in every walk.
+#
+# The two sections lose DIFFERENT amounts, and the asymmetry is the point rather
+# than an inconsistency. Reliability slurps the whole transcript (`jq -Rrs`), so
+# one aborted line takes every record with it: 3 -> 0. The signature walk runs
+# per-line (`jq -Rr`), so only the offending record is lost: 3 -> 2. Slurping is
+# what turns a single awkward block into a whole-transcript blackout, which is
+# also why the dispatch classifier reported "unreadable" rather than a low count.
+shared_ablate 's/(def content_blocks:.*?)\n  \| objects;/$1;/s' \
+  "content_blocks objects guard is load-bearing in two sections" 0 2
+# Drop `strings` from block_text: the object-valued .text reaches join(), which
+# refuses to join an object, aborting the line in every walk that flattens text.
+shared_ablate 's/(def block_text:.*?select\(\.type=="text"\) \| \.text) \| strings\]/$1]/s' \
+  "block_text strings guard is load-bearing in two sections" 2 2
+
 # ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
 # A guard that passes when removed is not a guard. Each arm copies the target,
 # removes exactly one filter, asserts the copy actually CHANGED, and requires the
@@ -3563,9 +3650,17 @@ ablate() { # $1=sed-expr $2=label $3=expected-count-after $4=days $5=expected-ch
 }
 # Arm A — drop the is_error filter: the documentation read must become counted
 # (2 -> 3). This is the contamination the section exists to exclude.
-# Anchored at end-of-line so it hits ONLY the signature walk's own filter — the
-# reliability section's `... and .is_error==true)` ends in a paren and is spared.
-ablate 's/\.type=="tool_result" and \.is_error==true$/.type=="tool_result"/' \
+#
+# Anchored on the signature walk's own INDENTATION (14 spaces) and end-of-line.
+# Once every walk was consolidated onto the shared `content_blocks`/`block_text`
+# accessors, all six errored-tool_result filters became textually identical apart
+# from indentation, so the previous end-of-`true` anchor stopped discriminating —
+# and, having been written against the pre-refactor text, stopped matching at all.
+# The harness caught that as "sed changed nothing" rather than passing a vacuous
+# arm. Indentation is the only remaining discriminator: 14 spaces is unique to
+# this walk (the others sit at 8, 10 and 12), and the one-changed-line assertion
+# below fails loudly if a future reindent breaks that uniqueness.
+ablate 's/^              | select(\.type=="tool_result" and \.is_error==true)$/              | select(.type=="tool_result")/' \
   "removing is_error lets a documentation read count" 3
 # Arm B — drop the record-timestamp filter in the 1-day window: the 2026-06-01
 # failure must reappear (1 -> 2), proving mtime is not what bounds the window.
