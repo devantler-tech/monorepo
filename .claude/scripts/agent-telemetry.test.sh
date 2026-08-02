@@ -2866,9 +2866,14 @@ cat > "$FIX/dh-role/interactive.jsonl" <<'EOF'
 EOF
 ROUT2=$(CLAUDE_PROJECTS_DIR="$FIX/dh-role" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+# Assert the COUNTS, not the labels. The first version of these two checked only
+# that the words appeared, and the labels print unconditionally — so both stayed
+# green with role selection disabled entirely. Ablation is what exposed that:
+# an arm that reddens nothing it should have reddened is a weak assertion, not a
+# safe one.
 check "another scheduled role is not this role's dispatch" "$ROUT2" "classified: 1"
-check "the other role is reported, not silently dropped"   "$ROUT2" "other scheduled roles"
-check "an interactive session is not a dispatch"           "$ROUT2" "no dispatch record"
+check "the other role is reported, not silently dropped"   "$ROUT2" "other scheduled roles ....................: 1"
+check "an interactive session is not a dispatch"           "$ROUT2" "no dispatch record .......................: 1"
 
 # CONTROL O is the FAIL-CLOSED-SILENTLY control for CONTROL N. Selecting by role
 # means a changed marker format publishes ZERO dispatches while root runs exist —
