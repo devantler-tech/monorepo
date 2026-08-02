@@ -2314,11 +2314,13 @@ append, so use plain `<lane>/<area>-<desc>` — those go straight to a PR, so th
 discoverable signal and no claim window applies.) Work there, open the PR, then
 `git -C <repo_path> worktree remove` to clean up (`<repo_path>` is a local filesystem path such as
 `applications/ksail` — `git -C` takes a path, not an `<owner/repo>` slug; use the slug only for `gh`
-commands). **Before editing any worktree this session did not create**, run
-`.claude/scripts/worktree-claim.sh check <wt> <session-slug>`: exit 3 means a **live foreign claim**
-(marker owner ≠ you, `created_at` within ~2h — the same window as an issue claim) → stand down and
-pick another lane; exit 0 means free, yours, or expired. A stale marker must not park a worktree
-permanently (#2284). **Submodule worktree isolation breaks whenever a submodule is initialised** — a
+commands). **Immediately before editing any worktree this session did not create**, atomically
+reserve it with `.claude/scripts/worktree-claim.sh acquire <wt> <session-slug>`: exit 3 means a
+**live foreign claim** (marker owner ≠ you, `created_at` within ~2h — the same window as an issue
+claim) → stand down and pick another lane; exit 0 means the caller now owns the marker. `check` is
+read-only diagnosis and does not reserve the worktree. Renew a long-running claim by calling
+`acquire` with the same owner at least hourly. A stale marker must not park a worktree permanently
+(#2284). **Submodule worktree isolation breaks whenever a submodule is initialised** — a
 stray shared `core.worktree` makes `git worktree add` resolve back into the main checkout, silently
 collapsing every parallel session into one physical tree.
 

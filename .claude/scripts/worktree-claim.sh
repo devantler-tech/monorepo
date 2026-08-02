@@ -9,19 +9,22 @@
 #   collision surfaced only as "File has been modified since read" after work
 #   was already underway.
 #
-#   This helper writes an ownership marker when creating a worktree, and checks
-#   it before entering a foreign one. A live foreign marker is treated like a
-#   live issue claim: pick another lane. Markers expire after ~2 hours so a
-#   crashed session parks nothing permanently (same window as issue claims).
+#   This helper atomically acquires an ownership marker when creating or
+#   entering a worktree. A live foreign marker is treated like a live issue
+#   claim: pick another lane. Markers expire after ~2 hours so a crashed
+#   session parks nothing permanently (same window as issue claims).
 #
 # USAGE
 #   .claude/scripts/worktree-claim.sh add  <repo_path> <worktree_path> <branch> <owner-slug>
 #       Create the worktree (git worktree add -b <branch>) and write the marker.
 #   .claude/scripts/worktree-claim.sh check <worktree_path> <my-owner-slug>
-#       Exit 0 if free / mine / expired; exit 3 if a live foreign claim exists.
+#       Read-only diagnostic: exit 0 if free / mine / expired; exit 3 if a live
+#       foreign claim exists. This does not reserve the worktree.
+#   .claude/scripts/worktree-claim.sh acquire <worktree_path> <owner-slug>
+#       Atomically acquire a free/expired worktree or renew the current owner's
+#       lease. Exit 3 without changing the marker when another live owner wins.
 #   .claude/scripts/worktree-claim.sh mark  <worktree_path> <owner-slug>
-#       Write/refresh the marker on an already-created worktree (e.g. after a
-#       bare `git worktree add` that could not go through `add`).
+#       Compatibility alias for `acquire`.
 #
 # MARKER
 #   Path: <worktree>/.claude-worktree-owner  (gitignored locally by agents; never
@@ -34,19 +37,23 @@
 #   0  success / free-or-mine-or-expired
 #   1  usage / argument error
 #   2  git or filesystem failure
-#   3  live foreign claim (check mode only)
+#   3  live foreign claim (check or acquire mode)
 
 set -euo pipefail
 
 readonly MARKER_NAME=".claude-worktree-owner"
+readonly LOCK_NAME="${MARKER_NAME}.lock"
 # Same ~2h window as the issue Claim protocol lease.
 readonly CLAIM_TTL_SECS=$((2 * 60 * 60))
+readonly LOCK_ATTEMPTS=50
+CLAIM_LOCK_DIR=""
 
 usage() {
   cat >&2 <<'EOF'
 usage:
   worktree-claim.sh add   <repo_path> <worktree_path> <branch> <owner-slug>
   worktree-claim.sh check <worktree_path> <my-owner-slug>
+  worktree-claim.sh acquire <worktree_path> <owner-slug>
   worktree-claim.sh mark  <worktree_path> <owner-slug>
 EOF
   exit 1
@@ -87,14 +94,44 @@ write_marker() {
   mv -f "$tmp" "$marker"
 }
 
+cleanup_lock() {
+  if [ -n "${CLAIM_LOCK_DIR:-}" ]; then
+    rmdir "$CLAIM_LOCK_DIR" 2>/dev/null || true
+    CLAIM_LOCK_DIR=""
+  fi
+}
+
+trap cleanup_lock EXIT
+trap 'exit 2' HUP INT TERM
+
+acquire_lock() {
+  local wt="$1" attempt=0
+  local lock="$wt/$LOCK_NAME"
+  while ! mkdir "$lock" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge "$LOCK_ATTEMPTS" ]; then
+      fail "timed out waiting for ownership lock: $lock"
+    fi
+    sleep 0.1
+  done
+  CLAIM_LOCK_DIR="$lock"
+}
+
+release_lock() {
+  local lock="${CLAIM_LOCK_DIR:-}"
+  [ -n "$lock" ] || return 0
+  rmdir "$lock" || fail "cannot release ownership lock: $lock"
+  CLAIM_LOCK_DIR=""
+}
+
 ignore_marker() {
   local wt="$1"
   local exclude
   exclude="$(git -C "$wt" rev-parse --git-path info/exclude)" ||
     fail "cannot resolve git exclude file for worktree: $wt"
   mkdir -p "$(dirname "$exclude")"
-  if ! grep -qxF "/$MARKER_NAME" "$exclude" 2>/dev/null; then
-    printf '/%s\n' "$MARKER_NAME" >>"$exclude"
+  if ! grep -qxF "/$MARKER_NAME*" "$exclude" 2>/dev/null; then
+    printf '/%s*\n' "$MARKER_NAME" >>"$exclude"
   fi
 }
 
@@ -113,13 +150,41 @@ read_marker() {
   done <"$marker"
 }
 
-cmd_mark() {
+cmd_acquire() {
   local wt="$1" owner="$2"
   [ -d "$wt" ] || fail "worktree path is not a directory: $wt"
   [ -n "$owner" ] || usage
+  acquire_lock "$wt"
   ignore_marker "$wt"
+  local marker="$wt/$MARKER_NAME" action="acquired"
+  read_marker "$marker"
+  if [ -e "$marker" ]; then
+    if [ -z "${MARKER_OWNER:-}" ] || [ -z "${MARKER_CREATED_AT:-}" ]; then
+      fail "malformed ownership marker (owner and created_at are required): $marker"
+    fi
+    if [ "$MARKER_OWNER" = "$owner" ]; then
+      action="renewed"
+    else
+      local created_epoch now_epoch age
+      created_epoch="$(iso_to_epoch "$MARKER_CREATED_AT")" ||
+        fail "unparseable ownership marker timestamp: $MARKER_CREATED_AT"
+      now_epoch="$(date -u +%s)"
+      age=$((now_epoch - created_epoch))
+      if [ "$age" -lt "$CLAIM_TTL_SECS" ]; then
+        echo "worktree-claim: LIVE foreign claim owner=$MARKER_OWNER created_at=$MARKER_CREATED_AT age=${age}s — stand down" >&2
+        release_lock
+        exit 3
+      fi
+      action="transferred expired claim"
+    fi
+  fi
   write_marker "$wt" "$owner"
-  echo "worktree-claim: marked $wt owner=$owner"
+  release_lock
+  echo "worktree-claim: $action $wt owner=$owner"
+}
+
+cmd_mark() {
+  cmd_acquire "$1" "$2"
 }
 
 cmd_add() {
@@ -134,8 +199,7 @@ cmd_add() {
   if ! git -C "$repo" worktree add -b "$branch" "$wt"; then
     fail "git worktree add failed for $wt (branch $branch)"
   fi
-  ignore_marker "$wt"
-  write_marker "$wt" "$owner"
+  cmd_acquire "$wt" "$owner"
   echo "worktree-claim: added $wt on $branch owner=$owner"
 }
 
@@ -149,19 +213,20 @@ cmd_check() {
   fi
   local marker="$wt/$MARKER_NAME"
   read_marker "$marker"
-  if [ -z "${MARKER_OWNER:-}" ] || [ -z "${MARKER_CREATED_AT:-}" ]; then
+  if [ ! -e "$marker" ]; then
     echo "worktree-claim: free (no live marker)"
     exit 0
+  fi
+  if [ -z "${MARKER_OWNER:-}" ] || [ -z "${MARKER_CREATED_AT:-}" ]; then
+    fail "malformed ownership marker (owner and created_at are required): $marker"
   fi
   if [ "$MARKER_OWNER" = "$me" ]; then
     echo "worktree-claim: mine (owner=$MARKER_OWNER)"
     exit 0
   fi
   local created_epoch now_epoch age
-  created_epoch="$(iso_to_epoch "$MARKER_CREATED_AT")" || {
-    echo "worktree-claim: free (unparseable created_at — treat as stale)"
-    exit 0
-  }
+  created_epoch="$(iso_to_epoch "$MARKER_CREATED_AT")" ||
+    fail "unparseable ownership marker timestamp: $MARKER_CREATED_AT"
   now_epoch="$(date -u +%s)"
   age=$((now_epoch - created_epoch))
   if [ "$age" -ge "$CLAIM_TTL_SECS" ]; then
@@ -184,6 +249,10 @@ main() {
     check)
       [ $# -eq 2 ] || usage
       cmd_check "$1" "$2"
+      ;;
+    acquire)
+      [ $# -eq 2 ] || usage
+      cmd_acquire "$1" "$2"
       ;;
     mark)
       [ $# -eq 2 ] || usage

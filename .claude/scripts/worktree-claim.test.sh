@@ -68,6 +68,49 @@ rc=0
 out="$("$script" check "$wt" "session-beta" 2>&1)" || rc=$?
 check "check expired foreign" 0 "$rc" "$out" "expired"
 
+# ── acquire: expired ownership transfers atomically ──────────────────────────
+rc=0
+out="$("$script" acquire "$wt" "session-beta" 2>&1)" || rc=$?
+check "acquire transfers expired claim" 0 "$rc" "$out" "owner=session-beta"
+owner_line="$(grep '^owner=' "$wt/.claude-worktree-owner")"
+check "transferred marker owner" 0 0 "$owner_line" "owner=session-beta"
+
+# ── acquire: current owner renews its lease ───────────────────────────────
+printf 'owner=session-beta\ncreated_at=%s\n' "$old" >"$wt/.claude-worktree-owner"
+rc=0
+out="$("$script" acquire "$wt" "session-beta" 2>&1)" || rc=$?
+check "acquire renews own claim" 0 "$rc" "$out" "renewed"
+renewed_at="$(sed -n 's/^created_at=//p' "$wt/.claude-worktree-owner")"
+check "renewal refreshes timestamp" 0 "$([ "$renewed_at" != "$old" ] && echo 0 || echo 1)"
+
+# ── malformed foreign marker fails closed ───────────────────────────────────
+printf 'owner=session-beta\ncreated_at=not-a-timestamp\n' >"$wt/.claude-worktree-owner"
+rc=0
+out="$("$script" acquire "$wt" "session-other" 2>&1)" || rc=$?
+check "malformed foreign marker fails closed" 2 "$rc" "$out" "unparseable"
+
+# ── acquire: concurrent claimants have exactly one winner ────────────────────────
+race="$tmp/race-wt"
+git -C "$repo" worktree add -q -b "claim-branch-race" "$race"
+"$script" acquire "$race" "session-racer-a" >"$tmp/racer-a.out" 2>&1 &
+pid_a=$!
+"$script" acquire "$race" "session-racer-b" >"$tmp/racer-b.out" 2>&1 &
+pid_b=$!
+rc_a=0
+wait "$pid_a" || rc_a=$?
+rc_b=0
+wait "$pid_b" || rc_b=$?
+race_result=1
+if { [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 3 ]; } ||
+  { [ "$rc_a" -eq 3 ] && [ "$rc_b" -eq 0 ]; }; then
+  race_result=0
+fi
+check "concurrent acquire has one winner" 0 "$race_result"
+race_owner="$(sed -n 's/^owner=//p' "$race/.claude-worktree-owner")"
+winner="session-racer-a"
+[ "$rc_b" -eq 0 ] && winner="session-racer-b"
+check "concurrent winner owns marker" "$winner" "$race_owner"
+
 # ── check: absent path is free ─────────────────────────────────────────────
 rc=0
 out="$("$script" check "$tmp/no-such-wt" "session-beta" 2>&1)" || rc=$?
