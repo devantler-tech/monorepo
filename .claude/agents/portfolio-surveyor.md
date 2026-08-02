@@ -107,10 +107,11 @@ public and private — no per-repo loop needed to enumerate):
    ownership-unverified rule below first.
    **`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier**:
    deepen its row only when the cheap search result has branch `deps/agent-skills-update` and exact
-   title `chore(deps): update agent skills`, then require the classifier below to exit 0. The cheap
-   branch/title test only selects a candidate; it never grants the exemption. If the classifier
-   returns 1, the App is untrusted outside that programmed path and the PR is static-review-only.
-   Exit 2 is a survey error and fails closed.
+   title `chore(deps): update agent skills`, then require the classifier below to exit 0 or 3. The
+   cheap branch/title test only selects a candidate; it never grants trust or an exemption. Exit 0
+   grants the narrow no-review path. Exit 3 means a trusted, review-required `agent-plugins` updater:
+   deepen its normal review surfaces and never report it exempt. Exit 1 leaves the App untrusted and
+   the PR static-review-only. Exit 2 is a survey error and fails closed.
    - **`devantler`-authored PRs: classify the CI state, NOT the ownership — report them as
      `OWNERSHIP-UNVERIFIED`, never "MERGE-READY own".** You cannot tell the routine's *own* PRs from the
      **maintainer's interactive** ones (an active feature campaign, `repo-assist`, a hand-driven session):
@@ -201,7 +202,8 @@ public and private — no per-repo loop needed to enumerate):
      merge-ready without ≥1 green review on top of green CI; a successful current-head review from any one provider completes the review gate**
      (maintainer direction 2026-07-11, clarified 2026-07-22).
      This includes drafts and promoted PRs from humans and actionable trusted bots — EXCEPT trusted
-     **programmed bot PRs**: the shared agent-skills updater's exact generated path (maintainer
+     **programmed bot PRs**: the shared agent-skills updater's exact generated path in `platform` and
+     `ksail` (maintainer
      direction 2026-07-23), Homebrew-tap cask PRs (GoReleaser's for `ksail`/`ksail-desktop` and
      World at Ruin's CD-generated ones on `goreleaser/world-at-ruin`, maintainer direction
      2026-07-18), and KSail release bumps (maintainer direction 2026-07-13, ksail#6095). Apply this
@@ -222,8 +224,9 @@ public and private — no per-repo loop needed to enumerate):
      provenance and both dates.
      The list's last SHA must equal `headRefOid`; an agent/maintainer adaptation commit therefore
      revokes the exemption even when the branch, title, and files still look generated. Exit 1 means
-     the normal review gate applies; exit 2 or any query/classifier failure is a survey error
-     and also fails closed. **Never infer exemption from a title,
+     an external/static-only candidate; exit 2 or any query/classifier failure is a survey error
+     and also fails closed; exit 3 is a trusted `agent-plugins` update that follows the normal review
+     gate. **Never infer exemption from a title,
      a dependency name, or a generic release-shaped branch.** The classifier deliberately binds the
      approved repository, PR actor, branch, title/version, current-head commit provenance, and exact
      changed-file set; do not recreate a

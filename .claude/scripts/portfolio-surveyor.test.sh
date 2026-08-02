@@ -71,10 +71,18 @@ grep -Fq 'programmed agent-skills updater PRs' "${constitution}" ||
   fail "constitution does not exempt programmed agent-skills updater PRs from review"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
+grep -Fq 'agent-plugins` updater PRs require semantic review' "${constitution}" ||
+  fail "constitution can still send marketplace instruction updates through the no-review path"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
 grep -Fq '`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs' "${constitution}" ||
   fail "constitution either misses botantler updater PRs or trusts the App globally"
 grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
   fail "surveyor cannot report a programmed bot review exemption"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq 'Exit 3 means a trusted, review-required `agent-plugins` updater' "${surveyor}" ||
+  fail "surveyor cannot distinguish review-bearing marketplace updates from untrusted lookalikes"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq '`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier' "${surveyor}" ||
@@ -260,8 +268,10 @@ grep -Fq 'never actionable at all' "${product_engineering_skill}" ||
   fail "advance playbook does not state that an automation-authored issue is never actionable"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
-grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||
-  fail "portfolio-maintenance skill still review-gates programmed agent-skills updater PRs"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '`agent-plugins` updater PRs require semantic review' "${maintenance_skill}" ||
+  fail "portfolio-maintenance skill can still exempt marketplace instruction updates from review"
 grep -Fq 'Compatibility overlay' "${maintenance_skill}" ||
   fail "plugin surveyor can run without the hardened local behavior before digest parity"
 grep -Fq 'read and follow the local' "${maintenance_skill}" ||
@@ -275,10 +285,10 @@ grep -Fq 'automation-owned dependency PRs' "${product_engineering_skill}" ||
   fail "product-engineering skill still treats dependency PRs as agent work"
 grep -Fq 'automation-owned dependency PRs' "${agent_skills_card}" ||
   fail "agent-skills product card still treats dependency PRs as agent work"
-grep -Fq 'never spend a review lane on them' "${agent_skills_card}" ||
-  fail "agent-skills product card still requires review for programmed updater PRs"
-grep -Fq 'classification succeeds' "${agent_skills_card}" ||
-  fail "agent-skills product card can skip review without a successful classifier result"
+grep -Fq 'never spend a review lane on exit-0 exemptions' "${agent_skills_card}" ||
+  fail "agent-skills product card does not preserve the narrow no-review path"
+grep -Fq 'classifier exits 3' "${agent_skills_card}" ||
+  fail "agent-skills product card does not require semantic review for marketplace updates"
 grep -Fq 'automation-owned dependency PRs' "${ksail_card}" ||
   fail "KSail product card still treats dependency PRs as agent work"
 if grep -Fq 'Bot PRs are first-priority work, not background noise' "${constitution}"; then
@@ -304,6 +314,19 @@ expect_review_gated() {
     rc=$?
   fi
   [[ "${rc}" -eq 1 ]] || fail "classifier errored for review-gated fixture: ${name}"
+}
+
+expect_review_required() {
+  local name="$1"
+  shift
+  local rc
+  if "${classifier}" "$@"; then
+    fail "unexpected no-review exemption: ${name}"
+  else
+    rc=$?
+  fi
+  [[ "${rc}" -eq 3 ]] ||
+    fail "classifier did not return trusted review-required state for ${name}: exit ${rc}"
 }
 
 expect_not_release_exempt() {
@@ -506,6 +529,31 @@ agent_plugins_skills_commits="$(jq -cn --arg head "${agent_plugins_skills_head}"
   message: "chore(deps): update agent skills"
 }]' | with_commit_dates)"
 
+agent_plugins_versioned_head="b6e8caf3166e0693ddae7159cd88783386af0b75"
+agent_plugins_versioned_files='[".claude-plugin/marketplace.json",".github/plugin/marketplace.json","plugins/github/.claude-plugin/plugin.json","plugins/github/plugin.json","plugins/github/skills/gh-stack/SKILL.md"]'
+agent_plugins_versioned_commits="$(jq -cn --arg head "${agent_plugins_versioned_head}" '[
+  {
+    sha: "af32046fa35e4c954f31ca6ba19d4a0659418af7",
+    author_login: "devantler",
+    author_name: "devantler",
+    author_email: "26203420+devantler@users.noreply.github.com",
+    committer_login: "github-actions[bot]",
+    committer_name: "github-actions[bot]",
+    committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+    message: "chore(deps): update agent skills"
+  },
+  {
+    sha: $head,
+    author_login: "github-actions[bot]",
+    author_name: "github-actions[bot]",
+    author_email: "41898282+github-actions[bot]@users.noreply.github.com",
+    committer_login: "github-actions[bot]",
+    committer_name: "github-actions[bot]",
+    committer_email: "41898282+github-actions[bot]@users.noreply.github.com",
+    message: "chore(deps): bump versions of changed plugins"
+  }
+]' | with_commit_dates)"
+
 multi_agent_skills_head="6666666666666666666666666666666666666666"
 multi_agent_skills_commits="$(jq -cn --arg head "${multi_agent_skills_head}" '[
   {
@@ -602,8 +650,8 @@ expect_exempt \
   "${ksail_files}" \
   "${ksail_commits}"
 
-expect_exempt \
-  "agent-plugins programmed agent-skills update" \
+expect_review_required \
+  "agent-plugins skill-only update" \
   "agent-plugins" \
   "app/botantler-1" \
   "deps/agent-skills-update" \
@@ -611,6 +659,16 @@ expect_exempt \
   "${agent_plugins_skills_head}" \
   "${agent_plugins_skills_files}" \
   "${agent_plugins_skills_commits}"
+
+expect_review_required \
+  "agent-plugins update with generated version files" \
+  "agent-plugins" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${agent_plugins_versioned_head}" \
+  "${agent_plugins_versioned_files}" \
+  "${agent_plugins_versioned_commits}"
 
 expect_exempt \
   "Platform programmed agent-skills update" \

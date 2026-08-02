@@ -34,9 +34,11 @@ put product-specific logic here.
 inherits it, then migrate consumers. Triage/label issues, drive actionable trusted-author PRs to merge,
 leave automation-owned dependency PRs alone, and keep dependency automation & docs current.
 Programmed `chore(deps): update agent skills` PRs are the no-review exception defined in the root
-contract only when `.claude/scripts/programmed-bot-review-exemption.sh` classification succeeds:
-let required CI and auto-merge decide accepted exemptions, and never spend a review lane on them.
-Route classifier failures, non-matching PRs, and lookalikes through the normal review process.
+contract only when `.claude/scripts/programmed-bot-review-exemption.sh` exits 0: let required CI and
+auto-merge decide accepted exemptions, and never spend a review lane on exit-0 exemptions. A genuine
+`agent-plugins` marketplace update is trusted but review-bearing when the classifier exits 3; request
+semantic review because bundled skill prose is executable agent instruction. Route classifier exit 1
+and non-matching lookalikes through the external/static-only path; exit 2 is a fail-closed error.
 
 Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md).
 

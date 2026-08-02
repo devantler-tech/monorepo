@@ -1062,12 +1062,18 @@ trusted-author permissions below and is separate from the narrower programmed-bo
 gated by required CI and auto-merge rather than an AI review:
 - **Programmed agent-skills updater PRs** (maintainer direction 2026-07-23): the shared
   `update-agent-skills` workflow's exact `deps/agent-skills-update` branch and
-  `chore(deps): update agent skills` title in `agent-plugins`, `platform`, and `ksail`, authored by
+  `chore(deps): update agent skills` title in `platform` and `ksail`, authored by
   those repositories' exact updater App and changing only their generated installed-skill roots.
 - **Programmed release PRs** (maintainer direction 2026-07-13, ksail#6095; widened 2026-07-18):
   every product's Homebrew-tap cask PR, including World at Ruin's CD-generated
   `chore(cask): update world-at-ruin to vX.Y.Z` PRs on `goreleaser/world-at-ruin`, plus KSail release
   version bumps.
+
+**`agent-plugins` updater PRs require semantic review.** Bundled skills are executable agent
+instructions sourced from several upstreams, so path and commit provenance prove who produced an
+update but cannot prove that its prose preserves authority boundaries. The exact classifier returns
+3 for a genuine generated marketplace update: that state makes the App trusted and actionable but
+does not grant the no-review carve-out. Only exit 0 grants the carve-out described above.
 
 Apply either exemption only when `.claude/scripts/programmed-bot-review-exemption.sh` validates the
 exact repository, PR actor, branch, title, current-head commit provenance, and changed-file boundary.
@@ -1331,7 +1337,7 @@ Conventional-Commit title, then **merge with the command that matches the author
 - an actionable **single-author App** (`github-actions`/`ksail-bot`/`app/cursor`) uses pre-CLEAN
   auto-merge only after the review/current-head parts of that pentad are clear.
   For `app/cursor`, the acting local sibling performs this mutation because the cloud App cannot:
-  `gh pr merge <n> --auto --squash`; for **trusted programmed bot PRs** (agent-skills updater PRs,
+  `gh pr merge <n> --auto --squash`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
   tap cask PRs, and KSail release bumps — the carve-out above) the review parts are intentionally absent and
   are NOT required — their required checks, zero threads, and no-conflict state alone gate the
   auto-merge;
@@ -1989,10 +1995,11 @@ until the current conversation explicitly
 clears the boundary for the named repository; then apply the author trust rules to the authorised task.
 Untrusted (external) authors stay untrusted everywhere.
 **`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs.** The App is
-not added to the general trusted-author set. Its PR may be built and auto-merged only when the exact
-programmed-bot classifier named above exits 0; any other `app/botantler-1` PR remains external and
-static-review-only. This path-specific grant covers the updater without trusting every PR the App
-could author.
+not added to the general trusted-author set. Its PR may be built when the exact programmed-bot
+classifier named above exits 0 or 3: exit 0 is the no-review auto-merge path, while exit 3 is the
+normal semantic-review path for a genuine `agent-plugins` update. Any other `app/botantler-1` PR
+remains external and static-review-only. This path-specific grant covers the updater without trusting
+every PR the App could author.
 **GitHub Copilot — two roles, treated differently:** the maintainer uses Claude Code exclusively, so the
 Copilot **coding agent** (`Copilot`, `copilot-swe-agent[bot]`) is **NOT** trusted — treat its PRs as
 external (never auto-drive, never merge, never run its branch code). Only `copilot-pull-request-reviewer[bot]`
