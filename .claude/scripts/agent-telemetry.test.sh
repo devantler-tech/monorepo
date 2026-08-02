@@ -3165,7 +3165,40 @@ Z2OUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-textonly-mixed" CODEX_HOME="$FIX/nocodex" M
 check   "the mixed text-only corpus still warns"            "$Z2OUT" "1 of 2 dispatches produced no evidence"
 check   "the served text-only run stays in the denominator" "$Z2OUT" "running count is 1"
 nocheck "the denominator no longer claims a tool call"      "$Z2OUT" "CONTRIBUTED tool calls"
-check   "and it says why a text-only run counts"            "$Z2OUT" "still had the opportunity to"
+
+# CONTROL Z3 pins the RUNNING COUNT AS AN IDENTITY: running == total - no-evidence.
+# Three rounds of review each found a different case the explanation got wrong,
+# because it explained the count by CAUSE ("only a refusal never got the
+# opportunity") while the code computes it by SUBTRACTION — and the two drift
+# apart at every bucket the story forgets. The second miss was an incomplete run
+# that did no work: excluded by the arithmetic, not a refusal, so the stated
+# reason was false. The durable fix is to stop asserting a cause. This control
+# pins the identity itself, which is the one claim that cannot go stale as
+# buckets are added, and it is checked on a corpus holding BOTH excluded kinds.
+mkdir -p "$FIX/dh-identity"
+{ dispatch_rec daily-ai-assistant 2026-08-01T09:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T09:00:01.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Surveyed every product; nothing actionable this tick."}]}}
+EOF
+} > "$FIX/dh-identity/live-textonly.jsonl"
+{ dispatch_rec daily-ai-assistant 2026-08-01T09:30:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T09:30:01.000Z","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+} > "$FIX/dh-identity/dead.jsonl"
+{ dispatch_rec daily-ai-assistant 2026-08-01T09:45:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T09:45:01.000Z","message":{"stop_reason":"tool_use","content":[{"type":"text","text":"Starting."}]}}
+EOF
+} > "$FIX/dh-identity/incomplete-nowork.jsonl"
+Z3OUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-identity" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "both evidence-free kinds are counted together" "$Z3OUT" "2 of 3 dispatches produced no evidence"
+# 3 total - 2 evidence-free = 1. A crashed no-work run is excluded alongside the
+# refusal, which is precisely what the old causal wording denied.
+check "running count is total minus evidence-free"    "$Z3OUT" "running count is 1"
+nocheck "no claim that a refusal is the only exclusion" "$Z3OUT" "Only a"
+check "the count is explained by subtraction"          "$Z3OUT" "defined by subtraction"
 
 # CONTROL AA pins ABSENT vs UNPARSEABLE. A window holding only correctly-parsed
 # other-role transcripts is a genuine zero — role parsing demonstrably worked and
