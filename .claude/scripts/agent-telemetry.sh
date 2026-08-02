@@ -631,29 +631,43 @@ NEVER_RAN_RE='^[[:space:]]*(<tool_use_error>)?[[:space:]]*('"$NEVER_RAN_SHAPES"'
 # Scalar fallback is `tostring`, never `empty`: stringifying an unexpected scalar
 # keeps the record observable, whereas dropping it reintroduces the silent
 # under-count these accessors exist to remove.
+# The shape lattice is FINITE, so it is handled exhaustively here rather than one
+# position at a time. Three review rounds each found the same defect at a
+# different position — an array element, a `.text` payload, a final-assistant
+# record — because each was patched where it was reported instead of stating the
+# rule once. The positions are: `message.content` (string | array | absent), an
+# array ELEMENT (bare scalar | block object), a block's `.text` (string |
+# non-string | absent), and the `.content`/`.output` of a result (string | array
+# | scalar). At every one of them the rule is the same: **coerce, never drop.**
+# `scalar_text` is that rule, and it is why no position needs its own guard.
 JQ_SHAPE_DEFS='
+def scalar_text: if type=="string" then . else tostring end;
 def content_blocks:
   (.message.content? // empty)
   | if type=="array" then .[] elif type=="object" then . else empty end
   | objects;
+def element_text:
+  if type=="object"
+  then (select(.type=="text") | select(.text != null) | .text | scalar_text)
+  else scalar_text end;
+def content_texts:
+  (.message.content? // empty)
+  | if type=="string" then .
+    elif type=="array" then (.[] | element_text)
+    else empty end;
+def message_text: [content_texts] | join("");
 def block_text:
   .content
-  | if type=="array" then
-      [ .[] | (strings), (objects | select(.type=="text") | .text | strings) ] | join(" ")
+  | if type=="array" then [.[] | element_text] | join(" ")
     elif type=="string" then .
     else tostring end;
 def output_text:
   .output
   | if type=="array" then
-      [ .[] | (strings), (objects | .text | strings) ] | join(" ")
+      [ .[] | if type=="object" then (select(.text != null) | .text | scalar_text)
+              else scalar_text end ] | join(" ")
     elif type=="string" then .
     else tostring end;
-def message_text:
-  (.message.content? // empty)
-  | if type=="string" then .
-    elif type=="array" then
-      [ .[] | (strings), (objects | select(.type=="text") | .text | strings) ] | join("")
-    else "" end;
 '
 
 # tool_use ids whose result shows the call never ran, resolved once per file.
@@ -1095,9 +1109,7 @@ if want dispatch; then
         | ([$recs[] | select(.type=="assistant") | content_blocks
             | select(.type=="tool_use")] | length) as $tu
         | (([$recs[] | select(.type=="assistant")] | last) // {}) as $lastrec
-        | (($lastrec
-            | if ((.message.content? | type) == "string") then .message.content
-              else ([content_blocks | select(.type=="text") | .text | strings] | last) end) // "") as $lastt
+        | ((($lastrec | [content_texts] | last)) // "") as $lastt
         | (($lastrec.timestamp) // ([$recs[]|select(.timestamp)|.timestamp]|last) // "") as $ts
         | (($lastrec.message.stop_reason) // "") as $sr
         | ([$recs[] | select(.type=="assistant")] | length) as $na

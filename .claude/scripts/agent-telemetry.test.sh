@@ -3646,6 +3646,43 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/barearray" CODEX_HOME="$FIX/codex" MONOREPO_DIR=
   HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 5 --section efficiency 2>&1)
 check "a bare-string element of a result array is still text" "$OUT" "bash timeouts .............. 1"
 
+# (5) THE SHAPE LATTICE, covered as a matrix rather than one position at a time.
+#     Three review rounds each reported the same defect at a different position,
+#     because each was patched where it was reported. The positions are finite —
+#     an array ELEMENT (bare scalar | block object), a block's `.text` (string |
+#     non-string | absent), and a final assistant record (string | array) — and at
+#     every one of them the rule is the same: COERCE, NEVER DROP. This fixture
+#     pins one payload per shape and requires each to survive to the output.
+mkdir -p "$FIX/lattice/x"
+cat > "$FIX/lattice/x/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"a"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"x1","is_error":true,"content":[{"type":"text","text":99}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:03Z","message":{"content":[{"type":"tool_use","id":"x2","name":"Edit","input":{"file_path":"/b"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"x2","is_error":true,"content":[{"type":"text","text":{"k":"v"}}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:05Z","message":{"content":[{"type":"tool_use","id":"x3","name":"Read","input":{"file_path":"/c"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"x3","is_error":true,"content":["bare elem"]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/lattice" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
+  HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 5 --section reliability 2>&1)
+check "lattice: every errored result survives"        "$OUT" "tool errors in window: 3"
+check "lattice: a numeric .text payload is preserved" "$OUT" "Bash: <n>"
+check "lattice: an object .text payload is preserved" "$OUT" 'Edit: {"k":"v"}'
+check "lattice: a bare array element is preserved"    "$OUT" "Read: bare elem"
+
+# (6) A bare-string provider refusal inside a final assistant ARRAY. Same rule at
+#     the record position: routing through `content_blocks` discarded it, so a
+#     dead dispatch was filed as `incomplete`.
+mkdir -p "$FIX/arrayrefusal/y"
+cat > "$FIX/arrayrefusal/y/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"stop_reason":"stop_sequence","content":["You've hit your weekly limit · resets Aug 1 at 1pm (Europe/Copenhagen)"]}}
+EOF
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/arrayrefusal" CODEX_HOME="$FIX/codex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
+  --since-days 3650 --max-files 5 --section dispatch 2>&1)
+check "a bare-string refusal in a final array is dead" "$OUT" "dead ......... 1"
+
 # A guard in a SHARED accessor must be load-bearing in MORE THAN ONE section —
 # that is what proves the call sites really are shared rather than merely similar.
 # Each arm removes exactly one guard from one accessor and requires two different
@@ -3680,12 +3717,15 @@ shared_ablate 's/(def content_blocks:.*?)\n  \| objects;/$1;/s' \
   "content_blocks objects guard is load-bearing in two sections" 0 2
 # Drop `strings` from block_text: the object-valued .text reaches join(), which
 # refuses to join an object, aborting the line in every walk that flattens text.
-# Re-aimed after `block_text` gained its bare-string branch: the old expression
-# matched `| strings]` at the end of the comprehension, which no longer exists.
-# The harness caught that as "perl changed nothing" rather than passing a vacuous
-# arm — a green control is not a live control, so re-ablate after every reshape.
-shared_ablate 's/(def block_text:.*?select\(\.type=="text"\) \| \.text) \| strings\)/$1)/s' \
-  "block_text strings guard is load-bearing in two sections" 2 2
+# Now aimed at `scalar_text`, the single coercion every position shares. Removing
+# it lets an object-valued payload reach `join`, which refuses to join an object,
+# so the record is dropped in both sections (3 -> 2 each).
+#
+# This arm has been re-aimed TWICE as the accessors were reshaped, and both times
+# the harness caught it as "perl changed nothing" rather than passing a vacuous
+# control. A green control is not a live control: re-ablate after every reshape.
+shared_ablate 's/def scalar_text: if type=="string" then \. else tostring end;/def scalar_text: .;/s' \
+  "the shared scalar_text coercion is load-bearing in two sections" 2 2
 
 # ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
 # A guard that passes when removed is not a guard. Each arm copies the target,
