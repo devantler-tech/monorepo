@@ -91,7 +91,20 @@ sweep() { # <repo_path>
     printf 'worktree-cleanup-all: ABORTING — cannot resolve physical path of %s\n' "$path" >&2
     exit 2; }
   if [ "$toplevel" != "$expected" ]; then
-    printf '\n### SKIP %s (broken isolation: toplevel=%s)\n' "$path" "$toplevel"
+    # Both conditions land here and both must SKIP, but they are NOT the same finding
+    # and their remedies are opposite, so they are reported apart. Discriminate on the
+    # path's OWN git metadata (a directory for a plain repo, a gitdir FILE for a
+    # submodule): absent means there is nothing checked out here and the toplevel
+    # merely resolved up to the parent; present means a real repository is aliased
+    # somewhere else, which is the dangerous case.
+    if [ ! -e "$path/.git" ]; then
+      printf '\n### SKIP %s (not initialised: no git metadata; toplevel resolved to %s)\n' \
+        "$path" "$toplevel"
+      printf '###      remedy: .claude/scripts/submodule-init.sh %s\n' "$path"
+    else
+      printf '\n### SKIP %s (broken isolation: toplevel=%s)\n' "$path" "$toplevel"
+      printf '###      remedy: repair this submodule in place — sessions editing here collide in one tree\n'
+    fi
     return 0
   fi
   # "$ROOT" is QUOTED: unquoted it is a glob pattern, so a root path containing

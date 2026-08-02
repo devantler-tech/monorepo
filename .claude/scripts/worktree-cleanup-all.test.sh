@@ -86,15 +86,56 @@ t_rewrites_session_worktree_root() {
   rm -rf "$root"
 }
 
-t_skips_broken_isolation() {
-  # A submodule path whose toplevel resolves elsewhere must be SKIPPED, never swept
-  # through the alias (that would operate on the wrong tree entirely).
+t_skips_uninitialised_submodule() {
+  # An UNINITIALISED submodule (no git metadata of its own) resolves up to the parent
+  # repo and must be SKIPPED — never swept through that alias.
+  #
+  # It must NOT be reported as broken isolation. The two conditions have opposite
+  # remedies: this one is benign and cleared by submodule-init.sh, whereas broken
+  # isolation means live sessions are silently colliding in one physical tree. This
+  # fixture builds the uninitialised case (it deletes the metadata outright), so
+  # asserting the broken-isolation wording here is what let the two blur together.
   local root; root=$(make_root)
   rm -rf "$root/repo/nested/.git"          # now resolves up to the parent repo
   mkdir -p "$root/repo/nested/.claude/worktrees"
   local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
                    bash "$SUT" dry-run 24 2>&1)
-  if printf '%s' "$out" | grep -q 'SKIP .*nested .*broken isolation'; then
+  if printf '%s' "$out" | grep -q 'SKIP .*nested .*not initialised' \
+     && printf '%s' "$out" | grep -q 'submodule-init.sh' \
+     && ! printf '%s' "$out" | grep -q 'nested .*broken isolation'; then
+    ok "SKIPs an uninitialised submodule and names it as such"
+  else
+    bad "SKIPs an uninitialised submodule and names it as such" "$out"
+  fi
+  rm -rf "$root"
+}
+
+t_skips_broken_isolation() {
+  # GENUINELY broken worktree isolation: the submodule keeps git metadata of its own,
+  # but a stray core.worktree resolves it back into the parent checkout. This is the
+  # dangerous case — sweeping through that alias would operate on the wrong tree — and
+  # until now nothing covered it, because the only test that claimed to deleted .git
+  # instead and so exercised the uninitialised path.
+  local root; root=$(make_root)
+  # Relocate the nested gitdir the way a real submodule stores it, then point
+  # core.worktree at the PARENT so the toplevel resolves outside the submodule.
+  mkdir -p "$root/repo/.git/modules"
+  mv "$root/repo/nested/.git" "$root/repo/.git/modules/nested"
+  printf 'gitdir: %s\n' "$root/repo/.git/modules/nested" > "$root/repo/nested/.git"
+  git -C "$root/repo/.git/modules/nested" config core.worktree "$root/repo"
+  mkdir -p "$root/repo/nested/.claude/worktrees"
+  # Guard the fixture itself: it is only a broken-isolation case if the metadata is
+  # still present AND the toplevel now resolves away from the submodule.
+  local top; top=$(git -C "$root/repo/nested" rev-parse --show-toplevel 2>/dev/null)
+  if [ ! -e "$root/repo/nested/.git" ] || [ "$top" = "$root/repo/nested" ]; then
+    bad "SKIPs a submodule with broken worktree isolation" \
+        "fixture did not reproduce broken isolation (toplevel=$top)"
+    rm -rf "$root"; return
+  fi
+  local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
+                   bash "$SUT" dry-run 24 2>&1)
+  if printf '%s' "$out" | grep -q 'SKIP .*nested .*broken isolation' \
+     && ! printf '%s' "$out" | grep -q 'nested .*not initialised'; then
     ok "SKIPs a submodule with broken worktree isolation"
   else
     bad "SKIPs a submodule with broken worktree isolation" "$out"
@@ -236,6 +277,7 @@ t_gitlink_validation_uses_a_literal_pathspec() {
 printf 'worktree-cleanup-all.sh contract tests\n'
 t_sweeps_root_and_submodules
 t_rewrites_session_worktree_root
+t_skips_uninitialised_submodule
 t_skips_broken_isolation
 t_aborts_and_exits_nonzero_on_sweep_failure
 t_per_repo_manifest_isolation
