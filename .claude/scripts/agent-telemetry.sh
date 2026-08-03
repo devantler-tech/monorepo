@@ -488,18 +488,160 @@ emit_credential_hits() {
       done
 }
 
+# ── PRIVATE-KEY MASKING — the one filter here that can destroy records ────────
+#
+# Written against a SPECIFICATION (RFC 7468 textual encodings, RFC 1421
+# encapsulated headers) rather than against the last review finding. The prior
+# implementations were each induced from whichever PEM shape a reviewer had just
+# produced, and every round produced one the previous fix had not enumerated —
+# greedy pairing, the unterminated case, a bounded closing search, RFC 1421
+# separators, and finally a complete key longer than the lookahead. The shapes
+# this must handle, and where each is answered:
+#
+#   1. TERMINATED block of ARBITRARY length  → pass B, closing search unbounded
+#   2. UNTERMINATED block                    → pass B, masked to HORIZON
+#   3. RFC 1421 `Proc-Type:`/`DEK-Info:` headers and their blank separator
+#                                            → no content test exists to stop on
+#   4. Short final base64 line               → likewise
+#   5. Several markers on ONE physical line  → pass A, match()/substr walk
+#   6. Stray unpaired BEGIN or END           → pass A / the marker sed below
+#   7. Both stream shapes (tagged rows, report) → mask_line() keeps the row tag
+#
+# 🔑 THE GOVERNING ASYMMETRY: a miss DISCLOSES A KEY, an over-mask costs report
+# lines inside a window we control. So no branch here asks what a line looks
+# like. Narrow classification is right for a parser and wrong for a redactor.
+AWK_KEY_REDACT='
+BEGIN { PH = "<redacted-key-material>"; HORIZON = 256 }
+# Mask a line WITHOUT destroying its structure. Callers tag rows as
+# `D<TAB>tool<TAB>message`, and this filter runs over that tagged stream as well
+# as over the final report — so replacing a whole line does not merely redact
+# it, it deletes the record and drops the error from the count. Measured on the
+# sed range this replaces: 4 errors -> 1.
+#
+# Preserving the tool field leaks nothing — it is a tool name, never payload —
+# and it is what makes an over-mask cost MESSAGE TEXT rather than EVIDENCE.
+function mask_line(s) {
+  if (s == "U") return s
+  if (match(s, /^D\t[^\t]*\t/)) return substr(s, 1, RLENGTH) PH
+  return PH
+}
+{ L[NR] = $0 }
+END {
+  n = NR
+  # Pass A — collapse every span COMPLETE ON ONE LINE, pairing each BEGIN with
+  # the NEAREST END. match()/substr, never a quantifier: a regex is
+  # leftmost-longest, so `.*` between the markers runs to the LAST END and
+  # strands a lone BEGIN, whose residual marker then re-opens the range.
+  for (i = 1; i <= n; i++) {
+    s = L[i]; out = ""
+    while (match(s, /-----BEGIN [A-Z ]*PRIVATE KEY-----/)) {
+      bs = RSTART; bl = RLENGTH
+      head = substr(s, 1, bs - 1)
+      rest = substr(s, bs + bl)
+      if (match(rest, /-----END [A-Z ]*PRIVATE KEY-----/)) {
+        out = out head PH
+        s = substr(rest, RSTART + RLENGTH)
+      } else {
+        # Unpaired BEGIN: the remainder of this line is key material. Whether
+        # the key CONTINUES past this line is decided in pass B.
+        out = out head PH
+        s = ""
+        U[i] = 1
+        break
+      }
+    }
+    L[i] = out s
+  }
+  # Pass B — resolve each line-crossing block by looking for its closing marker.
+  for (i = 1; i <= n; i++) {
+    if (!(i in U)) continue
+    # 🔴 THE SEARCH IS UNBOUNDED, AND THAT IS THE FIX. It used to stop at the
+    # same HORIZON the masking uses, which made the classification a GUESS: a
+    # COMPLETE key whose END sat beyond the lookahead was misread as
+    # unterminated and masked only to the horizon, so its tail was emitted
+    # verbatim. Measured on the bounded form with HORIZON=64: 36 body lines of a
+    # 100-line RSA-8192 key survived into the output.
+    #
+    # A bounded lookahead cannot answer an unbounded question. Scanning to end
+    # of input makes the terminated/unterminated split EXACT, which is what
+    # spec shape 1 requires — no fixed bound may apply to a real key block,
+    # because there is no length at which a PEM stops being a PEM.
+    #
+    # The cost is a stray BEGIN pairing with an unrelated END far later, which
+    # over-masks the lines between. That is deliberately accepted rather than
+    # bounded, for two reasons. First, bounding it is exactly the guess that
+    # leaked. Second, mask_line() above makes the over-mask NON-DESTRUCTIVE on
+    # the tagged stream — every record keeps its tag and stays counted, and only
+    # its message text is replaced. The earlier "200 records eaten" measurement
+    # predates that tag preservation; re-measured, the records survive.
+    close_at = 0
+    for (j = i + 1; j <= n; j++) {
+      if (L[j] ~ /-----END [A-Z ]*PRIVATE KEY-----/) { close_at = j; break }
+    }
+    if (close_at == 0) {
+      # UNTERMINATED block: mask every following line to HORIZON, with NO
+      # content test whatsoever. Stopping early on an explicit END is the
+      # terminated branch above; there is no other stop condition, by design.
+      #
+      # ⚠️ THE DEFAULT IS INVERTED ON PURPOSE, and the earlier version is a
+      # cautionary tale. This loop used to mask only lines that "plausibly
+      # continue key material" — a long unbroken base64 run — and that
+      # classifier leaked twice: an RFC 1421 ENCRYPTED PEM puts
+      # `Proc-Type:`/`DEK-Info:` headers and a BLANK separator between BEGIN
+      # and the body, so the loop stopped on line 1 and emitted the whole key;
+      # and a PEM final line is frequently shorter than the length floor, so it
+      # escaped even in the clean case. This asks nothing about what a line
+      # looks like, which is what makes it closed rather than merely wider.
+      #
+      # HORIZON is 256 lines. It bounds ONLY this branch — a key with no
+      # closing marker anywhere in the stream, i.e. a transcript truncated
+      # mid-key. 256 lines of base64 is ~16 KB of DER, comfortably past an
+      # RSA-16384 key (~170 body lines), so no realistic truncated key reaches
+      # the edge. It exists so a stray marker cannot consume the stream.
+      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) L[j] = mask_line(L[j])
+      continue
+    }
+    for (j = i + 1; j < close_at; j++) L[j] = mask_line(L[j])
+    s = L[close_at]
+    if (match(s, /-----END [A-Z ]*PRIVATE KEY-----/)) {
+      # Everything up to and including the END marker is key material; only the
+      # text after it survives. Capture that tail BEFORE the second match(),
+      # which resets RSTART/RLENGTH.
+      tail = substr(s, RSTART + RLENGTH)
+      # 🔴 The CLOSING line needs the same tag preservation every other masked
+      # line gets. It is the one branch that does not route through
+      # mask_line(), and it was blanking the row tag — so the record stopped
+      # parsing and dropped out of the count, which is precisely the defect
+      # mask_line() exists to prevent, surviving in the path it did not cover.
+      # Measured on a 202-row stray span: 201 of 202 rows kept their tag.
+      # (Same class as the bounded-search defect above: when a guard is added,
+      # check every OTHER path that walks the same structure.)
+      if (match(s, /^D\t[^\t]*\t/)) L[close_at] = substr(s, 1, RLENGTH) PH tail
+      else                          L[close_at] = PH tail
+    }
+  }
+  for (i = 1; i <= n; i++) print L[i]
+}
+'
+
 # Redact credential-shaped strings from ANYTHING this script prints.
 # Every emitted line originates in a transcript, and a failed tool result can
 # carry a token in its error text — so redaction lives at the output boundary
 # rather than in each detector, where one forgotten call-site leaks.
 redact() {
-  # A multi-line key block is masked with a sed RANGE (BEGIN..END), which is
-  # stateful across lines. The obvious alternative — masking any line that looks
-  # like base64 — over-redacts badly: tried against the real corpus it collapsed
-  # 30 distinct guard-denial entries into one unreadable bucket. Destroying real
-  # signal to catch a rare shape is a bad trade, and a redactor that eats the
-  # report is its own kind of failure.
-  sed -E '/-----BEGIN [A-Z ]*PRIVATE KEY-----/,/-----END [A-Z ]*PRIVATE KEY-----/ s/^.*$/<redacted-key-material>/' \
+  # Private-key material is masked by the bounded two-pass walk above, never by
+  # a sed RANGE. A sed range looks for its end address only on a LATER line, so
+  # a key pasted into ONE error message opened a range that never closed and
+  # rewrote every following line to EOF — measured, 4 in-window errors read as
+  # 1. Replacing the WHOLE line then still deleted the record it redacted
+  # (4 -> 3), because callers put structure on these lines. Only the key SPAN
+  # may be replaced. Both sed forms are why the walk exists; do not bring
+  # either back.
+  #
+  # The marker sed rules that follow are NOT dead: pass A leaves a stray
+  # unpaired END untouched (it scans for a BEGIN first), and rule 2 below is
+  # what masks it.
+  awk "$AWK_KEY_REDACT" \
   | sed -E \
     -e 's/(github_pat_[A-Za-z0-9_]{6})[A-Za-z0-9_]+/\1…<redacted>/g' \
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \

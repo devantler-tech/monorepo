@@ -3982,6 +3982,176 @@ relcase control "ordinary failure text" 4 0
 # the row tags: measured 4 -> 1, a 75% under-count from one unlucky message.
 # The whole-line form then still lost the tagged row itself (4 -> 3). Redacting
 # only the key SPAN is what keeps the secret out and the evidence in.
+PK_B=$(printf -- '-----%s %s PRIVATE KEY-----' 'BEGIN' 'RSA')
+PK_E=$(printf -- '-----%s %s PRIVATE KEY-----' 'END' 'RSA')
+relcase privatekey "parse failed: $PK_B AAAA $PK_E trailing" 4 0
+
+# F1b. UNBALANCED markers on one line — an ODD marker count. A regex quantifier
+# is leftmost-LONGEST, so `.*` between the markers ran to the LAST END and left
+# a trailing unpaired BEGIN behind. That residual then re-opened the unbounded
+# range and blanked every following record. Measured: 4 errors -> 1.
+relcase unbalancedkey "x $PK_B y $PK_E z $PK_B w" 4 0
+
+# ── REDACTOR UNIT TESTS — one row per SPEC SHAPE, not per reported bug ────────
+# The reliability walk strips control characters, so a multi-line message
+# arrives at the redactor as ONE line. That makes every cross-line branch
+# UNREACHABLE through `--section reliability`: a fixture written as
+# "multi-line" is silently flattened, and an ablation of the cross-line code
+# then honestly reports "the arm proves nothing". So the redactor is exercised
+# DIRECTLY here, as the unit it is.
+#
+# The shapes below are enumerated from RFC 7468 / RFC 1421 (monorepo#2643), NOT
+# induced from review findings. Five consecutive rounds of induction each
+# produced a shape the previous fix had not thought of; enumerating from the
+# spec is what stops the sixth.
+echo
+echo "redactor unit — the seven PEM shapes (monorepo#2643)"
+
+# Extract the awk program from the target so the unit under test is the SHIPPED
+# one, never a copy that can drift away from it.
+extract_awk() { sed -n "/^AWK_KEY_REDACT='/,/^'\$/p" "${1:-$TARGET}" | sed "1s/^AWK_KEY_REDACT='//; \$d"; }
+RB=$(printf -- '-----%s %s PRIVATE KEY-----' 'BEGIN' 'RSA')
+RE=$(printf -- '-----%s %s PRIVATE KEY-----' 'END' 'RSA')
+# A key body LONGER than the masking horizon (256). Shape 1 is the reason this
+# is 300 lines and not a token 3: the defect it pins only exists past the bound.
+longkey() {
+  printf '%s\n' "$RB"
+  for i in $(seq 1 300); do printf 'MIIEvgSECRETLINE-%03d\n' "$i"; done
+  printf '%s\n' "$RE"
+  printf 'AFTER-ROW\n'
+}
+
+# ── SHAPE 1 — a TERMINATED block of ARBITRARY length ──────────────────────────
+# 🔴 THE KNOWN-BROKEN ONE. The closing-marker search used to stop at the same
+# horizon the masking uses, so a COMPLETE key longer than that bound was
+# misclassified as unterminated and masked only to the horizon — its tail was
+# emitted verbatim. A bounded lookahead cannot answer an unbounded question.
+OUT=$(longkey | awk "$(extract_awk)")
+nocheck "shape 1: a terminated key LONGER than the horizon is fully masked" "$OUT" "SECRETLINE"
+check   "shape 1: and the record after it survives"                         "$OUT" "AFTER-ROW"
+
+# ── SHAPE 2 — UNTERMINATED block (no closing marker anywhere) ─────────────────
+# A truncated key is MORE likely in a transcript than a well-formed one,
+# because messages get cut. Requiring a closing marker before masking anything
+# emitted such a body verbatim — a P1 disclosure.
+OUT=$(printf 'timed out: %s\nMIIEvgSECRETBODYaaaa\nQEFAASCBKgSECRETTWO\n' "$RB" | awk "$(extract_awk)")
+nocheck "shape 2: an unterminated key body is masked"   "$OUT" "SECRETBODY"
+nocheck "shape 2: including its later body lines"       "$OUT" "SECRETTWO"
+
+# ── SHAPE 3 — RFC 1421 encrypted-PEM headers and their BLANK separator ────────
+# `Proc-Type:`/`DEK-Info:` and an empty line sit between BEGIN and the body, so
+# any content-shaped continuation test stops dead on the first header line and
+# emits the whole key. Reproduced before the default was inverted.
+OUT=$(printf 'Blocked: %s\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,9A7B2C\n\nMIIEvgIBADANBgkqSECRETBODYxxxx\n' "$RB" | awk "$(extract_awk)")
+nocheck "shape 3: an ENCRYPTED PEM body is masked through its headers" "$OUT" "SECRETBODY"
+nocheck "shape 3: and the DEK-Info header itself does not survive"     "$OUT" "AES-128-CBC"
+
+# ── SHAPE 4 — short final base64 line ────────────────────────────────────────
+# A PEM's last line is frequently only a few characters, so a minimum-length
+# test drops it even when every other line matches.
+OUT=$(printf 'x %s\nMIIEvgIBADANBgkqSECRETONExx\nSHORTTAIL=\n' "$RB" | awk "$(extract_awk)")
+nocheck "shape 4: a short final PEM line is masked" "$OUT" "SHORTTAIL"
+
+# ── SHAPE 5 — several markers on ONE physical line ───────────────────────────
+# Messages are newline-collapsed before reaching the redactor, so a whole key —
+# or several — can arrive on a single line.
+OUT=$(printf 'a %s SECRETIN %s b %s SECRETTWO\n' "$RB" "$RE" "$RB" | awk "$(extract_awk)")
+nocheck "shape 5: every span on a shared line is masked" "$OUT" "SECRETIN"
+nocheck "shape 5: including the trailing unpaired one"   "$OUT" "SECRETTWO"
+
+# ── SHAPE 6 — stray unpaired markers ─────────────────────────────────────────
+# A lone END is NOT handled by the awk walk (pass A scans for a BEGIN first);
+# the marker sed rule in redact() is what masks it. Asserting it here through
+# the walk alone would pin coverage that lives elsewhere — so this row goes
+# through the whole `--section reliability` path, which runs both.
+relcase strayend "prose mentioning $PK_E with no opener" 4 0
+
+# ── SHAPE 7 — BOTH stream shapes: a tagged row keeps its record ──────────────
+# 🔴 The over-mask must cost MESSAGE TEXT, never EVIDENCE. On the tagged stream
+# each row is one message with newlines already collapsed, so masking following
+# rows is pure measurement loss — bounded to that loss only because every masked
+# row keeps its `D<TAB>tool<TAB>` tag and stays counted.
+#
+# This also pins the CLOSING-line branch, which is the one path that does not
+# route through mask_line(). It was blanking that row's tag, so the record
+# stopped parsing and dropped out of the count: measured 201 of 202 rows kept.
+S7=$({ printf 'D\tBash\thead %s\n' "$RB"
+       for i in $(seq 1 200); do printf 'D\tBash\tRECORD-%03d\n' "$i"; done
+       printf 'D\tBash\ttail %s SURVIVING-TAIL\n' "$RE"; } | awk "$(extract_awk)")
+S7_ROWS=$(printf '%s\n' "$S7" | grep -c '')
+S7_TAGS=$(printf '%s\n' "$S7" | grep -c "^D$(printf '\t')Bash$(printf '\t')")
+if [ "$S7_ROWS" = 202 ] && [ "$S7_TAGS" = 202 ]; then
+  ok "shape 7: all 202 tagged rows keep their tag (records stay counted)"
+else
+  bad "shape 7: all 202 tagged rows keep their tag" "rows=$S7_ROWS tags=$S7_TAGS, expected 202/202"
+fi
+nocheck "shape 7: while every masked row's message text is gone" "$S7" "RECORD-100"
+check   "shape 7: and text after the closing marker survives"    "$S7" "SURVIVING-TAIL"
+
+# ── ablations — each proving ONE branch load-bearing ─────────────────────────
+# Every arm asserts the GUARANTEE stops holding, changes exactly ONE production
+# line, and is SIGNED in the correct direction. An arm that expects a needle to
+# reappear cannot detect a guard whose removal masks MORE, and vice versa.
+unit_ablate() { # $1=sed-expr $2=label $3=input-cmd $4=needle $5=appear|vanish
+  local ab="$FIX/abl_$$.sh" changed out
+  cp "$TARGET" "$ab"
+  sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
+  changed=$(diff "$TARGET" "$ab" | grep -c '^<')
+  if [ "$changed" -ne 1 ]; then
+    bad "ablation: $2" "sed changed $changed lines, expected 1 — arm is mis-aimed"
+    rm -f "$ab"; return
+  fi
+  out=$(eval "$3" | awk "$(extract_awk "$ab")")
+  rm -f "$ab"
+  if [ "$5" = appear ]; then
+    if printf '%s' "$out" | grep -qF -- "$4"; then ok "ablation: $2"
+    else bad "ablation: $2" "expected '$4' to REAPPEAR without the branch; it did not"; fi
+  else
+    if printf '%s' "$out" | grep -qF -- "$4"; then
+      bad "ablation: $2" "'$4' survived without the branch — the arm proves nothing"
+    else ok "ablation: $2"; fi
+  fi
+}
+
+# POSITIVE CONTROL for every "vanish"-signed arm below: the needles must be
+# present in the UNABLATED output, or asserting their absence proves nothing.
+# A diff of two empty outputs reads exactly like "behaviour preserved".
+CTRL=$({ printf 'x %s\n' "$RB"; for i in $(seq 1 300); do printf 'REPORT-LINE-%03d\n' "$i"; done; } | awk "$(extract_awk)")
+check "positive control: line past the horizon IS present unablated" "$CTRL" "REPORT-LINE-300"
+
+# 1. The UNBOUNDED closing search — the shape-1 fix. Re-coupling it to HORIZON
+#    restores the misclassification, and the leak is arithmetically exact:
+#    300 body lines - 256 horizon = 44, first at line 257.
+unit_ablate 's|^    for (j = i + 1; j <= n; j++) {$|    for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) {|' \
+  "the UNBOUNDED closing search is load-bearing (a long terminated key leaks without it)" \
+  'longkey' "MIIEvgSECRETLINE-257" appear
+
+# 2. The HORIZON bound on the unterminated branch — signed the OTHER way:
+#    removing it masks MORE, so the arm asserts the far line DISAPPEARS.
+unit_ablate 's|^      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) L\[j\] = mask_line(L\[j\])$|      for (j = i + 1; j <= n; j++) L[j] = mask_line(L[j])|' \
+  "the HORIZON bound is load-bearing (masking runs to EOF without it)" \
+  '{ printf "x %s\n" "$RB"; for i in $(seq 1 300); do printf "REPORT-LINE-%03d\n" "$i"; done; }' \
+  "REPORT-LINE-300" vanish
+
+# 3. Unconditional masking — ablate back to the CONTENT-TESTED form that leaked
+#    twice. The encrypted-PEM body must reappear.
+#    NOTE: the replacement class deliberately omits `/`; a `\/` in a sed
+#    REPLACEMENT emits a bare `/`, which closes the awk regex literal early and
+#    makes the ablated script a syntax error — the arm would then "pass"
+#    because awk produced nothing, not because the guard is load-bearing.
+unit_ablate 's|^      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) L\[j\] = mask_line(L\[j\])$|      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) { if (L[j] ~ /^[A-Za-z0-9+=]{16,}$/) L[j] = mask_line(L[j]); else break }|' \
+  "unconditional masking is load-bearing (an encrypted-PEM body leaks under a content test)" \
+  'printf "Blocked: %s\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,9A7B2C\n\nMIIEvgIBADANBgkqSECRETBODYxxxx\n" "$RB"' \
+  "SECRETBODY" appear
+
+# 4. Tag preservation on the CLOSING line — the branch that does not route
+#    through mask_line(). Without it the closing row's tag is blanked and the
+#    record stops parsing.
+unit_ablate 's|^      if (match(s, /\^D\\t\[\^\\t\]\*\\t/)) L\[close_at\] = substr(s, 1, RLENGTH) PH tail$|      if (0) L[close_at] = substr(s, 1, RLENGTH) PH tail|' \
+  "closing-line tag preservation is load-bearing (the record loses its tag without it)" \
+  '{ printf "D\tBash\thead %s\n" "$RB"; printf "D\tBash\ttail %s z\n" "$RE"; }' \
+  "$(printf 'D\tBash\t<redacted-key-material> z')" vanish
+
 # ── TIMESTAMP MATRIX — one row per SHAPE, not a case per reported bug ─────────
 # Three consecutive review rounds each reported this defect at a new position:
 # the type was unchecked, then a non-date string, then a malformed prefix. Each
