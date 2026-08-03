@@ -611,8 +611,18 @@ END {
       for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) { L[j] = mask_line(L[j]); U[j] = 0 }
       continue
     }
+    # ⚠️ The INTERMEDIATE lines are cleared, the CLOSING line is NOT, and the
+    # asymmetry is the whole point. An intermediate line is replaced wholesale,
+    # so any opener it held is gone and its block is subsumed by this span. The
+    # closing line is only masked UP TO its END marker — a BEGIN sitting AFTER
+    # that marker on the same physical line opens a block that continues past
+    # it and is still unresolved. Clearing the flag there skipped that block
+    # entirely and printed its body verbatim from the next line on.
+    #
+    # (Reported as a 🔴 leak on the first review round of this PR. The
+    # ordering is produced by pass A itself, which keeps `head` — the text
+    # before the BEGIN — and `head` still contains the earlier END.)
     for (j = i + 1; j < close_at; j++) { L[j] = mask_line(L[j]); U[j] = 0 }
-    U[close_at] = 0
     s = L[close_at]
     if (match(s, /-----END [A-Z ]*PRIVATE KEY-----/)) {
       # Everything up to and including the END marker is key material; only the

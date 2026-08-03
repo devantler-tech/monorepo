@@ -4080,6 +4080,30 @@ nocheck "shape 6a: two openers before one closer still mask the body" "$OUT" "SE
 check   "shape 6a: and do NOT eat the report after the key"           "$OUT" "SURVIVOR-6"
 check   "shape 6a: nor the line immediately after it"                 "$OUT" "SURVIVOR-1"
 
+# ── SHAPE 6 (b) — a CLOSER and an OPENER on the same physical line ───────────
+# 🔴 The reverse ordering of 6a, and it leaked where 6a did not. Pass A itself
+# produces this shape: it keeps `head` — the text before the BEGIN — and `head`
+# still contains the earlier END. So the line is simultaneously the closing
+# line of one block and the opening line of the next.
+#
+# 6a's fix cleared the open-block flag on every line a span consumed, and
+# clearing it on the CLOSING line skipped the block that opens after the marker
+# — its body printed verbatim from the next line on. An intermediate line is
+# replaced wholesale so its flag is genuinely spent; a closing line is masked
+# only up to its marker, so its flag is not. That asymmetry is the fix.
+#
+# Worth stating plainly: 6a and 6b are the same defect class approached from
+# two directions, and the guard for one CREATED the other. Neither row alone
+# constrains the program — they have to be read as a pair.
+endbeginfix() {
+  printf '%s\nMIIEvgSECRETONE\nclose %s then %s\n' "$RB" "$RE" "$RB"
+  printf 'MIIEvgSECRETTWO\nMIIEvgSECRETTHREE\n'
+}
+OUT=$(endbeginfix | awk "$(extract_awk)")
+nocheck "shape 6b: a block opening on a CLOSING line is still resolved" "$OUT" "SECRETTWO"
+nocheck "shape 6b: including its later body lines"                      "$OUT" "SECRETTHREE"
+nocheck "shape 6b: and the first block's body stays masked"             "$OUT" "SECRETONE"
+
 # ── SHAPE 6 — stray unpaired markers ─────────────────────────────────────────
 # A lone END is NOT handled by the awk walk (pass A scans for a BEGIN first);
 # the marker sed rule in redact() is what masks it. Asserting it here through
@@ -4135,8 +4159,20 @@ unit_ablate() { # $1=sed-expr $2=label $3=fixture-fn $4=needle $5=appear|vanish
     bad "ablation: $2" "sed changed $changed lines, expected 1 — arm is mis-aimed"
     rm -f "$ab"; return
   fi
-  out=$("$3" | awk "$(extract_awk "$ab")")
+  out=$("$3" | awk "$(extract_awk "$ab")" 2>/dev/null); local st=$?
   rm -f "$ab"
+  # 🔴 A `vanish` arm passes whenever the ablated program produces NOTHING —
+  # so a sed replacement that breaks the awk regex literal, or any other
+  # syntax error, reads exactly like "the guard was load-bearing". Three of the
+  # five arms are vanish-signed, so this would have silently hollowed out most
+  # of the ablation coverage. Require the ablated program to have RUN before
+  # judging its output: non-zero status or empty output is a mis-aimed arm, not
+  # a result. (Same class as the arm-changed-exactly-one-line check above: an
+  # ablation is only evidence if the ablated thing still executes.)
+  if [ "$st" -ne 0 ] || [ -z "$out" ]; then
+    bad "ablation: $2" "ablated program did not run (status=$st, ${#out} bytes out) — arm cannot judge"
+    return
+  fi
   if [ "$5" = appear ]; then
     if printf '%s' "$out" | grep -qF -- "$4"; then ok "ablation: $2"
     else bad "ablation: $2" "expected '$4' to REAPPEAR without the branch; it did not"; fi
