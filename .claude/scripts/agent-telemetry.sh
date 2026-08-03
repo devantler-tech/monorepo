@@ -965,6 +965,33 @@ codex_session_files() {
 
 SF_CACHE="$(session_files)"
 SF_COUNT=$(printf '%s' "$SF_CACHE" | grep -c . || true)
+
+# ── The window cutoff, computed ONCE for every section that bounds by record ──
+# The file set above is mtime-selected. That is a correct SUPERSET for windowing
+# — a record inside the window cannot live in a file last written before it —
+# but it is NOT a bound: a resumed session rewrites its file's mtime, dragging
+# every record it has ever held into the current window. Any section that
+# publishes a count "in window" must therefore filter on the RECORD's own
+# timestamp as well, against this cutoff.
+#
+# Computed once, at one site, deliberately. Two sections deriving the same
+# cutoff independently can drift in format or in the days arithmetic, and the
+# reliability/`--signature` equality is an ORACLE only while both walks are
+# bounded by the identical string.
+#
+# Same portable pair as the outcomes section: BSD `date -v` first, GNU `-d`
+# second. Full second precision, so the comparison is not truncated to a day.
+#
+# ⚠️ The cutoff carries `.000` because the comparison against a record's
+# timestamp is LEXICAL. Claude records use the fractional form
+# `…T10:00:00.500Z`, and against a plain `…T10:00:00Z` cutoff that sorts
+# BEFORE it — `.` (0x2E) < `Z` (0x5A) — so a record half a second INSIDE the
+# window was excluded. Verified: `".500Z" >= "…:00Z"` is false, `>= "…:00.000Z"`
+# is true, and a plain at-cutoff record still compares >= `.000`. Every walk
+# shares this cutoff, so a boundary record vanished from the metric AND its
+# control together — invisible, and in the under-reporting direction.
+WINDOW_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
+               || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
 CX_CACHE="$(codex_session_files)"
 CX_COUNT=$(printf '%s' "$CX_CACHE" | grep -c . || true)
 ALL_CACHE="$(printf '%s\n%s' "$SF_CACHE" "$CX_CACHE" | grep -c . >/dev/null 2>&1; printf '%s\n%s' "$SF_CACHE" "$CX_CACHE")"
@@ -1340,20 +1367,9 @@ fi
 if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -eq 1 ]; }; then
   echo
   echo "── SIGNATURE SCORING (hypothesis verdicts) ──────────────────────"
-  # Same portable pair as the outcomes section: BSD `date -v` first, GNU `-d`
-  # second. Full second precision, so the comparison against a record timestamp
-  # is not truncated to a whole day.
-  #
-  # ⚠️ The cutoff carries `.000` because the comparison against a record's
-  # timestamp is LEXICAL. Claude records use the fractional form
-  # `…T10:00:00.500Z`, and against a plain `…T10:00:00Z` cutoff that sorts
-  # BEFORE it — `.` (0x2E) < `Z` (0x5A) — so a record half a second INSIDE the
-  # window was excluded. Verified: `".500Z" >= "…:00Z"` is false, `>= "…:00.000Z"`
-  # is true, and a plain at-cutoff record still compares >= `.000`. Both walks
-  # share this cutoff, so the boundary record vanished from the metric AND its
-  # control together — invisible, and in the under-reporting direction.
-  SIG_SINCE=$(date -u -v-"${SINCE_DAYS}"d '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null \
-              || date -u -d "${SINCE_DAYS} days ago" '+%Y-%m-%dT%H:%M:%S.000Z' 2>/dev/null)
+  # The shared cutoff computed once near SF_CACHE. Sharing it is what makes the
+  # reliability/`--signature` equality an oracle rather than a coincidence.
+  SIG_SINCE="$WINDOW_SINCE"
   if [ -z "$SIG_SINCE" ]; then
     echo "  UNKNOWN: cannot compute window start (no usable \`date\`) — refusing to score."
   elif [ "$SF_COUNT" -eq 0 ]; then
@@ -1511,15 +1527,38 @@ fi
 if want reliability; then
   echo
   echo "── RELIABILITY ──────────────────────────────────────────────────"
-  if [ "$SF_COUNT" -eq 0 ]; then
+  if [ -z "$WINDOW_SINCE" ]; then
+    # FAIL CLOSED. Falling back to an unbounded count here would silently
+    # restore the mtime contamination this filter removes, and an unbounded
+    # count is indistinguishable from a bounded one by inspection — so a reader
+    # would trust a number that is not what it claims to be. A missing number is
+    # recoverable; a wrong number in the agent's own measurement layer is not.
+    echo "  UNKNOWN: cannot compute window start (no usable \`date\`) — refusing to score."
+  elif [ "$SF_COUNT" -eq 0 ]; then
     echo "  (no sessions in window)"
   else
     printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      jq -Rrs "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
+      jq -Rrs --arg since "$WINDOW_SINCE" "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
+        # The tool-name map is built from EVERY assistant record in the file and
+        # is deliberately NOT window-filtered. It is a lookup table, not a
+        # counted population: a tool_use can sit just outside the window while
+        # the errored result it names sits just inside, and filtering the map
+        # would silently reattribute that error to "unknown" — degrading
+        # attribution to buy nothing, since the map is never counted.
         (reduce (.[] | select(.type=="assistant") | content_blocks
                  | select(.type=="tool_use")) as $t ({}; .[$t.id] = $t.name)) as $names
-        | .[] | select(.type=="user") | content_blocks
+        | .[] | select(.type=="user")
+        # Bound by the timestamp ON THE RECORD. The file set is mtime-selected,
+        # NOTE: no apostrophes in this comment block — the jq program is a
+        # single-quoted shell string, so one would terminate it.
+        # which is a correct superset but not a bound — a resumed session
+        # rewrites its mtime and drags its whole history into the window. The
+        # error direction was INFLATION, worst on the busiest sessions, so every
+        # cross-run trend compared two differently contaminated numbers.
+        | (.timestamp // "") as $rts
+        | select($rts != "" and $rts >= $since)
+        | content_blocks
         | select(.type=="tool_result" and .is_error==true)
         | ($names[.tool_use_id] // "unknown") as $tool
         | (block_text) as $msg
@@ -1527,8 +1566,30 @@ if want reliability; then
       ' "$f" 2>/dev/null
     done | redact > "$ERRTMP" || true
 
+    # Records that carry a real error but NO timestamp, counted separately and
+    # printed. The filter above is strict, which is correct — measured over 60
+    # live transcripts, 200 of 200 errored user records carry a timestamp, so
+    # nothing real is lost today. But "correct today" is exactly how a silent
+    # under-count starts: were a future schema change to drop the field, a
+    # strict filter would quietly zero this section, and a zero here reads as
+    # "the agent had no errors" — the most flattering possible misreading, in
+    # the agent-s own measurement layer. Counting the excluded records makes
+    # that failure arrive as a visible number instead of a silent success.
+    UNDATED_ERR=$(printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      jq -Rrs "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))
+        | .[] | select(.type=="user")
+        | select((.timestamp // "") == "")
+        | select([ content_blocks
+                   | select(.type=="tool_result" and .is_error==true) ] | length > 0)
+        | "1"
+      ' "$f" 2>/dev/null
+    done | grep -c . || true)
+
     TOTAL_ERR=$(wc -l < "$ERRTMP" | tr -d ' ')
     echo "  tool errors in window: ${TOTAL_ERR}   [Claude instance only — see note]"
+    echo "  window: records at or after ${WINDOW_SINCE}   (record timestamps, not file mtime)"
+    echo "  undated errored records (excluded, expect 0): ${UNDATED_ERR}"
     echo
     echo "  by tool:"
     cut -f1 "$ERRTMP" | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
