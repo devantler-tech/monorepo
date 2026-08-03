@@ -3897,7 +3897,12 @@ rel_ablate() { # $1=sed-expr $2=label $3=expected-after $4=expected-changed-line
     bad "ablation: $2" "expected $3 after removing the filter; got: $(printf '%s' "$aout" | grep 'tool errors in window' || echo none)"
   fi
 }
-rel_ablate 's/^        | select(\$rts != "" and \$rts >= \$since)$/        | select($rts != "" or true)/' \
+# Anchored on the `elif` that carries the window bound, which is unique in the
+# file (10-space indent, inside the reliability walk). Neutralising just that
+# branch condition leaves the `U` branch and the emit shape untouched, so the
+# arm isolates the WINDOW BOUND rather than disabling the walk — an arm that
+# broke the whole walk would also produce a changed number while proving nothing.
+rel_ablate 's/^          elif \$rts >= \$since then$/          elif true then/' \
   "removing the reliability record-timestamp filter lets a weeks-old failure count" 2 1
 
 # FAIL-CLOSED: if the cutoff cannot be computed, the section must REFUSE to

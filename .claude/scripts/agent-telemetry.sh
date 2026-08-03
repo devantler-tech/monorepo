@@ -237,6 +237,9 @@ want() { [ "$SECTION" = all ] || [ "$SECTION" = "$1" ]; }
 # even when stdout is redacted, because the redactor only covers stdout.
 # Everything written here is redacted on the way IN as well.
 ERRTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_err.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Holds the reliability walk's TAGGED output (`D`/`U`) before it is split into
+# the counted error rows and the excluded-undated tally.
+RAWTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_raw.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 INJTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_inj.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Distinct prefix from .agtel_inj so the aggregate-identity width instrumentation
@@ -249,8 +252,8 @@ CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot 
 SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$SIGTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$SIGTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$SIGTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$SIGTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -1537,6 +1540,14 @@ if want reliability; then
   elif [ "$SF_COUNT" -eq 0 ]; then
     echo "  (no sessions in window)"
   else
+    # ONE pass emits both populations, tagged: `D` for a dated in-window error,
+    # `U` for an errored result carrying no timestamp at all. A second walk over
+    # every file to count a number expected to be 0 cost +34% wall clock on a
+    # frozen 80-file corpus (2.28s -> 3.06s), which is a poor trade for a
+    # diagnostic — and this script runs on every improver dispatch.
+    #
+    # Both tags are emitted per RESULT rather than per record, so the two
+    # numbers share a unit and `U` is directly comparable to the total above it.
     printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
       [ -n "$f" ] || continue
       jq -Rrs --arg since "$WINDOW_SINCE" "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
@@ -1548,48 +1559,44 @@ if want reliability; then
         # attribution to buy nothing, since the map is never counted.
         (reduce (.[] | select(.type=="assistant") | content_blocks
                  | select(.type=="tool_use")) as $t ({}; .[$t.id] = $t.name)) as $names
+        # Bound by the timestamp carried ON THE RECORD. The file set is
+        # mtime-selected, which is a correct superset but NOT a bound: a resumed
+        # session rewrites its mtime and drags its whole history into the
+        # window. The error direction was INFLATION, worst on the busiest and
+        # longest-lived sessions, so every cross-run trend was comparing two
+        # differently contaminated numbers.
+        # (No apostrophes in this comment: the jq program is a single-quoted
+        # shell string, so one would terminate it and break the script.)
         | .[] | select(.type=="user")
-        # Bound by the timestamp ON THE RECORD. The file set is mtime-selected,
-        # NOTE: no apostrophes in this comment block — the jq program is a
-        # single-quoted shell string, so one would terminate it.
-        # which is a correct superset but not a bound — a resumed session
-        # rewrites its mtime and drags its whole history into the window. The
-        # error direction was INFLATION, worst on the busiest sessions, so every
-        # cross-run trend compared two differently contaminated numbers.
         | (.timestamp // "") as $rts
-        | select($rts != "" and $rts >= $since)
-        | content_blocks
-        | select(.type=="tool_result" and .is_error==true)
-        | ($names[.tool_use_id] // "unknown") as $tool
-        | (block_text) as $msg
-        | "\($tool)\t\($msg | gsub("[\\n\\t]+";" ") | .[0:100])"
+        | [ content_blocks | select(.type=="tool_result" and .is_error==true) ] as $errs
+        | select(($errs | length) > 0)
+        | if $rts == "" then ($errs[] | "U")
+          elif $rts >= $since then
+            $errs[]
+            | ($names[.tool_use_id] // "unknown") as $tool
+            | (block_text) as $msg
+            | "D\t\($tool)\t\($msg | gsub("[\\n\\t]+";" ") | .[0:100])"
+          else empty end
       ' "$f" 2>/dev/null
-    done | redact > "$ERRTMP" || true
+    done | redact > "$RAWTMP" || true
 
-    # Records that carry a real error but NO timestamp, counted separately and
-    # printed. The filter above is strict, which is correct — measured over 60
-    # live transcripts, 200 of 200 errored user records carry a timestamp, so
-    # nothing real is lost today. But "correct today" is exactly how a silent
-    # under-count starts: were a future schema change to drop the field, a
-    # strict filter would quietly zero this section, and a zero here reads as
-    # "the agent had no errors" — the most flattering possible misreading, in
-    # the agent-s own measurement layer. Counting the excluded records makes
-    # that failure arrive as a visible number instead of a silent success.
-    UNDATED_ERR=$(printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      jq -Rrs "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))
-        | .[] | select(.type=="user")
-        | select((.timestamp // "") == "")
-        | select([ content_blocks
-                   | select(.type=="tool_result" and .is_error==true) ] | length > 0)
-        | "1"
-      ' "$f" 2>/dev/null
-    done | grep -c . || true)
+    # An errored result carrying no timestamp is EXCLUDED by the filter above,
+    # and excluding it silently is the failure this counter exists to prevent.
+    # The strict filter is correct today — measured over 60 live transcripts,
+    # 200 of 200 errored user records carry a timestamp and 0 do not — but
+    # "correct today" is exactly how a silent under-count begins. Were a schema
+    # change to drop the field, a strict filter would quietly zero this section,
+    # and a zero here reads as "the agent had no errors": the most flattering
+    # misreading available, in the agent own measurement layer. Counting the
+    # excluded results makes that arrive as a visible number, not a silent pass.
+    UNDATED_ERR=$(grep -c '^U$' "$RAWTMP" || true)
+    grep '^D	' "$RAWTMP" | cut -f2- > "$ERRTMP" || true
 
     TOTAL_ERR=$(wc -l < "$ERRTMP" | tr -d ' ')
     echo "  tool errors in window: ${TOTAL_ERR}   [Claude instance only — see note]"
     echo "  window: records at or after ${WINDOW_SINCE}   (record timestamps, not file mtime)"
-    echo "  undated errored records (excluded, expect 0): ${UNDATED_ERR}"
+    echo "  undated errored results (excluded, expect 0): ${UNDATED_ERR}"
     echo
     echo "  by tool:"
     cut -f1 "$ERRTMP" | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
@@ -1601,7 +1608,7 @@ if want reliability; then
       | redact \
       | sed -E 's/[0-9a-f]{8,}/<hash>/g; s/[0-9]+/<n>/g' \
       | sort | uniq -c | sort -rn | head -12 | sed 's/^/    /'
-    rm -f "$ERRTMP"
+    rm -f "$ERRTMP" "$RAWTMP"
     echo
     echo "  NOTE: tool-attributed errors are Claude-schema only (tool_use/tool_result)."
     echo "        Codex uses response_item/function_call_output with no is_error flag,"
