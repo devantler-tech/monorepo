@@ -691,6 +691,31 @@ def output_text:
               else scalar_text end ] | join(" ")
     elif type=="string" then .
     else tostring end;
+# THE WINDOW INVARIANT, defined once for every walk that bounds by record time.
+#
+# A record timestamp is comparable to the cutoff only if it genuinely PARSES as
+# canonical RFC 3339 UTC. Shape-matching is not validation, and this def exists
+# because trying to shape-match it failed three times in three review rounds —
+# first the type was unchecked, then a non-date string, then a malformed prefix.
+# Each fix guarded the position that had just been reported and the next round
+# found a new one. A regex cannot close this class at all: no anchored pattern
+# rejects `2026-13-45T99:00:00Z`, because validating a calendar is not a
+# lexical property. Parsing is.
+#
+# The failure it prevents is bidirectional, which is what makes a partial guard
+# so misleading: a value sorting ABOVE the cutoff (`9999-99-99T…`) is counted as
+# in-window and INFLATES, while one sorting below silently VANISHES from the
+# count and from the undated tally both. Only one of those is visible.
+#
+# `sub` strips fractional seconds, which `fromdateiso8601` does not accept —
+# and Claude records use that form, so without it every real record would be
+# rejected. STATED BEHAVIOUR CHOICE: a numeric-offset timestamp (`+02:00`) or a
+# zone-less one does NOT parse and therefore routes to the undated tally rather
+# than being compared. That is the safe direction — it surfaces in the canary
+# instead of being silently miscounted — but it is a choice, not an accident.
+def usable_ts:
+  type=="string"
+  and ((try (sub("\\.[0-9]+Z$";"Z") | fromdateiso8601) catch null) != null);
 '
 
 # tool_use ids whose result shows the call never ran, resolved once per file.
@@ -1421,7 +1446,7 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
         | select(length>0)|(try fromjson catch empty)
         | select(.type=="user")
         | (.timestamp // "") as $ts
-        | select($ts != "" and $ts >= $since)
+        | select(($ts | usable_ts) and $ts >= $since)
         | (.sessionId // "unknown") as $sid
         | select(
             # `content_blocks` yields ONLY object blocks. A content array can mix
@@ -1460,7 +1485,7 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
         ($ENV.SIG_ENV) as $sig
         | select(length>0)|(try fromjson catch empty)
         | (.timestamp // "") as $ts
-        | select($ts != "" and $ts >= $since)
+        | select(($ts | usable_ts) and $ts >= $since)
         | select(
             # UNION, so the control contains every match of the filtered walk by
             # CONSTRUCTION rather than by totals happening to line up. Comparing
@@ -1594,23 +1619,10 @@ if want reliability; then
         | (.timestamp // "") as $rts
         | [ content_blocks | select(.type=="tool_result" and .is_error==true) ] as $errs
         | select(($errs | length) > 0)
-        # THE INVARIANT, stated once: a timestamp is usable only if it is a
-        # string in the canonical RFC 3339 shape the cutoff is built in. Every
-        # other value — absent, wrong type, or a string that merely is not a
-        # date — is UNDATED and routes to the visible tally.
-        #
-        # Stated positively on purpose. The first version tested the two
-        # failures it happened to think of (absent, non-string) and a third
-        # walked straight through: a nonempty non-date string like
-        # "not-a-date" compares GREATER than the cutoff (`n` is 0x6E, `2` is
-        # 0x32), so it counted as in-window while the undated canary read zero,
-        # and a string-encoded epoch compares LESS and vanished from both. A
-        # lexical comparison only means anything against a value of the shape
-        # the cutoff has, so validating the shape is the whole precondition —
-        # enumerating malformed cases is not, and cannot be made, exhaustive.
-        | if ($rts | type) != "string"
-             or ($rts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}") | not)
-          then ($errs[] | "U")
+        # Anything that does not parse as canonical RFC 3339 UTC is UNDATED and
+        # routes to the visible tally. See `usable_ts` in the shared defs for
+        # why this is a parse and not a pattern.
+        | if ($rts | usable_ts | not) then ($errs[] | "U")
           elif $rts >= $since then
             $errs[]
             | ($names[.tool_use_id] // "unknown") as $tool

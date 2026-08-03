@@ -82,6 +82,10 @@ S_GHPPAD2="${S_GHPB}=="
 # of a production record — it is a shape that does not occur, and testing against
 # it would prove the walk works on records the agent never actually produces.
 S_NOW=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
+# The FRACTIONAL-second form real Claude records use. `fromdateiso8601` does not
+# accept it, so the parse guard strips it first — this variable is what pins that
+# strip, and without it every real record would route to the undated tally.
+S_NOW_FRAC=$(date -u '+%Y-%m-%dT%H:%M:%S.123Z')
 subst() {
   for _f in "$@"; do
     [ -f "$_f" ] || continue
@@ -3817,7 +3821,11 @@ ablate 's/^              | select(\.type=="tool_result" and \.is_error==true)$/ 
 # failure must reappear (1 -> 2), proving mtime is not what bounds the window.
 # The timestamp filter guards BOTH the real walk and its unfiltered control, so
 # this arm legitimately touches two lines — stated, not assumed.
-ablate 's/select($ts != "" and $ts >= $since)/select($ts != "" or true)/' \
+# Neutralise only the WINDOW comparison, leaving `usable_ts` in place, so the arm
+# isolates the window bound rather than the validity guard beside it. Both
+# signature walks carry the predicate, so two changed lines is correct here and
+# is stated rather than assumed.
+ablate 's/select(($ts | usable_ts) and $ts >= $since)/select(($ts | usable_ts) and true)/' \
   "removing the timestamp filter lets an out-of-window record count" 2 1 2
 
 # ── 26. RELIABILITY is bounded by the RECORD timestamp, not the file mtime ─────
@@ -4050,46 +4058,74 @@ else
   fi
 fi
 
-# F1b. A timestamp of the RIGHT TYPE but the WRONG SHAPE. This is the case the
-# first fix missed: it tested for absent and non-string, and a nonempty non-date
-# string walked through both. "not-a-date" compares GREATER than an ISO cutoff
-# (`n` is 0x6E, `2` is 0x32), so it counted as in-window while the undated
-# canary read zero — an invented in-window error, with nothing flagged.
-mkdir -p "$FIX/relloss_badstr"
+# ── TIMESTAMP MATRIX — one row per SHAPE, not a case per reported bug ─────────
+# Three consecutive review rounds each reported this defect at a new position:
+# the type was unchecked, then a non-date string, then a malformed prefix. Each
+# fix guarded the position just reported and the next round found another. The
+# matrix is the answer to that: it enumerates the shape lattice once, so a
+# partial guard fails here rather than in a fourth review round.
+#
+# The failure is BIDIRECTIONAL, which is why a half-guard is so misleading — a
+# value sorting above the cutoff is counted and INFLATES, one sorting below
+# VANISHES from the count and the undated tally both, and only one is visible.
+#
+# A regex cannot close this class: no anchored pattern rejects
+# `2026-13-45T99:00:00Z`, because a calendar is not a lexical property. The
+# guard therefore PARSES (see `usable_ts`), and this matrix is what pins that.
+mkdir -p "$FIX/relloss_tsmatrix"
 {
   printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
-  for i in 1 2 3; do
-    printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err %s"}]}]}}\n' "$S_NOW" "$i"
+  # COUNTED — genuinely parseable, in window. Fractional seconds are the form
+  # real Claude records use, so this row also guards the `sub` that strips them.
+  for t in "$S_NOW" "$S_NOW_FRAC"; do
+    printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"counted"}]}]}}\n' "$t"
   done
-  printf '{"type":"user","timestamp":"not-a-date","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"malformed ts"}]}]}}\n'
-  printf '{"type":"user","timestamp":"1754130000000","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"string epoch"}]}]}}\n'
-} > "$FIX/relloss_badstr/s.jsonl"
-OUT=$(PORTFOLIO_PATHS="$FIX/relloss_badstr" CLAUDE_PROJECTS_DIR="$FIX/relloss_badstr" \
-      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
-check "a malformed string timestamp is not counted as in-window" "$OUT" "tool errors in window: 3"
-check "both malformed string timestamps are FLAGGED undated"     "$OUT" \
-  "undated errored results (excluded, expect 0): 2"
-nocheck "and neither malformed record reaches the signatures"    "$OUT" "malformed ts"
+  # DROPPED — parses, but genuinely outside the window. Neither counted nor
+  # undated; this is the one correct exclusion and it must stay distinguishable
+  # from the malformed rows below.
+  printf '{"type":"user","timestamp":"2026-06-01T10:00:00.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"old"}]}]}}\n'
+  # UNDATED — every shape that does not parse. Each of these was, at some point,
+  # either counted as in-window or silently dropped.
+  for t in 'not-a-date' '1754130000000' '9999-99-99T99:99:99garbage' '0000-00-00T00:00:00x' '2026-13-45T99:00:00Z' '2026-08-03T10:00:00+02:00' '2026-08-03T10:00:00'; do
+    printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"UNPARSEABLE-ROW"}]}]}}\n' "$t"
+  done
+  # UNDATED — wrong TYPE entirely (unquoted number).
+  printf '{"type":"user","timestamp":1754130000000,"message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"UNPARSEABLE-ROW"}]}]}}\n'
+} > "$FIX/relloss_tsmatrix/s.jsonl"
+tsmatrix() { # $1 = script under test
+  PORTFOLIO_PATHS="$FIX/relloss_tsmatrix" CLAUDE_PROJECTS_DIR="$FIX/relloss_tsmatrix" \
+  CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "${1:-$TARGET}" --since-days 1 --section reliability 2>/dev/null
+}
+OUT=$(tsmatrix "$TARGET")
+check "matrix: only the 2 parseable in-window rows are counted" "$OUT" "tool errors in window: 2"
+check "matrix: all 8 unparseable rows are FLAGGED undated"      "$OUT" \
+  "undated errored results (excluded, expect 0): 8"
+nocheck "matrix: no unparseable row reaches the signatures"     "$OUT" "UNPARSEABLE-ROW"
+nocheck "matrix: the out-of-window row is excluded, not flagged" "$OUT" "old"
 
-# F3. A NON-STRING timestamp. jq total-orders numbers before strings, so an
-# epoch-ms value compares LESS than the cutoff and fell to `empty` — counted
-# nowhere and flagged nowhere. It must land in the undated tally instead, which
-# is the whole point of having one.
-mkdir -p "$FIX/relloss_numts"
-{
-  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
-  for i in 1 2 3; do
-    printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err %s"}]}]}}\n' "$S_NOW" "$i"
-  done
-  printf '{"type":"user","timestamp":1754130000000,"message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"epoch"}]}]}}\n'
-} > "$FIX/relloss_numts/s.jsonl"
-OUT=$(PORTFOLIO_PATHS="$FIX/relloss_numts" CLAUDE_PROJECTS_DIR="$FIX/relloss_numts" \
-      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
-check "a numeric timestamp is FLAGGED undated, not silently dropped" "$OUT" \
-  "undated errored results (excluded, expect 0): 1"
-check "and the other three are still counted" "$OUT" "tool errors in window: 3"
+# Ablate the parse invariant back to a bare non-empty test — the shape every
+# earlier round of this fix had. The matrix must stop reading 2/8.
+TSABL="$FIX/abl_ts.sh"
+cp "$TARGET" "$TSABL"
+sed -i.bak 's/^  and ((try (sub("\\\\\.\[0-9\]+Z\$";"Z") | fromdateiso8601) catch null) != null);$/  and (. != "");/' "$TSABL"; rm -f "$TSABL.bak"
+TSABL_CHANGED=$(diff "$TARGET" "$TSABL" | grep -c '^<')
+if [ "$TSABL_CHANGED" -ne 1 ]; then
+  bad "ablation: the parse-based timestamp invariant is load-bearing" \
+      "sed changed $TSABL_CHANGED lines, expected 1 — arm is mis-aimed"
+else
+  TSABL_OUT=$(tsmatrix "$TSABL")
+  TSABL_C=$(printf '%s' "$TSABL_OUT" | sed -n 's/.*tool errors in window: \([0-9]*\).*/\1/p' | head -1)
+  TSABL_U=$(printf '%s' "$TSABL_OUT" | sed -n 's/.*undated errored results (excluded, expect 0): \([0-9]*\).*/\1/p' | head -1)
+  # Assert the matrix stops being correct, NOT that it takes a specific wrong
+  # value — the same rule the NUL arm learned when it pinned a macOS artifact.
+  if [ -n "$TSABL_C" ] && { [ "$TSABL_C" != "2" ] || [ "$TSABL_U" != "8" ]; }; then
+    ok "ablation: the parse-based timestamp invariant is load-bearing (2/8 -> $TSABL_C/$TSABL_U)"
+  else
+    bad "ablation: the parse-based timestamp invariant is load-bearing" \
+        "matrix should stop reading 2/8 with the parse removed; got $TSABL_C/$TSABL_U"
+  fi
+fi
 
 # The redactor must still FIRE. Losing the record and losing the secret are
 # opposite failures, and a fix for one must not buy the other.
