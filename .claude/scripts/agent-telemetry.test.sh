@@ -3927,6 +3927,90 @@ else
 fi
 nocheck "and does NOT emit an unbounded count in that state" "$OUT" "tool errors in window:"
 
+# ── 26b. the reliability walk must not SILENTLY LOSE an errored record ────────
+# Three regressions found by review, all in the under-counting direction, which
+# is the one direction this subsystem must never fail in: a missed error does
+# not look like an error, it looks like the agent improving.
+#
+# Each case builds FOUR in-window errors and varies exactly one of them, so the
+# expected count is 4 and any loss is visible. The marker strings are assembled
+# at run time for the same reason the credential samples are.
+echo
+echo "reliability: no silent record loss"
+
+relcase() { # $1=name  $2=text for record 2  $3=expected errors  $4=expected undated
+  local dir="$FIX/relloss_$1" i t
+  mkdir -p "$dir"
+  {
+    printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
+    for i in 1 2 3 4; do
+      t="err $i"; [ "$i" = 2 ] && t="$2"
+      printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":%s}]}]}}\n' \
+        "$S_NOW" "$(printf '%s' "$t" | jq -Rs .)"
+    done
+  } > "$dir/s.jsonl"
+  local out errs und untag
+  out=$(PORTFOLIO_PATHS="$dir" CLAUDE_PROJECTS_DIR="$dir" CODEX_HOME="$FIX/nocodex" \
+        MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
+  errs=$(printf '%s' "$out" | sed -n 's/.*tool errors in window: \([0-9]*\).*/\1/p' | head -1)
+  und=$(printf '%s' "$out"  | sed -n 's/.*undated errored results (excluded, expect 0): \([0-9]*\).*/\1/p' | head -1)
+  untag=$(printf '%s' "$out"| sed -n 's/.*untagged rows (corruption canary, expect 0): \([0-9]*\).*/\1/p' | head -1)
+  if [ "$errs" = "$3" ] && [ "$und" = "$4" ] && [ "$untag" = "0" ]; then
+    ok "$1: errors=$3 undated=$4 untagged=0"
+  else
+    bad "$1: errors=$3 undated=$4 untagged=0" "got errors=${errs:-<none>} undated=${und:-<none>} untagged=${untag:-<none>}"
+  fi
+}
+
+# CONTROL — the same fixture with an ordinary message. Without this, a case that
+# reports 4 proves nothing about the variable under test.
+relcase control "ordinary failure text" 4 0
+
+# F1. A private-key marker inside ONE message. `redact()` matched BEGIN..END as
+# a sed RANGE, but jq has already collapsed newlines so both markers land on one
+# line — and a range only seeks its end on a LATER line. The range opened and
+# never closed, rewriting every following line to the placeholder and destroying
+# the row tags: measured 4 -> 1, a 75% under-count from one unlucky message.
+# The whole-line form then still lost the tagged row itself (4 -> 3). Redacting
+# only the key SPAN is what keeps the secret out and the evidence in.
+PK_B=$(printf -- '-----%s %s PRIVATE KEY-----' 'BEGIN' 'RSA')
+PK_E=$(printf -- '-----%s %s PRIVATE KEY-----' 'END' 'RSA')
+relcase privatekey "parse failed: $PK_B AAAA $PK_E trailing" 4 0
+
+# F2. A NUL byte reaches the scratch file, `grep` declares it binary and prints
+# "Binary file ... matches" INSTEAD of the rows: the count collapsed to 1 and
+# the temp path was printed as a tool name. Reachable, not theoretical — a JSON
+# NUL escape decodes through `jq -r` and survives the redactor.
+relcase nulbyte "$(printf 'before\000after')" 4 0
+
+# F3. A NON-STRING timestamp. jq total-orders numbers before strings, so an
+# epoch-ms value compares LESS than the cutoff and fell to `empty` — counted
+# nowhere and flagged nowhere. It must land in the undated tally instead, which
+# is the whole point of having one.
+mkdir -p "$FIX/relloss_numts"
+{
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
+  for i in 1 2 3; do
+    printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err %s"}]}]}}\n' "$S_NOW" "$i"
+  done
+  printf '{"type":"user","timestamp":1754130000000,"message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"epoch"}]}]}}\n'
+} > "$FIX/relloss_numts/s.jsonl"
+OUT=$(PORTFOLIO_PATHS="$FIX/relloss_numts" CLAUDE_PROJECTS_DIR="$FIX/relloss_numts" \
+      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
+check "a numeric timestamp is FLAGGED undated, not silently dropped" "$OUT" \
+  "undated errored results (excluded, expect 0): 1"
+check "and the other three are still counted" "$OUT" "tool errors in window: 3"
+
+# The redactor must still FIRE. Losing the record and losing the secret are
+# opposite failures, and a fix for one must not buy the other.
+OUT=$(PORTFOLIO_PATHS="$FIX/relloss_privatekey" CLAUDE_PROJECTS_DIR="$FIX/relloss_privatekey" \
+      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
+check "key material is still redacted"          "$OUT" "<redacted-key-material>"
+nocheck "and the raw key marker never appears"  "$OUT" "$PK_B"
+
 # ── 27. no fixture may carry an UNEXPANDED placeholder ────────────────────────
 # This guard exists because the placeholder scheme failed SILENTLY and in the
 # passing direction. `__NOW__` was added as a timestamp placeholder, but the

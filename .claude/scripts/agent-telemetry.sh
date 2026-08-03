@@ -499,7 +499,27 @@ redact() {
   # 30 distinct guard-denial entries into one unreadable bucket. Destroying real
   # signal to catch a rare shape is a bad trade, and a redactor that eats the
   # report is its own kind of failure.
-  sed -E '/-----BEGIN [A-Z ]*PRIVATE KEY-----/,/-----END [A-Z ]*PRIVATE KEY-----/ s/^.*$/<redacted-key-material>/' \
+  # ⚠️ The SAME-LINE case must be handled BEFORE the range, and it is not an
+  # edge case here: every walk in this script collapses newlines inside a
+  # message, so a key pasted into one error arrives with BEGIN and END on one
+  # line. A sed RANGE only looks for its end address on a LATER line, so such a
+  # line opens a range that never closes and every subsequent line — to EOF — is
+  # rewritten to the placeholder. Measured: 4 in-window errors, one carrying the
+  # marker, reported 1 (control without the marker: 4). That is a 75%
+  # under-count of the reliability metric caused by one unlucky error message.
+  # Rewriting the span first means the range address no longer matches the line,
+  # so the range never opens.
+  #
+  # This rule replaces THE KEY SPAN, not the whole line, and that distinction is
+  # load-bearing rather than cosmetic. Callers put structure on these lines —
+  # the reliability walk tags each row `D<TAB>tool<TAB>message` — and a
+  # whole-line rewrite destroys that structure, so the row stops being parseable
+  # and the error disappears from the count. Measured at exactly that: the
+  # whole-line form redacted correctly and still lost the record (4 -> 3, with
+  # the untagged canary reading 1). Redacting the secret must not also delete
+  # the evidence that an error occurred.
+  sed -E 's/-----BEGIN [A-Z ]*PRIVATE KEY-----.*-----END [A-Z ]*PRIVATE KEY-----/<redacted-key-material>/g' \
+  | sed -E '/-----BEGIN [A-Z ]*PRIVATE KEY-----/,/-----END [A-Z ]*PRIVATE KEY-----/ s/^.*$/<redacted-key-material>/' \
   | sed -E \
     -e 's/(github_pat_[A-Za-z0-9_]{6})[A-Za-z0-9_]+/\1…<redacted>/g' \
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
@@ -1574,12 +1594,30 @@ if want reliability; then
         | (.timestamp // "") as $rts
         | [ content_blocks | select(.type=="tool_result" and .is_error==true) ] as $errs
         | select(($errs | length) > 0)
-        | if $rts == "" then ($errs[] | "U")
+        # A NON-STRING timestamp is treated as undated, not merely an absent
+        # one. jq total-orders numbers BEFORE strings, so an epoch-ms timestamp
+        # after a schema change would compare LESS than the cutoff, fall to
+        # `empty`, and vanish from both the count and the undated tally — the
+        # exact silent drop this branch exists to make visible, arriving through
+        # the more likely drift (a retyped field) rather than a removed one.
+        | if ($rts | type) != "string" or $rts == "" then ($errs[] | "U")
           elif $rts >= $since then
             $errs[]
             | ($names[.tool_use_id] // "unknown") as $tool
             | (block_text) as $msg
-            | "D\t\($tool)\t\($msg | gsub("[\\n\\t]+";" ") | .[0:100])"
+            # Strip ALL control characters, not just newline and tab. A NUL
+            # reaching the scratch file makes `grep` treat it as binary and
+            # print "Binary file . matches" INSTEAD of the rows, collapsing the
+            # count to 1 and printing the temp path as a tool name. A JSON
+            # escape for NUL decodes to a raw byte through `jq -r` and survives
+            # the redactor, so this is reachable, not theoretical.
+            #
+            # It MUST be the POSIX class. The obvious explicit-range form is not
+            # merely ineffective here: measured, it DELETES THE PRINTABLE
+            # characters and leaves the control bytes, because jq decodes the
+            # escapes before Oniguruma sees the class. That would have corrupted
+            # every message rather than sanitising it.
+            | "D\t\($tool)\t\($msg | gsub("[[:cntrl:]]+";" ") | .[0:100])"
           else empty end
       ' "$f" 2>/dev/null
     done | redact > "$RAWTMP" || true
@@ -1595,11 +1633,21 @@ if want reliability; then
     # excluded results makes that arrive as a visible number, not a silent pass.
     UNDATED_ERR=$(grep -c '^U$' "$RAWTMP" || true)
     grep '^D	' "$RAWTMP" | cut -f2- > "$ERRTMP" || true
+    # Rows carrying NEITHER tag. Every row this walk emits is tagged, so this is
+    # 0 by construction — which is exactly why a non-zero value is worth
+    # printing: it means something downstream of jq rewrote the stream and the
+    # tag was destroyed. That is not hypothetical, it is how the private-key
+    # range bug above deflated the count by 75% while every other number in the
+    # section stayed internally consistent. A corruption that survives into a
+    # silent deflation is the failure mode this whole section guards against, so
+    # it gets its own visible number rather than trusting the fix to hold.
+    UNTAGGED_ERR=$(grep -cvE '^(U|D	)' "$RAWTMP" || true)
 
     TOTAL_ERR=$(wc -l < "$ERRTMP" | tr -d ' ')
     echo "  tool errors in window: ${TOTAL_ERR}   [Claude instance only — see note]"
     echo "  window: records at or after ${WINDOW_SINCE}   (record timestamps, not file mtime)"
     echo "  undated errored results (excluded, expect 0): ${UNDATED_ERR}"
+    echo "  untagged rows (corruption canary, expect 0): ${UNTAGGED_ERR}"
     echo
     echo "  by tool:"
     cut -f1 "$ERRTMP" | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
