@@ -533,8 +533,19 @@ END {
   # later. This bound is what stops a stray marker eating the rest of the report.
   for (i = 1; i <= n; i++) {
     if (!(i in U)) continue
+    # The search for a closing marker is bounded by the SAME horizon as the
+    # masking below. Without that bound this branch stayed a runaway: an
+    # unpaired BEGIN plus an unrelated END far later blanked everything between
+    # them. Measured — an unpaired marker and a stray END 202 lines later ate
+    # all 200 records in between, which is the exact class the horizon was added
+    # to close, surviving in the branch the horizon did not cover.
+    #
+    # A real key block is far shorter than the horizon, so bounding the search
+    # costs nothing; a block that genuinely exceeds it falls through to the
+    # unterminated path and is masked up to the horizon, which is safe in both
+    # directions — nothing leaks, and nothing runs away.
     close_at = 0
-    for (j = i + 1; j <= n; j++) {
+    for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) {
       if (L[j] ~ /-----END [A-Z ]*PRIVATE KEY-----/) { close_at = j; break }
     }
     if (close_at == 0) {

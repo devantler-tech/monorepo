@@ -4077,6 +4077,21 @@ check   "unit: nor the one after that"                        "$OUT" "NEXT-2"
 OUT=$({ printf '%s\n' "$RB"; for i in $(seq 1 70); do printf 'AAAAAAAAAAAAAAAAAAAA%02d\n' "$i"; done; } | awk "$(extract_awk)")
 check   "unit: masking stops at the horizon"         "$OUT" "AAAAAAAAAAAAAAAAAAAA70"
 
+# 🔴 THE OTHER BRANCH'S BOUND, found by reading the program rather than by a
+# reviewer. The horizon originally covered only the unterminated path; the
+# search for a CLOSING marker still scanned to end of file, so an unpaired
+# BEGIN plus an unrelated END far later blanked everything between. Measured
+# before the fix: an unpaired marker and a stray END 202 lines on ate all 200
+# records in between — the same runaway class, surviving in the branch the
+# horizon did not cover.
+#
+# Worth keeping as a pattern: when a bound is added to fix a runaway, check
+# every OTHER path that walks the same structure. A bound applied to one branch
+# reads as "the runaway is fixed" while its twin is still unbounded.
+OUT=$({ printf '%s\n' "$RB"; for i in $(seq 1 200); do printf 'RECORD-%03d\n' "$i"; done; printf 'tail %s\n' "$RE"; } | awk "$(extract_awk)")
+check   "unit: a distant stray END does not blank the records between" "$OUT" "RECORD-001"
+check   "unit: nor the ones near the far end"                          "$OUT" "RECORD-200"
+
 # ── ablations, each proving one branch is load-bearing ────────────────────────
 unit_ablate() { # $1=sed-expr  $2=label  $3=input  $4=needle-that-must-REAPPEAR
   local ab="$FIX/abl_unit.sh" changed out
@@ -4105,7 +4120,7 @@ unit_ablate 's|^        if (L\[j\] ~ /\^\[\[:space:\]\]\*\[A-Za-z0-9+\\/=\]{16,}
 # asserting "reappears" here would fail against a working guard.
 HABL="$FIX/abl_horizon.sh"
 cp "$TARGET" "$HABL"
-sed -i.bak 's/ \&\& (j - i) <= HORIZON//' "$HABL"; rm -f "$HABL.bak"
+sed -i.bak 's/^      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) {$/      for (j = i + 1; j <= n; j++) {/' "$HABL"; rm -f "$HABL.bak"
 HABL_CHANGED=$(diff "$TARGET" "$HABL" | grep -c '^<')
 if [ "$HABL_CHANGED" -ne 1 ]; then
   bad "ablation: the horizon bound is load-bearing" \
@@ -4117,6 +4132,25 @@ else
         "line 70 survived without the bound — the arm proves nothing"
   else
     ok "ablation: the horizon bound is load-bearing (masking runs past it without the bound)"
+  fi
+fi
+
+# The search bound, ablated separately — it is a DIFFERENT line from the
+# masking bound, and only a separate arm can show it is load-bearing.
+SABL="$FIX/abl_search.sh"
+cp "$TARGET" "$SABL"
+sed -i.bak 's/^    for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) {$/    for (j = i + 1; j <= n; j++) {/' "$SABL"; rm -f "$SABL.bak"
+SABL_CHANGED=$(diff "$TARGET" "$SABL" | grep -c '^<')
+if [ "$SABL_CHANGED" -ne 1 ]; then
+  bad "ablation: the closing-marker SEARCH bound is load-bearing" \
+      "sed changed $SABL_CHANGED lines, expected 1 — arm is mis-aimed"
+else
+  SOUT=$({ printf '%s\n' "$RB"; for i in $(seq 1 200); do printf 'RECORD-%03d\n' "$i"; done; printf 'tail %s\n' "$RE"; } | awk "$(extract_awk "$SABL")")
+  if printf '%s' "$SOUT" | grep -qF 'RECORD-100'; then
+    bad "ablation: the closing-marker SEARCH bound is load-bearing" \
+        "records survived without the bound — the arm proves nothing"
+  else
+    ok "ablation: the closing-marker SEARCH bound is load-bearing (200 records eaten without it)"
   fi
 fi
 
