@@ -4018,8 +4018,18 @@ nocheck "and grep never reports the file as binary" "$OUT" "Binary file"
 
 # The arm above is only worth having if removing the guard breaks it. Ablate the
 # control-character strip back to the newline/tab-only form it replaced: the
-# count must collapse 4 -> 1. This is what distinguishes the fixed arm from the
+# count must stop being 4. This is what distinguishes the fixed arm from the
 # vacuous one it replaces, which stayed GREEN with the guard removed.
+#
+# ⚠️ Assert that the count is WRONG, never that it is a particular wrong value.
+# The first version required exactly 1 and failed on Linux, because the two
+# `grep` implementations corrupt differently on a binary file: BSD prints one
+# "Binary file ... matches" line (count 1) while GNU suppresses the matches
+# entirely (count 0). Both are the same defect; only the artifact differs. The
+# guarantee under test is "removing the strip breaks the count", so pinning 1
+# pinned a macOS implementation detail and made a correct arm fail on a correct
+# platform. Worth knowing operationally too: on Linux this defect loses EVERY
+# row rather than all-but-one, so it is more destructive where CI runs.
 ABL="$FIX/abl_cntrl.sh"
 cp "$TARGET" "$ABL"
 sed -i.bak 's/gsub("\[\[:cntrl:\]\]+";" ")/gsub("[\\n\\t]+";" ")/' "$ABL"; rm -f "$ABL.bak"
@@ -4031,11 +4041,12 @@ else
   ABL_OUT=$(PORTFOLIO_PATHS="$FIX/relloss_nulbyte" CLAUDE_PROJECTS_DIR="$FIX/relloss_nulbyte" \
             CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
             bash "$ABL" --since-days 1 --section reliability 2>/dev/null)
-  if printf '%s' "$ABL_OUT" | grep -qF 'tool errors in window: 1'; then
-    ok "ablation: the control-character strip is load-bearing for the NUL case (4 -> 1)"
+  ABL_N=$(printf '%s' "$ABL_OUT" | sed -n 's/.*tool errors in window: \([0-9]*\).*/\1/p' | head -1)
+  if [ -n "$ABL_N" ] && [ "$ABL_N" != "4" ]; then
+    ok "ablation: the control-character strip is load-bearing for the NUL case (4 -> $ABL_N)"
   else
     bad "ablation: the control-character strip is load-bearing for the NUL case" \
-        "expected 1 with the guard removed; got: $(printf '%s' "$ABL_OUT" | grep 'tool errors in window' || echo none)"
+        "count should stop being 4 with the guard removed; got: ${ABL_N:-<no count emitted>}"
   fi
 fi
 
