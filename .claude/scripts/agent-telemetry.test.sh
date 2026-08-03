@@ -3993,11 +3993,22 @@ relcase privatekey "parse failed: $PK_B AAAA $PK_E trailing" 4 0
 # 4 errors -> 1, with the untagged canary reading 3.
 relcase unbalancedkey "x $PK_B y $PK_E z $PK_B w" 4 0
 
-# The CONTROL for the fix: a genuine key spanning SEPARATE LINES must still have
-# its body redacted. Without this row, "stop the range eating records" could be
-# satisfied by simply never redacting across lines — trading a measurement bug
-# for a leak. The body lines here carry no markers, so only the cross-line walk
-# can mask them.
+# A key written across separate lines in the SOURCE must still have its body
+# redacted. Read what this row actually pins, though — it is narrower than it
+# looks, and an earlier version of this comment overstated it.
+#
+# The reliability walk strips control characters, so this record reaches the
+# redactor FLATTENED onto one line. Pass A therefore masks the span, and the
+# cross-line walk is never reached. Verified by ablation: disabling pass B
+# entirely leaves the body masked exactly as before. So this row pins
+# PASS A ON A FLATTENED RECORD — that the section does not emit key material —
+# and nothing about cross-line behaviour.
+#
+# 🔑 Cross-line coverage lives in the redactor UNIT tests below, which are the
+# only place those branches are reachable. The claim this comment used to make
+# is the same failure the P1 above was: a control described by the property it
+# was written to defend rather than the one it instantiates. Left uncorrected,
+# the next reader trusts coverage that is not here and skips re-deriving it.
 mkdir -p "$FIX/relloss_multiline"
 {
   printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
