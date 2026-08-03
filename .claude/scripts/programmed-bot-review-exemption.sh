@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# Exit 0: no-review exemption; 1: untrusted/non-matching; 2: invalid input or environment;
+# 3: genuine programmed updater that is trusted but requires semantic review.
+
 set -euo pipefail
 
 if [[ "$#" -ne 7 ]] || ! command -v jq >/dev/null 2>&1; then
@@ -61,9 +64,6 @@ matches_agent_skills_files() {
   local path_pattern
 
   case "${repo}" in
-  agent-plugins)
-    path_pattern='^plugins/[^/]+/skills/[^/]+/.+'
-    ;;
   ksail | platform)
     path_pattern='^\.agents/skills/[^/]+/.+'
     ;;
@@ -75,6 +75,23 @@ matches_agent_skills_files() {
   jq -e --arg pattern "${path_pattern}" \
     'length > 0 and all(.[]; test($pattern))' \
     <<<"${files_json}" >/dev/null
+}
+
+# Marketplace skills are executable agent instructions sourced from several upstreams. Even a
+# mechanically genuine update needs semantic review: path/provenance checks prove who produced the
+# copy, not whether its prose preserves the consumer's authority boundaries. Exit 3 distinguishes a
+# genuine, trusted updater PR that requires review from both the no-review exemption (0) and an
+# untrusted lookalike (1).
+matches_agent_plugins_review_files() {
+  jq -e '
+    length > 0 and
+    any(.[]; test("^plugins/[^/]+/skills/[^/]+/.+")) and
+    all(.[];
+      test("^plugins/[^/]+/skills/[^/]+/.+") or
+      test("^plugins/[^/]+/(\\.claude-plugin/)?plugin\\.json$") or
+      . == ".claude-plugin/marketplace.json" or
+      . == ".github/plugin/marketplace.json")
+  ' <<<"${files_json}" >/dev/null
 }
 
 matches_agent_skills_provenance() {
@@ -94,6 +111,29 @@ matches_agent_skills_provenance() {
       .committer_name == "github-actions[bot]" and
       .committer_email == "41898282+github-actions[bot]@users.noreply.github.com" and
       .message == "chore(deps): update agent skills")
+  ' <<<"${commits_json}" >/dev/null
+}
+
+matches_agent_plugins_review_provenance() {
+  jq -e '
+    def skill_update:
+      .author_login == "devantler" and
+      .author_name == "devantler" and
+      .author_email == "26203420+devantler@users.noreply.github.com" and
+      .committer_login == "github-actions[bot]" and
+      .committer_name == "github-actions[bot]" and
+      .committer_email == "41898282+github-actions[bot]@users.noreply.github.com" and
+      .message == "chore(deps): update agent skills";
+    def version_bump:
+      .author_login == "github-actions[bot]" and
+      .author_name == "github-actions[bot]" and
+      .author_email == "41898282+github-actions[bot]@users.noreply.github.com" and
+      .committer_login == "github-actions[bot]" and
+      .committer_name == "github-actions[bot]" and
+      .committer_email == "41898282+github-actions[bot]@users.noreply.github.com" and
+      .message == "chore(deps): bump versions of changed plugins";
+    (length == 1 and (.[0] | skill_update)) or
+    (length == 2 and (.[0] | skill_update) and (.[1] | version_bump))
   ' <<<"${commits_json}" >/dev/null
 }
 
@@ -221,11 +261,17 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
     ;;
   esac
 
-  if [[ -n "${expected_author}" &&
-    "${author}" == "${expected_author}" ]] &&
-    matches_agent_skills_files &&
-    matches_agent_skills_provenance; then
-    exit 0
+  if [[ -n "${expected_author}" && "${author}" == "${expected_author}" ]]; then
+    if [[ "${repo}" == "agent-plugins" ]] &&
+      matches_agent_plugins_review_files &&
+      matches_agent_plugins_review_provenance; then
+      exit 3
+    fi
+    if [[ "${repo}" != "agent-plugins" ]] &&
+      matches_agent_skills_files &&
+      matches_agent_skills_provenance; then
+      exit 0
+    fi
   fi
 fi
 

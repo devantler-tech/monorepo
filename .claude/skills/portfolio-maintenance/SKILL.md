@@ -425,8 +425,10 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
    verdict line) so the sibling agent can see and act on it, incremental re-reviews,
    green-while-draft as the promotion precondition, the **automation-owned dependency-PR no-action carve-out**, and the trusted programmed
-   **bot carve-out** — exact-classifier-matched agent-skills updater PRs, tap cask PRs, and KSail
-   release bumps are check-gated, need NO review, and are never review-chased) is the contract's
+   **bot carve-out** — exact-classifier-matched exit-0 agent-skills updater PRs, tap cask PRs, and
+   KSail release bumps are check-gated, need NO review, and are never review-chased;
+   `agent-plugins` updater PRs require semantic review when their classifier returns the trusted
+   exit-3 state) is the contract's
    **green-review gate** (AGENTS.md *Autonomy → AUTO-REVIEW IS
    DISABLED*) — follow it, don't re-derive it here. When a draft reaches the full pentad AND you have
    tried and evaluated it as a user, **self-promote it and drive it to merge** (contract *Autonomy*;
