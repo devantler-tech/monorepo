@@ -503,6 +503,25 @@ emit_credential_hits() {
 # string, so one would terminate it and break the script.
 AWK_KEY_REDACT='
 BEGIN { PH = "<redacted-key-material>"; HORIZON = 64 }
+# Mask a line WITHOUT destroying its structure. Callers tag rows as
+# `D<TAB>tool<TAB>message`, and this filter runs over that tagged stream as well
+# as over the final report — so replacing a whole line does not merely redact
+# it, it deletes the record and drops the error from the count. Round 4
+# measured exactly that (4 errors -> 3).
+#
+# It matters most for the unconditional horizon masking below. In the tagged
+# stream each row is ONE message with newlines already collapsed, so key
+# material cannot span rows there and the masking is pure loss: measured, a
+# stray marker took a 4-error fixture to 2 with the untagged canary at 2. In the
+# REPORT stream lines genuinely can continue a key, and those lines carry no
+# tag, so they are masked whole.
+#
+# Preserving the tool field leaks nothing — it is a tool name, never payload.
+function mask_line(s) {
+  if (s == "U") return s
+  if (match(s, /^D\t[^\t]*\t/)) return substr(s, 1, RLENGTH) PH
+  return PH
+}
 { L[NR] = $0 }
 END {
   n = NR
@@ -549,25 +568,32 @@ END {
       if (L[j] ~ /-----END [A-Z ]*PRIVATE KEY-----/) { close_at = j; break }
     }
     if (close_at == 0) {
-      # UNTERMINATED block. Requiring a closing marker before masking anything
-      # leaked the body verbatim — a truncated PEM is MORE likely in a
-      # transcript than a well-formed one, because messages get cut. So mask
-      # following lines that plausibly CONTINUE key material, and stop at a
-      # bound. That keeps both failure directions closed: no unterminated body
-      # is disclosed, and no stray marker can consume the rest of the report.
+      # UNTERMINATED block: mask every following line to HORIZON, with NO
+      # content test whatsoever. Stopping early on an explicit END is the
+      # terminated branch above; there is no other stop condition, by design.
       #
-      # The continuation test is deliberately narrow — a long, unbroken
-      # base64 run. Report lines carry tabs, spaces or punctuation and so end
-      # the block immediately; a PEM body line does not. HORIZON bounds it
-      # regardless, so even a pathological run of base64-looking lines cannot
-      # eat the file.
-      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) {
-        if (L[j] ~ /^[[:space:]]*[A-Za-z0-9+\/=]{16,}[[:space:]]*$/) L[j] = PH
-        else break
-      }
+      # ⚠️ THE DEFAULT IS INVERTED ON PURPOSE, and the earlier version is a
+      # cautionary tale. This loop used to mask only lines that "plausibly
+      # continue key material" — a long unbroken base64 run — and that
+      # classifier leaked twice: an RFC 1421 ENCRYPTED PEM puts
+      # `Proc-Type:`/`DEK-Info:` headers and a BLANK separator between BEGIN
+      # and the body, so the loop stopped on line 1 and emitted the whole key;
+      # and a PEM final line is frequently shorter than the length floor, so it
+      # escaped even in the clean case.
+      #
+      # Narrow classification is right for a PARSER and wrong for a REDACTOR.
+      # Four rounds of review each produced a PEM shape the previous fix had
+      # not enumerated — greedy pairing, then the unterminated case, then the
+      # unbounded closing search, then these separators. PEM has more shapes
+      # than induction from review findings will ever cover, and the payoffs
+      # are not symmetric: a miss discloses a key, while an over-mask costs a
+      # few report lines inside a window we control. So this asks nothing about
+      # what a line looks like, which is what makes it closed rather than
+      # merely wider — including against shapes nobody here has thought of.
+      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) L[j] = mask_line(L[j])
       continue
     }
-    for (j = i + 1; j < close_at; j++) L[j] = PH
+    for (j = i + 1; j < close_at; j++) L[j] = mask_line(L[j])
     s = L[close_at]
     if (match(s, /-----END [A-Z ]*PRIVATE KEY-----/)) {
       L[close_at] = PH substr(s, RSTART + RLENGTH)

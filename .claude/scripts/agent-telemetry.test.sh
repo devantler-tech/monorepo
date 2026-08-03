@@ -4044,7 +4044,11 @@ OUT=$(PORTFOLIO_PATHS="$FIX/relloss_unterminated" CLAUDE_PROJECTS_DIR="$FIX/rell
       bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
 nocheck "an UNTERMINATED key body is redacted (no closing marker)" "$OUT" "SECRETBODY"
 nocheck "including its later body lines"                           "$OUT" "SECRETTWO"
-check   "and the record AFTER it still survives"                   "$OUT" "SURVIVOR-ROW"
+# The row after it is still COUNTED — its tag survives — but its MESSAGE is
+# masked, which is the accepted cost of masking unconditionally. Asserting the
+# message text here would pin the content test that leaked.
+check   "and the record AFTER it is still COUNTED (tag preserved)" "$OUT" "tool errors in window: 2"
+nocheck "though its message text is masked, not emitted"           "$OUT" "SURVIVOR-ROW"
 
 # ── REDACTOR UNIT TESTS — the multi-line paths are UNREACHABLE from a section ──
 # The reliability walk collapses control characters, so a multi-line message
@@ -4072,21 +4076,52 @@ OUT=$(printf 'D\tBash\tf %s\nMIIEvgSECRETBODYaaaa\n%s t\nAFTER-ROW\n' "$RB" "$RE
 nocheck "unit: terminated key body is masked"        "$OUT" "SECRETBODY"
 check   "unit: and the record after it survives"     "$OUT" "AFTER-ROW"
 
-# UNTERMINATED block — the P1. No closing marker anywhere, so a guard that waits
-# for one emits the body verbatim.
+# ── THE INVARIANT, not a list of shapes ───────────────────────────────────────
+# After an unterminated BEGIN, EVERY following line is masked to the horizon,
+# with no content test. These rows pin that property; they are deliberately NOT
+# an enumeration of PEM shapes, because enumerating shapes is what failed.
+#
+# Four review rounds each produced a shape the previous fix had not thought of:
+# greedy pairing, the unterminated case, the unbounded closing search, and then
+# RFC 1421 `Proc-Type:`/`DEK-Info:` headers with a blank separator. The old
+# continuation test — "a long unbroken base64 run" — stopped dead on the first
+# header line and emitted the whole key, and also dropped a PEM's final line,
+# which is frequently shorter than the length floor it required.
+#
+# The payoffs are not symmetric: a miss discloses a key, an over-mask costs a
+# few report lines inside a bounded window. So the guard asks nothing about what
+# a line looks like, and these rows assert exactly that.
+
+# UNTERMINATED block. Note the record after it is ALSO masked — that is the
+# accepted over-mask, not a defect, and asserting its survival here would pin
+# the very content test that leaked.
 OUT=$(printf 'D\tBash\tf %s\nMIIEvgSECRETBODYaaaa\nAFTER-ROW\n' "$RB" | awk "$(extract_awk)")
-nocheck "unit: UNTERMINATED key body is masked"      "$OUT" "SECRETBODY"
-check   "unit: and the record after it survives"     "$OUT" "AFTER-ROW"
+nocheck "unit: UNTERMINATED key body is masked"                    "$OUT" "SECRETBODY"
+nocheck "unit: and following lines are masked too (bounded cost)"  "$OUT" "AFTER-ROW"
 
-# UNBALANCED same-line markers must not open an unbounded range.
-OUT=$(printf 'x %s y %s z %s w\nNEXT-1\nNEXT-2\n' "$RB" "$RE" "$RB" | awk "$(extract_awk)")
-check   "unit: unbalanced markers do not eat the next record" "$OUT" "NEXT-1"
-check   "unit: nor the one after that"                        "$OUT" "NEXT-2"
+# ENCRYPTED PEM (RFC 1421): headers and a BLANK separator sit between BEGIN and
+# the body. Any content-shaped continuation test stops at the first header.
+OUT=$(printf 'Blocked: %s\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,9A7B2C\n\nMIIEvgIBADANBgkqSECRETBODYxxxx\n' "$RB" | awk "$(extract_awk)")
+nocheck "unit: an ENCRYPTED PEM body is masked through its headers" "$OUT" "SECRETBODY"
+nocheck "unit: and the DEK-Info header itself does not survive"     "$OUT" "AES-128-CBC"
 
-# The BOUND: a long run of base64-looking lines after an unterminated marker
-# must stop being masked at the horizon, so no stray marker can consume a file.
-OUT=$({ printf '%s\n' "$RB"; for i in $(seq 1 70); do printf 'AAAAAAAAAAAAAAAAAAAA%02d\n' "$i"; done; } | awk "$(extract_awk)")
-check   "unit: masking stops at the horizon"         "$OUT" "AAAAAAAAAAAAAAAAAAAA70"
+# SHORT FINAL LINE: a PEM's last base64 line is often only a few characters, so
+# a minimum-length test drops it even when every other line matches.
+OUT=$(printf 'x %s\nMIIEvgIBADANBgkqSECRETONExx\nSHORTTAIL=\n' "$RB" | awk "$(extract_awk)")
+nocheck "unit: a short final PEM line is masked"     "$OUT" "SHORTTAIL"
+
+# UNBALANCED same-line markers still must not open an UNBOUNDED range — the
+# horizon is what bounds it now, not a content test.
+OUT=$({ printf 'x %s y %s z %s w\n' "$RB" "$RE" "$RB"; for i in $(seq 1 70); do printf 'NEXT-%02d\n' "$i"; done; } | awk "$(extract_awk)")
+check   "unit: an unbalanced marker cannot eat past the horizon" "$OUT" "NEXT-70"
+
+# The BOUND, stated exactly: with HORIZON=64 and the marker on line 1, lines
+# 2..65 are masked and line 66 is the first survivor. "Not before and not
+# after" — an off-by-one in either direction is a different bug.
+OUT=$({ printf 'x %s\n' "$RB"; for i in $(seq 1 70); do printf 'REPORT-LINE-%02d\n' "$i"; done; } | awk "$(extract_awk)")
+nocheck "unit: the line at the horizon edge IS masked"   "$OUT" "REPORT-LINE-64"
+check   "unit: and the first line past it survives"      "$OUT" "REPORT-LINE-65"
+check   "unit: as does everything after that"            "$OUT" "REPORT-LINE-70"
 
 # 🔴 THE OTHER BRANCH'S BOUND, found by reading the program rather than by a
 # reviewer. The horizon originally covered only the unterminated path; the
@@ -4100,7 +4135,11 @@ check   "unit: masking stops at the horizon"         "$OUT" "AAAAAAAAAAAAAAAAAAA
 # every OTHER path that walks the same structure. A bound applied to one branch
 # reads as "the runaway is fixed" while its twin is still unbounded.
 OUT=$({ printf '%s\n' "$RB"; for i in $(seq 1 200); do printf 'RECORD-%03d\n' "$i"; done; printf 'tail %s\n' "$RE"; } | awk "$(extract_awk)")
-check   "unit: a distant stray END does not blank the records between" "$OUT" "RECORD-001"
+# Untagged report lines inside the horizon ARE masked now — that is the bounded
+# cost of asking nothing about content. What must still hold is that the damage
+# STOPS: everything past the horizon survives, so no marker can eat the file.
+nocheck "unit: lines inside the horizon are masked (bounded cost)"     "$OUT" "RECORD-001"
+check   "unit: a distant stray END does not blank records beyond it"   "$OUT" "RECORD-100"
 check   "unit: nor the ones near the far end"                          "$OUT" "RECORD-200"
 
 # ── ablations, each proving one branch is load-bearing ────────────────────────
@@ -4120,10 +4159,18 @@ unit_ablate() { # $1=sed-expr  $2=label  $3=input  $4=needle-that-must-REAPPEAR
   fi
 }
 
-# Removing the unterminated-continuation masking must leak the body.
-unit_ablate 's|^        if (L\[j\] ~ /\^\[\[:space:\]\]\*\[A-Za-z0-9+\\/=\]{16,}\[\[:space:\]\]\*\$/) L\[j\] = PH$|        if (0) L[j] = PH|' \
-  "unterminated-key masking is load-bearing (body leaks without it)" \
-  "D\tBash\tf $RB\nMIIEvgSECRETBODYaaaa\nAFTER-ROW\n" \
+# Ablate the unconditional masking back to the CONTENT-TESTED form that
+# leaked — a base64-shaped continuation test. The encrypted-PEM body must
+# reappear, which is the whole reason the default was inverted.
+# NOTE: the replacement regex deliberately omits `/` from the character class.
+# A `\/` in a sed REPLACEMENT is emitted as a bare `/`, which closes the awk
+# regex literal early and makes the ablated script a syntax error — the arm then
+# "fails" because awk produced nothing, not because the guard is load-bearing.
+# Dropping the slash keeps the class base64-shaped enough for the header line to
+# fail it, which is all this arm needs.
+unit_ablate 's|^      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) L\[j\] = mask_line(L\[j\])$|      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) { if (L[j] ~ /^[A-Za-z0-9+=]{16,}$/) L[j] = mask_line(L[j]); else break }|' \
+  "unconditional masking is load-bearing (encrypted-PEM body leaks under a content test)" \
+  "Blocked: $RB\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,9A7B2C\n\nMIIEvgIBADANBgkqSECRETBODYxxxx\n" \
   "SECRETBODY"
 
 # The horizon works in the OTHER direction: removing it masks MORE, so the arm
@@ -4131,7 +4178,7 @@ unit_ablate 's|^        if (L\[j\] ~ /\^\[\[:space:\]\]\*\[A-Za-z0-9+\\/=\]{16,}
 # asserting "reappears" here would fail against a working guard.
 HABL="$FIX/abl_horizon.sh"
 cp "$TARGET" "$HABL"
-sed -i.bak 's/^      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) {$/      for (j = i + 1; j <= n; j++) {/' "$HABL"; rm -f "$HABL.bak"
+sed -i.bak 's/^      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) L\[j\] = mask_line(L\[j\])$/      for (j = i + 1; j <= n; j++) L[j] = mask_line(L[j])/' "$HABL"; rm -f "$HABL.bak"
 HABL_CHANGED=$(diff "$TARGET" "$HABL" | grep -c '^<')
 if [ "$HABL_CHANGED" -ne 1 ]; then
   bad "ablation: the horizon bound is load-bearing" \
