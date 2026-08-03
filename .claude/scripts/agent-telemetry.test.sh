@@ -3982,321 +3982,6 @@ relcase control "ordinary failure text" 4 0
 # the row tags: measured 4 -> 1, a 75% under-count from one unlucky message.
 # The whole-line form then still lost the tagged row itself (4 -> 3). Redacting
 # only the key SPAN is what keeps the secret out and the evidence in.
-PK_B=$(printf -- '-----%s %s PRIVATE KEY-----' 'BEGIN' 'RSA')
-PK_E=$(printf -- '-----%s %s PRIVATE KEY-----' 'END' 'RSA')
-relcase privatekey "parse failed: $PK_B AAAA $PK_E trailing" 4 0
-
-# F1b. UNBALANCED markers on one line — an ODD marker count. A regex quantifier
-# is leftmost-LONGEST, so `.*` between the markers ran to the LAST END and left
-# a trailing unpaired BEGIN behind. That residual then re-opened the unbounded
-# range and blanked every following record. Measured on the previous head:
-# 4 errors -> 1, with the untagged canary reading 3.
-relcase unbalancedkey "x $PK_B y $PK_E z $PK_B w" 4 0
-
-# A key written across separate lines in the SOURCE must still have its body
-# redacted. Read what this row actually pins, though — it is narrower than it
-# looks, and an earlier version of this comment overstated it.
-#
-# The reliability walk strips control characters, so this record reaches the
-# redactor FLATTENED onto one line. Pass A therefore masks the span, and the
-# cross-line walk is never reached. Verified by ablation: disabling pass B
-# entirely leaves the body masked exactly as before. So this row pins
-# PASS A ON A FLATTENED RECORD — that the section does not emit key material —
-# and nothing about cross-line behaviour.
-#
-# 🔑 Cross-line coverage lives in the redactor UNIT tests below, which are the
-# only place those branches are reachable. The claim this comment used to make
-# is the same failure the P1 above was: a control described by the property it
-# was written to defend rather than the one it instantiates. Left uncorrected,
-# the next reader trusts coverage that is not here and skips re-deriving it.
-mkdir -p "$FIX/relloss_multiline"
-{
-  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
-  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":%s}]}]}}\n' \
-    "$S_NOW" "$(printf 'boom %s\nMIIEvgIBADANBgSECRETBODY\n%s tail' "$PK_B" "$PK_E" | jq -Rs .)"
-} > "$FIX/relloss_multiline/s.jsonl"
-OUT=$(PORTFOLIO_PATHS="$FIX/relloss_multiline" CLAUDE_PROJECTS_DIR="$FIX/relloss_multiline" \
-      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
-nocheck "a multi-line key body is still redacted"   "$OUT" "SECRETBODY"
-nocheck "and its markers never reach the output"    "$OUT" "$PK_B"
-
-# 🔴 THE UNTERMINATED CASE — a P1 leak the row above could not reach.
-# Requiring a closing marker before masking anything meant a TRUNCATED PEM had
-# its body emitted verbatim. A truncated key is MORE likely in a transcript than
-# a well-formed one, because messages get cut; the finding was reached through a
-# multi-line timeout description.
-#
-# Worth stating why the terminated row did not catch it: that fixture was added
-# precisely to stop the fix being satisfiable by never redacting across lines,
-# and it does prove that. But it instantiates a TERMINATED block, and the leak
-# lives in the unterminated shape. A control proves the property it
-# instantiates, not the property it was written to defend.
-mkdir -p "$FIX/relloss_unterminated"
-{
-  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
-  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":%s}]}]}}\n' \
-    "$S_NOW" "$(printf 'timed out: %s\nMIIEvgIBADANBgSECRETBODY\nQEFAASCBKgwggSSECRETTWO' "$PK_B" | jq -Rs .)"
-  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"SURVIVOR-ROW"}]}]}}\n' "$S_NOW"
-} > "$FIX/relloss_unterminated/s.jsonl"
-OUT=$(PORTFOLIO_PATHS="$FIX/relloss_unterminated" CLAUDE_PROJECTS_DIR="$FIX/relloss_unterminated" \
-      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
-nocheck "an UNTERMINATED key body is redacted (no closing marker)" "$OUT" "SECRETBODY"
-nocheck "including its later body lines"                           "$OUT" "SECRETTWO"
-# The row after it is still COUNTED — its tag survives — but its MESSAGE is
-# masked, which is the accepted cost of masking unconditionally. Asserting the
-# message text here would pin the content test that leaked.
-check   "and the record AFTER it is still COUNTED (tag preserved)" "$OUT" "tool errors in window: 2"
-nocheck "though its message text is masked, not emitted"           "$OUT" "SURVIVOR-ROW"
-
-# ── REDACTOR UNIT TESTS — the multi-line paths are UNREACHABLE from a section ──
-# The reliability walk collapses control characters, so a multi-line message
-# arrives at the redactor as ONE line. That makes the cross-line branches
-# untestable through `--section reliability`: a fixture written as "multi-line"
-# is silently flattened, and an ablation of the cross-line code then reports
-# "the arm proves nothing" — which is exactly what happened, and is the honest
-# result rather than a broken test.
-#
-# So the redactor is exercised DIRECTLY here, as the unit it is. That is also
-# the only place the leak that prompted these rows can be reproduced: multi-line
-# key material reaches redact() from sections that print stored text verbatim,
-# not from the error-signature walk.
-echo
-echo "redactor unit (multi-line paths, unreachable from a section)"
-
-# Extract the awk program from the target so the unit under test is the SHIPPED
-# one, never a copy that can drift away from it.
-extract_awk() { sed -n "/^AWK_KEY_REDACT='/,/^'\$/p" "${1:-$TARGET}" | sed "1s/^AWK_KEY_REDACT='//; \$d"; }
-RB=$(printf -- '-----%s %s PRIVATE KEY-----' 'BEGIN' 'RSA')
-RE=$(printf -- '-----%s %s PRIVATE KEY-----' 'END' 'RSA')
-
-# TERMINATED block: body masked, following record survives.
-OUT=$(printf 'D\tBash\tf %s\nMIIEvgSECRETBODYaaaa\n%s t\nAFTER-ROW\n' "$RB" "$RE" | awk "$(extract_awk)")
-nocheck "unit: terminated key body is masked"        "$OUT" "SECRETBODY"
-check   "unit: and the record after it survives"     "$OUT" "AFTER-ROW"
-
-# ── THE INVARIANT, not a list of shapes ───────────────────────────────────────
-# After an unterminated BEGIN, EVERY following line is masked to the horizon,
-# with no content test. These rows pin that property; they are deliberately NOT
-# an enumeration of PEM shapes, because enumerating shapes is what failed.
-#
-# Four review rounds each produced a shape the previous fix had not thought of:
-# greedy pairing, the unterminated case, the unbounded closing search, and then
-# RFC 1421 `Proc-Type:`/`DEK-Info:` headers with a blank separator. The old
-# continuation test — "a long unbroken base64 run" — stopped dead on the first
-# header line and emitted the whole key, and also dropped a PEM's final line,
-# which is frequently shorter than the length floor it required.
-#
-# The payoffs are not symmetric: a miss discloses a key, an over-mask costs a
-# few report lines inside a bounded window. So the guard asks nothing about what
-# a line looks like, and these rows assert exactly that.
-
-# UNTERMINATED block. Note the record after it is ALSO masked — that is the
-# accepted over-mask, not a defect, and asserting its survival here would pin
-# the very content test that leaked.
-OUT=$(printf 'D\tBash\tf %s\nMIIEvgSECRETBODYaaaa\nAFTER-ROW\n' "$RB" | awk "$(extract_awk)")
-nocheck "unit: UNTERMINATED key body is masked"                    "$OUT" "SECRETBODY"
-nocheck "unit: and following lines are masked too (bounded cost)"  "$OUT" "AFTER-ROW"
-
-# ENCRYPTED PEM (RFC 1421): headers and a BLANK separator sit between BEGIN and
-# the body. Any content-shaped continuation test stops at the first header.
-OUT=$(printf 'Blocked: %s\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,9A7B2C\n\nMIIEvgIBADANBgkqSECRETBODYxxxx\n' "$RB" | awk "$(extract_awk)")
-nocheck "unit: an ENCRYPTED PEM body is masked through its headers" "$OUT" "SECRETBODY"
-nocheck "unit: and the DEK-Info header itself does not survive"     "$OUT" "AES-128-CBC"
-
-# SHORT FINAL LINE: a PEM's last base64 line is often only a few characters, so
-# a minimum-length test drops it even when every other line matches.
-OUT=$(printf 'x %s\nMIIEvgIBADANBgkqSECRETONExx\nSHORTTAIL=\n' "$RB" | awk "$(extract_awk)")
-nocheck "unit: a short final PEM line is masked"     "$OUT" "SHORTTAIL"
-
-# UNBALANCED same-line markers still must not open an UNBOUNDED range — the
-# horizon is what bounds it now, not a content test.
-OUT=$({ printf 'x %s y %s z %s w\n' "$RB" "$RE" "$RB"; for i in $(seq 1 70); do printf 'NEXT-%02d\n' "$i"; done; } | awk "$(extract_awk)")
-check   "unit: an unbalanced marker cannot eat past the horizon" "$OUT" "NEXT-70"
-
-# The BOUND, stated exactly: with HORIZON=64 and the marker on line 1, lines
-# 2..65 are masked and line 66 is the first survivor. "Not before and not
-# after" — an off-by-one in either direction is a different bug.
-OUT=$({ printf 'x %s\n' "$RB"; for i in $(seq 1 70); do printf 'REPORT-LINE-%02d\n' "$i"; done; } | awk "$(extract_awk)")
-nocheck "unit: the line at the horizon edge IS masked"   "$OUT" "REPORT-LINE-64"
-check   "unit: and the first line past it survives"      "$OUT" "REPORT-LINE-65"
-check   "unit: as does everything after that"            "$OUT" "REPORT-LINE-70"
-
-# 🔴 THE OTHER BRANCH'S BOUND, found by reading the program rather than by a
-# reviewer. The horizon originally covered only the unterminated path; the
-# search for a CLOSING marker still scanned to end of file, so an unpaired
-# BEGIN plus an unrelated END far later blanked everything between. Measured
-# before the fix: an unpaired marker and a stray END 202 lines on ate all 200
-# records in between — the same runaway class, surviving in the branch the
-# horizon did not cover.
-#
-# Worth keeping as a pattern: when a bound is added to fix a runaway, check
-# every OTHER path that walks the same structure. A bound applied to one branch
-# reads as "the runaway is fixed" while its twin is still unbounded.
-OUT=$({ printf '%s\n' "$RB"; for i in $(seq 1 200); do printf 'RECORD-%03d\n' "$i"; done; printf 'tail %s\n' "$RE"; } | awk "$(extract_awk)")
-# Untagged report lines inside the horizon ARE masked now — that is the bounded
-# cost of asking nothing about content. What must still hold is that the damage
-# STOPS: everything past the horizon survives, so no marker can eat the file.
-nocheck "unit: lines inside the horizon are masked (bounded cost)"     "$OUT" "RECORD-001"
-check   "unit: a distant stray END does not blank records beyond it"   "$OUT" "RECORD-100"
-check   "unit: nor the ones near the far end"                          "$OUT" "RECORD-200"
-
-# ── ablations, each proving one branch is load-bearing ────────────────────────
-unit_ablate() { # $1=sed-expr  $2=label  $3=input  $4=needle-that-must-REAPPEAR
-  local ab="$FIX/abl_unit.sh" changed out
-  cp "$TARGET" "$ab"
-  sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
-  changed=$(diff "$TARGET" "$ab" | grep -c '^<')
-  if [ "$changed" -ne 1 ]; then
-    bad "ablation: $2" "sed changed $changed lines, expected 1 — arm is mis-aimed"; return
-  fi
-  out=$(printf '%b' "$3" | awk "$(extract_awk "$ab")")
-  if printf '%s' "$out" | grep -qF "$4"; then
-    ok "ablation: $2"
-  else
-    bad "ablation: $2" "expected '$4' to reappear once the branch is removed; it did not"
-  fi
-}
-
-# Ablate the unconditional masking back to the CONTENT-TESTED form that
-# leaked — a base64-shaped continuation test. The encrypted-PEM body must
-# reappear, which is the whole reason the default was inverted.
-# NOTE: the replacement regex deliberately omits `/` from the character class.
-# A `\/` in a sed REPLACEMENT is emitted as a bare `/`, which closes the awk
-# regex literal early and makes the ablated script a syntax error — the arm then
-# "fails" because awk produced nothing, not because the guard is load-bearing.
-# Dropping the slash keeps the class base64-shaped enough for the header line to
-# fail it, which is all this arm needs.
-unit_ablate 's|^      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) L\[j\] = mask_line(L\[j\])$|      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) { if (L[j] ~ /^[A-Za-z0-9+=]{16,}$/) L[j] = mask_line(L[j]); else break }|' \
-  "unconditional masking is load-bearing (encrypted-PEM body leaks under a content test)" \
-  "Blocked: $RB\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,9A7B2C\n\nMIIEvgIBADANBgkqSECRETBODYxxxx\n" \
-  "SECRETBODY"
-
-# The horizon works in the OTHER direction: removing it masks MORE, so the arm
-# asserts the far marker DISAPPEARS. Signing an ablation correctly matters —
-# asserting "reappears" here would fail against a working guard.
-HABL="$FIX/abl_horizon.sh"
-cp "$TARGET" "$HABL"
-sed -i.bak 's/^      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) L\[j\] = mask_line(L\[j\])$/      for (j = i + 1; j <= n; j++) L[j] = mask_line(L[j])/' "$HABL"; rm -f "$HABL.bak"
-HABL_CHANGED=$(diff "$TARGET" "$HABL" | grep -c '^<')
-if [ "$HABL_CHANGED" -ne 1 ]; then
-  bad "ablation: the horizon bound is load-bearing" \
-      "sed changed $HABL_CHANGED lines, expected 1 — arm is mis-aimed"
-else
-  HOUT=$({ printf '%s\n' "$RB"; for i in $(seq 1 70); do printf 'AAAAAAAAAAAAAAAAAAAA%02d\n' "$i"; done; } | awk "$(extract_awk "$HABL")")
-  if printf '%s' "$HOUT" | grep -qF 'AAAAAAAAAAAAAAAAAAAA70'; then
-    bad "ablation: the horizon bound is load-bearing" \
-        "line 70 survived without the bound — the arm proves nothing"
-  else
-    ok "ablation: the horizon bound is load-bearing (masking runs past it without the bound)"
-  fi
-fi
-
-# The search bound, ablated separately — it is a DIFFERENT line from the
-# masking bound, and only a separate arm can show it is load-bearing.
-SABL="$FIX/abl_search.sh"
-cp "$TARGET" "$SABL"
-sed -i.bak 's/^    for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) {$/    for (j = i + 1; j <= n; j++) {/' "$SABL"; rm -f "$SABL.bak"
-SABL_CHANGED=$(diff "$TARGET" "$SABL" | grep -c '^<')
-if [ "$SABL_CHANGED" -ne 1 ]; then
-  bad "ablation: the closing-marker SEARCH bound is load-bearing" \
-      "sed changed $SABL_CHANGED lines, expected 1 — arm is mis-aimed"
-else
-  SOUT=$({ printf '%s\n' "$RB"; for i in $(seq 1 200); do printf 'RECORD-%03d\n' "$i"; done; printf 'tail %s\n' "$RE"; } | awk "$(extract_awk "$SABL")")
-  if printf '%s' "$SOUT" | grep -qF 'RECORD-100'; then
-    bad "ablation: the closing-marker SEARCH bound is load-bearing" \
-        "records survived without the bound — the arm proves nothing"
-  else
-    ok "ablation: the closing-marker SEARCH bound is load-bearing (200 records eaten without it)"
-  fi
-fi
-
-# F2. A NUL byte reaches the scratch file, `grep` declares it binary and prints
-# "Binary file ... matches" INSTEAD of the rows: the count collapsed to 1 and
-# the temp path was printed as a tool name.
-#
-# 🔴 The NUL MUST be written as a JSON escape straight into the fixture, never
-# built in the shell. The first version of this arm used
-# `"$(printf 'before\000after')"`, and bash cannot carry a NUL through a
-# variable or command substitution — measured, that yields the 11-byte,
-# NUL-FREE string `beforeafter`. The arm therefore exercised nothing and stayed
-# GREEN with the production guard ablated: a vacuous test that read as a
-# passing one. (The session shell here is zsh, which behaves differently and
-# will mislead anyone who checks interactively; the shebang selects bash.)
-#
-# Writing the escape into the JSON makes `jq -r` materialise the byte INSIDE
-# the production pipeline, at exactly the point the guard is meant to handle
-# it — which is also the only place the defect ever occurs.
-mkdir -p "$FIX/relloss_nulbyte"
-{
-  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
-  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err 1"}]}]}}\n' "$S_NOW"
-  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"before\\u0000NUL-TAIL"}]}]}}\n' "$S_NOW"
-  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err 3"}]}]}}\n' "$S_NOW"
-  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err 4"}]}]}}\n' "$S_NOW"
-} > "$FIX/relloss_nulbyte/s.jsonl"
-# The fixture must actually contain the escape — a substitution that silently
-# consumed it would recreate the vacuous arm in a new disguise.
-if grep -q 'u0000' "$FIX/relloss_nulbyte/s.jsonl" \
-   && jq -r '[.. | strings] | join("")' "$FIX/relloss_nulbyte/s.jsonl" 2>/dev/null | od -An -c | grep -q '\\0'; then
-  ok "nulbyte fixture carries a literal JSON NUL escape (not a shell-stripped one)"
-else
-  bad "nulbyte fixture carries a literal JSON NUL escape" "escape missing from fixture"
-fi
-OUT=$(PORTFOLIO_PATHS="$FIX/relloss_nulbyte" CLAUDE_PROJECTS_DIR="$FIX/relloss_nulbyte" \
-      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
-check "a NUL byte does not collapse the count"      "$OUT" "tool errors in window: 4"
-nocheck "and grep never reports the file as binary" "$OUT" "Binary file"
-# POSITIVE CONTROL for the ablation below. Without this, the arm could pass
-# vacuously — if the tail never reached the report in EITHER state, asserting
-# its absence under ablation would prove nothing at all.
-check   "and the text AFTER the NUL still reaches the report" "$OUT" "NUL-TAIL"
-
-# The arm above is only worth having if removing the guard breaks it. Ablate the
-# control-character strip back to the newline/tab-only form it replaced: the
-# count must stop being 4. This is what distinguishes the fixed arm from the
-# vacuous one it replaces, which stayed GREEN with the guard removed.
-#
-# ⚠️ Assert that the count is WRONG, never that it is a particular wrong value.
-# The first version required exactly 1 and failed on Linux, because the two
-# `grep` implementations corrupt differently on a binary file: BSD prints one
-# "Binary file ... matches" line (count 1) while GNU suppresses the matches
-# entirely (count 0). Both are the same defect; only the artifact differs. The
-# guarantee under test is "removing the strip breaks the count", so pinning 1
-# pinned a macOS implementation detail and made a correct arm fail on a correct
-# platform. Worth knowing operationally too: on Linux this defect loses EVERY
-# row rather than all-but-one, so it is more destructive where CI runs.
-ABL="$FIX/abl_cntrl.sh"
-cp "$TARGET" "$ABL"
-sed -i.bak 's/gsub("\[\[:cntrl:\]\]+";" ")/gsub("[\\n\\t]+";" ")/' "$ABL"; rm -f "$ABL.bak"
-ABL_CHANGED=$(diff "$TARGET" "$ABL" | grep -c '^<')
-if [ "$ABL_CHANGED" -ne 1 ]; then
-  bad "ablation: the control-character strip is load-bearing for the NUL case" \
-      "sed changed $ABL_CHANGED lines, expected 1 — arm is mis-aimed"
-else
-  ABL_OUT=$(PORTFOLIO_PATHS="$FIX/relloss_nulbyte" CLAUDE_PROJECTS_DIR="$FIX/relloss_nulbyte" \
-            CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-            bash "$ABL" --since-days 1 --section reliability 2>/dev/null)
-  # Assert on the MESSAGE, not the count. The bounded key-redaction walk added
-  # later sits between the jq stage and `grep`, and awk truncates a line at an
-  # embedded NUL — so with the strip removed the record now SURVIVES (count
-  # stays 4) and its text is silently cut at the NUL instead. The count stopped
-  # discriminating the moment that walk was introduced; the surviving observable
-  # is whether the text AFTER the NUL still reaches the report.
-  #
-  # This is worth stating plainly: the arm did not become wrong, the pipeline
-  # changed underneath it. An ablation is only as good as its observable, and an
-  # observable can be invalidated by an unrelated change elsewhere in the chain.
-  if printf '%s' "$ABL_OUT" | grep -qF 'NUL-TAIL'; then
-    bad "ablation: the control-character strip is load-bearing for the NUL case" \
-        "text after the NUL survived with the strip removed — the arm proves nothing"
-  else
-    ok "ablation: the control-character strip is load-bearing for the NUL case (tail lost without it)"
-  fi
-fi
-
 # ── TIMESTAMP MATRIX — one row per SHAPE, not a case per reported bug ─────────
 # Three consecutive review rounds each reported this defect at a new position:
 # the type was unchecked, then a non-date string, then a malformed prefix. Each
@@ -4376,14 +4061,57 @@ else
         "matrix should stop reading 2/10 with the parse removed; got $TSABL_C/$TSABL_U"
   fi
 fi
-
-# The redactor must still FIRE. Losing the record and losing the secret are
-# opposite failures, and a fix for one must not buy the other.
-OUT=$(PORTFOLIO_PATHS="$FIX/relloss_privatekey" CLAUDE_PROJECTS_DIR="$FIX/relloss_privatekey" \
+# ── 26c. the SIGNATURE section must not return a FALSE CLEAN ──────────────────
+# Both walks in that section discard a record whose timestamp cannot be compared
+# to the cutoff — correctly, since it cannot be placed in or out of the window.
+# But discarding it from the metric AND its control made a matching record
+# vanish with no trace: a `not-a-date` record containing the requested signature
+# reported `REAL occurrences: 0` and nothing else.
+#
+# That is worse in kind than the equivalent reliability under-count, because
+# this section is used to score hypotheses and to search after an incident, and
+# reliability at least had a canary. A zero here reads as "the signature does
+# not occur", which is exactly the wrong conclusion to hand a safety search.
+echo
+echo "signature section (no false clean)"
+mkdir -p "$FIX/sig_undated"
+printf '{"type":"user","timestamp":"not-a-date","sessionId":"s1","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":[{"type":"text","text":"SIGNEEDLE happened"}]}]}}\n' > "$FIX/sig_undated/s.jsonl"
+OUT=$(PORTFOLIO_PATHS="$FIX/sig_undated" CLAUDE_PROJECTS_DIR="$FIX/sig_undated" \
       CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
-check "key material is still redacted"          "$OUT" "<redacted-key-material>"
-nocheck "and the raw key marker never appears"  "$OUT" "$PK_B"
+      bash "$TARGET" --since-days 1 --section signature --signature 'SIGNEEDLE' 2>/dev/null)
+check "an undated MATCH is counted and flagged"      "$OUT" "undated matches (excluded, expect 0) ............: 1"
+check "and the zero is explicitly not a clean verdict" "$OUT" "NOT a clean verdict"
+
+# CONTROL — a properly dated match must still count normally, with the canary at
+# zero. Without this row the fix could "work" by flagging everything.
+mkdir -p "$FIX/sig_dated"
+printf '{"type":"user","timestamp":"%s","sessionId":"s1","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":[{"type":"text","text":"SIGNEEDLE happened"}]}]}}\n' "$S_NOW" > "$FIX/sig_dated/s.jsonl"
+OUT=$(PORTFOLIO_PATHS="$FIX/sig_dated" CLAUDE_PROJECTS_DIR="$FIX/sig_dated" \
+      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 1 --section signature --signature 'SIGNEEDLE' 2>/dev/null)
+check "a dated match still counts normally"          "$OUT" "REAL occurrences (tool_result with is_error==true): 1"
+check "and the canary stays at zero"                 "$OUT" "undated matches (excluded, expect 0) ............: 0"
+nocheck "with no false-clean warning"                "$OUT" "NOT a clean verdict"
+
+# Ablate the canary: the undated match must go back to vanishing silently.
+SUABL="$FIX/abl_sigundated.sh"
+cp "$TARGET" "$SUABL"
+sed -i.bak 's/^        | select((\.timestamp \/\/ null) | usable_ts | not)$/        | select(false)/' "$SUABL"; rm -f "$SUABL.bak"
+SUABL_CHANGED=$(diff "$TARGET" "$SUABL" | grep -c '^<')
+if [ "$SUABL_CHANGED" -ne 1 ]; then
+  bad "ablation: the signature undated canary is load-bearing" \
+      "sed changed $SUABL_CHANGED lines, expected 1 — arm is mis-aimed"
+else
+  SUABL_OUT=$(PORTFOLIO_PATHS="$FIX/sig_undated" CLAUDE_PROJECTS_DIR="$FIX/sig_undated" \
+              CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+              bash "$SUABL" --since-days 1 --section signature --signature 'SIGNEEDLE' 2>/dev/null)
+  if printf '%s' "$SUABL_OUT" | grep -qF 'NOT a clean verdict'; then
+    bad "ablation: the signature undated canary is load-bearing" \
+        "still warned with the canary removed — the arm proves nothing"
+  else
+    ok "ablation: the signature undated canary is load-bearing (match vanishes silently without it)"
+  fi
+fi
 
 # ── 27. no fixture may carry an UNEXPANDED placeholder ────────────────────────
 # This guard exists because the placeholder scheme failed SILENTLY and in the

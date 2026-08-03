@@ -488,121 +488,6 @@ emit_credential_hits() {
       done
 }
 
-# Bounded private-key redaction, used by redact() below. See the comment at its
-# call site for the three data-loss bugs each pass exists to prevent.
-#
-# ⚠️ KNOWN PROPERTY, measured: awk TRUNCATES a line at an embedded NUL
-# (`before<NUL>after` prints as `before`). Nothing here relies on that, and it
-# must not become the thing that protects the pipeline: the control-character
-# strip in the jq walks removes NULs at SOURCE, before any line reaches this
-# filter, and that is the real guard. This note exists so a future reader does
-# not delete the source-side strip on the grounds that "awk handles it" — awk
-# handles it by silently discarding the rest of the message.
-#
-# NOTE: no apostrophes anywhere in this program — it is a single-quoted shell
-# string, so one would terminate it and break the script.
-AWK_KEY_REDACT='
-BEGIN { PH = "<redacted-key-material>"; HORIZON = 64 }
-# Mask a line WITHOUT destroying its structure. Callers tag rows as
-# `D<TAB>tool<TAB>message`, and this filter runs over that tagged stream as well
-# as over the final report — so replacing a whole line does not merely redact
-# it, it deletes the record and drops the error from the count. Round 4
-# measured exactly that (4 errors -> 3).
-#
-# It matters most for the unconditional horizon masking below. In the tagged
-# stream each row is ONE message with newlines already collapsed, so key
-# material cannot span rows there and the masking is pure loss: measured, a
-# stray marker took a 4-error fixture to 2 with the untagged canary at 2. In the
-# REPORT stream lines genuinely can continue a key, and those lines carry no
-# tag, so they are masked whole.
-#
-# Preserving the tool field leaks nothing — it is a tool name, never payload.
-function mask_line(s) {
-  if (s == "U") return s
-  if (match(s, /^D\t[^\t]*\t/)) return substr(s, 1, RLENGTH) PH
-  return PH
-}
-{ L[NR] = $0 }
-END {
-  n = NR
-  # Pass A — collapse every COMPLETE span, pairing each BEGIN with the NEAREST
-  # END. match()/substr, never a quantifier: a regex is leftmost-longest, so
-  # `.*` between the markers runs to the LAST END and strands a lone BEGIN.
-  for (i = 1; i <= n; i++) {
-    s = L[i]; out = ""
-    while (match(s, /-----BEGIN [A-Z ]*PRIVATE KEY-----/)) {
-      bs = RSTART; bl = RLENGTH
-      head = substr(s, 1, bs - 1)
-      rest = substr(s, bs + bl)
-      if (match(rest, /-----END [A-Z ]*PRIVATE KEY-----/)) {
-        out = out head PH
-        s = substr(rest, RSTART + RLENGTH)
-      } else {
-        # Unpaired BEGIN: the remainder of this line is key material. Whether
-        # the key CONTINUES past this line is decided in pass B.
-        out = out head PH
-        s = ""
-        U[i] = 1
-        break
-      }
-    }
-    L[i] = out s
-  }
-  # Pass B — blank FOLLOWING lines only when a matching END genuinely appears
-  # later. This bound is what stops a stray marker eating the rest of the report.
-  for (i = 1; i <= n; i++) {
-    if (!(i in U)) continue
-    # The search for a closing marker is bounded by the SAME horizon as the
-    # masking below. Without that bound this branch stayed a runaway: an
-    # unpaired BEGIN plus an unrelated END far later blanked everything between
-    # them. Measured — an unpaired marker and a stray END 202 lines later ate
-    # all 200 records in between, which is the exact class the horizon was added
-    # to close, surviving in the branch the horizon did not cover.
-    #
-    # A real key block is far shorter than the horizon, so bounding the search
-    # costs nothing; a block that genuinely exceeds it falls through to the
-    # unterminated path and is masked up to the horizon, which is safe in both
-    # directions — nothing leaks, and nothing runs away.
-    close_at = 0
-    for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) {
-      if (L[j] ~ /-----END [A-Z ]*PRIVATE KEY-----/) { close_at = j; break }
-    }
-    if (close_at == 0) {
-      # UNTERMINATED block: mask every following line to HORIZON, with NO
-      # content test whatsoever. Stopping early on an explicit END is the
-      # terminated branch above; there is no other stop condition, by design.
-      #
-      # ⚠️ THE DEFAULT IS INVERTED ON PURPOSE, and the earlier version is a
-      # cautionary tale. This loop used to mask only lines that "plausibly
-      # continue key material" — a long unbroken base64 run — and that
-      # classifier leaked twice: an RFC 1421 ENCRYPTED PEM puts
-      # `Proc-Type:`/`DEK-Info:` headers and a BLANK separator between BEGIN
-      # and the body, so the loop stopped on line 1 and emitted the whole key;
-      # and a PEM final line is frequently shorter than the length floor, so it
-      # escaped even in the clean case.
-      #
-      # Narrow classification is right for a PARSER and wrong for a REDACTOR.
-      # Four rounds of review each produced a PEM shape the previous fix had
-      # not enumerated — greedy pairing, then the unterminated case, then the
-      # unbounded closing search, then these separators. PEM has more shapes
-      # than induction from review findings will ever cover, and the payoffs
-      # are not symmetric: a miss discloses a key, while an over-mask costs a
-      # few report lines inside a window we control. So this asks nothing about
-      # what a line looks like, which is what makes it closed rather than
-      # merely wider — including against shapes nobody here has thought of.
-      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) L[j] = mask_line(L[j])
-      continue
-    }
-    for (j = i + 1; j < close_at; j++) L[j] = mask_line(L[j])
-    s = L[close_at]
-    if (match(s, /-----END [A-Z ]*PRIVATE KEY-----/)) {
-      L[close_at] = PH substr(s, RSTART + RLENGTH)
-    }
-  }
-  for (i = 1; i <= n; i++) print L[i]
-}
-'
-
 # Redact credential-shaped strings from ANYTHING this script prints.
 # Every emitted line originates in a transcript, and a failed tool result can
 # carry a token in its error text — so redaction lives at the output boundary
@@ -614,33 +499,7 @@ redact() {
   # 30 distinct guard-denial entries into one unreadable bucket. Destroying real
   # signal to catch a rare shape is a bad trade, and a redactor that eats the
   # report is its own kind of failure.
-  # ⚠️ PRIVATE-KEY REDACTION IS THE ONE PLACE THIS FILTER CAN DESTROY RECORDS,
-  # so it is done with a bounded two-pass walk rather than sed. Three distinct
-  # data-loss bugs have lived in this spot; each is why a piece of the walk
-  # exists, and the sed forms that produced them must not come back:
-  #
-  # 1. A sed RANGE (`/BEGIN/,/END/`) looks for its end address only on a LATER
-  #    line. Every walk here collapses newlines inside a message, so a key
-  #    pasted into one error arrives with both markers on ONE line, which opened
-  #    a range that never closed and rewrote every following line to EOF.
-  #    Measured 4 in-window errors -> 1: a 75% under-count from one message.
-  # 2. Replacing the WHOLE LINE still lost the record it redacted (4 -> 3).
-  #    Callers put structure on these lines — the reliability walk tags each row
-  #    `D<TAB>tool<TAB>message` — so a whole-line rewrite makes the row
-  #    unparseable and the error vanishes. Only the key SPAN may be replaced.
-  # 3. A regex quantifier is leftmost-LONGEST, so `.*` between the markers
-  #    consumed to the LAST END and left a trailing unpaired BEGIN behind:
-  #    `x BEGIN y END z BEGIN w` became `x <redacted> z BEGIN w`, and that
-  #    residual marker re-opened the unbounded range from (1). Verified: the two
-  #    records after it were blanked. Pass A therefore pairs each BEGIN with the
-  #    NEAREST END using match()/substr, never a quantifier.
-  #
-  # The bound in pass B is the load-bearing part: a line left with an unpaired
-  # BEGIN blanks following lines ONLY when a matching END genuinely appears
-  # later. A stray marker with no END redacts to end of its own line and stops
-  # there, so it can never eat the rest of the report. A real multi-line key
-  # still has its body redacted, because its END does arrive.
-  awk "$AWK_KEY_REDACT" \
+  sed -E '/-----BEGIN [A-Z ]*PRIVATE KEY-----/,/-----END [A-Z ]*PRIVATE KEY-----/ s/^.*$/<redacted-key-material>/' \
   | sed -E \
     -e 's/(github_pat_[A-Za-z0-9_]{6})[A-Za-z0-9_]+/\1…<redacted>/g' \
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
@@ -1667,8 +1526,42 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
          | sed -E 's/[[:cntrl:]]+/ /g' | tr -d '\n' | cut -c1-100)"
     echo "  window: records at or after ${SIG_SINCE}   (record timestamps, not file mtime)"
     echo
+    # Records carrying the signature but NO usable timestamp, counted and shown.
+    #
+    # ⚠️ This section is used to SCORE HYPOTHESES and to search for a signature
+    # after an incident, so a silent zero here is worse than the equivalent in
+    # the reliability section. Both walks above discard an unusable timestamp —
+    # correctly, since it cannot be compared to the cutoff — but discarding it
+    # from BOTH the metric and its control made a matching record vanish
+    # entirely: measured, a `not-a-date` record containing the needle reported
+    # `REAL occurrences: 0` with nothing to indicate anything had been dropped.
+    # That is a FALSE CLEAN in a safety search, and the reliability section at
+    # least had a canary for it.
+    SIG_UNDATED=$(printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      SIG_ENV="$SIGNATURE" jq -Rr "$JQ_SHAPE_DEFS"'
+        ($ENV.SIG_ENV) as $sig
+        | select(length>0)|(try fromjson catch empty)
+        | select(.type=="user")
+        | select((.timestamp // null) | usable_ts | not)
+        | select(
+            [ content_blocks
+            | select(.type=="tool_result" and .is_error==true)
+              | select(block_text | contains($sig))
+            ] | length > 0
+          )
+        | "1"
+      ' "$f" 2>/dev/null
+    done | grep -c . || true)
+
     echo "  REAL occurrences (tool_result with is_error==true): ${SIG_OCC}"
     echo "  distinct sessions ................................: ${SIG_SESS}"
+    echo "  undated matches (excluded, expect 0) ............: ${SIG_UNDATED}"
+    if [ "${SIG_UNDATED:-0}" -gt 0 ]; then
+      echo "  ⚠️  UNDATED MATCHES EXIST — the count above is NOT a clean verdict."
+      echo "      Those records carry the signature but no comparable timestamp,"
+      echo "      so they are outside the window test rather than outside the window."
+    fi
     if [ "$SIG_OCC" -gt 0 ]; then
       echo "  first / last occurrence:"
       printf '    first %s\n' "$(cut -f1 "$SIGTMP" | sort | head -1)"
