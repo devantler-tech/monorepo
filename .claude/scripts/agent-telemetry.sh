@@ -610,6 +610,66 @@ fi
 NEVER_RAN_SHAPES='Blocked:|Permission to use [A-Za-z_]+ with command|Claude requested permissions to use|approval (denied|required) for tool'
 NEVER_RAN_RE='^[[:space:]]*(<tool_use_error>)?[[:space:]]*('"$NEVER_RAN_SHAPES"')'
 
+# ── SHARED SHAPE ACCESSORS (Claude transcript schema) ─────────────────────────
+# Claude's transcript schema is HETEROGENEOUS by design: `message.content` may be
+# a string or an array, array elements may be blocks or bare strings, a
+# `tool_result`'s `.content` may be a string, an array of blocks, or contain
+# primitives, and `.text` is not guaranteed to be a string.
+#
+# Every hand-rolled walk used to re-derive its own guards against that, so a walk
+# was correct only if its author remembered every case — and the failure when one
+# was forgotten is SILENT AND ALWAYS DOWNWARD: jq aborts the offending input line,
+# the call site's `2>/dev/null` swallows the error, and the record is dropped. A
+# missed record does not look like an error, it looks like improvement, which is
+# exactly the wrong direction for instruments the agent uses to decide whether its
+# own fixes worked.
+#
+# These definitions state each shape rule ONCE. Prepend them to a jq program with
+# "$JQ_SHAPE_DEFS" and use the accessors instead of indexing `.type`/`.text`
+# directly, so a new walk inherits correctness rather than re-deriving it.
+#
+# Scalar fallback is `tostring`, never `empty`: stringifying an unexpected scalar
+# keeps the record observable, whereas dropping it reintroduces the silent
+# under-count these accessors exist to remove.
+# The shape lattice is FINITE, so it is handled exhaustively here rather than one
+# position at a time. Three review rounds each found the same defect at a
+# different position — an array element, a `.text` payload, a final-assistant
+# record — because each was patched where it was reported instead of stating the
+# rule once. The positions are: `message.content` (string | array | absent), an
+# array ELEMENT (bare scalar | block object), a block's `.text` (string |
+# non-string | absent), and the `.content`/`.output` of a result (string | array
+# | scalar). At every one of them the rule is the same: **coerce, never drop.**
+# `scalar_text` is that rule, and it is why no position needs its own guard.
+JQ_SHAPE_DEFS='
+def scalar_text: if type=="string" then . else tostring end;
+def content_blocks:
+  (.message.content? // empty)
+  | if type=="array" then .[] elif type=="object" then . else empty end
+  | objects;
+def element_text:
+  if type=="object"
+  then (select(.type=="text") | select(.text != null) | .text | scalar_text)
+  else scalar_text end;
+def content_texts:
+  (.message.content? // empty)
+  | if type=="string" then .
+    elif type=="array" then (.[] | element_text)
+    else empty end;
+def message_text: [content_texts] | join("");
+def block_text:
+  .content
+  | if type=="array" then [.[] | element_text] | join(" ")
+    elif type=="string" then .
+    else tostring end;
+def output_text:
+  .output
+  | if type=="array" then
+      [ .[] | if type=="object" then (select(.text != null) | .text | scalar_text)
+              else scalar_text end ] | join(" ")
+    elif type=="string" then .
+    else tostring end;
+'
+
 # tool_use ids whose result shows the call never ran, resolved once per file.
 #
 # The content is NORMALISED to its text before matching, exactly as the safety
@@ -619,13 +679,10 @@ NEVER_RAN_RE='^[[:space:]]*(<tool_use_error>)?[[:space:]]*('"$NEVER_RAN_SHAPES"'
 # as an executed foreground launch even though it never ran. Anchoring without
 # normalising is precisely that bug.
 denied_ids() {
-  jq -Rr --arg re "$NEVER_RAN_RE" 'select(length>0)|(try fromjson catch empty)
-          | select(.type=="user") | .message.content[]?
+  jq -Rr --arg re "$NEVER_RAN_RE" "$JQ_SHAPE_DEFS"'select(length>0)|(try fromjson catch empty)
+          | select(.type=="user") | content_blocks
           | select(.type=="tool_result" and .is_error==true)
-          | select((.content
-                    | if type=="array" then (map(select(.type=="text").text // empty)|join(" "))
-                      elif type=="string" then . else tostring end)
-                   | test($re))
+          | select((block_text) | test($re))
           | .tool_use_id // empty' "$1" 2>/dev/null \
     | jq -Rs 'split("\n")|map(select(length>0))' 2>/dev/null
 }
@@ -748,17 +805,12 @@ strip_heredocs() {
 # fabricate the metric.
 tool_result_text() {
   local f="$1"
-  jq -r '
+  jq -r "$JQ_SHAPE_DEFS"'
     .. | objects
     | (
-        (select(.type=="tool_result")
-         | .content
-         | if type=="array" then (map(select(.type=="text").text)|join(" "))
-           elif type=="string" then . else empty end),
+        (select(.type=="tool_result") | block_text),
         (select(.type=="function_call_output" or .type=="custom_tool_call_output")
-         | .output
-         | if type=="array" then (map(.text? // empty)|join(" "))
-           elif type=="string" then . else empty end)
+         | output_text)
       )
     | select(type=="string") | select(length > 0)
   ' "$f" 2>/dev/null
@@ -771,13 +823,10 @@ tool_result_text() {
 # a fresh failure, inflating exactly the numbers the improver acts on.
 tool_result_failure_text() {
   local f="$1"
-  jq -r '
+  jq -r "$JQ_SHAPE_DEFS"'
     .. | objects
     | (
-        (select(.type=="tool_result" and .is_error==true)
-         | .content
-         | if type=="array" then (map(select(.type=="text").text)|join(" "))
-           elif type=="string" then . else empty end),
+        (select(.type=="tool_result" and .is_error==true) | block_text),
         # CODEX FAILURE DETECTION DEPENDS ON A FLAG THAT DOES NOT EXIST.
         # Verified against live sessions: output records carry keys
         # type/id/call_id/output and no is_error/status. A scan of 40 real
@@ -792,9 +841,7 @@ tool_result_failure_text() {
         # single-quoted shell string, so one would terminate it.
         (select(.type=="function_call_output" or .type=="custom_tool_call_output")
          | select(((.is_error? // false) == true) or ((.status? // "") == "error"))
-         | .output
-         | if type=="array" then (map(.text? // empty)|join(" "))
-           elif type=="string" then . else empty end)
+         | output_text)
       )
     | select(type=="string") | select(length > 0)
   ' "$f" 2>/dev/null
@@ -1054,16 +1101,15 @@ if want dispatch; then
       # The role comes from the injected dispatch record and must START it. A
       # substring test would misread this tool's own output, which quotes both
       # the marker and the refusal wording as evidence, as a dispatch record.
-      row=$(jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty)) as $recs
+      row=$(jq -Rrs "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty)) as $recs
         | ([$recs[] | select(.type=="user")
-            | ((.message.content | if type=="string" then .
-                else ((map(select(.type=="text")|.text))|join("")) end) // "")
+            | (message_text // "")
             | select(startswith("<scheduled-task"))] | .[0] // "") as $disp
         | (($disp | capture("name=\"(?<n>[a-z0-9-]+)\"") | .n) // "") as $role
-        | ([$recs[] | select(.type=="assistant") | .message.content[]?
+        | ([$recs[] | select(.type=="assistant") | content_blocks
             | select(.type=="tool_use")] | length) as $tu
         | (([$recs[] | select(.type=="assistant")] | last) // {}) as $lastrec
-        | (([$lastrec.message.content[]?|select(.type=="text")|.text] | last) // "") as $lastt
+        | ((($lastrec | [content_texts] | last)) // "") as $lastt
         | (($lastrec.timestamp) // ([$recs[]|select(.timestamp)|.timestamp]|last) // "") as $ts
         | (($lastrec.message.stop_reason) // "") as $sr
         | ([$recs[] | select(.type=="assistant")] | length) as $na
@@ -1328,7 +1374,7 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
     # literally rather than being reinterpreted.
     printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      SIG_ENV="$SIGNATURE" jq -Rr --arg since "$SIG_SINCE" '
+      SIG_ENV="$SIGNATURE" jq -Rr --arg since "$SIG_SINCE" "$JQ_SHAPE_DEFS"'
         ($ENV.SIG_ENV) as $sig
         | select(length>0)|(try fromjson catch empty)
         | select(.type=="user")
@@ -1336,21 +1382,16 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
         | select($ts != "" and $ts >= $since)
         | (.sessionId // "unknown") as $sid
         | select(
-            (.message.content // empty)
-            | select(type=="array")
-            | any(
-                # `objects` FIRST. A content array can mix plain strings with
-                # blocks, and indexing a string with `.type` makes jq abort the
-                # whole input line — which this call site swallows via
-                # `2>/dev/null`, so a record holding a REAL errored tool_result
-                # would vanish silently. That under-reports, the same direction
-                # as the contamination this section exists to remove.
-                objects
-                | .type=="tool_result" and .is_error==true
-                and ((.content | if type=="array" then (map(objects|select(.type=="text")|.text|strings)|join(" "))
-                                 elif type=="string" then . else (.|tostring) end)
-                     | contains($sig))
-              )
+            # `content_blocks` yields ONLY object blocks. A content array can mix
+            # plain strings with blocks, and indexing a string with `.type` makes
+            # jq abort the whole input line — which this call site swallows via
+            # `2>/dev/null`, so a record holding a REAL errored tool_result would
+            # vanish silently. That under-reports, the same direction as the
+            # contamination this section exists to remove.
+            [ content_blocks
+              | select(.type=="tool_result" and .is_error==true)
+              | select(block_text | contains($sig))
+            ] | length > 0
           )
         | "\($ts)\t\($sid)"
       ' "$f" 2>/dev/null
@@ -1373,7 +1414,7 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
     # variable between the two numbers.
     SIG_NAIVE=$(printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      SIG_ENV="$SIGNATURE" jq -Rr --arg since "$SIG_SINCE" '
+      SIG_ENV="$SIGNATURE" jq -Rr --arg since "$SIG_SINCE" "$JQ_SHAPE_DEFS"'
         ($ENV.SIG_ENV) as $sig
         | select(length>0)|(try fromjson catch empty)
         | (.timestamp // "") as $ts
@@ -1387,13 +1428,10 @@ if [ "$SECTION" = signature ] || { [ "$SECTION" = all ] && [ "$SIGNATURE_SET" -e
             # superset missing the subset entirely, and no warning.
             ([.. | strings] | any(contains($sig)))
             or (
-              (.message.content // empty)
-              | if type=="array" then
-                  any(objects | .type=="tool_result"
-                      and ((.content | if type=="array" then (map(objects|select(.type=="text")|.text|strings)|join(" "))
-                                       elif type=="string" then . else (.|tostring) end)
-                           | contains($sig)))
-                else false end
+              [ content_blocks
+                | select(.type=="tool_result")
+                | select(block_text | contains($sig))
+              ] | length > 0
             )
           )
         | "1"
@@ -1478,14 +1516,13 @@ if want reliability; then
   else
     printf '%s\n' "$SF_CACHE" | while IFS= read -r f; do
       [ -n "$f" ] || continue
-      jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty))|
-        (reduce (.[] | select(.type=="assistant") | .message.content[]?
+      jq -Rrs "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
+        (reduce (.[] | select(.type=="assistant") | content_blocks
                  | select(.type=="tool_use")) as $t ({}; .[$t.id] = $t.name)) as $names
-        | .[] | select(.type=="user") | .message.content[]?
+        | .[] | select(.type=="user") | content_blocks
         | select(.type=="tool_result" and .is_error==true)
         | ($names[.tool_use_id] // "unknown") as $tool
-        | (.content | if type=="array" then (map(select(.type=="text").text)|join(" "))
-                      elif type=="string" then . else (.|tostring) end) as $msg
+        | (block_text) as $msg
         | "\($tool)\t\($msg | gsub("[\\n\\t]+";" ") | .[0:100])"
       ' "$f" 2>/dev/null
     done | redact > "$ERRTMP" || true
@@ -1939,13 +1976,13 @@ if want efficiency; then
     # labelled them "timeout victims" — in a window with zero timeouts it still
     # produced a confident-looking list, which is worse than an empty one.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      jq -Rrs 'split("\n")|map(select(length>0)|(try fromjson catch empty))|
-        (reduce (.[] | select(.type=="assistant") | .message.content[]?
+      jq -Rrs "$JQ_SHAPE_DEFS"'split("\n")|map(select(length>0)|(try fromjson catch empty))|
+        (reduce (.[] | select(.type=="assistant") | content_blocks
                  | select(.type=="tool_use")) as $t ({};
                    .[$t.id] = ($t.input?.description? // $t.input?.command? // "?"))) as $desc
-        | .[] | select(.type=="user") | .message.content[]?
+        | .[] | select(.type=="user") | content_blocks
         | select(.type=="tool_result" and .is_error==true)
-        | select((.content | tostring) | test("Command timed out after"))
+        | select((block_text) | test("Command timed out after"))
         | ($desc[.tool_use_id] // "<unknown command>") | .[0:60]
       ' "$f" 2>/dev/null
     done | redact | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
@@ -1992,12 +2029,10 @@ if want safety; then
     # counts decide guard-vs-agent, so inflating them argues for loosening a
     # guard that never actually fired.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      jq -r --arg never_ran "$NEVER_RAN_RE" '
+      jq -r --arg never_ran "$NEVER_RAN_RE" "$JQ_SHAPE_DEFS"'
         .. | objects
         | (
-            (select(.type=="tool_result" and .is_error==true)
-             | .content | if type=="array" then (map(select(.type=="text").text)|join(" "))
-                          elif type=="string" then . else empty end),
+            (select(.type=="tool_result" and .is_error==true) | block_text),
             # Codex denials are NOT detected here, by decision rather than
             # omission. Its output records carry no error flag, 40 live sessions
             # showed no denial text, and it runs approval-policy=never. Five
@@ -2007,8 +2042,7 @@ if want safety; then
             # removed and the gap is stated in the output instead.
             (select(.type=="function_call_output" or .type=="custom_tool_call_output")
              | select((.is_error? // false) == true or (.status? // "") == "error")
-             | .output | if type=="array" then (map(.text? // empty)|join(" "))
-                         elif type=="string" then . else empty end)
+             | output_text)
           )
         | select(type=="string")
         | select(test($never_ran))

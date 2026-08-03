@@ -3527,6 +3527,229 @@ nocheck "an oversized signature never reports a zero count" "$OUT" "REAL occurre
 OUT=$(sigrun); check "an inline signature is echoed on its label line" "$OUT" \
   "signature scored (fixed string, case-sensitive):"
 
+# ── SHARED SHAPE ACCESSORS: one fixture, every awkward shape, every section ───
+# Claude's transcript schema is heterogeneous by design, and every walk used to
+# re-derive its own guards against it — so a walk was correct only if its author
+# remembered every case, and the failure when one was forgotten is SILENT and
+# always downward: jq aborts the input line, the call site's `2>/dev/null` eats
+# the error, and the record is dropped.
+#
+# ONE fixture carries every shape that aborts a naive walk, and EVERY section is
+# asserted against it. Before the shared accessors, the already-hardened
+# signature section scored this fixture while reliability read 0 and dispatch
+# reported the whole transcript "unreadable" — the same corpus, three different
+# answers, which is precisely the divergence a shared accessor removes.
+mkdir -p "$FIX/awkward/aw"
+cat > "$FIX/awkward/aw/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:01Z","message":{"content":"a plain string content record"}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:02Z","message":{"content":["bare string block",{"type":"tool_use","id":"a1","name":"Bash","input":{"command":"gh pr view 1","description":"awkward probe"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:03Z","message":{"content":["bare string block",{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[42,{"type":"text","text":"AWKWARDSIG mixed-array failure"}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:04Z","message":{"content":[{"type":"tool_use","id":"a2","name":"Edit","input":{"file_path":"/y","description":"awkward edit"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"a2","is_error":true,"content":[{"type":"text","text":99},{"type":"text","text":"AWKWARDSIG nonstring-text failure"}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:06Z","message":{"content":[{"type":"tool_use","id":"a3","name":"Read","input":{"file_path":"/z","description":"awkward read"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:07Z","message":{"content":[{"type":"tool_result","tool_use_id":"a3","is_error":true,"content":[{"type":"text","text":{"nested":"object"}},{"type":"text","text":"AWKWARDSIG objtext failure"}]}]}}
+EOF
+
+# $1 = script under test, $2 = section, $3 = optional signature
+awkrun() {
+  DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/awkward" CODEX_HOME="$FIX/codex" \
+    MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+    bash "$1" --since-days 3650 --max-files 20 --section "$2" \
+    ${3:+--signature "$3"} 2>&1
+}
+
+echo
+echo "shared shape accessors"
+OUT=$(awkrun "$TARGET" reliability)
+check "awkward shapes: every errored result is counted"    "$OUT" "tool errors in window: 3"
+check "awkward shapes: mixed-array result attributed"      "$OUT" "1 Bash"
+check "awkward shapes: non-string .text result attributed" "$OUT" "1 Edit"
+check "awkward shapes: object .text result attributed"     "$OUT" "1 Read"
+OUT=$(awkrun "$TARGET" signature AWKWARDSIG)
+check "awkward shapes: signature scores all three" "$OUT" "is_error==true): 3"
+# The consequential one. A single bare string in a content array used to abort
+# the dispatch classifier's whole-transcript parse, so a dispatch that really ran
+# was reported as an unreadable transcript — an instrument the improver reads
+# FIRST, to decide whether any other number in the report is trustworthy.
+OUT=$(awkrun "$TARGET" dispatch)
+check "awkward shapes: the dispatch is classified"     "$OUT" 'dispatches of role "daily-ai-assistant": 1'
+check "awkward shapes: the dispatch counts as live"    "$OUT" "live ......... 1"
+nocheck "awkward shapes: transcript is not unreadable" "$OUT" "unreadable transcript ....................: 1"
+
+# ── Three shapes the FIRST version of the accessors got wrong (Codex review) ──
+# All three are silent and downward — the exact failure direction these accessors
+# exist to remove — so each is pinned with its own fixture.
+
+# (1) A tool_result whose `content` is null or false. `(.content? // empty)` made
+#     jq emit nothing, so the walk dropped the entire errored result rather than
+#     reaching the scalar `tostring` fallback. Measured: base counted 2, the first
+#     accessor version counted 0. Reading `.content` directly restores it.
+mkdir -p "$FIX/nullcontent/n"
+cat > "$FIX/nullcontent/n/s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"tool_use","id":"n1","name":"Bash","input":{"command":"x","description":"d"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"n1","is_error":true,"content":null}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:02Z","message":{"content":[{"type":"tool_use","id":"n2","name":"Edit","input":{"file_path":"/y"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"n2","is_error":true,"content":false}]}}
+EOF
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/nullcontent" CODEX_HOME="$FIX/codex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
+  --since-days 3650 --max-files 5 --section reliability 2>&1)
+check "null/false tool_result content stays observable" "$OUT" "tool errors in window: 2"
+
+# (2) A bare string BEFORE the dispatch marker in a content array. Filtering bare
+#     strings out reduced the message to the marker alone, so an interactive
+#     session was falsely classified as a scheduled dispatch — corrupting the
+#     denominator of every per-dispatch rate. Order must be preserved.
+mkdir -p "$FIX/barestring/m"
+cat > "$FIX/barestring/m/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":["please look at this: ",{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"m1","name":"Bash","input":{"command":"x"}}]}}
+EOF
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/barestring" CODEX_HOME="$FIX/codex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
+  --since-days 3650 --max-files 5 --section dispatch 2>&1)
+check "a bare-string prefix is not read as a dispatch marker" "$OUT" \
+  'dispatches of role "daily-ai-assistant": 0'
+check "that session is reported as interactive instead" "$OUT" \
+  "no dispatch record .......................: 1"
+
+# (3) A final assistant record using the documented STRING form of
+#     `message.content` and carrying the provider refusal. `content_blocks`
+#     yields only objects, so the refusal text never reached the classifier and a
+#     dead dispatch was filed as `incomplete` — an outage rendered as "maybe still
+#     running", which is a fail-OPEN in the health signal every other number here
+#     is re-based on.
+mkdir -p "$FIX/strfinal/p"
+cat > "$FIX/strfinal/p/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"stop_reason":"stop_sequence","content":"You've hit your weekly limit · resets Aug 1 at 1pm (Europe/Copenhagen)"}}
+EOF
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/strfinal" CODEX_HOME="$FIX/codex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
+  --since-days 3650 --max-files 5 --section dispatch 2>&1)
+check "a string-form final refusal is classified dead"   "$OUT" "dead ......... 1"
+nocheck "it is not misfiled as incomplete"               "$OUT" "incomplete ... 1"
+
+# (4) A bare string as an ELEMENT of a tool_result's content array. Filtering
+#     array members through `objects` alone dropped it, so a timeout whose message
+#     is stored that way vanished from the efficiency metric. Note this one is an
+#     improvement over origin/main rather than a regression repair: base filtered
+#     the same array through `select(.type=="text")`, which aborts on a bare
+#     string, so base scored it 0 too. Measured base 0 · objects-only 0 · fixed 1.
+mkdir -p "$FIX/barearray/q"
+cat > "$FIX/barearray/q/s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"tool_use","id":"q1","name":"Bash","input":{"command":"sleep 300","description":"poll CI"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"q1","is_error":true,"content":["Command timed out after 5m 0s"]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/barearray" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
+  HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 5 --section efficiency 2>&1)
+check "a bare-string element of a result array is still text" "$OUT" "bash timeouts .............. 1"
+
+# (5) THE SHAPE LATTICE, covered as a matrix rather than one position at a time.
+#     Three review rounds each reported the same defect at a different position,
+#     because each was patched where it was reported. The positions are finite —
+#     an array ELEMENT (bare scalar | block object), a block's `.text` (string |
+#     non-string | absent), and a final assistant record (string | array) — and at
+#     every one of them the rule is the same: COERCE, NEVER DROP. This fixture
+#     pins one payload per shape and requires each to survive to the output.
+mkdir -p "$FIX/lattice/x"
+cat > "$FIX/lattice/x/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"a"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"x1","is_error":true,"content":[{"type":"text","text":99}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:03Z","message":{"content":[{"type":"tool_use","id":"x2","name":"Edit","input":{"file_path":"/b"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"x2","is_error":true,"content":[{"type":"text","text":{"k":"v"}}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:05Z","message":{"content":[{"type":"tool_use","id":"x3","name":"Read","input":{"file_path":"/c"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"x3","is_error":true,"content":["bare elem"]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/lattice" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
+  HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 5 --section reliability 2>&1)
+check "lattice: every errored result survives"        "$OUT" "tool errors in window: 3"
+check "lattice: a numeric .text payload is preserved" "$OUT" "Bash: <n>"
+check "lattice: an object .text payload is preserved" "$OUT" 'Edit: {"k":"v"}'
+check "lattice: a bare array element is preserved"    "$OUT" "Read: bare elem"
+
+# (5b) The remaining two cells of the `.text` axis: NULL and ABSENT. These are the
+#      one place `element_text` deliberately emits nothing, and that is not a
+#      "drop" — the RECORD is still counted, only the payload text is empty,
+#      because there is no payload. Coercing them would put the literal string
+#      "null" into the message and make a payload-less result look like it
+#      carried content, which is fabrication rather than evidence. Measured:
+#      origin/main counts these 3 records too, so this matches base behaviour.
+#      Pinned in both directions — the records survive, and no "null" is invented.
+mkdir -p "$FIX/nulltext/z"
+cat > "$FIX/nulltext/z/s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"tool_use","id":"z1","name":"Bash","input":{"command":"a"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"z1","is_error":true,"content":[{"type":"text","text":null}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:02Z","message":{"content":[{"type":"tool_use","id":"z2","name":"Edit","input":{"file_path":"/b"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"z2","is_error":true,"content":[{"type":"text"}]}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:04Z","message":{"content":[{"type":"tool_use","id":"z3","name":"Read","input":{"file_path":"/c"}}]}}
+{"type":"user","timestamp":"2026-08-01T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"z3","is_error":true,"content":[{"type":"text","text":null},{"type":"text","text":"real payload"}]}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulltext" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" \
+  HOME="$FIX" bash "$TARGET" --since-days 3650 --max-files 5 --section reliability 2>&1)
+check   "null and absent .text keep their records counted" "$OUT" "tool errors in window: 3"
+check   "a sibling payload beside a null .text survives"   "$OUT" "Read: real payload"
+nocheck "an absent .text is not invented as \"null\""      "$OUT" "Edit: null"
+
+# (6) A bare-string provider refusal inside a final assistant ARRAY. Same rule at
+#     the record position: routing through `content_blocks` discarded it, so a
+#     dead dispatch was filed as `incomplete`.
+mkdir -p "$FIX/arrayrefusal/y"
+cat > "$FIX/arrayrefusal/y/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"assistant","timestamp":"2026-08-01T10:00:01Z","message":{"stop_reason":"stop_sequence","content":["You've hit your weekly limit · resets Aug 1 at 1pm (Europe/Copenhagen)"]}}
+EOF
+OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/arrayrefusal" CODEX_HOME="$FIX/codex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
+  --since-days 3650 --max-files 5 --section dispatch 2>&1)
+check "a bare-string refusal in a final array is dead" "$OUT" "dead ......... 1"
+
+# A guard in a SHARED accessor must be load-bearing in MORE THAN ONE section —
+# that is what proves the call sites really are shared rather than merely similar.
+# Each arm removes exactly one guard from one accessor and requires two different
+# sections to under-count.
+shared_ablate() { # $1=perl-expr $2=label $3=reliability-after $4=signature-after
+  local ab="$FIX/shared-ablate.sh"
+  cp "$TARGET" "$ab"
+  perl -0pi -e "$1" "$ab"
+  if cmp -s "$TARGET" "$ab"; then
+    bad "shared ablation: $2" "perl changed nothing — the arm proves nothing"
+    return
+  fi
+  local r s
+  r=$(awkrun "$ab" reliability | grep -oE 'tool errors in window: [0-9]+' | head -1)
+  s=$(awkrun "$ab" signature AWKWARDSIG | grep -oE 'is_error==true\): [0-9]+' | head -1)
+  if [ "$r" = "tool errors in window: $3" ] && [ "$s" = "is_error==true): $4" ]; then
+    ok "shared ablation: $2"
+  else
+    bad "shared ablation: $2" "expected reliability=$3 signature=$4; got '$r' / '$s'"
+  fi
+}
+# Drop `objects` from content_blocks: the bare string in the content array is no
+# longer filtered, so indexing it with .type aborts the line in every walk.
+#
+# The two sections lose DIFFERENT amounts, and the asymmetry is the point rather
+# than an inconsistency. Reliability slurps the whole transcript (`jq -Rrs`), so
+# one aborted line takes every record with it: 3 -> 0. The signature walk runs
+# per-line (`jq -Rr`), so only the offending record is lost: 3 -> 2. Slurping is
+# what turns a single awkward block into a whole-transcript blackout, which is
+# also why the dispatch classifier reported "unreadable" rather than a low count.
+shared_ablate 's/(def content_blocks:.*?)\n  \| objects;/$1;/s' \
+  "content_blocks objects guard is load-bearing in two sections" 0 2
+# Drop `strings` from block_text: the object-valued .text reaches join(), which
+# refuses to join an object, aborting the line in every walk that flattens text.
+# Now aimed at `scalar_text`, the single coercion every position shares. Removing
+# it lets an object-valued payload reach `join`, which refuses to join an object,
+# so the record is dropped in both sections (3 -> 2 each).
+#
+# This arm has been re-aimed TWICE as the accessors were reshaped, and both times
+# the harness caught it as "perl changed nothing" rather than passing a vacuous
+# control. A green control is not a live control: re-ablate after every reshape.
+shared_ablate 's/def scalar_text: if type=="string" then \. else tostring end;/def scalar_text: .;/s' \
+  "the shared scalar_text coercion is load-bearing in two sections" 2 2
+
 # ── ABLATION: each filter must be LOAD-BEARING ────────────────────────────────
 # A guard that passes when removed is not a guard. Each arm copies the target,
 # removes exactly one filter, asserts the copy actually CHANGED, and requires the
@@ -3563,9 +3786,17 @@ ablate() { # $1=sed-expr $2=label $3=expected-count-after $4=days $5=expected-ch
 }
 # Arm A — drop the is_error filter: the documentation read must become counted
 # (2 -> 3). This is the contamination the section exists to exclude.
-# Anchored at end-of-line so it hits ONLY the signature walk's own filter — the
-# reliability section's `... and .is_error==true)` ends in a paren and is spared.
-ablate 's/\.type=="tool_result" and \.is_error==true$/.type=="tool_result"/' \
+#
+# Anchored on the signature walk's own INDENTATION (14 spaces) and end-of-line.
+# Once every walk was consolidated onto the shared `content_blocks`/`block_text`
+# accessors, all six errored-tool_result filters became textually identical apart
+# from indentation, so the previous end-of-`true` anchor stopped discriminating —
+# and, having been written against the pre-refactor text, stopped matching at all.
+# The harness caught that as "sed changed nothing" rather than passing a vacuous
+# arm. Indentation is the only remaining discriminator: 14 spaces is unique to
+# this walk (the others sit at 8, 10 and 12), and the one-changed-line assertion
+# below fails loudly if a future reindent breaks that uniqueness.
+ablate 's/^              | select(\.type=="tool_result" and \.is_error==true)$/              | select(.type=="tool_result")/' \
   "removing is_error lets a documentation read count" 3
 # Arm B — drop the record-timestamp filter in the 1-day window: the 2026-06-01
 # failure must reappear (1 -> 2), proving mtime is not what bounds the window.
