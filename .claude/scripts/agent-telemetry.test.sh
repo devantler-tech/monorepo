@@ -4010,27 +4010,113 @@ OUT=$(PORTFOLIO_PATHS="$FIX/relloss_multiline" CLAUDE_PROJECTS_DIR="$FIX/relloss
 nocheck "a multi-line key body is still redacted"   "$OUT" "SECRETBODY"
 nocheck "and its markers never reach the output"    "$OUT" "$PK_B"
 
-# Ablate the NEAREST-pairing walk back to a greedy leftmost-longest span, which
-# is exactly the shape that stranded the unpaired BEGIN. The unbalanced fixture
-# must stop reading 4 — asserted as "stops being correct", not as a specific
-# wrong value, per the platform-artifact lesson from the NUL arm.
-PKABL="$FIX/abl_pk.sh"
-cp "$TARGET" "$PKABL"
-sed -i.bak 's/if (close_at == 0) continue/if (close_at == 0) close_at = n + 1/' "$PKABL"; rm -f "$PKABL.bak"
-PKABL_CHANGED=$(diff "$TARGET" "$PKABL" | grep -c '^<')
-if [ "$PKABL_CHANGED" -ne 1 ]; then
-  bad "ablation: nearest-pair key redaction is load-bearing" \
-      "sed changed $PKABL_CHANGED lines, expected 1 — arm is mis-aimed"
-else
-  PKABL_OUT=$(PORTFOLIO_PATHS="$FIX/relloss_unbalancedkey" CLAUDE_PROJECTS_DIR="$FIX/relloss_unbalancedkey" \
-              CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
-              bash "$PKABL" --since-days 1 --section reliability 2>/dev/null)
-  PKABL_N=$(printf '%s' "$PKABL_OUT" | sed -n 's/.*tool errors in window: \([0-9]*\).*/\1/p' | head -1)
-  if [ -n "$PKABL_N" ] && [ "$PKABL_N" != "4" ]; then
-    ok "ablation: nearest-pair key redaction is load-bearing (4 -> $PKABL_N)"
+# 🔴 THE UNTERMINATED CASE — a P1 leak the row above could not reach.
+# Requiring a closing marker before masking anything meant a TRUNCATED PEM had
+# its body emitted verbatim. A truncated key is MORE likely in a transcript than
+# a well-formed one, because messages get cut; the finding was reached through a
+# multi-line timeout description.
+#
+# Worth stating why the terminated row did not catch it: that fixture was added
+# precisely to stop the fix being satisfiable by never redacting across lines,
+# and it does prove that. But it instantiates a TERMINATED block, and the leak
+# lives in the unterminated shape. A control proves the property it
+# instantiates, not the property it was written to defend.
+mkdir -p "$FIX/relloss_unterminated"
+{
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":%s}]}]}}\n' \
+    "$S_NOW" "$(printf 'timed out: %s\nMIIEvgIBADANBgSECRETBODY\nQEFAASCBKgwggSSECRETTWO' "$PK_B" | jq -Rs .)"
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"SURVIVOR-ROW"}]}]}}\n' "$S_NOW"
+} > "$FIX/relloss_unterminated/s.jsonl"
+OUT=$(PORTFOLIO_PATHS="$FIX/relloss_unterminated" CLAUDE_PROJECTS_DIR="$FIX/relloss_unterminated" \
+      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
+nocheck "an UNTERMINATED key body is redacted (no closing marker)" "$OUT" "SECRETBODY"
+nocheck "including its later body lines"                           "$OUT" "SECRETTWO"
+check   "and the record AFTER it still survives"                   "$OUT" "SURVIVOR-ROW"
+
+# ── REDACTOR UNIT TESTS — the multi-line paths are UNREACHABLE from a section ──
+# The reliability walk collapses control characters, so a multi-line message
+# arrives at the redactor as ONE line. That makes the cross-line branches
+# untestable through `--section reliability`: a fixture written as "multi-line"
+# is silently flattened, and an ablation of the cross-line code then reports
+# "the arm proves nothing" — which is exactly what happened, and is the honest
+# result rather than a broken test.
+#
+# So the redactor is exercised DIRECTLY here, as the unit it is. That is also
+# the only place the leak that prompted these rows can be reproduced: multi-line
+# key material reaches redact() from sections that print stored text verbatim,
+# not from the error-signature walk.
+echo
+echo "redactor unit (multi-line paths, unreachable from a section)"
+
+# Extract the awk program from the target so the unit under test is the SHIPPED
+# one, never a copy that can drift away from it.
+extract_awk() { sed -n "/^AWK_KEY_REDACT='/,/^'\$/p" "${1:-$TARGET}" | sed "1s/^AWK_KEY_REDACT='//; \$d"; }
+RB=$(printf -- '-----%s %s PRIVATE KEY-----' 'BEGIN' 'RSA')
+RE=$(printf -- '-----%s %s PRIVATE KEY-----' 'END' 'RSA')
+
+# TERMINATED block: body masked, following record survives.
+OUT=$(printf 'D\tBash\tf %s\nMIIEvgSECRETBODYaaaa\n%s t\nAFTER-ROW\n' "$RB" "$RE" | awk "$(extract_awk)")
+nocheck "unit: terminated key body is masked"        "$OUT" "SECRETBODY"
+check   "unit: and the record after it survives"     "$OUT" "AFTER-ROW"
+
+# UNTERMINATED block — the P1. No closing marker anywhere, so a guard that waits
+# for one emits the body verbatim.
+OUT=$(printf 'D\tBash\tf %s\nMIIEvgSECRETBODYaaaa\nAFTER-ROW\n' "$RB" | awk "$(extract_awk)")
+nocheck "unit: UNTERMINATED key body is masked"      "$OUT" "SECRETBODY"
+check   "unit: and the record after it survives"     "$OUT" "AFTER-ROW"
+
+# UNBALANCED same-line markers must not open an unbounded range.
+OUT=$(printf 'x %s y %s z %s w\nNEXT-1\nNEXT-2\n' "$RB" "$RE" "$RB" | awk "$(extract_awk)")
+check   "unit: unbalanced markers do not eat the next record" "$OUT" "NEXT-1"
+check   "unit: nor the one after that"                        "$OUT" "NEXT-2"
+
+# The BOUND: a long run of base64-looking lines after an unterminated marker
+# must stop being masked at the horizon, so no stray marker can consume a file.
+OUT=$({ printf '%s\n' "$RB"; for i in $(seq 1 70); do printf 'AAAAAAAAAAAAAAAAAAAA%02d\n' "$i"; done; } | awk "$(extract_awk)")
+check   "unit: masking stops at the horizon"         "$OUT" "AAAAAAAAAAAAAAAAAAAA70"
+
+# ── ablations, each proving one branch is load-bearing ────────────────────────
+unit_ablate() { # $1=sed-expr  $2=label  $3=input  $4=needle-that-must-REAPPEAR
+  local ab="$FIX/abl_unit.sh" changed out
+  cp "$TARGET" "$ab"
+  sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
+  changed=$(diff "$TARGET" "$ab" | grep -c '^<')
+  if [ "$changed" -ne 1 ]; then
+    bad "ablation: $2" "sed changed $changed lines, expected 1 — arm is mis-aimed"; return
+  fi
+  out=$(printf '%b' "$3" | awk "$(extract_awk "$ab")")
+  if printf '%s' "$out" | grep -qF "$4"; then
+    ok "ablation: $2"
   else
-    bad "ablation: nearest-pair key redaction is load-bearing" \
-        "count should stop being 4 with nearest-pairing removed; got ${PKABL_N:-<none>}"
+    bad "ablation: $2" "expected '$4' to reappear once the branch is removed; it did not"
+  fi
+}
+
+# Removing the unterminated-continuation masking must leak the body.
+unit_ablate 's|^        if (L\[j\] ~ /\^\[\[:space:\]\]\*\[A-Za-z0-9+\\/=\]{16,}\[\[:space:\]\]\*\$/) L\[j\] = PH$|        if (0) L[j] = PH|' \
+  "unterminated-key masking is load-bearing (body leaks without it)" \
+  "D\tBash\tf $RB\nMIIEvgSECRETBODYaaaa\nAFTER-ROW\n" \
+  "SECRETBODY"
+
+# The horizon works in the OTHER direction: removing it masks MORE, so the arm
+# asserts the far marker DISAPPEARS. Signing an ablation correctly matters —
+# asserting "reappears" here would fail against a working guard.
+HABL="$FIX/abl_horizon.sh"
+cp "$TARGET" "$HABL"
+sed -i.bak 's/ \&\& (j - i) <= HORIZON//' "$HABL"; rm -f "$HABL.bak"
+HABL_CHANGED=$(diff "$TARGET" "$HABL" | grep -c '^<')
+if [ "$HABL_CHANGED" -ne 1 ]; then
+  bad "ablation: the horizon bound is load-bearing" \
+      "sed changed $HABL_CHANGED lines, expected 1 — arm is mis-aimed"
+else
+  HOUT=$({ printf '%s\n' "$RB"; for i in $(seq 1 70); do printf 'AAAAAAAAAAAAAAAAAAAA%02d\n' "$i"; done; } | awk "$(extract_awk "$HABL")")
+  if printf '%s' "$HOUT" | grep -qF 'AAAAAAAAAAAAAAAAAAAA70'; then
+    bad "ablation: the horizon bound is load-bearing" \
+        "line 70 survived without the bound — the arm proves nothing"
+  else
+    ok "ablation: the horizon bound is load-bearing (masking runs past it without the bound)"
   fi
 fi
 
@@ -4145,9 +4231,20 @@ mkdir -p "$FIX/relloss_tsmatrix"
   # undated; this is the one correct exclusion and it must stay distinguishable
   # from the malformed rows below.
   printf '{"type":"user","timestamp":"2026-06-01T10:00:00.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"OUT-OF-WINDOW-ROW"}]}]}}\n'
+  # DROPPED — a GENUINE leap day. This is the control for the round-trip guard:
+  # without it, the guard could pass every "invalid date" row by rejecting every
+  # February 29, which would be wrong in the other direction. 2024 is a leap
+  # year, so this value round-trips unchanged and must be treated as a real date
+  # (out of window, NOT undated).
+  printf '{"type":"user","timestamp":"2024-02-29T10:00:00.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"OUT-OF-WINDOW-ROW"}]}]}}\n'
   # UNDATED — every shape that does not parse. Each of these was, at some point,
   # either counted as in-window or silently dropped.
-  for t in 'not-a-date' '1754130000000' '9999-99-99T99:99:99garbage' '0000-00-00T00:00:00x' '2026-13-45T99:00:00Z' '2026-08-03T10:00:00+02:00' '2026-08-03T10:00:00'; do
+  # 2026-02-29 and 2026-02-30 do not exist. `fromdateiso8601` does not reject
+  # them — it NORMALIZES them to 2026-03-01 and 2026-03-02 — so a parse-only
+  # guard accepted them and then compared the ORIGINAL string lexically. Only
+  # month-13 style values fail to parse outright, which is precisely what made a
+  # parse-only lattice look complete. The guard is a ROUND TRIP for this reason.
+  for t in 'not-a-date' '1754130000000' '9999-99-99T99:99:99garbage' '0000-00-00T00:00:00x' '2026-13-45T99:00:00Z' '2026-02-29T10:00:00Z' '2026-02-30T10:00:00Z' '2026-08-03T10:00:00+02:00' '2026-08-03T10:00:00'; do
     printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"UNPARSEABLE-ROW"}]}]}}\n' "$t"
   done
   # UNDATED — wrong TYPE entirely (unquoted number).
@@ -4160,8 +4257,8 @@ tsmatrix() { # $1 = script under test
 }
 OUT=$(tsmatrix "$TARGET")
 check "matrix: only the 2 parseable in-window rows are counted" "$OUT" "tool errors in window: 2"
-check "matrix: all 8 unparseable rows are FLAGGED undated"      "$OUT" \
-  "undated errored results (excluded, expect 0): 8"
+check "matrix: all 10 unparseable rows are FLAGGED undated"      "$OUT" \
+  "undated errored results (excluded, expect 0): 10"
 nocheck "matrix: no unparseable row reaches the signatures"     "$OUT" "UNPARSEABLE-ROW"
 nocheck "matrix: the out-of-window row is excluded, not flagged" "$OUT" "OUT-OF-WINDOW-ROW"
 
@@ -4169,7 +4266,7 @@ nocheck "matrix: the out-of-window row is excluded, not flagged" "$OUT" "OUT-OF-
 # earlier round of this fix had. The matrix must stop reading 2/8.
 TSABL="$FIX/abl_ts.sh"
 cp "$TARGET" "$TSABL"
-sed -i.bak 's/^  and ((try (sub("\\\\\.\[0-9\]+Z\$";"Z") | fromdateiso8601) catch null) != null);$/  and (. != "");/' "$TSABL"; rm -f "$TSABL.bak"
+sed -i.bak 's/and \$r == (\$o | sub/and true; # ablated: (\$o | sub/' "$TSABL"; rm -f "$TSABL.bak"
 TSABL_CHANGED=$(diff "$TARGET" "$TSABL" | grep -c '^<')
 if [ "$TSABL_CHANGED" -ne 1 ]; then
   bad "ablation: the parse-based timestamp invariant is load-bearing" \
@@ -4180,11 +4277,11 @@ else
   TSABL_U=$(printf '%s' "$TSABL_OUT" | sed -n 's/.*undated errored results (excluded, expect 0): \([0-9]*\).*/\1/p' | head -1)
   # Assert the matrix stops being correct, NOT that it takes a specific wrong
   # value — the same rule the NUL arm learned when it pinned a macOS artifact.
-  if [ -n "$TSABL_C" ] && { [ "$TSABL_C" != "2" ] || [ "$TSABL_U" != "8" ]; }; then
-    ok "ablation: the parse-based timestamp invariant is load-bearing (2/8 -> $TSABL_C/$TSABL_U)"
+  if [ -n "$TSABL_C" ] && { [ "$TSABL_C" != "2" ] || [ "$TSABL_U" != "10" ]; }; then
+    ok "ablation: the parse-based timestamp invariant is load-bearing (2/10 -> $TSABL_C/$TSABL_U)"
   else
     bad "ablation: the parse-based timestamp invariant is load-bearing" \
-        "matrix should stop reading 2/8 with the parse removed; got $TSABL_C/$TSABL_U"
+        "matrix should stop reading 2/10 with the parse removed; got $TSABL_C/$TSABL_U"
   fi
 fi
 

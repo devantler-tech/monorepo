@@ -502,7 +502,7 @@ emit_credential_hits() {
 # NOTE: no apostrophes anywhere in this program — it is a single-quoted shell
 # string, so one would terminate it and break the script.
 AWK_KEY_REDACT='
-BEGIN { PH = "<redacted-key-material>" }
+BEGIN { PH = "<redacted-key-material>"; HORIZON = 64 }
 { L[NR] = $0 }
 END {
   n = NR
@@ -537,7 +537,25 @@ END {
     for (j = i + 1; j <= n; j++) {
       if (L[j] ~ /-----END [A-Z ]*PRIVATE KEY-----/) { close_at = j; break }
     }
-    if (close_at == 0) continue
+    if (close_at == 0) {
+      # UNTERMINATED block. Requiring a closing marker before masking anything
+      # leaked the body verbatim — a truncated PEM is MORE likely in a
+      # transcript than a well-formed one, because messages get cut. So mask
+      # following lines that plausibly CONTINUE key material, and stop at a
+      # bound. That keeps both failure directions closed: no unterminated body
+      # is disclosed, and no stray marker can consume the rest of the report.
+      #
+      # The continuation test is deliberately narrow — a long, unbroken
+      # base64 run. Report lines carry tabs, spaces or punctuation and so end
+      # the block immediately; a PEM body line does not. HORIZON bounds it
+      # regardless, so even a pathological run of base64-looking lines cannot
+      # eat the file.
+      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) {
+        if (L[j] ~ /^[[:space:]]*[A-Za-z0-9+\/=]{16,}[[:space:]]*$/) L[j] = PH
+        else break
+      }
+      continue
+    }
     for (j = i + 1; j < close_at; j++) L[j] = PH
     s = L[close_at]
     if (match(s, /-----END [A-Z ]*PRIVATE KEY-----/)) {
@@ -779,9 +797,26 @@ def output_text:
 # zone-less one does NOT parse and therefore routes to the undated tally rather
 # than being compared. That is the safe direction — it surfaces in the canary
 # instead of being silently miscounted — but it is a choice, not an accident.
+# ⚠️ The test is a ROUND TRIP, not merely a successful parse, because
+# `fromdateiso8601` NORMALIZES an invalid calendar date instead of rejecting it.
+# Measured: `2026-02-29T10:00:00Z` parses happily and round-trips to
+# `2026-03-01T10:00:00Z`; `2026-02-30` becomes `2026-03-02`. A parse-only guard
+# therefore accepts a date that does not exist and then compares the ORIGINAL
+# string lexically — the same defect class as the regex it replaced, one layer
+# down. Only month-13 style values fail to parse at all, which is exactly what
+# made a parse-only lattice look complete.
+#
+# Comparing the re-rendered value against the input is what closes it: a
+# normalized date differs from what was written and is rejected, while a
+# GENUINE leap day (`2024-02-29T10:00:00Z`) round-trips unchanged and is still
+# accepted. That last case is the control — without it this guard could pass by
+# rejecting every February 29.
 def usable_ts:
   type=="string"
-  and ((try (sub("\\.[0-9]+Z$";"Z") | fromdateiso8601) catch null) != null);
+  and (. as $o
+       | (try ((sub("\\.[0-9]+Z$";"Z")) | fromdateiso8601 | todateiso8601)
+          catch null) as $r
+       | $r != null and $r == ($o | sub("\\.[0-9]+Z$";"Z")));
 '
 
 # tool_use ids whose result shows the call never ran, resolved once per file.
