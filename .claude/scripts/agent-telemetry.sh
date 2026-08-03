@@ -488,6 +488,66 @@ emit_credential_hits() {
       done
 }
 
+# Bounded private-key redaction, used by redact() below. See the comment at its
+# call site for the three data-loss bugs each pass exists to prevent.
+#
+# ⚠️ KNOWN PROPERTY, measured: awk TRUNCATES a line at an embedded NUL
+# (`before<NUL>after` prints as `before`). Nothing here relies on that, and it
+# must not become the thing that protects the pipeline: the control-character
+# strip in the jq walks removes NULs at SOURCE, before any line reaches this
+# filter, and that is the real guard. This note exists so a future reader does
+# not delete the source-side strip on the grounds that "awk handles it" — awk
+# handles it by silently discarding the rest of the message.
+#
+# NOTE: no apostrophes anywhere in this program — it is a single-quoted shell
+# string, so one would terminate it and break the script.
+AWK_KEY_REDACT='
+BEGIN { PH = "<redacted-key-material>" }
+{ L[NR] = $0 }
+END {
+  n = NR
+  # Pass A — collapse every COMPLETE span, pairing each BEGIN with the NEAREST
+  # END. match()/substr, never a quantifier: a regex is leftmost-longest, so
+  # `.*` between the markers runs to the LAST END and strands a lone BEGIN.
+  for (i = 1; i <= n; i++) {
+    s = L[i]; out = ""
+    while (match(s, /-----BEGIN [A-Z ]*PRIVATE KEY-----/)) {
+      bs = RSTART; bl = RLENGTH
+      head = substr(s, 1, bs - 1)
+      rest = substr(s, bs + bl)
+      if (match(rest, /-----END [A-Z ]*PRIVATE KEY-----/)) {
+        out = out head PH
+        s = substr(rest, RSTART + RLENGTH)
+      } else {
+        # Unpaired BEGIN: the remainder of this line is key material. Whether
+        # the key CONTINUES past this line is decided in pass B.
+        out = out head PH
+        s = ""
+        U[i] = 1
+        break
+      }
+    }
+    L[i] = out s
+  }
+  # Pass B — blank FOLLOWING lines only when a matching END genuinely appears
+  # later. This bound is what stops a stray marker eating the rest of the report.
+  for (i = 1; i <= n; i++) {
+    if (!(i in U)) continue
+    close_at = 0
+    for (j = i + 1; j <= n; j++) {
+      if (L[j] ~ /-----END [A-Z ]*PRIVATE KEY-----/) { close_at = j; break }
+    }
+    if (close_at == 0) continue
+    for (j = i + 1; j < close_at; j++) L[j] = PH
+    s = L[close_at]
+    if (match(s, /-----END [A-Z ]*PRIVATE KEY-----/)) {
+      L[close_at] = PH substr(s, RSTART + RLENGTH)
+    }
+  }
+  for (i = 1; i <= n; i++) print L[i]
+}
+'
+
 # Redact credential-shaped strings from ANYTHING this script prints.
 # Every emitted line originates in a transcript, and a failed tool result can
 # carry a token in its error text — so redaction lives at the output boundary
@@ -499,27 +559,33 @@ redact() {
   # 30 distinct guard-denial entries into one unreadable bucket. Destroying real
   # signal to catch a rare shape is a bad trade, and a redactor that eats the
   # report is its own kind of failure.
-  # ⚠️ The SAME-LINE case must be handled BEFORE the range, and it is not an
-  # edge case here: every walk in this script collapses newlines inside a
-  # message, so a key pasted into one error arrives with BEGIN and END on one
-  # line. A sed RANGE only looks for its end address on a LATER line, so such a
-  # line opens a range that never closes and every subsequent line — to EOF — is
-  # rewritten to the placeholder. Measured: 4 in-window errors, one carrying the
-  # marker, reported 1 (control without the marker: 4). That is a 75%
-  # under-count of the reliability metric caused by one unlucky error message.
-  # Rewriting the span first means the range address no longer matches the line,
-  # so the range never opens.
+  # ⚠️ PRIVATE-KEY REDACTION IS THE ONE PLACE THIS FILTER CAN DESTROY RECORDS,
+  # so it is done with a bounded two-pass walk rather than sed. Three distinct
+  # data-loss bugs have lived in this spot; each is why a piece of the walk
+  # exists, and the sed forms that produced them must not come back:
   #
-  # This rule replaces THE KEY SPAN, not the whole line, and that distinction is
-  # load-bearing rather than cosmetic. Callers put structure on these lines —
-  # the reliability walk tags each row `D<TAB>tool<TAB>message` — and a
-  # whole-line rewrite destroys that structure, so the row stops being parseable
-  # and the error disappears from the count. Measured at exactly that: the
-  # whole-line form redacted correctly and still lost the record (4 -> 3, with
-  # the untagged canary reading 1). Redacting the secret must not also delete
-  # the evidence that an error occurred.
-  sed -E 's/-----BEGIN [A-Z ]*PRIVATE KEY-----.*-----END [A-Z ]*PRIVATE KEY-----/<redacted-key-material>/g' \
-  | sed -E '/-----BEGIN [A-Z ]*PRIVATE KEY-----/,/-----END [A-Z ]*PRIVATE KEY-----/ s/^.*$/<redacted-key-material>/' \
+  # 1. A sed RANGE (`/BEGIN/,/END/`) looks for its end address only on a LATER
+  #    line. Every walk here collapses newlines inside a message, so a key
+  #    pasted into one error arrives with both markers on ONE line, which opened
+  #    a range that never closed and rewrote every following line to EOF.
+  #    Measured 4 in-window errors -> 1: a 75% under-count from one message.
+  # 2. Replacing the WHOLE LINE still lost the record it redacted (4 -> 3).
+  #    Callers put structure on these lines — the reliability walk tags each row
+  #    `D<TAB>tool<TAB>message` — so a whole-line rewrite makes the row
+  #    unparseable and the error vanishes. Only the key SPAN may be replaced.
+  # 3. A regex quantifier is leftmost-LONGEST, so `.*` between the markers
+  #    consumed to the LAST END and left a trailing unpaired BEGIN behind:
+  #    `x BEGIN y END z BEGIN w` became `x <redacted> z BEGIN w`, and that
+  #    residual marker re-opened the unbounded range from (1). Verified: the two
+  #    records after it were blanked. Pass A therefore pairs each BEGIN with the
+  #    NEAREST END using match()/substr, never a quantifier.
+  #
+  # The bound in pass B is the load-bearing part: a line left with an unpaired
+  # BEGIN blanks following lines ONLY when a matching END genuinely appears
+  # later. A stray marker with no END redacts to end of its own line and stops
+  # there, so it can never eat the rest of the report. A real multi-line key
+  # still has its body redacted, because its END does arrive.
+  awk "$AWK_KEY_REDACT" \
   | sed -E \
     -e 's/(github_pat_[A-Za-z0-9_]{6})[A-Za-z0-9_]+/\1…<redacted>/g' \
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \

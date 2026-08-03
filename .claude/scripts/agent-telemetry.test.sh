@@ -3986,6 +3986,54 @@ PK_B=$(printf -- '-----%s %s PRIVATE KEY-----' 'BEGIN' 'RSA')
 PK_E=$(printf -- '-----%s %s PRIVATE KEY-----' 'END' 'RSA')
 relcase privatekey "parse failed: $PK_B AAAA $PK_E trailing" 4 0
 
+# F1b. UNBALANCED markers on one line — an ODD marker count. A regex quantifier
+# is leftmost-LONGEST, so `.*` between the markers ran to the LAST END and left
+# a trailing unpaired BEGIN behind. That residual then re-opened the unbounded
+# range and blanked every following record. Measured on the previous head:
+# 4 errors -> 1, with the untagged canary reading 3.
+relcase unbalancedkey "x $PK_B y $PK_E z $PK_B w" 4 0
+
+# The CONTROL for the fix: a genuine key spanning SEPARATE LINES must still have
+# its body redacted. Without this row, "stop the range eating records" could be
+# satisfied by simply never redacting across lines — trading a measurement bug
+# for a leak. The body lines here carry no markers, so only the cross-line walk
+# can mask them.
+mkdir -p "$FIX/relloss_multiline"
+{
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":%s}]}]}}\n' \
+    "$S_NOW" "$(printf 'boom %s\nMIIEvgIBADANBgSECRETBODY\n%s tail' "$PK_B" "$PK_E" | jq -Rs .)"
+} > "$FIX/relloss_multiline/s.jsonl"
+OUT=$(PORTFOLIO_PATHS="$FIX/relloss_multiline" CLAUDE_PROJECTS_DIR="$FIX/relloss_multiline" \
+      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
+nocheck "a multi-line key body is still redacted"   "$OUT" "SECRETBODY"
+nocheck "and its markers never reach the output"    "$OUT" "$PK_B"
+
+# Ablate the NEAREST-pairing walk back to a greedy leftmost-longest span, which
+# is exactly the shape that stranded the unpaired BEGIN. The unbalanced fixture
+# must stop reading 4 — asserted as "stops being correct", not as a specific
+# wrong value, per the platform-artifact lesson from the NUL arm.
+PKABL="$FIX/abl_pk.sh"
+cp "$TARGET" "$PKABL"
+sed -i.bak 's/if (close_at == 0) continue/if (close_at == 0) close_at = n + 1/' "$PKABL"; rm -f "$PKABL.bak"
+PKABL_CHANGED=$(diff "$TARGET" "$PKABL" | grep -c '^<')
+if [ "$PKABL_CHANGED" -ne 1 ]; then
+  bad "ablation: nearest-pair key redaction is load-bearing" \
+      "sed changed $PKABL_CHANGED lines, expected 1 — arm is mis-aimed"
+else
+  PKABL_OUT=$(PORTFOLIO_PATHS="$FIX/relloss_unbalancedkey" CLAUDE_PROJECTS_DIR="$FIX/relloss_unbalancedkey" \
+              CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+              bash "$PKABL" --since-days 1 --section reliability 2>/dev/null)
+  PKABL_N=$(printf '%s' "$PKABL_OUT" | sed -n 's/.*tool errors in window: \([0-9]*\).*/\1/p' | head -1)
+  if [ -n "$PKABL_N" ] && [ "$PKABL_N" != "4" ]; then
+    ok "ablation: nearest-pair key redaction is load-bearing (4 -> $PKABL_N)"
+  else
+    bad "ablation: nearest-pair key redaction is load-bearing" \
+        "count should stop being 4 with nearest-pairing removed; got ${PKABL_N:-<none>}"
+  fi
+fi
+
 # F2. A NUL byte reaches the scratch file, `grep` declares it binary and prints
 # "Binary file ... matches" INSTEAD of the rows: the count collapsed to 1 and
 # the temp path was printed as a tool name.
@@ -4006,7 +4054,7 @@ mkdir -p "$FIX/relloss_nulbyte"
 {
   printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
   printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err 1"}]}]}}\n' "$S_NOW"
-  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"before\\u0000after"}]}]}}\n' "$S_NOW"
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"before\\u0000NUL-TAIL"}]}]}}\n' "$S_NOW"
   printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err 3"}]}]}}\n' "$S_NOW"
   printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err 4"}]}]}}\n' "$S_NOW"
 } > "$FIX/relloss_nulbyte/s.jsonl"
@@ -4023,6 +4071,10 @@ OUT=$(PORTFOLIO_PATHS="$FIX/relloss_nulbyte" CLAUDE_PROJECTS_DIR="$FIX/relloss_n
       bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
 check "a NUL byte does not collapse the count"      "$OUT" "tool errors in window: 4"
 nocheck "and grep never reports the file as binary" "$OUT" "Binary file"
+# POSITIVE CONTROL for the ablation below. Without this, the arm could pass
+# vacuously — if the tail never reached the report in EITHER state, asserting
+# its absence under ablation would prove nothing at all.
+check   "and the text AFTER the NUL still reaches the report" "$OUT" "NUL-TAIL"
 
 # The arm above is only worth having if removing the guard breaks it. Ablate the
 # control-character strip back to the newline/tab-only form it replaced: the
@@ -4049,12 +4101,21 @@ else
   ABL_OUT=$(PORTFOLIO_PATHS="$FIX/relloss_nulbyte" CLAUDE_PROJECTS_DIR="$FIX/relloss_nulbyte" \
             CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
             bash "$ABL" --since-days 1 --section reliability 2>/dev/null)
-  ABL_N=$(printf '%s' "$ABL_OUT" | sed -n 's/.*tool errors in window: \([0-9]*\).*/\1/p' | head -1)
-  if [ -n "$ABL_N" ] && [ "$ABL_N" != "4" ]; then
-    ok "ablation: the control-character strip is load-bearing for the NUL case (4 -> $ABL_N)"
-  else
+  # Assert on the MESSAGE, not the count. The bounded key-redaction walk added
+  # later sits between the jq stage and `grep`, and awk truncates a line at an
+  # embedded NUL — so with the strip removed the record now SURVIVES (count
+  # stays 4) and its text is silently cut at the NUL instead. The count stopped
+  # discriminating the moment that walk was introduced; the surviving observable
+  # is whether the text AFTER the NUL still reaches the report.
+  #
+  # This is worth stating plainly: the arm did not become wrong, the pipeline
+  # changed underneath it. An ablation is only as good as its observable, and an
+  # observable can be invalidated by an unrelated change elsewhere in the chain.
+  if printf '%s' "$ABL_OUT" | grep -qF 'NUL-TAIL'; then
     bad "ablation: the control-character strip is load-bearing for the NUL case" \
-        "count should stop being 4 with the guard removed; got: ${ABL_N:-<no count emitted>}"
+        "text after the NUL survived with the strip removed — the arm proves nothing"
+  else
+    ok "ablation: the control-character strip is load-bearing for the NUL case (tail lost without it)"
   fi
 fi
 
@@ -4083,7 +4144,7 @@ mkdir -p "$FIX/relloss_tsmatrix"
   # DROPPED — parses, but genuinely outside the window. Neither counted nor
   # undated; this is the one correct exclusion and it must stay distinguishable
   # from the malformed rows below.
-  printf '{"type":"user","timestamp":"2026-06-01T10:00:00.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"old"}]}]}}\n'
+  printf '{"type":"user","timestamp":"2026-06-01T10:00:00.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"OUT-OF-WINDOW-ROW"}]}]}}\n'
   # UNDATED — every shape that does not parse. Each of these was, at some point,
   # either counted as in-window or silently dropped.
   for t in 'not-a-date' '1754130000000' '9999-99-99T99:99:99garbage' '0000-00-00T00:00:00x' '2026-13-45T99:00:00Z' '2026-08-03T10:00:00+02:00' '2026-08-03T10:00:00'; do
@@ -4102,7 +4163,7 @@ check "matrix: only the 2 parseable in-window rows are counted" "$OUT" "tool err
 check "matrix: all 8 unparseable rows are FLAGGED undated"      "$OUT" \
   "undated errored results (excluded, expect 0): 8"
 nocheck "matrix: no unparseable row reaches the signatures"     "$OUT" "UNPARSEABLE-ROW"
-nocheck "matrix: the out-of-window row is excluded, not flagged" "$OUT" "old"
+nocheck "matrix: the out-of-window row is excluded, not flagged" "$OUT" "OUT-OF-WINDOW-ROW"
 
 # Ablate the parse invariant back to a bare non-empty test — the shape every
 # earlier round of this fix had. The matrix must stop reading 2/8.
