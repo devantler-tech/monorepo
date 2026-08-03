@@ -171,6 +171,27 @@ grep -Fq '`green_review` as `none`, NOT as findings' "${surveyor}" ||
   fail "surveyor may route a failed Bugbot run to the findings state instead of to no-review"
 grep -Fq 'bugbot-error@<sha>' "${surveyor}" ||
   fail "surveyor has no state for a Bugbot run that never happened"
+grep -Fq '**Reviewed commit:**' "${surveyor}" ||
+  fail "surveyor does not teach Codex comment-form greens (#2244 AC1)"
+grep -Fq 'not-requested@' "${surveyor}" ||
+  fail "surveyor does not distinguish not-requested from none (#2244 AC2)"
+grep -Fq 'not-requested@' "${maintenance_skill}" ||
+  fail "portfolio-maintenance skill omits not-requested green_review state (#2244)"
+# Classification semantics (not mere token presence): zero TOTAL artifacts → not-requested;
+# artifacts present with no current-head match → evidence-bearing none(...). Counting only
+# current-head matches would misclassify a stale-green PR as never-requested.
+grep -Fq 'count **total** review-output artifacts on the PR' "${surveyor}" ||
+  fail "surveyor does not define not-requested from total (any-SHA) artifact counts"
+grep -Fq 'zero current-head matches alone is not enough' "${surveyor}" ||
+  fail "surveyor may treat zero current-head matches as not-requested when stale artifacts exist"
+grep -Fq 'every **total** review-output count on the PR is zero' "${maintenance_skill}" ||
+  fail "maintenance skill does not require total (any-SHA) zero for not-requested"
+grep -Fq 'artifacts that **exist on the PR** but do not match the current head' "${maintenance_skill}" ||
+  fail "maintenance skill does not define none(...) from existing artifacts with no head match"
+grep -Fq 'Admissible evidence is a direct per-PR check of all three surfaces only' "${constitution}" ||
+  fail "constitution fallback does not require per-PR three-surface evidence (#2244 AC3)"
+grep -Fq 'Zero review-output on all three surfaces is `not-requested`, not `none`' "${surveyor}" ||
+  fail "surveyor may still emit none(…0…) for the never-requested state (#2244)"
 # That state tells the surveyor to emit a LANE-SIGNAL row, so the lane and reason enums must admit
 # one. The grammar is written out twice, and BOTH sites are asserted: a producer without its schema
 # means the outage is never reported at all, which is the failure this change exists to prevent.

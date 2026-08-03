@@ -166,14 +166,19 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   green-review state** — so a run can
   **drain all five**, not just threads. **(e) green review:** nothing may be self-promoted without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
-  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>`
+  `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>`
   (`self@<sha>` = the last-resort agent self-review on an **own** PR when ALL THREE lanes are down —
-  contract *Autonomy → Local review round*; never on a bot-authored PR). **`none` carries
-  its evidence** — the review-output artifact counts the surveyor actually saw, **per lane**, and the abbreviated
-  head it matched — so a real absence is distinguishable from a filter miss; a bare `none` is an
-  unverifiable claim, and the suffix is scoped to `green_review` only (never `rd=none`, which is
-  GitHub's unrelated `reviewDecision`). Non-zero counts beside `none` are normal when the artifacts
-  are **stale** (at a non-head SHA) — that is a re-request signal, not a contradiction.
+  contract *Autonomy → Local review round*; never on a bot-authored PR). **`not-requested@<abbrev-head>`
+  means every **total** review-output count on the PR is zero after checking all three surfaces
+  (any SHA — not merely zero current-head matches)** — request a first review; it is ordinary
+  post-auto-review-disabled state, not an outage. **`none` carries its evidence** — the **total**
+  review-output artifact counts the surveyor actually saw on the PR, **per lane**, plus the
+  abbreviated head it matched against — so a real absence-of-current-head-green (artifacts exist,
+  none match head) is distinguishable from a filter miss **and** from never-requested; a bare
+  `none` is an unverifiable claim, and the suffix is scoped to `green_review` only (never
+  `rd=none`, which is GitHub's unrelated `reviewDecision`). Non-zero counts beside `none` are
+  normal when the artifacts are **stale** (at a non-head SHA) — that is a re-request signal, not a
+  contradiction.
   Fetch `headRefOid` while deepening every actionable own/trusted PR. A finding-free CodeRabbit
   review completion counts as `cr@<sha>` even without `APPROVED`: bind a review object by REST
   `commit_id` **and require `submitted_at` after the latest authenticated request for that head**, or
@@ -198,8 +203,10 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   a later authenticated Bugbot request marker is paired to its bare trigger, and a successful
   check-run starts after that trigger; choose newest `started_at`, then highest check-run id.
   Report a current-head non-green output from ANY reviewer as `*-findings@<sha>` with a link/count
-  and **NEEDS-FIX** before considering another review request; reserve `none` for no actual review
-  output on any of the three surfaces. Count all unresolved review threads across all pages, regardless of author.
+  and **NEEDS-FIX** before considering another review request; emit `not-requested@<abbrev-head>`
+  when every lane's **total** review-output count on the PR is zero (artifact existence is
+  independent of current-head matching), and reserve evidence-bearing `none(…)` for review
+  artifacts that **exist on the PR** but do not match the current head. Count all unresolved review threads across all pages, regardless of author.
   Query threads per PR via GraphQL
   `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}` and
   report `unresolved=<n>`. **Paginate `reviewThreads` (follow
