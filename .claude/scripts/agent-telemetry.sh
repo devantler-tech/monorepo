@@ -553,8 +553,18 @@ END {
     L[i] = out s
   }
   # Pass B — resolve each line-crossing block by looking for its closing marker.
+  # 🔴 U[] is CLEARED as lines are consumed, and that is load-bearing. A masked
+  # line no longer holds the BEGIN that flagged it, so re-processing it starts a
+  # SECOND search from inside a region that is already handled — and because the
+  # closing marker it would have paired with has itself just been replaced, that
+  # search finds nothing and falls into the unterminated branch, running away
+  # for a full horizon of lines that were never key material.
+  #
+  # Reached by an entirely ordinary input: two BEGINs before one END. Measured
+  # on the un-cleared form — `BEGIN / BEGIN / body / END` followed by six plain
+  # report lines destroyed all six.
   for (i = 1; i <= n; i++) {
-    if (!(i in U)) continue
+    if (!U[i]) continue
     # 🔴 THE SEARCH IS UNBOUNDED, AND THAT IS THE FIX. It used to stop at the
     # same HORIZON the masking uses, which made the classification a GUESS: a
     # COMPLETE key whose END sat beyond the lookahead was misread as
@@ -598,10 +608,11 @@ END {
       # mid-key. 256 lines of base64 is ~16 KB of DER, comfortably past an
       # RSA-16384 key (~170 body lines), so no realistic truncated key reaches
       # the edge. It exists so a stray marker cannot consume the stream.
-      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) L[j] = mask_line(L[j])
+      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) { L[j] = mask_line(L[j]); U[j] = 0 }
       continue
     }
-    for (j = i + 1; j < close_at; j++) L[j] = mask_line(L[j])
+    for (j = i + 1; j < close_at; j++) { L[j] = mask_line(L[j]); U[j] = 0 }
+    U[close_at] = 0
     s = L[close_at]
     if (match(s, /-----END [A-Z ]*PRIVATE KEY-----/)) {
       # Everything up to and including the END marker is key material; only the
