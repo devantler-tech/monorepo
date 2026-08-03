@@ -1594,13 +1594,23 @@ if want reliability; then
         | (.timestamp // "") as $rts
         | [ content_blocks | select(.type=="tool_result" and .is_error==true) ] as $errs
         | select(($errs | length) > 0)
-        # A NON-STRING timestamp is treated as undated, not merely an absent
-        # one. jq total-orders numbers BEFORE strings, so an epoch-ms timestamp
-        # after a schema change would compare LESS than the cutoff, fall to
-        # `empty`, and vanish from both the count and the undated tally — the
-        # exact silent drop this branch exists to make visible, arriving through
-        # the more likely drift (a retyped field) rather than a removed one.
-        | if ($rts | type) != "string" or $rts == "" then ($errs[] | "U")
+        # THE INVARIANT, stated once: a timestamp is usable only if it is a
+        # string in the canonical RFC 3339 shape the cutoff is built in. Every
+        # other value — absent, wrong type, or a string that merely is not a
+        # date — is UNDATED and routes to the visible tally.
+        #
+        # Stated positively on purpose. The first version tested the two
+        # failures it happened to think of (absent, non-string) and a third
+        # walked straight through: a nonempty non-date string like
+        # "not-a-date" compares GREATER than the cutoff (`n` is 0x6E, `2` is
+        # 0x32), so it counted as in-window while the undated canary read zero,
+        # and a string-encoded epoch compares LESS and vanished from both. A
+        # lexical comparison only means anything against a value of the shape
+        # the cutoff has, so validating the shape is the whole precondition —
+        # enumerating malformed cases is not, and cannot be made, exhaustive.
+        | if ($rts | type) != "string"
+             or ($rts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}") | not)
+          then ($errs[] | "U")
           elif $rts >= $since then
             $errs[]
             | ($names[.tool_use_id] // "unknown") as $tool

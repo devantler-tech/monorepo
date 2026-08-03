@@ -3980,9 +3980,86 @@ relcase privatekey "parse failed: $PK_B AAAA $PK_E trailing" 4 0
 
 # F2. A NUL byte reaches the scratch file, `grep` declares it binary and prints
 # "Binary file ... matches" INSTEAD of the rows: the count collapsed to 1 and
-# the temp path was printed as a tool name. Reachable, not theoretical — a JSON
-# NUL escape decodes through `jq -r` and survives the redactor.
-relcase nulbyte "$(printf 'before\000after')" 4 0
+# the temp path was printed as a tool name.
+#
+# 🔴 The NUL MUST be written as a JSON escape straight into the fixture, never
+# built in the shell. The first version of this arm used
+# `"$(printf 'before\000after')"`, and bash cannot carry a NUL through a
+# variable or command substitution — measured, that yields the 11-byte,
+# NUL-FREE string `beforeafter`. The arm therefore exercised nothing and stayed
+# GREEN with the production guard ablated: a vacuous test that read as a
+# passing one. (The session shell here is zsh, which behaves differently and
+# will mislead anyone who checks interactively; the shebang selects bash.)
+#
+# Writing the escape into the JSON makes `jq -r` materialise the byte INSIDE
+# the production pipeline, at exactly the point the guard is meant to handle
+# it — which is also the only place the defect ever occurs.
+mkdir -p "$FIX/relloss_nulbyte"
+{
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err 1"}]}]}}\n' "$S_NOW"
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"before\\u0000after"}]}]}}\n' "$S_NOW"
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err 3"}]}]}}\n' "$S_NOW"
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err 4"}]}]}}\n' "$S_NOW"
+} > "$FIX/relloss_nulbyte/s.jsonl"
+# The fixture must actually contain the escape — a substitution that silently
+# consumed it would recreate the vacuous arm in a new disguise.
+if grep -q 'u0000' "$FIX/relloss_nulbyte/s.jsonl" \
+   && jq -r '[.. | strings] | join("")' "$FIX/relloss_nulbyte/s.jsonl" 2>/dev/null | od -An -c | grep -q '\\0'; then
+  ok "nulbyte fixture carries a literal JSON NUL escape (not a shell-stripped one)"
+else
+  bad "nulbyte fixture carries a literal JSON NUL escape" "escape missing from fixture"
+fi
+OUT=$(PORTFOLIO_PATHS="$FIX/relloss_nulbyte" CLAUDE_PROJECTS_DIR="$FIX/relloss_nulbyte" \
+      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
+check "a NUL byte does not collapse the count"      "$OUT" "tool errors in window: 4"
+nocheck "and grep never reports the file as binary" "$OUT" "Binary file"
+
+# The arm above is only worth having if removing the guard breaks it. Ablate the
+# control-character strip back to the newline/tab-only form it replaced: the
+# count must collapse 4 -> 1. This is what distinguishes the fixed arm from the
+# vacuous one it replaces, which stayed GREEN with the guard removed.
+ABL="$FIX/abl_cntrl.sh"
+cp "$TARGET" "$ABL"
+sed -i.bak 's/gsub("\[\[:cntrl:\]\]+";" ")/gsub("[\\n\\t]+";" ")/' "$ABL"; rm -f "$ABL.bak"
+ABL_CHANGED=$(diff "$TARGET" "$ABL" | grep -c '^<')
+if [ "$ABL_CHANGED" -ne 1 ]; then
+  bad "ablation: the control-character strip is load-bearing for the NUL case" \
+      "sed changed $ABL_CHANGED lines, expected 1 — arm is mis-aimed"
+else
+  ABL_OUT=$(PORTFOLIO_PATHS="$FIX/relloss_nulbyte" CLAUDE_PROJECTS_DIR="$FIX/relloss_nulbyte" \
+            CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+            bash "$ABL" --since-days 1 --section reliability 2>/dev/null)
+  if printf '%s' "$ABL_OUT" | grep -qF 'tool errors in window: 1'; then
+    ok "ablation: the control-character strip is load-bearing for the NUL case (4 -> 1)"
+  else
+    bad "ablation: the control-character strip is load-bearing for the NUL case" \
+        "expected 1 with the guard removed; got: $(printf '%s' "$ABL_OUT" | grep 'tool errors in window' || echo none)"
+  fi
+fi
+
+# F1b. A timestamp of the RIGHT TYPE but the WRONG SHAPE. This is the case the
+# first fix missed: it tested for absent and non-string, and a nonempty non-date
+# string walked through both. "not-a-date" compares GREATER than an ISO cutoff
+# (`n` is 0x6E, `2` is 0x32), so it counted as in-window while the undated
+# canary read zero — an invented in-window error, with nothing flagged.
+mkdir -p "$FIX/relloss_badstr"
+{
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash"}]}}\n'
+  for i in 1 2 3; do
+    printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"err %s"}]}]}}\n' "$S_NOW" "$i"
+  done
+  printf '{"type":"user","timestamp":"not-a-date","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"malformed ts"}]}]}}\n'
+  printf '{"type":"user","timestamp":"1754130000000","message":{"content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"string epoch"}]}]}}\n'
+} > "$FIX/relloss_badstr/s.jsonl"
+OUT=$(PORTFOLIO_PATHS="$FIX/relloss_badstr" CLAUDE_PROJECTS_DIR="$FIX/relloss_badstr" \
+      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 1 --section reliability 2>/dev/null)
+check "a malformed string timestamp is not counted as in-window" "$OUT" "tool errors in window: 3"
+check "both malformed string timestamps are FLAGGED undated"     "$OUT" \
+  "undated errored results (excluded, expect 0): 2"
+nocheck "and neither malformed record reaches the signatures"    "$OUT" "malformed ts"
 
 # F3. A NON-STRING timestamp. jq total-orders numbers before strings, so an
 # epoch-ms value compares LESS than the cutoff and fell to `empty` — counted
