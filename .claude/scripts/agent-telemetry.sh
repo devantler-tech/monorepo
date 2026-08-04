@@ -528,23 +528,40 @@ function mask_line(s) {
 { L[NR] = $0 }
 END {
   n = NR
-  # Pass A — collapse every span COMPLETE ON ONE LINE, pairing each BEGIN with
-  # the NEAREST END. match()/substr, never a quantifier: a regex is
-  # leftmost-longest, so `.*` between the markers runs to the LAST END and
-  # strands a lone BEGIN, whose residual marker then re-opens the range.
+  # Pass A — collapse every span COMPLETE ON ONE LINE, closing each BEGIN at the
+  # END that returns nesting DEPTH to zero. match()/substr, never a quantifier:
+  # a regex is leftmost-longest, so `.*` between the markers runs to the LAST END
+  # and strands a lone BEGIN, whose residual marker then re-opens the range.
+  #
+  # 🔴 DEPTH, not the NEAREST END. Pairing with the nearest closer leaked on
+  # `BEGIN1 … BEGIN2 … END2 SECRET END1`: the span ended at END2, so `SECRET
+  # END1` survived pass A, and the stray-marker sed downstream masks only the
+  # marker — the key material beside it reached the output. An ordinary
+  # single-span line masks fully at the same head, which is why a suite without
+  # this shape stays green (shape 5 alone did not constrain it).
+  #
+  # Walking BOTH markers and closing at depth 0 also makes the two-openers-
+  # one-closer case fall to the unterminated branch, where pass B resolves it —
+  # over-masking, which is the direction the governing asymmetry above demands.
   for (i = 1; i <= n; i++) {
     s = L[i]; out = ""
     while (match(s, /-----BEGIN [A-Z ]*PRIVATE KEY-----/)) {
       bs = RSTART; bl = RLENGTH
       head = substr(s, 1, bs - 1)
-      rest = substr(s, bs + bl)
-      if (match(rest, /-----END [A-Z ]*PRIVATE KEY-----/)) {
-        out = out head PH
-        s = substr(rest, RSTART + RLENGTH)
+      tail = substr(s, bs + bl)
+      depth = 1; closed = 0
+      while (depth > 0 && match(tail, /-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/)) {
+        mark = substr(tail, RSTART, RLENGTH)
+        tail = substr(tail, RSTART + RLENGTH)
+        if (mark ~ /^-----BEGIN/) depth++
+        else if (--depth == 0) closed = 1
+      }
+      out = out head PH
+      if (closed) {
+        s = tail
       } else {
         # Unpaired BEGIN: the remainder of this line is key material. Whether
         # the key CONTINUES past this line is decided in pass B.
-        out = out head PH
         s = ""
         U[i] = 1
         break

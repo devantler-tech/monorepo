@@ -4059,6 +4059,28 @@ OUT=$(printf 'a %s SECRETIN %s b %s SECRETTWO\n' "$RB" "$RE" "$RB" | awk "$(extr
 nocheck "shape 5: every span on a shared line is masked" "$OUT" "SECRETIN"
 nocheck "shape 5: including the trailing unpaired one"   "$OUT" "SECRETTWO"
 
+# ── SHAPE 5 (b) — NESTED markers on one physical line ────────────────────────
+# 🔴 P1 disclosure, found by Codex review on #2654. `BEGIN1 … BEGIN2 … END2
+# SECRET END1`: closing the span at the NEAREST END consumed both openers but
+# ended the mask at END2, so `SECRET END1` survived pass A. The stray-marker sed
+# downstream then masked only the marker, and the key material beside it reached
+# the telemetry output.
+#
+# Shape 5 above does NOT constrain this — its markers are sequential, so the
+# nearest closer is also the correct one. The distinguishing input is nesting,
+# which is why the row is separate rather than folded into 5.
+OUT=$(printf 'a %s b %s c %s SECRETNEST %s\n' "$RB" "$RB" "$RE" "$RE" | awk "$(extract_awk)")
+nocheck "shape 5b: a nested span masks through the OUTERMOST closer" "$OUT" "SECRETNEST"
+
+# CONTROL, opposite direction — the fix must not degenerate into "mask to the
+# LAST END on the line", which would pass the row above while destroying every
+# record between two independent keys. Two complete spans must still close
+# individually, so the text between and after them survives.
+OUT=$(printf 'a %s S1 %s KEEPME %s S2 %s TAILKEEP\n' "$RB" "$RE" "$RB" "$RE" | awk "$(extract_awk)")
+nocheck "shape 5b control: independent spans still mask their own bodies" "$OUT" "S1"
+check   "shape 5b control: text BETWEEN two spans survives"               "$OUT" "KEEPME"
+check   "shape 5b control: text AFTER the last span survives"             "$OUT" "TAILKEEP"
+
 # ── SHAPE 6 (a) — TWO openers before one closer ──────────────────────────────
 # 🔴 Found by reading the shipped program end to end, not by a review round.
 # The second BEGIN sits INSIDE the region the first one's span already masked,
