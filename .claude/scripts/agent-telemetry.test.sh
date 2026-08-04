@@ -2944,9 +2944,11 @@ check "a real interactive session is still counted as one" "$AOUT" "no dispatch 
 check "the engineer dispatch is still classified"          "$AOUT" "classified: 1"
 # The invariant itself, computed from the report rather than asserted per-line:
 # roots must equal the sum of every bucket, or the breakdown is lying.
-A_ROOTS=$(printf '%s' "$AOUT" | sed -n 's/.*root transcripts in window: \([0-9]*\).*/\1/p' | head -1)
+A_ROOTS=$(printf '%s' "$AOUT" | sed -n 's/.*root transcripts selected by file mtime: \([0-9]*\).*/\1/p' | head -1)
 A_SUM=$(printf '%s' "$AOUT" | sed -n \
-  -e 's/.*dispatches of role "[^"]*": \([0-9]*\).*/\1/p' \
+  -e 's/.*dispatches of role "[^"]*" IN WINDOW BY RECORD: \([0-9]*\).*/\1/p' \
+  -e 's/.*last record BEFORE the window [ .]*: \([0-9]*\).*/\1/p' \
+  -e 's/.*no usable record timestamp [ .]*: \([0-9]*\).*/\1/p' \
   -e 's/.*other scheduled roles [ .]*: \([0-9]*\).*/\1/p' \
   -e 's/.*no dispatch record [ .]*: \([0-9]*\).*/\1/p' \
   -e 's/.*unreadable transcript [ .]*: \([0-9]*\).*/\1/p' | awk '{s+=$1} END{print s+0}')
@@ -3274,6 +3276,84 @@ check "the caveat fires on cap divergence with no other roles" "$CDOUT" "POPULAT
 # Paired control: with no cap pressure and no other roles there is nothing to
 # warn about, or the caveat degenerates into unconditional noise.
 nocheck "no caveat when neither cap nor other roles diverge" "$COUT" "POPULATION MISMATCH"
+
+# ── CONTROL AA: the RECORD WINDOW (monorepo#2660) ────────────────────────────
+# Every fixture above runs at --since-days 3650, where mtime and record windows
+# agree — which is exactly why this defect survived them all. The file set is an
+# mtime SUPERSET: a resumed session, or any bulk filesystem touch, drags a whole
+# history into the current window. Measured live 2026-08-04 over 1d: 68 role
+# dispatches selected, 44 of them last emitting a record BEFORE the window
+# opened, and ALL 9 refusals the section reported dated three to four days out.
+# It published "9 of 66 produced no evidence" plus a WARNING over a window whose
+# true content was 24 dispatches and ZERO refusals.
+#
+# BOTH DIRECTIONS ARE PINNED HERE, and the second is the one that matters most:
+# a filter that excluded everything would silence the defect and the detector
+# together. So the same corpus carries one stale refusal that must vanish and
+# one CURRENT refusal that must still be counted and must still set the bounds.
+mkdir -p "$FIX/dh-recwin"
+# Dated relative to NOW, because the cutoff is now-minus-N. A hardcoded "recent"
+# timestamp silently ages out and the control stops discriminating.
+RW_NOW=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')
+{ dispatch_rec daily-ai-assistant "$RW_NOW"
+  printf '{"type":"assistant","timestamp":"%s","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You'"'"'ve hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}\n' "$RW_NOW"
+} > "$FIX/dh-recwin/current.jsonl"
+# The stale one. Its refusal is real and correctly classified — the classifier is
+# not what is wrong — but it happened months before this window opened.
+{ dispatch_rec daily-ai-assistant 2026-04-30T23:59:50.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-05-01T00:00:00.000Z","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+} > "$FIX/dh-recwin/stale.jsonl"
+# A stale LIVE run too, so the exclusion is proved for the healthy buckets and
+# not only for refusals — otherwise a filter that dropped only refusals passes.
+{ dispatch_rec daily-ai-assistant 2026-04-29T23:59:50.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-04-30T00:00:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"aa1","name":"Bash","input":{"command":"echo stale"}}]}}
+EOF
+} > "$FIX/dh-recwin/stale-live.jsonl"
+RWOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-recwin" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 1 --section dispatch 2>&1)
+# The exclusion. All three files are selected by mtime (created just now).
+check   "stale dispatches are excluded from the classified total" "$RWOUT" "classified: 1"
+check   "the excluded ones are counted, not dropped"              "$RWOUT" "last record BEFORE the window .: 2"
+# The opposite direction: the in-window refusal survives and still sets bounds.
+check   "an in-window refusal is still counted"                   "$RWOUT" "dead ......... 1"
+check   "the in-window refusal still sets the bounds"             "$RWOUT" "refusals observed: 1 dispatch(es)"
+nocheck "a stale refusal does not enter the outage bounds"        "$RWOUT" "2026-05-01T00:00:00"
+check   "a stale live run does not inflate the live count"        "$RWOUT" "live ......... 0"
+# The widened window is the ABLATION arm expressed as data rather than as a code
+# edit: the same three files, the same classifier, only the cutoff moved. If the
+# record filter were absent, the 1d run above would already read like this one.
+RWWIDE=$(CLAUDE_PROJECTS_DIR="$FIX/dh-recwin" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+         DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "widening the window brings the stale dispatches back" "$RWWIDE" "classified: 3"
+check "and the stale refusal reappears in the bounds"        "$RWWIDE" "first 2026-05-01T00:00:00.000Z"
+# A window holding only stale dispatches must not read as a format change or as
+# a scheduler absence. Both messages are actively wrong there, and the second is
+# the false outage this whole control exists to remove.
+mkdir -p "$FIX/dh-recwin-stale"
+cp "$FIX/dh-recwin/stale.jsonl" "$FIX/dh-recwin-stale/s.jsonl"
+RWZ=$(CLAUDE_PROJECTS_DIR="$FIX/dh-recwin-stale" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      DISPATCH_HEALTH=on bash "$TARGET" --since-days 1 --section dispatch 2>&1)
+check   "an all-stale window says so plainly"           "$RWZ" "has no dispatch INSIDE this window"
+nocheck "an all-stale window is not a format change"    "$RWZ" "role selection matched 0"
+nocheck "an all-stale window is not a scheduler absence" "$RWZ" "did not run in this window"
+nocheck "an all-stale window raises no no-evidence WARNING" "$RWZ" "produced no evidence"
+# UNDATED is its own bucket, not silently folded into either side: a dispatch
+# whose final record carries an unparseable timestamp cannot be PROVED in-window,
+# and dropping it silently is the same unattributable zero the role filter's own
+# warnings exist to prevent.
+mkdir -p "$FIX/dh-recwin-undated"
+{ dispatch_rec daily-ai-assistant 2026-08-01T10:00:00.000Z
+  cat <<'EOF'
+{"type":"assistant","timestamp":"2026-02-30T10:00:00Z","message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"aa2","name":"Bash","input":{"command":"echo undated"}}]}}
+EOF
+} > "$FIX/dh-recwin-undated/s.jsonl"
+RWU=$(CLAUDE_PROJECTS_DIR="$FIX/dh-recwin-undated" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check "an unparseable record timestamp is tallied, not dropped" "$RWU" "no usable record timestamp ....: 1"
+check "and it is not classified"                               "$RWU" "classified: 0"
 
 # ── SIGNATURE SCORING (monorepo#2622) ─────────────────────────────────────────
 # A hypothesis verdict is only as good as the count behind it. These prove the
@@ -3605,7 +3685,7 @@ check "awkward shapes: signature scores all three" "$OUT" "is_error==true): 3"
 # was reported as an unreadable transcript — an instrument the improver reads
 # FIRST, to decide whether any other number in the report is trustworthy.
 OUT=$(awkrun "$TARGET" dispatch)
-check "awkward shapes: the dispatch is classified"     "$OUT" 'dispatches of role "daily-ai-assistant": 1'
+check "awkward shapes: the dispatch is classified"     "$OUT" 'dispatches of role "daily-ai-assistant" IN WINDOW BY RECORD: 1'
 check "awkward shapes: the dispatch counts as live"    "$OUT" "live ......... 1"
 nocheck "awkward shapes: transcript is not unreadable" "$OUT" "unreadable transcript ....................: 1"
 
@@ -3642,7 +3722,7 @@ OUT=$(DISPATCH_HEALTH=on CLAUDE_PROJECTS_DIR="$FIX/barestring" CODEX_HOME="$FIX/
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" bash "$TARGET" \
   --since-days 3650 --max-files 5 --section dispatch 2>&1)
 check "a bare-string prefix is not read as a dispatch marker" "$OUT" \
-  'dispatches of role "daily-ai-assistant": 0'
+  'dispatches of role "daily-ai-assistant" IN WINDOW BY RECORD: 0'
 check "that session is reported as interactive instead" "$OUT" \
   "no dispatch record .......................: 1"
 
