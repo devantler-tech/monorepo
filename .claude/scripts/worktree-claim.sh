@@ -237,8 +237,13 @@ bounded_remote() {
 # shquote renders "$1" as one single-quoted shell word, so a path or ref containing spaces, newlines,
 # or shell metacharacters prints as a single safely reusable argument rather than something that
 # would re-split or be interpreted if pasted back into a shell.
+#
+# The escaping is a parameter expansion rather than `$(… | sed …)`: command substitution strips
+# TRAILING NEWLINES, so a path ending in one was quoted as a different path than the one being
+# operated on — and this output is a command the reader is invited to paste and run.
 shquote() {
-  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+  local escaped=${1//\'/\'\\\'\'}
+  printf "'%s'" "$escaped"
 }
 
 # warn_if_base_is_stale reports how far the new worktree's base is behind the remote default branch.
@@ -287,10 +292,17 @@ warn_if_base_is_stale() {
     base_freshness_unknown "$default_ref"
     return 0
   fi
-  # Normalise before the numeric test: a non-integer (empty, or an error string) from a command that
-  # nonetheless SUCCEEDED would make `[ "$behind" -gt 0 ]` fail OPEN inside an if, silently skipping
-  # the very warning this exists for.
-  case "$behind" in '' | *[!0-9]*) behind=0 ;; esac
+  # A non-integer (empty, or an error string) from a command that nonetheless SUCCEEDED must be
+  # handled before the numeric test, or `[ "$behind" -gt 0 ]` fails OPEN inside an if and silently
+  # skips the very warning this exists for. It takes the UNKNOWN path rather than normalising to 0:
+  # folding it to 0 also stopped the fail-open, but it bought that by rendering an unestablished
+  # comparison exactly like a current base — the same silence the FAILED-rev-list branch above
+  # refuses, and the one this whole check exists to remove.
+  case "$behind" in '' | *[!0-9]*)
+    base_freshness_unknown "$default_ref"
+    return 0
+    ;;
+  esac
   [ "$behind" -gt 0 ] || return 0
   echo "worktree-claim: WARNING base is $behind commit(s) behind $default_ref" >&2
   echo "worktree-claim:      This tree does NOT show current $default_ref. Anything you conclude here" >&2

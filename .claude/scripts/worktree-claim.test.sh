@@ -335,8 +335,20 @@ grep -qF -- '[!0-9]' <<<"$normalise_code" || normalise_rc=1
 # compare their positions: the normalisation must precede the comparison that depends on it.
 # awk with `exit` (not `grep -n | head`) — the pipe would EPIPE the writer under pipefail, exactly
 # the flake fixed in check() above. index() keeps both needles literal.
-norm_line="$(awk 'index($0,"behind=0"){print NR; exit}' <<<"$normalise_code")"
+# The malformed case must take the UNKNOWN path, not fold to `behind=0`: normalising to 0 also
+# stopped the fail-open, but rendered an unestablished comparison identically to a current base.
+# So the anchor is the `[!0-9]` case itself, and the arm below additionally requires that the
+# diagnostic — not a silent assignment — is what follows it.
+norm_line="$(awk 'index($0,"[!0-9]"){print NR; exit}' <<<"$normalise_code")"
 test_line="$(awk 'index($0,"\"$behind\" -gt 0"){print NR; exit}' <<<"$normalise_code")"
+# ...and the malformed branch must EMIT the UNKNOWN notice rather than silently choosing a value.
+# `if`, not `cmd && assign`: under `set -e` a non-final `&&` operand that fails makes the LIST's
+# status non-zero, which is the fail-open/abort ambiguity this file keeps pinning elsewhere.
+malformed_branch="$(awk -v n="$norm_line" \
+  'NR>n && NR<=n+3 && index($0,"base_freshness_unknown")' <<<"$normalise_code")"
+if [ -z "$malformed_branch" ]; then normalise_rc=1; fi
+# And the retired normalisation must be gone, or both spellings could coexist with the silent one winning.
+if grep -qF -- 'behind=0' <<<"$normalise_code"; then normalise_rc=1; fi
 # Guard both operands before the numeric comparison: `[ "" -lt 3 ]` errors rather than returning
 # false, and an unguarded `&&` chain would swallow that as "arm satisfied" — the same fail-open
 # shape this test exists to pin.
@@ -391,6 +403,26 @@ check "an unresponsive remote is abandoned at the bound, not waited out" 0 "$han
 hang_unknown_rc=0
 grep -qF -- "base freshness UNKNOWN" <<<"$hang_out" || hang_unknown_rc=1
 check "an unresponsive remote reports UNKNOWN rather than silence" 0 "$hang_unknown_rc"
+
+# shquote must survive a TERMINAL NEWLINE. `$(…)` strips trailing newlines, so the previous
+# command-substitution form emitted a rebase hint naming a DIFFERENT path than the one it operated
+# on — and that hint is written to be pasted and run.
+# The SHIPPED function is extracted and evaluated, not reimplemented here: a local copy would only
+# prove that the copy works, which is the vacuous shape this file guards against elsewhere.
+shquote_rc=0
+shquote_fn="$(sed -n '/^shquote()/,/^}/p' "$script")"
+# `printf %s` then measure: capturing with $() here would strip the very newline under test.
+shquote_len="$(bash -c 'eval "$1"; out="$(shquote "$2"; printf X)"; out=${out%X}; printf %s "${#out}"' \
+  _ "$shquote_fn" $'wt\n')"
+# "'" + w + t + newline + "'" = 5 characters. A stripped newline yields 4.
+[ "$shquote_len" = "5" ] || shquote_rc=1
+check "shipped shquote preserves a terminal newline" 0 "$shquote_rc"
+# Source-coupled arm: the shipped shquote must not use command substitution at all, which is the
+# only way the strip can reappear.
+shquote_src="$(sed -n '/^shquote()/,/^}/p' "$script" | grep -vE '^[[:space:]]*#')"
+shquote_impl_rc=0
+if grep -qF -- '$(' <<<"$shquote_src"; then shquote_impl_rc=1; fi
+check "shquote uses no command substitution (cannot strip a trailing newline)" 0 "$shquote_impl_rc"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
