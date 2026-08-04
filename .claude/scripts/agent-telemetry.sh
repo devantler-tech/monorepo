@@ -1380,6 +1380,14 @@ if want dispatch; then
   if [ "${DISPATCH_HEALTH:-off}" != "on" ]; then
     echo "  (disabled — set DISPATCH_HEALTH=on to activate)"
     echo "  New capability, default-off pending validation against a known window."
+  elif [ -z "$WINDOW_SINCE" ]; then
+    # FAIL CLOSED, exactly as RELIABILITY does with the same cutoff. Scoring on
+    # an empty cutoff would compare every timestamp against "" — always true —
+    # so the section would silently revert to the mtime population this change
+    # removes, while still printing the bucket lines that claim it is bounded.
+    # An unbounded count is indistinguishable from a bounded one by inspection,
+    # and this section's numbers are read as denominator instructions.
+    echo "  UNKNOWN: cannot compute window start (no usable \`date\`) — refusing to score."
   elif [ "$SF_COUNT" -eq 0 ]; then
     echo "  (no claude sessions in window)"
   else

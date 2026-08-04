@@ -3354,6 +3354,20 @@ RWU=$(CLAUDE_PROJECTS_DIR="$FIX/dh-recwin-undated" CODEX_HOME="$FIX/nocodex" MON
       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "an unparseable record timestamp is tallied, not dropped" "$RWU" "no usable record timestamp ....: 1"
 check "and it is not classified"                               "$RWU" "classified: 0"
+# FAIL-CLOSED on a missing cutoff, the same way RELIABILITY does. An empty
+# cutoff compares true against every timestamp, so the section would revert to
+# the mtime population while still printing lines that claim it is bounded —
+# the worst of both, because it is invisible. Only `date` is broken — emptying
+# PATH would break `jq` and `find` too and the section would never be reached,
+# so the arm would pass without ever exercising the guard.
+mkdir -p "$FIX/dh-nodate-bin"
+printf '#!/bin/sh\nexit 1\n' > "$FIX/dh-nodate-bin/date"
+chmod +x "$FIX/dh-nodate-bin/date"
+RWF=$(PATH="$FIX/dh-nodate-bin:$PATH" PORTFOLIO_PATHS="$FIX" CLAUDE_PROJECTS_DIR="$FIX/dh-recwin" \
+      CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      DISPATCH_HEALTH=on bash "$TARGET" --since-days 1 --section dispatch 2>&1)
+check   "no usable date refuses to score dispatch health" "$RWF" "refusing to score"
+nocheck "and it does not fall back to an mtime count"     "$RWF" "IN WINDOW BY RECORD"
 
 # ── SIGNATURE SCORING (monorepo#2622) ─────────────────────────────────────────
 # A hypothesis verdict is only as good as the count behind it. These prove the
