@@ -217,5 +217,55 @@ grep -qF 'every non-zero status' "$root_contract" || fail_closed_rc=1
 grep -qF 'every non-zero status' "$maintenance_contract" || fail_closed_rc=1
 check "contracts fail closed on every acquisition error" 0 "$fail_closed_rc"
 
+# ── stale-base warning (the pinned-gitlink trap) ───────────────────────────────
+# A submodule worktree is created at the pinned gitlink, not at the remote default branch. git is
+# silent about the gap, so a tree tens of commits behind reads exactly like a current one. Both arms
+# below are required: the control is what proves the warning is discriminating rather than
+# unconditional, since a script that always warned would pass the positive arm alone.
+origin_repo="$tmp/origin.git"
+git init -q --bare -b main "$origin_repo"
+
+seed="$tmp/seed"
+git init -q -b main "$seed"
+git -C "$seed" config user.name "worktree-claim-test"
+git -C "$seed" config user.email "worktree-claim-test@example.com"
+git -C "$seed" commit --allow-empty -qm "base"
+git -C "$seed" remote add origin "$origin_repo"
+git -C "$seed" push -q origin main
+
+consumer="$tmp/consumer"
+git clone -q "$origin_repo" "$consumer"
+git -C "$consumer" config user.name "worktree-claim-test"
+git -C "$consumer" config user.email "worktree-claim-test@example.com"
+
+# Upstream advances by exactly two commits; the consumer stays pinned at base.
+git -C "$seed" commit --allow-empty -qm "ahead-1"
+git -C "$seed" commit --allow-empty -qm "ahead-2"
+git -C "$seed" push -q origin main
+
+stale_out="$("$script" add "$consumer" "$tmp/wt-stale" "claim-stale" "session-stale" 2>&1)"
+stale_rc=$?
+check "stale base still claims successfully (advisory, not fatal)" 0 "$stale_rc" \
+  "$stale_out" "owner=session-stale"
+check "stale base warns" 0 "$stale_rc" "$stale_out" "WARNING base is 2 commit(s) behind"
+check "stale-base warning names the rebase fix" 0 "$stale_rc" "$stale_out" "rebase origin/main"
+
+# Control: same script, same repo, base now current — the warning MUST disappear. If this arm also
+# warned, the positive arm above would prove nothing about staleness detection.
+git -C "$consumer" fetch -q origin main
+git -C "$consumer" reset -q --hard origin/main
+current_out="$("$script" add "$consumer" "$tmp/wt-current" "claim-current" "session-current" 2>&1)"
+current_rc=$?
+check "current base still claims successfully" 0 "$current_rc" "$current_out" "owner=session-current"
+current_warn_rc=0
+printf '%s' "$current_out" | grep -qF "WARNING base is" && current_warn_rc=1
+check "current base does NOT warn (control)" 0 "$current_warn_rc"
+
+# The numeric guard must be present: an unnormalised count would make the -gt test fail OPEN inside
+# an if, silently skipping the warning on exactly the malformed input it should be loudest about.
+normalise_rc=0
+grep -qF "case \"\$behind\" in '' | *[!0-9]*) behind=0 ;; esac" "$script" || normalise_rc=1
+check "behind-count is normalised before the numeric test" 0 "$normalise_rc"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
