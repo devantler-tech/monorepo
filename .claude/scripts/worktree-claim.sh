@@ -202,7 +202,25 @@ base_freshness_unknown() {
 
 # How long an advisory remote call may take before it is abandoned. Short on purpose: this runs on
 # the creation path of every worktree, and its answer is a NOTE, never a gate.
-WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="${WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS:-10}"
+WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT=10
+WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="${WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS:-$WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT}"
+
+# The bound is handed straight to `sleep`, so a malformed value makes that `sleep` fail instantly and
+# collapses the bound to roughly zero: the remote is abandoned before it can answer, and a REACHABLE
+# remote is then reported UNKNOWN for a reason nothing states. `0` is rejected for the same reason
+# while parsing as a perfectly good integer -- it is a well-formed value that is not a bound.
+#
+# Validated HERE, once, rather than inside bounded_remote: both call sites redirect that function's
+# stderr (`2>/dev/null`, so an advisory remote failure cannot abort the claim), which would swallow
+# the notice at exactly the moment it matters. Reporting the rejection is the point -- falling back
+# silently would trade one invisible failure for another.
+case "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" in
+  '' | *[!0-9]* | 0)
+    echo "worktree-claim: NOTE ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=" \
+      "'$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS', using ${WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT}s" >&2
+    WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="$WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT"
+    ;;
+esac
 
 # bounded_remote runs an advisory remote git call that can never hang the claim.
 #

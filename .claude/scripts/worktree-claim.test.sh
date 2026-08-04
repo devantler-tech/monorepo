@@ -549,6 +549,33 @@ if pgrep -f 'sleep 9871' >/dev/null 2>&1; then timer_leak_rc=1; fi
 check "a fast remote leaves no timer process behind" 0 "$timer_leak_rc"
 pkill -KILL -f 'sleep 9871' >/dev/null 2>&1 || true
 
+# The bound is read from the environment and handed straight to `sleep`, so a malformed value makes
+# that `sleep` fail instantly and collapses the bound to roughly zero: the remote is abandoned before
+# it can answer, and a REACHABLE remote is then reported UNKNOWN for a reason nothing states. The
+# guard rejects the value, says so, and falls back to the default.
+#
+# Asserted on the NOTICE rather than on elapsed time, deliberately. Both the guarded and unguarded
+# arms finish quickly here -- the unguarded one because the bound collapsed, the guarded one because
+# the fixture answers immediately -- so a wall-clock assertion would pass either way and prove
+# nothing. The distinguishing observable is that the rejection is reported.
+badtimeout_consumer="$tmp/badtimeout-consumer"
+git clone -q "$origin_repo" "$badtimeout_consumer"
+badtimeout_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=invalid "$script" add \
+  "$badtimeout_consumer" "$tmp/wt-badtimeout" "claim-badtimeout" "session-badtimeout" 2>&1)" || true
+check "a non-integer timeout is rejected and reported" 0 0 \
+  "$badtimeout_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
+check "a rejected timeout still claims the worktree" 0 0 \
+  "$badtimeout_out" "owner=session-badtimeout"
+
+# `0` parses as an integer but is not a bound -- it abandons every remote call immediately, which is
+# the same invisible-UNKNOWN failure wearing a well-formed value.
+zerotimeout_consumer="$tmp/zerotimeout-consumer"
+git clone -q "$origin_repo" "$zerotimeout_consumer"
+zerotimeout_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=0 "$script" add \
+  "$zerotimeout_consumer" "$tmp/wt-zerotimeout" "claim-zerotimeout" "session-zerotimeout" 2>&1)" || true
+check "a zero timeout is rejected as not-a-bound" 0 0 \
+  "$zerotimeout_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
+
 # Remote-default DISCOVERY failure must report UNKNOWN, not fall back to the clone-time pointer.
 # The fallback trusted `refs/remotes/origin/HEAD` — written once at clone time and never refreshed —
 # which is the stale source this whole check exists to stop trusting: if the default moved, the old
