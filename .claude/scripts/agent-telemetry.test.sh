@@ -641,8 +641,12 @@ parity_case "generic_padded" "config secret=__GENPAD__" "__GENPAD__"
 # still reports the leak. A shape that is redacted but undetected reads as
 # "clean", so the two legs are asserted together, per shape, exactly as the JWT
 # and generic-token regressions taught.
-parity_case "pgp_armor"  "boom -----BEGIN PGP PRIVATE KEY BLOCK----- SECRETPGPARMOR" "SECRETPGPARMOR"
-parity_case "rfc7468_punct" "boom -----BEGIN X9.42 DH PRIVATE KEY----- SECRETDHLABEL" "SECRETDHLABEL"
+# Markers assembled at run time, per the convention the redactor rows already
+# follow: no complete private-key marker literal is written to disk.
+parity_case "pgp_armor" \
+  "$(printf -- 'boom -----%s PGP PRIVATE KEY BLOCK----- SECRETPGPARMOR' 'BEGIN')" "SECRETPGPARMOR"
+parity_case "rfc7468_punct" \
+  "$(printf -- 'boom -----%s X9.42 DH PRIVATE KEY----- SECRETDHLABEL' 'BEGIN')" "SECRETDHLABEL"
 
 # Codex image tools persist rendered images as very large `data:` strings in
 # custom tool outputs. Those strings are encoded binary, not transcript text;
@@ -4366,11 +4370,29 @@ check "shape 8 control: a row outside any key span keeps its tool name" "$S8C" "
 #    `gpg --armor --export-secret-keys` emits exactly this, so it is not
 #    hypothetical.
 #
-# `[^-]*PRIVATE KEY[^-]*` is the spec's own class rather than a wildcard: because
-# hyphen is the ONE character a label may not contain, the expression physically
-# cannot run past the five-dash boundary on either side. That is what keeps a
-# widened label from decaying into the substring match this file has paid for
-# elsewhere — and the CONTROL below is what proves it did not.
+# 🔴 THE OBVIOUS WIDENING IS WRONG, AND ITS ARGUMENT IS SEDUCTIVE.
+# `[^-]*PRIVATE KEY[^-]*` was written here first, on the reasoning that hyphen is
+# the one character a label may not contain, so the expression "physically cannot
+# run past the five-dash boundary". That is FALSE, and both failure modes were
+# reproduced on the real program before this text was rewritten:
+#
+#  1. It never needs to CROSS a dash — only to find a dash-FREE GAP between two
+#     dash runs. `-----BEGIN was seen; the PRIVATE KEY is elsewhere -----` bridges
+#     two unrelated runs, is masked as a marker, and the unpaired opener then
+#     masks the rest of the stream to EOF. Ordinary prose destroys the report.
+#  2. Far worse, it widens the END marker, which is a STOP CONDITION. Loosening a
+#     stop condition can only ever mask LESS. A prose line reading
+#     `-----END ... PRIVATE KEY-----` between a truncated key's BEGIN and its body
+#     closed the span early and emitted the remaining body VERBATIM — an
+#     under-mask, the one direction this file's governing asymmetry forbids.
+#     (`-----END ... PRIVATE KEY-----` already occurs in the live corpus.)
+#
+# So the label is bounded to the two families the specs actually require, and no
+# further: it must START with an alphanumeric — which is what rejects `... `
+# and lowercase prose — and the PGP suffix is admitted as the LITERAL ` BLOCK`
+# rather than a trailing wildcard. Widening a grammar past its evidence is how a
+# precise rule silently becomes a substring match, and here it silently became a
+# leak. The two regression CONTROLS below are what pin both directions.
 PGPB=$(printf -- '-----%s PGP PRIVATE KEY BLOCK-----' 'BEGIN')
 PGPE=$(printf -- '-----%s PGP PRIVATE KEY BLOCK-----' 'END')
 OUT=$(printf 'boom %s\nlQOYBGSECRETPGPBODY\n%s\nAFTER-ROW\n' "$PGPB" "$PGPE" | awk "$AWK_PROG")
@@ -4391,6 +4413,26 @@ check "shape 9 control: a CERTIFICATE block is left alone" "$OUT" "CERTBODYKEEPM
 OUT=$(printf 'ordinary line PRIVATE KEY mentioned in prose KEEPPROSE\n' | awk "$AWK_PROG")
 check "shape 9 control: prose naming PRIVATE KEY is untouched" "$OUT" "KEEPPROSE"
 
+# 🔴 REGRESSION CONTROL 1 — prose BRIDGING TWO DASH RUNS is not a marker.
+# The two controls above cannot see this: a CERTIFICATE label and a dash-free
+# prose line both behave identically under every candidate expression, so
+# neither constrains the widening in the direction it actually broke. This one
+# does — it is the exact string that made `[^-]*` mask the whole stream, and it
+# fails the moment the label is allowed to span a dash-free gap.
+OUT=$(printf -- 'note -----%s was seen; the PRIVATE KEY is elsewhere ----- end of note KEEP_TAIL\nSECOND_LINE_KEEP\n' 'BEGIN' | awk "$AWK_PROG")
+check "shape 9 control: prose bridging two dash runs is NOT a marker"  "$OUT" "KEEP_TAIL"
+check "shape 9 control: and the stream after it is not masked to EOF"  "$OUT" "SECOND_LINE_KEEP"
+
+# 🔴 REGRESSION CONTROL 2 — a PROSE `END` must not close a real key span.
+# The END marker is a STOP CONDITION, so widening it can only ever mask LESS.
+# Here a truncated RSA key is followed by a prose line that a loosened END
+# expression accepted: the span closed early and the remaining body was emitted
+# verbatim. This is the UNDER-mask direction, which no other row in this file
+# covers for the label grammar — every other shape varies body or marker count,
+# not what the label is allowed to say.
+OUT=$(printf '%s\nMIIBODY_001\n-----END ... PRIVATE KEY-----\nMIIBODY_002_LEAKED\nMIIBODY_003_LEAKED\n' "$RB" | awk "$AWK_PROG")
+nocheck "shape 9 control: a PROSE end-marker does not close a key span (no leak)" "$OUT" "LEAKED"
+
 # ── SHAPE 9 (structural) — ONE label expression, at EVERY marker site ─────────
 # The defect was never a single bad regex: the same label class was spelled out
 # at nine independent sites (four awk regexes, three marker `sed` rules, and the
@@ -4403,8 +4445,14 @@ check "shape 9 control: prose naming PRIVATE KEY is untouched" "$OUT" "KEEPPROSE
 # lines reports 8 for the 9 real sites, so a line-based floor of 9 can only be
 # satisfied by adding a tenth site. This assertion caught exactly that mistake
 # in its own first draft.
-SITES_NEW=$(grep -o -- '\[\^-\]\*PRIVATE KEY\[\^-\]\*' "$TARGET" | grep -c '' || true)
-SITES_OLD=$(grep -o -- '\[A-Z \]\*PRIVATE KEY' "$TARGET" | grep -c '' || true)
+SITES_NEW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
+# BOTH rejected spellings are pinned, not just the original: `[A-Z ]*` is the
+# narrow class that could not reach either real family, and `[^-]*…[^-]*` is the
+# over-wide one that leaked. A site left on either is a defect, and naming only
+# the first would let the second reappear silently.
+SITES_OLD=$(grep -oF -- '[A-Z ]*PRIVATE KEY' "$TARGET" | grep -c '' || true)
+SITES_BAD=$(grep -oF -- '[^-]*PRIVATE KEY[^-]*' "$TARGET" | grep -c '' || true)
+SITES_OLD=$((SITES_OLD + SITES_BAD))
 if [ "$SITES_NEW" -ge 9 ] && [ "$SITES_OLD" -eq 0 ]; then
   ok "shape 9 structural: every private-key marker site uses the one widened label expression"
 else

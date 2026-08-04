@@ -587,7 +587,7 @@ END {
   # over-masking, which is the direction the governing asymmetry above demands.
   for (i = 1; i <= n; i++) {
     s = L[i]; out = ""
-    while (match(s, /-----BEGIN [^-]*PRIVATE KEY[^-]*-----/)) {
+    while (match(s, /-----BEGIN ([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?-----/)) {
       bs = RSTART; bl = RLENGTH
       head = substr(s, 1, bs - 1)
       # `scan`, deliberately NOT `tail`: pass B owns a global of that name. It
@@ -596,7 +596,7 @@ END {
       # U[] flag below, and this program has paid for that class enough times.
       scan = substr(s, bs + bl)
       depth = 1; closed = 0
-      while (depth > 0 && match(scan, /-----(BEGIN|END) [^-]*PRIVATE KEY[^-]*-----/)) {
+      while (depth > 0 && match(scan, /-----(BEGIN|END) ([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?-----/)) {
         mark = substr(scan, RSTART, RLENGTH)
         scan = substr(scan, RSTART + RLENGTH)
         if (mark ~ /^-----BEGIN/) depth++
@@ -685,7 +685,7 @@ END {
     close_at = 0; close_end = 0; bdepth = U[i]
     for (j = i + 1; j <= n && close_at == 0; j++) {
       bscan = L[j]; bdrop = 0
-      while (match(bscan, /-----END [^-]*PRIVATE KEY[^-]*-----/)) {
+      while (match(bscan, /-----END ([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?-----/)) {
         # Absolute end offset of this marker in L[j], accumulated as `bscan` is
         # consumed. The closing line is masked UP TO the marker that actually
         # balanced the depth, not the first one on the line — closing at the
@@ -793,9 +793,9 @@ redact() {
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
     -e 's/(AKIA[0-9A-Z]{4})[0-9A-Z]+/\1…<redacted>/g' \
     -e 's/(xox[baprs]-[A-Za-z0-9]{4})[A-Za-z0-9-]+/\1…<redacted>/g' \
-    -e 's/-----BEGIN [^-]*PRIVATE KEY[^-]*-----([^-]|-[^-])*(-----END [^-]*PRIVATE KEY[^-]*-----)?/<redacted-private-key>/g' \
-    -e 's/-----(BEGIN|END) [^-]*PRIVATE KEY[^-]*-----/<redacted-private-key>/g' \
-    -e 's/(-----BEGIN [^-]*PRIVATE KEY[^-]*-----)[^-]*/\1<redacted-key-material>/g' \
+    -e 's/-----BEGIN ([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?-----([^-]|-[^-])*(-----END ([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?-----)?/<redacted-private-key>/g' \
+    -e 's/-----(BEGIN|END) ([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?-----/<redacted-private-key>/g' \
+    -e 's/(-----BEGIN ([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?-----)[^-]*/\1<redacted-key-material>/g' \
     -e 's/(eyJ[A-Za-z0-9_-]{6})[A-Za-z0-9_.-]{20,}/\1…<redacted-jwt>/g' \
     -e 's/((secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^"'"'"'[:space:],}]{8,}/\1<redacted>/gI'
 }
@@ -824,7 +824,7 @@ sha256_digest() {
 # form), each time reporting a real leak as "clean". The test suite asserts a
 # sample of EVERY numbered shape is both detected AND redacted; add to both
 # lists together or the test fails.
-CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN [^-]*PRIVATE KEY[^-]*-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN ([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 
 # TABLE variant of CRED_RE — identical shapes, but the prefix-identified ones
 # (gh?_ / github_pat_ / AKIA / xox / eyJ) are BOUNDARY-ANCHORED: the char before
@@ -836,7 +836,7 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # start) from blob noise. The anchor costs no true positives and is used ONLY
 # for the leak TABLE; redact() keeps the broad unanchored CRED_RE, so
 # over-redaction is preserved even where the table refuses to count.
-CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN [^-]*PRIVATE KEY[^-]*-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN ([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 # The locator's masked-display test, kept as a REGEX rather than a glob and kept
 # byte-for-byte equivalent to the table's own `x ~ /^[a-z0-9_-]+\*\*\*/`. It must
 # stay anchored and must require the WHOLE run before `***` to be class
