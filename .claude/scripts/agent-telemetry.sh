@@ -504,8 +504,10 @@ emit_credential_hits() {
 #                                            → no content test exists to stop on
 #   4. Short final base64 line               → likewise
 #   5. Several markers on ONE physical line  → pass A, match()/substr walk
+#   5c. NESTED markers ACROSS lines          → pass B, depth over U[] and END
 #   6. Stray unpaired BEGIN or END           → pass A / the marker sed below
 #   7. Both stream shapes (tagged rows, report) → mask_line() keeps the row tag
+#   8. Key material in a tagged row TOOL field  → mask_line() masks it too
 #
 # 🔑 THE GOVERNING ASYMMETRY: a miss DISCLOSES A KEY, an over-mask costs report
 # lines inside a window we control. So no branch here asks what a line looks
@@ -528,8 +530,27 @@ BEGIN { PH = "<redacted-key-material>"; TAB = sprintf("%c", 9); TAG_RE = "^D" TA
 # it, it deletes the record and drops the error from the count. Measured on the
 # sed range this replaces: 4 errors -> 1.
 #
-# Preserving the tool field leaks nothing — it is a tool name, never payload —
-# and it is what makes an over-mask cost MESSAGE TEXT rather than EVIDENCE.
+# 🔴 THE TOOL FIELD IS MASKED TOO, and the earlier claim that it need not be is
+# the one this file paid for. It read "preserving the tool field leaks nothing —
+# it is a tool name, never payload", and that is an assumption about well-formed
+# input asserted inside the one function whose governing rule is to assume
+# nothing about content. It is false: the reliability stream builds that field
+# from `$t.name` straight out of the transcript (see the `D\t` emitter below),
+# with no sanitisation on the way, so `BEGIN / D<TAB><key body><TAB>msg / END`
+# emitted the key body verbatim while dutifully masking the message beside it.
+#
+# What survives is the STRUCTURE only: the `D` tag and both separators. That is
+# all the count needs — the consumer selects on `^D<TAB>` and splits on tabs, so
+# a three-field row still parses and is still counted. The over-mask therefore
+# costs MESSAGE TEXT and TOOL ATTRIBUTION, never a RECORD, and it loses the tool
+# name only on a row whose tool name is already key material.
+#
+# ⚠️ Deliberately NOT a content test on the field. A whitelist of "safe-looking"
+# tool names is not the harmless direction it appears to be: base64 draws from
+# `A-Za-z0-9+/=`, so a key chunk containing none of `+/=` — an ordinary
+# occurrence, not a contrived one — matches any plausible identifier pattern and
+# would be preserved. A test that only ever masks MORE is admissible here; this
+# one would mask less on exactly the input that matters, so it is not that.
 function mask_line(s) {
   # `U` is the UNDATED sentinel: an errored tool result carrying no usable
   # RFC 3339 timestamp is emitted as a bare `U` so it can be counted and
@@ -537,7 +558,7 @@ function mask_line(s) {
   # to redact and nothing to preserve — return it whole. Masking it to PH would
   # destroy the very marker the undated count is derived from.
   if (s == "U") return s
-  if (match(s, TAG_RE)) return substr(s, 1, RLENGTH) PH
+  if (match(s, TAG_RE)) return "D" TAB PH TAB PH
   return PH
 }
 # ⚠️ ACCEPTED MEMORY BOUND. This buffers every emitted line to EOF — the same
@@ -626,9 +647,43 @@ END {
     # the tagged stream — every record keeps its tag and stays counted, and only
     # its message text is replaced. The earlier "200 records eaten" measurement
     # predates that tag preservation; re-measured, the records survive.
-    close_at = 0
-    for (j = i + 1; j <= n; j++) {
-      if (L[j] ~ /-----END [A-Z ]*PRIVATE KEY-----/) { close_at = j; break }
+    #
+    # 🔴 AND IT TRACKS DEPTH, for the same reason pass A does — one dimension
+    # up. Pass A has already consumed every BEGIN marker, so nesting is no
+    # longer visible in the TEXT here; it survives only as U[], the flag marking
+    # a line that ended with an unclosed opener. So the walk reads U[j] as an
+    # opener and each residual END marker as a closer, and closes at depth 0.
+    #
+    # The order within a line is fixed rather than chosen: pass A keeps `head`,
+    # the text BEFORE the unpaired BEGIN, so any END left on a flagged line
+    # necessarily precedes that opener. Closers first, then the opener.
+    #
+    # Without it, `BEGIN1 / body / BEGIN2 / END2 / SECRET / END1` closed the
+    # outer block at END2, cleared U[] for the line of BEGIN2 as a consumed
+    # line, and so never resolved the block of BEGIN2 — SECRET printed
+    # verbatim. The pass-A
+    # same-line nesting fix does not constrain this at all, which is the whole
+    # lesson: fixing one shape of a defect is not fixing the defect.
+    #
+    # It must not RE-BOUND the scan — shape 1 needs it unbounded — so the depth
+    # counter rides along with the existing walk to end of input rather than
+    # replacing it. `bdepth`/`bscan`/`bdrop` are named apart from the pass-A
+    # `depth`/`scan` on purpose: a value leaking between passes is the same
+    # class as the U[] flag below, and this program has paid for it enough.
+    close_at = 0; close_end = 0; bdepth = 1
+    for (j = i + 1; j <= n && close_at == 0; j++) {
+      bscan = L[j]; bdrop = 0
+      while (match(bscan, /-----END [A-Z ]*PRIVATE KEY-----/)) {
+        # Absolute end offset of this marker in L[j], accumulated as `bscan` is
+        # consumed. The closing line is masked UP TO the marker that actually
+        # balanced the depth, not the first one on the line — closing at the
+        # first would mask LESS than the nesting requires, which is the wrong
+        # side of the governing asymmetry.
+        bdrop += RSTART + RLENGTH - 1
+        bscan = substr(bscan, RSTART + RLENGTH)
+        if (--bdepth == 0) { close_at = j; close_end = bdrop; break }
+      }
+      if (close_at == 0 && U[j]) bdepth++
     }
     if (close_at == 0) {
       # UNTERMINATED block: mask every following line to end of input, with NO
@@ -682,22 +737,22 @@ END {
     # before the BEGIN — and `head` still contains the earlier END.)
     for (j = i + 1; j < close_at; j++) { L[j] = mask_line(L[j]); U[j] = 0 }
     s = L[close_at]
-    if (match(s, /-----END [A-Z ]*PRIVATE KEY-----/)) {
-      # Everything up to and including the END marker is key material; only the
-      # text after it survives. Capture that tail BEFORE the second match(),
-      # which resets RSTART/RLENGTH.
-      tail = substr(s, RSTART + RLENGTH)
-      # 🔴 The CLOSING line needs the same tag preservation every other masked
-      # line gets. It is the one branch that does not route through
-      # mask_line(), and it was blanking the row tag — so the record stopped
-      # parsing and dropped out of the count, which is precisely the defect
-      # mask_line() exists to prevent, surviving in the path it did not cover.
-      # Measured on a 202-row stray span: 201 of 202 rows kept their tag.
-      # (Same class as the bounded-search defect above: when a guard is added,
-      # check every OTHER path that walks the same structure.)
-      if (match(s, TAG_RE)) L[close_at] = substr(s, 1, RLENGTH) PH tail
-      else                          L[close_at] = PH tail
-    }
+    # Everything up to and including the BALANCING END marker is key material;
+    # only the text after it survives. `close_end` is the offset of that marker,
+    # computed by the depth walk above — re-matching here would find the FIRST
+    # END on the line, which under nesting is not the one that closed us.
+    tail = substr(s, close_end + 1)
+    # 🔴 The CLOSING line needs the same structural preservation every other
+    # masked line gets. It is the one branch that does not route through
+    # mask_line(), and it was blanking the row tag — so the record stopped
+    # parsing and dropped out of the count, which is precisely the defect
+    # mask_line() exists to prevent, surviving in the path it did not cover.
+    # Measured on a 202-row stray span: 201 of 202 rows kept their tag.
+    # (Same class as the bounded-search defect above: when a guard is added,
+    # check every OTHER path that walks the same structure — which is also why
+    # the tool field is masked here exactly as mask_line() now masks it.)
+    if (match(s, TAG_RE)) L[close_at] = "D" TAB PH TAB PH tail
+    else                  L[close_at] = PH tail
   }
   for (i = 1; i <= n; i++) print L[i]
 }

@@ -4120,6 +4120,61 @@ nocheck "shape 5b control: independent spans still mask their own bodies" "$OUT"
 check   "shape 5b control: text BETWEEN two spans survives"               "$OUT" "KEEPME"
 check   "shape 5b control: text AFTER the last span survives"             "$OUT" "TAILKEEP"
 
+# ── SHAPE 5 (c) — NESTED markers ACROSS physical lines ───────────────────────
+# 🔴 P1 disclosure, found by Codex review on #2654 — the SAME defect as 5b, one
+# dimension up, and the fix for 5b did not touch it. Pass A gained a depth
+# counter for markers within one line; the closing search of pass B was still
+# "the first END on any later line". So on
+#
+#     BEGIN1 / body / BEGIN2 / END2 / SECRET / END1
+#
+# the outer block closed at END2, the intermediate lines were masked, U[] was
+# cleared for the line of BEGIN2 as a consumed line, and the block of BEGIN2 was
+# therefore never resolved — SECRET printed verbatim from the next line on.
+#
+# Worth stating plainly, because it is the recurring lesson of this whole file:
+# fixing one SHAPE of a defect is not fixing the DEFECT. 5b passing is exactly
+# what made this look handled.
+#
+# Pass B now reads U[j] as an opener and a residual END as a closer, closing at
+# depth 0 — the pass-A rule lifted to the line-crossing scan, WITHOUT re-bounding
+# it, because shape 1 needs that scan unbounded.
+crossnestfix() { printf '%s\nAAAA\n%s\n%s\nMIIEvgSECRETXNEST\n%s\n' "$RB" "$RB" "$RE" "$RE"; }
+OUT=$(crossnestfix | awk "$AWK_PROG")
+nocheck "shape 5c: a cross-line nested span masks through the OUTERMOST closer" "$OUT" "SECRETXNEST"
+
+# CONTROL, opposite direction — the depth counter must not degenerate into
+# "close at the LAST END in the input", which would pass the row above while
+# merging every pair of independent keys and destroying the records between
+# them. Two complete, SEPARATE cross-line spans must still close individually.
+xindepfix() { printf '%s\nS1\n%s\nKEEPMEX\n%s\nS2\n%s\nTAILKEEPX\n' "$RB" "$RE" "$RB" "$RE"; }
+OUT=$(xindepfix | awk "$AWK_PROG")
+nocheck "shape 5c control: independent cross-line spans mask their own bodies" "$OUT" "S1"
+check   "shape 5c control: text BETWEEN two cross-line spans survives"         "$OUT" "KEEPMEX"
+check   "shape 5c control: text AFTER the last cross-line span survives"       "$OUT" "TAILKEEPX"
+
+# ── SHAPE 5 (d) — several closers on the CLOSING line ────────────────────────
+# 🔴 A THIRD disclosure, found by probing the 5c fix rather than reported by a
+# review round — which is the point of writing the probe. Once nesting is
+# tracked, the closing line may carry MORE THAN ONE END, and only the one that
+# balanced the depth is the real closer. The closing branch re-matched the line
+# and took the FIRST, so everything between the two markers printed verbatim:
+#
+#     BEGIN1 / BEGIN2 / body / END2 <key material> END1 TAIL
+#                              ^ masked to here     ^ leaked
+#
+# Measured on the parent commit: `MIIEvgMIDDLELEAK` survived in full. The walk
+# now records the offset of the BALANCING marker and the closing branch masks to
+# it, so the choice is made once by the code that knows the depth.
+kthendfix() { printf '%s\n%s\nMIIEvgSECRETKTH\n%s MIIEvgMIDDLELEAK %s TAILX\n' "$RB" "$RB" "$RE" "$RE"; }
+OUT=$(kthendfix | awk "$AWK_PROG")
+nocheck "shape 5d: material between two closers on the closing line is masked" "$OUT" "MIDDLELEAK"
+nocheck "shape 5d: and the body above it stays masked"                         "$OUT" "SECRETKTH"
+# CONTROL, opposite direction — masking to the balancing closer must not become
+# "mask the whole closing line", or the tail after a legitimately closed span is
+# destroyed and shape 6b (a block opening after the closer) becomes unreachable.
+check   "shape 5d control: text after the BALANCING closer still survives"      "$OUT" "TAILX"
+
 # ── SHAPE 6 (a) — TWO openers before one closer ──────────────────────────────
 # 🔴 Found by reading the shipped program end to end, not by a review round.
 # The second BEGIN sits INSIDE the region the first one's span already masked,
@@ -4138,8 +4193,36 @@ nestedfix() {
 }
 OUT=$(nestedfix | awk "$AWK_PROG")
 nocheck "shape 6a: two openers before one closer still mask the body" "$OUT" "SECRETNESTED"
-check   "shape 6a: and do NOT eat the report after the key"           "$OUT" "SURVIVOR-6"
-check   "shape 6a: nor the line immediately after it"                 "$OUT" "SURVIVOR-1"
+# 🔑 RE-SIGNED when pass B gained the depth counter (shape 5c), and the reason
+# matters more than the row. Two openers and ONE closer is an UNBALANCED input:
+# depth never returns to zero, so the block is genuinely unterminated and falls
+# to the unterminated branch, which masks to end of input by design.
+#
+# The old rows asserted these lines SURVIVED, which was the nearest-END reading
+# — close the outer block at the only END and declare the input handled. That
+# reading is what leaked on 5c, because it is a GUESS about which opener the
+# lone closer belongs to. PEM does not nest, so there is no correct answer
+# available here; there is only a safe direction and an unsafe one.
+#
+# So the guarantee this row now pins is the ACCEPTED COST, in both directions:
+# the report lines are over-masked (unsafe direction refused), and the records
+# still survive because the input is the tagged stream in production. The
+# record-preservation half is asserted on the tagged variant below, not here.
+nocheck "shape 6a: an unbalanced input over-masks the report (accepted cost)" "$OUT" "SURVIVOR-6"
+nocheck "shape 6a: including the line immediately after it"                   "$OUT" "SURVIVOR-1"
+
+# ...and the half that makes that cost payable: on the TAGGED stream the same
+# over-mask costs message text and tool attribution, never a RECORD.
+nestedrowfix() {
+  printf 'D\tBash\t%s\nD\tBash\t%s\nD\tBash\tMIIEvgSECRETNESTED\nD\tBash\t%s\n' "$RB" "$RB" "$RE"
+  for i in $(seq 1 6); do printf 'D\tRead\tSURVIVOR-%d\n' "$i"; done
+}
+NR6=$(nestedrowfix | awk "$AWK_PROG" | awk -F'\t' '$1 == "D" && NF == 3' | grep -c '')
+if [ "$NR6" = 10 ]; then
+  ok "shape 6a: all 10 records survive the unbalanced over-mask"
+else
+  bad "shape 6a: all 10 records survive the unbalanced over-mask" "$NR6 of 10 rows still parse as D<TAB>tool<TAB>msg"
+fi
 
 # ── SHAPE 6 (b) — a CLOSER and an OPENER on the same physical line ───────────
 # 🔴 The reverse ordering of 6a, and it leaked where 6a did not. Pass A itself
@@ -4195,7 +4278,13 @@ S7=$({ printf 'D\tBash\thead %s\n' "$RB"
        for i in $(seq 1 200); do printf 'D\tBash\tRECORD-%03d\n' "$i"; done
        printf 'D\tBash\ttail %s SURVIVING-TAIL\n' "$RE"; } | awk "$AWK_PROG")
 S7_ROWS=$(printf '%s\n' "$S7" | grep -c '')
-S7_TAGS=$(printf '%s\n' "$S7" | grep -c "^D$(printf '\t')Bash$(printf '\t')")
+# 🔑 The assertion is the STRUCTURE the consumer parses, not the literal tool
+# name. Production selects rows with `^D<TAB>` and splits on tabs, so what has
+# to survive is the `D` tag and both separators — three fields. It was written
+# as `^D<TAB>Bash<TAB>` while the tool field was preserved verbatim; that field
+# is now masked inside a key span (shape 8), and pinning the old literal would
+# have pinned the very disclosure shape 8 exists to close.
+S7_TAGS=$(printf '%s\n' "$S7" | awk -F'\t' '$1 == "D" && NF == 3' | grep -c '')
 if [ "$S7_ROWS" = 202 ] && [ "$S7_TAGS" = 202 ]; then
   ok "shape 7: all 202 tagged rows keep their tag (records stay counted)"
 else
@@ -4203,6 +4292,35 @@ else
 fi
 nocheck "shape 7: while every masked row's message text is gone" "$S7" "RECORD-100"
 check   "shape 7: and text after the closing marker survives"    "$S7" "SURVIVING-TAIL"
+
+# ── SHAPE 8 — key material in the TOOL field of a tagged row ─────────────────
+# 🔴 P1 disclosure, found by Codex review on #2654, and the sharper of that
+# round: it refuted a STATED ASSUMPTION rather than an implementation detail.
+# mask_line() preserved the tool field on the reasoning that it "is a tool name,
+# never payload" — an assumption about well-formed input, asserted inside the
+# one function whose governing rule is to assume nothing about content.
+#
+# It is false. The reliability stream builds that field from `$t.name` straight
+# out of the transcript with no sanitisation, so a key body landing there was
+# emitted verbatim while the message beside it was dutifully masked.
+#
+# The fix keeps STRUCTURE only — `D<TAB>PH<TAB>PH` — which is all the count
+# needs, so the over-mask still costs no record. Deliberately unconditional: a
+# whitelist of safe-looking tool names is not the harmless direction it looks,
+# because base64 draws from `A-Za-z0-9+/=` and a key chunk containing none of
+# `+/=` matches any plausible identifier pattern.
+S8=$(printf '%s\nD\tMIIEvgSECRETINTOOL\tmsgtext\n%s\n' "$RB" "$RE" | awk "$AWK_PROG")
+nocheck "shape 8: key material in a tool field inside a key span is masked" "$S8" "SECRETINTOOL"
+if [ "$(printf '%s\n' "$S8" | awk -F'\t' '$1 == "D" && NF == 3' | grep -c '')" = 1 ]; then
+  ok "shape 8: and the row still parses as three fields (record stays counted)"
+else
+  bad "shape 8: and the row still parses as three fields" "$S8"
+fi
+# CONTROL, opposite direction — masking is scoped to lines INSIDE a key span.
+# A row that merely sits in the same stream keeps its real tool name, or the
+# whole by-tool breakdown would be destroyed by one stray marker upstream.
+S8C=$(printf 'D\tBash\tordinary failure\n' | awk "$AWK_PROG")
+check "shape 8 control: a row outside any key span keeps its tool name" "$S8C" "$(printf 'D\tBash\tordinary failure')"
 
 # ── ablations — each proving ONE branch load-bearing ─────────────────────────
 # Every arm asserts the GUARANTEE stops holding, changes exactly ONE production
@@ -4253,6 +4371,16 @@ strayfix()   { printf 'x %s\n' "$RB"; for i in $(seq 1 300); do printf 'REPORT-L
 strayrowfix(){ printf 'D\tBash\tx %s\n' "$RB"; for i in $(seq 1 300); do printf 'D\tRead\tREPORT-LINE-%03d\n' "$i"; done; }
 encpemfix()  { printf 'Blocked: %s\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,9A7B2C\n\nMIIEvgIBADANBgkqSECRETBODYxxxx\n' "$RB"; }
 closerowfix(){ printf 'D\tBash\thead %s\n' "$RB"; printf 'D\tBash\ttail %s z\n' "$RE"; }
+tooltrapfix(){ printf '%s\nD\tMIIEvgSECRETINTOOL\tmsgtext\n%s\n' "$RB" "$RE"; }
+# A BALANCED nested pair — depth returns to zero, so the span closes normally
+# and the report after it survives. That is what makes it the right fixture for
+# the U[]-clearing arm: `nestedfix` (two openers, one closer) is unbalanced, so
+# its report lines are over-masked by the UNABLATED program too, and a vanish
+# arm on it would pass without the guard ever mattering.
+nestedpairfix(){
+  printf '%s\n%s\nMIIEvgSECRETPAIR\n%s\n%s\n' "$RB" "$RB" "$RE" "$RE"
+  for i in $(seq 1 6); do printf 'SURVIVOR-%d\n' "$i"; done
+}
 
 # ── THE ACCEPTED COST, pinned in BOTH directions ──────────────────────────────
 # Unbounding the unterminated masking buys shape 2 at a price, and the price is
@@ -4268,7 +4396,7 @@ nocheck "accepted cost: a stray BEGIN over-masks to EOF" "$OUT" "REPORT-LINE-300
 # counts. Without this row the arm above would read as pure loss.
 OUTR=$(strayrowfix | awk "$AWK_PROG")
 check "accepted cost: but the over-masked rows keep their tags" \
-  "$OUTR" "$(printf 'D\tRead\t<redacted-key-material>')"
+  "$OUTR" "$(printf 'D\t<redacted-key-material>\t<redacted-key-material>')"
 if [ "$(printf '%s\n' "$OUTR" | grep -c "$(printf '^D\t')")" -eq 301 ]; then
   ok "accepted cost: all 301 records survive the over-mask"
 else
@@ -4280,7 +4408,7 @@ fi
 # present in the UNABLATED output, or asserting their absence proves nothing.
 # A diff of two empty outputs reads exactly like "behaviour preserved".
 CTRL2=$(closerowfix | awk "$AWK_PROG")
-check "positive control: the closing row keeps its tag unablated" "$CTRL2" "$(printf 'D\tBash\t<redacted-key-material> z')"
+check "positive control: the closing row keeps its tag unablated" "$CTRL2" "$(printf 'D\t<redacted-key-material>\t<redacted-key-material> z')"
 
 # POSITIVE CONTROL for the APPEAR-signed arm 2: the needle must be in the
 # FIXTURE, or "it reappeared" is unfalsifiable. That it is ABSENT from the
@@ -4311,9 +4439,32 @@ check "positive control: the unterminated fixture carries its needle" \
 #    the closing search decides terminated-vs-unterminated correctly, and the
 #    cost of getting it wrong — now over-masking rather than leaking. Signed
 #    VANISH; its positive control is the shape-1 `AFTER-ROW` row above.
-unit_ablate 's|^    for (j = i + 1; j <= n; j++) {$|    for (j = i + 1; j <= n \&\& (j - i) <= 256; j++) {|' \
+#
+#    ⚠️ RE-AIMED when the closing search gained its depth counter (shape 5c).
+#    The arm targeted the pre-depth loop header verbatim; that line no longer
+#    exists, so the sed matched nothing and `unit_ablate` correctly reported a
+#    mis-aimed arm rather than a result. Re-aiming, not deleting, is the point:
+#    a guard whose ablation stops compiling is a guard nobody is checking.
+unit_ablate 's|^    for (j = i + 1; j <= n \&\& close_at == 0; j++) {$|    for (j = i + 1; j <= n \&\& close_at == 0 \&\& (j - i) <= 256; j++) {|' \
   "the UNBOUNDED closing search is load-bearing (a long terminated key is misclassified without it)" \
   longkey "AFTER-ROW" vanish
+
+# 1b. The DEPTH COUNTER in that same closing search — the shape-5c fix. Ablate
+#     it back to the nearest-END form by never incrementing on a nested opener,
+#     and the nested body must REAPPEAR. Signed APPEAR, so it cannot be
+#     satisfied by an ablation that merely breaks the program: an arm that
+#     produces nothing fails the emptiness guard, and one that over-masks fails
+#     to find the needle.
+unit_ablate 's|^      if (close_at == 0 \&\& U\[j\]) bdepth++$|      if (close_at == 0 \&\& U[j]) bdepth += 0|' \
+  "cross-line nesting depth is load-bearing (a nested key body leaks without it)" \
+  crossnestfix "SECRETXNEST" appear
+
+# 1c. Masking the closing line to the BALANCING closer rather than the first one
+#     — the shape-5d fix. Ablate back to re-matching the line, and the material
+#     between the two END markers must REAPPEAR. Signed APPEAR.
+unit_ablate 's|^    tail = substr(s, close_end + 1)$|    if (match(s, /-----END [A-Z ]*PRIVATE KEY-----/)) tail = substr(s, RSTART + RLENGTH)|' \
+  "closing at the BALANCING marker is load-bearing (material between two closers leaks without it)" \
+  kthendfix "MIDDLELEAK" appear
 
 # 2. The UNBOUNDED masking on the unterminated branch — the shape-2 fix, and
 #    the arm whose SIGN REVERSED when the bound came out. It used to assert
@@ -4341,16 +4492,34 @@ unit_ablate 's|^      for (j = i + 1; j <= n; j++) { L\[j\] = mask_line(L\[j\]);
 # 4. Tag preservation on the CLOSING line — the branch that does not route
 #    through mask_line(). Without it the closing row's tag is blanked and the
 #    record stops parsing.
-unit_ablate 's|^      if (match(s, TAG_RE)) L\[close_at\] = substr(s, 1, RLENGTH) PH tail$|      if (0) L[close_at] = substr(s, 1, RLENGTH) PH tail|' \
+unit_ablate 's|^    if (match(s, TAG_RE)) L\[close_at\] = "D" TAB PH TAB PH tail$|    if (0) L[close_at] = "D" TAB PH TAB PH tail|' \
   "closing-line tag preservation is load-bearing (the record loses its tag without it)" \
-  closerowfix "$(printf 'D\tBash\t<redacted-key-material> z')" vanish
+  closerowfix "$(printf 'D\t<redacted-key-material>\t<redacted-key-material> z')" vanish
+
+# 4b. Masking the TOOL FIELD inside a key span — the shape-8 fix. Ablate back to
+#     the form that preserved it verbatim, and the key material planted in that
+#     field must REAPPEAR. Signed APPEAR for the same reason as 1b.
+unit_ablate 's|^  if (match(s, TAG_RE)) return "D" TAB PH TAB PH$|  if (match(s, TAG_RE)) return substr(s, 1, RLENGTH) PH|' \
+  "masking the tool field is load-bearing (key material in a tool name leaks without it)" \
+  tooltrapfix "SECRETINTOOL" appear
 
 # 5. Clearing U[] as lines are consumed. Without it a second opener inside an
 #    already-masked span re-enters the unterminated branch and runs away, so the
 #    arm is signed VANISH: removing the guard masks MORE.
+#
+#    ⚠️ FIXTURE RE-AIMED alongside shape 6a. It used `nestedfix` — two openers,
+#    one closer — whose report lines the UNABLATED program now over-masks by
+#    design, since depth never returns to zero. A vanish arm on a needle that is
+#    already absent passes whatever the guard does, which is the exact class of
+#    hollow arm this file keeps having to catch. `nestedpairfix` is BALANCED, so
+#    SURVIVOR-6 is present unablated (asserted immediately below) and its
+#    disappearance is attributable to the removed guard.
+CTRL5=$(nestedpairfix | awk "$AWK_PROG")
+check "positive control: a BALANCED nested span leaves the report intact" "$CTRL5" "SURVIVOR-6"
+nocheck "positive control: while still masking the nested body"           "$CTRL5" "SECRETPAIR"
 unit_ablate 's|^    for (j = i + 1; j < close_at; j++) { L\[j\] = mask_line(L\[j\]); U\[j\] = 0 }$|    for (j = i + 1; j < close_at; j++) { L[j] = mask_line(L[j]) }|' \
   "clearing U[] on consumed lines is load-bearing (a second opener runs away without it)" \
-  nestedfix "SURVIVOR-6" vanish
+  nestedpairfix "SURVIVOR-6" vanish
 
 # ── TIMESTAMP MATRIX — one row per SHAPE, not a case per reported bug ─────────
 # Three consecutive review rounds each reported this defect at a new position:
