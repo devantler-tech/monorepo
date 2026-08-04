@@ -47,8 +47,8 @@ git -C "$repo" commit --allow-empty -qm "init"
 wt="$tmp/wt-a"
 
 # ── add writes marker ──────────────────────────────────────────────────────
-out="$("$script" add "$repo" "$wt" "claim-branch-a" "session-alpha" 2>&1)"
-rc=$?
+rc=0
+out="$("$script" add "$repo" "$wt" "claim-branch-a" "session-alpha" 2>&1)" || rc=$?
 check "add succeeds" 0 "$rc" "$out" "owner=session-alpha"
 check "marker file exists" 0 "$([ -f "$wt/.claude-worktree-owner" ] && echo 0 || echo 1)"
 owner_line="$(grep '^owner=' "$wt/.claude-worktree-owner")"
@@ -66,8 +66,8 @@ check "relative add succeeds" 0 "$rc" "$out" "owner=session-relative"
 check "relative marker is repo-relative" 0 "$([ -f "$repo/$relative_wt/.claude-worktree-owner" ] && echo 0 || echo 1)"
 
 # ── check: mine ────────────────────────────────────────────────────────────
-out="$("$script" check "$wt" "session-alpha" 2>&1)"
-rc=$?
+rc=0
+out="$("$script" check "$wt" "session-alpha" 2>&1)" || rc=$?
 check "check mine" 0 "$rc" "$out" "mine"
 
 # ── check: live foreign ────────────────────────────────────────────────────
@@ -246,8 +246,12 @@ git -C "$seed" commit --allow-empty -qm "ahead-1"
 git -C "$seed" commit --allow-empty -qm "ahead-2"
 git -C "$seed" push -q origin main
 
-stale_out="$("$script" add "$consumer" "$tmp/wt-stale" "claim-stale" "session-stale" 2>&1)"
-stale_rc=$?
+# `|| rc=$?`, not a bare assignment: under `set -Eeuo pipefail` a non-zero command substitution
+# terminates the suite on the assignment itself, so a regression here would abort before the arm
+# below could report it — no FAIL line, no summary, just a bare shell exit. The guard keeps the
+# regression a reported failure. Same shape as the malformed-count arm at lines 429-431.
+stale_rc=0
+stale_out="$("$script" add "$consumer" "$tmp/wt-stale" "claim-stale" "session-stale" 2>&1)" || stale_rc=$?
 check "stale base still claims successfully (advisory, not fatal)" 0 "$stale_rc" \
   "$stale_out" "owner=session-stale"
 check "stale base warns" 0 "$stale_rc" "$stale_out" "WARNING base is 2 commit(s) behind"
@@ -257,8 +261,8 @@ check "stale-base warning names the rebase fix" 0 "$stale_rc" "$stale_out" "reba
 # warned, the positive arm above would prove nothing about staleness detection.
 git -C "$consumer" fetch -q origin main
 git -C "$consumer" reset -q --hard origin/main
-current_out="$("$script" add "$consumer" "$tmp/wt-current" "claim-current" "session-current" 2>&1)"
-current_rc=$?
+current_rc=0
+current_out="$("$script" add "$consumer" "$tmp/wt-current" "claim-current" "session-current" 2>&1)" || current_rc=$?
 check "current base still claims successfully" 0 "$current_rc" "$current_out" "owner=session-current"
 current_warn_rc=0
 grep -qF -- "WARNING base is" <<<"$current_out" && current_warn_rc=1
@@ -294,8 +298,8 @@ git -C "$moved_origin" symbolic-ref HEAD refs/heads/trunk
 moved_stale="$(git -C "$moved_consumer" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo "")"
 check "clone-time origin/HEAD still names the OLD default (precondition)" "origin/main" "$moved_stale"
 
-moved_out="$("$script" add "$moved_consumer" "$tmp/wt-moved" "claim-moved" "session-moved" 2>&1)"
-moved_rc=$?
+moved_rc=0
+moved_out="$("$script" add "$moved_consumer" "$tmp/wt-moved" "claim-moved" "session-moved" 2>&1)" || moved_rc=$?
 check "moved default still claims successfully" 0 "$moved_rc" "$moved_out" "owner=session-moved"
 check "moved default is measured against the CURRENT remote default" 0 "$moved_rc" \
   "$moved_out" "WARNING base is 2 commit(s) behind origin/trunk"
@@ -336,8 +340,8 @@ narrowed_tip="$(git -C "$narrowed_seed" rev-parse main)"
 check "origin/main is present but STALE before the claim (precondition)" 0 \
   "$([ "$narrowed_pre" != "$narrowed_tip" ] && echo 0 || echo 1)"
 
-narrowed_out="$("$script" add "$narrowed_consumer" "$tmp/wt-narrowed" "claim-narrowed" "session-narrowed" 2>&1)"
-narrowed_rc=$?
+narrowed_rc=0
+narrowed_out="$("$script" add "$narrowed_consumer" "$tmp/wt-narrowed" "claim-narrowed" "session-narrowed" 2>&1)" || narrowed_rc=$?
 check "narrowed refspec still claims successfully" 0 "$narrowed_rc" "$narrowed_out" "owner=session-narrowed"
 # The whole point: three commits behind must be REPORTED, not swallowed by a tracking ref the fetch
 # never updated. A silent pass here is the exact failure this function exists to remove.
@@ -352,8 +356,8 @@ check "narrowed refspec never reports a silent 'current' base" 0 "$narrowed_sile
 # check exists to remove. Repointing origin at an absent bare repository is hermetic: ls-remote and
 # fetch both fail locally, no network is touched. Claiming must still succeed (advisory, never fatal).
 git -C "$consumer" remote set-url origin "$tmp/absent-origin.git"
-unknown_out="$("$script" add "$consumer" "$tmp/wt-unknown" "claim-unknown" "session-unknown" 2>&1)"
-unknown_rc=$?
+unknown_rc=0
+unknown_out="$("$script" add "$consumer" "$tmp/wt-unknown" "claim-unknown" "session-unknown" 2>&1)" || unknown_rc=$?
 check "unavailable remote still claims successfully" 0 "$unknown_rc" \
   "$unknown_out" "owner=session-unknown"
 check "unavailable remote writes the ownership marker" 0 \
@@ -451,9 +455,13 @@ revlist_line="$(awk 'index($0,"rev-list --count"){print NR; exit}' <<<"$normalis
 case "$revlist_line" in '' | *[!0-9]*) revlist_line=0 ;; esac
 [ "$revlist_line" -gt 0 ] &&
   grep -qF -- 'if ! behind="$(git -C "$wt" rev-list --count' <<<"$normalise_code" || revfail_rc=1
-# The guard body must actually emit the notice, not merely return.
-awk -v n="$revlist_line" 'NR>n && NR<=n+2 && index($0,"base_freshness_unknown")' <<<"$normalise_code" |
-  grep -q . || revfail_rc=1
+# The guard body must actually emit the notice, not merely return. Captured output + an emptiness
+# test, NOT `awk | grep -q`: `grep -q` exits at the first match, the awk writer can then die of
+# EPIPE, and under `pipefail` the pipeline reports failure for a needle it actually found — the
+# size-dependent flake `check()` documents at lines 26-28. Same shape as lines 394-396.
+revfail_branch="$(awk -v n="$revlist_line" \
+  'NR>n && NR<=n+2 && index($0,"base_freshness_unknown")' <<<"$normalise_code")"
+if [ -z "$revfail_branch" ]; then revfail_rc=1; fi
 check "a FAILED rev-list reports UNKNOWN rather than behind=0" 0 "$revfail_rc"
 
 # A remote that never answers must not hold the claim open. `ext::` runs an arbitrary command as the
@@ -524,8 +532,21 @@ check "shquote still escapes an embedded single quote" 0 "$shquote_esc_rc"
 # below greps the process table, and a bare `sleep 97` matches a leftover from any earlier run of
 # this suite — which made the assertion fail on a tree that was actually correct. The temp path is
 # unique per run, so the grep can only ever match this run's descendants.
+#
+# NO `exec`, for the same reason spelled out for `ignore_transport` below — but the failure it
+# prevents here is narrower than "the arm never fires", and the difference was measured rather than
+# assumed. `exec sleep 97` replaces the process image, so the transport's own argv becomes "sleep 97"
+# and this run's unique path is gone from it. The arm still went red, because `git remote-ext origin
+# <path>` carries the path as an ARGUMENT and is itself orphaned by the same regression — so what the
+# assertion actually observed was the git helper, a PROXY, never the transport the comment names.
+# Ablating group signalling to pid-only signalling made that concrete: with `exec` a bare `sleep 97`
+# was left running and `pgrep -f "$slow_transport"` could not see it (1 leaked, 0 of them matched);
+# without `exec` the transport is matched directly (2 matches, 0 leaked). A regression that reaped
+# the helper but not the transport — exactly the TERM-ignoring case the next arm covers — would
+# therefore have read clean here. Looping over short sleeps keeps the script itself resident, so the
+# arm observes the process it claims to.
 slow_transport="$tmp/slow-transport"
-printf '#!/usr/bin/env bash\nexec sleep 97\n' >"$slow_transport"
+printf '#!/usr/bin/env bash\nfor _ in $(seq 97); do sleep 1; done\n' >"$slow_transport"
 chmod +x "$slow_transport"
 order_consumer="$tmp/order-consumer"
 git clone -q "$origin_repo" "$order_consumer"
@@ -548,6 +569,9 @@ sleep 1
 orphan_rc=0
 if pgrep -f "$slow_transport" >/dev/null 2>&1; then orphan_rc=1; fi
 check "a timed-out remote leaves no orphaned transport process" 0 "$orphan_rc"
+# Mirror the `ignore_transport` cleanup below: if the arm above just FAILED there is a live process
+# holding this run's temp dir, and the EXIT trap's `rm -rf` would otherwise race it.
+pkill -KILL -f "$slow_transport" >/dev/null 2>&1 || true
 
 # SIGTERM is a REQUEST -- catchable and ignorable -- so the timer's TERM does not stop a transport
 # that ignores it. The WAITED-ON process is `git`, which honours TERM and dies, so `add` still
