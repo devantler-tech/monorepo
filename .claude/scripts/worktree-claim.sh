@@ -239,9 +239,16 @@ warn_if_base_is_stale() {
     base_freshness_unknown "$default_ref"
     return 0
   fi
-  behind="$(git -C "$wt" rev-list --count "HEAD..$default_ref" 2>/dev/null || echo 0)"
-  # Normalise before the numeric test: a non-integer (empty, or an error string) would make
-  # `[ "$behind" -gt 0 ]` fail OPEN inside an if, silently skipping the very warning this exists for.
+  # A FAILED rev-list is an unavailable comparison, not a current base. Folding it into `|| echo 0`
+  # made the normalisation below accept it and the numeric test skip silently — reporting neither a
+  # warning nor UNKNOWN, which is the same silent "looks current" this check exists to remove.
+  if ! behind="$(git -C "$wt" rev-list --count "HEAD..$default_ref" 2>/dev/null)"; then
+    base_freshness_unknown "$default_ref"
+    return 0
+  fi
+  # Normalise before the numeric test: a non-integer (empty, or an error string) from a command that
+  # nonetheless SUCCEEDED would make `[ "$behind" -gt 0 ]` fail OPEN inside an if, silently skipping
+  # the very warning this exists for.
   case "$behind" in '' | *[!0-9]*) behind=0 ;; esac
   [ "$behind" -gt 0 ] || return 0
   echo "worktree-claim: WARNING base is $behind commit(s) behind $default_ref" >&2

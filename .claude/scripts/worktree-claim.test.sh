@@ -345,5 +345,23 @@ case "$test_line" in '' | *[!0-9]*) test_line=0 ;; esac
 [ "$norm_line" -gt 0 ] && [ "$test_line" -gt 0 ] && [ "$norm_line" -lt "$test_line" ] || normalise_rc=1
 check "behind-count is normalised BEFORE the numeric test" 0 "$normalise_rc"
 
+# A FAILED rev-list must report UNKNOWN, not fold into behind=0 — otherwise an unavailable comparison
+# renders identically to a current base, the exact silence this whole check removes.
+#
+# ⚠️ SOURCE-COUPLED for the same reason as the arm above: `warn_if_base_is_stale` runs immediately
+# after a successful `git worktree add`, so a failing `rev-list` in that window cannot be provoked
+# hermetically. Asserted on structure — the assignment is guarded by `if !`, and the guard body calls
+# base_freshness_unknown — with comments stripped so prose cannot satisfy it. Replace with a
+# behavioural arm if the count ever moves behind an injectable seam.
+revfail_rc=0
+revlist_line="$(awk 'index($0,"rev-list --count"){print NR; exit}' <<<"$normalise_code")"
+case "$revlist_line" in '' | *[!0-9]*) revlist_line=0 ;; esac
+[ "$revlist_line" -gt 0 ] &&
+  grep -qF -- 'if ! behind="$(git -C "$wt" rev-list --count' <<<"$normalise_code" || revfail_rc=1
+# The guard body must actually emit the notice, not merely return.
+awk -v n="$revlist_line" 'NR>n && NR<=n+2 && index($0,"base_freshness_unknown")' <<<"$normalise_code" |
+  grep -q . || revfail_rc=1
+check "a FAILED rev-list reports UNKNOWN rather than behind=0" 0 "$revfail_rc"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
