@@ -444,7 +444,25 @@ warn_if_base_is_stale() {
   echo "worktree-claim: WARNING base is $behind commit(s) behind $default_ref" >&2
   echo "worktree-claim:      This tree does NOT show current $default_ref. Anything you conclude here" >&2
   echo "worktree-claim:      about 'current behaviour' may already be changed or fixed upstream." >&2
-  echo "worktree-claim:      Rebase before analysing:  git -C $(shquote "$wt") rebase $(shquote "$default_ref")" >&2
+  # The hint must not send the reader to `origin/<branch>`, which is the very ref the measurement
+  # above refuses to trust — under a NARROWED `remote.origin.fetch` the tracking ref is not updated
+  # by the fetch and stays frozen at its old value. It still resolves, so the rebase reports
+  # "Current branch main is up to date." and leaves the tree exactly as stale as the warning just
+  # said it was. Measured: 3 commits behind, old hint run, still 3 commits behind. That is the same
+  # silent false-current this function exists to remove, reintroduced inside its own remedy — and
+  # worse than a hard failure, because git agrees with the user and the warning reads as noise.
+  #
+  # A MOVED default is NOT a second instance of this, though it looks like one: the claim's fetch
+  # carries the repository's configured refspec in addition to the command-line one, so an ordinary
+  # consumer gains refs/remotes/origin/<newbranch> as a side effect and the old hint would have run
+  # there. Only the narrowed-mapping case is real; the negative control below pins that distinction
+  # so this comment cannot quietly generalise back.
+  #
+  # What was MEASURED is the fetched branch tip, so that is what must be rebased onto. FETCH_HEAD is
+  # per-worktree and BOTH halves run in "$wt", so the value read back is the one just written there —
+  # a fetch in "$repo" would reintroduce the shared-mutable-state trap the measurement avoids.
+  echo "worktree-claim:      Rebase before analysing:  git -C $(shquote "$wt") fetch origin $(shquote "$default_branch") &&" >&2
+  echo "worktree-claim:                                git -C $(shquote "$wt") rebase FETCH_HEAD" >&2
 }
 
 cmd_check() {

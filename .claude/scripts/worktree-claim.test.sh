@@ -255,7 +255,12 @@ stale_out="$("$script" add "$consumer" "$tmp/wt-stale" "claim-stale" "session-st
 check "stale base still claims successfully (advisory, not fatal)" 0 "$stale_rc" \
   "$stale_out" "owner=session-stale"
 check "stale base warns" 0 "$stale_rc" "$stale_out" "WARNING base is 2 commit(s) behind"
-check "stale-base warning names the rebase fix" 0 "$stale_rc" "$stale_out" "rebase 'origin/main'"
+# The hint must not name refs/remotes/origin/*: nothing in the claim updates it, so it is absent on a
+# moved default and frozen under a narrowed refspec. It names the fetch that was actually measured.
+check "stale-base warning names the rebase fix" 0 "$stale_rc" "$stale_out" "rebase FETCH_HEAD"
+stale_hint_rc=0
+grep -qF -- "rebase 'origin/main'" <<<"$stale_out" && stale_hint_rc=1
+check "stale-base hint does NOT send the user to the tracking ref" 0 "$stale_hint_rc"
 
 # Control: same script, same repo, base now current — the warning MUST disappear. If this arm also
 # warned, the positive arm above would prove nothing about staleness detection.
@@ -304,6 +309,15 @@ check "moved default still claims successfully" 0 "$moved_rc" "$moved_out" "owne
 check "moved default is measured against the CURRENT remote default" 0 "$moved_rc" \
   "$moved_out" "WARNING base is 2 commit(s) behind origin/trunk"
 
+# A moved default does NOT break the old tracking-ref hint, and asserting that it did would pin a
+# claim this suite can disprove: `git fetch origin +refs/heads/trunk:<private>` also applies the
+# repository's CONFIGURED refspec, so an ordinary consumer gains origin/trunk as a side effect of the
+# claim itself. Pinned as a precondition so the narrowed-refspec arms below are not later "tidied up"
+# into covering this case too.
+moved_tracking_ref="$(git -C "$moved_consumer" rev-parse --verify --quiet origin/trunk >/dev/null 2>&1 && echo present || echo absent)"
+check "a moved default leaves the tracking ref PRESENT, so it is not the broken-hint case" \
+  "present" "$moved_tracking_ref"
+
 # The configured fetch refspec does not map the default branch into refs/remotes/origin/*. `git fetch
 # origin main` still SUCCEEDS and still retrieves the new tip — but it lands in FETCH_HEAD only,
 # because the command-line refspec controls what is fetched while the CONFIGURED mapping controls
@@ -350,6 +364,35 @@ check "narrowed refspec is measured against the tip actually FETCHED" 0 "$narrow
 narrowed_silent_rc=0
 grep -qF -- "WARNING base is" <<<"$narrowed_out" || narrowed_silent_rc=1
 check "narrowed refspec never reports a silent 'current' base" 0 "$narrowed_silent_rc"
+
+# The arms below execute the two commands literally, so this pins that the script actually EMITS
+# them — without it the execution arms would keep passing even if the hint reverted, and they would
+# be proving git's behaviour rather than this script's advice. Both halves are asserted: the rebase
+# target alone would leave the fetch, which is what makes FETCH_HEAD correct, unpinned.
+check "the emitted hint names the fetch that makes FETCH_HEAD correct" 0 "$narrowed_rc" \
+  "$narrowed_out" "fetch origin 'main' &&"
+check "the emitted hint rebases onto FETCH_HEAD" 0 "$narrowed_rc" "$narrowed_out" "rebase FETCH_HEAD"
+
+# A hint is only advice if it RUNS, so both forms are EXECUTED here rather than pattern-matched.
+# This is the fixture where they differ: the claim's fetch does not update origin/main (the
+# configured mapping does not cover it), so the tracking ref is frozen while the tree is 3 behind.
+#
+# NEGATIVE CONTROL, and it carries the whole argument: the OLD hint does not fail loudly here — it
+# SUCCEEDS, says "up to date", and leaves the tree exactly as stale as the warning just reported.
+# That is the silent false-current this function exists to remove, reappearing inside its remedy.
+narrowed_old_hint_rc=0
+git -C "$tmp/wt-narrowed" rebase 'origin/main' >/dev/null 2>&1 || narrowed_old_hint_rc=$?
+check "the tracking-ref hint SUCCEEDS while changing nothing (negative control)" 0 "$narrowed_old_hint_rc"
+narrowed_behind_after_old="$(git -C "$tmp/wt-narrowed" rev-list --count "HEAD..$narrowed_tip" 2>/dev/null)"
+check "the tracking-ref hint leaves the tree just as stale" 3 "$narrowed_behind_after_old"
+
+# The emitted hint, run exactly as written. It must close the gap the warning reported.
+narrowed_new_hint_rc=0
+{ git -C "$tmp/wt-narrowed" fetch origin main >/dev/null 2>&1 &&
+  git -C "$tmp/wt-narrowed" rebase FETCH_HEAD >/dev/null 2>&1; } || narrowed_new_hint_rc=$?
+check "the emitted hint RUNS under a narrowed refspec" 0 "$narrowed_new_hint_rc"
+narrowed_behind_after_new="$(git -C "$tmp/wt-narrowed" rev-list --count "HEAD..$narrowed_tip" 2>/dev/null)"
+check "the emitted hint actually closes the gap it reported" 0 "$narrowed_behind_after_new"
 
 # Unresolvable remote: the comparison cannot be made, and the required outcome is an explicit UNKNOWN
 # rather than silence — silence is indistinguishable from "base is current", the confusion this whole
