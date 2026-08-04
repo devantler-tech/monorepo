@@ -521,6 +521,11 @@ BEGIN { PH = "<redacted-key-material>"; HORIZON = 256 }
 # Preserving the tool field leaks nothing — it is a tool name, never payload —
 # and it is what makes an over-mask cost MESSAGE TEXT rather than EVIDENCE.
 function mask_line(s) {
+  # `U` is the UNDATED sentinel: an errored tool result carrying no usable
+  # RFC 3339 timestamp is emitted as a bare `U` so it can be counted and
+  # excluded. It holds no tool field and no message text, so there is nothing
+  # to redact and nothing to preserve — return it whole. Masking it to PH would
+  # destroy the very marker the undated count is derived from.
   if (s == "U") return s
   if (match(s, /^D\t[^\t]*\t/)) return substr(s, 1, RLENGTH) PH
   return PH

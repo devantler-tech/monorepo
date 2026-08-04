@@ -4010,6 +4010,30 @@ echo "redactor unit — the seven PEM shapes (monorepo#2643)"
 # Extract the awk program from the target so the unit under test is the SHIPPED
 # one, never a copy that can drift away from it.
 extract_awk() { sed -n "/^AWK_KEY_REDACT='/,/^'\$/p" "${1:-$TARGET}" | sed "1s/^AWK_KEY_REDACT='//; \$d"; }
+
+# 🔴 PIN THE EXTRACTION ITSELF, BEFORE ANY SHAPE ROW DEPENDS ON IT.
+# `awk ""` is valid: it exits 0 and prints nothing. Every shape row below is an
+# ABSENCE assertion (`nocheck` — "the sentinel must not appear"), and absence is
+# exactly what an empty program produces, so a broken extraction would report
+# the whole section green with NO program under test.
+#
+# The extraction keys on the literal text `AWK_KEY_REDACT='` and a lone closing
+# quote line in the target, so an ordinary rename or requoting in
+# agent-telemetry.sh breaks it SILENTLY — the failure mode is green tests, not
+# an error. `unit_ablate` below already guards this class for the ablation arms;
+# the direct rows carry the primary coverage and need it more.
+#
+# Testing for `mask_line` rather than mere non-emptiness is deliberate: a
+# partial extraction that captured only the leading comment block would be
+# non-empty and still be no program at all.
+AWK_PROG=$(extract_awk)
+if [ -n "$AWK_PROG" ] && printf '%s' "$AWK_PROG" | grep -q 'mask_line'; then
+  ok "redactor unit: the awk program really extracts from the shipped script"
+else
+  bad "redactor unit: the awk program really extracts from the shipped script" \
+      "extraction produced ${#AWK_PROG} bytes with no mask_line() — every absence row below would pass vacuously"
+fi
+
 RB=$(printf -- '-----%s %s PRIVATE KEY-----' 'BEGIN' 'RSA')
 RE=$(printf -- '-----%s %s PRIVATE KEY-----' 'END' 'RSA')
 # A key body LONGER than the masking horizon (256). Shape 1 is the reason this
