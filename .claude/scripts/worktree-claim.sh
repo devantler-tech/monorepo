@@ -187,21 +187,9 @@ cmd_add() {
   echo "worktree-claim: added $wt on $branch owner=$owner"
 }
 
-# warn_if_base_is_stale reports how far the new worktree's base is behind the remote default branch.
-#
-# A submodule worktree is created at the PINNED gitlink, not at the remote default branch, and git
-# says nothing about the gap. That silence is the whole defect: a tree tens of commits stale reads
-# exactly like a current one, so "this code is missing X" can be true of the pin and false upstream.
-# Measured twice on the same issue (ksail#6203, pin 7ac8e7bb) — the second time it reached a public
-# root-cause comment asserting a security hole that two merged PRs had already closed. A prose rule
-# did not prevent either occurrence, because the moment you need it is the moment you have no reason
-# to suspect anything. So the check is unconditional and its output lands at creation time.
-#
-# Advisory, never fatal: creating a worktree at the pin is legitimate (a monorepo-coordinated change
-# pins deliberately), and an offline or restricted host must still be able to claim one.
 # base_freshness_unknown reports that the comparison could not be made. Both unresolvable paths emit
 # it: staying silent would be indistinguishable from "base is current", which is the exact confusion
-# this check exists to remove.
+# the staleness check below exists to remove.
 base_freshness_unknown() {
   echo "worktree-claim: NOTE could not resolve $1 — base freshness UNKNOWN, verify before" >&2
   echo "worktree-claim:      concluding anything about current upstream behaviour." >&2
@@ -214,6 +202,18 @@ shquote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
+# warn_if_base_is_stale reports how far the new worktree's base is behind the remote default branch.
+#
+# A submodule worktree is created at the PINNED gitlink, not at the remote default branch, and git
+# says nothing about the gap. That silence is the whole defect: a tree tens of commits stale reads
+# exactly like a current one, so "this code is missing X" can be true of the pin and false upstream.
+# Measured twice on the same issue (ksail#6203, pin 7ac8e7bb) — the second time it reached a public
+# root-cause comment asserting a security hole that two merged PRs had already closed. A prose rule
+# did not prevent either occurrence, because the moment you need it is the moment you have no reason
+# to suspect anything. So the check is unconditional and its output lands at creation time.
+#
+# Advisory, never fatal: creating a worktree at the pin is legitimate (a monorepo-coordinated change
+# pins deliberately), and an offline or restricted host must still be able to claim one.
 warn_if_base_is_stale() {
   local repo="$1" wt="$2" default_ref default_branch behind
   # Ask the REMOTE for its current default branch. refs/remotes/origin/HEAD is local metadata written
