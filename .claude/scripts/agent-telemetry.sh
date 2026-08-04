@@ -1500,7 +1500,22 @@ if want dispatch; then
            else "OUT" end) as $inw
         | (($lastrec.message.stop_reason) // "") as $sr
         | ([$recs[] | select(.type=="assistant")] | length) as $na
-        | "\($role)\t\($recs|length)\t\($na)\t\($tu)\t\($ts)\t\($sr)\t\($inw)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
+        # DELIMITER INJECTION. The row is tab-delimited and the shell splits it
+        # positionally, so any control character surviving into a field shifts
+        # every field after it. $lastt was already scrubbed; $ts and $sr were
+        # not, and $inw sits directly BEHIND $sr — so a record whose
+        # stop_reason decodes to "end_turn<TAB>IN" makes the shell read
+        # sr=end_turn and inw=IN while jq computed OUT. REPRODUCED: a record
+        # dated three months outside a 1d window was published as
+        # "IN WINDOW BY RECORD: 1, live 1". Transcript content is untrusted
+        # input by contract, and this turns it into control over the window
+        # bound itself, which is the one field that must not be forgeable.
+        # POSIX class deliberately, per `usable_ts` above: jq decodes escapes
+        # before Oniguruma sees an explicit range, so the range form deletes
+        # the printable characters and leaves the control bytes.
+        | ($ts | gsub("[[:cntrl:]]+";" ")) as $tsf
+        | ($sr | gsub("[[:cntrl:]]+";" ")) as $srf
+        | "\($role)\t\($recs|length)\t\($na)\t\($tu)\t\($tsf)\t\($srf)\t\($inw)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
       ' "$f" 2>/dev/null | head -1)
       # jq emitting nothing at all (an I/O error, a shape no branch handles) is
       # the same class as a file with no parsable records, and it lands in the
@@ -1670,11 +1685,23 @@ EOF
     # changed record format (a defect that does not exist) or a scheduler absence
     # (an outage that did not happen). Both readings are actively misleading, and
     # the second is the exact false alarm this whole change exists to remove.
-    if [ "$DH_TOTAL" -eq 0 ] && [ $((DH_OUTWIN + DH_UNDATED)) -gt 0 ]; then
+    #
+    # UNDATED IS NOT PROOF OF ABSENCE, so it gets its own claim and is tested
+    # FIRST. An out-of-window dispatch is KNOWN to be outside — its record
+    # timestamp says so. An undated one is unplaceable: it may well have run
+    # inside this window, and asserting "no dispatch INSIDE this window … not
+    # an outage" over it is an unproven claim in the fail-open direction, in
+    # the section whose whole job is to say when it does not know.
+    if [ "$DH_TOTAL" -eq 0 ] && [ "$DH_UNDATED" -gt 0 ]; then
+      printf '  UNKNOWN in-window population for role "%s".\n' "$DH_ROLE"
+      printf '    %s of its transcripts carry no usable record timestamp, so whether any\n' "$DH_UNDATED"
+      echo "    dispatch ran inside this window cannot be established either way."
+      echo "    This is NOT evidence of an absence and NOT evidence of an outage."
+    elif [ "$DH_TOTAL" -eq 0 ] && [ "$DH_OUTWIN" -gt 0 ]; then
       printf '  Role "%s" has no dispatch INSIDE this window.\n' "$DH_ROLE"
-      printf '    %s of its transcripts were selected by file mtime but carry no record\n' "$((DH_OUTWIN + DH_UNDATED))"
-      echo "    inside it. Parsing worked and the role exists; widen --since-days to"
-      echo "    see them. This is not an outage and not a format change."
+      printf '    %s of its transcripts were selected by file mtime but every record they\n' "$DH_OUTWIN"
+      echo "    carry predates it. Parsing worked and the role exists; widen"
+      echo "    --since-days to see them. This is not an outage and not a format change."
     elif [ "$DH_TOTAL" -eq 0 ] && [ "$DH_ROOTS" -gt 0 ] \
        && [ $((DH_NOREC + DH_UNREADABLE)) -eq 0 ] && [ "$DH_OTHERROLE" -gt 0 ]; then
       printf '  Role "%s" did not run in this window — no dispatch of it exists.\n' "$DH_ROLE"

@@ -3354,6 +3354,45 @@ RWU=$(CLAUDE_PROJECTS_DIR="$FIX/dh-recwin-undated" CODEX_HOME="$FIX/nocodex" MON
       DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
 check "an unparseable record timestamp is tallied, not dropped" "$RWU" "no usable record timestamp ....: 1"
 check "and it is not classified"                               "$RWU" "classified: 0"
+# UNDATED IS NOT PROOF OF ABSENCE. An out-of-window dispatch is KNOWN to be
+# outside; an undated one is unplaceable and may have run inside the window. So
+# a zero total caused by undated records must report UNKNOWN, never the
+# confident "no dispatch INSIDE this window … not an outage" — that is an
+# unproven claim in the fail-open direction, in the section whose job is to say
+# when it does not know. (CodeRabbit, monorepo#2669.)
+check   "an undated zero total reports UNKNOWN"          "$RWU" "UNKNOWN in-window population"
+nocheck "an undated zero does not claim a known absence" "$RWU" "has no dispatch INSIDE this window"
+nocheck "an undated zero does not claim it is no outage" "$RWU" "This is not an outage"
+
+# DELIMITER INJECTION into the window bound. The row is tab-delimited and the
+# shell splits it positionally, so a control character surviving into $ts or $sr
+# shifts every later field — and $inw sits directly behind $sr. REPRODUCED before
+# the fix: a record dated 2026-04-30, three months outside a 1d window, whose
+# stop_reason decodes to "end_turn<TAB>IN", was published as
+# "IN WINDOW BY RECORD: 1 / live 1". Transcript content is untrusted input by
+# contract, so the window bound must not be forgeable from it. (CodeRabbit, #2669.)
+#
+# The fixture MUST be written through a quoted heredoc: `echo` under zsh expands
+# \t to a real tab, which is an invalid raw control byte inside a JSON string, so
+# the record fails to parse and the arm passes without ever testing anything —
+# a vacuous control produced while reproducing this very finding.
+mkdir -p "$FIX/dh-inject"
+cat > "$FIX/dh-inject/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"assistant","timestamp":"2026-04-30T00:00:00.000Z","message":{"stop_reason":"end_turn\tIN","content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"echo pwn"}}]}}
+EOF
+# The fixture is only a control if jq really decodes that escape to a tab.
+INJ_TS=$(sed -n '2p' "$FIX/dh-inject/s.jsonl" | jq -r '.message.stop_reason' | tr '\t' 'T')
+if [ "$INJ_TS" = "end_turnTIN" ]; then
+  ok "the injection fixture really carries a decoded tab (not a vacuous arm)"
+else
+  bad "the injection fixture really carries a decoded tab" "decoded to: $INJ_TS"
+fi
+IJOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-inject" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 1 --section dispatch 2>&1)
+check   "a forged tab in stop_reason cannot flip the window bound" "$IJOUT" "IN WINDOW BY RECORD: 0"
+check   "the forged record stays excluded as out-of-window"        "$IJOUT" "last record BEFORE the window .: 1"
+nocheck "and it never reaches the live bucket"                     "$IJOUT" "live ......... 1"
 # FAIL-CLOSED on a missing cutoff, the same way RELIABILITY does. An empty
 # cutoff compares true against every timestamp, so the section would revert to
 # the mtime population while still printing lines that claim it is bounded —
