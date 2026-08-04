@@ -300,6 +300,53 @@ check "moved default still claims successfully" 0 "$moved_rc" "$moved_out" "owne
 check "moved default is measured against the CURRENT remote default" 0 "$moved_rc" \
   "$moved_out" "WARNING base is 2 commit(s) behind origin/trunk"
 
+# The configured fetch refspec does not map the default branch into refs/remotes/origin/*. `git fetch
+# origin main` still SUCCEEDS and still retrieves the new tip — but it lands in FETCH_HEAD only,
+# because the command-line refspec controls what is fetched while the CONFIGURED mapping controls
+# which remote-tracking refs get updated. So a pre-existing origin/main stays frozen at its old value,
+# rev-parse resolves it happily, and the comparison is made against a ref that no longer tracks
+# anything. Same silent false-current as the moved-default case above, reached one layer down: every
+# guard in this function fires correctly and the ANSWER is still wrong, because the ref being compared
+# is not the tip that was just fetched.
+narrowed_origin="$tmp/narrowed-origin.git"
+git init -q --bare -b main "$narrowed_origin"
+narrowed_seed="$tmp/narrowed-seed"
+git init -q -b main "$narrowed_seed"
+git -C "$narrowed_seed" config user.name "worktree-claim-test"
+git -C "$narrowed_seed" config user.email "worktree-claim-test@example.com"
+git -C "$narrowed_seed" commit --allow-empty -qm "base"
+git -C "$narrowed_seed" remote add origin "$narrowed_origin"
+git -C "$narrowed_seed" push -q origin main
+
+narrowed_consumer="$tmp/narrowed-consumer"
+git clone -q "$narrowed_origin" "$narrowed_consumer"
+git -C "$narrowed_consumer" config user.name "worktree-claim-test"
+git -C "$narrowed_consumer" config user.email "worktree-claim-test@example.com"
+# Narrow the mapping so main is no longer covered. origin/main SURVIVES at the clone-time value,
+# which is what makes this the silent case rather than the UNKNOWN one.
+git -C "$narrowed_consumer" config remote.origin.fetch "+refs/heads/release/*:refs/remotes/origin/release/*"
+
+git -C "$narrowed_seed" commit --allow-empty -qm "ahead-1"
+git -C "$narrowed_seed" commit --allow-empty -qm "ahead-2"
+git -C "$narrowed_seed" commit --allow-empty -qm "ahead-3"
+git -C "$narrowed_seed" push -q origin main
+
+narrowed_pre="$(git -C "$narrowed_consumer" rev-parse origin/main)"
+narrowed_tip="$(git -C "$narrowed_seed" rev-parse main)"
+check "origin/main is present but STALE before the claim (precondition)" 0 \
+  "$([ "$narrowed_pre" != "$narrowed_tip" ] && echo 0 || echo 1)"
+
+narrowed_out="$("$script" add "$narrowed_consumer" "$tmp/wt-narrowed" "claim-narrowed" "session-narrowed" 2>&1)"
+narrowed_rc=$?
+check "narrowed refspec still claims successfully" 0 "$narrowed_rc" "$narrowed_out" "owner=session-narrowed"
+# The whole point: three commits behind must be REPORTED, not swallowed by a tracking ref the fetch
+# never updated. A silent pass here is the exact failure this function exists to remove.
+check "narrowed refspec is measured against the tip actually FETCHED" 0 "$narrowed_rc" \
+  "$narrowed_out" "WARNING base is 3 commit(s) behind"
+narrowed_silent_rc=0
+grep -qF -- "WARNING base is" <<<"$narrowed_out" || narrowed_silent_rc=1
+check "narrowed refspec never reports a silent 'current' base" 0 "$narrowed_silent_rc"
+
 # Unresolvable remote: the comparison cannot be made, and the required outcome is an explicit UNKNOWN
 # rather than silence — silence is indistinguishable from "base is current", the confusion this whole
 # check exists to remove. Repointing origin at an absent bare repository is hermetic: ls-remote and

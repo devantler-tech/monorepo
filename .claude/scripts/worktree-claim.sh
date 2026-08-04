@@ -325,7 +325,7 @@ shquote() {
 # Advisory, never fatal: creating a worktree at the pin is legitimate (a monorepo-coordinated change
 # pins deliberately), and an offline or restricted host must still be able to claim one.
 warn_if_base_is_stale() {
-  local repo="$1" wt="$2" default_ref default_branch behind
+  local repo="$1" wt="$2" default_ref default_branch behind remote_tip
   # Ask the REMOTE for its current default branch. refs/remotes/origin/HEAD is local metadata written
   # at clone time and never refreshed, so once a repository's default moves (main → trunk) the stale
   # pointer makes this compare against a branch the remote no longer defaults to — and report "not
@@ -353,14 +353,28 @@ warn_if_base_is_stale() {
     base_freshness_unknown "$default_ref"
     return 0
   fi
-  if ! git -C "$repo" rev-parse --verify --quiet "$default_ref" >/dev/null 2>&1; then
+  # Compare against the tip THIS fetch just retrieved, never against refs/remotes/origin/*. The
+  # command-line refspec above controls what is FETCHED; the repository's configured
+  # `remote.origin.fetch` mapping independently controls which remote-tracking refs get UPDATED. Where
+  # that mapping does not cover the default branch — narrowed, customised, or a remote added without
+  # one — the fetch still succeeds and still brings down the new tip, but origin/<branch> stays frozen
+  # at whatever it held before. It then resolves perfectly, so every guard here passes and the ANSWER
+  # is silently wrong: measured on a stale origin/main with the remote three commits ahead, this
+  # reported no gap at all. FETCH_HEAD is written by the fetch itself, so it cannot disagree with what
+  # was retrieved.
+  #
+  # Resolve it in "$repo", which is where the fetch ran: FETCH_HEAD is a PER-WORKTREE ref, so reading
+  # it from "$wt" would consult that worktree's own — absent on a fresh tree, and arbitrarily old on a
+  # reused one, which would reintroduce the same stale comparison through the replacement for it.
+  if ! remote_tip="$(git -C "$repo" rev-parse --verify --quiet FETCH_HEAD 2>/dev/null)" ||
+    [ -z "$remote_tip" ]; then
     base_freshness_unknown "$default_ref"
     return 0
   fi
   # A FAILED rev-list is an unavailable comparison, not a current base. Folding it into `|| echo 0`
   # made the normalisation below accept it and the numeric test skip silently — reporting neither a
   # warning nor UNKNOWN, which is the same silent "looks current" this check exists to remove.
-  if ! behind="$(git -C "$wt" rev-list --count "HEAD..$default_ref" 2>/dev/null)"; then
+  if ! behind="$(git -C "$wt" rev-list --count "HEAD..$remote_tip" 2>/dev/null)"; then
     base_freshness_unknown "$default_ref"
     return 0
   fi
