@@ -3393,6 +3393,46 @@ IJOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-inject" CODEX_HOME="$FIX/nocodex" MONOREPO_
 check   "a forged tab in stop_reason cannot flip the window bound" "$IJOUT" "IN WINDOW BY RECORD: 0"
 check   "the forged record stays excluded as out-of-window"        "$IJOUT" "last record BEFORE the window .: 1"
 nocheck "and it never reaches the live bucket"                     "$IJOUT" "live ......... 1"
+
+# The COST CONTROL for that scrub. `gsub` is a string operation and aborts the
+# whole jq program on a non-string, and `.timestamp` is transcript-supplied — so
+# scrubbing without coercing first turns a numeric timestamp into a whole-file
+# parse failure. MEASURED before the coercion: `"timestamp":1785238560676`
+# reported the dispatch as `unreadable transcript`, i.e. a run that demonstrably
+# happened filed as a parse error, in the instrument read first to decide whether
+# any other number is trustworthy. It is the same defect the bare-string fixture
+# above already pins, one field over. The correct bucket is UNDATED.
+mkdir -p "$FIX/dh-numts"
+cat > "$FIX/dh-numts/s.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-08-01T10:00:00.000Z","message":{"content":[{"type":"text","text":"<scheduled-task name=\"daily-ai-assistant\" file=\"/x/SKILL.md\">\nrun\n</scheduled-task>"}]}}
+{"type":"assistant","timestamp":1785238560676,"message":{"stop_reason":"end_turn","content":[{"type":"tool_use","id":"n1","name":"Bash","input":{"command":"echo x"}}]}}
+EOF
+NTOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-numts" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 3650 --section dispatch 2>&1)
+check   "a numeric timestamp lands in undated, not unreadable" "$NTOUT" "no usable record timestamp ....: 1"
+nocheck "a numeric timestamp is not a parse failure"           "$NTOUT" "unreadable transcript ....................: 1"
+
+# THE RESUMED-SESSION FALLBACK. Dating a dispatch from the last record of ANY
+# type lets a resume rewrite when the run happened: the refusal here is from
+# 2026-05-01 and the last assistant record carries no timestamp, so a USER
+# record appended today supplied the date. MEASURED before the fix: this exact
+# fixture reported `IN WINDOW BY RECORD: 1 / dead 1` in a 1-DAY window with the
+# outage dated to today — the stale-outage-as-current failure this whole change
+# exists to remove, surviving in the resumed-session path its own rationale
+# names. The dispatch must be UNDATED: its own assistant records cannot place it.
+mkdir -p "$FIX/dh-resumefall"
+{ dispatch_rec daily-ai-assistant 2026-04-30T23:59:50.000Z
+  cat <<'EOF'
+{"type":"assistant","message":{"stop_reason":"stop_sequence","content":[{"type":"text","text":"You've hit your weekly limit · resets 1pm (Europe/Copenhagen)"}]}}
+EOF
+  printf '{"type":"user","timestamp":"%s","message":{"content":[{"type":"text","text":"resumed"}]}}\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+} > "$FIX/dh-resumefall/s.jsonl"
+RFOUT=$(CLAUDE_PROJECTS_DIR="$FIX/dh-resumefall" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        DISPATCH_HEALTH=on bash "$TARGET" --since-days 1 --section dispatch 2>&1)
+check   "a resume cannot date an undated dispatch into the window" "$RFOUT" "no usable record timestamp ....: 1"
+check   "so it is not classified"                                  "$RFOUT" "classified: 0"
+nocheck "and its stale refusal never becomes a current outage"     "$RFOUT" "refusals observed: 1"
 # FAIL-CLOSED on a missing cutoff, the same way RELIABILITY does. An empty
 # cutoff compares true against every timestamp, so the section would revert to
 # the mtime population while still printing lines that claim it is bounded —

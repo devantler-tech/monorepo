@@ -1494,7 +1494,20 @@ if want dispatch; then
             | select(.type=="tool_use")] | length) as $tu
         | (([$recs[] | select(.type=="assistant")] | last) // {}) as $lastrec
         | ((($lastrec | [content_texts] | last)) // "") as $lastt
-        | (($lastrec.timestamp) // ([$recs[]|select(.timestamp)|.timestamp]|last) // "") as $ts
+        # THE ASSISTANT RECORD ONLY. This used to fall back to the last record
+        # of ANY type, which a resume defeats: a session whose refusal is months
+        # old and whose last assistant record carries no timestamp picks up the
+        # timestamp of a USER record appended today. MEASURED at the previous
+        # head: a refusal dated 2026-05-01 was published in a 1-day window as
+        # `IN WINDOW BY RECORD: 1 / dead 1`, with the outage dated to the minute
+        # the probe ran. That is precisely the stale-outage-reported-as-current
+        # failure this section is being fixed for, surviving in the resumed
+        # session path the fix names in its own rationale — and it matters more
+        # now than before, because this value no longer merely LABELS the
+        # dispatch, it decides whether the dispatch is counted at all.
+        # A missing one routes to UNDATED, which is honest: a dispatch whose own
+        # records cannot place it in time is unplaceable, not in-window.
+        | (($lastrec.timestamp) // "") as $ts
         | (if ($ts | usable_ts | not) then "UNDATED"
            elif $ts >= $since then "IN"
            else "OUT" end) as $inw
@@ -1513,8 +1526,21 @@ if want dispatch; then
         # POSIX class deliberately, per `usable_ts` above: jq decodes escapes
         # before Oniguruma sees an explicit range, so the range form deletes
         # the printable characters and leaves the control bytes.
-        | ($ts | gsub("[[:cntrl:]]+";" ")) as $tsf
-        | ($sr | gsub("[[:cntrl:]]+";" ")) as $srf
+        # (No apostrophes in this comment: the jq program is a single-quoted
+        # shell string, so one would terminate it and break the script.)
+        # `scalar_text` FIRST, per the coerce-never-drop rule above. `gsub` is
+        # a string operation and ABORTS the whole program on a non-string, and
+        # `.timestamp`/`.stop_reason` are transcript-supplied, so a numeric
+        # timestamp would kill the parse for the entire transcript. MEASURED:
+        # without the coercion, `"timestamp":1785238560676` reported the run as
+        # `unreadable transcript` — a dispatch that demonstrably RAN, filed as a
+        # parse failure, in the instrument the improver reads first to decide
+        # whether any other number is trustworthy. That is the identical defect
+        # the bare-string-in-a-content-array fixture already pins, reintroduced
+        # one field over; the right bucket for such a record is UNDATED, which
+        # `usable_ts` gives it because the raw value is not a string.
+        | ($ts | scalar_text | gsub("[[:cntrl:]]+";" ")) as $tsf
+        | ($sr | scalar_text | gsub("[[:cntrl:]]+";" ")) as $srf
         | "\($role)\t\($recs|length)\t\($na)\t\($tu)\t\($tsf)\t\($srf)\t\($inw)\t\($lastt|gsub("[\\n\\t]+";" ")|.[0:300])"
       ' "$f" 2>/dev/null | head -1)
       # jq emitting nothing at all (an I/O error, a shape no branch handles) is
