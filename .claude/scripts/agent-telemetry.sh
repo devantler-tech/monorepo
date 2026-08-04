@@ -548,17 +548,21 @@ END {
     while (match(s, /-----BEGIN [A-Z ]*PRIVATE KEY-----/)) {
       bs = RSTART; bl = RLENGTH
       head = substr(s, 1, bs - 1)
-      tail = substr(s, bs + bl)
+      # `scan`, deliberately NOT `tail`: pass B owns a global of that name. It
+      # assigns before every use today, so sharing it is not a live defect —
+      # but a value from pass A surviving into pass B is the same class as the
+      # U[] flag below, and this program has paid for that class enough times.
+      scan = substr(s, bs + bl)
       depth = 1; closed = 0
-      while (depth > 0 && match(tail, /-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/)) {
-        mark = substr(tail, RSTART, RLENGTH)
-        tail = substr(tail, RSTART + RLENGTH)
+      while (depth > 0 && match(scan, /-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/)) {
+        mark = substr(scan, RSTART, RLENGTH)
+        scan = substr(scan, RSTART + RLENGTH)
         if (mark ~ /^-----BEGIN/) depth++
         else if (--depth == 0) closed = 1
       }
       out = out head PH
       if (closed) {
-        s = tail
+        s = scan
       } else {
         # Unpaired BEGIN: the remainder of this line is key material. Whether
         # the key CONTINUES past this line is decided in pass B.
