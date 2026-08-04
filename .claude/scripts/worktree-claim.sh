@@ -207,20 +207,30 @@ WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="${WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS:-$WORKT
 
 # The bound is handed straight to `sleep`, so a malformed value makes that `sleep` fail instantly and
 # collapses the bound to roughly zero: the remote is abandoned before it can answer, and a REACHABLE
-# remote is then reported UNKNOWN for a reason nothing states. `0` is rejected for the same reason
-# while parsing as a perfectly good integer -- it is a well-formed value that is not a bound.
+# remote is then reported UNKNOWN for a reason nothing states.
+#
+# The accept condition is "all digits AND at least one non-zero digit", which is deliberately not the
+# same as "not equal to 0". Zero is a well-formed integer that is not a bound, and it has infinitely
+# many spellings: `00` and `000` are digit-only, are not the literal `0`, and `sleep` returns from all
+# of them immediately. Matching a VALUE rather than a set of spellings is what makes this closed --
+# an earlier round rejected only `0` and let `00` through. `0001` is accepted, and correctly so: it
+# is an unusual spelling of a genuine 1-second bound.
 #
 # Validated HERE, once, rather than inside bounded_remote: both call sites redirect that function's
 # stderr (`2>/dev/null`, so an advisory remote failure cannot abort the claim), which would swallow
 # the notice at exactly the moment it matters. Reporting the rejection is the point -- falling back
 # silently would trade one invisible failure for another.
 case "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" in
-  '' | *[!0-9]* | 0)
-    echo "worktree-claim: NOTE ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=" \
-      "'$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS', using ${WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT}s" >&2
-    WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="$WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT"
-    ;;
+  *[!0-9]* | '') worktree_claim_timeout_usable=no ;;
+  *[1-9]*) worktree_claim_timeout_usable=yes ;;
+  *) worktree_claim_timeout_usable=no ;;
 esac
+if [ "$worktree_claim_timeout_usable" = no ]; then
+  echo "worktree-claim: NOTE ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=" \
+    "'$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS', using ${WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT}s" >&2
+  WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="$WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT"
+fi
+unset worktree_claim_timeout_usable
 
 # bounded_remote runs an advisory remote git call that can never hang the claim.
 #

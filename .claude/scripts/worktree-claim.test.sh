@@ -576,6 +576,29 @@ zerotimeout_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=0 "$script" add \
 check "a zero timeout is rejected as not-a-bound" 0 0 \
   "$zerotimeout_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
 
+# Zero has more than one spelling. `00` and `000` are digit-only and are not the literal `0`, and
+# `sleep` returns from each immediately -- so a guard written against the SPELLING `0` leaves exactly
+# the same collapsed bound reachable. An earlier round of this PR did precisely that.
+for zero_spelling in 00 000; do
+  zs_consumer="$tmp/zs-$zero_spelling-consumer"
+  git clone -q "$origin_repo" "$zs_consumer"
+  zs_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="$zero_spelling" "$script" add \
+    "$zs_consumer" "$tmp/wt-zs-$zero_spelling" "claim-zs-$zero_spelling" "session-zs" 2>&1)" || true
+  check "an all-zero timeout spelling '$zero_spelling' is rejected" 0 0 \
+    "$zs_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
+done
+
+# POSITIVE CONTROL: `0001` has leading zeros but is a genuine 1-second bound and must NOT be
+# rejected. Without this, a guard that simply refused any value containing a zero would satisfy every
+# assertion above while quietly refusing legitimate configuration -- strict-looking and wrong.
+leadzero_consumer="$tmp/leadzero-consumer"
+git clone -q "$origin_repo" "$leadzero_consumer"
+leadzero_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=0001 "$script" add \
+  "$leadzero_consumer" "$tmp/wt-leadzero" "claim-leadzero" "session-leadzero" 2>&1)" || true
+leadzero_rc=0
+grep -qF "ignoring unusable" <<<"$leadzero_out" && leadzero_rc=1
+check "a leading-zero but NON-zero timeout is accepted" 0 "$leadzero_rc"
+
 # Remote-default DISCOVERY failure must report UNKNOWN, not fall back to the clone-time pointer.
 # The fallback trusted `refs/remotes/origin/HEAD` — written once at clone time and never refreshed —
 # which is the stale source this whole check exists to stop trusting: if the default moved, the old
