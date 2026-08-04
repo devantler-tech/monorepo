@@ -195,6 +195,45 @@ base_freshness_unknown() {
   echo "worktree-claim:      concluding anything about current upstream behaviour." >&2
 }
 
+# How long an advisory remote call may take before it is abandoned. Short on purpose: this runs on
+# the creation path of every worktree, and its answer is a NOTE, never a gate.
+WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="${WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS:-10}"
+
+# bounded_remote runs an advisory remote git call that can never hang the claim.
+#
+# Both remote calls below happen inside cmd_add, where the freshness check is explicitly allowed to
+# fail — so a remote that never answers must not block worktree creation. Two different hangs are
+# possible and they need different fixes: a credential or passphrase PROMPT waits forever (closed by
+# GIT_TERMINAL_PROMPT and ssh BatchMode), and an UNREACHABLE host waits on TCP (closed by the timer).
+#
+# Deliberately not coreutils `timeout`: it is absent from a stock macOS, which is both this script's
+# primary host and one leg of the CI matrix, so a timeout-based bound would silently not apply on the
+# platform that needs it most. The killer subshell below is portable to bash 3.2.
+#
+# Two non-obvious details, both verified rather than assumed:
+#   * the command is `wait`ed on, not polled with `kill -0` — a finished child stays a zombie until it
+#     is reaped, so a poll loop would spin until the deadline instead of returning immediately;
+#   * the killer's stdout is redirected, because it would otherwise inherit and hold open a caller's
+#     pipe, making every call take the full timeout even when git answered instantly.
+bounded_remote() {
+  local secs="$1"
+  shift
+  local cmd_pid killer_pid rc=0
+  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" "$@" &
+  cmd_pid=$!
+  (
+    sleep "$secs"
+    kill -TERM "$cmd_pid" 2>/dev/null
+  ) >/dev/null 2>&1 &
+  killer_pid=$!
+  # `wait` reports a signal-killed job on the SHELL's stderr, so it is silenced here rather than at
+  # each call site.
+  { wait "$cmd_pid" || rc=$?; } 2>/dev/null
+  kill -TERM "$killer_pid" 2>/dev/null || true
+  { wait "$killer_pid" || true; } 2>/dev/null
+  return "$rc"
+}
+
 # shquote renders "$1" as one single-quoted shell word, so a path or ref containing spaces, newlines,
 # or shell metacharacters prints as a single safely reusable argument rather than something that
 # would re-split or be interpreted if pasted back into a shell.
@@ -222,7 +261,8 @@ warn_if_base_is_stale() {
   # behind" while the tree is arbitrarily stale, which is precisely the silence this check removes.
   # `|| true`: with `set -o pipefail` a repo that has no origin at all (or an unreachable one) would
   # otherwise abort the whole claim on an advisory check that is explicitly allowed to fail.
-  default_branch="$(git -C "$repo" ls-remote --symref origin HEAD 2>/dev/null |
+  default_branch="$(bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+    git -C "$repo" ls-remote --symref origin HEAD 2>/dev/null |
     awk '$1 == "ref:" { sub("^refs/heads/", "", $2); print $2; exit }' || true)"
   if [ -z "$default_branch" ]; then
     # Offline or restricted host: fall back to the local pointer, then to the conventional default.
@@ -231,7 +271,8 @@ warn_if_base_is_stale() {
   fi
   [ -n "$default_branch" ] || default_branch="main"
   default_ref="origin/$default_branch"
-  if ! git -C "$repo" fetch --quiet origin "$default_branch" 2>/dev/null; then
+  if ! bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+    git -C "$repo" fetch --quiet origin "$default_branch" 2>/dev/null; then
     base_freshness_unknown "$default_ref"
     return 0
   fi

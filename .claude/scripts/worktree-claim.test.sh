@@ -261,7 +261,7 @@ current_out="$("$script" add "$consumer" "$tmp/wt-current" "claim-current" "sess
 current_rc=$?
 check "current base still claims successfully" 0 "$current_rc" "$current_out" "owner=session-current"
 current_warn_rc=0
-printf '%s' "$current_out" | grep -qF "WARNING base is" && current_warn_rc=1
+grep -qF -- "WARNING base is" <<<"$current_out" && current_warn_rc=1
 check "current base does NOT warn (control)" 0 "$current_warn_rc"
 
 # The remote's default branch MOVED after the clone. refs/remotes/origin/HEAD is written once, at
@@ -362,6 +362,35 @@ case "$revlist_line" in '' | *[!0-9]*) revlist_line=0 ;; esac
 awk -v n="$revlist_line" 'NR>n && NR<=n+2 && index($0,"base_freshness_unknown")' <<<"$normalise_code" |
   grep -q . || revfail_rc=1
 check "a FAILED rev-list reports UNKNOWN rather than behind=0" 0 "$revfail_rc"
+
+# A remote that never answers must not hold the claim open. `ext::` runs an arbitrary command as the
+# transport, so this hangs git deterministically with no network and no unreachable-address guesswork.
+# The bound is asserted by WALL CLOCK: a run that merely "succeeds" would also succeed if the timer
+# never fired and git sat there for the full sleep, so elapsed time is the only thing that separates
+# a working bound from an absent one.
+#
+# `protocol.ext.allow` is REQUIRED and is not decoration: it defaults to `never`, so without it git
+# rejects the transport in 0s with "transport 'ext' not allowed" and the fixture exercises the
+# fast-FAILURE path instead of the hang. That version of this test passed with the bound removed —
+# it was vacuous, and only the ablation exposed it.
+hang_consumer="$tmp/hang-consumer"
+git clone -q "$origin_repo" "$hang_consumer"
+git -C "$hang_consumer" remote set-url origin "ext::sleep 60"
+git -C "$hang_consumer" config protocol.ext.allow always
+hang_start="$(date +%s)"
+hang_rc=0
+hang_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=3 "$script" add \
+  "$hang_consumer" "$tmp/wt-hang" "claim-hang" "session-hang" 2>&1)" || hang_rc=$?
+hang_elapsed=$(($(date +%s) - hang_start))
+check "an unresponsive remote still claims successfully (advisory, not fatal)" 0 "$hang_rc" \
+  "$hang_out" "owner=session-hang"
+# Two calls are bounded, so allow both plus slack -- but far below the 60s the transport would take.
+hang_bounded_rc=0
+[ "$hang_elapsed" -lt 30 ] || hang_bounded_rc=1
+check "an unresponsive remote is abandoned at the bound, not waited out" 0 "$hang_bounded_rc"
+hang_unknown_rc=0
+grep -qF -- "base freshness UNKNOWN" <<<"$hang_out" || hang_unknown_rc=1
+check "an unresponsive remote reports UNKNOWN rather than silence" 0 "$hang_unknown_rc"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
