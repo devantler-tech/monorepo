@@ -488,18 +488,306 @@ emit_credential_hits() {
       done
 }
 
+# ── PRIVATE-KEY MASKING — the one filter here that can destroy records ────────
+#
+# Written against a SPECIFICATION (RFC 7468 textual encodings, RFC 1421
+# encapsulated headers) rather than against the last review finding. The prior
+# implementations were each induced from whichever PEM shape a reviewer had just
+# produced, and every round produced one the previous fix had not enumerated —
+# greedy pairing, the unterminated case, a bounded closing search, RFC 1421
+# separators, and finally a complete key longer than the lookahead. The shapes
+# this must handle, and where each is answered:
+#
+#   1. TERMINATED block of ARBITRARY length  → pass B, closing search unbounded
+#   2. UNTERMINATED block                    → pass B, masked to end of input
+#   3. RFC 1421 `Proc-Type:`/`DEK-Info:` headers and their blank separator
+#                                            → no content test exists to stop on
+#   4. Short final base64 line               → likewise
+#   5. Several markers on ONE physical line  → pass A, match()/substr walk
+#   5c. NESTED markers ACROSS lines          → pass B, depth over U[] and END
+#   6. Stray unpaired BEGIN or END           → pass A / the marker sed below
+#   7. Both stream shapes (tagged rows, report) → mask_line() keeps the row tag
+#   8. Key material in a tagged row TOOL field  → mask_line() masks it too
+#
+# 🔑 THE GOVERNING ASYMMETRY: a miss DISCLOSES A KEY, an over-mask costs report
+# lines inside a window we control. So no branch here asks what a line looks
+# like. Narrow classification is right for a parser and wrong for a redactor.
+AWK_KEY_REDACT='
+# TAG_RE matches the `D<TAB>tool<TAB>` row prefix. It is built from an explicit
+# tab CHARACTER rather than written as the literal /^D\t[^\t]*\t/, because POSIX
+# does not define `\t` INSIDE A BRACKET EXPRESSION. Every awk this runs on today
+# honours it — measured on one-true-awk 20200816 (macOS CI) and on the Linux CI
+# leg, where a `t`-containing tool name like `TodoWrite` matches identically
+# either way — so this is hardening against unspecified behaviour, not a live
+# defect. It is worth doing anyway because the failure mode is SILENT: an awk
+# reading `[^\t]` as "not backslash and not t" would drop the tag from exactly
+# the rows mask_line() exists to keep countable, and a dropped record looks like
+# a clean run rather than an error.
+BEGIN { PH = "<redacted-key-material>"; TAB = sprintf("%c", 9); TAG_RE = "^D" TAB "[^" TAB "]*" TAB }
+# Mask a line WITHOUT destroying its structure. Callers tag rows as
+# `D<TAB>tool<TAB>message`, and this filter runs over that tagged stream as well
+# as over the final report — so replacing a whole line does not merely redact
+# it, it deletes the record and drops the error from the count. Measured on the
+# sed range this replaces: 4 errors -> 1.
+#
+# 🔴 THE TOOL FIELD IS MASKED TOO, and the earlier claim that it need not be is
+# the one this file paid for. It read "preserving the tool field leaks nothing —
+# it is a tool name, never payload", and that is an assumption about well-formed
+# input asserted inside the one function whose governing rule is to assume
+# nothing about content. It is false: the reliability stream builds that field
+# from `$t.name` straight out of the transcript (see the `D\t` emitter below),
+# with no sanitisation on the way, so `BEGIN / D<TAB><key body><TAB>msg / END`
+# emitted the key body verbatim while dutifully masking the message beside it.
+#
+# What survives is the STRUCTURE only: the `D` tag and both separators. That is
+# all the count needs — the consumer selects on `^D<TAB>` and splits on tabs, so
+# a three-field row still parses and is still counted. The over-mask therefore
+# costs MESSAGE TEXT and TOOL ATTRIBUTION, never a RECORD, and it loses the tool
+# name only on a row whose tool name is already key material.
+#
+# ⚠️ Deliberately NOT a content test on the field. A whitelist of "safe-looking"
+# tool names is not the harmless direction it appears to be: base64 draws from
+# `A-Za-z0-9+/=`, so a key chunk containing none of `+/=` — an ordinary
+# occurrence, not a contrived one — matches any plausible identifier pattern and
+# would be preserved. A test that only ever masks MORE is admissible here; this
+# one would mask less on exactly the input that matters, so it is not that.
+function mask_line(s) {
+  # `U` is the UNDATED sentinel: an errored tool result carrying no usable
+  # RFC 3339 timestamp is emitted as a bare `U` so it can be counted and
+  # excluded. It holds no tool field and no message text, so there is nothing
+  # to redact and nothing to preserve — return it whole. Masking it to PH would
+  # destroy the very marker the undated count is derived from.
+  if (s == "U") return s
+  if (match(s, TAG_RE)) return "D" TAB PH TAB PH
+  return PH
+}
+# ⚠️ ACCEPTED MEMORY BOUND. This buffers every emitted line to EOF — the same
+# trade the private-key spans force, since a block cannot be classified as
+# terminated until its closing marker is found (or proven absent), and that
+# answer is deliberately unbounded above. `MAX_FILES` bounds the report, but a
+# wide window can push hundreds of thousands of tagged rows through here, so the
+# footprint scales with the SELECTED WINDOW, not with the report size.
+{ L[NR] = $0 }
+END {
+  n = NR
+  # Pass A — collapse every span COMPLETE ON ONE LINE, closing each BEGIN at the
+  # END that returns nesting DEPTH to zero. match()/substr, never a quantifier:
+  # a regex is leftmost-longest, so `.*` between the markers runs to the LAST END
+  # and strands a lone BEGIN, whose residual marker then re-opens the range.
+  #
+  # 🔴 DEPTH, not the NEAREST END. Pairing with the nearest closer leaked on
+  # `BEGIN1 … BEGIN2 … END2 SECRET END1`: the span ended at END2, so `SECRET
+  # END1` survived pass A, and the stray-marker sed downstream masks only the
+  # marker — the key material beside it reached the output. An ordinary
+  # single-span line masks fully at the same head, which is why a suite without
+  # this shape stays green (shape 5 alone did not constrain it).
+  #
+  # Walking BOTH markers and closing at depth 0 also makes the two-openers-
+  # one-closer case fall to the unterminated branch, where pass B resolves it —
+  # over-masking, which is the direction the governing asymmetry above demands.
+  for (i = 1; i <= n; i++) {
+    s = L[i]; out = ""
+    while (match(s, /-----BEGIN [A-Z ]*PRIVATE KEY-----/)) {
+      bs = RSTART; bl = RLENGTH
+      head = substr(s, 1, bs - 1)
+      # `scan`, deliberately NOT `tail`: pass B owns a global of that name. It
+      # assigns before every use today, so sharing it is not a live defect —
+      # but a value from pass A surviving into pass B is the same class as the
+      # U[] flag below, and this program has paid for that class enough times.
+      scan = substr(s, bs + bl)
+      depth = 1; closed = 0
+      while (depth > 0 && match(scan, /-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/)) {
+        mark = substr(scan, RSTART, RLENGTH)
+        scan = substr(scan, RSTART + RLENGTH)
+        if (mark ~ /^-----BEGIN/) depth++
+        else if (--depth == 0) closed = 1
+      }
+      out = out head PH
+      if (closed) {
+        s = scan
+      } else {
+        # Unpaired BEGIN: the remainder of this line is key material. Whether
+        # the key CONTINUES past this line is decided in pass B.
+        #
+        # 🔴 U[] IS A COUNT, NOT A FLAG, and `depth` is already that count: the
+        # walk above exits with 1 + openers - closers still outstanding on this
+        # line. Storing a boolean collapsed `BEGIN BEGIN` on one physical line
+        # into a single opener, so the pass-B depth walk closed the block at the
+        # FIRST later END instead of the second — and everything after that END
+        # printed verbatim. It is the same nearest-closer defect as 5c/5d,
+        # reached through pass A folding two openers into one line.
+        s = ""
+        U[i] = depth
+        break
+      }
+    }
+    L[i] = out s
+  }
+  # Pass B — resolve each line-crossing block by looking for its closing marker.
+  # 🔴 U[] is CLEARED as lines are consumed, and that is load-bearing. A masked
+  # line no longer holds the BEGIN that flagged it, so re-processing it starts a
+  # SECOND search from inside a region that is already handled — and because the
+  # closing marker it would have paired with has itself just been replaced, that
+  # search finds nothing and falls into the unterminated branch, running away
+  # for a full horizon of lines that were never key material.
+  #
+  # Reached by an entirely ordinary input: two BEGINs before one END. Measured
+  # on the un-cleared form — `BEGIN / BEGIN / body / END` followed by six plain
+  # report lines destroyed all six.
+  for (i = 1; i <= n; i++) {
+    if (!U[i]) continue
+    # 🔴 THE SEARCH IS UNBOUNDED, AND THAT IS THE FIX. It used to stop at a
+    # fixed lookahead, which made the classification a GUESS: a COMPLETE key
+    # whose END sat beyond it was misread as unterminated and masked only that
+    # far, so its tail was emitted verbatim. Measured on the bounded form with
+    # a 64-line lookahead: 36 body lines of a 100-line RSA-8192 key survived
+    # into the output.
+    #
+    # A bounded lookahead cannot answer an unbounded question. Scanning to end
+    # of input makes the terminated/unterminated split EXACT, which is what
+    # spec shape 1 requires — no fixed bound may apply to a real key block,
+    # because there is no length at which a PEM stops being a PEM.
+    #
+    # The cost is a stray BEGIN pairing with an unrelated END far later, which
+    # over-masks the lines between. That is deliberately accepted rather than
+    # bounded, for two reasons. First, bounding it is exactly the guess that
+    # leaked. Second, mask_line() above makes the over-mask NON-DESTRUCTIVE on
+    # the tagged stream — every record keeps its tag and stays counted, and only
+    # its message text is replaced. The earlier "200 records eaten" measurement
+    # predates that tag preservation; re-measured, the records survive.
+    #
+    # 🔴 AND IT TRACKS DEPTH, for the same reason pass A does — one dimension
+    # up. Pass A has already consumed every BEGIN marker, so nesting is no
+    # longer visible in the TEXT here; it survives only as U[], the flag marking
+    # a line that ended with an unclosed opener. So the walk reads U[j] as an
+    # opener and each residual END marker as a closer, and closes at depth 0.
+    #
+    # The order within a line is fixed rather than chosen: pass A keeps `head`,
+    # the text BEFORE the unpaired BEGIN, so any END left on a flagged line
+    # necessarily precedes that opener. Closers first, then the opener.
+    #
+    # Without it, `BEGIN1 / body / BEGIN2 / END2 / SECRET / END1` closed the
+    # outer block at END2, cleared U[] for the line of BEGIN2 as a consumed
+    # line, and so never resolved the block of BEGIN2 — SECRET printed
+    # verbatim. The pass-A
+    # same-line nesting fix does not constrain this at all, which is the whole
+    # lesson: fixing one shape of a defect is not fixing the defect.
+    #
+    # It must not RE-BOUND the scan — shape 1 needs it unbounded — so the depth
+    # counter rides along with the existing walk to end of input rather than
+    # replacing it. `bdepth`/`bscan`/`bdrop` are named apart from the pass-A
+    # `depth`/`scan` on purpose: a value leaking between passes is the same
+    # class as the U[] flag below, and this program has paid for it enough.
+    # `bdepth` seeds from U[i] rather than 1, and accumulates U[j] rather than
+    # incrementing, because U[] counts openers — see pass A. A line can carry
+    # more than one, and treating it as a flag under-counts the depth by exactly
+    # the number pass A folded away.
+    close_at = 0; close_end = 0; bdepth = U[i]
+    for (j = i + 1; j <= n && close_at == 0; j++) {
+      bscan = L[j]; bdrop = 0
+      while (match(bscan, /-----END [A-Z ]*PRIVATE KEY-----/)) {
+        # Absolute end offset of this marker in L[j], accumulated as `bscan` is
+        # consumed. The closing line is masked UP TO the marker that actually
+        # balanced the depth, not the first one on the line — closing at the
+        # first would mask LESS than the nesting requires, which is the wrong
+        # side of the governing asymmetry.
+        bdrop += RSTART + RLENGTH - 1
+        bscan = substr(bscan, RSTART + RLENGTH)
+        if (--bdepth == 0) { close_at = j; close_end = bdrop; break }
+      }
+      if (close_at == 0) bdepth += U[j]
+    }
+    if (close_at == 0) {
+      # UNTERMINATED block: mask every following line to end of input, with NO
+      # content test whatsoever. Stopping early on an explicit END is the
+      # terminated branch above; there is no other stop condition, by design.
+      #
+      # ⚠️ THE DEFAULT IS INVERTED ON PURPOSE, and the earlier version is a
+      # cautionary tale. This loop used to mask only lines that "plausibly
+      # continue key material" — a long unbroken base64 run — and that
+      # classifier leaked twice: an RFC 1421 ENCRYPTED PEM puts
+      # `Proc-Type:`/`DEK-Info:` headers and a BLANK separator between BEGIN
+      # and the body, so the loop stopped on line 1 and emitted the whole key;
+      # and a PEM final line is frequently shorter than the length floor, so it
+      # escaped even in the clean case. This asks nothing about what a line
+      # looks like, which is what makes it closed rather than merely wider.
+      #
+      # 🔴 THE MASKING IS UNBOUNDED, and that bound is where the LAST leak was.
+      # It used to stop at a 256-line HORIZON, justified as "no realistic
+      # truncated key is that long" and "a stray marker must not consume the
+      # stream". The first half is the same length guess the closing search
+      # above already had to abandon: PEM imposes no payload ceiling, so an
+      # unterminated key longer than the bound emitted its tail verbatim.
+      # Measured on the bounded form: a 300-line unterminated body left 44
+      # survivors, the first at body line 257 — 300 - 256, exactly.
+      #
+      # The second half is real but is the WRONG SIDE OF THE ASYMMETRY. A stray
+      # BEGIN with no END anywhere and a transcript truncated mid-key are the
+      # same input — this branch asks nothing about content, deliberately, so
+      # nothing here can tell them apart. Bounding it therefore does not
+      # separate the two cases; it just picks disclosure over over-masking for
+      # every input past the bound.
+      #
+      # Accepting the runaway costs message text, not evidence: mask_line()
+      # preserves each row tag, so the records stay parsed and counted. That is
+      # the identical trade the unbounded closing search above already makes,
+      # for the identical reason — and it is what makes shape 2 exact, as the
+      # shape-1 fix made shape 1 exact.
+      for (j = i + 1; j <= n; j++) { L[j] = mask_line(L[j]); U[j] = 0 }
+      continue
+    }
+    # ⚠️ The INTERMEDIATE lines are cleared, the CLOSING line is NOT, and the
+    # asymmetry is the whole point. An intermediate line is replaced wholesale,
+    # so any opener it held is gone and its block is subsumed by this span. The
+    # closing line is only masked UP TO its END marker — a BEGIN sitting AFTER
+    # that marker on the same physical line opens a block that continues past
+    # it and is still unresolved. Clearing the flag there skipped that block
+    # entirely and printed its body verbatim from the next line on.
+    #
+    # (Reported as a 🔴 leak on the first review round of this PR. The
+    # ordering is produced by pass A itself, which keeps `head` — the text
+    # before the BEGIN — and `head` still contains the earlier END.)
+    for (j = i + 1; j < close_at; j++) { L[j] = mask_line(L[j]); U[j] = 0 }
+    s = L[close_at]
+    # Everything up to and including the BALANCING END marker is key material;
+    # only the text after it survives. `close_end` is the offset of that marker,
+    # computed by the depth walk above — re-matching here would find the FIRST
+    # END on the line, which under nesting is not the one that closed us.
+    tail = substr(s, close_end + 1)
+    # 🔴 The CLOSING line needs the same structural preservation every other
+    # masked line gets. It is the one branch that does not route through
+    # mask_line(), and it was blanking the row tag — so the record stopped
+    # parsing and dropped out of the count, which is precisely the defect
+    # mask_line() exists to prevent, surviving in the path it did not cover.
+    # Measured on a 202-row stray span: 201 of 202 rows kept their tag.
+    # (Same class as the bounded-search defect above: when a guard is added,
+    # check every OTHER path that walks the same structure — which is also why
+    # the tool field is masked here exactly as mask_line() now masks it.)
+    if (match(s, TAG_RE)) L[close_at] = "D" TAB PH TAB PH tail
+    else                  L[close_at] = PH tail
+  }
+  for (i = 1; i <= n; i++) print L[i]
+}
+'
+
 # Redact credential-shaped strings from ANYTHING this script prints.
 # Every emitted line originates in a transcript, and a failed tool result can
 # carry a token in its error text — so redaction lives at the output boundary
 # rather than in each detector, where one forgotten call-site leaks.
 redact() {
-  # A multi-line key block is masked with a sed RANGE (BEGIN..END), which is
-  # stateful across lines. The obvious alternative — masking any line that looks
-  # like base64 — over-redacts badly: tried against the real corpus it collapsed
-  # 30 distinct guard-denial entries into one unreadable bucket. Destroying real
-  # signal to catch a rare shape is a bad trade, and a redactor that eats the
-  # report is its own kind of failure.
-  sed -E '/-----BEGIN [A-Z ]*PRIVATE KEY-----/,/-----END [A-Z ]*PRIVATE KEY-----/ s/^.*$/<redacted-key-material>/' \
+  # Private-key material is masked by the bounded two-pass walk above, never by
+  # a sed RANGE. A sed range looks for its end address only on a LATER line, so
+  # a key pasted into ONE error message opened a range that never closed and
+  # rewrote every following line to EOF — measured, 4 in-window errors read as
+  # 1. Replacing the WHOLE line then still deleted the record it redacted
+  # (4 -> 3), because callers put structure on these lines. Only the key SPAN
+  # may be replaced. Both sed forms are why the walk exists; do not bring
+  # either back.
+  #
+  # The marker sed rules that follow are NOT dead: pass A leaves a stray
+  # unpaired END untouched (it scans for a BEGIN first), and rule 2 below is
+  # what masks it.
+  awk "$AWK_KEY_REDACT" \
   | sed -E \
     -e 's/(github_pat_[A-Za-z0-9_]{6})[A-Za-z0-9_]+/\1…<redacted>/g' \
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
