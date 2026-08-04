@@ -357,6 +357,40 @@ case "$test_line" in '' | *[!0-9]*) test_line=0 ;; esac
 [ "$norm_line" -gt 0 ] && [ "$test_line" -gt 0 ] && [ "$norm_line" -lt "$test_line" ] || normalise_rc=1
 check "behind-count is normalised BEFORE the numeric test" 0 "$normalise_rc"
 
+# ...and the same property BEHAVIOURALLY, which is what the arm above says it cannot be. It can:
+# `git` is resolved from PATH, so a stub forwarding every other subcommand to the real binary and
+# returning a non-integer on `rev-list --count` is the injectable seam the comment asked for. Worth
+# both arms — the source-coupled one pins that the retired `behind=0` spelling is gone, this one
+# pins the OUTPUT, so a reformat cannot break it and a matching comment cannot satisfy it.
+stub_dir="$tmp/stub-bin"
+mkdir -p "$stub_dir"
+real_git="$(command -v git)"
+cat >"$stub_dir/git" <<STUB
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = "rev-list" ]; then
+    for inner in "\$@"; do
+      [ "\$inner" = "--count" ] && { printf 'fatal: not a valid object name\n'; exit 0; }
+    done
+  fi
+done
+exec "$real_git" "\$@"
+STUB
+chmod +x "$stub_dir/git"
+malformed_consumer="$tmp/malformed-consumer"
+git clone -q "$origin_repo" "$malformed_consumer"
+malformed_rc=0
+malformed_out="$(PATH="$stub_dir:$PATH" "$script" add \
+  "$malformed_consumer" "$tmp/wt-malformed" "claim-malformed" "session-malformed" 2>&1)" || malformed_rc=$?
+check "a malformed behind-count still claims successfully (advisory, not fatal)" 0 "$malformed_rc" \
+  "$malformed_out" "owner=session-malformed"
+check "a malformed behind-count reports UNKNOWN rather than a silent 'current'" 0 "$malformed_rc" \
+  "$malformed_out" "base freshness UNKNOWN"
+# The NEGATIVE half: it must not render as a current base, which is what `behind=0` produced.
+malformed_quiet_rc=0
+grep -qF -- "WARNING base is 0 commit(s)" <<<"$malformed_out" && malformed_quiet_rc=1
+check "a malformed behind-count never renders as 'not behind'" 0 "$malformed_quiet_rc"
+
 # A FAILED rev-list must report UNKNOWN, not fold into behind=0 — otherwise an unavailable comparison
 # renders identically to a current base, the exact silence this whole check removes.
 #
@@ -423,6 +457,15 @@ shquote_src="$(sed -n '/^shquote()/,/^}/p' "$script" | grep -vE '^[[:space:]]*#'
 shquote_impl_rc=0
 if grep -qF -- '$(' <<<"$shquote_src"; then shquote_impl_rc=1; fi
 check "shquote uses no command substitution (cannot strip a trailing newline)" 0 "$shquote_impl_rc"
+# The POSITIVE half, and it is not decoration: both arms above would still pass if the newline fix
+# had broken quote escaping outright, since neither input contains a quote. Escaping IS the job this
+# helper exists to do, so it needs an arm of its own — compared byte-exactly against the expected
+# `'it'\''s'`, because a length check cannot tell a correct escape from a differently-wrong one.
+shquote_esc_rc=0
+bash -c 'eval "$1"; shquote "$2" >"$3"' _ "$shquote_fn" "it's" "$tmp/shq.esc"
+printf "%s" "'it'\\''s'" >"$tmp/shq.esc.expected"
+cmp -s "$tmp/shq.esc" "$tmp/shq.esc.expected" || shquote_esc_rc=1
+check "shquote still escapes an embedded single quote" 0 "$shquote_esc_rc"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
