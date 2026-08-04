@@ -4385,7 +4385,14 @@ check "shape 8 control: a row outside any key span keeps its tool name" "$S8C" "
 #     `-----END ... PRIVATE KEY-----` between a truncated key's BEGIN and its body
 #     closed the span early and emitted the remaining body VERBATIM — an
 #     under-mask, the one direction this file's governing asymmetry forbids.
-#     (`-----END ... PRIVATE KEY-----` already occurs in the live corpus.)
+#     (That shape does occur in the live corpus, but state its provenance or the
+#     count reads as a recurring production pattern, which it is not. Measured
+#     2026-08-04: exactly ONE occurrence predates this investigation — a
+#     `user`-role record of 2026-07-07, transcript text rather than an emitted
+#     key — while every later occurrence was written BY this investigation and by
+#     sessions since discussing it. The corpus stores the very sessions that scan
+#     it, so it is self-contaminating: the count is evidence that the shape is
+#     REACHABLE in ordinary text, never that production keeps emitting it.)
 #
 # So the label is bounded to the two families the specs actually require, and no
 # further: it must START with an alphanumeric — which is what rejects `... `
