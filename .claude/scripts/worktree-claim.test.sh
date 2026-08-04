@@ -437,10 +437,14 @@ check "a malformed behind-count still claims successfully (advisory, not fatal)"
   "$malformed_out" "owner=session-malformed"
 check "a malformed behind-count reports UNKNOWN rather than a silent 'current'" 0 "$malformed_rc" \
   "$malformed_out" "base freshness UNKNOWN"
-# The NEGATIVE half: it must not render as a current base, which is what `behind=0` produced.
+# The NEGATIVE half. It must not emit a behind-count WARNING at all: the count is unusable, so the
+# only honest outputs are the UNKNOWN notice (asserted above) and silence about a distance. Matched on
+# the `WARNING base is` PREFIX, not on `WARNING base is 0 commit(s)` -- the retired `behind=0` folding
+# never printed that string either (0 is not > 0, so it warned about nothing), which made the old
+# assertion unfireable. The prefix form does fire, on a garbage count rendered into the message.
 malformed_quiet_rc=0
-grep -qF -- "WARNING base is 0 commit(s)" <<<"$malformed_out" && malformed_quiet_rc=1
-check "a malformed behind-count never renders as 'not behind'" 0 "$malformed_quiet_rc"
+grep -qF -- "WARNING base is" <<<"$malformed_out" && malformed_quiet_rc=1
+check "a malformed behind-count never renders a distance" 0 "$malformed_quiet_rc"
 
 # A FAILED rev-list must report UNKNOWN, not fold into behind=0 — otherwise an unavailable comparison
 # renders identically to a current base, the exact silence this whole check removes.
@@ -631,20 +635,22 @@ pkill -KILL -f 'sleep 9871' >/dev/null 2>&1 || true
 # nothing. The distinguishing observable is that the rejection is reported.
 badtimeout_consumer="$tmp/badtimeout-consumer"
 git clone -q "$origin_repo" "$badtimeout_consumer"
+badtimeout_rc=0
 badtimeout_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=invalid "$script" add \
-  "$badtimeout_consumer" "$tmp/wt-badtimeout" "claim-badtimeout" "session-badtimeout" 2>&1)" || true
-check "a non-integer timeout is rejected and reported" 0 0 \
+  "$badtimeout_consumer" "$tmp/wt-badtimeout" "claim-badtimeout" "session-badtimeout" 2>&1)" || badtimeout_rc=$?
+check "a non-integer timeout is rejected and reported" 0 "$badtimeout_rc" \
   "$badtimeout_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
-check "a rejected timeout still claims the worktree" 0 0 \
+check "a rejected timeout still claims the worktree" 0 "$badtimeout_rc" \
   "$badtimeout_out" "owner=session-badtimeout"
 
 # `0` parses as an integer but is not a bound -- it abandons every remote call immediately, which is
 # the same invisible-UNKNOWN failure wearing a well-formed value.
 zerotimeout_consumer="$tmp/zerotimeout-consumer"
 git clone -q "$origin_repo" "$zerotimeout_consumer"
+zerotimeout_rc=0
 zerotimeout_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=0 "$script" add \
-  "$zerotimeout_consumer" "$tmp/wt-zerotimeout" "claim-zerotimeout" "session-zerotimeout" 2>&1)" || true
-check "a zero timeout is rejected as not-a-bound" 0 0 \
+  "$zerotimeout_consumer" "$tmp/wt-zerotimeout" "claim-zerotimeout" "session-zerotimeout" 2>&1)" || zerotimeout_rc=$?
+check "a zero timeout is rejected as not-a-bound" 0 "$zerotimeout_rc" \
   "$zerotimeout_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
 
 # Zero has more than one spelling. `00` and `000` are digit-only and are not the literal `0`, and
@@ -653,9 +659,10 @@ check "a zero timeout is rejected as not-a-bound" 0 0 \
 for zero_spelling in 00 000; do
   zs_consumer="$tmp/zs-$zero_spelling-consumer"
   git clone -q "$origin_repo" "$zs_consumer"
+  zs_rc=0
   zs_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="$zero_spelling" "$script" add \
-    "$zs_consumer" "$tmp/wt-zs-$zero_spelling" "claim-zs-$zero_spelling" "session-zs" 2>&1)" || true
-  check "an all-zero timeout spelling '$zero_spelling' is rejected" 0 0 \
+    "$zs_consumer" "$tmp/wt-zs-$zero_spelling" "claim-zs-$zero_spelling" "session-zs" 2>&1)" || zs_rc=$?
+  check "an all-zero timeout spelling '$zero_spelling' is rejected" 0 "$zs_rc" \
     "$zs_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
 done
 
@@ -664,11 +671,73 @@ done
 # assertion above while quietly refusing legitimate configuration -- strict-looking and wrong.
 leadzero_consumer="$tmp/leadzero-consumer"
 git clone -q "$origin_repo" "$leadzero_consumer"
+leadzero_add_rc=0
 leadzero_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=0001 "$script" add \
-  "$leadzero_consumer" "$tmp/wt-leadzero" "claim-leadzero" "session-leadzero" 2>&1)" || true
+  "$leadzero_consumer" "$tmp/wt-leadzero" "claim-leadzero" "session-leadzero" 2>&1)" || leadzero_add_rc=$?
+check "a leading-zero timeout still claims successfully" 0 "$leadzero_add_rc" \
+  "$leadzero_out" "owner=session-leadzero"
 leadzero_rc=0
 grep -qF "ignoring unusable" <<<"$leadzero_out" && leadzero_rc=1
 check "a leading-zero but NON-zero timeout is accepted" 0 "$leadzero_rc"
+
+# RANGE, not just spelling. `sleep` enforces the bound, and both ends defeat it: BSD sleep (the
+# primary host) rejects a value at/above ~2^31 with a usage error and returns INSTANTLY, so the killer
+# fires at once and TERMs a reachable remote -- the bound collapses to ~0 and every claim reports
+# UNKNOWN; GNU sleep accepts the same value and waits ~317 years, i.e. no bound at all. `600000` is
+# unbounded on both and is the plausible "someone meant milliseconds" value. Measured on this PR's own
+# previous head: both were ACCEPTED.
+for bad_range in 600000 10000000000; do
+  br_consumer="$tmp/br-$bad_range-consumer"
+  git clone -q "$origin_repo" "$br_consumer"
+  br_rc=0
+  br_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="$bad_range" "$script" add \
+    "$br_consumer" "$tmp/wt-br-$bad_range" "claim-br-$bad_range" "session-br" 2>&1)" || br_rc=$?
+  check "an out-of-range timeout '$bad_range' is rejected" 0 "$br_rc" \
+    "$br_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
+done
+
+# POSITIVE CONTROL for the range guard: the maximum must still be ACCEPTED, or a guard that simply
+# refused anything long would satisfy both arms above while rejecting legitimate configuration.
+maxtimeout_consumer="$tmp/maxtimeout-consumer"
+git clone -q "$origin_repo" "$maxtimeout_consumer"
+maxtimeout_rc=0
+maxtimeout_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=3600 "$script" add \
+  "$maxtimeout_consumer" "$tmp/wt-maxtimeout" "claim-maxtimeout" "session-maxtimeout" 2>&1)" || maxtimeout_rc=$?
+maxtimeout_rejected=0
+grep -qF "ignoring unusable" <<<"$maxtimeout_out" && maxtimeout_rejected=1
+check "the maximum in-range timeout is accepted (control)" 0 "$maxtimeout_rejected"
+check "the maximum in-range timeout still claims" 0 "$maxtimeout_rc" \
+  "$maxtimeout_out" "owner=session-maxtimeout"
+
+# ── a hostile remote default-branch name must never reach git as an OPTION ──────
+# The name is REMOTE-supplied and fed to `git fetch`. Passed positionally, a name beginning with `-`
+# is parsed as an option: a remote whose HEAD symrefs to refs/heads/--upload-pack=<cmd> made git RUN
+# <cmd>. Reproduced against this PR's own previous head -- the sentinel file was created -- so this is
+# a demonstrated arbitrary-command primitive on the creation path of every worktree, not a theory.
+# Note the ref really does live under refs/heads/, so requiring that prefix does NOT close it; the
+# name itself has to be rejected.
+inj_origin="$tmp/inj-origin.git"
+git init -q --bare -b main "$inj_origin"
+git -C "$seed" push -q "$inj_origin" main
+inj_pwn="$tmp/inj-pwn"
+inj_sentinel="$tmp/inj-executed"
+printf '#!/usr/bin/env bash\n: >"%s"\nexit 1\n' "$inj_sentinel" >"$inj_pwn"
+chmod +x "$inj_pwn"
+git -C "$inj_origin" update-ref "refs/heads/--upload-pack=$inj_pwn" refs/heads/main
+git -C "$inj_origin" symbolic-ref HEAD "refs/heads/--upload-pack=$inj_pwn"
+inj_consumer="$tmp/inj-consumer"
+git clone -q "$origin_repo" "$inj_consumer"
+git -C "$inj_consumer" remote set-url origin "$inj_origin"
+inj_rc=0
+inj_out="$("$script" add "$inj_consumer" "$tmp/wt-inj" "claim-inj" "session-inj" 2>&1)" || inj_rc=$?
+check "a hostile default-branch name still claims (advisory, not fatal)" 0 "$inj_rc" \
+  "$inj_out" "owner=session-inj"
+check "a hostile default-branch name reports UNKNOWN" 0 "$inj_rc" \
+  "$inj_out" "base freshness UNKNOWN"
+# The arm that matters: the attacker-chosen command must not have run.
+inj_exec_rc=0
+[ -e "$inj_sentinel" ] && inj_exec_rc=1
+check "a hostile default-branch name is NEVER executed" 0 "$inj_exec_rc"
 
 # Remote-default DISCOVERY failure must report UNKNOWN, not fall back to the clone-time pointer.
 # The fallback trusted `refs/remotes/origin/HEAD` — written once at clone time and never refreshed —

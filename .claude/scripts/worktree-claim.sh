@@ -188,7 +188,11 @@ cmd_add() {
   # branch and then exit 3 without the lane it just built. Ownership is the point of `add`; freshness
   # is a NOTE, so the note waits.
   cmd_acquire "$wt" "$owner"
-  warn_if_base_is_stale "$repo" "$wt"
+  # `|| true`: the check is advisory by contract, so its status must never decide whether `add`
+  # succeeded. Every path in it returns 0 today, but relying on that couples the claim's exit code to
+  # the internals of a NOTE -- one future `return 1` on an unresolvable comparison would abort the
+  # claim under `set -e`, after the worktree and branch were already created.
+  warn_if_base_is_stale "$repo" "$wt" || true
   echo "worktree-claim: added $wt on $branch owner=$owner"
 }
 
@@ -220,9 +224,28 @@ WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="${WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS:-$WORKT
 # stderr (`2>/dev/null`, so an advisory remote failure cannot abort the claim), which would swallow
 # the notice at exactly the moment it matters. Reporting the rejection is the point -- falling back
 # silently would trade one invisible failure for another.
+# The RANGE matters as much as the spelling, and both ends defeat the bound. `sleep` is what enforces
+# it, and BSD sleep (the primary host) rejects a value at/above ~2^31 outright -- usage error, returns
+# instantly -- so the killer fires immediately and TERMs a perfectly reachable remote: the bound
+# collapses to ~0 and every claim reports UNKNOWN. GNU sleep accepts the same value and waits ~317
+# years, i.e. no bound at all. A merely large in-range value (`600000`, the "someone meant
+# milliseconds" case) is unbounded on both. So accept only 1..3600.
+#
+# LENGTH is checked BEFORE the numeric comparison, and that ordering is load-bearing: `[` parses its
+# operands as machine integers, so `[ 99999999999999999999 -ge 1 ]` does not return false -- it errors
+# ("integer expression expected") with status 2, which inside an `if` is indistinguishable from a
+# clean false and would fail OPEN. Digits-only is established first, so the length test is safe.
 case "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" in
   *[!0-9]* | '') worktree_claim_timeout_usable=no ;;
-  *[1-9]*) worktree_claim_timeout_usable=yes ;;
+  *[1-9]*)
+    if [ "${#WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS}" -le 4 ] &&
+      [ "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" -ge 1 ] &&
+      [ "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" -le 3600 ]; then
+      worktree_claim_timeout_usable=yes
+    else
+      worktree_claim_timeout_usable=no
+    fi
+    ;;
   *) worktree_claim_timeout_usable=no ;;
 esac
 if [ "$worktree_claim_timeout_usable" = no ]; then
@@ -325,7 +348,7 @@ shquote() {
 # Advisory, never fatal: creating a worktree at the pin is legitimate (a monorepo-coordinated change
 # pins deliberately), and an offline or restricted host must still be able to claim one.
 warn_if_base_is_stale() {
-  local repo="$1" wt="$2" default_ref default_branch behind remote_tip
+  local repo="$1" wt="$2" default_ref default_branch behind remote_tip tipref
   # Ask the REMOTE for its current default branch. refs/remotes/origin/HEAD is local metadata written
   # at clone time and never refreshed, so once a repository's default moves (main → trunk) the stale
   # pointer makes this compare against a branch the remote no longer defaults to — and report "not
@@ -334,7 +357,7 @@ warn_if_base_is_stale() {
   # otherwise abort the whole claim on an advisory check that is explicitly allowed to fail.
   default_branch="$(bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
     git -C "$repo" ls-remote --symref origin HEAD 2>/dev/null |
-    awk '$1 == "ref:" { sub("^refs/heads/", "", $2); print $2; exit }' || true)"
+    awk '$1 == "ref:" && $2 ~ /^refs\/heads\// { sub("^refs/heads/", "", $2); print $2; exit }' || true)"
   if [ -z "$default_branch" ]; then
     # Remote discovery FAILED, and that is not the same as "the default is probably main". The local
     # pointer and the conventional guess are exactly the stale sources this function was written to
@@ -347,27 +370,55 @@ warn_if_base_is_stale() {
     base_freshness_unknown "origin/HEAD"
     return 0
   fi
+  # The name came from the REMOTE, so it is untrusted input on a path that feeds `git fetch`. Passed
+  # positionally, a name beginning with `-` is parsed as an OPTION, not a branch: a remote whose HEAD
+  # symrefs to `refs/heads/--upload-pack=<cmd>` makes this run `git fetch … --upload-pack=<cmd>`, and
+  # git honours it — an arbitrary-command primitive on the creation path of every worktree. The awk
+  # above now requires the symref to live under refs/heads/, and this rejects anything that is not a
+  # plain branch name. Rejection is advisory like every other failure here: UNKNOWN, never fatal.
+  case "$default_branch" in
+  -* | *[!A-Za-z0-9._/-]*)
+    base_freshness_unknown "origin/HEAD"
+    return 0
+    ;;
+  esac
   default_ref="origin/$default_branch"
+  # Fetch into a PRIVATE per-invocation ref rather than reading FETCH_HEAD afterwards. FETCH_HEAD is
+  # shared mutable state of "$repo" — the path every concurrent lane passes — so any other fetch there
+  # (a sibling claim, branch-cleanup, submodule-init) between the fetch and the read replaces it, and
+  # the comparison silently answers about the WRONG branch: measured as a stale tree reported with no
+  # warning at all, which is exactly the false-current this check exists to remove.
+  #
+  # `+refs/heads/<b>:<tipref>` also removes two further defects of the positional form: the refspec is
+  # what is fetched regardless of the repository's `remote.origin.fetch` mapping (the narrowed-refspec
+  # case), and a leading `-` can no longer reach git's option parser even if the guard above is ever
+  # loosened. `--no-recurse-submodules` because git defaults to on-demand recursion: on a superproject
+  # with moved gitlinks — precisely the stale base this warns about — the advisory call would fetch
+  # every changed submodule inside its timeout and degrade to UNKNOWN on the repo it exists for.
+  # `--no-tags` for the same reason: this needs one commit, not the tag graph.
+  tipref="refs/worktree-claim/tip-$$"
   if ! bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
-    git -C "$repo" fetch --quiet origin "$default_branch" 2>/dev/null; then
+    git -C "$repo" fetch --quiet --no-tags --no-recurse-submodules \
+    origin "+refs/heads/$default_branch:$tipref" 2>/dev/null; then
+    git -C "$repo" update-ref -d "$tipref" 2>/dev/null || true
     base_freshness_unknown "$default_ref"
     return 0
   fi
-  # Compare against the tip THIS fetch just retrieved, never against refs/remotes/origin/*. The
-  # command-line refspec above controls what is FETCHED; the repository's configured
-  # `remote.origin.fetch` mapping independently controls which remote-tracking refs get UPDATED. Where
-  # that mapping does not cover the default branch — narrowed, customised, or a remote added without
-  # one — the fetch still succeeds and still brings down the new tip, but origin/<branch> stays frozen
-  # at whatever it held before. It then resolves perfectly, so every guard here passes and the ANSWER
-  # is silently wrong: measured on a stale origin/main with the remote three commits ahead, this
-  # reported no gap at all. FETCH_HEAD is written by the fetch itself, so it cannot disagree with what
-  # was retrieved.
+  # Compare against the tip THIS invocation fetched, never against refs/remotes/origin/*. A positional
+  # `git fetch origin <branch>` retrieves the branch but leaves the tracking ref alone wherever the
+  # repository's `remote.origin.fetch` mapping does not cover it — narrowed, customised, or a remote
+  # added without one. origin/<branch> then stays frozen while resolving perfectly, so every guard here
+  # passes and the ANSWER is silently wrong: measured on a stale origin/main with the remote three
+  # commits ahead, this reported no gap at all. The explicit refspec above writes the tip into a ref
+  # this call owns, so the value read back cannot disagree with what was retrieved, and — unlike
+  # FETCH_HEAD — no concurrent fetch in "$repo" can overwrite it in between.
   #
-  # Resolve it in "$repo", which is where the fetch ran: FETCH_HEAD is a PER-WORKTREE ref, so reading
-  # it from "$wt" would consult that worktree's own — absent on a fresh tree, and arbitrarily old on a
-  # reused one, which would reintroduce the same stale comparison through the replacement for it.
-  if ! remote_tip="$(git -C "$repo" rev-parse --verify --quiet FETCH_HEAD 2>/dev/null)" ||
-    [ -z "$remote_tip" ]; then
+  # Resolve the private ref this invocation just wrote, then delete it immediately — it is a scratch
+  # value, not state any later run should inherit. Deleting BEFORE the emptiness test keeps the ref
+  # from surviving the UNKNOWN path too.
+  remote_tip="$(git -C "$repo" rev-parse --verify --quiet "$tipref^{commit}" 2>/dev/null)" || remote_tip=""
+  git -C "$repo" update-ref -d "$tipref" 2>/dev/null || true
+  if [ -z "$remote_tip" ]; then
     base_freshness_unknown "$default_ref"
     return 0
   fi
