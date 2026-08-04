@@ -511,7 +511,17 @@ emit_credential_hits() {
 # lines inside a window we control. So no branch here asks what a line looks
 # like. Narrow classification is right for a parser and wrong for a redactor.
 AWK_KEY_REDACT='
-BEGIN { PH = "<redacted-key-material>" }
+# TAG_RE matches the `D<TAB>tool<TAB>` row prefix. It is built from an explicit
+# tab CHARACTER rather than written as the literal /^D\t[^\t]*\t/, because POSIX
+# does not define `\t` INSIDE A BRACKET EXPRESSION. Every awk this runs on today
+# honours it — measured on one-true-awk 20200816 (macOS CI) and on the Linux CI
+# leg, where a `t`-containing tool name like `TodoWrite` matches identically
+# either way — so this is hardening against unspecified behaviour, not a live
+# defect. It is worth doing anyway because the failure mode is SILENT: an awk
+# reading `[^\t]` as "not backslash and not t" would drop the tag from exactly
+# the rows mask_line() exists to keep countable, and a dropped record looks like
+# a clean run rather than an error.
+BEGIN { PH = "<redacted-key-material>"; TAB = sprintf("%c", 9); TAG_RE = "^D" TAB "[^" TAB "]*" TAB }
 # Mask a line WITHOUT destroying its structure. Callers tag rows as
 # `D<TAB>tool<TAB>message`, and this filter runs over that tagged stream as well
 # as over the final report — so replacing a whole line does not merely redact
@@ -527,9 +537,15 @@ function mask_line(s) {
   # to redact and nothing to preserve — return it whole. Masking it to PH would
   # destroy the very marker the undated count is derived from.
   if (s == "U") return s
-  if (match(s, /^D\t[^\t]*\t/)) return substr(s, 1, RLENGTH) PH
+  if (match(s, TAG_RE)) return substr(s, 1, RLENGTH) PH
   return PH
 }
+# ⚠️ ACCEPTED MEMORY BOUND. This buffers every emitted line to EOF — the same
+# trade the private-key spans force, since a block cannot be classified as
+# terminated until its closing marker is found (or proven absent), and that
+# answer is deliberately unbounded above. `MAX_FILES` bounds the report, but a
+# wide window can push hundreds of thousands of tagged rows through here, so the
+# footprint scales with the SELECTED WINDOW, not with the report size.
 { L[NR] = $0 }
 END {
   n = NR
@@ -679,7 +695,7 @@ END {
       # Measured on a 202-row stray span: 201 of 202 rows kept their tag.
       # (Same class as the bounded-search defect above: when a guard is added,
       # check every OTHER path that walks the same structure.)
-      if (match(s, /^D\t[^\t]*\t/)) L[close_at] = substr(s, 1, RLENGTH) PH tail
+      if (match(s, TAG_RE)) L[close_at] = substr(s, 1, RLENGTH) PH tail
       else                          L[close_at] = PH tail
     }
   }

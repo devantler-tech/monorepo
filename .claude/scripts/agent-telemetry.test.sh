@@ -4057,7 +4057,7 @@ longunterm() {
 # horizon the masking uses, so a COMPLETE key longer than that bound was
 # misclassified as unterminated and masked only to the horizon — its tail was
 # emitted verbatim. A bounded lookahead cannot answer an unbounded question.
-OUT=$(longkey | awk "$(extract_awk)")
+OUT=$(longkey | awk "$AWK_PROG")
 nocheck "shape 1: a terminated key LONGER than the horizon is fully masked" "$OUT" "SECRETLINE"
 check   "shape 1: and the record after it survives"                         "$OUT" "AFTER-ROW"
 
@@ -4065,7 +4065,7 @@ check   "shape 1: and the record after it survives"                         "$OU
 # A truncated key is MORE likely in a transcript than a well-formed one,
 # because messages get cut. Requiring a closing marker before masking anything
 # emitted such a body verbatim — a P1 disclosure.
-OUT=$(printf 'timed out: %s\nMIIEvgSECRETBODYaaaa\nQEFAASCBKgSECRETTWO\n' "$RB" | awk "$(extract_awk)")
+OUT=$(printf 'timed out: %s\nMIIEvgSECRETBODYaaaa\nQEFAASCBKgSECRETTWO\n' "$RB" | awk "$AWK_PROG")
 nocheck "shape 2: an unterminated key body is masked"   "$OUT" "SECRETBODY"
 nocheck "shape 2: including its later body lines"       "$OUT" "SECRETTWO"
 
@@ -4074,27 +4074,27 @@ nocheck "shape 2: including its later body lines"       "$OUT" "SECRETTWO"
 # 300 body lines - 256 = 44 survivors, the first at body line 257. PEM imposes
 # no payload ceiling, so no fixed bound can apply to a real key block — the
 # same argument in both branches, now applied in both.
-OUT=$(longunterm | awk "$(extract_awk)")
+OUT=$(longunterm | awk "$AWK_PROG")
 nocheck "shape 2: an unterminated key LONGER than 256 lines is fully masked" "$OUT" "SECRETBODY"
 
 # ── SHAPE 3 — RFC 1421 encrypted-PEM headers and their BLANK separator ────────
 # `Proc-Type:`/`DEK-Info:` and an empty line sit between BEGIN and the body, so
 # any content-shaped continuation test stops dead on the first header line and
 # emits the whole key. Reproduced before the default was inverted.
-OUT=$(printf 'Blocked: %s\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,9A7B2C\n\nMIIEvgIBADANBgkqSECRETBODYxxxx\n' "$RB" | awk "$(extract_awk)")
+OUT=$(printf 'Blocked: %s\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,9A7B2C\n\nMIIEvgIBADANBgkqSECRETBODYxxxx\n' "$RB" | awk "$AWK_PROG")
 nocheck "shape 3: an ENCRYPTED PEM body is masked through its headers" "$OUT" "SECRETBODY"
 nocheck "shape 3: and the DEK-Info header itself does not survive"     "$OUT" "AES-128-CBC"
 
 # ── SHAPE 4 — short final base64 line ────────────────────────────────────────
 # A PEM's last line is frequently only a few characters, so a minimum-length
 # test drops it even when every other line matches.
-OUT=$(printf 'x %s\nMIIEvgIBADANBgkqSECRETONExx\nSHORTTAIL=\n' "$RB" | awk "$(extract_awk)")
+OUT=$(printf 'x %s\nMIIEvgIBADANBgkqSECRETONExx\nSHORTTAIL=\n' "$RB" | awk "$AWK_PROG")
 nocheck "shape 4: a short final PEM line is masked" "$OUT" "SHORTTAIL"
 
 # ── SHAPE 5 — several markers on ONE physical line ───────────────────────────
 # Messages are newline-collapsed before reaching the redactor, so a whole key —
 # or several — can arrive on a single line.
-OUT=$(printf 'a %s SECRETIN %s b %s SECRETTWO\n' "$RB" "$RE" "$RB" | awk "$(extract_awk)")
+OUT=$(printf 'a %s SECRETIN %s b %s SECRETTWO\n' "$RB" "$RE" "$RB" | awk "$AWK_PROG")
 nocheck "shape 5: every span on a shared line is masked" "$OUT" "SECRETIN"
 nocheck "shape 5: including the trailing unpaired one"   "$OUT" "SECRETTWO"
 
@@ -4108,14 +4108,14 @@ nocheck "shape 5: including the trailing unpaired one"   "$OUT" "SECRETTWO"
 # Shape 5 above does NOT constrain this — its markers are sequential, so the
 # nearest closer is also the correct one. The distinguishing input is nesting,
 # which is why the row is separate rather than folded into 5.
-OUT=$(printf 'a %s b %s c %s SECRETNEST %s\n' "$RB" "$RB" "$RE" "$RE" | awk "$(extract_awk)")
+OUT=$(printf 'a %s b %s c %s SECRETNEST %s\n' "$RB" "$RB" "$RE" "$RE" | awk "$AWK_PROG")
 nocheck "shape 5b: a nested span masks through the OUTERMOST closer" "$OUT" "SECRETNEST"
 
 # CONTROL, opposite direction — the fix must not degenerate into "mask to the
 # LAST END on the line", which would pass the row above while destroying every
 # record between two independent keys. Two complete spans must still close
 # individually, so the text between and after them survives.
-OUT=$(printf 'a %s S1 %s KEEPME %s S2 %s TAILKEEP\n' "$RB" "$RE" "$RB" "$RE" | awk "$(extract_awk)")
+OUT=$(printf 'a %s S1 %s KEEPME %s S2 %s TAILKEEP\n' "$RB" "$RE" "$RB" "$RE" | awk "$AWK_PROG")
 nocheck "shape 5b control: independent spans still mask their own bodies" "$OUT" "S1"
 check   "shape 5b control: text BETWEEN two spans survives"               "$OUT" "KEEPME"
 check   "shape 5b control: text AFTER the last span survives"             "$OUT" "TAILKEEP"
@@ -4136,7 +4136,7 @@ nestedfix() {
   printf '%s\n%s\nMIIEvgSECRETNESTED\n%s\n' "$RB" "$RB" "$RE"
   for i in $(seq 1 6); do printf 'SURVIVOR-%d\n' "$i"; done
 }
-OUT=$(nestedfix | awk "$(extract_awk)")
+OUT=$(nestedfix | awk "$AWK_PROG")
 nocheck "shape 6a: two openers before one closer still mask the body" "$OUT" "SECRETNESTED"
 check   "shape 6a: and do NOT eat the report after the key"           "$OUT" "SURVIVOR-6"
 check   "shape 6a: nor the line immediately after it"                 "$OUT" "SURVIVOR-1"
@@ -4160,7 +4160,7 @@ endbeginfix() {
   printf '%s\nMIIEvgSECRETONE\nclose %s then %s\n' "$RB" "$RE" "$RB"
   printf 'MIIEvgSECRETTWO\nMIIEvgSECRETTHREE\n'
 }
-OUT=$(endbeginfix | awk "$(extract_awk)")
+OUT=$(endbeginfix | awk "$AWK_PROG")
 nocheck "shape 6b: a block opening on a CLOSING line is still resolved" "$OUT" "SECRETTWO"
 nocheck "shape 6b: including its later body lines"                      "$OUT" "SECRETTHREE"
 nocheck "shape 6b: and the first block's body stays masked"             "$OUT" "SECRETONE"
@@ -4193,7 +4193,7 @@ nocheck "shape 6: but the marker itself is masked"            "$STRAY" "$PK_E"
 # stopped parsing and dropped out of the count: measured 201 of 202 rows kept.
 S7=$({ printf 'D\tBash\thead %s\n' "$RB"
        for i in $(seq 1 200); do printf 'D\tBash\tRECORD-%03d\n' "$i"; done
-       printf 'D\tBash\ttail %s SURVIVING-TAIL\n' "$RE"; } | awk "$(extract_awk)")
+       printf 'D\tBash\ttail %s SURVIVING-TAIL\n' "$RE"; } | awk "$AWK_PROG")
 S7_ROWS=$(printf '%s\n' "$S7" | grep -c '')
 S7_TAGS=$(printf '%s\n' "$S7" | grep -c "^D$(printf '\t')Bash$(printf '\t')")
 if [ "$S7_ROWS" = 202 ] && [ "$S7_TAGS" = 202 ]; then
@@ -4212,7 +4212,7 @@ check   "shape 7: and text after the closing marker survives"    "$S7" "SURVIVIN
 # Passing code here would put an eval in the one suite whose whole subject is a
 # filter over attacker-controlled text; a function name cannot grow into that.
 unit_ablate() { # $1=sed-expr $2=label $3=fixture-fn $4=needle $5=appear|vanish
-  local ab="$FIX/abl_$$.sh" changed out
+  local ab="$FIX/abl_$$.sh" changed out st
   cp "$TARGET" "$ab"
   sed -i.bak "$1" "$ab"; rm -f "$ab.bak"
   changed=$(diff "$TARGET" "$ab" | grep -c '^<')
@@ -4220,7 +4220,11 @@ unit_ablate() { # $1=sed-expr $2=label $3=fixture-fn $4=needle $5=appear|vanish
     bad "ablation: $2" "sed changed $changed lines, expected 1 — arm is mis-aimed"
     rm -f "$ab"; return
   fi
-  out=$("$3" | awk "$(extract_awk "$ab")" 2>/dev/null); local st=$?
+  # `st` is declared with the locals above and captured on its OWN line. Writing
+  # `local st=$?` here would be a declaration whose own exit status masks the
+  # pipeline's, and the status is what the mis-aimed-arm guard below depends on.
+  out=$("$3" | awk "$(extract_awk "$ab")" 2>/dev/null)
+  st=$?
   rm -f "$ab"
   # 🔴 A `vanish` arm passes whenever the ablated program produces NOTHING —
   # so a sed replacement that breaks the awk regex literal, or any other
@@ -4255,14 +4259,14 @@ closerowfix(){ printf 'D\tBash\thead %s\n' "$RB"; printf 'D\tBash\ttail %s z\n' 
 # recorded here rather than left in a comment. A stray BEGIN with no END now
 # over-masks to end of input — the SAME input as a truncated key, which is why
 # no bound could have separated them.
-OUT=$(strayfix | awk "$(extract_awk)")
+OUT=$(strayfix | awk "$AWK_PROG")
 nocheck "accepted cost: a stray BEGIN over-masks to EOF" "$OUT" "REPORT-LINE-300"
 
 # 🔑 AND WHY THAT PRICE IS PAYABLE — the half that actually justifies the trade.
 # On the TAGGED stream the over-mask costs MESSAGE TEXT, not EVIDENCE:
 # mask_line() keeps `D<TAB>tool<TAB>`, so every record still parses and still
 # counts. Without this row the arm above would read as pure loss.
-OUTR=$(strayrowfix | awk "$(extract_awk)")
+OUTR=$(strayrowfix | awk "$AWK_PROG")
 check "accepted cost: but the over-masked rows keep their tags" \
   "$OUTR" "$(printf 'D\tRead\t<redacted-key-material>')"
 if [ "$(printf '%s\n' "$OUTR" | grep -c "$(printf '^D\t')")" -eq 301 ]; then
@@ -4275,7 +4279,7 @@ fi
 # POSITIVE CONTROL for every "vanish"-signed arm below: the needles must be
 # present in the UNABLATED output, or asserting their absence proves nothing.
 # A diff of two empty outputs reads exactly like "behaviour preserved".
-CTRL2=$(closerowfix | awk "$(extract_awk)")
+CTRL2=$(closerowfix | awk "$AWK_PROG")
 check "positive control: the closing row keeps its tag unablated" "$CTRL2" "$(printf 'D\tBash\t<redacted-key-material> z')"
 
 # POSITIVE CONTROL for the APPEAR-signed arm 2: the needle must be in the
@@ -4337,7 +4341,7 @@ unit_ablate 's|^      for (j = i + 1; j <= n; j++) { L\[j\] = mask_line(L\[j\]);
 # 4. Tag preservation on the CLOSING line — the branch that does not route
 #    through mask_line(). Without it the closing row's tag is blanked and the
 #    record stops parsing.
-unit_ablate 's|^      if (match(s, /\^D\\t\[\^\\t\]\*\\t/)) L\[close_at\] = substr(s, 1, RLENGTH) PH tail$|      if (0) L[close_at] = substr(s, 1, RLENGTH) PH tail|' \
+unit_ablate 's|^      if (match(s, TAG_RE)) L\[close_at\] = substr(s, 1, RLENGTH) PH tail$|      if (0) L[close_at] = substr(s, 1, RLENGTH) PH tail|' \
   "closing-line tag preservation is load-bearing (the record loses its tag without it)" \
   closerowfix "$(printf 'D\tBash\t<redacted-key-material> z')" vanish
 
