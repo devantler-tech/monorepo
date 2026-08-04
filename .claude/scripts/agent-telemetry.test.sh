@@ -4433,6 +4433,22 @@ check "shape 9 control: and the stream after it is not masked to EOF"  "$OUT" "S
 OUT=$(printf '%s\nMIIBODY_001\n-----END ... PRIVATE KEY-----\nMIIBODY_002_LEAKED\nMIIBODY_003_LEAKED\n' "$RB" | awk "$AWK_PROG")
 nocheck "shape 9 control: a PROSE end-marker does not close a key span (no leak)" "$OUT" "LEAKED"
 
+# 🔴 REGRESSION CONTROL 3 — the rewrite must not NARROW what the old class caught.
+# Every control above guards the over-wide direction. This one guards the other,
+# and it is the direction the whole file's governing asymmetry actually forbids:
+# the replaced `[A-Z ]*` absorbed leading and repeated SPACES, because the space
+# was inside its character class. Hoisting the label into an OPTIONAL group
+# silently dropped that — with the group absent, the expression demanded
+# `PRIVATE` immediately after the single literal space, so a marker carrying an
+# extra space stopped matching and its body was emitted VERBATIM. Reproduced
+# against the shipped expression: `-----BEGIN  PRIVATE KEY-----` masked on the
+# base commit and leaked after the widening.
+# The ` *` that fixes it cannot re-open either leak above: it matches only
+# spaces, so it can neither bridge a dash-free gap nor let lowercase prose into
+# the label. Both regression controls above re-run against it unchanged.
+OUT=$(printf -- 'boom -----%s  PRIVATE KEY-----\nMIISECRET_EXTRASPACE\n' 'BEGIN' | awk "$AWK_PROG")
+nocheck "shape 9 control: an extra space before the label still masks (no narrowing)" "$OUT" "SECRET_EXTRASPACE"
+
 # ── SHAPE 9 (structural) — ONE label expression, at EVERY marker site ─────────
 # The defect was never a single bad regex: the same label class was spelled out
 # at nine independent sites (four awk regexes, three marker `sed` rules, and the
@@ -4445,14 +4461,16 @@ nocheck "shape 9 control: a PROSE end-marker does not close a key span (no leak)
 # lines reports 8 for the 9 real sites, so a line-based floor of 9 can only be
 # satisfied by adding a tenth site. This assertion caught exactly that mistake
 # in its own first draft.
-SITES_NEW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
-# BOTH rejected spellings are pinned, not just the original: `[A-Z ]*` is the
-# narrow class that could not reach either real family, and `[^-]*…[^-]*` is the
-# over-wide one that leaked. A site left on either is a defect, and naming only
-# the first would let the second reappear silently.
+SITES_NEW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
+# THREE rejected spellings are pinned, not just the original: `[A-Z ]*` is the
+# narrow class that could not reach either real family, `[^-]*…[^-]*` is the
+# over-wide one that leaked, and the ` *`-less optional group is the one that
+# NARROWED (regression control 3). A site left on any of them is a defect, and
+# naming only the first would let the others reappear silently.
 SITES_OLD=$(grep -oF -- '[A-Z ]*PRIVATE KEY' "$TARGET" | grep -c '' || true)
 SITES_BAD=$(grep -oF -- '[^-]*PRIVATE KEY[^-]*' "$TARGET" | grep -c '' || true)
-SITES_OLD=$((SITES_OLD + SITES_BAD))
+SITES_NARROW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY' "$TARGET" | grep -c '' || true)
+SITES_OLD=$((SITES_OLD + SITES_BAD + SITES_NARROW))
 if [ "$SITES_NEW" -ge 9 ] && [ "$SITES_OLD" -eq 0 ]; then
   ok "shape 9 structural: every private-key marker site uses the one widened label expression"
 else
