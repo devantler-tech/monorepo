@@ -23,7 +23,10 @@ check() {
     printf 'FAIL %s: expected exit %s, got %s\n' "$name" "$want" "$got" >&2
     fail=$((fail + 1)); return
   fi
-  if [ -n "$needle" ] && ! printf '%s' "$hay" | grep -qF "$needle"; then
+  # Here-string, not `printf | grep -q`: under `pipefail` grep exits at the first match and the
+  # writer dies with EPIPE, so a LONGER haystack makes the pipeline report failure on a needle it
+  # actually found. That turns a passing assertion into a size-dependent flake.
+  if [ -n "$needle" ] && ! grep -qF -- "$needle" <<<"$hay"; then
     printf 'FAIL %s: output missing %q\n  got: %s\n' "$name" "$needle" "$hay" >&2
     fail=$((fail + 1)); return
   fi
@@ -248,7 +251,7 @@ stale_rc=$?
 check "stale base still claims successfully (advisory, not fatal)" 0 "$stale_rc" \
   "$stale_out" "owner=session-stale"
 check "stale base warns" 0 "$stale_rc" "$stale_out" "WARNING base is 2 commit(s) behind"
-check "stale-base warning names the rebase fix" 0 "$stale_rc" "$stale_out" "rebase origin/main"
+check "stale-base warning names the rebase fix" 0 "$stale_rc" "$stale_out" "rebase 'origin/main'"
 
 # Control: same script, same repo, base now current — the warning MUST disappear. If this arm also
 # warned, the positive arm above would prove nothing about staleness detection.
@@ -261,6 +264,57 @@ current_warn_rc=0
 printf '%s' "$current_out" | grep -qF "WARNING base is" && current_warn_rc=1
 check "current base does NOT warn (control)" 0 "$current_warn_rc"
 
+# The remote's default branch MOVED after the clone. refs/remotes/origin/HEAD is written once, at
+# clone time, and no fetch refreshes it — so a check that trusts it keeps comparing against the old
+# default and reports "not behind" while the tree is arbitrarily stale against the real one. That is
+# the silent-wrong-answer case, strictly worse than the UNKNOWN below, because it looks like a pass.
+moved_origin="$tmp/moved-origin.git"
+git init -q --bare -b main "$moved_origin"
+moved_seed="$tmp/moved-seed"
+git init -q -b main "$moved_seed"
+git -C "$moved_seed" config user.name "worktree-claim-test"
+git -C "$moved_seed" config user.email "worktree-claim-test@example.com"
+git -C "$moved_seed" commit --allow-empty -qm "base"
+git -C "$moved_seed" remote add origin "$moved_origin"
+git -C "$moved_seed" push -q origin main
+
+moved_consumer="$tmp/moved-consumer"
+git clone -q "$moved_origin" "$moved_consumer"
+git -C "$moved_consumer" config user.name "worktree-claim-test"
+git -C "$moved_consumer" config user.email "worktree-claim-test@example.com"
+
+# Default moves main → trunk, and trunk advances by two commits. The consumer's origin/HEAD still
+# names main, and main itself never moves — so comparing against the stale pointer yields behind=0.
+git -C "$moved_seed" checkout -q -b trunk
+git -C "$moved_seed" commit --allow-empty -qm "trunk-ahead-1"
+git -C "$moved_seed" commit --allow-empty -qm "trunk-ahead-2"
+git -C "$moved_seed" push -q origin trunk
+git -C "$moved_origin" symbolic-ref HEAD refs/heads/trunk
+
+moved_stale="$(git -C "$moved_consumer" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo "")"
+check "clone-time origin/HEAD still names the OLD default (precondition)" "origin/main" "$moved_stale"
+
+moved_out="$("$script" add "$moved_consumer" "$tmp/wt-moved" "claim-moved" "session-moved" 2>&1)"
+moved_rc=$?
+check "moved default still claims successfully" 0 "$moved_rc" "$moved_out" "owner=session-moved"
+check "moved default is measured against the CURRENT remote default" 0 "$moved_rc" \
+  "$moved_out" "WARNING base is 2 commit(s) behind origin/trunk"
+
+# Unresolvable remote: the comparison cannot be made, and the required outcome is an explicit UNKNOWN
+# rather than silence — silence is indistinguishable from "base is current", the confusion this whole
+# check exists to remove. Repointing origin at an absent bare repository is hermetic: ls-remote and
+# fetch both fail locally, no network is touched. Claiming must still succeed (advisory, never fatal).
+git -C "$consumer" remote set-url origin "$tmp/absent-origin.git"
+unknown_out="$("$script" add "$consumer" "$tmp/wt-unknown" "claim-unknown" "session-unknown" 2>&1)"
+unknown_rc=$?
+check "unavailable remote still claims successfully" 0 "$unknown_rc" \
+  "$unknown_out" "owner=session-unknown"
+check "unavailable remote writes the ownership marker" 0 \
+  "$([ -e "$tmp/wt-unknown/.claude-worktree-owner" ] && echo 0 || echo 1)"
+check "unavailable remote reports base freshness UNKNOWN" 0 "$unknown_rc" \
+  "$unknown_out" "base freshness UNKNOWN"
+git -C "$consumer" remote set-url origin "$origin_repo"
+
 # The numeric guard must be present: an unnormalised count would make the -gt test fail OPEN inside
 # an if, silently skipping the warning on exactly the malformed input it should be loudest about.
 #
@@ -271,9 +325,25 @@ check "current base does NOT warn (control)" 0 "$current_warn_rc"
 # directions. Replace this with a behavioural arm if the count ever moves behind an injectable seam.
 normalise_rc=0
 normalise_src="$(sed -n '/^warn_if_base_is_stale()/,/^}/p' "$script")"
-printf '%s' "$normalise_src" | grep -qF 'behind=0' || normalise_rc=1
-printf '%s' "$normalise_src" | grep -qF '[!0-9]' || normalise_rc=1
-check "behind-count is normalised before the numeric test" 0 "$normalise_rc"
+# Comment lines are stripped first. The function DOCUMENTS the numeric test verbatim ("would make
+# `[ "$behind" -gt 0 ]` fail OPEN…"), so matching the raw text finds the prose two lines above the
+# code and reports the order backwards — the same match-a-comment defect this arm exists to catch.
+normalise_code="$(grep -vE '^[[:space:]]*#' <<<"$normalise_src")"
+grep -qF -- '[!0-9]' <<<"$normalise_code" || normalise_rc=1
+# Presence alone is not the property. Both tokens would still be found if a later edit moved the
+# normalisation BELOW the numeric test, which reinstates the fail-open path this arm guards. So
+# compare their positions: the normalisation must precede the comparison that depends on it.
+# awk with `exit` (not `grep -n | head`) — the pipe would EPIPE the writer under pipefail, exactly
+# the flake fixed in check() above. index() keeps both needles literal.
+norm_line="$(awk 'index($0,"behind=0"){print NR; exit}' <<<"$normalise_code")"
+test_line="$(awk 'index($0,"\"$behind\" -gt 0"){print NR; exit}' <<<"$normalise_code")"
+# Guard both operands before the numeric comparison: `[ "" -lt 3 ]` errors rather than returning
+# false, and an unguarded `&&` chain would swallow that as "arm satisfied" — the same fail-open
+# shape this test exists to pin.
+case "$norm_line" in '' | *[!0-9]*) norm_line=0 ;; esac
+case "$test_line" in '' | *[!0-9]*) test_line=0 ;; esac
+[ "$norm_line" -gt 0 ] && [ "$test_line" -gt 0 ] && [ "$norm_line" -lt "$test_line" ] || normalise_rc=1
+check "behind-count is normalised BEFORE the numeric test" 0 "$normalise_rc"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

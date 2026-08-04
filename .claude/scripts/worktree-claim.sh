@@ -199,16 +199,46 @@ cmd_add() {
 #
 # Advisory, never fatal: creating a worktree at the pin is legitimate (a monorepo-coordinated change
 # pins deliberately), and an offline or restricted host must still be able to claim one.
+# base_freshness_unknown reports that the comparison could not be made. Both unresolvable paths emit
+# it: staying silent would be indistinguishable from "base is current", which is the exact confusion
+# this check exists to remove.
+base_freshness_unknown() {
+  echo "worktree-claim: NOTE could not resolve $1 — base freshness UNKNOWN, verify before" >&2
+  echo "worktree-claim:      concluding anything about current upstream behaviour." >&2
+}
+
+# shquote renders "$1" as one single-quoted shell word, so a path or ref containing spaces, newlines,
+# or shell metacharacters prints as a single safely reusable argument rather than something that
+# would re-split or be interpreted if pasted back into a shell.
+shquote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 warn_if_base_is_stale() {
-  local repo="$1" wt="$2" default_ref behind
-  default_ref="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-  [ -n "$default_ref" ] || default_ref="origin/main"
-  if ! git -C "$repo" fetch --quiet origin "${default_ref#origin/}" 2>/dev/null; then
-    echo "worktree-claim: NOTE could not fetch ${default_ref} — base freshness UNKNOWN, verify before" >&2
-    echo "worktree-claim:      concluding anything about current upstream behaviour." >&2
+  local repo="$1" wt="$2" default_ref default_branch behind
+  # Ask the REMOTE for its current default branch. refs/remotes/origin/HEAD is local metadata written
+  # at clone time and never refreshed, so once a repository's default moves (main → trunk) the stale
+  # pointer makes this compare against a branch the remote no longer defaults to — and report "not
+  # behind" while the tree is arbitrarily stale, which is precisely the silence this check removes.
+  # `|| true`: with `set -o pipefail` a repo that has no origin at all (or an unreachable one) would
+  # otherwise abort the whole claim on an advisory check that is explicitly allowed to fail.
+  default_branch="$(git -C "$repo" ls-remote --symref origin HEAD 2>/dev/null |
+    awk '$1 == "ref:" { sub("^refs/heads/", "", $2); print $2; exit }' || true)"
+  if [ -z "$default_branch" ]; then
+    # Offline or restricted host: fall back to the local pointer, then to the conventional default.
+    default_branch="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    default_branch="${default_branch#origin/}"
+  fi
+  [ -n "$default_branch" ] || default_branch="main"
+  default_ref="origin/$default_branch"
+  if ! git -C "$repo" fetch --quiet origin "$default_branch" 2>/dev/null; then
+    base_freshness_unknown "$default_ref"
     return 0
   fi
-  git -C "$repo" rev-parse --verify --quiet "$default_ref" >/dev/null 2>&1 || return 0
+  if ! git -C "$repo" rev-parse --verify --quiet "$default_ref" >/dev/null 2>&1; then
+    base_freshness_unknown "$default_ref"
+    return 0
+  fi
   behind="$(git -C "$wt" rev-list --count "HEAD..$default_ref" 2>/dev/null || echo 0)"
   # Normalise before the numeric test: a non-integer (empty, or an error string) would make
   # `[ "$behind" -gt 0 ]` fail OPEN inside an if, silently skipping the very warning this exists for.
@@ -217,7 +247,7 @@ warn_if_base_is_stale() {
   echo "worktree-claim: WARNING base is $behind commit(s) behind $default_ref" >&2
   echo "worktree-claim:      This tree does NOT show current $default_ref. Anything you conclude here" >&2
   echo "worktree-claim:      about 'current behaviour' may already be changed or fixed upstream." >&2
-  echo "worktree-claim:      Rebase before analysing:  git -C $wt rebase $default_ref" >&2
+  echo "worktree-claim:      Rebase before analysing:  git -C $(shquote "$wt") rebase $(shquote "$default_ref")" >&2
 }
 
 cmd_check() {
