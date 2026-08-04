@@ -232,7 +232,11 @@ bounded_remote() {
   set -m
   GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" "$@" &
   cmd_pid=$!
-  [ "$had_monitor" -eq 1 ] || set +m
+  # The killer is started while job control is STILL on, so it too gets its own process group. That
+  # is what makes it killable as a tree: the subshell's `sleep` is a separate child, and a signal to
+  # the subshell's pid alone does not reach it -- so on the fast path, where the command answers long
+  # before the deadline, the timer's `sleep` outlived the call and ran to its full duration. Every
+  # normal `add` leaked one or two of them.
   (
     sleep "$secs"
     # Negative pid = the process GROUP. Falls back to the single pid if the group is already gone
@@ -241,10 +245,13 @@ bounded_remote() {
     kill -TERM -"$cmd_pid" 2>/dev/null || kill -TERM "$cmd_pid" 2>/dev/null
   ) >/dev/null 2>&1 &
   killer_pid=$!
+  [ "$had_monitor" -eq 1 ] || set +m
   # `wait` reports a signal-killed job on the SHELL's stderr, so it is silenced here rather than at
   # each call site.
   { wait "$cmd_pid" || rc=$?; } 2>/dev/null
-  kill -TERM "$killer_pid" 2>/dev/null || true
+  # Group first, so the timer's own `sleep` child goes with it; single pid only as the fallback for
+  # a host where job control was unavailable and no separate group exists.
+  kill -TERM -"$killer_pid" 2>/dev/null || kill -TERM "$killer_pid" 2>/dev/null || true
   { wait "$killer_pid" || true; } 2>/dev/null
   # SIGTERM is catchable AND ignorable, so the timer's TERM only *asks* the tree to stop. `wait`
   # above returns as soon as GIT exits -- git honours TERM -- but a transport helper that ignores it

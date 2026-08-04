@@ -531,6 +531,24 @@ if pgrep -f "$ignore_transport" >/dev/null 2>&1; then ignore_orphan_rc=1; fi
 check "a SIGTERM-IGNORING transport is SIGKILLed, not left orphaned" 0 "$ignore_orphan_rc"
 pkill -KILL -f "$ignore_transport" >/dev/null 2>&1 || true
 
+# The TIMER must not outlive the call it bounds. The killer subshell sleeps in a separate child
+# process, so signalling the subshell's pid alone leaves that `sleep` running to its full duration --
+# on the FAST path, where the remote answers immediately, every `add` leaked one or two of them.
+# Bounding both is the same tree-kill problem as the transport, one level up.
+#
+# The timeout value is deliberately absurd and unique: a real leak is then unmistakable in the
+# process table, and the assertion cannot collide with an unrelated `sleep` from this suite, another
+# suite, or a developer's shell. A round number like 60 would match half the machine.
+timer_consumer="$tmp/timer-consumer"
+git clone -q "$origin_repo" "$timer_consumer"
+WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=9871 "$script" add \
+  "$timer_consumer" "$tmp/wt-timer" "claim-timer" "session-timer" >/dev/null 2>&1 || true
+sleep 1
+timer_leak_rc=0
+if pgrep -f 'sleep 9871' >/dev/null 2>&1; then timer_leak_rc=1; fi
+check "a fast remote leaves no timer process behind" 0 "$timer_leak_rc"
+pkill -KILL -f 'sleep 9871' >/dev/null 2>&1 || true
+
 # Remote-default DISCOVERY failure must report UNKNOWN, not fall back to the clone-time pointer.
 # The fallback trusted `refs/remotes/origin/HEAD` — written once at clone time and never refreshed —
 # which is the stale source this whole check exists to stop trusting: if the default moved, the old
