@@ -263,8 +263,16 @@ check "current base does NOT warn (control)" 0 "$current_warn_rc"
 
 # The numeric guard must be present: an unnormalised count would make the -gt test fail OPEN inside
 # an if, silently skipping the warning on exactly the malformed input it should be loudest about.
+#
+# ⚠️ This arm is a SOURCE-COUPLED guard, not a behavioural one — reaching the malformed-count path
+# needs `git rev-list --count` to emit a non-integer, which cannot be provoked hermetically. It is
+# therefore matched on the two semantic tokens rather than a whole literal line: an exact-line match
+# breaks on a harmless reformat and passes on the same text sitting in a comment, which fails in both
+# directions. Replace this with a behavioural arm if the count ever moves behind an injectable seam.
 normalise_rc=0
-grep -qF "case \"\$behind\" in '' | *[!0-9]*) behind=0 ;; esac" "$script" || normalise_rc=1
+normalise_src="$(sed -n '/^warn_if_base_is_stale()/,/^}/p' "$script")"
+printf '%s' "$normalise_src" | grep -qF 'behind=0' || normalise_rc=1
+printf '%s' "$normalise_src" | grep -qF '[!0-9]' || normalise_rc=1
 check "behind-count is normalised before the numeric test" 0 "$normalise_rc"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
