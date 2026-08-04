@@ -246,6 +246,22 @@ bounded_remote() {
   { wait "$cmd_pid" || rc=$?; } 2>/dev/null
   kill -TERM "$killer_pid" 2>/dev/null || true
   { wait "$killer_pid" || true; } 2>/dev/null
+  # SIGTERM is catchable AND ignorable, so the timer's TERM only *asks* the tree to stop. `wait`
+  # above returns as soon as GIT exits -- git honours TERM -- but a transport helper that ignores it
+  # survives, reparented, running to its own native timeout. `add` then reports success while
+  # leaving a process behind, and it can do so twice per call.
+  #
+  # The sweep has to be HERE rather than as a second stage inside the killer: `wait` returns the
+  # moment git dies and the very next line kills the killer, so anything scheduled after a grace
+  # period in that subshell is cancelled before it ever runs. (Verified -- a grace-then-KILL written
+  # inside the killer left the orphan alive, and the test failed identically with and without it.)
+  #
+  # SIGKILL cannot be trapped, so this is what actually reaps the group. No grace period is owed:
+  # `wait` has already returned, so the command is finished and every remaining group member is by
+  # definition a descendant that outlived it. Sleeping first would also charge the delay to EVERY
+  # call, including the fast success path, to no purpose. On that path the group is already empty
+  # and the kill is a silent no-op.
+  kill -KILL -"$cmd_pid" 2>/dev/null || true
   return "$rc"
 }
 

@@ -502,6 +502,35 @@ orphan_rc=0
 if pgrep -f "$slow_transport" >/dev/null 2>&1; then orphan_rc=1; fi
 check "a timed-out remote leaves no orphaned transport process" 0 "$orphan_rc"
 
+# SIGTERM is a REQUEST -- catchable and ignorable -- so the timer's TERM does not stop a transport
+# that ignores it. The WAITED-ON process is `git`, which honours TERM and dies, so `add` still
+# returns at the bound; what survives is the transport helper, reparented and running to its own
+# native timeout. `add` reports success while leaving a process behind, twice per call. SIGKILL
+# cannot be trapped, so escalating to it after a grace period is what actually reaps the tree.
+#
+# Fixture shape is load-bearing in two ways, both learned by ablation:
+#   * NO `exec`. `exec sleep 97` replaces the process image, so its argv becomes "sleep 97" and
+#     `pgrep -f "$ignore_transport"` can never match -- the assertion would pass on a broken tree.
+#     Looping over short sleeps keeps the script itself resident, so its path stays greppable.
+#   * The loop is what makes ignoring TERM observable: the group TERM kills the current `sleep 1`
+#     child, but the script traps nothing and continues, which is exactly the surviving helper.
+# Elapsed time is deliberately NOT asserted here: `git` dies on TERM either way, so a wall-clock
+# assertion passes in both arms and would only look like proof.
+ignore_transport="$tmp/ignore-term-transport"
+printf '#!/usr/bin/env bash\ntrap "" TERM\nfor _ in $(seq 97); do sleep 1; done\n' >"$ignore_transport"
+chmod +x "$ignore_transport"
+ignore_consumer="$tmp/ignore-consumer"
+git clone -q "$origin_repo" "$ignore_consumer"
+git -C "$ignore_consumer" remote set-url origin "ext::$ignore_transport"
+git -C "$ignore_consumer" config protocol.ext.allow always
+WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=2 "$script" add \
+  "$ignore_consumer" "$tmp/wt-ignore" "claim-ignore" "session-ignore" >/dev/null 2>&1 || true
+sleep 2
+ignore_orphan_rc=0
+if pgrep -f "$ignore_transport" >/dev/null 2>&1; then ignore_orphan_rc=1; fi
+check "a SIGTERM-IGNORING transport is SIGKILLed, not left orphaned" 0 "$ignore_orphan_rc"
+pkill -KILL -f "$ignore_transport" >/dev/null 2>&1 || true
+
 # Remote-default DISCOVERY failure must report UNKNOWN, not fall back to the clone-time pointer.
 # The fallback trusted `refs/remotes/origin/HEAD` — written once at clone time and never refreshed —
 # which is the stale source this whole check exists to stop trusting: if the default moved, the old
