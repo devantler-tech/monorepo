@@ -4175,6 +4175,25 @@ nocheck "shape 5d: and the body above it stays masked"                         "
 # destroyed and shape 6b (a block opening after the closer) becomes unreachable.
 check   "shape 5d control: text after the BALANCING closer still survives"      "$OUT" "TAILX"
 
+# ── SHAPE 5 (e) — several openers COLLAPSED onto one physical line ───────────
+# 🔴 A FOURTH disclosure, reported by CodeRabbit against the 5c/5d fix — and it
+# is the same nearest-closer defect once more, reached from a direction neither
+# 5c nor 5d covers. Pass A stops at the first UNPAIRED opener and folds the rest
+# of the line into the mask, so `BEGIN BEGIN` on one line leaves ONE flagged
+# line standing for TWO open blocks. U[] recorded a boolean, so pass B seeded
+# its depth at 1, closed at the FIRST later END, and everything after that END
+# printed verbatim.
+#
+# U[] now carries the COUNT — which pass A already had in `depth`, so the fix
+# stores a value it was computing and discarding.
+collapsefix() { printf '%s %s\nMIIEvgSECRETCOLL\n%s MIIEvgCOLLAPSELEAK %s TAILC\n' "$RB" "$RB" "$RE" "$RE"; }
+OUT=$(collapsefix | awk "$AWK_PROG")
+nocheck "shape 5e: collapsed openers still close at the OUTERMOST marker" "$OUT" "COLLAPSELEAK"
+nocheck "shape 5e: and the body between them stays masked"                "$OUT" "SECRETCOLL"
+# CONTROL, opposite direction — counting openers must not over-count and swallow
+# the tail of a legitimately balanced input.
+check   "shape 5e control: text after the BALANCING closer still survives" "$OUT" "TAILC"
+
 # ── SHAPE 6 (a) — TWO openers before one closer ──────────────────────────────
 # 🔴 Found by reading the shipped program end to end, not by a review round.
 # The second BEGIN sits INSIDE the region the first one's span already masked,
@@ -4455,9 +4474,18 @@ unit_ablate 's|^    for (j = i + 1; j <= n \&\& close_at == 0; j++) {$|    for (
 #     satisfied by an ablation that merely breaks the program: an arm that
 #     produces nothing fails the emptiness guard, and one that over-masks fails
 #     to find the needle.
-unit_ablate 's|^      if (close_at == 0 \&\& U\[j\]) bdepth++$|      if (close_at == 0 \&\& U[j]) bdepth += 0|' \
+unit_ablate 's|^      if (close_at == 0) bdepth += U\[j\]$|      if (close_at == 0) bdepth += 0|' \
   "cross-line nesting depth is load-bearing (a nested key body leaks without it)" \
   crossnestfix "SECRETXNEST" appear
+
+# 1d. U[] carrying the opener COUNT rather than a flag — the shape-5e fix.
+#     Ablate the pass-A store back to the boolean and the collapsed-opener leak
+#     must REAPPEAR. Signed APPEAR. Note this arm ablates pass A while the arm
+#     above ablates pass B: the count is written in one pass and read in the
+#     other, so a single arm could not tell which half is load-bearing.
+unit_ablate 's|^        U\[i\] = depth$|        U[i] = 1|' \
+  "U[] carrying the opener COUNT is load-bearing (collapsed openers leak without it)" \
+  collapsefix "COLLAPSELEAK" appear
 
 # 1c. Masking the closing line to the BALANCING closer rather than the first one
 #     — the shape-5d fix. Ablate back to re-matching the line, and the material

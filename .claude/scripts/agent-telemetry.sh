@@ -608,8 +608,16 @@ END {
       } else {
         # Unpaired BEGIN: the remainder of this line is key material. Whether
         # the key CONTINUES past this line is decided in pass B.
+        #
+        # 🔴 U[] IS A COUNT, NOT A FLAG, and `depth` is already that count: the
+        # walk above exits with 1 + openers - closers still outstanding on this
+        # line. Storing a boolean collapsed `BEGIN BEGIN` on one physical line
+        # into a single opener, so the pass-B depth walk closed the block at the
+        # FIRST later END instead of the second — and everything after that END
+        # printed verbatim. It is the same nearest-closer defect as 5c/5d,
+        # reached through pass A folding two openers into one line.
         s = ""
-        U[i] = 1
+        U[i] = depth
         break
       }
     }
@@ -670,7 +678,11 @@ END {
     # replacing it. `bdepth`/`bscan`/`bdrop` are named apart from the pass-A
     # `depth`/`scan` on purpose: a value leaking between passes is the same
     # class as the U[] flag below, and this program has paid for it enough.
-    close_at = 0; close_end = 0; bdepth = 1
+    # `bdepth` seeds from U[i] rather than 1, and accumulates U[j] rather than
+    # incrementing, because U[] counts openers — see pass A. A line can carry
+    # more than one, and treating it as a flag under-counts the depth by exactly
+    # the number pass A folded away.
+    close_at = 0; close_end = 0; bdepth = U[i]
     for (j = i + 1; j <= n && close_at == 0; j++) {
       bscan = L[j]; bdrop = 0
       while (match(bscan, /-----END [A-Z ]*PRIVATE KEY-----/)) {
@@ -683,7 +695,7 @@ END {
         bscan = substr(bscan, RSTART + RLENGTH)
         if (--bdepth == 0) { close_at = j; close_end = bdrop; break }
       }
-      if (close_at == 0 && U[j]) bdepth++
+      if (close_at == 0) bdepth += U[j]
     }
     if (close_at == 0) {
       # UNTERMINATED block: mask every following line to end of input, with NO
