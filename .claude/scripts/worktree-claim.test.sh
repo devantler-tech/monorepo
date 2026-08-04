@@ -641,9 +641,17 @@ ignore_consumer="$tmp/ignore-consumer"
 git clone -q "$origin_repo" "$ignore_consumer"
 git -C "$ignore_consumer" remote set-url origin "ext::$ignore_transport"
 git -C "$ignore_consumer" config protocol.ext.allow always
-WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=2 "$script" add \
-  "$ignore_consumer" "$tmp/wt-ignore" "claim-ignore" "session-ignore" >/dev/null 2>&1 || true
+ignore_rc=0
+ignore_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=2 "$script" add \
+  "$ignore_consumer" "$tmp/wt-ignore" "claim-ignore" "session-ignore" 2>&1)" || ignore_rc=$?
 sleep 2
+# An absence assertion alone is vacuous: if a regression made `add` fail BEFORE bounded_remote ever
+# ran, no transport would be spawned and the arm below would report success on a broken tree. So
+# establish first that the bounded call actually happened — this transport swallows TERM, so the
+# remote is abandoned and the freshness verdict degrades to UNKNOWN, which is the observable proof
+# that the timeout path executed rather than being skipped.
+check "the SIGTERM-ignoring transport was actually reached (guards the arm below)" 0 "$ignore_rc" \
+  "$ignore_out" "base freshness UNKNOWN"
 ignore_orphan_rc=0
 if pgrep -f "$ignore_transport" >/dev/null 2>&1; then ignore_orphan_rc=1; fi
 check "a SIGTERM-IGNORING transport is SIGKILLed, not left orphaned" 0 "$ignore_orphan_rc"
@@ -659,9 +667,15 @@ pkill -KILL -f "$ignore_transport" >/dev/null 2>&1 || true
 # suite, or a developer's shell. A round number like 60 would match half the machine.
 timer_consumer="$tmp/timer-consumer"
 git clone -q "$origin_repo" "$timer_consumer"
-WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=9871 "$script" add \
-  "$timer_consumer" "$tmp/wt-timer" "claim-timer" "session-timer" >/dev/null 2>&1 || true
+timer_rc=0
+timer_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=9871 "$script" add \
+  "$timer_consumer" "$tmp/wt-timer" "claim-timer" "session-timer" 2>&1)" || timer_rc=$?
 sleep 1
+# Same vacuity guard as the transport arm above: an `add` that failed before arming the timer would
+# leave no `sleep 9871` and the leak assertion would pass for the wrong reason. A successful claim is
+# the marker that the fast path — the one that used to leak a timer per call — actually ran.
+check "the fast path was actually reached (guards the arm below)" 0 "$timer_rc" \
+  "$timer_out" "owner=session-timer"
 timer_leak_rc=0
 if pgrep -f 'sleep 9871' >/dev/null 2>&1; then timer_leak_rc=1; fi
 check "a fast remote leaves no timer process behind" 0 "$timer_leak_rc"
