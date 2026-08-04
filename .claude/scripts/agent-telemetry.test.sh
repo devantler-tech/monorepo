@@ -4044,6 +4044,13 @@ longkey() {
   printf '%s\n' "$RE"
   printf 'AFTER-ROW\n'
 }
+# The same length, with NO closing marker anywhere — shape 2 past the old bound.
+# Deliberately the same 300 lines as `longkey`, so the two shapes differ in
+# exactly one property: whether the block is terminated.
+longunterm() {
+  printf '%s\n' "$RB"
+  for i in $(seq 1 300); do printf 'MIIEvgSECRETBODY-%03d\n' "$i"; done
+}
 
 # ── SHAPE 1 — a TERMINATED block of ARBITRARY length ──────────────────────────
 # 🔴 THE KNOWN-BROKEN ONE. The closing-marker search used to stop at the same
@@ -4061,6 +4068,14 @@ check   "shape 1: and the record after it survives"                         "$OU
 OUT=$(printf 'timed out: %s\nMIIEvgSECRETBODYaaaa\nQEFAASCBKgSECRETTWO\n' "$RB" | awk "$(extract_awk)")
 nocheck "shape 2: an unterminated key body is masked"   "$OUT" "SECRETBODY"
 nocheck "shape 2: including its later body lines"       "$OUT" "SECRETTWO"
+
+# 🔴 AND AT ARBITRARY LENGTH. The masking used to stop at a 256-line horizon,
+# so this shape leaked exactly as shape 1 did before its search was unbounded:
+# 300 body lines - 256 = 44 survivors, the first at body line 257. PEM imposes
+# no payload ceiling, so no fixed bound can apply to a real key block — the
+# same argument in both branches, now applied in both.
+OUT=$(longunterm | awk "$(extract_awk)")
+nocheck "shape 2: an unterminated key LONGER than 256 lines is fully masked" "$OUT" "SECRETBODY"
 
 # ── SHAPE 3 — RFC 1421 encrypted-PEM headers and their BLANK separator ────────
 # `Proc-Type:`/`DEK-Info:` and an empty line sit between BEGIN and the body, so
@@ -4231,29 +4246,83 @@ unit_ablate() { # $1=sed-expr $2=label $3=fixture-fn $4=needle $5=appear|vanish
 
 # Fixture functions for the arms below. Named, not eval'd.
 strayfix()   { printf 'x %s\n' "$RB"; for i in $(seq 1 300); do printf 'REPORT-LINE-%03d\n' "$i"; done; }
+strayrowfix(){ printf 'D\tBash\tx %s\n' "$RB"; for i in $(seq 1 300); do printf 'D\tRead\tREPORT-LINE-%03d\n' "$i"; done; }
 encpemfix()  { printf 'Blocked: %s\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,9A7B2C\n\nMIIEvgIBADANBgkqSECRETBODYxxxx\n' "$RB"; }
 closerowfix(){ printf 'D\tBash\thead %s\n' "$RB"; printf 'D\tBash\ttail %s z\n' "$RE"; }
+
+# ── THE ACCEPTED COST, pinned in BOTH directions ──────────────────────────────
+# Unbounding the unterminated masking buys shape 2 at a price, and the price is
+# recorded here rather than left in a comment. A stray BEGIN with no END now
+# over-masks to end of input — the SAME input as a truncated key, which is why
+# no bound could have separated them.
+OUT=$(strayfix | awk "$(extract_awk)")
+nocheck "accepted cost: a stray BEGIN over-masks to EOF" "$OUT" "REPORT-LINE-300"
+
+# 🔑 AND WHY THAT PRICE IS PAYABLE — the half that actually justifies the trade.
+# On the TAGGED stream the over-mask costs MESSAGE TEXT, not EVIDENCE:
+# mask_line() keeps `D<TAB>tool<TAB>`, so every record still parses and still
+# counts. Without this row the arm above would read as pure loss.
+OUTR=$(strayrowfix | awk "$(extract_awk)")
+check "accepted cost: but the over-masked rows keep their tags" \
+  "$OUTR" "$(printf 'D\tRead\t<redacted-key-material>')"
+if [ "$(printf '%s\n' "$OUTR" | grep -c "$(printf '^D\t')")" -eq 301 ]; then
+  ok "accepted cost: all 301 records survive the over-mask"
+else
+  bad "accepted cost: all 301 records survive the over-mask" \
+      "$(printf '%s\n' "$OUTR" | grep -c "$(printf '^D\t')") of 301 rows kept a tag"
+fi
 
 # POSITIVE CONTROL for every "vanish"-signed arm below: the needles must be
 # present in the UNABLATED output, or asserting their absence proves nothing.
 # A diff of two empty outputs reads exactly like "behaviour preserved".
-CTRL=$(strayfix | awk "$(extract_awk)")
-check "positive control: line past the horizon IS present unablated" "$CTRL" "REPORT-LINE-300"
 CTRL2=$(closerowfix | awk "$(extract_awk)")
 check "positive control: the closing row keeps its tag unablated" "$CTRL2" "$(printf 'D\tBash\t<redacted-key-material> z')"
 
-# 1. The UNBOUNDED closing search — the shape-1 fix. Re-coupling it to HORIZON
-#    restores the misclassification, and the leak is arithmetically exact:
-#    300 body lines - 256 horizon = 44, first at line 257.
-unit_ablate 's|^    for (j = i + 1; j <= n; j++) {$|    for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) {|' \
-  "the UNBOUNDED closing search is load-bearing (a long terminated key leaks without it)" \
-  longkey "MIIEvgSECRETLINE-257" appear
+# POSITIVE CONTROL for the APPEAR-signed arm 2: the needle must be in the
+# FIXTURE, or "it reappeared" is unfalsifiable. That it is ABSENT from the
+# unablated program is the shape-2 row above; this asserts the fixture is not
+# empty of the thing the arm hunts for. (Arm 1 is vanish-signed and its control
+# is the shape-1 `AFTER-ROW` row.)
+check "positive control: the unterminated fixture carries its needle" \
+  "$(longunterm)" "MIIEvgSECRETBODY-257"
 
-# 2. The HORIZON bound on the unterminated branch — signed the OTHER way:
-#    removing it masks MORE, so the arm asserts the far line DISAPPEARS.
-unit_ablate 's|^      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) { L\[j\] = mask_line(L\[j\]); U\[j\] = 0 }$|      for (j = i + 1; j <= n; j++) { L[j] = mask_line(L[j]); U[j] = 0 }|' \
-  "the HORIZON bound is load-bearing (masking runs to EOF without it)" \
-  strayfix "REPORT-LINE-300" vanish
+# ⚠️ Both arms below re-introduce a LITERAL 256 rather than naming HORIZON.
+# The constant was deleted with the bound, and an undefined awk variable is 0 —
+# so `(j - i) <= HORIZON` would be false on the first iteration, and each arm
+# would exercise a loop that never runs instead of the bounded form it claims
+# to test. Arm 1 would then fail confusingly and arm 3 would PASS for entirely
+# the wrong reason.
+
+# 1. The UNBOUNDED closing search — the shape-1 fix. 🔑 THIS ARM CHANGED SIGN
+#    TOO, and the reason is worth more than the arm: the two bounds are NO
+#    LONGER INDEPENDENT. Bounding the closing search still misclassifies a long
+#    terminated key as unterminated — but that branch is now unbounded, so it
+#    masks the key to EOF instead of emitting its tail. Measured: with only
+#    this bound restored, SECRETLINE survivors stay 0 and it is `AFTER-ROW`,
+#    the ordinary record past the key, that disappears (1 -> 0).
+#
+#    So the unterminated branch is now a BACKSTOP for a mis-bounded closing
+#    search: the shape-1 disclosure needs BOTH bounds back, and `unit_ablate`
+#    changes exactly one line by design. What this arm can still prove is that
+#    the closing search decides terminated-vs-unterminated correctly, and the
+#    cost of getting it wrong — now over-masking rather than leaking. Signed
+#    VANISH; its positive control is the shape-1 `AFTER-ROW` row above.
+unit_ablate 's|^    for (j = i + 1; j <= n; j++) {$|    for (j = i + 1; j <= n \&\& (j - i) <= 256; j++) {|' \
+  "the UNBOUNDED closing search is load-bearing (a long terminated key is misclassified without it)" \
+  longkey "AFTER-ROW" vanish
+
+# 2. The UNBOUNDED masking on the unterminated branch — the shape-2 fix, and
+#    the arm whose SIGN REVERSED when the bound came out. It used to assert
+#    that a 256-line horizon was load-bearing, pinning a stray BEGIN's 300th
+#    report line as a SURVIVOR. That pinned the wrong side of the governing
+#    asymmetry: the same bound that spared those report lines emitted 44 lines
+#    of an over-long unterminated key. The two inputs are indistinguishable
+#    here by construction — this branch asks nothing about content — so the
+#    bound never separated them, it only chose disclosure for both. Now signed
+#    APPEAR: restoring the bound must bring the key body back.
+unit_ablate 's|^      for (j = i + 1; j <= n; j++) { L\[j\] = mask_line(L\[j\]); U\[j\] = 0 }$|      for (j = i + 1; j <= n \&\& (j - i) <= 256; j++) { L[j] = mask_line(L[j]); U[j] = 0 }|' \
+  "the UNBOUNDED unterminated masking is load-bearing (a long truncated key leaks without it)" \
+  longunterm "MIIEvgSECRETBODY-257" appear
 
 # 3. Unconditional masking — ablate back to the CONTENT-TESTED form that leaked
 #    twice. The encrypted-PEM body must reappear.
@@ -4261,7 +4330,7 @@ unit_ablate 's|^      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) { L\[
 #    REPLACEMENT emits a bare `/`, which closes the awk regex literal early and
 #    makes the ablated script a syntax error — the arm would then "pass"
 #    because awk produced nothing, not because the guard is load-bearing.
-unit_ablate 's|^      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) { L\[j\] = mask_line(L\[j\]); U\[j\] = 0 }$|      for (j = i + 1; j <= n \&\& (j - i) <= HORIZON; j++) { if (L[j] ~ /^[A-Za-z0-9+=]{16,}$/) { L[j] = mask_line(L[j]); U[j] = 0 } else break }|' \
+unit_ablate 's|^      for (j = i + 1; j <= n; j++) { L\[j\] = mask_line(L\[j\]); U\[j\] = 0 }$|      for (j = i + 1; j <= n; j++) { if (L[j] ~ /^[A-Za-z0-9+=]{16,}$/) { L[j] = mask_line(L[j]); U[j] = 0 } else break }|' \
   "unconditional masking is load-bearing (an encrypted-PEM body leaks under a content test)" \
   encpemfix "SECRETBODY" appear
 

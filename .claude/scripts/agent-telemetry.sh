@@ -499,7 +499,7 @@ emit_credential_hits() {
 # this must handle, and where each is answered:
 #
 #   1. TERMINATED block of ARBITRARY length  → pass B, closing search unbounded
-#   2. UNTERMINATED block                    → pass B, masked to HORIZON
+#   2. UNTERMINATED block                    → pass B, masked to end of input
 #   3. RFC 1421 `Proc-Type:`/`DEK-Info:` headers and their blank separator
 #                                            → no content test exists to stop on
 #   4. Short final base64 line               → likewise
@@ -511,7 +511,7 @@ emit_credential_hits() {
 # lines inside a window we control. So no branch here asks what a line looks
 # like. Narrow classification is right for a parser and wrong for a redactor.
 AWK_KEY_REDACT='
-BEGIN { PH = "<redacted-key-material>"; HORIZON = 256 }
+BEGIN { PH = "<redacted-key-material>" }
 # Mask a line WITHOUT destroying its structure. Callers tag rows as
 # `D<TAB>tool<TAB>message`, and this filter runs over that tagged stream as well
 # as over the final report — so replacing a whole line does not merely redact
@@ -591,12 +591,12 @@ END {
   # report lines destroyed all six.
   for (i = 1; i <= n; i++) {
     if (!U[i]) continue
-    # 🔴 THE SEARCH IS UNBOUNDED, AND THAT IS THE FIX. It used to stop at the
-    # same HORIZON the masking uses, which made the classification a GUESS: a
-    # COMPLETE key whose END sat beyond the lookahead was misread as
-    # unterminated and masked only to the horizon, so its tail was emitted
-    # verbatim. Measured on the bounded form with HORIZON=64: 36 body lines of a
-    # 100-line RSA-8192 key survived into the output.
+    # 🔴 THE SEARCH IS UNBOUNDED, AND THAT IS THE FIX. It used to stop at a
+    # fixed lookahead, which made the classification a GUESS: a COMPLETE key
+    # whose END sat beyond it was misread as unterminated and masked only that
+    # far, so its tail was emitted verbatim. Measured on the bounded form with
+    # a 64-line lookahead: 36 body lines of a 100-line RSA-8192 key survived
+    # into the output.
     #
     # A bounded lookahead cannot answer an unbounded question. Scanning to end
     # of input makes the terminated/unterminated split EXACT, which is what
@@ -615,7 +615,7 @@ END {
       if (L[j] ~ /-----END [A-Z ]*PRIVATE KEY-----/) { close_at = j; break }
     }
     if (close_at == 0) {
-      # UNTERMINATED block: mask every following line to HORIZON, with NO
+      # UNTERMINATED block: mask every following line to end of input, with NO
       # content test whatsoever. Stopping early on an explicit END is the
       # terminated branch above; there is no other stop condition, by design.
       #
@@ -629,12 +629,28 @@ END {
       # escaped even in the clean case. This asks nothing about what a line
       # looks like, which is what makes it closed rather than merely wider.
       #
-      # HORIZON is 256 lines. It bounds ONLY this branch — a key with no
-      # closing marker anywhere in the stream, i.e. a transcript truncated
-      # mid-key. 256 lines of base64 is ~16 KB of DER, comfortably past an
-      # RSA-16384 key (~170 body lines), so no realistic truncated key reaches
-      # the edge. It exists so a stray marker cannot consume the stream.
-      for (j = i + 1; j <= n && (j - i) <= HORIZON; j++) { L[j] = mask_line(L[j]); U[j] = 0 }
+      # 🔴 THE MASKING IS UNBOUNDED, and that bound is where the LAST leak was.
+      # It used to stop at a 256-line HORIZON, justified as "no realistic
+      # truncated key is that long" and "a stray marker must not consume the
+      # stream". The first half is the same length guess the closing search
+      # above already had to abandon: PEM imposes no payload ceiling, so an
+      # unterminated key longer than the bound emitted its tail verbatim.
+      # Measured on the bounded form: a 300-line unterminated body left 44
+      # survivors, the first at body line 257 — 300 - 256, exactly.
+      #
+      # The second half is real but is the WRONG SIDE OF THE ASYMMETRY. A stray
+      # BEGIN with no END anywhere and a transcript truncated mid-key are the
+      # same input — this branch asks nothing about content, deliberately, so
+      # nothing here can tell them apart. Bounding it therefore does not
+      # separate the two cases; it just picks disclosure over over-masking for
+      # every input past the bound.
+      #
+      # Accepting the runaway costs message text, not evidence: mask_line()
+      # preserves each row tag, so the records stay parsed and counted. That is
+      # the identical trade the unbounded closing search above already makes,
+      # for the identical reason — and it is what makes shape 2 exact, as the
+      # shape-1 fix made shape 1 exact.
+      for (j = i + 1; j <= n; j++) { L[j] = mask_line(L[j]); U[j] = 0 }
       continue
     }
     # ⚠️ The INTERMEDIATE lines are cleared, the CLOSING line is NOT, and the
