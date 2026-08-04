@@ -4393,6 +4393,21 @@ check "shape 8 control: a row outside any key span keeps its tool name" "$S8C" "
 # rather than a trailing wildcard. Widening a grammar past its evidence is how a
 # precise rule silently becomes a substring match, and here it silently became a
 # leak. The two regression CONTROLS below are what pin both directions.
+#
+# ⚠️ SCOPE, STATED PLAINLY SO THIS IS NOT MISREAD AS AN RFC 7468 IMPLEMENTATION.
+# It is NOT one, deliberately. RFC 7468's `labelchar` (%x21-2C / %x2E-7E) also
+# admits punctuation this class rejects, and the grammar permits an INTERNAL
+# hyphen-minus; `FOO/BAR PRIVATE KEY` and `FOO-BAR PRIVATE KEY` are therefore
+# spec-legal and are NOT matched here. What IS covered is every label actually
+# registered for private-key material — verified, all eight mask:
+#   PRIVATE KEY · ENCRYPTED PRIVATE KEY · RSA PRIVATE KEY · DSA PRIVATE KEY
+#   EC PRIVATE KEY · OPENSSH PRIVATE KEY · PGP PRIVATE KEY BLOCK
+#   X9.42 DH PRIVATE KEY
+# Closing the residual spec gap is NOT a character-class widening: an `END`
+# matcher broad enough to accept an arbitrary label can close a span EARLY, which
+# is the under-mask direction reproduced above. It needs the closer to be PAIRED
+# to its opener's label, which is a structural change to the span walker and is
+# tracked separately rather than smuggled into this fix.
 PGPB=$(printf -- '-----%s PGP PRIVATE KEY BLOCK-----' 'BEGIN')
 PGPE=$(printf -- '-----%s PGP PRIVATE KEY BLOCK-----' 'END')
 OUT=$(printf 'boom %s\nlQOYBGSECRETPGPBODY\n%s\nAFTER-ROW\n' "$PGPB" "$PGPE" | awk "$AWK_PROG")
