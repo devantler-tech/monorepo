@@ -467,5 +467,66 @@ printf "%s" "'it'\\''s'" >"$tmp/shq.esc.expected"
 cmp -s "$tmp/shq.esc" "$tmp/shq.esc.expected" || shquote_esc_rc=1
 check "shquote still escapes an embedded single quote" 0 "$shquote_esc_rc"
 
+# `add` must CLAIM before it runs the advisory freshness check. That check makes up to two bounded
+# remote calls, so running it first leaves the new tree unclaimed for both timeouts — long enough for
+# a concurrent run to take the marker, which would leave this invocation exiting 3 on a worktree and
+# branch it just created. Asserted on OUTPUT ORDER against the unresponsive-remote fixture, which is
+# the case where the window is widest: the acquire line must precede the freshness NOTE.
+#
+# The transport is a script under this run's own `mktemp -d`, NOT a bare `sleep`: the orphan check
+# below greps the process table, and a bare `sleep 97` matches a leftover from any earlier run of
+# this suite — which made the assertion fail on a tree that was actually correct. The temp path is
+# unique per run, so the grep can only ever match this run's descendants.
+slow_transport="$tmp/slow-transport"
+printf '#!/usr/bin/env bash\nexec sleep 97\n' >"$slow_transport"
+chmod +x "$slow_transport"
+order_consumer="$tmp/order-consumer"
+git clone -q "$origin_repo" "$order_consumer"
+git -C "$order_consumer" remote set-url origin "ext::$slow_transport"
+git -C "$order_consumer" config protocol.ext.allow always
+order_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=2 "$script" add \
+  "$order_consumer" "$tmp/wt-order" "claim-order" "session-order" 2>&1)" || true
+acquire_at="$(awk '/owner=session-order/{print NR; exit}' <<<"$order_out")"
+note_at="$(awk '/base freshness UNKNOWN/{print NR; exit}' <<<"$order_out")"
+case "$acquire_at" in '' | *[!0-9]*) acquire_at=0 ;; esac
+case "$note_at" in '' | *[!0-9]*) note_at=0 ;; esac
+order_rc=0
+[ "$acquire_at" -gt 0 ] && [ "$note_at" -gt 0 ] && [ "$acquire_at" -lt "$note_at" ] || order_rc=1
+check "add claims the worktree BEFORE the advisory remote check" 0 "$order_rc"
+
+# A timed-out git must not leave its TRANSPORT child running. git delegates to a helper process, and
+# killing only the git pid leaves that helper reparented, running to its own native timeout — twice
+# per `add`, so an unresponsive remote accumulates them. Matched on this run's unique transport path.
+sleep 1
+orphan_rc=0
+if pgrep -f "$slow_transport" >/dev/null 2>&1; then orphan_rc=1; fi
+check "a timed-out remote leaves no orphaned transport process" 0 "$orphan_rc"
+
+# Remote-default DISCOVERY failure must report UNKNOWN, not fall back to the clone-time pointer.
+# The fallback trusted `refs/remotes/origin/HEAD` — written once at clone time and never refreshed —
+# which is the stale source this whole check exists to stop trusting: if the default moved, the old
+# branch usually still fetches, so the comparison yields behind=0 and reports a CURRENT base for an
+# arbitrarily stale tree. The git stub makes only the symref discovery fail, so the branch fetch
+# still succeeds and the old fallback path would have been taken.
+symref_stub="$tmp/symref-stub"
+mkdir -p "$symref_stub"
+cat >"$symref_stub/git" <<STUB
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  [ "\$arg" = "--symref" ] && exit 0
+done
+exec "$real_git" "\$@"
+STUB
+chmod +x "$symref_stub/git"
+symref_consumer="$tmp/symref-consumer"
+git clone -q "$origin_repo" "$symref_consumer"
+symref_rc=0
+symref_out="$(PATH="$symref_stub:$PATH" "$script" add \
+  "$symref_consumer" "$tmp/wt-symref" "claim-symref" "session-symref" 2>&1)" || symref_rc=$?
+check "failed default discovery still claims successfully" 0 "$symref_rc" \
+  "$symref_out" "owner=session-symref"
+check "failed default discovery reports UNKNOWN, not a stale-pointer comparison" 0 "$symref_rc" \
+  "$symref_out" "base freshness UNKNOWN"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

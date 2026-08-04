@@ -182,8 +182,13 @@ cmd_add() {
   if ! git -C "$repo" worktree add -b "$branch" "$wt"; then
     fail "git worktree add failed for $wt (branch $branch)"
   fi
-  warn_if_base_is_stale "$repo" "$wt"
+  # Claim BEFORE the advisory freshness check, not after. That check makes up to two bounded remote
+  # calls, so it can hold the newly-created tree unclaimed for the length of both timeouts — a window
+  # in which a concurrent run can take the marker, leaving this invocation to create the worktree and
+  # branch and then exit 3 without the lane it just built. Ownership is the point of `add`; freshness
+  # is a NOTE, so the note waits.
   cmd_acquire "$wt" "$owner"
+  warn_if_base_is_stale "$repo" "$wt"
   echo "worktree-claim: added $wt on $branch owner=$owner"
 }
 
@@ -218,12 +223,22 @@ WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="${WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS:-10}"
 bounded_remote() {
   local secs="$1"
   shift
-  local cmd_pid killer_pid rc=0
+  local cmd_pid killer_pid rc=0 had_monitor=0
+  # Job control gives the background command its OWN process group, which is what makes the whole
+  # transport tree killable. git delegates to a helper (`git remote-ext`, ssh, git-remote-https); a
+  # kill aimed at the git pid alone leaves that helper reparented and running to ITS native timeout,
+  # and `add` can time out twice per call, so an unresponsive remote accumulates them.
+  case "$-" in *m*) had_monitor=1 ;; esac
+  set -m
   GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" "$@" &
   cmd_pid=$!
+  [ "$had_monitor" -eq 1 ] || set +m
   (
     sleep "$secs"
-    kill -TERM "$cmd_pid" 2>/dev/null
+    # Negative pid = the process GROUP. Falls back to the single pid if the group is already gone
+    # (or job control was unavailable), so a host without it degrades to the previous behaviour
+    # rather than failing to time out at all.
+    kill -TERM -"$cmd_pid" 2>/dev/null || kill -TERM "$cmd_pid" 2>/dev/null
   ) >/dev/null 2>&1 &
   killer_pid=$!
   # `wait` reports a signal-killed job on the SHELL's stderr, so it is silenced here rather than at
@@ -270,11 +285,17 @@ warn_if_base_is_stale() {
     git -C "$repo" ls-remote --symref origin HEAD 2>/dev/null |
     awk '$1 == "ref:" { sub("^refs/heads/", "", $2); print $2; exit }' || true)"
   if [ -z "$default_branch" ]; then
-    # Offline or restricted host: fall back to the local pointer, then to the conventional default.
-    default_branch="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-    default_branch="${default_branch#origin/}"
+    # Remote discovery FAILED, and that is not the same as "the default is probably main". The local
+    # pointer and the conventional guess are exactly the stale sources this function was written to
+    # stop trusting: if the remote default has moved, the old branch usually still exists and still
+    # fetches, so comparing against it yields behind=0 and reports a current base for an arbitrarily
+    # stale tree — the silent false-current this check exists to remove, reached by the fallback
+    # rather than by the bug it replaced.
+    #
+    # Claiming still succeeds (advisory, never fatal); only the freshness VERDICT becomes UNKNOWN.
+    base_freshness_unknown "origin/HEAD"
+    return 0
   fi
-  [ -n "$default_branch" ] || default_branch="main"
   default_ref="origin/$default_branch"
   if ! bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
     git -C "$repo" fetch --quiet origin "$default_branch" 2>/dev/null; then
