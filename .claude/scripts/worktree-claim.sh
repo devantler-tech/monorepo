@@ -182,8 +182,287 @@ cmd_add() {
   if ! git -C "$repo" worktree add -b "$branch" "$wt"; then
     fail "git worktree add failed for $wt (branch $branch)"
   fi
+  # Claim BEFORE the advisory freshness check, not after. That check makes up to two bounded remote
+  # calls, so it can hold the newly-created tree unclaimed for the length of both timeouts — a window
+  # in which a concurrent run can take the marker, leaving this invocation to create the worktree and
+  # branch and then exit 3 without the lane it just built. Ownership is the point of `add`; freshness
+  # is a NOTE, so the note waits.
   cmd_acquire "$wt" "$owner"
+  # `|| true`: the check is advisory by contract, so its status must never decide whether `add`
+  # succeeded. Every path in it returns 0 today, but relying on that couples the claim's exit code to
+  # the internals of a NOTE -- one future `return 1` on an unresolvable comparison would abort the
+  # claim under `set -e`, after the worktree and branch were already created.
+  warn_if_base_is_stale "$repo" "$wt" || true
   echo "worktree-claim: added $wt on $branch owner=$owner"
+}
+
+# base_freshness_unknown reports that the comparison could not be made. Both unresolvable paths emit
+# it: staying silent would be indistinguishable from "base is current", which is the exact confusion
+# the staleness check below exists to remove.
+base_freshness_unknown() {
+  echo "worktree-claim: NOTE could not resolve $1 — base freshness UNKNOWN, verify before" >&2
+  echo "worktree-claim:      concluding anything about current upstream behaviour." >&2
+}
+
+# How long an advisory remote call may take before it is abandoned. Short on purpose: this runs on
+# the creation path of every worktree, and its answer is a NOTE, never a gate.
+WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT=10
+WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="${WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS:-$WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT}"
+
+# The bound is handed straight to `sleep`, so a malformed value makes that `sleep` fail instantly and
+# collapses the bound to roughly zero: the remote is abandoned before it can answer, and a REACHABLE
+# remote is then reported UNKNOWN for a reason nothing states.
+#
+# The accept condition is "all digits AND at least one non-zero digit", which is deliberately not the
+# same as "not equal to 0". Zero is a well-formed integer that is not a bound, and it has infinitely
+# many spellings: `00` and `000` are digit-only, are not the literal `0`, and `sleep` returns from all
+# of them immediately. Matching a VALUE rather than a set of spellings is what makes this closed --
+# an earlier round rejected only `0` and let `00` through. `0001` is accepted, and correctly so: it
+# is an unusual spelling of a genuine 1-second bound.
+#
+# Validated HERE, once, rather than inside bounded_remote: both call sites redirect that function's
+# stderr (`2>/dev/null`, so an advisory remote failure cannot abort the claim), which would swallow
+# the notice at exactly the moment it matters. Reporting the rejection is the point -- falling back
+# silently would trade one invisible failure for another.
+# The RANGE matters as much as the spelling, and both ends defeat the bound. `sleep` is what enforces
+# it, and BSD sleep (the primary host) rejects a value at/above ~2^31 outright -- usage error, returns
+# instantly -- so the killer fires immediately and TERMs a perfectly reachable remote: the bound
+# collapses to ~0 and every claim reports UNKNOWN. GNU sleep accepts the same value and waits ~317
+# years, i.e. no bound at all. A merely large in-range value (`600000`, the "someone meant
+# milliseconds" case) is unbounded on both. So accept only 1..3600.
+#
+# LENGTH is checked BEFORE the numeric comparison, and that ordering is load-bearing: `[` parses its
+# operands as machine integers, so `[ 99999999999999999999 -ge 1 ]` does not return false -- it errors
+# ("integer expression expected") with status 2, which inside an `if` is indistinguishable from a
+# clean false and would fail OPEN. Digits-only is established first, so the length test is safe.
+case "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" in
+  *[!0-9]* | '') worktree_claim_timeout_usable=no ;;
+  *[1-9]*)
+    if [ "${#WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS}" -le 4 ] &&
+      [ "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" -ge 1 ] &&
+      [ "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" -le 3600 ]; then
+      worktree_claim_timeout_usable=yes
+    else
+      worktree_claim_timeout_usable=no
+    fi
+    ;;
+  *) worktree_claim_timeout_usable=no ;;
+esac
+if [ "$worktree_claim_timeout_usable" = no ]; then
+  echo "worktree-claim: NOTE ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=" \
+    "'$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS', using ${WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT}s" >&2
+  WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="$WORKTREE_CLAIM_REMOTE_TIMEOUT_DEFAULT"
+fi
+unset worktree_claim_timeout_usable
+
+# bounded_remote runs an advisory remote git call that can never hang the claim.
+#
+# Both remote calls below happen inside cmd_add, where the freshness check is explicitly allowed to
+# fail — so a remote that never answers must not block worktree creation. Two different hangs are
+# possible and they need different fixes: a credential or passphrase PROMPT waits forever (closed by
+# GIT_TERMINAL_PROMPT and ssh BatchMode), and an UNREACHABLE host waits on TCP (closed by the timer).
+#
+# Deliberately not coreutils `timeout`: it is absent from a stock macOS, which is both this script's
+# primary host and one leg of the CI matrix, so a timeout-based bound would silently not apply on the
+# platform that needs it most. The killer subshell below is portable to bash 3.2.
+#
+# Two non-obvious details, both verified rather than assumed:
+#   * the command is `wait`ed on, not polled with `kill -0` — a finished child stays a zombie until it
+#     is reaped, so a poll loop would spin until the deadline instead of returning immediately;
+#   * the killer's stdout is redirected, because it would otherwise inherit and hold open a caller's
+#     pipe, making every call take the full timeout even when git answered instantly.
+bounded_remote() {
+  local secs="$1"
+  shift
+  local cmd_pid killer_pid rc=0 had_monitor=0
+  # Job control gives the background command its OWN process group, which is what makes the whole
+  # transport tree killable. git delegates to a helper (`git remote-ext`, ssh, git-remote-https); a
+  # kill aimed at the git pid alone leaves that helper reparented and running to ITS native timeout,
+  # and `add` can time out twice per call, so an unresponsive remote accumulates them.
+  case "$-" in *m*) had_monitor=1 ;; esac
+  set -m
+  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes" "$@" &
+  cmd_pid=$!
+  # The killer is started while job control is STILL on, so it too gets its own process group. That
+  # is what makes it killable as a tree: the subshell's `sleep` is a separate child, and a signal to
+  # the subshell's pid alone does not reach it -- so on the fast path, where the command answers long
+  # before the deadline, the timer's `sleep` outlived the call and ran to its full duration. Every
+  # normal `add` leaked one or two of them.
+  (
+    sleep "$secs"
+    # Negative pid = the process GROUP. Falls back to the single pid if the group is already gone
+    # (or job control was unavailable), so a host without it degrades to the previous behaviour
+    # rather than failing to time out at all.
+    kill -TERM -"$cmd_pid" 2>/dev/null || kill -TERM "$cmd_pid" 2>/dev/null
+  ) >/dev/null 2>&1 &
+  killer_pid=$!
+  [ "$had_monitor" -eq 1 ] || set +m
+  # `wait` reports a signal-killed job on the SHELL's stderr, so it is silenced here rather than at
+  # each call site.
+  { wait "$cmd_pid" || rc=$?; } 2>/dev/null
+  # Group first, so the timer's own `sleep` child goes with it; single pid only as the fallback for
+  # a host where job control was unavailable and no separate group exists.
+  kill -TERM -"$killer_pid" 2>/dev/null || kill -TERM "$killer_pid" 2>/dev/null || true
+  { wait "$killer_pid" || true; } 2>/dev/null
+  # SIGTERM is catchable AND ignorable, so the timer's TERM only *asks* the tree to stop. `wait`
+  # above returns as soon as GIT exits -- git honours TERM -- but a transport helper that ignores it
+  # survives, reparented, running to its own native timeout. `add` then reports success while
+  # leaving a process behind, and it can do so twice per call.
+  #
+  # The sweep has to be HERE rather than as a second stage inside the killer: `wait` returns the
+  # moment git dies and the very next line kills the killer, so anything scheduled after a grace
+  # period in that subshell is cancelled before it ever runs. (Verified -- a grace-then-KILL written
+  # inside the killer left the orphan alive, and the test failed identically with and without it.)
+  #
+  # SIGKILL cannot be trapped, so this is what actually reaps the group. No grace period is owed:
+  # `wait` has already returned, so the command is finished and every remaining group member is by
+  # definition a descendant that outlived it. Sleeping first would also charge the delay to EVERY
+  # call, including the fast success path, to no purpose. On that path the group is already empty
+  # and the kill is a silent no-op.
+  kill -KILL -"$cmd_pid" 2>/dev/null || true
+  return "$rc"
+}
+
+# shquote renders "$1" as one single-quoted shell word, so a path or ref containing spaces, newlines,
+# or shell metacharacters prints as a single safely reusable argument rather than something that
+# would re-split or be interpreted if pasted back into a shell.
+#
+# The escaping is a parameter expansion rather than `$(… | sed …)`: command substitution strips
+# TRAILING NEWLINES, so a path ending in one was quoted as a different path than the one being
+# operated on — and this output is a command the reader is invited to paste and run.
+shquote() {
+  local escaped=${1//\'/\'\\\'\'}
+  printf "'%s'" "$escaped"
+}
+
+# warn_if_base_is_stale reports how far the new worktree's base is behind the remote default branch.
+#
+# A submodule worktree is created at the PINNED gitlink, not at the remote default branch, and git
+# says nothing about the gap. That silence is the whole defect: a tree tens of commits stale reads
+# exactly like a current one, so "this code is missing X" can be true of the pin and false upstream.
+# Measured twice on the same issue (ksail#6203, pin 7ac8e7bb) — the second time it reached a public
+# root-cause comment asserting a security hole that two merged PRs had already closed. A prose rule
+# did not prevent either occurrence, because the moment you need it is the moment you have no reason
+# to suspect anything. So the check is unconditional and its output lands at creation time.
+#
+# Advisory, never fatal: creating a worktree at the pin is legitimate (a monorepo-coordinated change
+# pins deliberately), and an offline or restricted host must still be able to claim one.
+warn_if_base_is_stale() {
+  local repo="$1" wt="$2" default_ref default_branch behind remote_tip tipref
+  # Ask the REMOTE for its current default branch. refs/remotes/origin/HEAD is local metadata written
+  # at clone time and never refreshed, so once a repository's default moves (main → trunk) the stale
+  # pointer makes this compare against a branch the remote no longer defaults to — and report "not
+  # behind" while the tree is arbitrarily stale, which is precisely the silence this check removes.
+  # `|| true`: with `set -o pipefail` a repo that has no origin at all (or an unreachable one) would
+  # otherwise abort the whole claim on an advisory check that is explicitly allowed to fail.
+  default_branch="$(bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+    git -C "$repo" ls-remote --symref origin HEAD 2>/dev/null |
+    awk '$1 == "ref:" && $2 ~ /^refs\/heads\// { sub("^refs/heads/", "", $2); print $2; exit }' || true)"
+  if [ -z "$default_branch" ]; then
+    # Remote discovery FAILED, and that is not the same as "the default is probably main". The local
+    # pointer and the conventional guess are exactly the stale sources this function was written to
+    # stop trusting: if the remote default has moved, the old branch usually still exists and still
+    # fetches, so comparing against it yields behind=0 and reports a current base for an arbitrarily
+    # stale tree — the silent false-current this check exists to remove, reached by the fallback
+    # rather than by the bug it replaced.
+    #
+    # Claiming still succeeds (advisory, never fatal); only the freshness VERDICT becomes UNKNOWN.
+    base_freshness_unknown "origin/HEAD"
+    return 0
+  fi
+  # The name came from the REMOTE, so it is untrusted input on a path that feeds `git fetch`. Passed
+  # positionally, a name beginning with `-` is parsed as an OPTION, not a branch: a remote whose HEAD
+  # symrefs to `refs/heads/--upload-pack=<cmd>` makes this run `git fetch … --upload-pack=<cmd>`, and
+  # git honours it — an arbitrary-command primitive on the creation path of every worktree. The awk
+  # above now requires the symref to live under refs/heads/, and this rejects anything that is not a
+  # plain branch name. Rejection is advisory like every other failure here: UNKNOWN, never fatal.
+  case "$default_branch" in
+  -* | *[!A-Za-z0-9._/-]*)
+    base_freshness_unknown "origin/HEAD"
+    return 0
+    ;;
+  esac
+  default_ref="origin/$default_branch"
+  # Fetch into a PRIVATE per-invocation ref rather than reading FETCH_HEAD afterwards. FETCH_HEAD is
+  # shared mutable state of "$repo" — the path every concurrent lane passes — so any other fetch there
+  # (a sibling claim, branch-cleanup, submodule-init) between the fetch and the read replaces it, and
+  # the comparison silently answers about the WRONG branch: measured as a stale tree reported with no
+  # warning at all, which is exactly the false-current this check exists to remove.
+  #
+  # `+refs/heads/<b>:<tipref>` also removes two further defects of the positional form: the refspec is
+  # what is fetched regardless of the repository's `remote.origin.fetch` mapping (the narrowed-refspec
+  # case), and a leading `-` can no longer reach git's option parser even if the guard above is ever
+  # loosened. `--no-recurse-submodules` because git defaults to on-demand recursion: on a superproject
+  # with moved gitlinks — precisely the stale base this warns about — the advisory call would fetch
+  # every changed submodule inside its timeout and degrade to UNKNOWN on the repo it exists for.
+  # `--no-tags` for the same reason: this needs one commit, not the tag graph.
+  tipref="refs/worktree-claim/tip-$$"
+  if ! bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+    git -C "$repo" fetch --quiet --no-tags --no-recurse-submodules \
+    origin "+refs/heads/$default_branch:$tipref" 2>/dev/null; then
+    git -C "$repo" update-ref -d "$tipref" 2>/dev/null || true
+    base_freshness_unknown "$default_ref"
+    return 0
+  fi
+  # Compare against the tip THIS invocation fetched, never against refs/remotes/origin/*. A positional
+  # `git fetch origin <branch>` retrieves the branch but leaves the tracking ref alone wherever the
+  # repository's `remote.origin.fetch` mapping does not cover it — narrowed, customised, or a remote
+  # added without one. origin/<branch> then stays frozen while resolving perfectly, so every guard here
+  # passes and the ANSWER is silently wrong: measured on a stale origin/main with the remote three
+  # commits ahead, this reported no gap at all. The explicit refspec above writes the tip into a ref
+  # this call owns, so the value read back cannot disagree with what was retrieved, and — unlike
+  # FETCH_HEAD — no concurrent fetch in "$repo" can overwrite it in between.
+  #
+  # Resolve the private ref this invocation just wrote, then delete it immediately — it is a scratch
+  # value, not state any later run should inherit. Deleting BEFORE the emptiness test keeps the ref
+  # from surviving the UNKNOWN path too.
+  remote_tip="$(git -C "$repo" rev-parse --verify --quiet "$tipref^{commit}" 2>/dev/null)" || remote_tip=""
+  git -C "$repo" update-ref -d "$tipref" 2>/dev/null || true
+  if [ -z "$remote_tip" ]; then
+    base_freshness_unknown "$default_ref"
+    return 0
+  fi
+  # A FAILED rev-list is an unavailable comparison, not a current base. Folding it into `|| echo 0`
+  # made the normalisation below accept it and the numeric test skip silently — reporting neither a
+  # warning nor UNKNOWN, which is the same silent "looks current" this check exists to remove.
+  if ! behind="$(git -C "$wt" rev-list --count "HEAD..$remote_tip" 2>/dev/null)"; then
+    base_freshness_unknown "$default_ref"
+    return 0
+  fi
+  # A non-integer (empty, or an error string) from a command that nonetheless SUCCEEDED must be
+  # handled before the numeric test, or `[ "$behind" -gt 0 ]` fails OPEN inside an if and silently
+  # skips the very warning this exists for. It takes the UNKNOWN path rather than normalising to 0:
+  # folding it to 0 also stopped the fail-open, but it bought that by rendering an unestablished
+  # comparison exactly like a current base — the same silence the FAILED-rev-list branch above
+  # refuses, and the one this whole check exists to remove.
+  case "$behind" in '' | *[!0-9]*)
+    base_freshness_unknown "$default_ref"
+    return 0
+    ;;
+  esac
+  [ "$behind" -gt 0 ] || return 0
+  echo "worktree-claim: WARNING base is $behind commit(s) behind $default_ref" >&2
+  echo "worktree-claim:      This tree does NOT show current $default_ref. Anything you conclude here" >&2
+  echo "worktree-claim:      about 'current behaviour' may already be changed or fixed upstream." >&2
+  # The hint must not send the reader to `origin/<branch>`, which is the very ref the measurement
+  # above refuses to trust — under a NARROWED `remote.origin.fetch` the tracking ref is not updated
+  # by the fetch and stays frozen at its old value. It still resolves, so the rebase reports
+  # "Current branch main is up to date." and leaves the tree exactly as stale as the warning just
+  # said it was. Measured: 3 commits behind, old hint run, still 3 commits behind. That is the same
+  # silent false-current this function exists to remove, reintroduced inside its own remedy — and
+  # worse than a hard failure, because git agrees with the user and the warning reads as noise.
+  #
+  # A MOVED default is NOT a second instance of this, though it looks like one: the claim's fetch
+  # carries the repository's configured refspec in addition to the command-line one, so an ordinary
+  # consumer gains refs/remotes/origin/<newbranch> as a side effect and the old hint would have run
+  # there. Only the narrowed-mapping case is real; the negative control below pins that distinction
+  # so this comment cannot quietly generalise back.
+  #
+  # What was MEASURED is the fetched branch tip, so that is what must be rebased onto. FETCH_HEAD is
+  # per-worktree and BOTH halves run in "$wt", so the value read back is the one just written there —
+  # a fetch in "$repo" would reintroduce the shared-mutable-state trap the measurement avoids.
+  echo "worktree-claim:      Rebase before analysing:  git -C $(shquote "$wt") fetch origin $(shquote "$default_branch") &&" >&2
+  echo "worktree-claim:                                git -C $(shquote "$wt") rebase FETCH_HEAD" >&2
 }
 
 cmd_check() {

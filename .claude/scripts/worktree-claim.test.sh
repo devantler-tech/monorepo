@@ -23,7 +23,10 @@ check() {
     printf 'FAIL %s: expected exit %s, got %s\n' "$name" "$want" "$got" >&2
     fail=$((fail + 1)); return
   fi
-  if [ -n "$needle" ] && ! printf '%s' "$hay" | grep -qF "$needle"; then
+  # Here-string, not `printf | grep -q`: under `pipefail` grep exits at the first match and the
+  # writer dies with EPIPE, so a LONGER haystack makes the pipeline report failure on a needle it
+  # actually found. That turns a passing assertion into a size-dependent flake.
+  if [ -n "$needle" ] && ! grep -qF -- "$needle" <<<"$hay"; then
     printf 'FAIL %s: output missing %q\n  got: %s\n' "$name" "$needle" "$hay" >&2
     fail=$((fail + 1)); return
   fi
@@ -44,8 +47,8 @@ git -C "$repo" commit --allow-empty -qm "init"
 wt="$tmp/wt-a"
 
 # ── add writes marker ──────────────────────────────────────────────────────
-out="$("$script" add "$repo" "$wt" "claim-branch-a" "session-alpha" 2>&1)"
-rc=$?
+rc=0
+out="$("$script" add "$repo" "$wt" "claim-branch-a" "session-alpha" 2>&1)" || rc=$?
 check "add succeeds" 0 "$rc" "$out" "owner=session-alpha"
 check "marker file exists" 0 "$([ -f "$wt/.claude-worktree-owner" ] && echo 0 || echo 1)"
 owner_line="$(grep '^owner=' "$wt/.claude-worktree-owner")"
@@ -63,8 +66,8 @@ check "relative add succeeds" 0 "$rc" "$out" "owner=session-relative"
 check "relative marker is repo-relative" 0 "$([ -f "$repo/$relative_wt/.claude-worktree-owner" ] && echo 0 || echo 1)"
 
 # ── check: mine ────────────────────────────────────────────────────────────
-out="$("$script" check "$wt" "session-alpha" 2>&1)"
-rc=$?
+rc=0
+out="$("$script" check "$wt" "session-alpha" 2>&1)" || rc=$?
 check "check mine" 0 "$rc" "$out" "mine"
 
 # ── check: live foreign ────────────────────────────────────────────────────
@@ -216,6 +219,608 @@ grep -qiF 'only exit 0 authorizes' "$maintenance_contract" || fail_closed_rc=1
 grep -qF 'every non-zero status' "$root_contract" || fail_closed_rc=1
 grep -qF 'every non-zero status' "$maintenance_contract" || fail_closed_rc=1
 check "contracts fail closed on every acquisition error" 0 "$fail_closed_rc"
+
+# ── stale-base warning (the pinned-gitlink trap) ───────────────────────────────
+# A submodule worktree is created at the pinned gitlink, not at the remote default branch. git is
+# silent about the gap, so a tree tens of commits behind reads exactly like a current one. Both arms
+# below are required: the control is what proves the warning is discriminating rather than
+# unconditional, since a script that always warned would pass the positive arm alone.
+origin_repo="$tmp/origin.git"
+git init -q --bare -b main "$origin_repo"
+
+seed="$tmp/seed"
+git init -q -b main "$seed"
+git -C "$seed" config user.name "worktree-claim-test"
+git -C "$seed" config user.email "worktree-claim-test@example.com"
+git -C "$seed" commit --allow-empty -qm "base"
+git -C "$seed" remote add origin "$origin_repo"
+git -C "$seed" push -q origin main
+
+consumer="$tmp/consumer"
+git clone -q "$origin_repo" "$consumer"
+git -C "$consumer" config user.name "worktree-claim-test"
+git -C "$consumer" config user.email "worktree-claim-test@example.com"
+
+# Upstream advances by exactly two commits; the consumer stays pinned at base.
+git -C "$seed" commit --allow-empty -qm "ahead-1"
+git -C "$seed" commit --allow-empty -qm "ahead-2"
+git -C "$seed" push -q origin main
+
+# `|| rc=$?`, not a bare assignment: under `set -Eeuo pipefail` a non-zero command substitution
+# terminates the suite on the assignment itself, so a regression here would abort before the arm
+# below could report it — no FAIL line, no summary, just a bare shell exit. The guard keeps the
+# regression a reported failure. Same shape as the malformed-count arm at lines 429-431.
+stale_rc=0
+stale_out="$("$script" add "$consumer" "$tmp/wt-stale" "claim-stale" "session-stale" 2>&1)" || stale_rc=$?
+check "stale base still claims successfully (advisory, not fatal)" 0 "$stale_rc" \
+  "$stale_out" "owner=session-stale"
+check "stale base warns" 0 "$stale_rc" "$stale_out" "WARNING base is 2 commit(s) behind"
+# The hint must not name refs/remotes/origin/*: nothing in the claim updates it, so it is absent on a
+# moved default and frozen under a narrowed refspec. It names the fetch that was actually measured.
+check "stale-base warning names the rebase fix" 0 "$stale_rc" "$stale_out" "rebase FETCH_HEAD"
+stale_hint_rc=0
+grep -qF -- "rebase 'origin/main'" <<<"$stale_out" && stale_hint_rc=1
+check "stale-base hint does NOT send the user to the tracking ref" 0 "$stale_hint_rc"
+
+# Control: same script, same repo, base now current — the warning MUST disappear. If this arm also
+# warned, the positive arm above would prove nothing about staleness detection.
+git -C "$consumer" fetch -q origin main
+git -C "$consumer" reset -q --hard origin/main
+current_rc=0
+current_out="$("$script" add "$consumer" "$tmp/wt-current" "claim-current" "session-current" 2>&1)" || current_rc=$?
+check "current base still claims successfully" 0 "$current_rc" "$current_out" "owner=session-current"
+current_warn_rc=0
+grep -qF -- "WARNING base is" <<<"$current_out" && current_warn_rc=1
+check "current base does NOT warn (control)" 0 "$current_warn_rc"
+
+# The remote's default branch MOVED after the clone. refs/remotes/origin/HEAD is written once, at
+# clone time, and no fetch refreshes it — so a check that trusts it keeps comparing against the old
+# default and reports "not behind" while the tree is arbitrarily stale against the real one. That is
+# the silent-wrong-answer case, strictly worse than the UNKNOWN below, because it looks like a pass.
+moved_origin="$tmp/moved-origin.git"
+git init -q --bare -b main "$moved_origin"
+moved_seed="$tmp/moved-seed"
+git init -q -b main "$moved_seed"
+git -C "$moved_seed" config user.name "worktree-claim-test"
+git -C "$moved_seed" config user.email "worktree-claim-test@example.com"
+git -C "$moved_seed" commit --allow-empty -qm "base"
+git -C "$moved_seed" remote add origin "$moved_origin"
+git -C "$moved_seed" push -q origin main
+
+moved_consumer="$tmp/moved-consumer"
+git clone -q "$moved_origin" "$moved_consumer"
+git -C "$moved_consumer" config user.name "worktree-claim-test"
+git -C "$moved_consumer" config user.email "worktree-claim-test@example.com"
+
+# Default moves main → trunk, and trunk advances by two commits. The consumer's origin/HEAD still
+# names main, and main itself never moves — so comparing against the stale pointer yields behind=0.
+git -C "$moved_seed" checkout -q -b trunk
+git -C "$moved_seed" commit --allow-empty -qm "trunk-ahead-1"
+git -C "$moved_seed" commit --allow-empty -qm "trunk-ahead-2"
+git -C "$moved_seed" push -q origin trunk
+git -C "$moved_origin" symbolic-ref HEAD refs/heads/trunk
+
+moved_stale="$(git -C "$moved_consumer" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo "")"
+check "clone-time origin/HEAD still names the OLD default (precondition)" "origin/main" "$moved_stale"
+
+moved_rc=0
+moved_out="$("$script" add "$moved_consumer" "$tmp/wt-moved" "claim-moved" "session-moved" 2>&1)" || moved_rc=$?
+check "moved default still claims successfully" 0 "$moved_rc" "$moved_out" "owner=session-moved"
+check "moved default is measured against the CURRENT remote default" 0 "$moved_rc" \
+  "$moved_out" "WARNING base is 2 commit(s) behind origin/trunk"
+
+# A moved default does NOT break the old tracking-ref hint, and asserting that it did would pin a
+# claim this suite can disprove: `git fetch origin +refs/heads/trunk:<private>` also applies the
+# repository's CONFIGURED refspec, so an ordinary consumer gains origin/trunk as a side effect of the
+# claim itself. Pinned as a precondition so the narrowed-refspec arms below are not later "tidied up"
+# into covering this case too.
+moved_tracking_ref="$(git -C "$moved_consumer" rev-parse --verify --quiet origin/trunk >/dev/null 2>&1 && echo present || echo absent)"
+check "a moved default leaves the tracking ref PRESENT, so it is not the broken-hint case" \
+  "present" "$moved_tracking_ref"
+
+# The configured fetch refspec does not map the default branch into refs/remotes/origin/*. `git fetch
+# origin main` still SUCCEEDS and still retrieves the new tip — but it lands in FETCH_HEAD only,
+# because the command-line refspec controls what is fetched while the CONFIGURED mapping controls
+# which remote-tracking refs get updated. So a pre-existing origin/main stays frozen at its old value,
+# rev-parse resolves it happily, and the comparison is made against a ref that no longer tracks
+# anything. Same silent false-current as the moved-default case above, reached one layer down: every
+# guard in this function fires correctly and the ANSWER is still wrong, because the ref being compared
+# is not the tip that was just fetched.
+narrowed_origin="$tmp/narrowed-origin.git"
+git init -q --bare -b main "$narrowed_origin"
+narrowed_seed="$tmp/narrowed-seed"
+git init -q -b main "$narrowed_seed"
+git -C "$narrowed_seed" config user.name "worktree-claim-test"
+git -C "$narrowed_seed" config user.email "worktree-claim-test@example.com"
+git -C "$narrowed_seed" commit --allow-empty -qm "base"
+git -C "$narrowed_seed" remote add origin "$narrowed_origin"
+git -C "$narrowed_seed" push -q origin main
+
+narrowed_consumer="$tmp/narrowed-consumer"
+git clone -q "$narrowed_origin" "$narrowed_consumer"
+git -C "$narrowed_consumer" config user.name "worktree-claim-test"
+git -C "$narrowed_consumer" config user.email "worktree-claim-test@example.com"
+# Narrow the mapping so main is no longer covered. origin/main SURVIVES at the clone-time value,
+# which is what makes this the silent case rather than the UNKNOWN one.
+git -C "$narrowed_consumer" config remote.origin.fetch "+refs/heads/release/*:refs/remotes/origin/release/*"
+
+git -C "$narrowed_seed" commit --allow-empty -qm "ahead-1"
+git -C "$narrowed_seed" commit --allow-empty -qm "ahead-2"
+git -C "$narrowed_seed" commit --allow-empty -qm "ahead-3"
+git -C "$narrowed_seed" push -q origin main
+
+narrowed_pre="$(git -C "$narrowed_consumer" rev-parse origin/main)"
+narrowed_tip="$(git -C "$narrowed_seed" rev-parse main)"
+check "origin/main is present but STALE before the claim (precondition)" 0 \
+  "$([ "$narrowed_pre" != "$narrowed_tip" ] && echo 0 || echo 1)"
+
+narrowed_rc=0
+narrowed_out="$("$script" add "$narrowed_consumer" "$tmp/wt-narrowed" "claim-narrowed" "session-narrowed" 2>&1)" || narrowed_rc=$?
+check "narrowed refspec still claims successfully" 0 "$narrowed_rc" "$narrowed_out" "owner=session-narrowed"
+# The whole point: three commits behind must be REPORTED, not swallowed by a tracking ref the fetch
+# never updated. A silent pass here is the exact failure this function exists to remove.
+check "narrowed refspec is measured against the tip actually FETCHED" 0 "$narrowed_rc" \
+  "$narrowed_out" "WARNING base is 3 commit(s) behind"
+narrowed_silent_rc=0
+grep -qF -- "WARNING base is" <<<"$narrowed_out" || narrowed_silent_rc=1
+check "narrowed refspec never reports a silent 'current' base" 0 "$narrowed_silent_rc"
+
+# The arms below execute the two commands literally, so this pins that the script actually EMITS
+# them — without it the execution arms would keep passing even if the hint reverted, and they would
+# be proving git's behaviour rather than this script's advice. Both halves are asserted: the rebase
+# target alone would leave the fetch, which is what makes FETCH_HEAD correct, unpinned.
+check "the emitted hint names the fetch that makes FETCH_HEAD correct" 0 "$narrowed_rc" \
+  "$narrowed_out" "fetch origin 'main' &&"
+check "the emitted hint rebases onto FETCH_HEAD" 0 "$narrowed_rc" "$narrowed_out" "rebase FETCH_HEAD"
+
+# A hint is only advice if it RUNS, so both forms are EXECUTED here rather than pattern-matched.
+# This is the fixture where they differ: the claim's fetch does not update origin/main (the
+# configured mapping does not cover it), so the tracking ref is frozen while the tree is 3 behind.
+#
+# NEGATIVE CONTROL, and it carries the whole argument: the OLD hint does not fail loudly here — it
+# SUCCEEDS, says "up to date", and leaves the tree exactly as stale as the warning just reported.
+# That is the silent false-current this function exists to remove, reappearing inside its remedy.
+narrowed_old_hint_rc=0
+git -C "$tmp/wt-narrowed" rebase 'origin/main' >/dev/null 2>&1 || narrowed_old_hint_rc=$?
+check "the tracking-ref hint SUCCEEDS while changing nothing (negative control)" 0 "$narrowed_old_hint_rc"
+narrowed_behind_after_old="$(git -C "$tmp/wt-narrowed" rev-list --count "HEAD..$narrowed_tip" 2>/dev/null)"
+check "the tracking-ref hint leaves the tree just as stale" 3 "$narrowed_behind_after_old"
+
+# The emitted hint, run exactly as written. It must close the gap the warning reported.
+narrowed_new_hint_rc=0
+{ git -C "$tmp/wt-narrowed" fetch origin main >/dev/null 2>&1 &&
+  git -C "$tmp/wt-narrowed" rebase FETCH_HEAD >/dev/null 2>&1; } || narrowed_new_hint_rc=$?
+check "the emitted hint RUNS under a narrowed refspec" 0 "$narrowed_new_hint_rc"
+narrowed_behind_after_new="$(git -C "$tmp/wt-narrowed" rev-list --count "HEAD..$narrowed_tip" 2>/dev/null)"
+check "the emitted hint actually closes the gap it reported" 0 "$narrowed_behind_after_new"
+
+# Unresolvable remote: the comparison cannot be made, and the required outcome is an explicit UNKNOWN
+# rather than silence — silence is indistinguishable from "base is current", the confusion this whole
+# check exists to remove. Repointing origin at an absent bare repository is hermetic: ls-remote and
+# fetch both fail locally, no network is touched. Claiming must still succeed (advisory, never fatal).
+git -C "$consumer" remote set-url origin "$tmp/absent-origin.git"
+unknown_rc=0
+unknown_out="$("$script" add "$consumer" "$tmp/wt-unknown" "claim-unknown" "session-unknown" 2>&1)" || unknown_rc=$?
+check "unavailable remote still claims successfully" 0 "$unknown_rc" \
+  "$unknown_out" "owner=session-unknown"
+check "unavailable remote writes the ownership marker" 0 \
+  "$([ -e "$tmp/wt-unknown/.claude-worktree-owner" ] && echo 0 || echo 1)"
+check "unavailable remote reports base freshness UNKNOWN" 0 "$unknown_rc" \
+  "$unknown_out" "base freshness UNKNOWN"
+git -C "$consumer" remote set-url origin "$origin_repo"
+
+# The numeric guard must be present: an unnormalised count would make the -gt test fail OPEN inside
+# an if, silently skipping the warning on exactly the malformed input it should be loudest about.
+#
+# ⚠️ This arm is a SOURCE-COUPLED guard, not a behavioural one — reaching the malformed-count path
+# needs `git rev-list --count` to emit a non-integer, which cannot be provoked hermetically. It is
+# therefore matched on the two semantic tokens rather than a whole literal line: an exact-line match
+# breaks on a harmless reformat and passes on the same text sitting in a comment, which fails in both
+# directions. Replace this with a behavioural arm if the count ever moves behind an injectable seam.
+normalise_rc=0
+normalise_src="$(sed -n '/^warn_if_base_is_stale()/,/^}/p' "$script")"
+# Comment lines are stripped first. The function DOCUMENTS the numeric test verbatim ("would make
+# `[ "$behind" -gt 0 ]` fail OPEN…"), so matching the raw text finds the prose two lines above the
+# code and reports the order backwards — the same match-a-comment defect this arm exists to catch.
+normalise_code="$(grep -vE '^[[:space:]]*#' <<<"$normalise_src")"
+grep -qF -- '[!0-9]' <<<"$normalise_code" || normalise_rc=1
+# Presence alone is not the property. Both tokens would still be found if a later edit moved the
+# normalisation BELOW the numeric test, which reinstates the fail-open path this arm guards. So
+# compare their positions: the normalisation must precede the comparison that depends on it.
+# awk with `exit` (not `grep -n | head`) — the pipe would EPIPE the writer under pipefail, exactly
+# the flake fixed in check() above. index() keeps both needles literal.
+# The malformed case must take the UNKNOWN path, not fold to `behind=0`: normalising to 0 also
+# stopped the fail-open, but rendered an unestablished comparison identically to a current base.
+# So the anchor is the `[!0-9]` case itself, and the arm below additionally requires that the
+# diagnostic — not a silent assignment — is what follows it.
+norm_line="$(awk 'index($0,"[!0-9]"){print NR; exit}' <<<"$normalise_code")"
+test_line="$(awk 'index($0,"\"$behind\" -gt 0"){print NR; exit}' <<<"$normalise_code")"
+# ...and the malformed branch must EMIT the UNKNOWN notice rather than silently choosing a value.
+# `if`, not `cmd && assign`: under `set -e` a non-final `&&` operand that fails makes the LIST's
+# status non-zero, which is the fail-open/abort ambiguity this file keeps pinning elsewhere.
+malformed_branch="$(awk -v n="$norm_line" \
+  'NR>n && NR<=n+3 && index($0,"base_freshness_unknown")' <<<"$normalise_code")"
+if [ -z "$malformed_branch" ]; then normalise_rc=1; fi
+# And the retired normalisation must be gone, or both spellings could coexist with the silent one winning.
+if grep -qF -- 'behind=0' <<<"$normalise_code"; then normalise_rc=1; fi
+# Guard both operands before the numeric comparison: `[ "" -lt 3 ]` errors rather than returning
+# false, and an unguarded `&&` chain would swallow that as "arm satisfied" — the same fail-open
+# shape this test exists to pin.
+case "$norm_line" in '' | *[!0-9]*) norm_line=0 ;; esac
+case "$test_line" in '' | *[!0-9]*) test_line=0 ;; esac
+[ "$norm_line" -gt 0 ] && [ "$test_line" -gt 0 ] && [ "$norm_line" -lt "$test_line" ] || normalise_rc=1
+check "behind-count is normalised BEFORE the numeric test" 0 "$normalise_rc"
+
+# ...and the same property BEHAVIOURALLY, which is what the arm above says it cannot be. It can:
+# `git` is resolved from PATH, so a stub forwarding every other subcommand to the real binary and
+# returning a non-integer on `rev-list --count` is the injectable seam the comment asked for. Worth
+# both arms — the source-coupled one pins that the retired `behind=0` spelling is gone, this one
+# pins the OUTPUT, so a reformat cannot break it and a matching comment cannot satisfy it.
+stub_dir="$tmp/stub-bin"
+mkdir -p "$stub_dir"
+real_git="$(command -v git)"
+cat >"$stub_dir/git" <<STUB
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = "rev-list" ]; then
+    for inner in "\$@"; do
+      [ "\$inner" = "--count" ] && { printf 'fatal: not a valid object name\n'; exit 0; }
+    done
+  fi
+done
+exec "$real_git" "\$@"
+STUB
+chmod +x "$stub_dir/git"
+malformed_consumer="$tmp/malformed-consumer"
+git clone -q "$origin_repo" "$malformed_consumer"
+malformed_rc=0
+malformed_out="$(PATH="$stub_dir:$PATH" "$script" add \
+  "$malformed_consumer" "$tmp/wt-malformed" "claim-malformed" "session-malformed" 2>&1)" || malformed_rc=$?
+check "a malformed behind-count still claims successfully (advisory, not fatal)" 0 "$malformed_rc" \
+  "$malformed_out" "owner=session-malformed"
+check "a malformed behind-count reports UNKNOWN rather than a silent 'current'" 0 "$malformed_rc" \
+  "$malformed_out" "base freshness UNKNOWN"
+# The NEGATIVE half. It must not emit a behind-count WARNING at all: the count is unusable, so the
+# only honest outputs are the UNKNOWN notice (asserted above) and silence about a distance. Matched on
+# the `WARNING base is` PREFIX, not on `WARNING base is 0 commit(s)` -- the retired `behind=0` folding
+# never printed that string either (0 is not > 0, so it warned about nothing), which made the old
+# assertion unfireable. The prefix form does fire, on a garbage count rendered into the message.
+malformed_quiet_rc=0
+grep -qF -- "WARNING base is" <<<"$malformed_out" && malformed_quiet_rc=1
+check "a malformed behind-count never renders a distance" 0 "$malformed_quiet_rc"
+
+# A FAILED rev-list must report UNKNOWN, not fold into behind=0 — otherwise an unavailable comparison
+# renders identically to a current base, the exact silence this whole check removes.
+#
+# ⚠️ SOURCE-COUPLED for the same reason as the arm above: `warn_if_base_is_stale` runs immediately
+# after a successful `git worktree add`, so a failing `rev-list` in that window cannot be provoked
+# hermetically. Asserted on structure — the assignment is guarded by `if !`, and the guard body calls
+# base_freshness_unknown — with comments stripped so prose cannot satisfy it. Replace with a
+# behavioural arm if the count ever moves behind an injectable seam.
+revfail_rc=0
+revlist_line="$(awk 'index($0,"rev-list --count"){print NR; exit}' <<<"$normalise_code")"
+case "$revlist_line" in '' | *[!0-9]*) revlist_line=0 ;; esac
+[ "$revlist_line" -gt 0 ] &&
+  grep -qF -- 'if ! behind="$(git -C "$wt" rev-list --count' <<<"$normalise_code" || revfail_rc=1
+# The guard body must actually emit the notice, not merely return. Captured output + an emptiness
+# test, NOT `awk | grep -q`: `grep -q` exits at the first match, the awk writer can then die of
+# EPIPE, and under `pipefail` the pipeline reports failure for a needle it actually found — the
+# size-dependent flake `check()` documents at lines 26-28. Same shape as lines 394-396.
+revfail_branch="$(awk -v n="$revlist_line" \
+  'NR>n && NR<=n+2 && index($0,"base_freshness_unknown")' <<<"$normalise_code")"
+if [ -z "$revfail_branch" ]; then revfail_rc=1; fi
+check "a FAILED rev-list reports UNKNOWN rather than behind=0" 0 "$revfail_rc"
+
+# A remote that never answers must not hold the claim open. `ext::` runs an arbitrary command as the
+# transport, so this hangs git deterministically with no network and no unreachable-address guesswork.
+# The bound is asserted by WALL CLOCK: a run that merely "succeeds" would also succeed if the timer
+# never fired and git sat there for the full sleep, so elapsed time is the only thing that separates
+# a working bound from an absent one.
+#
+# `protocol.ext.allow` is REQUIRED and is not decoration: it defaults to `never`, so without it git
+# rejects the transport in 0s with "transport 'ext' not allowed" and the fixture exercises the
+# fast-FAILURE path instead of the hang. That version of this test passed with the bound removed —
+# it was vacuous, and only the ablation exposed it.
+hang_consumer="$tmp/hang-consumer"
+git clone -q "$origin_repo" "$hang_consumer"
+git -C "$hang_consumer" remote set-url origin "ext::sleep 60"
+git -C "$hang_consumer" config protocol.ext.allow always
+hang_start="$(date +%s)"
+hang_rc=0
+hang_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=3 "$script" add \
+  "$hang_consumer" "$tmp/wt-hang" "claim-hang" "session-hang" 2>&1)" || hang_rc=$?
+hang_elapsed=$(($(date +%s) - hang_start))
+check "an unresponsive remote still claims successfully (advisory, not fatal)" 0 "$hang_rc" \
+  "$hang_out" "owner=session-hang"
+# Two calls are bounded, so allow both plus slack -- but far below the 60s the transport would take.
+hang_bounded_rc=0
+[ "$hang_elapsed" -lt 30 ] || hang_bounded_rc=1
+check "an unresponsive remote is abandoned at the bound, not waited out" 0 "$hang_bounded_rc"
+hang_unknown_rc=0
+grep -qF -- "base freshness UNKNOWN" <<<"$hang_out" || hang_unknown_rc=1
+check "an unresponsive remote reports UNKNOWN rather than silence" 0 "$hang_unknown_rc"
+
+# shquote must survive a TERMINAL NEWLINE. `$(…)` strips trailing newlines, so the previous
+# command-substitution form emitted a rebase hint naming a DIFFERENT path than the one it operated
+# on — and that hint is written to be pasted and run.
+# The SHIPPED function is extracted and evaluated, not reimplemented here: a local copy would only
+# prove that the copy works, which is the vacuous shape this file guards against elsewhere.
+shquote_rc=0
+shquote_fn="$(sed -n '/^shquote()/,/^}/p' "$script")"
+# `printf %s` then measure: capturing with $() here would strip the very newline under test.
+shquote_len="$(bash -c 'eval "$1"; out="$(shquote "$2"; printf X)"; out=${out%X}; printf %s "${#out}"' \
+  _ "$shquote_fn" $'wt\n')"
+# "'" + w + t + newline + "'" = 5 characters. A stripped newline yields 4.
+[ "$shquote_len" = "5" ] || shquote_rc=1
+check "shipped shquote preserves a terminal newline" 0 "$shquote_rc"
+# Source-coupled arm: the shipped shquote must not use command substitution at all, which is the
+# only way the strip can reappear.
+shquote_src="$(sed -n '/^shquote()/,/^}/p' "$script" | grep -vE '^[[:space:]]*#')"
+shquote_impl_rc=0
+if grep -qF -- '$(' <<<"$shquote_src"; then shquote_impl_rc=1; fi
+check "shquote uses no command substitution (cannot strip a trailing newline)" 0 "$shquote_impl_rc"
+# The POSITIVE half, and it is not decoration: both arms above would still pass if the newline fix
+# had broken quote escaping outright, since neither input contains a quote. Escaping IS the job this
+# helper exists to do, so it needs an arm of its own — compared byte-exactly against the expected
+# `'it'\''s'`, because a length check cannot tell a correct escape from a differently-wrong one.
+shquote_esc_rc=0
+bash -c 'eval "$1"; shquote "$2" >"$3"' _ "$shquote_fn" "it's" "$tmp/shq.esc"
+printf "%s" "'it'\\''s'" >"$tmp/shq.esc.expected"
+cmp -s "$tmp/shq.esc" "$tmp/shq.esc.expected" || shquote_esc_rc=1
+check "shquote still escapes an embedded single quote" 0 "$shquote_esc_rc"
+
+# `add` must CLAIM before it runs the advisory freshness check. That check makes up to two bounded
+# remote calls, so running it first leaves the new tree unclaimed for both timeouts — long enough for
+# a concurrent run to take the marker, which would leave this invocation exiting 3 on a worktree and
+# branch it just created. Asserted on OUTPUT ORDER against the unresponsive-remote fixture, which is
+# the case where the window is widest: the acquire line must precede the freshness NOTE.
+#
+# The transport is a script under this run's own `mktemp -d`, NOT a bare `sleep`: the orphan check
+# below greps the process table, and a bare `sleep 97` matches a leftover from any earlier run of
+# this suite — which made the assertion fail on a tree that was actually correct. The temp path is
+# unique per run, so the grep can only ever match this run's descendants.
+#
+# NO `exec`, for the same reason spelled out for `ignore_transport` below — but the failure it
+# prevents here is narrower than "the arm never fires", and the difference was measured rather than
+# assumed. `exec sleep 97` replaces the process image, so the transport's own argv becomes "sleep 97"
+# and this run's unique path is gone from it. The arm still went red, because `git remote-ext origin
+# <path>` carries the path as an ARGUMENT and is itself orphaned by the same regression — so what the
+# assertion actually observed was the git helper, a PROXY, never the transport the comment names.
+# Ablating group signalling to pid-only signalling made that concrete: with `exec` a bare `sleep 97`
+# was left running and `pgrep -f "$slow_transport"` could not see it (1 leaked, 0 of them matched);
+# without `exec` the transport is matched directly (2 matches, 0 leaked). A regression that reaped
+# the helper but not the transport — exactly the TERM-ignoring case the next arm covers — would
+# therefore have read clean here. Looping over short sleeps keeps the script itself resident, so the
+# arm observes the process it claims to.
+slow_transport="$tmp/slow-transport"
+printf '#!/usr/bin/env bash\nfor _ in $(seq 97); do sleep 1; done\n' >"$slow_transport"
+chmod +x "$slow_transport"
+order_consumer="$tmp/order-consumer"
+git clone -q "$origin_repo" "$order_consumer"
+git -C "$order_consumer" remote set-url origin "ext::$slow_transport"
+git -C "$order_consumer" config protocol.ext.allow always
+order_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=2 "$script" add \
+  "$order_consumer" "$tmp/wt-order" "claim-order" "session-order" 2>&1)" || true
+acquire_at="$(awk '/owner=session-order/{print NR; exit}' <<<"$order_out")"
+note_at="$(awk '/base freshness UNKNOWN/{print NR; exit}' <<<"$order_out")"
+case "$acquire_at" in '' | *[!0-9]*) acquire_at=0 ;; esac
+case "$note_at" in '' | *[!0-9]*) note_at=0 ;; esac
+order_rc=0
+[ "$acquire_at" -gt 0 ] && [ "$note_at" -gt 0 ] && [ "$acquire_at" -lt "$note_at" ] || order_rc=1
+check "add claims the worktree BEFORE the advisory remote check" 0 "$order_rc"
+
+# A timed-out git must not leave its TRANSPORT child running. git delegates to a helper process, and
+# killing only the git pid leaves that helper reparented, running to its own native timeout — twice
+# per `add`, so an unresponsive remote accumulates them. Matched on this run's unique transport path.
+sleep 1
+orphan_rc=0
+if pgrep -f "$slow_transport" >/dev/null 2>&1; then orphan_rc=1; fi
+check "a timed-out remote leaves no orphaned transport process" 0 "$orphan_rc"
+# Mirror the `ignore_transport` cleanup below: if the arm above just FAILED there is a live process
+# holding this run's temp dir, and the EXIT trap's `rm -rf` would otherwise race it.
+pkill -KILL -f "$slow_transport" >/dev/null 2>&1 || true
+
+# SIGTERM is a REQUEST -- catchable and ignorable -- so the timer's TERM does not stop a transport
+# that ignores it. The WAITED-ON process is `git`, which honours TERM and dies, so `add` still
+# returns at the bound; what survives is the transport helper, reparented and running to its own
+# native timeout. `add` reports success while leaving a process behind, twice per call. SIGKILL
+# cannot be trapped, so escalating to it after a grace period is what actually reaps the tree.
+#
+# Fixture shape is load-bearing in two ways, both learned by ablation:
+#   * NO `exec`. `exec sleep 97` replaces the process image, so its argv becomes "sleep 97" and
+#     `pgrep -f "$ignore_transport"` can never match -- the assertion would pass on a broken tree.
+#     Looping over short sleeps keeps the script itself resident, so its path stays greppable.
+#   * The loop is what makes ignoring TERM observable: the group TERM kills the current `sleep 1`
+#     child, but the script traps nothing and continues, which is exactly the surviving helper.
+# Elapsed time is deliberately NOT asserted here: `git` dies on TERM either way, so a wall-clock
+# assertion passes in both arms and would only look like proof.
+ignore_transport="$tmp/ignore-term-transport"
+printf '#!/usr/bin/env bash\ntrap "" TERM\nfor _ in $(seq 97); do sleep 1; done\n' >"$ignore_transport"
+chmod +x "$ignore_transport"
+ignore_consumer="$tmp/ignore-consumer"
+git clone -q "$origin_repo" "$ignore_consumer"
+git -C "$ignore_consumer" remote set-url origin "ext::$ignore_transport"
+git -C "$ignore_consumer" config protocol.ext.allow always
+ignore_rc=0
+ignore_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=2 "$script" add \
+  "$ignore_consumer" "$tmp/wt-ignore" "claim-ignore" "session-ignore" 2>&1)" || ignore_rc=$?
+sleep 2
+# An absence assertion alone is vacuous: if a regression made `add` fail BEFORE bounded_remote ever
+# ran, no transport would be spawned and the arm below would report success on a broken tree. So
+# establish first that the bounded call actually happened — this transport swallows TERM, so the
+# remote is abandoned and the freshness verdict degrades to UNKNOWN, which is the observable proof
+# that the timeout path executed rather than being skipped.
+check "the SIGTERM-ignoring transport was actually reached (guards the arm below)" 0 "$ignore_rc" \
+  "$ignore_out" "base freshness UNKNOWN"
+ignore_orphan_rc=0
+if pgrep -f "$ignore_transport" >/dev/null 2>&1; then ignore_orphan_rc=1; fi
+check "a SIGTERM-IGNORING transport is SIGKILLed, not left orphaned" 0 "$ignore_orphan_rc"
+pkill -KILL -f "$ignore_transport" >/dev/null 2>&1 || true
+
+# The TIMER must not outlive the call it bounds. The killer subshell sleeps in a separate child
+# process, so signalling the subshell's pid alone leaves that `sleep` running to its full duration --
+# on the FAST path, where the remote answers immediately, every `add` leaked one or two of them.
+# Bounding both is the same tree-kill problem as the transport, one level up.
+#
+# The timeout value is deliberately absurd and unique: a real leak is then unmistakable in the
+# process table, and the assertion cannot collide with an unrelated `sleep` from this suite, another
+# suite, or a developer's shell. A round number like 60 would match half the machine.
+timer_consumer="$tmp/timer-consumer"
+git clone -q "$origin_repo" "$timer_consumer"
+timer_rc=0
+timer_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=9871 "$script" add \
+  "$timer_consumer" "$tmp/wt-timer" "claim-timer" "session-timer" 2>&1)" || timer_rc=$?
+sleep 1
+# Same vacuity guard as the transport arm above: an `add` that failed before arming the timer would
+# leave no `sleep 9871` and the leak assertion would pass for the wrong reason. A successful claim is
+# the marker that the fast path — the one that used to leak a timer per call — actually ran.
+check "the fast path was actually reached (guards the arm below)" 0 "$timer_rc" \
+  "$timer_out" "owner=session-timer"
+timer_leak_rc=0
+if pgrep -f 'sleep 9871' >/dev/null 2>&1; then timer_leak_rc=1; fi
+check "a fast remote leaves no timer process behind" 0 "$timer_leak_rc"
+pkill -KILL -f 'sleep 9871' >/dev/null 2>&1 || true
+
+# The bound is read from the environment and handed straight to `sleep`, so a malformed value makes
+# that `sleep` fail instantly and collapses the bound to roughly zero: the remote is abandoned before
+# it can answer, and a REACHABLE remote is then reported UNKNOWN for a reason nothing states. The
+# guard rejects the value, says so, and falls back to the default.
+#
+# Asserted on the NOTICE rather than on elapsed time, deliberately. Both the guarded and unguarded
+# arms finish quickly here -- the unguarded one because the bound collapsed, the guarded one because
+# the fixture answers immediately -- so a wall-clock assertion would pass either way and prove
+# nothing. The distinguishing observable is that the rejection is reported.
+badtimeout_consumer="$tmp/badtimeout-consumer"
+git clone -q "$origin_repo" "$badtimeout_consumer"
+badtimeout_rc=0
+badtimeout_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=invalid "$script" add \
+  "$badtimeout_consumer" "$tmp/wt-badtimeout" "claim-badtimeout" "session-badtimeout" 2>&1)" || badtimeout_rc=$?
+check "a non-integer timeout is rejected and reported" 0 "$badtimeout_rc" \
+  "$badtimeout_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
+check "a rejected timeout still claims the worktree" 0 "$badtimeout_rc" \
+  "$badtimeout_out" "owner=session-badtimeout"
+
+# `0` parses as an integer but is not a bound -- it abandons every remote call immediately, which is
+# the same invisible-UNKNOWN failure wearing a well-formed value.
+zerotimeout_consumer="$tmp/zerotimeout-consumer"
+git clone -q "$origin_repo" "$zerotimeout_consumer"
+zerotimeout_rc=0
+zerotimeout_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=0 "$script" add \
+  "$zerotimeout_consumer" "$tmp/wt-zerotimeout" "claim-zerotimeout" "session-zerotimeout" 2>&1)" || zerotimeout_rc=$?
+check "a zero timeout is rejected as not-a-bound" 0 "$zerotimeout_rc" \
+  "$zerotimeout_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
+
+# Zero has more than one spelling. `00` and `000` are digit-only and are not the literal `0`, and
+# `sleep` returns from each immediately -- so a guard written against the SPELLING `0` leaves exactly
+# the same collapsed bound reachable. An earlier round of this PR did precisely that.
+for zero_spelling in 00 000; do
+  zs_consumer="$tmp/zs-$zero_spelling-consumer"
+  git clone -q "$origin_repo" "$zs_consumer"
+  zs_rc=0
+  zs_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="$zero_spelling" "$script" add \
+    "$zs_consumer" "$tmp/wt-zs-$zero_spelling" "claim-zs-$zero_spelling" "session-zs" 2>&1)" || zs_rc=$?
+  check "an all-zero timeout spelling '$zero_spelling' is rejected" 0 "$zs_rc" \
+    "$zs_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
+done
+
+# POSITIVE CONTROL: `0001` has leading zeros but is a genuine 1-second bound and must NOT be
+# rejected. Without this, a guard that simply refused any value containing a zero would satisfy every
+# assertion above while quietly refusing legitimate configuration -- strict-looking and wrong.
+leadzero_consumer="$tmp/leadzero-consumer"
+git clone -q "$origin_repo" "$leadzero_consumer"
+leadzero_add_rc=0
+leadzero_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=0001 "$script" add \
+  "$leadzero_consumer" "$tmp/wt-leadzero" "claim-leadzero" "session-leadzero" 2>&1)" || leadzero_add_rc=$?
+check "a leading-zero timeout still claims successfully" 0 "$leadzero_add_rc" \
+  "$leadzero_out" "owner=session-leadzero"
+leadzero_rc=0
+grep -qF "ignoring unusable" <<<"$leadzero_out" && leadzero_rc=1
+check "a leading-zero but NON-zero timeout is accepted" 0 "$leadzero_rc"
+
+# RANGE, not just spelling. `sleep` enforces the bound, and both ends defeat it: BSD sleep (the
+# primary host) rejects a value at/above ~2^31 with a usage error and returns INSTANTLY, so the killer
+# fires at once and TERMs a reachable remote -- the bound collapses to ~0 and every claim reports
+# UNKNOWN; GNU sleep accepts the same value and waits ~317 years, i.e. no bound at all. `600000` is
+# unbounded on both and is the plausible "someone meant milliseconds" value. Measured on this PR's own
+# previous head: both were ACCEPTED.
+for bad_range in 600000 10000000000; do
+  br_consumer="$tmp/br-$bad_range-consumer"
+  git clone -q "$origin_repo" "$br_consumer"
+  br_rc=0
+  br_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="$bad_range" "$script" add \
+    "$br_consumer" "$tmp/wt-br-$bad_range" "claim-br-$bad_range" "session-br" 2>&1)" || br_rc=$?
+  check "an out-of-range timeout '$bad_range' is rejected" 0 "$br_rc" \
+    "$br_out" "ignoring unusable WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS="
+done
+
+# POSITIVE CONTROL for the range guard: the maximum must still be ACCEPTED, or a guard that simply
+# refused anything long would satisfy both arms above while rejecting legitimate configuration.
+maxtimeout_consumer="$tmp/maxtimeout-consumer"
+git clone -q "$origin_repo" "$maxtimeout_consumer"
+maxtimeout_rc=0
+maxtimeout_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=3600 "$script" add \
+  "$maxtimeout_consumer" "$tmp/wt-maxtimeout" "claim-maxtimeout" "session-maxtimeout" 2>&1)" || maxtimeout_rc=$?
+maxtimeout_rejected=0
+grep -qF "ignoring unusable" <<<"$maxtimeout_out" && maxtimeout_rejected=1
+check "the maximum in-range timeout is accepted (control)" 0 "$maxtimeout_rejected"
+check "the maximum in-range timeout still claims" 0 "$maxtimeout_rc" \
+  "$maxtimeout_out" "owner=session-maxtimeout"
+
+# ── a hostile remote default-branch name must never reach git as an OPTION ──────
+# The name is REMOTE-supplied and fed to `git fetch`. Passed positionally, a name beginning with `-`
+# is parsed as an option: a remote whose HEAD symrefs to refs/heads/--upload-pack=<cmd> made git RUN
+# <cmd>. Reproduced against this PR's own previous head -- the sentinel file was created -- so this is
+# a demonstrated arbitrary-command primitive on the creation path of every worktree, not a theory.
+# Note the ref really does live under refs/heads/, so requiring that prefix does NOT close it; the
+# name itself has to be rejected.
+inj_origin="$tmp/inj-origin.git"
+git init -q --bare -b main "$inj_origin"
+git -C "$seed" push -q "$inj_origin" main
+inj_pwn="$tmp/inj-pwn"
+inj_sentinel="$tmp/inj-executed"
+printf '#!/usr/bin/env bash\n: >"%s"\nexit 1\n' "$inj_sentinel" >"$inj_pwn"
+chmod +x "$inj_pwn"
+git -C "$inj_origin" update-ref "refs/heads/--upload-pack=$inj_pwn" refs/heads/main
+git -C "$inj_origin" symbolic-ref HEAD "refs/heads/--upload-pack=$inj_pwn"
+inj_consumer="$tmp/inj-consumer"
+git clone -q "$origin_repo" "$inj_consumer"
+git -C "$inj_consumer" remote set-url origin "$inj_origin"
+inj_rc=0
+inj_out="$("$script" add "$inj_consumer" "$tmp/wt-inj" "claim-inj" "session-inj" 2>&1)" || inj_rc=$?
+check "a hostile default-branch name still claims (advisory, not fatal)" 0 "$inj_rc" \
+  "$inj_out" "owner=session-inj"
+check "a hostile default-branch name reports UNKNOWN" 0 "$inj_rc" \
+  "$inj_out" "base freshness UNKNOWN"
+# The arm that matters: the attacker-chosen command must not have run.
+inj_exec_rc=0
+[ -e "$inj_sentinel" ] && inj_exec_rc=1
+check "a hostile default-branch name is NEVER executed" 0 "$inj_exec_rc"
+
+# Remote-default DISCOVERY failure must report UNKNOWN, not fall back to the clone-time pointer.
+# The fallback trusted `refs/remotes/origin/HEAD` — written once at clone time and never refreshed —
+# which is the stale source this whole check exists to stop trusting: if the default moved, the old
+# branch usually still fetches, so the comparison yields behind=0 and reports a CURRENT base for an
+# arbitrarily stale tree. The git stub makes only the symref discovery fail, so the branch fetch
+# still succeeds and the old fallback path would have been taken.
+symref_stub="$tmp/symref-stub"
+mkdir -p "$symref_stub"
+cat >"$symref_stub/git" <<STUB
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  [ "\$arg" = "--symref" ] && exit 0
+done
+exec "$real_git" "\$@"
+STUB
+chmod +x "$symref_stub/git"
+symref_consumer="$tmp/symref-consumer"
+git clone -q "$origin_repo" "$symref_consumer"
+symref_rc=0
+symref_out="$(PATH="$symref_stub:$PATH" "$script" add \
+  "$symref_consumer" "$tmp/wt-symref" "claim-symref" "session-symref" 2>&1)" || symref_rc=$?
+check "failed default discovery still claims successfully" 0 "$symref_rc" \
+  "$symref_out" "owner=session-symref"
+check "failed default discovery reports UNKNOWN, not a stale-pointer comparison" 0 "$symref_rc" \
+  "$symref_out" "base freshness UNKNOWN"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
