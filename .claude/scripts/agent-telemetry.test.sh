@@ -5101,8 +5101,14 @@ check "control: needle at the TAIL is unaffected (grep must read all input)" \
 # a reintroduction anywhere is caught, not just one in `check`/`nocheck`.
 # The forbidden shape is assembled rather than written literally, so this file
 # does not match its own detector.
+# The leading [^|] is load-bearing: without it the detector also matches the
+# SECOND pipe of a `||`, so an ordinary `cmd || grep -qF x file` — which reads a
+# file directly and has no writer to kill — reads as a defect. That false
+# positive is not hypothetical; it mis-flagged branch-cleanup.sh's re_kept()
+# during this fix. It costs one edge case: a line whose very first character is
+# the pipe. Continuation lines in this suite indent, so [^|] still matches.
 _pq() { printf '%s%s%s' "$1" ' | grep -' "$2"; }
-PIPEQ_RE="\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q"
+PIPEQ_RE="[^|]\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q"
 PIPEQ_SELF="${BASH_SOURCE[0]}"
 PIPEQ_HITS=$(grep -cE "$PIPEQ_RE" "$PIPEQ_SELF" || true)
 if [ "$PIPEQ_HITS" -eq 0 ]; then
@@ -5127,9 +5133,13 @@ else
       "control matched $PIPEQ_CTL of 2 known-bad lines"
 fi
 
-# Negative control: the detector must NOT fire on the correct here-string form,
-# or it would report a false hit on every line this fix introduced.
-PIPEQ_NEG=$(printf '%s\n' 'if grep -qF -- needle <<<"$X"; then :; fi' \
+# Negative controls: the detector must NOT fire on the correct here-string form
+# (or it would flag every line this fix introduced), and must NOT fire on an
+# `||` fallback into a grep that reads a FILE — there is no writer to kill, so
+# that shape is safe and flagging it would push someone to "fix" working code.
+PIPEQ_NEG=$(printf '%s\n%s\n' \
+              'if grep -qF -- needle <<<"$X"; then :; fi' \
+              'if cached "$1" || grep -qF -- "$1" "$keepfile"; then :; fi' \
             | grep -cE "$PIPEQ_RE" || true)
 if [ "$PIPEQ_NEG" -eq 0 ]; then
   ok "structural guard control: detector stays silent on the correct here-string form"
