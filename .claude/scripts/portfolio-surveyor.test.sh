@@ -86,16 +86,21 @@ grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
 # work. Measured live on platform#2973.
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
-grep -Fq 'object **whose own `body` is non-empty AND whose head carries a CodeRabbit commit status whose' "${surveyor}" ||
+grep -Fq 'object **whose own `body` BEGINS WITH the recognised CodeRabbit review-artifact marker' "${surveyor}" ||
   fail "surveyor can count an empty CodeRabbit reply container as a green review"
 grep -Fq 'An EMPTY review object is a reply container, not a review' "${surveyor}" ||
   fail "surveyor does not name the empty-review-container trap"
-# A non-empty body plus an exclusion list is a blocklist: an unlisted non-review response
-# (a thread reply carrying text, a setup note, an unrecognised service message) passes it
-# while no review ran. Only the head's own `Review completed` status makes the test
-# positive, so it has to be a required conjunct rather than described corroboration.
-grep -Fq 'REQUIRED, not advisory.**' "${surveyor}" ||
-  fail "surveyor treats the CodeRabbit status as advisory, so a non-empty non-review body still passes"
+# A non-empty body is not enough, and neither is pairing it with the head's status: a run
+# completing and *some* object carrying text are independent facts, so a non-empty reply
+# container can satisfy both while no review of that object exists. Measured on
+# monorepo#2677, where one head carried a bodylen=0 container AND a real review under a
+# single `Review completed` status. The object must be identified positively instead.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq '`**Actionable comments posted:`' "${surveyor}" ||
+  fail "surveyor does not positively identify a CodeRabbit review artifact, so a non-empty non-review body still passes"
+grep -Fq 'the status only proves a run completed' "${surveyor}" ||
+  fail "surveyor treats the head status as proof the matched object is a substantive review"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq 'fails closed to `none`' "${surveyor}" ||
