@@ -190,8 +190,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   identical section repeats.
   🔴 **Corroborate with the head's `CodeRabbit` commit status, and read its `description`, not its
   `state`.** `state` is `success` for a completed review, for `Review skipped: automatic reviews are
-  disabled` (the default state of every head, since auto-review is disabled portfolio-wide), and for
-  `Review rate limited` alike, so a state-only check reads every never-reviewed PR as green. Only a
+  disabled` (the default state of every head, since auto-review is disabled portfolio-wide), and —
+  while `fail_commit_status: false` is in force — for a rate-limit refusal alike, so a state-only
+  check reads every never-reviewed PR as green. Only a
   `description` beginning `Review completed` evidences a run, and it corroborates the artifact rather
   than replacing it.
   Report an older completion as stale, and a current-head CodeRabbit review carrying

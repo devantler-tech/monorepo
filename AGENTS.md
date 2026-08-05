@@ -993,8 +993,10 @@ the green can be newer than the finding, so recency decides nothing here.
 🔴 **The `CodeRabbit` commit status is `success` when NO review ran — the `description` is the only
 discriminator.** Auto-review is disabled portfolio-wide, so
 `success — Review skipped: automatic reviews are disabled` is the **default state of every head**,
-carrying zero reviews, zero inline comments and no summary; `Review rate limited` is `success` too
-(see *Local review round*). A green keyed on `context == "CodeRabbit" && state == "success"`
+carrying zero reviews, zero inline comments and no summary; a rate-limit refusal publishes `success`
+too while `reviews.fail_commit_status: false` is in force (see *Local review round*, whose
+`CodeRabbit / failure` wording describes the same refusal with that lever off). A green keyed on
+`context == "CodeRabbit" && state == "success"`
 therefore marks **every never-reviewed PR as reviewed** — a fail-open on the promotion gate reachable
 by following the surface list literally. So read the `description`, never the `state`:
 `Review completed` is the only value that evidences a run, and
