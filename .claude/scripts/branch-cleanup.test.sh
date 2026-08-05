@@ -430,7 +430,13 @@ real_git=$(command -v git)
 cat >"$tmp/bin/git" <<SHIM
 #!/usr/bin/env bash
 if [ "\$1" = "worktree" ] && [ "\$2" = "list" ] && [ -n "\${WT_SHIM_STATE:-}" ]; then
-  n=\$(cat "\$WT_SHIM_STATE" 2>/dev/null || echo 0); echo \$((n+1)) >"\$WT_SHIM_STATE"
+  # The counter file is TRUNCATED (not written to 0) between arms, so the first
+  # read yields the empty string — and \`[ "" -ge 1 ]\` is not merely false in
+  # bash, it prints "integer expression expected" to stderr. That stderr is
+  # captured into the assertion's \$out, where it would sit next to a genuine
+  # failure message and read like part of it. Default it explicitly.
+  n=\$(cat "\$WT_SHIM_STATE" 2>/dev/null || echo 0); n=\${n:-0}
+  echo \$((n+1)) >"\$WT_SHIM_STATE"
   if [ "\$n" -ge 1 ] && [ -s "\${WT_SHIM_INJECT:-/nonexistent}" ]; then
     cat "\$WT_SHIM_INJECT"; exit 0
   fi
