@@ -50,6 +50,12 @@ plugin carries them (or an explicit, tested subset):
    `**Reviewed commit:**` marker), fails closed when unattributable, and is **not** cleared by a
    newer `Didn't find any major issues` comment. Without this the pentad reads fully clear over an
    open P2 — measured on monorepo#2559.
+4c. **CodeRabbit commit-status description discriminator** (monorepo#2676) — the `CodeRabbit` status
+   is `state: success` for a completed review, for `Review skipped: automatic reviews are disabled`,
+   and for a rate-limit refusal alike. Auto-review is disabled deployment-wide, so the skipped form
+   is the default state of every head: the status corroborates run-completion only when its
+   `description` begins `Review completed`, and never satisfies the gate on its own. Without this a
+   state-only check reports every never-reviewed PR as green.
 5. **Sequential review coordination state** — authenticated single-phase request marker posted with
    the trigger (the two-phase reservation was retired on measurement 2026-07-25), pending request,
    monotonic artifact-backed or evidenced-expiry no-gate progression,

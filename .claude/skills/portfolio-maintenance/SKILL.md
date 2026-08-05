@@ -188,6 +188,13 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   reply/acknowledgement, quota notice, service shell, or summary saying the review did not run.
   Treat an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` as zero when the
   identical section repeats.
+  🔴 **Corroborate with the head's `CodeRabbit` commit status, and read its `description`, not its
+  `state`.** `state` is `success` for a completed review, for `Review skipped: automatic reviews are
+  disabled` (the default state of every head, since auto-review is disabled portfolio-wide), and —
+  while `fail_commit_status: false` is in force — for a rate-limit refusal alike, so a state-only
+  check reads every never-reviewed PR as green. Only a
+  `description` beginning `Review completed` evidences a run, and it corroborates the artifact rather
+  than replacing it.
   Report an older completion as stale, and a current-head CodeRabbit review carrying
   findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual

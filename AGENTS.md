@@ -970,7 +970,7 @@ green reads as "no review". Rows are in lane-priority order:**
 
 | Lane | Clean/green artifact | Findings artifact | Key to match |
 |---|---|---|---|
-| **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head, or the auto-generated summary comment updated after the authenticated request, naming the head, and carrying no rate-limit/service marker |
+| **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head, or the auto-generated summary comment updated after the authenticated request, naming the head, and carrying no rate-limit/service marker; the head's `CodeRabbit` commit status corroborates that a review RAN only when its `description` begins `Review completed` |
 | **Codex** (`chatgpt-codex-connector[bot]`) | **issue COMMENT** — `Codex Review: Didn't find any major issues` + `**Reviewed commit:** <sha>` (10-char, no `commit_id` field) | review object, `state: COMMENTED`, inline threads — **OR an issue COMMENT carrying a `## Review finding` section** (see below) | clean pass: comment body sha vs `headRefOid[0:10]`; comment-form finding: full 40-char sha in its blob permalinks |
 | **Cursor Bugbot** (`cursor[bot]`) | **CHECK-RUN named `Cursor Bugbot`** (app slug `cursor`), `conclusion: success` — *no review object, no comment* | same check-run with **`conclusion: neutral` AND `output.title: "Bugbot Review"`**, findings as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments` | check-run at `commits/<headRefOid>/check-runs` |
 
@@ -989,6 +989,20 @@ is precisely why the marker-based sweep missed it. **`Didn't find any major issu
 the green can be newer than the finding, so recency decides nothing here.
 
 **CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request and naming the head. Reject auto-generated command replies/acknowledgements and any summary carrying a rate-limit, quota, or service marker saying the review did not run. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
+
+🔴 **The `CodeRabbit` commit status is `success` when NO review ran — the `description` is the only
+discriminator.** Auto-review is disabled portfolio-wide, so
+`success — Review skipped: automatic reviews are disabled` is the **default state of every head**,
+carrying zero reviews, zero inline comments and no summary; a rate-limit refusal publishes `success`
+too while `reviews.fail_commit_status: false` is in force (see *Local review round*, whose
+`CodeRabbit / failure` wording describes the same refusal with that lever off). A green keyed on
+`context == "CodeRabbit" && state == "success"`
+therefore marks **every never-reviewed PR as reviewed** — a fail-open on the promotion gate reachable
+by following the surface list literally. So read the `description`, never the `state`:
+`Review completed` is the only value that evidences a run, and
+`Review skipped: automatic reviews are disabled` is a not-run marker in the same family as a
+rate-limit marker. The status is a **required corroborator, never a satisfier** — it proves only that
+*a* run completed, so a green still needs the real artifact its row names, positively identified.
 
 ⚠️ **Bugbot's green is a status check, NOT a review object and NOT a comment** — a gate or survey that
 sweeps only `pulls/<n>/reviews` and `issues/<n>/comments` is **structurally blind** to it and will
