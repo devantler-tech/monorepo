@@ -79,6 +79,21 @@ grep -Fq '`app/botantler-1` is narrowly trusted only for programmed agent-skills
   fail "constitution either misses botantler updater PRs or trusts the App globally"
 grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
   fail "surveyor cannot report a programmed bot review exemption"
+# An empty review object is the container GitHub creates for a reply to an existing
+# review thread. It is authored by the bot, anchored to the current head, and has zero
+# findings — so a green-review test that does not require a substantive body reports a
+# clean review on a PR that had none, and a run following the digest merges unreviewed
+# work. Measured live on platform#2973.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq 'object **whose own `body` is non-empty**' "${surveyor}" ||
+  fail "surveyor can count an empty CodeRabbit reply container as a green review"
+grep -Fq 'An EMPTY review object is a reply container, not a review' "${surveyor}" ||
+  fail "surveyor does not name the empty-review-container trap"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq 'the `description` is the discriminator, never the state' "${surveyor}" ||
+  fail "surveyor can read a CodeRabbit status state=success as proof a review ran"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq 'Exit 3 means a trusted, review-required `agent-plugins` updater' "${surveyor}" ||

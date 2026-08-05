@@ -247,13 +247,24 @@ public and private — no per-repo loop needed to enumerate):
      still applies its creation-record test before acting on any `devantler` row.
      Fetch `headRefOid` while deepening the PR. Report `cr@<sha>` for a finding-free CodeRabbit
      review completion at the current head even without `APPROVED`: accept a current-head review
-     object, or CodeRabbit's substantive auto-generated summary comment
+     object **whose own `body` is non-empty**, or CodeRabbit's substantive auto-generated summary comment
      (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after the
      authenticated request and naming `headRefOid`, only when its threads, review-body sections, and
      explicit ancillary problem count are all zero. **Never count an auto-generated command reply, acknowledgement, quota notice, or service shell as a review completion**; reject the summary too when
      its body says the review did not run. The qualifying review object `submitted_at` must be later than the latest authenticated CodeRabbit request marker for that head, just as the summary's
      `updated_at` must be later; this prevents a same-SHA retry from reusing its original review.
      An authenticated fingerprint-matching **`body_findings=0-resolved@<sha>` counts as zero for CodeRabbit success** even when the identical section is repeated in the later review.
+     🔴 **An EMPTY review object is a reply container, not a review — `body: ""` never satisfies the gate.**
+     GitHub wraps a reply to an existing review thread in its own review object, so CodeRabbit
+     acknowledging a resolved finding ("confirmed. The revised text correctly identifies…") lands as a
+     review that is authored by `coderabbitai[bot]`, anchored to the CURRENT head, and carries zero
+     finding sections — passing every "no findings at head" test while representing no review at all.
+     Measured on platform#2973 (2026-08-05): a `bodylen=0` container at `afa4445220` was reported
+     `cr@afa4445220` while that head's own CodeRabbit status read `Review skipped: automatic reviews
+     are disabled`; the real review, one head earlier, was `bodylen=2755`. Corroborate with the head's
+     CodeRabbit commit status, which reads `Review completed` for a review that ran and
+     `Review skipped: …` or `Review rate limited` when none did — and note that `state=success`
+     accompanies all three, so the `description` is the discriminator, never the state.
      Report an older completion as `cr-stale@<sha>`. A
      **current-head CodeRabbit review that carries findings** (a `COMMENTED`/`CHANGES_REQUESTED`
      review with unresolved threads or actionable comments) is `cr-findings@<sha>` — report its
