@@ -86,10 +86,20 @@ grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
 # work. Measured live on platform#2973.
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
-grep -Fq 'object **whose own `body` is non-empty**' "${surveyor}" ||
+grep -Fq 'object **whose own `body` is non-empty AND whose head carries a CodeRabbit commit status whose' "${surveyor}" ||
   fail "surveyor can count an empty CodeRabbit reply container as a green review"
 grep -Fq 'An EMPTY review object is a reply container, not a review' "${surveyor}" ||
   fail "surveyor does not name the empty-review-container trap"
+# A non-empty body plus an exclusion list is a blocklist: an unlisted non-review response
+# (a thread reply carrying text, a setup note, an unrecognised service message) passes it
+# while no review ran. Only the head's own `Review completed` status makes the test
+# positive, so it has to be a required conjunct rather than described corroboration.
+grep -Fq 'REQUIRED, not advisory.**' "${surveyor}" ||
+  fail "surveyor treats the CodeRabbit status as advisory, so a non-empty non-review body still passes"
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq 'fails closed to `none`' "${surveyor}" ||
+  fail "surveyor does not fail closed when the head carries no CodeRabbit status"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq 'the `description` is the discriminator, never the state' "${surveyor}" ||
