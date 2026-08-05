@@ -11,8 +11,8 @@ PASS=0; FAIL=0
 
 ok()   { PASS=$((PASS+1)); echo "  ✓ $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "  ✗ $1"; echo "      $2"; }
-check(){ if printf '%s' "$2" | grep -qF -- "$3"; then ok "$1"; else bad "$1" "expected to find: $3"; fi; }
-nocheck(){ if printf '%s' "$2" | grep -qF -- "$3"; then bad "$1" "should NOT contain: $3"; else ok "$1"; fi; }
+check(){ if grep -qF -- "$3" <<<"$2"; then ok "$1"; else bad "$1" "expected to find: $3"; fi; }
+nocheck(){ if grep -qF -- "$3" <<<"$2"; then bad "$1" "should NOT contain: $3"; else ok "$1"; fi; }
 
 # The injected record every scheduled dispatch begins with. Dispatch fixtures
 # carry a real one so the role selector runs against the shape production sees
@@ -441,13 +441,13 @@ OUT=$(runleak --section safety)
 nocheck "P2: quoted prose is not counted as a denial" "$OUT" "rm -rf"
 check   "P2: a real errored tool_result is still counted" "$OUT" "Blocked:"
 nocheck "P2: never echoes a fine-grained PAT"  "$OUT" "$(ex __PATZ__)"
-if printf '%s' "$OUT" | grep -qF 'github-pat (fine-grained)'; then
+if grep -qF 'github-pat (fine-grained)' <<<"$OUT"; then
   ok "P2: fine-grained PAT detected AND redacted"
 else bad "P2: fine-grained PAT detected AND redacted" "not flagged"; fi
 
 OUT=$(runleak --section efficiency)
 check "P2: Codex sessions feed the detectors" "$OUT" "BOTH instances"
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. [1-9]'; then
+if grep -qE 'sleep/poll calls \.\. [1-9]' <<<"$OUT"; then
   ok "P2: a Codex-format sleep is counted"
 else bad "P2: a Codex-format sleep is counted" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
@@ -505,7 +505,7 @@ cat > "$FIX/proseonly/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/proseonly" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 0'; then
+if grep -qE 'sleep/poll calls \.\. 0' <<<"$OUT"; then
   ok "prose mentioning sleep does not fabricate a busy-wait"
 else bad "prose mentioning sleep does not fabricate a busy-wait" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
@@ -516,7 +516,7 @@ cat > "$FIX/proseonly/real.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/proseonly" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 1'; then
+if grep -qE 'sleep/poll calls \.\. 1' <<<"$OUT"; then
   ok "a real sleep command is still counted (filter is not vacuous)"
 else bad "a real sleep command is still counted" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
@@ -529,10 +529,10 @@ EOF
 subst "$FIX/projects/jwt/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/projects/jwt" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
-if printf '%s' "$OUT" | grep -q 'jwt-like'; then
+if grep -q 'jwt-like' <<<"$OUT"; then
   # NB: match the EXPANDED token, not the literal placeholder — grepping OUT for
   # "__JWTTAIL__" post-subst could never fire, making the echo check vacuous.
-  printf '%s' "$OUT" | grep -qF "$(ex __JWTTAIL__)" \
+  grep -qF "$(ex __JWTTAIL__)" <<<"$OUT" \
     && bad "JWT flagged AND redacted" "raw JWT echoed" || ok "JWT flagged AND redacted"
 else bad "JWT flagged AND redacted" "not detected at all"; fi
 
@@ -549,13 +549,13 @@ subst "$FIX/cxonly/sessions/r.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 nocheck "Codex-only window is not skipped as empty" "$OUT" "no sessions in window — neither"
-if printf '%s' "$OUT" | grep -qF 'aws-access-key-id'; then
+if grep -qF 'aws-access-key-id' <<<"$OUT"; then
   ok "Codex-only credential leak is still caught"
 else bad "Codex-only credential leak is still caught" "missed"; fi
 
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxonly" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. [1-9]'; then
+if grep -qE 'sleep/poll calls \.\. [1-9]' <<<"$OUT"; then
   ok "Codex-only busy-wait is still counted"
 else bad "Codex-only busy-wait is still counted" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
@@ -565,7 +565,7 @@ else bad "Codex-only busy-wait is still counted" "$(printf '%s' "$OUT" | grep 's
 mkdir -p "$FIX/one"; echo '{}' > "$FIX/one/only.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/one" CODEX_HOME="$FIX/codex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section reliability 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sessions in window: 1 '; then
+if grep -qE 'sessions in window: 1 ' <<<"$OUT"; then
   ok "one file counts as exactly one (no stat-flavour phantoms)"
 else bad "one file counts as exactly one" "$(printf '%s' "$OUT" | grep 'sessions in window')"; fi
 
@@ -606,16 +606,16 @@ parity_case() { # name, sample-with-placeholders, distinctive-secret-placeholder
         bash "$TARGET" --since-days 3650 --section reliability 2>&1)
   local detected=no redacted=yes exercised=no masked=no
   # detected = the credential section lists at least one count line
-  if printf '%s' "$out" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+[0-9]+ '; then
+  if grep -qE '^[[:space:]]+[0-9]+ ' < <(sed -n '/credential-shaped/,/rotate the credential/p' <<<"$out"); then
     detected=yes
   fi
   # exercised = the errored result reached the printed error signatures at all;
   # masked = redact() visibly fired on that very line. Digit normalisation in
   # the signature pipeline mangles digit-bearing secrets, so a raw-absent grep
   # alone could miss a leak — the POSITIVE marker is the guard.
-  printf '%s' "$rout" | grep -q 'boom' && exercised=yes
-  printf '%s' "$rout" | grep 'boom' | grep -q 'redacted' && masked=yes
-  { printf '%s' "$out"; printf '%s' "$rout"; } | grep -qF "$secret" && redacted=no
+  grep -q 'boom' <<<"$rout" && exercised=yes
+  grep -q 'redacted' < <(grep 'boom' <<<"$rout") && masked=yes
+  grep -qF "$secret" < <(printf '%s' "$out"; printf '%s' "$rout") && redacted=no
   if [ "$detected" = yes ] && [ "$redacted" = yes ] && [ "$exercised" = yes ] && [ "$masked" = yes ]; then
     ok "$name: detected AND redacted (redactor exercised)"
   else
@@ -668,16 +668,16 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/binary/projects" CODEX_HOME="$FIX/binary/codex" 
       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -q 'aws-access-key-id'; then
+if grep -q 'aws-access-key-id' <<<"$TABLE"; then
   bad "binary image data does not create a credential alert" "$TABLE"
 else ok "binary image data does not create a credential alert"; fi
-if printf '%s' "$TABLE" | grep -q 'slack-token'; then
+if grep -q 'slack-token' <<<"$TABLE"; then
   ok "adjacent ordinary text is still scanned"
 else bad "adjacent ordinary text is still scanned" "$TABLE"; fi
-if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+if grep -q 'github-token (classic/app)' <<<"$TABLE"; then
   ok "malformed raw records remain fail-closed"
 else bad "malformed raw records remain fail-closed" "$TABLE"; fi
-if printf '%s' "$TABLE" | grep -q 'github-pat (fine-grained)'; then
+if grep -q 'github-pat (fine-grained)' <<<"$TABLE"; then
   ok "credential-shaped JSON object keys are still scanned"
 else bad "credential-shaped JSON object keys are still scanned" "$TABLE"; fi
 nocheck "credential-shaped JSON object keys are sanitized" "$OUT" "$(ex __PATA__)"
@@ -696,7 +696,7 @@ ASSOC_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/association/projects" CODEX_HOME="$FIX/ass
             MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
             bash "$TARGET" --since-days 3650 --section safety 2>&1)
 ASSOC_TABLE=$(printf '%s' "$ASSOC_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$ASSOC_TABLE" | grep -q 'generic-assignment'; then
+if grep -q 'generic-assignment' <<<"$ASSOC_TABLE"; then
   ok "generic JSON key/value associations are still scanned"
 else bad "generic JSON key/value associations are still scanned" "$ASSOC_TABLE"; fi
 
@@ -711,10 +711,10 @@ PREFIX_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/prefix/projects" CODEX_HOME="$FIX/prefix/
              MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
              bash "$TARGET" --since-days 3650 --section safety 2>&1)
 PREFIX_TABLE=$(printf '%s' "$PREFIX_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$PREFIX_TABLE" | grep -q 'jwt-like'; then
+if grep -q 'jwt-like' <<<"$PREFIX_TABLE"; then
   ok "data-URL-prefixed ordinary text cannot suppress a credential"
 else bad "data-URL-prefixed ordinary text cannot suppress a credential" "$PREFIX_TABLE"; fi
-if printf '%s' "$PREFIX_TABLE" | grep -q 'aws-access-key-id'; then
+if grep -q 'aws-access-key-id' <<<"$PREFIX_TABLE"; then
   bad "only actual image payload fields are excluded" "$PREFIX_TABLE"
 else ok "only actual image payload fields are excluded"; fi
 
@@ -729,7 +729,7 @@ NUL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulkey/projects" CODEX_HOME="$FIX/nulkey/cod
           MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
           bash "$TARGET" --since-days 3650 --section safety 2>&1)
 NUL_TABLE=$(printf '%s' "$NUL_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$NUL_TABLE" | grep -q 'github-pat (fine-grained)'; then
+if grep -q 'github-pat (fine-grained)' <<<"$NUL_TABLE"; then
   ok "NUL-bearing object keys cannot switch credential grep to binary mode"
 else bad "NUL-bearing object keys cannot switch credential grep to binary mode" "$NUL_TABLE"; fi
 
@@ -755,13 +755,13 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blob" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$F
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 ROUT=$(CLAUDE_PROJECTS_DIR="$FIX/blob" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section reliability 2>&1)
-if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -q 'github-token'; then
+if grep -q 'github-token' < <(sed -n '/credential-shaped/,/rotate the credential/p' <<<"$OUT"); then
   bad "mid-blob gh?_ substring is NOT counted" "counted as a token"
 else ok "mid-blob gh?_ substring is NOT counted"; fi
 # …but the output-boundary redactor still masks it (broad CRED_RE unchanged),
 # so refusing to COUNT blob noise never means ECHOING it — proven POSITIVELY
 # on the error-signature path, not by absence alone.
-if printf '%s' "$ROUT" | grep 'boom' | grep -q 'redacted'; then
+if grep -q 'redacted' < <(grep 'boom' <<<"$ROUT"); then
   ok "mid-blob token is still redacted on output"
 else bad "mid-blob token is still redacted on output" "$(printf '%s' "$ROUT" | grep 'boom' | head -1)"; fi
 nocheck "mid-blob raw token never appears" "$ROUT" "$(ex __GHPE__)"
@@ -776,10 +776,10 @@ subst "$FIX/assign/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/assign" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+if grep -q 'github-token (classic/app)' <<<"$TABLE"; then
   ok "assignment-wrapped token classifies by its VALUE shape"
 else bad "assignment-wrapped token classifies by its VALUE shape" "$TABLE"; fi
-if printf '%s' "$TABLE" | grep -q 'generic-assignment'; then
+if grep -q 'generic-assignment' <<<"$TABLE"; then
   bad "assignment-wrapped token is not buried in the weak bucket" "counted as generic"
 else ok "assignment-wrapped token is not buried in the weak bucket"; fi
 
@@ -791,7 +791,7 @@ printf '{"type":"user","message":{"content":[{"type":"text","text":"saw __GHPE__
 subst "$FIX/dedup/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/dedup" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
-if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+1 github-token'; then
+if grep -qE '^[[:space:]]+1 github-token' < <(sed -n '/credential-shaped/,/rotate the credential/p' <<<"$OUT"); then
   ok "standalone + wrapped same token dedups to ONE distinct value"
 else bad "standalone + wrapped same token dedups to ONE distinct value" \
   "$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep 'github-token')"; fi
@@ -804,7 +804,7 @@ subst "$FIX/compound/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/compound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)' && printf '%s' "$TABLE" | grep -q 'aws-access-key-id'; then
+if grep -q 'github-token (classic/app)' <<<"$TABLE" && grep -q 'aws-access-key-id' <<<"$TABLE"; then
   ok "compound assignment surfaces BOTH credential shapes"
 else bad "compound assignment surfaces BOTH credential shapes" "$TABLE"; fi
 
@@ -816,7 +816,7 @@ subst "$FIX/compound2/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/compound2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)' && printf '%s' "$TABLE" | grep -q 'aws-access-key-id'; then
+if grep -q 'github-token (classic/app)' <<<"$TABLE" && grep -q 'aws-access-key-id' <<<"$TABLE"; then
   ok "ampersand-compound surfaces BOTH credential shapes"
 else bad "ampersand-compound surfaces BOTH credential shapes" "$TABLE"; fi
 
@@ -828,10 +828,10 @@ printf '{"type":"user","message":{"content":[{"type":"text","text":"cfg token=gh
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/shortval" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -q 'github-token'; then
+if grep -q 'github-token' <<<"$TABLE"; then
   bad "short prefix-only value stays weak-signal" "upgraded to github-token"
 else ok "short prefix-only value stays weak-signal"; fi
-if printf '%s' "$TABLE" | grep -q 'generic-assignment'; then
+if grep -q 'generic-assignment' <<<"$TABLE"; then
   ok "short prefix-only value still counted as generic"
 else bad "short prefix-only value still counted as generic" "$TABLE"; fi
 
@@ -846,7 +846,7 @@ subst "$FIX/ansi/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/ansi" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+if grep -q 'github-token (classic/app)' <<<"$TABLE"; then
   ok "ANSI-styled real token is still counted"
 else bad "ANSI-styled real token is still counted" "$TABLE"; fi
 
@@ -861,7 +861,7 @@ subst "$FIX/ansi2/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/ansi2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -q 'github-token (classic/app)'; then
+if grep -q 'github-token (classic/app)' <<<"$TABLE"; then
   ok "colon-parameter CSI-styled token is still counted"
 else bad "colon-parameter CSI-styled token is still counted" "$TABLE"; fi
 
@@ -885,10 +885,10 @@ subst "$FIX/masked/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/masked" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -qF 'github-pat (fine-grained) [masked-display]'; then
+if grep -qF 'github-pat (fine-grained) [masked-display]' <<<"$TABLE"; then
   ok "gh-style masked token prefix labels as masked-display"
 else bad "gh-style masked token prefix labels as masked-display" "$TABLE"; fi
-if printf '%s' "$TABLE" | grep -Eq 'github-pat \(fine-grained\)$'; then
+if grep -Eq 'github-pat \(fine-grained\)$' <<<"$TABLE"; then
   ok "full unmasked token keeps its plain high-signal row"
 else bad "full unmasked token keeps its plain high-signal row" "$TABLE"; fi
 
@@ -900,7 +900,7 @@ subst "$FIX/masked2/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/masked2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -qF 'github-token (classic/app) [masked-display]'; then
+if grep -qF 'github-token (classic/app) [masked-display]' <<<"$TABLE"; then
   ok "standalone masked token prefix labels as masked-display"
 else bad "standalone masked token prefix labels as masked-display" "$TABLE"; fi
 
@@ -919,7 +919,7 @@ subst "$FIX/masked3/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/masked3" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -qE '^[[:space:]]+1 github-pat \(fine-grained\) \[masked-display\]'; then
+if grep -qE '^[[:space:]]+1 github-pat \(fine-grained\) \[masked-display\]' <<<"$TABLE"; then
   ok "same token under different mask lengths dedups to ONE masked row"
 else bad "same token under different mask lengths dedups to ONE masked row" "$TABLE"; fi
 
@@ -931,10 +931,10 @@ subst "$FIX/maskedglob/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/maskedglob" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$TABLE" | grep -Eq 'github-token \(classic/app\)$'; then
+if grep -Eq 'github-token \(classic/app\)$' <<<"$TABLE"; then
   ok "single-glob-asterisk token stays a plain high-signal row"
 else bad "single-glob-asterisk token stays a plain high-signal row" "$TABLE"; fi
-if printf '%s' "$TABLE" | grep -qF '[masked-display]'; then
+if grep -qF '[masked-display]' <<<"$TABLE"; then
   bad "single-glob-asterisk token is NOT labelled masked" "labelled masked"
 else ok "single-glob-asterisk token is NOT labelled masked"; fi
 
@@ -951,7 +951,7 @@ cat >> "$FIX/cxreal/sessions/r.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreal" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 1'; then
+if grep -qE 'sleep/poll calls \.\. 1' <<<"$OUT"; then
   ok "REAL Codex exec_command shape is parsed"
 else bad "REAL Codex exec_command shape is parsed" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
@@ -962,7 +962,7 @@ cat > "$FIX/tprose/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/tprose" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'bash timeouts \.+ 0'; then
+if grep -qE 'bash timeouts \.+ 0' <<<"$OUT"; then
   ok "prose quoting a timeout does not inflate the count"
 else bad "prose quoting a timeout does not inflate the count" "$(printf '%s' "$OUT" | grep 'timeouts')"; fi
 
@@ -1027,14 +1027,14 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="
       PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
 # Two in-scope sessions each ran one sleep; the two out-of-scope ones must not count.
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2'; then
+if grep -qE 'sleep/poll calls \.\. 2' <<<"$OUT"; then
   ok "only portfolio sessions are read (2 in-scope, 2 excluded)"
 else bad "only portfolio sessions are read" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
       PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section reliability 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sessions in window: 2 '; then
+if grep -qE 'sessions in window: 2 ' <<<"$OUT"; then
   ok "session count reflects only in-scope projects"
 else bad "session count reflects only in-scope projects" "$(printf '%s' "$OUT" | grep 'sessions in window')"; fi
 
@@ -1043,7 +1043,7 @@ else bad "session count reflects only in-scope projects" "$(printf '%s' "$OUT" |
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/scoped" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
       PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section reliability 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sessions in window: 2 '; then
+if grep -qE 'sessions in window: 2 ' <<<"$OUT"; then
   ok "per-session worktree dirs are still in scope"
 else bad "per-session worktree dirs are still in scope" "worktree sessions dropped"; fi
 
@@ -1072,7 +1072,7 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/anchor" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
       PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2'; then
+if grep -qE 'sleep/poll calls \.\. 2' <<<"$OUT"; then
   ok "sibling repo 'monorepo-client' is NOT admitted by prefix"
 else bad "sibling repo 'monorepo-client' is NOT admitted by prefix" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
@@ -1089,7 +1089,7 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxwt" MONOREPO_DIR="/Use
 # Excluding the only session empties the corpus, so the section short-circuits
 # rather than printing a zero — either outcome proves the worktree was excluded,
 # and the `sleep 8` inside it must never be counted.
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 0|no sessions in window'; then
+if grep -qE 'sleep/poll calls \.\. 0|no sessions in window' <<<"$OUT"; then
   ok "codex worktree with no verifiable origin fails closed"
 else bad "codex worktree with no verifiable origin fails closed" "$(printf '%s' "$OUT" | grep -E 'sleep/poll|sessions')"; fi
 nocheck "...and its command is not counted" "$OUT" "sleep/poll calls .. 1"
@@ -1114,7 +1114,7 @@ cat > "$FIX/varsleep/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/varsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2'; then
+if grep -qE 'sleep/poll calls \.\. 2' <<<"$OUT"; then
   ok "sleeps with variable delays are counted"
 else bad "sleeps with variable delays are counted" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
@@ -1165,7 +1165,7 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/mark" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/fixmono" \
       PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 3'; then
+if grep -qE 'sleep/poll calls \.\. 3' <<<"$OUT"; then
   ok "'monorepo--client' excluded; worktree + git-modules markers kept"
 else bad "'monorepo--client' excluded; worktree + git-modules markers kept" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
@@ -1179,12 +1179,12 @@ EOF
 subst "$FIX/oldlog/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/oldlog" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'bash timeouts \.+ 0'; then
+if grep -qE 'bash timeouts \.+ 0' <<<"$OUT"; then
   ok "a successful command echoing an old log is not a timeout"
 else bad "a successful command echoing an old log is not a timeout" "$(printf '%s' "$OUT" | grep 'timeouts')"; fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/oldlog" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
-if printf '%s' "$OUT" | grep -qE 'two-writer races \.+ 0'; then
+if grep -qE 'two-writer races \.+ 0' <<<"$OUT"; then
   ok "...nor a two-writer race"
 else bad "...nor a two-writer race" "$(printf '%s' "$OUT" | grep 'two-writer')"; fi
 
@@ -1196,7 +1196,7 @@ printf '{"type":"user","message":{"content":[{"type":"text","text":"cfg password
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/semi" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 nocheck "semicolon-bearing secret is redacted" "$OUT" "abc;defghijklmn"
-if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+[0-9]+ '; then
+if grep -qE '^[[:space:]]+[0-9]+ ' < <(sed -n '/credential-shaped/,/rotate the credential/p' <<<"$OUT"); then
   ok "semicolon-bearing secret is also DETECTED (parity)"
 else bad "semicolon-bearing secret is also DETECTED (parity)" "detector missed what redact() masks"; fi
 
@@ -1237,7 +1237,7 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxdeny" MONOREPO_DIR="$F
 check "the Codex denial gap is DISCLOSED, not implied clean" "$OUT" "CLAUDE-SCHEMA ONLY"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxdeny" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section a2a 2>&1)
-if printf '%s' "$OUT" | grep -qE 'two-writer races \.+ 0'; then
+if grep -qE 'two-writer races \.+ 0' <<<"$OUT"; then
   ok "a flagless Codex record is NOT counted from invented markers"
 else bad "a flagless Codex record is NOT counted from invented markers" "$(printf '%s' "$OUT" | grep 'two-writer')"; fi
 
@@ -1268,7 +1268,7 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/imit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="/Users/x/git-personal/monorepo" \
       PORTFOLIO_PATHS="/Users/x/git-personal/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --max-files 50 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2'; then
+if grep -qE 'sleep/poll calls \.\. 2' <<<"$OUT"; then
   ok "a repo imitating the worktree marker is excluded"
 else bad "a repo imitating the worktree marker is excluded" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
@@ -1280,7 +1280,7 @@ printf '{"type":"user","message":{"content":[{"type":"text","text":"cfg api_key=
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/escq" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 nocheck "an escaped-quote secret is redacted" "$OUT" "abcdefghijklmnop"
-if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+[0-9]+ '; then
+if grep -qE '^[[:space:]]+[0-9]+ ' < <(sed -n '/credential-shaped/,/rotate the credential/p' <<<"$OUT"); then
   ok "an escaped-quote secret is also DETECTED"
 else bad "an escaped-quote secret is also DETECTED" "raw grep missed what redact() masks"; fi
 
@@ -1293,7 +1293,7 @@ cat >> "$FIX/cxreplay/sessions/r.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreplay" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'bash timeouts \.+ 0'; then
+if grep -qE 'bash timeouts \.+ 0' <<<"$OUT"; then
   ok "a Codex log replay is not counted as a fresh timeout"
 else bad "a Codex log replay is not counted as a fresh timeout" "$(printf '%s' "$OUT" | grep 'timeouts')"; fi
 
@@ -1305,7 +1305,7 @@ cat >> "$FIX/cxreal2/sessions/r.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreal2" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'bash timeouts \.+ 0'; then
+if grep -qE 'bash timeouts \.+ 0' <<<"$OUT"; then
   ok "Codex text without a real flag is NOT counted (no invented format)"
 else bad "Codex text without a real flag is NOT counted" "$(printf '%s' "$OUT" | grep 'timeouts')"; fi
 
@@ -1323,7 +1323,7 @@ cat > "$FIX/compound/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/compound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2'; then
+if grep -qE 'sleep/poll calls \.\. 2' <<<"$OUT"; then
   ok "compound-shell sleeps counted; 'echo sleep 60' still not"
 else bad "compound-shell sleeps counted; 'echo sleep 60' still not" "$(printf '%s' "$OUT" | grep 'sleep/poll')"; fi
 
@@ -1336,7 +1336,7 @@ printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"ok"}]
 subst "$FIX/malformed/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/malformed" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
-if printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p' | grep -qE '^[[:space:]]+[0-9]+ '; then
+if grep -qE '^[[:space:]]+[0-9]+ ' < <(sed -n '/credential-shaped/,/rotate the credential/p' <<<"$OUT"); then
   ok "a credential AFTER a malformed record is still found"
 else bad "a credential AFTER a malformed record is still found" "jq aborted at the bad line"; fi
 
@@ -1400,7 +1400,7 @@ INVALID_BATCH=$(CREDENTIAL_SCAN_BATCH_FILES=00 \
   bash "$TARGET" --since-days 3650 --section safety 2>&1)
 invalid_batch_status=$?
 if [ "$invalid_batch_status" -eq 2 ] \
-   && printf '%s' "$INVALID_BATCH" | grep -qF 'CREDENTIAL_SCAN_BATCH_FILES must be a positive integer'; then
+   && grep -qF 'CREDENTIAL_SCAN_BATCH_FILES must be a positive integer' <<<"$INVALID_BATCH"; then
   ok "zero-padded zero credential batch size fails closed"
 else
   bad "zero-padded zero credential batch size fails closed" \
@@ -1430,8 +1430,8 @@ if [ "$REFERENCE" = "$BATCHED" ]; then
 else
   bad "credential batching preserves the complete safety output byte-for-byte" \
     "$(diff -u <(printf '%s\n' "$REFERENCE") <(printf '%s\n' "$BATCHED") | head -40)"; fi
-if printf '%s' "$BATCHED" | sed -n '/credential-shaped/,/rotate the credential/p' \
-   | grep -q '2 generic-assignment'; then
+if grep -q '2 generic-assignment' \
+   < <(sed -n '/credential-shaped/,/rotate the credential/p' <<<"$BATCHED"); then
   ok "credential batching preserves a decoded secret after an unterminated file"
 else
   bad "credential batching preserves a decoded secret after an unterminated file" \
@@ -1449,7 +1449,7 @@ cat > "$FIX/interrupt/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/interrupt" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'interrupted tool calls \.+ 0'; then
+if grep -qE 'interrupted tool calls \.+ 0' <<<"$OUT"; then
   ok "prose quoting the interrupt flag does not fabricate one"
 else bad "prose quoting the interrupt flag does not fabricate one" "$(printf '%s' "$OUT" | grep 'interrupted')"; fi
 
@@ -1669,10 +1669,10 @@ cat > "$FIX/bgsleep/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bgsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'background launch \.+ 1'; then
+if grep -qE 'background launch \.+ 1' <<<"$OUT"; then
   ok "a backgrounded sleep is classified background-launch"
 else bad "a backgrounded sleep is classified background-launch" "$(printf '%s' "$OUT" | grep -E 'foreground|deferred|unclass')"; fi
-if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 0'; then
+if grep -qE 'foreground launch \.+ 0' <<<"$OUT"; then
   ok "...and is NOT classified foreground-launch"
 else bad "...and is NOT classified foreground-launch" "$(printf '%s' "$OUT" | grep -E 'foreground')"; fi
 
@@ -1685,7 +1685,7 @@ cat > "$FIX/fgsleep/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/fgsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 2'; then
+if grep -qE 'foreground launch \.+ 2' <<<"$OUT"; then
   ok "an omitted AND an explicit-false flag both read as foreground"
 else bad "an omitted AND an explicit-false flag both read as foreground" "$(printf '%s' "$OUT" | grep -E 'foreground|deferred')"; fi
 
@@ -1694,10 +1694,10 @@ else bad "an omitted AND an explicit-false flag both read as foreground" "$(prin
 # them into foreground would invent an attribution the data cannot support.
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxreal" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'launch mode unknown \.+ 1'; then
+if grep -qE 'launch mode unknown \.+ 1' <<<"$OUT"; then
   ok "a Codex sleep has unknown launch mode"
 else bad "a Codex sleep has unknown launch mode" "$(printf '%s' "$OUT" | grep -E 'unclass|foreground')"; fi
-if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 0'; then
+if grep -qE 'foreground launch \.+ 0' <<<"$OUT"; then
   ok "...and is NOT attributed to foreground"
 else bad "...and is NOT attributed to foreground" "$(printf '%s' "$OUT" | grep -E 'foreground')"; fi
 check "the Codex classification gap is stated" "$OUT" "STATED GAP, NOT A ZERO"
@@ -1707,9 +1707,9 @@ check "launch mode is not presented as a compliance verdict" "$OUT" "NOT a compl
 # Mixed corpus: 2 Claude (1 fg + 1 bg) + 1 Codex = 3.
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/bgsleep" CODEX_HOME="$FIX/cxreal" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'sleep/poll calls \.\. 2' \
-   && printf '%s' "$OUT" | grep -qE 'background launch \.+ 1' \
-   && printf '%s' "$OUT" | grep -qE 'launch mode unknown \.+ 1'; then
+if grep -qE 'sleep/poll calls \.\. 2' <<<"$OUT" \
+   && grep -qE 'background launch \.+ 1' <<<"$OUT" \
+   && grep -qE 'launch mode unknown \.+ 1' <<<"$OUT"; then
   ok "classes sum to the total across both instances"
 else bad "classes sum to the total across both instances" "$(printf '%s' "$OUT" | grep -E 'sleep/poll|foreground|deferred|unclass')"; fi
 # The total is DERIVED from the classes now, so a drift warning would be a
@@ -1733,7 +1733,7 @@ EOF
 subst "$FIX/blockedsleep/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blockedsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1'; then
+if grep -qE 'foreground launch \.+ 1' <<<"$OUT"; then
   ok "a hook-BLOCKED sleep is excluded; the executed one still counts"
 else bad "a hook-BLOCKED sleep is excluded; the executed one still counts" "$(printf '%s' "$OUT" | grep -E 'foreground|sleep/poll')"; fi
 
@@ -1749,7 +1749,7 @@ EOF
 subst "$FIX/timedoutsleep/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/timedoutsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1'; then
+if grep -qE 'foreground launch \.+ 1' <<<"$OUT"; then
   ok "a TIMED-OUT sleep still counts (it ran; is_error is not 'never ran')"
 else bad "a TIMED-OUT sleep still counts (it ran; is_error is not 'never ran')" "$(printf '%s' "$OUT" | grep -E 'foreground|sleep/poll')"; fi
 
@@ -1773,7 +1773,7 @@ EOF
 subst "$FIX/deniedsleep/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/deniedsleep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 0'; then
+if grep -qE 'foreground launch \.+ 0' <<<"$OUT"; then
   ok "permission-denied sleeps are excluded too, not just hook-blocked ones"
 else bad "permission-denied sleeps are excluded too, not just hook-blocked ones" "$(printf '%s' "$OUT" | grep -E 'foreground|sleep/poll')"; fi
 
@@ -1812,7 +1812,7 @@ mkdir -p "$FIX/forgetag"
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"echo BGnot-a-real-tag\nsleep 60"}}]}}' > "$FIX/forgetag/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/forgetag" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'foreground launch \.+ 1' && printf '%s' "$OUT" | grep -qE 'background launch \.+ 0'; then
+if grep -qE 'foreground launch \.+ 1' <<<"$OUT" && grep -qE 'background launch \.+ 0' <<<"$OUT"; then
   ok "command text cannot forge a class tag"
 else bad "command text cannot forge a class tag" "$(printf '%s' "$OUT" | grep -E 'foreground|background')"; fi
 
@@ -1830,7 +1830,7 @@ cat > "$FIX/wtremote/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtremote" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 1'; then
+if grep -qE 'remote poll, same command \.+ 1' <<<"$OUT"; then
   ok "a sleep chained to a remote poll is scored remote-adjacent"
 else bad "a sleep chained to a remote poll is scored remote-adjacent" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -1842,7 +1842,7 @@ cat > "$FIX/wtlocal/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtlocal" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+if grep -qE 'no remote poll adjacent \.+ 1' <<<"$OUT"; then
   ok "a sleep bounding a local process is scored PERMITTED, not a violation"
 else bad "a sleep bounding a local process is scored PERMITTED, not a violation" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -1857,7 +1857,7 @@ cat > "$FIX/wtnext/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtnext" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, next command \.+ 1'; then
+if grep -qE 'remote poll, next command \.+ 1' <<<"$OUT"; then
   ok "an UNCHAINED sleep-then-poll is caught across two tool calls"
 else bad "an UNCHAINED sleep-then-poll is caught across two tool calls" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -1880,7 +1880,7 @@ touch -t 202607200101 "$FIX/wtcross/b.jsonl"
 touch -t 202607200202 "$FIX/wtcross/a.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtcross" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, next command \.+ 0'; then
+if grep -qE 'remote poll, next command \.+ 0' <<<"$OUT"; then
   ok "adjacency does NOT cross a transcript boundary"
 else bad "adjacency does NOT cross a transcript boundary" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -1893,12 +1893,12 @@ cat > "$FIX/wtcross2/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtcross2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 0'; then
+if grep -qE 'FOREGROUND.*remote-adjacent \.+ 0' <<<"$OUT"; then
   ok "a BACKGROUND remote poll is NOT counted as the busy-wait violation"
 else bad "a BACKGROUND remote poll is NOT counted as the busy-wait violation" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtremote" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
+if grep -qE 'FOREGROUND.*remote-adjacent \.+ 1' <<<"$OUT"; then
   ok "a FOREGROUND remote poll IS counted as the busy-wait violation"
 else bad "a FOREGROUND remote poll IS counted as the busy-wait violation" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
 
@@ -1921,7 +1921,7 @@ touch -t 202607200101 "$FIX/wthdsep/b.jsonl"
 touch -t 202607200202 "$FIX/wthdsep/a.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wthdsep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, next command \.+ 0'; then
+if grep -qE 'remote poll, next command \.+ 0' <<<"$OUT"; then
   ok "an unterminated heredoc cannot swallow the transcript separator"
 else bad "an unterminated heredoc cannot swallow the transcript separator" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -1937,7 +1937,7 @@ cat > "$FIX/wtpendcls/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtpendcls" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
+if grep -qE 'FOREGROUND.*remote-adjacent \.+ 1' <<<"$OUT"; then
   ok "an unchained violation is attributed to the SLEEP's class, not the poll's"
 else bad "an unchained violation is attributed to the SLEEP's class, not the poll's" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND|remote poll')"; fi
 
@@ -1951,7 +1951,7 @@ cat > "$FIX/wtsum/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtsum" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'wait-target total'; then
+if grep -qE 'wait-target total' <<<"$OUT"; then
   bad "wait-target buckets sum to the launch-mode total" "$(printf '%s' "$OUT" | grep -E 'wait-target total|remote poll|no remote')"
 else ok "wait-target buckets sum to the launch-mode total"; fi
 
@@ -1963,7 +1963,7 @@ cat > "$FIX/wthd/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wthd" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 0'; then
+if grep -qE 'remote poll, same command \.+ 0' <<<"$OUT"; then
   ok "a heredoc BODY does not inflate the wait-target count"
 else bad "a heredoc BODY does not inflate the wait-target count" "$(printf '%s' "$OUT" | grep -E 'remote poll')"; fi
 
@@ -1981,7 +1981,7 @@ cat > "$FIX/wtorder/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtorder" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 0'; then
+if grep -qE 'remote poll, same command \.+ 0' <<<"$OUT"; then
   ok "a poll BEFORE the sleep is not counted as a chained busy-wait"
 else bad "a poll BEFORE the sleep is not counted as a chained busy-wait" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -1994,7 +1994,7 @@ cat > "$FIX/wtalias/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtalias" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 2'; then
+if grep -qE 'remote poll, same command \.+ 2' <<<"$OUT"; then
   ok "a path-qualified gh and a network git subcommand both count as remote"
 else bad "a path-qualified gh and a network git subcommand both count as remote" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -2006,7 +2006,7 @@ cat > "$FIX/wtgitlocal/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtgitlocal" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+if grep -qE 'no remote poll adjacent \.+ 1' <<<"$OUT"; then
   ok "a LOCAL git subcommand does not count as a remote poll"
 else bad "a LOCAL git subcommand does not count as a remote poll" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -2019,10 +2019,10 @@ cat > "$FIX/wtfgnext/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtfgnext" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, next command \.+ 1'; then
+if grep -qE 'remote poll, next command \.+ 1' <<<"$OUT"; then
   ok "a BACKGROUND unchained sleep still counts in the aggregate next bucket"
 else bad "a BACKGROUND unchained sleep still counts in the aggregate next bucket" "$(printf '%s' "$OUT" | grep -E 'remote poll')"; fi
-if printf '%s' "$OUT" | grep -qE 'of which UNCHAINED \(fg\) \.+ 0'; then
+if grep -qE 'of which UNCHAINED \(fg\) \.+ 0' <<<"$OUT"; then
   ok "...but is EXCLUDED from the foreground-only figure that tests the rule"
 else bad "...but is EXCLUDED from the foreground-only figure that tests the rule" "$(printf '%s' "$OUT" | grep -E 'UNCHAINED')"; fi
 
@@ -2038,10 +2038,10 @@ cat > "$FIX/wthdleak/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wthdleak" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'explicit sleep/poll calls \.+ 1'; then
+if grep -qE 'explicit sleep/poll calls \.+ 1' <<<"$OUT"; then
   ok "an unterminated heredoc does not swallow the NEXT command's sleep"
 else bad "an unterminated heredoc does not swallow the NEXT command's sleep" "$(printf '%s' "$OUT" | grep -E 'explicit sleep|remote poll')"; fi
-if printf '%s' "$OUT" | grep -qE 'wait-target total'; then
+if grep -qE 'wait-target total' <<<"$OUT"; then
   bad "both passes stay reconciled across a heredoc leak" "$(printf '%s' "$OUT" | grep -E 'wait-target total')"
 else ok "both passes stay reconciled across a heredoc leak"; fi
 
@@ -2060,7 +2060,7 @@ cat > "$FIX/wtloop/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtloop" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
+if grep -qE 'FOREGROUND.*remote-adjacent \.+ 1' <<<"$OUT"; then
   ok "a loop-wrapped poll AFTER the sleep counts (back-edge)"
 else bad "a loop-wrapped poll AFTER the sleep counts (back-edge)" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote|FOREGROUND')"; fi
 
@@ -2073,7 +2073,7 @@ cat > "$FIX/wtnoloop/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtnoloop" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+if grep -qE 'no remote poll adjacent \.+ 1' <<<"$OUT"; then
   ok "...but a straight-line poll before the sleep is still not adjacent"
 else bad "...but a straight-line poll before the sleep is still not adjacent" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -2086,7 +2086,7 @@ cat > "$FIX/wtlocalcurl/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtlocalcurl" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+if grep -qE 'no remote poll adjacent \.+ 1' <<<"$OUT"; then
   ok "a curl at a LOOPBACK address is a permitted local timer"
 else bad "a curl at a LOOPBACK address is a permitted local timer" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -2098,7 +2098,7 @@ cat > "$FIX/wtremotecurl/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtremotecurl" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 1'; then
+if grep -qE 'remote poll, same command \.+ 1' <<<"$OUT"; then
   ok "...but a curl at a REMOTE host still counts"
 else bad "...but a curl at a REMOTE host still counts" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -2116,8 +2116,8 @@ cat > "$FIX/wtdetach/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtdetach" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, same command \.+ 1' \
-   && printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 0'; then
+if grep -qE 'remote poll, same command \.+ 1' <<<"$OUT" \
+   && grep -qE 'FOREGROUND.*remote-adjacent \.+ 0' <<<"$OUT"; then
   ok "a shell-DETACHED watcher is remote-adjacent but NOT a foreground violation"
 else bad "a shell-DETACHED watcher is remote-adjacent but NOT a foreground violation" "$(printf '%s' "$OUT" | grep -E 'remote poll|FOREGROUND')"; fi
 
@@ -2129,7 +2129,7 @@ cat > "$FIX/wtandand/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtandand" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
+if grep -qE 'FOREGROUND.*remote-adjacent \.+ 1' <<<"$OUT"; then
   ok "...but a trailing && is not detachment"
 else bad "...but a trailing && is not detachment" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
 
@@ -2144,14 +2144,14 @@ EOF
 subst "$FIX/wtdenied/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtdenied" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'remote poll, next command \.+ 1'; then
+if grep -qE 'remote poll, next command \.+ 1' <<<"$OUT"; then
   ok "a DENIED poll still marks the sleep before it as remote-adjacent"
 else bad "a DENIED poll still marks the sleep before it as remote-adjacent" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
 # ...and the denied command must NOT re-enter the launch counts, or the two
 # passes stop reconciling and the drift warning fires.
-if printf '%s' "$OUT" | grep -qE 'explicit sleep/poll calls \.+ 1' \
-   && ! printf '%s' "$OUT" | grep -qE 'wait-target total'; then
+if grep -qE 'explicit sleep/poll calls \.+ 1' <<<"$OUT" \
+   && ! grep -qE 'wait-target total' <<<"$OUT"; then
   ok "...without counting the denied command as a launch"
 else bad "...without counting the denied command as a launch" "$(printf '%s' "$OUT" | grep -E 'explicit sleep|wait-target total')"; fi
 
@@ -2164,7 +2164,7 @@ cat > "$FIX/wtloopscope/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtloopscope" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+if grep -qE 'no remote poll adjacent \.+ 1' <<<"$OUT"; then
   ok "a poll OUTSIDE the loop is not attributed to a sleep inside it"
 else bad "a poll OUTSIDE the loop is not attributed to a sleep inside it" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -2177,7 +2177,7 @@ cat > "$FIX/wtloopcond/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtloopcond" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'FOREGROUND.*remote-adjacent \.+ 1'; then
+if grep -qE 'FOREGROUND.*remote-adjacent \.+ 1' <<<"$OUT"; then
   ok "...but a poll in the loop CONDITION still counts (back-edge revisits it)"
 else bad "...but a poll in the loop CONDITION still counts (back-edge revisits it)" "$(printf '%s' "$OUT" | grep -E 'remote poll|FOREGROUND')"; fi
 
@@ -2189,7 +2189,7 @@ cat > "$FIX/wtloopseq/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtloopseq" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+if grep -qE 'no remote poll adjacent \.+ 1' <<<"$OUT"; then
   ok "a poll in an EARLIER sequential loop is not attributed to a later one"
 else bad "a poll in an EARLIER sequential loop is not attributed to a later one" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -2201,7 +2201,7 @@ cat > "$FIX/wtcomment/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtcomment" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
-if printf '%s' "$OUT" | grep -qE 'no remote poll adjacent \.+ 1'; then
+if grep -qE 'no remote poll adjacent \.+ 1' <<<"$OUT"; then
   ok "a tool named in a COMMENT is not a poll"
 else bad "a tool named in a COMMENT is not a poll" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
@@ -2243,14 +2243,14 @@ check "default run advertises the credential-provenance flag" "$OUT" \
 # detector's identical concentration line and passes before anything is built —
 # caught here as a false pass during the RED run.
 CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$CREDSEC" | grep -qE 'across [0-9]+ transcript records in [0-9]+ sessions'; then
+if grep -qE 'across [0-9]+ transcript records in [0-9]+ sessions' <<<"$CREDSEC"; then
   ok "credential table carries a concentration line"
 else bad "credential table carries a concentration line" "$CREDSEC"; fi
 
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credprov" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
 check "provenance emits a session locator" "$OUT" "session=s.jsonl"
-if printf '%s' "$OUT" | grep -qE 'session=s\.jsonl line=[0-9]+ record=user shape=github-token'; then
+if grep -qE 'session=s\.jsonl line=[0-9]+ record=user shape=github-token' <<<"$OUT"; then
   ok "provenance locator carries line, record type and shape"
 else bad "provenance locator carries line, record type and shape" \
   "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
@@ -2262,7 +2262,7 @@ else bad "provenance locator carries line, record type and shape" \
 # defence-in-depth assertion that would catch a redactor regression; the
 # EMITTER-level property is pinned by the `shape=` assertion above, which does
 # go RED under exactly that ablation.
-if printf '%s' "$OUT" | grep -q "$S_GHPB"; then
+if grep -q "$S_GHPB" <<<"$OUT"; then
   bad "output boundary never prints the credential value" "raw token appeared in output"
 else ok "output boundary never prints the credential value"; fi
 
@@ -2278,8 +2278,8 @@ EOF
 subst "$FIX/credshort/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credshort" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
-if printf '%s' "$OUT" | grep -q 'github-pat (fine-grained)' \
-   && printf '%s' "$OUT" | grep -q 'shape=github-pat'; then
+if grep -q 'github-pat (fine-grained)' <<<"$OUT" \
+   && grep -q 'shape=github-pat' <<<"$OUT"; then
   ok "locator shape agrees with the table row it annotates"
 else bad "locator shape agrees with the table row it annotates" \
   "$(printf '%s' "$OUT" | grep -E 'github-|session=' | head -3)"; fi
@@ -2344,8 +2344,8 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednested" CODEX_HOME="$FIX/nocodex" MONOREPO_D
 # Assert AGREEMENT on both sides, as the sibling parity tests do — the table's
 # verdict is the reference, so a regression that broke the table instead of the
 # locator cannot pass by making the two agree on the wrong answer.
-if printf '%s' "$OUT" | grep -q 'github-token (classic/app)' \
-   && printf '%s' "$OUT" | grep -q 'shape=github-token'; then
+if grep -q 'github-token (classic/app)' <<<"$OUT" \
+   && grep -q 'shape=github-token' <<<"$OUT"; then
   ok "nested wrappers locate as the underlying token shape"
 else bad "nested wrappers locate as the underlying token shape" \
   "$(printf '%s' "$OUT" | grep -E 'github-token|generic-assignment|session=' | head -4)"; fi
@@ -2407,11 +2407,11 @@ printf '{"type":"user","message":{"content":[{"type":"text","text":"a \\"%s\\" b
 subst "$FIX/creddup/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/creddup" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
-if printf '%s' "$OUT" | grep -qE '3x session=s\.jsonl line=1 .*shape=github-token'; then
+if grep -qE '3x session=s\.jsonl line=1 .*shape=github-token' <<<"$OUT"; then
   ok "repeated matches at one location collapse with a printed count"
 else bad "repeated matches at one location collapse with a printed count" \
   "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
-if printf '%s' "$OUT" | grep -qE '^[[:space:]]+1 github-token'; then
+if grep -qE '^[[:space:]]+1 github-token' <<<"$OUT"; then
   ok "table still counts ONE distinct value for the repeated token"
 else bad "table still counts ONE distinct value for the repeated token" \
   "$(printf '%s' "$OUT" | grep 'github-token' | head -2)"; fi
@@ -2445,8 +2445,8 @@ printf '{"type":"user","message":{"content":[{"type":"text","text":"k=%s x %s\00
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/crednulweld" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
 # Assert BOTH sides: the real credential is still located, and no phantom appears.
-if printf '%s' "$OUT" | grep -q 'shape=aws-access-key-id' \
-   && ! printf '%s' "$OUT" | grep -q 'shape=github-token'; then
+if grep -q 'shape=aws-access-key-id' <<<"$OUT" \
+   && ! grep -q 'shape=github-token' <<<"$OUT"; then
   ok "NUL is translated, not deleted, so fragments cannot weld into a phantom token"
 else bad "NUL is translated, not deleted, so fragments cannot weld into a phantom token" \
   "$(printf '%s' "$OUT" | grep -E 'shape=' | head -3)"; fi
@@ -2462,7 +2462,7 @@ else bad "NUL is translated, not deleted, so fragments cannot weld into a phanto
 # assertion GREEN — verified by ablation, not assumed. The weld itself stays
 # pinned by the phantom-shape assertion directly above.
 CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$CREDSEC" | grep -qE 'largest single record: 1$'; then
+if grep -qE 'largest single record: 1$' <<<"$CREDSEC"; then
   ok "NUL-weld record pins the concentration figure too"
 else bad "NUL-weld record pins the concentration figure too" \
   "$(printf '%s' "$CREDSEC" | grep -E 'across .* records')"; fi
@@ -2479,8 +2479,8 @@ EOF
 subst "$FIX/credmaskloc/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credmaskloc" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
-if printf '%s' "$OUT" | grep -q 'masked-display' \
-   && printf '%s' "$OUT" | grep -qE 'shape=github-pat \[masked-display\]'; then
+if grep -q 'masked-display' <<<"$OUT" \
+   && grep -qE 'shape=github-pat \[masked-display\]' <<<"$OUT"; then
   ok "locator carries the table's [masked-display] qualifier"
 else bad "locator carries the table's [masked-display] qualifier" \
   "$(printf '%s' "$OUT" | grep -E 'github-pat|session=' | head -3)"; fi
@@ -2506,10 +2506,10 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credmasknotclass" CODEX_HOME="$FIX/nocodex" MONO
 # Assert BOTH sides, so the table stays the reference: the row must be the plain
 # high-signal shape, and the locator must agree with it rather than adding the
 # lower-risk qualifier.
-if printf '%s' "$OUT" | grep -qE 'shape=github-token$|shape=github-token[^[]' \
-   && printf '%s' "$OUT" | grep -q 'github-token (classic/app)' \
-   && ! printf '%s' "$OUT" | grep -qE 'github-token \(classic/app\) \[masked-display\]' \
-   && ! printf '%s' "$OUT" | grep -qE 'shape=github-token \[masked-display\]'; then
+if grep -qE 'shape=github-token$|shape=github-token[^[]' <<<"$OUT" \
+   && grep -q 'github-token (classic/app)' <<<"$OUT" \
+   && ! grep -qE 'github-token \(classic/app\) \[masked-display\]' <<<"$OUT" \
+   && ! grep -qE 'shape=github-token \[masked-display\]' <<<"$OUT"; then
   ok "locator withholds [masked-display] when the pre-mask run is not class chars"
 else bad "locator withholds [masked-display] when the pre-mask run is not class chars" \
   "$(printf '%s' "$OUT" | grep -E 'github-token|session=' | head -3)"; fi
@@ -2534,7 +2534,7 @@ subst "$FIX/credcompound/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credcompound" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$CREDSEC" | grep -qE 'largest single record: 3'; then
+if grep -qE 'largest single record: 3' <<<"$CREDSEC"; then
   ok "concentration splits compound matches like the table"
 else bad "concentration splits compound matches like the table" \
   "$(printf '%s' "$CREDSEC" | grep -E 'across .* records')"; fi
@@ -2560,7 +2560,7 @@ subst "$FIX/credsesscount/alpha.jsonl" "$FIX/credsesscount/beta.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credsesscount" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
-if printf '%s' "$CREDSEC" | grep -qE 'in 2 sessions'; then
+if grep -qE 'in 2 sessions' <<<"$CREDSEC"; then
   ok "session redaction keeps distinct sessions distinct"
 else bad "session redaction keeps distinct sessions distinct" \
   "$(printf '%s' "$CREDSEC" | grep -E 'across .* records')"; fi
@@ -2605,7 +2605,7 @@ OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credpadhi" CODEX_HOME="$FIX/nocodex" MONOREPO_DI
 CREDSEC=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
 check "a double-padded HIGH-SIGNAL token keeps its shape in the table" "$CREDSEC" \
       "1 github-token (classic/app)"
-if printf '%s' "$OUT" | grep -qE 'shape=github-token'; then
+if grep -qE 'shape=github-token' <<<"$OUT"; then
   ok "the locator agrees: double padding does not demote a token to generic"
 else bad "the locator agrees: double padding does not demote a token to generic" \
   "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
@@ -2631,7 +2631,7 @@ check "an ANSI-styled token is still counted by the table" "$CREDSEC" \
 # concentration line, and an unscoped grep passes on that one instead.
 nocheck "a styled credential is not reported across 0 records" "$CREDSEC" \
       "across 0 transcript records"
-if printf '%s' "$OUT" | grep -qE 'session=s\.jsonl line=[0-9]+ record=user shape=github-token'; then
+if grep -qE 'session=s\.jsonl line=[0-9]+ record=user shape=github-token' <<<"$OUT"; then
   ok "a styled credential still emits a full provenance locator"
 else bad "a styled credential still emits a full provenance locator" \
   "$(printf '%s' "$OUT" | grep 'session=' | head -3)"; fi
@@ -3983,7 +3983,7 @@ ablate() { # $1=sed-expr $2=label $3=expected-count-after $4=days $5=expected-ch
     return
   fi
   local aout; aout=$(sigrun "$ab" "${4:-3650}")
-  if printf '%s' "$aout" | grep -qF "is_error==true): $3"; then
+  if grep -qF "is_error==true): $3" <<<"$aout"; then
     ok "ablation: $2"
   else
     bad "ablation: $2" "expected count $3 after removing the filter; got: $(printf '%s' "$aout" | grep 'is_error==true)' || echo none)"
@@ -4085,7 +4085,7 @@ rel_ablate() { # $1=sed-expr $2=label $3=expected-after $4=expected-changed-line
     bad "ablation: $2" "sed changed $changed lines, expected ${4:-1} — arm is mis-aimed"; return
   fi
   aout=$(relrun "$ab" 1)
-  if printf '%s' "$aout" | grep -qF "tool errors in window: $3"; then
+  if grep -qF "tool errors in window: $3" <<<"$aout"; then
     ok "ablation: $2"
   else
     bad "ablation: $2" "expected $3 after removing the filter; got: $(printf '%s' "$aout" | grep 'tool errors in window' || echo none)"
@@ -4113,7 +4113,7 @@ chmod +x "$FIX/nodate/date"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/sigscore" CODEX_HOME="$FIX/nocodex" \
       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" PATH="$FIX/nodate:$PATH" \
       bash "$TARGET" --since-days 1 --max-files 50 --section reliability 2>&1)
-if printf '%s' "$OUT" | grep -q 'UNKNOWN: cannot compute window start'; then
+if grep -q 'UNKNOWN: cannot compute window start' <<<"$OUT"; then
   ok "reliability refuses to score when the window start cannot be computed"
 else
   bad "reliability refuses to score when the window start cannot be computed" \
@@ -4213,7 +4213,7 @@ extract_awk() { sed -n "/^AWK_KEY_REDACT='/,/^'\$/p" "${1:-$TARGET}" | sed "1s/^
 # partial extraction that captured only the leading comment block would be
 # non-empty and still be no program at all.
 AWK_PROG=$(extract_awk)
-if [ -n "$AWK_PROG" ] && printf '%s' "$AWK_PROG" | grep -q 'mask_line'; then
+if [ -n "$AWK_PROG" ] && grep -q 'mask_line' <<<"$AWK_PROG"; then
   ok "redactor unit: the awk program really extracts from the shipped script"
 else
   bad "redactor unit: the awk program really extracts from the shipped script" \
@@ -4708,10 +4708,10 @@ unit_ablate() { # $1=sed-expr $2=label $3=fixture-fn $4=needle $5=appear|vanish
     return
   fi
   if [ "$5" = appear ]; then
-    if printf '%s' "$out" | grep -qF -- "$4"; then ok "ablation: $2"
+    if grep -qF -- "$4" <<<"$out"; then ok "ablation: $2"
     else bad "ablation: $2" "expected '$4' to REAPPEAR without the branch; it did not"; fi
   else
-    if printf '%s' "$out" | grep -qF -- "$4"; then
+    if grep -qF -- "$4" <<<"$out"; then
       bad "ablation: $2" "'$4' survived without the branch — the arm proves nothing"
     else ok "ablation: $2"; fi
   fi
@@ -5004,7 +5004,7 @@ else
   SUABL_OUT=$(PORTFOLIO_PATHS="$FIX/sig_undated" CLAUDE_PROJECTS_DIR="$FIX/sig_undated" \
               CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
               bash "$SUABL" --since-days 1 --section signature --signature 'SIGNEEDLE' 2>/dev/null)
-  if printf '%s' "$SUABL_OUT" | grep -qF 'NOT a clean verdict'; then
+  if grep -qF 'NOT a clean verdict' <<<"$SUABL_OUT"; then
     bad "ablation: the signature undated canary is load-bearing" \
         "still warned with the canary removed — the arm proves nothing"
   else
@@ -5042,6 +5042,137 @@ if jq -ne '"__NOW__" >= "2026-08-03T00:00:00.000Z"' >/dev/null 2>&1; then
 else
   bad "documented: a literal placeholder sorts AFTER a real date" \
       "expected the lexical comparison to be true"
+fi
+
+echo
+echo "── regression guard: assertion status must not depend on the writer ──"
+# This suite runs under `set -o pipefail`. A pipeline that ENDS in a quiet grep
+# reports the WRITER's fate, not whether the needle matched: `grep -q` exits at
+# the first match, the still-writing producer takes SIGPIPE (exit 141), and
+# pipefail propagates 141 as the pipeline status. So a MATCH is reported as a
+# non-match. The two consequences are not symmetric:
+#   * `check`   — a matching assertion was recorded as a FAILURE (noisy, visible);
+#   * `nocheck` — a needle that IS present was reported absent, so every absence
+#                 assertion passed VACUOUSLY and could not fire (silent, and the
+#                 dangerous direction: this suite's absence assertions include
+#                 the ones proving a credential does NOT survive redaction).
+# Whether the producer finishes before grep exits depends on payload size and
+# scheduling, which is precisely the environment-dependence of monorepo#2661:
+# red locally on macOS, green on macos-latest CI, and drifting run to run.
+# The fix is to remove the pipe (`grep -qF -- PATTERN <<<"$VAR"`), never to drop
+# pipefail — pipefail is what catches a failing intermediate stage.
+
+# The payload must be MANY LINES, not one long line — this distinction is the
+# whole test. `grep -q` exits at the matching LINE, so the writer is still
+# working only if plenty of lines follow the match. A single 256KiB line makes
+# grep read the entire line before it can match, the writer finishes, and no
+# SIGPIPE ever occurs: built that way these guards pass under the OLD construct
+# too, i.e. they are vacuous. Verified by ablation — see the arm table in the PR.
+# Built by doubling: ~14 iterations. Do NOT build this with a pattern
+# substitution like ${pad// /x} — that is O(n^2) in bash and hangs the suite
+# for minutes at this size (measured while writing this test).
+PIPEQ_PAD=$'x\n'
+while [ ${#PIPEQ_PAD} -lt 200000 ]; do PIPEQ_PAD="$PIPEQ_PAD$PIPEQ_PAD"; done
+PIPEQ_BIG="NEEDLE_AT_HEAD"$'\n'"$PIPEQ_PAD"
+check "presence assertion holds with the needle at the HEAD of a many-line payload" \
+      "$PIPEQ_BIG" "NEEDLE_AT_HEAD"
+
+# The vacuous-pass direction cannot be written as a passing `nocheck` — a
+# `nocheck` over a present needle is SUPPOSED to record a failure. So assert the
+# predicate `nocheck` is built on: it must still be able to see a present needle
+# early in a many-line payload. Under the old construct this returned false,
+# which is what made every absence assertion unfireable on this host.
+if grep -qF -- "NEEDLE_AT_HEAD" <<<"$PIPEQ_BIG"; then
+  ok "absence assertions can still fire on a many-line payload (no vacuous pass)"
+else
+  bad "absence assertions can still fire on a many-line payload (no vacuous pass)" \
+      "the predicate reported a needle absent that IS present"
+fi
+
+# Control that must NOT move between the broken and fixed constructs: with the
+# needle at the TAIL, grep has to read all input either way, so no SIGPIPE is
+# possible. It passes in both arms — which is what proves the two guards above
+# discriminate because of the construct, and not because the payload is broken.
+check "control: needle at the TAIL is unaffected (grep must read all input)" \
+      "${PIPEQ_BIG}NEEDLE_AT_TAIL" "NEEDLE_AT_TAIL"
+
+# Structural guard: the behavioural checks above cover the two shared helpers,
+# but the construct appeared at 130 further call sites. Scan the whole suite so
+# a reintroduction anywhere is caught, not just one in `check`/`nocheck`.
+# The forbidden shape is assembled rather than written literally, so this file
+# does not match its own detector.
+# The leading [^|] is load-bearing: without it the detector also matches the
+# SECOND pipe of a `||`, so an ordinary `cmd || grep -qF x file` — which reads a
+# file directly and has no writer to kill — reads as a defect. That false
+# positive is not hypothetical; it mis-flagged branch-cleanup.sh's re_kept()
+# during this fix. It costs one edge case: a line whose very first character is
+# the pipe. Continuation lines in this suite indent, so [^|] still matches.
+_pq() { printf '%s%s%s' "$1" ' | grep -' "$2"; }
+PIPEQ_RE="[^|]\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q"
+# Scan via SCRIPT_DIR, which line 8 already resolved to an ABSOLUTE path, rather
+# than the raw ${BASH_SOURCE[0]} — that is the INVOCATION path, and it is relative
+# whenever the suite is run as `bash .claude/scripts/agent-telemetry.test.sh`. If
+# anything ever changes the working directory before this point, grep cannot open
+# the file: it exits 2 printing nothing, `|| true` discards that status, and
+# PIPEQ_HITS becomes the EMPTY STRING. `[ "" -eq 0 ]` then errors with "integer
+# expression expected" and takes the else branch, reporting a defect COUNT THAT
+# WAS NEVER MEASURED. That direction is fail-closed, so it cannot wave a real
+# defect through — but "the guard could not run" and "the guard found N defects"
+# must not reach the reader as the same message.
+PIPEQ_SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+if [ ! -r "$PIPEQ_SELF" ]; then
+  bad "no pipeline into a quiet grep survives anywhere in this suite" \
+      "the guard DID NOT RUN — suite source unreadable at '$PIPEQ_SELF'"
+else
+  PIPEQ_HITS=$(grep -cE "$PIPEQ_RE" "$PIPEQ_SELF" || true)
+  if [ "${PIPEQ_HITS:-0}" -eq 0 ]; then
+    ok "no pipeline into a quiet grep survives anywhere in this suite"
+  else
+    bad "no pipeline into a quiet grep survives anywhere in this suite" \
+        "$PIPEQ_HITS occurrence(s) — rewrite each as: grep -qF -- PATTERN <<<\"\$VAR\""
+  fi
+fi
+
+# Control for the readability branch: prove an unreadable source really does
+# yield an empty count, so the -r test above is load-bearing rather than
+# decoration. This is the exact path that produced a bare "integer expression
+# expected" before hardening.
+PIPEQ_MISS=$(grep -cE "$PIPEQ_RE" "$SCRIPT_DIR/definitely-not-a-file-2661" 2>/dev/null || true)
+if [ -z "$PIPEQ_MISS" ]; then
+  ok "structural guard control: an unreadable source yields no count, so the -r branch is required"
+else
+  bad "structural guard control: an unreadable source yields no count, so the -r branch is required" \
+      "expected an empty count for a missing file, got '$PIPEQ_MISS'"
+fi
+
+# Positive control for the structural guard. A detector that matches nothing
+# would pass identically on a file full of the defect, so prove it FIRES on a
+# known-bad line — and that it catches the reversed flag order (`-Eq`), which
+# is the spelling the first sweep of this fix missed.
+PIPEQ_CTL=$(printf '%s\n%s\n' \
+              "$(_pq 'if printf "%s" "$X"' 'qF needle; then :; fi')" \
+              "$(_pq 'if printf "%s" "$X"' 'Eq needle; then :; fi')" \
+            | grep -cE "$PIPEQ_RE" || true)
+if [ "$PIPEQ_CTL" -eq 2 ]; then
+  ok "structural guard control: detector fires on both -qF and -Eq spellings"
+else
+  bad "structural guard control: detector fires on both -qF and -Eq spellings" \
+      "control matched $PIPEQ_CTL of 2 known-bad lines"
+fi
+
+# Negative controls: the detector must NOT fire on the correct here-string form
+# (or it would flag every line this fix introduced), and must NOT fire on an
+# `||` fallback into a grep that reads a FILE — there is no writer to kill, so
+# that shape is safe and flagging it would push someone to "fix" working code.
+PIPEQ_NEG=$(printf '%s\n%s\n' \
+              'if grep -qF -- needle <<<"$X"; then :; fi' \
+              'if cached "$1" || grep -qF -- "$1" "$keepfile"; then :; fi' \
+            | grep -cE "$PIPEQ_RE" || true)
+if [ "$PIPEQ_NEG" -eq 0 ]; then
+  ok "structural guard control: detector stays silent on the correct here-string form"
+else
+  bad "structural guard control: detector stays silent on the correct here-string form" \
+      "the fixed form matched the forbidden-shape detector"
 fi
 
 echo
