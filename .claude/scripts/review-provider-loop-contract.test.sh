@@ -98,6 +98,25 @@ grep -Fq 'Missing or delayed pre-merge output never blocks promotion' "${constit
   fail "absent ancillary CodeRabbit output can still block a reviewed PR"
 grep -Fq 'fold it into `body_findings`' "${surveyor}" ||
   fail "an explicit CodeRabbit pre-merge problem is not preserved as a review finding"
+
+# The `CodeRabbit` commit status carries `state: success` for three different outcomes — a completed
+# review, a review that never ran because auto-review is disabled, and a rate-limited refusal
+# (monorepo#2676). Auto-review is disabled portfolio-wide, so the skipped form is the DEFAULT state
+# of every head: a green keyed on the state alone marks every never-reviewed PR as reviewed. These
+# guards keep the `description` discriminator, and the status's corroborator-not-satisfier role, in
+# all three overlays that describe the swept surfaces.
+assert_prose "${constitution}" 'Review skipped: automatic reviews are disabled' \
+  "constitution does not name the not-run CodeRabbit status description"
+assert_prose "${constitution}" 'the `description` is the only discriminator' \
+  "constitution does not make the status description the discriminator"
+assert_prose "${constitution}" 'required corroborator, never a satisfier' \
+  "the CodeRabbit commit status can satisfy the green-review gate on its own"
+assert_prose "${surveyor}" 'Review skipped: automatic reviews are disabled' \
+  "surveyor lost the not-run CodeRabbit status marker"
+assert_prose "${surveyor}" 'the `description` is the discriminator, never the state' \
+  "surveyor can read a skipped CodeRabbit review as a green"
+assert_prose "${maintenance_skill}" 'Review skipped: automatic reviews are disabled' \
+  "portfolio-maintenance is blind to the not-run CodeRabbit status"
 for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
   if grep -Fq 'premerge=' "${contract_file}"; then
     fail "standalone CodeRabbit pre-merge readiness state remains in ${contract_file}"
