@@ -99,9 +99,10 @@ grep -Fq 'Missing or delayed pre-merge output never blocks promotion' "${constit
 grep -Fq 'fold it into `body_findings`' "${surveyor}" ||
   fail "an explicit CodeRabbit pre-merge problem is not preserved as a review finding"
 
-# The `CodeRabbit` commit status carries `state: success` for three different outcomes — a completed
-# review, a review that never ran because auto-review is disabled, and a rate-limited refusal
-# (monorepo#2676). Auto-review is disabled portfolio-wide, so the skipped form is the DEFAULT state
+# With `reviews.fail_commit_status: false`, the `CodeRabbit` commit status carries `state: success`
+# for three different outcomes — a completed review, a review that never ran because auto-review is
+# disabled, and a rate-limited refusal (monorepo#2676). Auto-review is disabled portfolio-wide, so
+# the skipped form is the DEFAULT state
 # of every head: a green keyed on the state alone marks every never-reviewed PR as reviewed. These
 # guards keep the `description` discriminator, and the status's corroborator-not-satisfier role, in
 # all three overlays that describe the swept surfaces.
