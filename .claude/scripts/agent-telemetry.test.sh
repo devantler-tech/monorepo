@@ -5109,13 +5109,40 @@ check "control: needle at the TAIL is unaffected (grep must read all input)" \
 # the pipe. Continuation lines in this suite indent, so [^|] still matches.
 _pq() { printf '%s%s%s' "$1" ' | grep -' "$2"; }
 PIPEQ_RE="[^|]\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q"
-PIPEQ_SELF="${BASH_SOURCE[0]}"
-PIPEQ_HITS=$(grep -cE "$PIPEQ_RE" "$PIPEQ_SELF" || true)
-if [ "$PIPEQ_HITS" -eq 0 ]; then
-  ok "no pipeline into a quiet grep survives anywhere in this suite"
-else
+# Scan via SCRIPT_DIR, which line 8 already resolved to an ABSOLUTE path, rather
+# than the raw ${BASH_SOURCE[0]} — that is the INVOCATION path, and it is relative
+# whenever the suite is run as `bash .claude/scripts/agent-telemetry.test.sh`. If
+# anything ever changes the working directory before this point, grep cannot open
+# the file: it exits 2 printing nothing, `|| true` discards that status, and
+# PIPEQ_HITS becomes the EMPTY STRING. `[ "" -eq 0 ]` then errors with "integer
+# expression expected" and takes the else branch, reporting a defect COUNT THAT
+# WAS NEVER MEASURED. That direction is fail-closed, so it cannot wave a real
+# defect through — but "the guard could not run" and "the guard found N defects"
+# must not reach the reader as the same message.
+PIPEQ_SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+if [ ! -r "$PIPEQ_SELF" ]; then
   bad "no pipeline into a quiet grep survives anywhere in this suite" \
-      "$PIPEQ_HITS occurrence(s) — rewrite each as: grep -qF -- PATTERN <<<\"\$VAR\""
+      "the guard DID NOT RUN — suite source unreadable at '$PIPEQ_SELF'"
+else
+  PIPEQ_HITS=$(grep -cE "$PIPEQ_RE" "$PIPEQ_SELF" || true)
+  if [ "${PIPEQ_HITS:-0}" -eq 0 ]; then
+    ok "no pipeline into a quiet grep survives anywhere in this suite"
+  else
+    bad "no pipeline into a quiet grep survives anywhere in this suite" \
+        "$PIPEQ_HITS occurrence(s) — rewrite each as: grep -qF -- PATTERN <<<\"\$VAR\""
+  fi
+fi
+
+# Control for the readability branch: prove an unreadable source really does
+# yield an empty count, so the -r test above is load-bearing rather than
+# decoration. This is the exact path that produced a bare "integer expression
+# expected" before hardening.
+PIPEQ_MISS=$(grep -cE "$PIPEQ_RE" "$SCRIPT_DIR/definitely-not-a-file-2661" 2>/dev/null || true)
+if [ -z "$PIPEQ_MISS" ]; then
+  ok "structural guard control: an unreadable source yields no count, so the -r branch is required"
+else
+  bad "structural guard control: an unreadable source yields no count, so the -r branch is required" \
+      "expected an empty count for a missing file, got '$PIPEQ_MISS'"
 fi
 
 # Positive control for the structural guard. A detector that matches nothing
