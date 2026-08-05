@@ -117,6 +117,10 @@ assert_prose "${surveyor}" 'the `description` is the discriminator, never the st
   "surveyor can read a skipped CodeRabbit review as a green"
 assert_prose "${maintenance_skill}" 'Review skipped: automatic reviews are disabled' \
   "portfolio-maintenance is blind to the not-run CodeRabbit status"
+# The parity checklist gates deletion of the local surveyor overlay, so a deployment-hardened rule
+# absent from it is one the overlay removal drops silently.
+assert_prose "${parity_checklist}" 'CodeRabbit commit-status description discriminator' \
+  "removing the surveyor overlay would silently drop the status discriminator"
 for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
   if grep -Fq 'premerge=' "${contract_file}"; then
     fail "standalone CodeRabbit pre-merge readiness state remains in ${contract_file}"
