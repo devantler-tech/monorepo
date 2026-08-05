@@ -411,6 +411,74 @@ report "apply recorded the remote deletion sha and MERGED status" \
 # Silence unused-var lint for the open_sha we only needed for push tip creation.
 : "$open_sha" "$local_sha"
 
+# --- 13. the pre-delete worktree re-check must survive a realistic list -----
+# monorepo#2674. The local delete loop re-reads `git worktree list --porcelain`
+# immediately before `update-ref -d`, to catch a worktree that claimed the
+# branch AFTER the keep-set snapshot. That predicate was a pipeline ending in
+# `grep -Fxq`, and this script runs under `pipefail`: grep exits at the matching
+# line, the still-writing `printf` takes SIGPIPE (141), and pipefail reports 141
+# as the pipeline status — so a branch that IS checked out reads as checked out
+# NOWHERE and gets deleted, leaving that worktree on a dangling HEAD.
+#
+# It is a SIZE-dependent failure, which is why it survived review: the predicate
+# is correct for a one- or two-entry list and wrong from about five entries up.
+# A `git` shim on PATH returns the real enumeration for the keep-set snapshot
+# and a larger, later one for the re-check — exactly the race the re-check
+# exists to cover, and the only way to isolate it from the primary keep-set.
+wt_shim_dir="$tmp/wtshim"; mkdir -p "$wt_shim_dir"
+real_git=$(command -v git)
+cat >"$tmp/bin/git" <<SHIM
+#!/usr/bin/env bash
+if [ "\$1" = "worktree" ] && [ "\$2" = "list" ] && [ -n "\${WT_SHIM_STATE:-}" ]; then
+  n=\$(cat "\$WT_SHIM_STATE" 2>/dev/null || echo 0); echo \$((n+1)) >"\$WT_SHIM_STATE"
+  if [ "\$n" -ge 1 ] && [ -s "\${WT_SHIM_INJECT:-/nonexistent}" ]; then
+    cat "\$WT_SHIM_INJECT"; exit 0
+  fi
+fi
+exec "$real_git" "\$@"
+SHIM
+chmod +x "$tmp/bin/git"
+
+# A worktree list of realistic size. The target branch sits near the FRONT,
+# as a real match usually does — that is what leaves the writer with work to do.
+mk_wt_list() {   # $1 = branch to include ("" for none)
+  local target="$1" i
+  printf 'worktree %s\nHEAD %s\nbranch refs/heads/main\n\n' "$work" "$(git -C "$work" rev-parse main)"
+  [ -n "$target" ] && printf 'worktree %s/live\nHEAD %s\nbranch refs/heads/%s\n\n' "$tmp" "$(git -C "$work" rev-parse main)" "$target"
+  for i in $(seq 1 40); do
+    printf 'worktree %s/.claude/worktrees/sess-%s\nHEAD %s\nbranch refs/heads/claude/other-session-%s\n\n' \
+      "$work" "$i" "$(git -C "$work" rev-parse main)" "$i"
+  done
+}
+
+# ARM 1 — the guard: branch IS in the later list, so it must be KEPT.
+wt_sha=$(mk_remote_branch "claude/wt-reclaim-2674")
+git -C "$work" checkout main >/dev/null
+: >"$OPEN_HEADS_FILE"
+printf '%s\tMERGED\t%s\n' "claude/wt-reclaim-2674" "$wt_sha" >"$PR_EVIDENCE_FILE"
+export WT_SHIM_STATE="$wt_shim_dir/count" WT_SHIM_INJECT="$wt_shim_dir/list"
+: >"$WT_SHIM_STATE"; mk_wt_list "claude/wt-reclaim-2674" >"$WT_SHIM_INJECT"
+manifest="$tmp/manifest-2674a"; : >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
+report "worktree re-check keeps a branch claimed after the snapshot (#2674)" \
+  "$($real_git -C "$work" rev-parse --verify --quiet "refs/heads/claude/wt-reclaim-2674" >/dev/null && echo yes || echo no)" \
+  "rc=$rc out=$out"
+
+# ARM 2 — control: same shim, same size, branch ABSENT from the later list, so
+# the branch SHOULD be deleted. Without this, a harness that never deletes
+# anything would pass arm 1 vacuously.
+ctl_sha=$(mk_remote_branch "claude/wt-control-2674")
+git -C "$work" checkout main >/dev/null
+printf '%s\tMERGED\t%s\n' "claude/wt-control-2674" "$ctl_sha" >"$PR_EVIDENCE_FILE"
+: >"$WT_SHIM_STATE"; mk_wt_list "" >"$WT_SHIM_INJECT"
+manifest="$tmp/manifest-2674b"; : >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
+report "control: an unclaimed branch is still deleted at the same list size (#2674)" \
+  "$($real_git -C "$work" rev-parse --verify --quiet "refs/heads/claude/wt-control-2674" >/dev/null && echo no || echo yes)" \
+  "rc=$rc out=$out"
+unset WT_SHIM_STATE WT_SHIM_INJECT
+rm -f "$tmp/bin/git"
+
 if [[ "$fail" -ne 0 ]]; then
   echo "branch-cleanup contract: FAILED"
   exit 1

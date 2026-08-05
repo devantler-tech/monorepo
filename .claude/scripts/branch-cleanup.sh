@@ -367,7 +367,15 @@ if [ "$DO_LOCAL" -eq 1 ]; then
         echo "$SLUG: keep '$b' — worktree enumeration failed; refusing to delete (fail-closed)" >&2
         l_keep=$((l_keep+1)); errors=$((errors+1)); continue
       fi
-      if printf '%s\n' "$wt_list" | grep -Fxq "branch refs/heads/$b"; then
+      # Feed grep directly instead of through a pipe. This script runs under
+      # `pipefail`, and `grep -Fxq` exits at the first match — so with a pipe the
+      # still-writing `printf` takes SIGPIPE (141) and pipefail reports THAT as
+      # the pipeline status, turning "is checked out" into "is checked out
+      # nowhere" and deleting the branch this very check exists to protect.
+      # Size-dependent, hence easy to miss: correct up to ~2 worktree entries,
+      # wrong from ~5 up. Do NOT "simplify" this back into a pipeline, and do
+      # not fix such a case by dropping pipefail (monorepo#2674).
+      if grep -Fxq "branch refs/heads/$b" <<<"$wt_list"; then
         echo "$SLUG: keep '$b' — checked out by a worktree since the snapshot" >&2
         l_keep=$((l_keep+1)); continue
       fi
