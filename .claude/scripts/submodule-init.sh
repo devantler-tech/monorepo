@@ -155,7 +155,7 @@ repair() {
   [ -n "$super_mdir" ] ||
     die "cannot resolve the superproject's gitdir — refusing to repair '$path' rather than skip the parent-escape check"
   if same_dir "$mdir" "$super_mdir"; then
-    die "'$path' resolves to the SUPERPROJECT's gitdir ('$mdir'), not its own — refusing to repair, because that would redirect the parent repository's checkout at '$path'. Populate the submodule first: git submodule update --init '$path'"
+    die "'$path' resolves to the SUPERPROJECT's gitdir ('$mdir'), not its own — refusing to repair, because that would redirect the parent repository's checkout at '$path'. The directory has content but no usable '.git', so nothing here is a real submodule checkout: remove its stray contents, then re-run 'submodule-init.sh $path' to populate it at the pinned commit"
   fi
 
   git config -f "$mdir/config" extensions.worktreeConfig true
