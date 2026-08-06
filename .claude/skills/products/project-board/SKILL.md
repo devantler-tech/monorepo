@@ -23,10 +23,39 @@ product it is working on. This card is the place where the board itself gets *im
 
 Run these as a survey pass; each has a known-good answer.
 
-⚠️ **Paginate, or every check lies.** `gh project item-list` **defaults to `--limit 30`** and the board
-carries **thousands** of items, so an unbounded pass samples the first page and cheerfully reports
-100% clean while drift sits at item 31. Always pass an explicit high limit (or page the GraphQL
-`items(first:100, after:…)` connection to exhaustion) before trusting any number below.
+🔴 **Do NOT check the board by enumerating it — an explicit high limit does NOT make enumeration
+safe.** `gh project item-list` defaults to `--limit 30`, but raising the limit only moves the cut:
+measured 2026-08-06, `--limit 3000` returned **exactly 3000** items against a true
+`projectV2{items{totalCount}}` of **4988**, with **no truncation signal** — no warning, no error,
+exit 0. ~40% of the board was silently absent, so every check below would have reported clean while
+the drift sat past the cut. Returning exactly the limit is the *only* tell, and it is one the caller
+has to look for.
+
+⚠️ **Enumeration also costs the whole hourly GraphQL budget, which every lane shares.** That same
+pass left `graphql: {limit:5000, remaining:73}`. The budget is attached to the **user**, so
+`claude/*`, `codex/*` and `cursor/*` all draw on it — and the surveyor's paginated `reviewThreads`
+queries are what the hygiene pentad's unresolved-thread count depends on. A starved pentad reads as
+*clean*, which is a **fail-open on the promotion gate**. Never spend the shared budget on a board
+sweep to answer a question a per-issue query answers for ~1 point.
+
+**So: ask per issue, not per board.** For coverage and membership, query the issue's own side —
+`repository(owner:…, name:…){issue(number:N){projectItems(first:20){nodes{project{number}}}}}` —
+which is cheap and distinguishes "on no project" from "on project 5" (negative control: `platform#1`
+→ `[]`, verified non-vacuous).
+
+**If a check genuinely needs the whole board**, pair the enumeration with a mandatory truncation
+guard and treat a trip as a hard failure, never a result:
+
+```sh
+total=$(gh api graphql -f query='{organization(login:"devantler-tech"){projectV2(number:5){items{totalCount}}}}' \
+  --jq '.data.organization.projectV2.items.totalCount')
+n=$(gh project item-list 5 --owner devantler-tech --format json --limit "$LIMIT" | jq '.items | length')
+[ "$n" -eq "$LIMIT" ] && { echo "TRUNCATED at limit ($n); refusing"; exit 1; }
+[ "$n" -lt "$total" ]  && { echo "INCOMPLETE: $n of $total; refusing";  exit 1; }
+```
+
+Never suppress stderr on these calls: a rate-limited `gh` prints `API rate limit exceeded` and exits
+non-zero, and a `2>/dev/null` turns that into an empty result indistinguishable from a clean board.
 
 | Check | Query | Healthy |
 |---|---|---|
