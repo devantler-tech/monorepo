@@ -287,6 +287,25 @@ emit_injection_hits() {
       done
 }
 
+# Stream of redacted, lowercased phrases -> one "<digest>~<display>" key per
+# line. The phrase list identifies a phrase by digest AND bounded display, so
+# the class join must use the same identity: two matches differing only in
+# characters the display filter strips (`add "bot" ...` vs `add bot ...`) or
+# only beyond the 80-character bound share a display but not a digest. Keyed on
+# display alone their counts merge, and the merged split then prints on BOTH
+# phrase-list lines, where it can belong to the other digest or exceed its own
+# line's total. `~` is safe as the field separator because the display filter
+# admits only [a-z0-9 ._:/@+-].
+phrase_class_keys() {
+  local ph
+  while IFS= read -r ph || [ -n "$ph" ]; do
+    [ -n "$ph" ] || continue
+    printf '%s~%s\n' \
+      "$(printf '%s' "$ph" | sha256_digest)" \
+      "$(printf '%s' "$ph" | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)"
+  done
+}
+
 # Emit one safe class row per occurrence without suppressing anything from the
 # fail-closed raw total. Runtime-supplied developer context is structurally
 # distinguishable from user/tool content, but a compacted record can contain
@@ -351,7 +370,7 @@ emit_injection_classes() {
         # separator because the filter above admits only [a-z0-9 ._:/@+-].
         printf '%s' "$raw" | grep -hoiE "$INJ_PHRASE_RE" \
           | redact | tr '[:upper:]' '[:lower:]' \
-          | sed -E 's|[^a-z0-9 ._:/@+-]||g' | cut -c1-80 \
+          | phrase_class_keys \
           | awk -v S="$session" -v L="$line" -v RT="$runtime_phrases" '
               BEGIN {
                 n = split(RT, a, "|")
@@ -361,10 +380,21 @@ emit_injection_classes() {
               # runtime string the raw detector did not also match can never
               # invent an occurrence, and any surplus falls through to
               # other-content. That replaces the old numeric sanity guard.
+              # The runtime multiset is keyed on DISPLAY, not on the digest,
+              # because the two sides live in different escaping spaces: the raw
+              # transcript line is JSON-escaped while jq hands back the decoded
+              # text, so their digests can never agree. The display filter
+              # strips backslashes and quotes alike, which makes it the only
+              # representation both sides share. The DIGEST is still emitted,
+              # because the report join needs it to keep two colliding displays
+              # apart.
               {
-                if (rt[$0] > 0) { rt[$0]--; c = "runtime-developer" }
+                p = index($0, "~")
+                digest = substr($0, 1, p - 1)
+                disp = substr($0, p + 1)
+                if (rt[disp] > 0) { rt[disp]--; c = "runtime-developer" }
                 else { c = "other-content" }
-                print S "\t" L "\t" c "\t" $0
+                print S "\t" L "\t" c "\t" digest "\t" disp
               }'
       done
 }
@@ -2745,15 +2775,19 @@ if want safety; then
     sort "$INJTMP" | uniq -c | sort -rn | head -6 \
       | awk -F '\t' '
           FILENAME != "-" {
-            if ($4 != "") {
-              if ($3 == "runtime-developer") rtc[$4]++; else occ[$4]++
+            if ($5 != "") {
+              k = $4 "~" $5
+              if ($3 == "runtime-developer") rtc[k]++; else occ[k]++
             }
             next
           }
           {
             prefix=$1; sub(/^[[:space:]]*/, "", prefix); split(prefix, parts, /[[:space:]]+/)
             disp = substr($2,1,80)
-            printf "    %7d %s   (%d runtime / %d other)\n", parts[1], disp, rtc[disp]+0, occ[disp]+0
+            # parts[1] is the count uniq prepended; parts[2] is the digest. Key
+            # on digest+display so two colliding displays keep separate splits.
+            k = parts[2] "~" disp
+            printf "    %7d %s   (%d runtime / %d other)\n", parts[1], disp, rtc[k]+0, occ[k]+0
           }
         ' "$CONCTMP" -
     : > "$CONCTMP"

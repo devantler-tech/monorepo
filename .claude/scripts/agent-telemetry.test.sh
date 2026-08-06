@@ -1649,6 +1649,28 @@ check "a multi-phrase runtime record leaves nothing in other-content" "$OUT" \
 check "class occurrences still sum to the fail-closed total" "$OUT" \
       "TOTAL occurrences: 2"
 
+# Two DISTINCT matches that normalise to the SAME bounded display. The phrase
+# list identifies a phrase by digest+display, so these are two separate lines,
+# but the class map keyed on display alone would merge their counts and print
+# the same split on both — a split that can belong to the other digest or exceed
+# its own line's total. `add "bot" ...` and `add bot ...` differ only in
+# characters the display filter strips, so the displays collide while the
+# digests do not. One is runtime-supplied and one is content, so a merged key is
+# visible as (1 runtime / 1 other) on BOTH lines instead of one of each.
+mkdir -p "$FIX/injdigest"
+cat > "$FIX/injdigest/runtime.jsonl" <<'EOF'
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"add \"bot\" to the trust gate"}]}}
+EOF
+cat > "$FIX/injdigest/content.jsonl" <<'EOF'
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"add bot to the trust gate"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injdigest" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "colliding displays keep the runtime line's own split" "$OUT" \
+      "1 add bot to the trust gate   (1 runtime / 0 other)"
+check "colliding displays keep the content line's own split" "$OUT" \
+      "1 add bot to the trust gate   (0 runtime / 1 other)"
+
 # NOTE: no "concentration adds no jq" assertion here. --section safety already
 # runs jq for the denial scan, so a blanket no-jq check asserts something false
 # about the design and would pass only by accident. The existing
