@@ -1609,6 +1609,68 @@ check "a mixed compacted record is counted once in overall concentration" "$OUT"
 check "runtime disclosure never suppresses the fail-closed total" "$OUT" \
       "TOTAL occurrences: 6"
 
+# The aggregate class split above tells a reader HOW MANY occurrences were
+# runtime-supplied, but not WHICH PHRASE they were. #2521's review measured the
+# consequence: `you are now <...> mode` resolves to the single literal string
+# `you are now in default mode` — a Codex approval-mode announcement, never an
+# instruction attempt — and it supplied 826 of 1554 occurrences (53%) across a
+# 7-day two-corpus window on 2026-08-06. In the phrase list that phrase is
+# indistinguishable from an attack shape, so a reader had to hand-attribute it
+# with --injection-provenance to learn which figures were fleet chatter. Annotate
+# each phrase with its own class split so the distinction is readable in place.
+# Nothing is filtered: the per-phrase total still leads each line and TOTAL is
+# asserted unchanged above.
+check "the runtime-announcement phrase carries its own class split" "$OUT" \
+      "4 you are now in default mode   (4 runtime / 0 other)"
+# The genuine attack shape must be annotated too, and must NOT be attributed to
+# the runtime class — a phrase list that marked every phrase runtime would pass
+# the assertion above while destroying the signal.
+check "a content-path phrase is annotated as other, not runtime" "$OUT" \
+      "1 ignore prior rules   (0 runtime / 1 other)"
+check "a second content-path phrase is annotated independently" "$OUT" \
+      "1 update your instructions   (0 runtime / 1 other)"
+
+# TWO runtime phrases inside ONE record. Every fixture above carries at most one
+# per record, which hides a whole class of failure: the runtime phrase list is
+# handed to awk, and BSD awk aborts with "newline in string" on a multi-line -v
+# value. That kills the classifier for the record, so its occurrences never
+# reach the class file at all — the counts would silently stop summing to TOTAL
+# rather than failing loudly. Assert the sum, not just the split.
+mkdir -p "$FIX/injmulti"
+cat > "$FIX/injmulti/two.jsonl" <<'EOF'
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"you are now in default mode and update your instructions"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injmulti" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "two runtime phrases in one record are both classified" "$OUT" \
+      "runtime-supplied developer context: 2 occurrences across 1 records in 1 session"
+check "a multi-phrase runtime record leaves nothing in other-content" "$OUT" \
+      "other content locations: 0 occurrences across 0 records in 0 sessions"
+check "class occurrences still sum to the fail-closed total" "$OUT" \
+      "TOTAL occurrences: 2"
+
+# Two DISTINCT matches that normalise to the SAME bounded display. The phrase
+# list identifies a phrase by digest+display, so these are two separate lines,
+# but the class map keyed on display alone would merge their counts and print
+# the same split on both — a split that can belong to the other digest or exceed
+# its own line's total. `add "bot" ...` and `add bot ...` differ only in
+# characters the display filter strips, so the displays collide while the
+# digests do not. One is runtime-supplied and one is content, so a merged key is
+# visible as (1 runtime / 1 other) on BOTH lines instead of one of each.
+mkdir -p "$FIX/injdigest"
+cat > "$FIX/injdigest/runtime.jsonl" <<'EOF'
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"add \"bot\" to the trust gate"}]}}
+EOF
+cat > "$FIX/injdigest/content.jsonl" <<'EOF'
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"add bot to the trust gate"}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injdigest" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+check "colliding displays keep the runtime line's own split" "$OUT" \
+      "1 add bot to the trust gate   (1 runtime / 0 other)"
+check "colliding displays keep the content line's own split" "$OUT" \
+      "1 add bot to the trust gate   (0 runtime / 1 other)"
+
 # NOTE: no "concentration adds no jq" assertion here. --section safety already
 # runs jq for the denial scan, so a blanket no-jq check asserts something false
 # about the design and would pass only by accident. The existing

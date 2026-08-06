@@ -287,13 +287,32 @@ emit_injection_hits() {
       done
 }
 
+# Stream of redacted, lowercased phrases -> one "<digest>~<display>" key per
+# line. The phrase list identifies a phrase by digest AND bounded display, so
+# the class join must use the same identity: two matches differing only in
+# characters the display filter strips (`add "bot" ...` vs `add bot ...`) or
+# only beyond the 80-character bound share a display but not a digest. Keyed on
+# display alone their counts merge, and the merged split then prints on BOTH
+# phrase-list lines, where it can belong to the other digest or exceed its own
+# line's total. `~` is safe as the field separator because the display filter
+# admits only [a-z0-9 ._:/@+-].
+phrase_class_keys() {
+  local ph
+  while IFS= read -r ph || [ -n "$ph" ]; do
+    [ -n "$ph" ] || continue
+    printf '%s~%s\n' \
+      "$(printf '%s' "$ph" | sha256_digest)" \
+      "$(printf '%s' "$ph" | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)"
+  done
+}
+
 # Emit one safe class row per occurrence without suppressing anything from the
 # fail-closed raw total. Runtime-supplied developer context is structurally
 # distinguishable from user/tool content, but a compacted record can contain
 # both. Classify the matched STRING path, never the whole record. If parsing or
 # reconciliation is uncertain, retain every raw occurrence as other content.
 emit_injection_classes() {
-  local f="$1" session line raw raw_count runtime_count other_count i
+  local f="$1" session line raw runtime_phrases
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
@@ -301,52 +320,82 @@ emit_injection_classes() {
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
-        raw_count=$(printf '%s' "$raw" | grep -hoiE "$INJ_PHRASE_RE" | wc -l | tr -d ' ')
-        runtime_count=$(printf '%s' "$raw" | jq -r --arg re "$INJ_PHRASE_RE" '
-          def match_count:
-            if type == "string" then [scan($re; "i")] | length else 0 end;
-          if
-            (.type == "response_item"
-             and .payload.type == "message"
-             and .payload.role == "developer")
-          then
-            ([.payload.content[]?.text | match_count] | add // 0)
-          elif
-            (.type == "turn_context")
-          then
-            (.payload.collaboration_mode.settings.developer_instructions | match_count)
-          elif
-            (.type == "event_msg" and .payload.type == "thread_settings_applied")
-          then
-            (.payload.thread_settings.collaboration_mode.settings.developer_instructions | match_count)
-          elif
-            (.type == "compacted")
-          then
-            ([
-              .payload.replacement_history[]?
-              | select(.type == "message" and .role == "developer")
-              | .content[]?.text
-              | match_count
-            ] | add // 0)
-          else
-            0
-          end
-        ' 2>/dev/null || true)
-        case "$runtime_count" in
-          ''|*[!0-9]*) runtime_count=0 ;;
-          *) [ "$runtime_count" -le "$raw_count" ] || runtime_count=0 ;;
-        esac
-        other_count=$((raw_count - runtime_count))
-        i=0
-        while [ "$i" -lt "$runtime_count" ]; do
-          printf '%s\t%s\truntime-developer\n' "$session" "$line"
-          i=$((i + 1))
-        done
-        i=0
-        while [ "$i" -lt "$other_count" ]; do
-          printf '%s\t%s\tother-content\n' "$session" "$line"
-          i=$((i + 1))
-        done
+        # Runtime-supplied developer context as STRINGS rather than a bare
+        # count, so every occurrence keeps the phrase it came from and the
+        # report can name WHICH phrase was fleet chatter. Any path this filter
+        # cannot reach — a shape we do not model, a malformed record, a jq
+        # failure — yields nothing here and stays fail-closed as other-content.
+        runtime_phrases=$(printf '%s' "$raw" | jq -r '
+          def runtime_text:
+            if
+              (.type == "response_item"
+               and .payload.type == "message"
+               and .payload.role == "developer")
+            then
+              [.payload.content[]?.text]
+            elif
+              (.type == "turn_context")
+            then
+              [.payload.collaboration_mode.settings.developer_instructions]
+            elif
+              (.type == "event_msg" and .payload.type == "thread_settings_applied")
+            then
+              [.payload.thread_settings.collaboration_mode.settings.developer_instructions]
+            elif
+              (.type == "compacted")
+            then
+              [
+                .payload.replacement_history[]?
+                | select(.type == "message" and .role == "developer")
+                | .content[]?.text
+              ]
+            else
+              []
+            end;
+          runtime_text | .[] | select(type == "string")
+        ' 2>/dev/null \
+          | grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null \
+          | redact | tr '[:upper:]' '[:lower:]' \
+          | sed -E 's|[^a-z0-9 ._:/@+-]||g' | cut -c1-80 \
+          | tr '\n' '|' || true)
+        # Normalisation MUST match the phrase list's own display derivation, or
+        # the per-phrase class annotation silently joins nothing.
+        #
+        # The runtime list reaches awk as a PIPE-separated single line, never as
+        # newline-separated text: BSD awk aborts a -v value containing a newline
+        # ("newline in string"), which would kill the classifier for exactly the
+        # records carrying MORE than one runtime phrase and drop their
+        # occurrences from the class file entirely — the counts would stop
+        # summing to TOTAL instead of failing loudly. `|` is safe as the
+        # separator because the filter above admits only [a-z0-9 ._:/@+-].
+        printf '%s' "$raw" | grep -hoiE "$INJ_PHRASE_RE" \
+          | redact | tr '[:upper:]' '[:lower:]' \
+          | phrase_class_keys \
+          | awk -v S="$session" -v L="$line" -v RT="$runtime_phrases" '
+              BEGIN {
+                n = split(RT, a, "|")
+                for (i = 1; i <= n; i++) if (a[i] != "") rt[a[i]]++
+              }
+              # Multiset consumption caps runtime at the raw match count: a
+              # runtime string the raw detector did not also match can never
+              # invent an occurrence, and any surplus falls through to
+              # other-content. That replaces the old numeric sanity guard.
+              # The runtime multiset is keyed on DISPLAY, not on the digest,
+              # because the two sides live in different escaping spaces: the raw
+              # transcript line is JSON-escaped while jq hands back the decoded
+              # text, so their digests can never agree. The display filter
+              # strips backslashes and quotes alike, which makes it the only
+              # representation both sides share. The DIGEST is still emitted,
+              # because the report join needs it to keep two colliding displays
+              # apart.
+              {
+                p = index($0, "~")
+                digest = substr($0, 1, p - 1)
+                disp = substr($0, p + 1)
+                if (rt[disp] > 0) { rt[disp]--; c = "runtime-developer" }
+                else { c = "other-content" }
+                print S "\t" L "\t" c "\t" digest "\t" disp
+              }'
       done
 }
 
@@ -2705,11 +2754,43 @@ if want safety; then
     echo "       records MAY be echo — a previous report re-counted by the NEXT run —"
     echo "       but flat record/session counts do NOT rule out a new hit: a real"
     echo "       attempt can share an existing record. Read both; classify neither.)"
-    : > "$CONCTMP"
+    # Per-phrase class split, derived BEFORE the scratch file is cleared. The
+    # aggregate lines above say how many occurrences were fleet chatter but not
+    # WHICH phrase they were, so a runtime status announcement and a genuine
+    # attack shape read identically in the list below. #2521 measured the cost:
+    # `you are now <...> mode` resolves to the single literal string
+    # `you are now in default mode` — a Codex approval-mode announcement — and
+    # supplied 826 of 1554 occurrences (53%) over a 7-day two-corpus window on
+    # 2026-08-06, yet identifying it required hand-attribution with
+    # --injection-provenance. Annotation only ADDS the split; the per-phrase
+    # total still leads each line and TOTAL occurrences stays fail-closed.
     # Group on the fixed-width digest plus bounded display. If display
     # truncation happens before identity is derived, distinct matches collapse.
+    # The class map is read as a FILE, never passed with `awk -v`: BSD awk
+    # rejects a newline inside a -v value ("newline in string"), which silently
+    # killed the whole phrase list on macOS. The `FILENAME != "-"` guard —
+    # rather than the usual NR==FNR — is load-bearing for the same reason a
+    # negative control exists: when the class file is EMPTY, NR==FNR is still
+    # true for the first phrase line and would eat it.
     sort "$INJTMP" | uniq -c | sort -rn | head -6 \
-      | awk -F '\t' '{prefix=$1; sub(/^[[:space:]]*/, "", prefix); split(prefix, parts, /[[:space:]]+/); printf "    %7d %s\n", parts[1], substr($2,1,80)}'
+      | awk -F '\t' '
+          FILENAME != "-" {
+            if ($5 != "") {
+              k = $4 "~" $5
+              if ($3 == "runtime-developer") rtc[k]++; else occ[k]++
+            }
+            next
+          }
+          {
+            prefix=$1; sub(/^[[:space:]]*/, "", prefix); split(prefix, parts, /[[:space:]]+/)
+            disp = substr($2,1,80)
+            # parts[1] is the count uniq prepended; parts[2] is the digest. Key
+            # on digest+display so two colliding displays keep separate splits.
+            k = parts[2] "~" disp
+            printf "    %7d %s   (%d runtime / %d other)\n", parts[1], disp, rtc[k]+0, occ[k]+0
+          }
+        ' "$CONCTMP" -
+    : > "$CONCTMP"
     if [ "$INJECTION_PROVENANCE" -eq 1 ]; then
       printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
         emit_injection_hits "$f"
