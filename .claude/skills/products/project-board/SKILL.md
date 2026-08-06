@@ -50,9 +50,15 @@ guard and treat a trip as a hard failure, never a result:
 total=$(gh api graphql -f query='{organization(login:"devantler-tech"){projectV2(number:5){items{totalCount}}}}' \
   --jq '.data.organization.projectV2.items.totalCount')
 n=$(gh project item-list 5 --owner devantler-tech --format json --limit "$LIMIT" | jq '.items | length')
-[ "$n" -eq "$LIMIT" ] && { echo "TRUNCATED at limit ($n); refusing"; exit 1; }
-[ "$n" -lt "$total" ]  && { echo "INCOMPLETE: $n of $total; refusing";  exit 1; }
+if [ "$n" -eq "$LIMIT" ]; then echo "TRUNCATED at limit ($n); refusing" >&2; exit 1; fi
+if [ "$n" -lt "$total" ];  then echo "INCOMPLETE: $n of $total; refusing" >&2; exit 1; fi
 ```
+
+(Written as `if`, not `cond && { …; exit 1; }`. Measured: the `&&` form is safe mid-script — `set -e`
+exempts a non-final component of an AND-OR list — but on the **healthy** path it evaluates to **1**,
+so as the last command of a script or function it returns a spurious failure and takes a `set -e`
+caller down with it. `if` has no such edge. Set `LIMIT` above `totalCount`; the equality arm is what
+catches the silent cut.)
 
 Never suppress stderr on these calls: a rate-limited `gh` prints `API rate limit exceeded` and exits
 non-zero, and a `2>/dev/null` turns that into an empty result indistinguishable from a clean board.
