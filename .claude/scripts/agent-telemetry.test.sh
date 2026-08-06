@@ -766,6 +766,74 @@ if grep -q 'redacted' < <(grep 'boom' <<<"$ROUT"); then
 else bad "mid-blob token is still redacted on output" "$(printf '%s' "$ROUT" | grep 'boom' | head -1)"; fi
 nocheck "mid-blob raw token never appears" "$ROUT" "$(ex __GHPE__)"
 
+# ── 6d³. blob-embedded LABEL requires base64-run evidence (#2522) ─────────────
+# The boundary anchor above rejects a token whose preceding char is in
+# [A-Za-z0-9_-]. It cannot reject one whose boundary char is `+`, `/` or `=` —
+# those ARE outside the anchor class and are also base64 characters, so a token
+# shape occurring by chance inside an encoded blob is counted as a real
+# credential. Measured 2026-07-25: 35 of 113 GitHub-token-shaped matches were
+# chance substrings inside Codex `encrypted_content` blobs.
+#
+# #2520 tried to key that on the boundary CHARACTER alone. Only `+`/`/` CAN
+# match mid-blob, but that does not make `/` MEAN mid-blob — a JWT in a URL
+# path segment takes `/` as its boundary too, so the label would have downgraded
+# a genuinely exposed credential. The evidence required is therefore a
+# surrounding base64 RUN, never the boundary char.
+#
+# The label NEVER suppresses: the row keeps its shape and its count, so a
+# mislabelled row is still triaged. Ambiguity fails closed to the plain row.
+echo
+echo "blob-embedded label (base64-run evidence, #2522)"
+
+# (1) Token inside a real base64 run → labelled.
+mkdir -p "$FIX/blobrun"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=QUJDREVGR0hJSktMTU5PUFFS/__GHPE__zz"}]}}\n' > "$FIX/blobrun/s.jsonl"
+subst "$FIX/blobrun/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobrun" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  ok "a token inside a base64 run is labelled blob-embedded"
+else bad "a token inside a base64 run is labelled blob-embedded" "$TABLE"; fi
+# NOTHING SUPPRESSED: the shape and its count survive the label.
+if grep -qE '^[[:space:]]+1 github-token' <<<"$TABLE"; then
+  ok "the blob-embedded row keeps its shape and count (no suppression)"
+else bad "the blob-embedded row keeps its shape and count (no suppression)" "$TABLE"; fi
+
+# (2) THE COUNTEREXAMPLE that closed #2520: a JWT as a URL path segment takes
+# `/` as its boundary char, but `test/session` is 12 run chars — under the
+# threshold — so it must stay a plain high-signal row.
+mkdir -p "$FIX/urljwt"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"GET https://example.test/session/__JWT__ HTTP/1.1"}]}}\n' > "$FIX/urljwt/s.jsonl"
+subst "$FIX/urljwt/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/urljwt" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'jwt-like' <<<"$TABLE"; then
+  ok "a JWT in a URL path is still reported"
+else bad "a JWT in a URL path is still reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a JWT in a URL path is NOT downgraded to blob-embedded" "$TABLE"
+else ok "a JWT in a URL path is NOT downgraded to blob-embedded"; fi
+
+# (3) A complete image payload is excluded from the table upstream, so it must
+# not manufacture a blob-embedded row either — the label is derived from the
+# SAME filtered input as the table, not from a second unfiltered scan.
+mkdir -p "$FIX/blobimg/projects" "$FIX/blobimg/codex/sessions"
+cat > "$FIX/blobimg/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFS/__AWS__BBBB"}]}}
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimg/codex/sessions/s.jsonl" && rm -f "$FIX/blobimg/codex/sessions/s.jsonl.bak"
+subst "$FIX/blobimg/codex/sessions/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimg/projects" CODEX_HOME="$FIX/blobimg/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "an excluded image payload produces no blob-embedded row" "$TABLE"
+else ok "an excluded image payload produces no blob-embedded row"; fi
+
 # An ASSIGNMENT-wrapped token (`GITHUB_TOKEN=ghp_…`) is the most common real
 # leak form, and grep's leftmost-match rule hands the whole string to the
 # generic alternative — so the classifier must look INSIDE the value or the
