@@ -147,8 +147,14 @@ repair() {
   # place by a different route, so test the RESOLVED gitdir rather than the presence of a `.git` entry
   # (an existence check is subsumed by this one and provably never fires on its own). Fail closed: the
   # blast radius is the parent repo and every session sharing it (monorepo#2694).
-  super_mdir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-  if [ -n "$super_mdir" ] && same_dir "$mdir" "$super_mdir"; then
+  # No `|| true` and no silent fallback: `same_dir` fails closed on an empty path, which here would
+  # SKIP the guard rather than trip it, so a failed probe must stop the run instead of quietly
+  # disabling the check. `errexit` covers a non-zero rev-parse; the emptiness test covers a
+  # zero-exit-no-output result.
+  super_mdir=$(git rev-parse --path-format=absolute --git-common-dir)
+  [ -n "$super_mdir" ] ||
+    die "cannot resolve the superproject's gitdir — refusing to repair '$path' rather than skip the parent-escape check"
+  if same_dir "$mdir" "$super_mdir"; then
     die "'$path' resolves to the SUPERPROJECT's gitdir ('$mdir'), not its own — refusing to repair, because that would redirect the parent repository's checkout at '$path'. Populate the submodule first: git submodule update --init '$path'"
   fi
 
