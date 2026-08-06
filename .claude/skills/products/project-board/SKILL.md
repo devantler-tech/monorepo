@@ -48,8 +48,14 @@ guard and treat a trip as a hard failure, never a result:
 
 ```sh
 total=$(gh api graphql -f query='{organization(login:"devantler-tech"){projectV2(number:5){items{totalCount}}}}' \
-  --jq '.data.organization.projectV2.items.totalCount')
-n=$(gh project item-list 5 --owner devantler-tech --format json --limit "$LIMIT" | jq '.items | length')
+  --jq '.data.organization.projectV2.items.totalCount') \
+  || { echo "totalCount query failed; refusing" >&2; exit 1; }
+items=$(gh project item-list 5 --owner devantler-tech --format json --limit "$LIMIT") \
+  || { echo "item-list failed; refusing" >&2; exit 1; }
+n=$(printf '%s' "$items" | jq '.items | length')
+for v in "$n" "$total"; do
+  case "$v" in ''|*[!0-9]*) echo "non-numeric count [$v]; refusing" >&2; exit 1 ;; esac
+done
 if [ "$n" -eq "$LIMIT" ]; then echo "TRUNCATED at limit ($n); refusing" >&2; exit 1; fi
 if [ "$n" -lt "$total" ];  then echo "INCOMPLETE: $n of $total; refusing" >&2; exit 1; fi
 ```
@@ -59,6 +65,16 @@ exempts a non-final component of an AND-OR list — but on the **healthy** path 
 so as the last command of a script or function it returns a spurious failure and takes a `set -e`
 caller down with it. `if` has no such edge. Set `LIMIT` above `totalCount`; the equality arm is what
 catches the silent cut.)
+
+🔴 **Each `gh` call is checked on its own line, and both counts are asserted numeric, because
+otherwise this guard fails OPEN — the exact direction it exists to prevent.** Measured: with `gh`
+returning non-zero, the old one-line pipeline left `n` empty; `[ "" -eq "$LIMIT" ]` and
+`[ "" -lt "$total" ]` then both exit **2** with `integer expression expected`, and a `[` failure
+*inside an `if` condition* is exempt from `set -e` — so both arms evaluated false, the script reached
+its success path, and it **exited 0 having counted nothing**. A rate limit therefore read as a clean
+board. `set -o pipefail` alone would not have saved it either: the pipeline masks `gh`'s status behind
+`jq`'s. Verified in all three states — `gh` failing ⇒ exit 1, a genuine truncation (`n == LIMIT`) ⇒
+exit 1, and a healthy full read ⇒ exit 0, so the guard is not vacuous.
 
 Never suppress stderr on these calls: a rate-limited `gh` prints `API rate limit exceeded` and exits
 non-zero, and a `2>/dev/null` turns that into an empty result indistinguishable from a clean board.
