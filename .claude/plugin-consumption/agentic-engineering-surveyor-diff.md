@@ -56,6 +56,12 @@ plugin carries them (or an explicit, tested subset):
    is the default state of every head: the status corroborates run-completion only when its
    `description` begins `Review completed`, and never satisfies the gate on its own. Without this a
    state-only check reports every never-reviewed PR as green.
+4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713) — a review object
+   counts only when its body begins `**Actionable comments posted:`; an empty object is a reply
+   container, never a review, whatever its `commit_id`. Measured over the 60 most recently merged
+   monorepo PRs: 16 of 19 objects at a merged head were empty, and two PRs merged with no substantive
+   review at the merged commit. Without this a bare `commit_id == head` match reports a non-review as
+   a green.
 5. **Sequential review coordination state** — authenticated single-phase request marker posted with
    the trigger (the two-phase reservation was retired on measurement 2026-07-25), pending request,
    monotonic artifact-backed or evidenced-expiry no-gate progression,

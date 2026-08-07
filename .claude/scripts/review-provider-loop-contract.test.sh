@@ -146,6 +146,10 @@ assert_prose "${constitution}" 'an empty object is a reply container, never a re
 # drifting apart again in the direction that caused this defect.
 assert_prose "${surveyor}" 'Actionable comments posted:' \
   "surveyor lost the positive identification of a CodeRabbit review object"
+# The parity checklist gates deletion of the local surveyor overlay, so a rule absent from it is one
+# the overlay removal drops silently — the same guard pattern as 4c above.
+assert_prose "${parity_checklist}" 'CodeRabbit review-object positive identification' \
+  "removing the surveyor overlay would silently drop the review-object identification"
 if grep -Fq 'pre-merge summary parsing' "${parity_checklist}"; then
   fail "plugin-parity checklist can reintroduce the removed pre-merge gate"
 fi
