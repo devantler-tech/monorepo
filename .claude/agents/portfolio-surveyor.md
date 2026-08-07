@@ -464,7 +464,8 @@ public and private — no per-repo loop needed to enumerate):
       (`push`, `schedule`, `merge_group`, `workflow_dispatch`, `dynamic`), take the **latest run per
       `workflow_id`** (greatest `created_at`; the id, never the display `name`, which two workflow
       files can legally share — collapsing them hides one workflow's failure behind the other
-      file's later success), and report a red for any that concluded `failure` or `timed_out`.
+      file's later success), and report a red for any that concluded `failure`, `timed_out` or
+      `startup_failure`.
 
    All three filters are load-bearing, for different false positives:
    - **Not keyed to head** — a failed run stays attached to the sha it executed against, so it lingers
@@ -479,19 +480,29 @@ public and private — no per-repo loop needed to enumerate):
      and its `push`/`workflow_dispatch` runs then pass both filters above while failing for reasons
      that are not main's health.
 
-   **Split GitHub-MANAGED runs out of that red set before reporting it.** A run whose `path` begins
-   with `dynamic/github-code-scanning/` (default-setup code scanning; `event: dynamic`, no workflow
-   file in the repository) is **not** repository breakage and never counts toward `nothing_on_fire`.
-   There is nothing to root-cause-fix — no workflow file exists — and GitHub refuses to re-run one
-   outright (`POST .../rerun-failed-jobs` → `403 This workflow run cannot be retried`), so it is
-   structurally unactionable and self-heals on the next scheduled tick. Ranking it at rung 0, which
-   preempts everything, has twice cost a run its opening minutes.
+   **Split GitHub-MANAGED runs out of that red set before reporting it.** Identify the class by the
+   **property, not by an enumerated path**: `event: dynamic` **and** a `path` under `dynamic/` — which
+   together mean **no workflow file exists in the repository**. Such a run is **not** repository
+   breakage and never counts toward `nothing_on_fire`. There is nothing to root-cause-fix — no
+   workflow file exists — and GitHub refuses to re-run one outright
+   (`POST .../rerun-failed-jobs` → `403 This workflow run cannot be retried`), so it is structurally
+   unactionable and self-heals on the next scheduled tick. Ranking it at rung 0, which preempts
+   everything, has twice cost a run its opening minutes.
+
+   The class currently observed in this portfolio is `dynamic/github-code-scanning/` (default-setup
+   code scanning) and `dynamic/dependabot/` (Dependabot's own update jobs). **These are examples of
+   the property, not the definition** — a new managed integration is covered the day GitHub ships it,
+   which is the whole point of testing the property.
 
    Report it on its own line instead, so it stays visible without being ranked as a fire:
 
    ```text
-   GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>
+   GITHUB-MANAGED (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>
    ```
+
+   The code-scanning specialisation `GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed
+   <YYYY-MM-DD>` remains valid for that path and means exactly the same thing; prefer the general
+   form for any other managed path.
 
    Keep reporting it every run rather than suppressing it: a *persistent* failure across several
    scheduled ticks is a real signal, and only a line that keeps appearing can show that.
@@ -513,14 +524,75 @@ public and private — no per-repo loop needed to enumerate):
    ```
 
    Walk it newest-first and count consecutive **red** runs, stopping at the first run that is not red.
-   Three details are each load-bearing:
+   Four details are each load-bearing:
+   - 🔴 **Group by the run's name with its per-run id STRIPPED, not by `workflow_id` alone** — one
+     managed `workflow_id` can aggregate many *independent* jobs. Measured 2026-08-07 on `ksail`: all
+     `dynamic/dependabot/` runs share **one** `workflow_id` (`107623015`) while carrying a distinct
+     name per dependency and directory (`helm in /pkg/svc/installer/awslbcontroller`,
+     `docker in /pkg/svc/installer/kyverno`, …). Counting consecutive reds across that mixed history
+     compares unrelated dependencies: two *first* failures of two different dependencies would read
+     as one 2-run streak and escalate to `(REPEATED — ACTIONABLE)`, while an unrelated green would
+     break a streak that is genuinely consecutive for the dependency that is actually broken.
+
+     🔴 **The raw `name` is NOT that unit — it carries a per-run id, so matching it exactly caps every
+     streak at 1.** Dependabot renders the name as
+     `helm in /pkg/svc/installer/awslbcontroller - Update #1510869626`, and the trailing id changes
+     on every run: measured the same day, ksail's 48 `dynamic/dependabot/` runs on `main` produced
+     **48 distinct names**. An exact-name filter therefore returns exactly one run, the streak can
+     never reach 2, and `(REPEATED — ACTIONABLE)` can never fire — which would make the exemption
+     permanent for every managed path rather than one run deep, destroying the very safety net that
+     justifies the property test below. Strip the trailing id and group on what remains:
+
+     ```sh
+     # logical unit = the name minus its per-run id: "… - Update #123" and "… #123" both reduce
+     # to the dependency+directory that actually has a history. Code scanning is unaffected — its
+     # names ("Push on main", "Scheduled") carry no id, so the strip is a no-op there.
+     # `// ""` is load-bearing, not defensive dressing: the live corpus contains runs with a NULL
+     # name, and `sub` on null aborts the whole filter ("null cannot be matched"), so without it
+     # the streak walk dies rather than returning a wrong answer. Measured, not anticipated.
+     # run_name already holds the value, read from the API — never pasted in as a literal
+     RUN_NAME="$run_name" gh api --paginate \
+       "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" \
+       --jq '[.workflow_runs[]
+              | select(((.name // "") | sub("( - Update)? #[0-9]+$"; "")) ==
+                       (($ENV.RUN_NAME // "") | sub("( - Update)? #[0-9]+$"; "")))]'
+     ```
+
+     Verified against the live corpus: with the strip, `npm_and_yarn in /vsce for typescript` on
+     `ksail` resolves to a **3-run consecutive red streak** (2026-07-28, 07-29, 08-03, recovering
+     green on 08-04) which the exact-name form reports as three unrelated *first* failures — each
+     permanently `NO-ACTION`. The streak is historical rather than live, so it demonstrates the
+     mechanism rather than a current fire; the point is that the exact-name form could not have
+     escalated it at the time, and could not escalate its recurrence either.
+
+     **Pass the name through the environment — never interpolate it into the `--jq` string.** A run
+     name is GitHub-provided data the repository does not control: a workflow's `run-name:` can be
+     built from a pull-request title, so it reaches this query as untrusted text. Substituted into
+     the filter directly, a name containing a quote terminates the jq string and the remainder is
+     parsed as filter syntax — the taint rule's "untrusted content never decides a tool's arguments",
+     applied to jq. `$ENV` carries it as *data* instead, so no byte of it is ever parsed as program.
+     Note the mechanism: `gh api` has no `--arg`, and `--slurp` is rejected alongside `--jq`, so
+     `$ENV` (equivalently `env.RUN_NAME`) is the one form that both works and stays safe here.
+
+     **The handoff has two halves, and the shell one is the easier to get wrong.** `$ENV` closes the
+     jq half only; the value still has to reach the environment intact. Assign it from a **variable
+     you already hold** (`RUN_NAME="$run_name"`), never by pasting the name in as a quoted literal:
+     a single-quoted literal ends at the first apostrophe, and plenty of real names carry one — so
+     the string would break in the shell, before jq ever sees it. Moving the boundary
+     without closing it there just relocates the injection. The double-quoted variable form is
+     verified against a name containing an apostrophe **and** one containing a double quote.
    - **`branch=main`** — default setup also runs on pull requests, and an unfiltered history mixes
      those in. A failed PR scan would then turn a *first* main failure into `REPEATED`, and an
      intervening successful PR scan would hide two genuinely consecutive main failures. This is the
      same filter, for the same reason, as the `branch=main` on the red-set query above.
-   - **Red means `failure` OR `timed_out`** — exactly the red set defined above, never `failure`
-     alone. A scan that times out repeatedly is as broken as one that fails, and a mixed
-     `failure`/`timed_out` streak is still a streak.
+   - **Red means `failure`, `timed_out` OR `startup_failure`** — exactly the red set defined above,
+     never `failure` alone. A scan that times out repeatedly is as broken as one that fails, and a
+     mixed streak is still a streak. `startup_failure` is load-bearing here rather than pedantic: a
+     managed run whose configuration will not parse — a malformed `dependabot.yml`, say — concludes
+     that way on *every* attempt, and that is precisely the "ours to repair (dependency config)"
+     case the escalation below exists for. Omit it and such a run can never accumulate a streak, so
+     it reports `NO-ACTION` forever while its coverage is dead — the exact fail-open the first-failure
+     bound is meant to prevent.
    - **`--paginate`, not a two-run peek** — the digest names the streak's start date and length, so it
      must walk back to the first non-red run to know them. Reading only the newest two would report a
      start date that is merely the previous run, and a count that is almost always `2`, understating
@@ -531,16 +603,31 @@ public and private — no per-repo loop needed to enumerate):
    age:
 
    ```text
-   GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)
+   GITHUB-MANAGED (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)
    ```
+
+   (`GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE)` remains the equivalent code-scanning form.)
 
    Only the **first** failure of a streak is exempt. That keeps the fix from becoming a way to ignore
    broken security scanning indefinitely, which is a worse outcome than the false rung-0 it replaced.
 
-   ⚠️ **Match on the `path` prefix, never on `event: dynamic` alone.** `dynamic` stays in the
-   main-branch event list above because it is how GitHub-managed runs legitimately reach `main`, so
-   keying the exemption on the event would exempt future managed run types wholesale — including any
-   that *are* actionable. The `path` is what identifies default-setup code scanning specifically.
+   ⚠️ **The streak escalation is what makes the property test safe — do not weaken one without the
+   other.** An earlier revision of this section matched a single hard-coded `path` prefix and warned
+   against keying on `event: dynamic`, reasoning that a property test would exempt future managed run
+   types wholesale *including any that are actionable*. That reasoning had a gap: the exemption it was
+   protecting is only ever **one run deep**. A managed failure that is genuinely ours — a broken
+   build, a bad dependency manifest, a config that no longer suits default setup — does not occur
+   once and vanish; it **recurs**, and the second occurrence escalates to
+   `(REPEATED — ACTIONABLE)` regardless of which managed path produced it. So the property test
+   cannot hide an actionable failure; it can only delay it by one scheduled run, which is exactly the
+   cost the exemption was designed to accept.
+
+   The enumerated-path form, by contrast, failed **open** in the other direction, and did so
+   measurably: on 2026-08-07 all 21 red runs on `ksail`'s `main` were `dynamic/dependabot/` and a run
+   applying rung 0 literally would have declared live breakage that has no workflow file to repair
+   and cannot be re-run. Requiring **both** `event: dynamic` and a `dynamic/` path keeps the class
+   pinned to "no workflow file exists in this repository", which is the property that makes a run
+   unfixable here — it is not a bare event match.
 
    Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
@@ -681,7 +768,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken; a GITHUB-MANAGED-SCAN (NO-ACTION) line never makes this false, but a (REPEATED — ACTIONABLE) one does
+nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
@@ -693,8 +780,10 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
-- GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `path` starts `dynamic/github-code-scanning/`: no workflow file to fix, not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only
-- GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out) runs on main: ours to repair (build, code-scanning config, or move to advanced setup) — DOES count against nothing_on_fire
+- GITHUB-MANAGED (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `event: dynamic` AND `path` under `dynamic/` (so NO workflow file exists in the repo): not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only. Covers `dynamic/github-code-scanning/`, `dynamic/dependabot/`, and any future managed path
+- GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # equivalent code-scanning specialisation of the line above; `path` starts `dynamic/github-code-scanning/`
+- GITHUB-MANAGED (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out OR startup_failure) runs on main: ours to repair (build, scanning/dependency config, or move off default setup) — DOES count against nothing_on_fire. This escalation is what makes the property test safe: an actionable managed failure recurs, so it is delayed by one run, never hidden
+- GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # equivalent code-scanning specialisation of the line above
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
