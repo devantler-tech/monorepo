@@ -916,8 +916,29 @@ CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([A-Z0-9
 # without the label and #2522 specified run evidence instead.
 #
 # So: at least CRED_BLOB_RUN_MIN base64 characters, then a base64 boundary char,
-# then the token. `https://example.test/session/eyJ…` yields a run of
-# `test/session` (12) — under the threshold — and stays a plain high-signal row.
+# then the token.
+#
+# 🔴 THE RUN MUST BE UNBROKEN BY `/`, OR AN ORDINARY REST PATH CLEARS IT. `/` was
+# once in the run class, which made the run's LENGTH the only test — and a URL
+# path reaches any length simply by being nested. `test/session` is 12 and
+# passed, but `test/api/v1/sessions` is 20, so the very same JWT was downgraded
+# to "probably encoding noise" purely for sitting one path segment deeper. Both
+# shapes occur constantly in transcripts, and the second is the more common one.
+# Length alone therefore never distinguished a blob from a path; it only looked
+# like it did, because the single fixture chosen happened to sit under the bar.
+#
+# What actually separates them is how the run is BROKEN UP. Base64 emits `/`
+# about once every 64 characters, so a genuine blob carries long slash-free
+# stretches, while a URL path is short segments between slashes. Requiring
+# CRED_BLOB_RUN_MIN base64 characters with no `/` among them keeps the blob
+# evidence and drops the path. `/` remains a valid BOUNDARY char — it is how a
+# blob's own slash introduces the chance substring — it is just no longer
+# something the run may be made of.
+#
+# The residual error is in the SAFE direction, deliberately: a blob whose final
+# slash-free stretch happens to be shorter than the threshold stays a plain
+# high-signal row, costing one extra triage, where the opposite error buries a
+# live credential.
 #
 # 🔴 THE BOUNDARY CLASS EXCLUDES `=`, THOUGH `=` IS A BASE64 CHARACTER. `=` is
 # also the assignment operator, and `<16+ alnum key>=<token>` — the most common
@@ -930,14 +951,17 @@ CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([A-Z0-9
 # row, costing one extra triage, where the alternative buries a live credential.
 # `=` stays in the RUN class, because padding legitimately appears inside a blob.
 CRED_BLOB_RUN_MIN=16
-CRED_BLOB_TABLE_RE='[A-Za-z0-9+/=]{'"$CRED_BLOB_RUN_MIN"',}[+/]'"$CRED_PREFIX_SHAPES_RE"
+CRED_BLOB_TABLE_RE='[A-Za-z0-9+=]{'"$CRED_BLOB_RUN_MIN"',}[+/]'"$CRED_PREFIX_SHAPES_RE"
 # Strips the run and its boundary char so a blob leg value normalises to the
 # SAME string the table leg produces (whose single boundary char is removed by
 # the shared `s/^[^A-Za-z0-9_-]//` step). If these two ever diverge the label
 # lands on the wrong row, so both legs share one normaliser — see
-# cred_normalise(). Its boundary class must therefore stay byte-for-byte equal
-# to CRED_BLOB_TABLE_RE's, `=` exclusion included.
-CRED_BLOB_STRIP_RE='^[A-Za-z0-9+/=]{'"$CRED_BLOB_RUN_MIN"',}[+/]'
+# cred_normalise(). Its RUN and BOUNDARY classes must therefore stay
+# byte-for-byte equal to CRED_BLOB_TABLE_RE's — the run's `/` exclusion and the
+# boundary's `=` exclusion alike. Tightening the label test alone would leave a
+# no-longer-blob match still carrying its run into the value, which corrupts the
+# credential's identity and is worse than the mislabel it set out to fix.
+CRED_BLOB_STRIP_RE='^[A-Za-z0-9+=]{'"$CRED_BLOB_RUN_MIN"',}[+/]'
 # Partition test for an already-extracted match. It must require the SHAPES
 # after the boundary, not merely a long run: a generic assignment with a long
 # key (`myverylongsecretname=value…`) is 20 run chars then a boundary, so a

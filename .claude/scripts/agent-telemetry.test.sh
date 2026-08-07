@@ -836,6 +836,72 @@ if grep -q 'blob-embedded' <<<"$TABLE"; then
   bad "a token assigned to a long alphanumeric key is NOT downgraded to blob-embedded" "$TABLE"
 else ok "a token assigned to a long alphanumeric key is NOT downgraded to blob-embedded"; fi
 
+# (2c) 🔴 (2) PASSES ONLY BECAUSE ITS PATH IS SHORT, so it never actually tested
+# the threshold. `test/session` is 12 run chars against a minimum of 16 — one
+# value that happens to sit under the bar, with nothing at or past it. An
+# ordinary REST path clears the bar easily, because `/` was itself in the RUN
+# class: `test/api/v1/sessions` is 20, so the very same JWT is downgraded to
+# "probably encoding noise" purely for being one path segment deeper. Both
+# fixtures below are real-shaped URLs, and both must stay plain high-signal.
+#
+# The discriminator is the UNBROKEN run, not its total length: base64 emits `/`
+# roughly once per 64 characters, so a genuine blob has long slash-free
+# stretches, while a URL path is short segments separated by slashes. Excluding
+# `/` from the run class separates them and fails in the SAFE direction — a blob
+# whose last slash-free stretch happens to be short costs one extra triage,
+# where the alternative buries a live credential.
+mkdir -p "$FIX/urljwtdeep"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"GET https://example.test/api/v1/sessions/__JWT__ HTTP/1.1"}]}}\n' > "$FIX/urljwtdeep/s.jsonl"
+subst "$FIX/urljwtdeep/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/urljwtdeep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'jwt-like' <<<"$TABLE"; then
+  ok "a JWT in a DEEP URL path is still reported"
+else bad "a JWT in a DEEP URL path is still reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a JWT in a DEEP URL path is NOT downgraded to blob-embedded" "$TABLE"
+else ok "a JWT in a DEEP URL path is NOT downgraded to blob-embedded"; fi
+
+# The same defect reaches a github-token, which is the higher-severity half: a
+# token pasted in an API URL is a live credential in a transcript.
+mkdir -p "$FIX/urltokdeep"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"GET https://api.example.test/v2/organizations/tokens/__GHPE__ HTTP/1.1"}]}}\n' > "$FIX/urltokdeep/s.jsonl"
+subst "$FIX/urltokdeep/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/urltokdeep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$TABLE"; then
+  ok "a token in a DEEP URL path is still reported"
+else bad "a token in a DEEP URL path is still reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a token in a DEEP URL path is NOT downgraded to blob-embedded" "$TABLE"
+else ok "a token in a DEEP URL path is NOT downgraded to blob-embedded"; fi
+
+# (2d) PARITY INVARIANT between the label test and the strip.
+#
+# Stated honestly: reverting the strip's run class ALONE breaks no behavioural
+# assertion above, and I verified that by ablation rather than assuming it. It
+# cannot, because the strip only ever sees matches the label test already
+# accepted, and those carry no `/` in their run — so on reachable input the two
+# classes are equivalent. That makes the strip's class unobservable by example,
+# and an unobservable invariant is exactly the kind that silently rots: loosen
+# the label test later without touching the strip and a no-longer-blob match
+# keeps its run inside the credential's value, corrupting its identity.
+#
+# So bind it structurally instead of behaviourally — assert the two classes are
+# byte-identical, which is what the comments on both constants already require.
+BLOB_TABLE_CLASS=$(grep -o "CRED_BLOB_TABLE_RE='\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*='//")
+BLOB_STRIP_CLASS=$(grep -o "CRED_BLOB_STRIP_RE='\^\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*='\^//")
+if [ -n "$BLOB_TABLE_CLASS" ] && [ -n "$BLOB_STRIP_CLASS" ]; then
+  ok "parity control: both blob run classes were located"
+else bad "parity control: both blob run classes were located" \
+  "table='$BLOB_TABLE_CLASS' strip='$BLOB_STRIP_CLASS'"; fi
+if [ "$BLOB_TABLE_CLASS" = "$BLOB_STRIP_CLASS" ]; then
+  ok "the blob label and strip share one run class (byte-identical)"
+else bad "the blob label and strip share one run class (byte-identical)" \
+  "label=$BLOB_TABLE_CLASS strip=$BLOB_STRIP_CLASS"; fi
+
 # (3) A complete image payload is excluded from the table upstream, so it must
 # not manufacture a blob-embedded row either — the label is derived from the
 # SAME filtered input as the table, not from a second unfiltered scan.
