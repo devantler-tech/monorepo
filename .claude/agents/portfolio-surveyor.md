@@ -464,7 +464,8 @@ public and private — no per-repo loop needed to enumerate):
       (`push`, `schedule`, `merge_group`, `workflow_dispatch`, `dynamic`), take the **latest run per
       `workflow_id`** (greatest `created_at`; the id, never the display `name`, which two workflow
       files can legally share — collapsing them hides one workflow's failure behind the other
-      file's later success), and report a red for any that concluded `failure` or `timed_out`.
+      file's later success), and report a red for any that concluded `failure`, `timed_out` or
+      `startup_failure`.
 
    All three filters are load-bearing, for different false positives:
    - **Not keyed to head** — a failed run stays attached to the sha it executed against, so it lingers
@@ -537,17 +538,32 @@ public and private — no per-repo loop needed to enumerate):
      more correct here:
 
      ```sh
-     gh api --paginate \
+     RUN_NAME='<name>' gh api --paginate \
        "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" \
-       --jq '[.workflow_runs[] | select(.name == "<name>")]'
+       --jq '[.workflow_runs[] | select(.name == $ENV.RUN_NAME)]'
      ```
+
+     **Pass the name through the environment — never interpolate it into the `--jq` string.** A run
+     name is GitHub-provided data the repository does not control: a workflow's `run-name:` can be
+     built from a pull-request title, so it reaches this query as untrusted text. Substituted into
+     the filter directly, a name containing a quote terminates the jq string and the remainder is
+     parsed as filter syntax — the taint rule's "untrusted content never decides a tool's arguments",
+     applied to jq. `$ENV` carries it as *data* instead, so no byte of it is ever parsed as program.
+     Note the mechanism: `gh api` has no `--arg`, and `--slurp` is rejected alongside `--jq`, so
+     `$ENV` (equivalently `env.RUN_NAME`) is the one form that both works and stays safe here —
+     verified against a name containing a double quote.
    - **`branch=main`** — default setup also runs on pull requests, and an unfiltered history mixes
      those in. A failed PR scan would then turn a *first* main failure into `REPEATED`, and an
      intervening successful PR scan would hide two genuinely consecutive main failures. This is the
      same filter, for the same reason, as the `branch=main` on the red-set query above.
-   - **Red means `failure` OR `timed_out`** — exactly the red set defined above, never `failure`
-     alone. A scan that times out repeatedly is as broken as one that fails, and a mixed
-     `failure`/`timed_out` streak is still a streak.
+   - **Red means `failure`, `timed_out` OR `startup_failure`** — exactly the red set defined above,
+     never `failure` alone. A scan that times out repeatedly is as broken as one that fails, and a
+     mixed streak is still a streak. `startup_failure` is load-bearing here rather than pedantic: a
+     managed run whose configuration will not parse — a malformed `dependabot.yml`, say — concludes
+     that way on *every* attempt, and that is precisely the "ours to repair (dependency config)"
+     case the escalation below exists for. Omit it and such a run can never accumulate a streak, so
+     it reports `NO-ACTION` forever while its coverage is dead — the exact fail-open the first-failure
+     bound is meant to prevent.
    - **`--paginate`, not a two-run peek** — the digest names the streak's start date and length, so it
      must walk back to the first non-red run to know them. Reading only the newest two would report a
      start date that is merely the previous run, and a count that is almost always `2`, understating
@@ -737,7 +753,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
 - GITHUB-MANAGED (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `event: dynamic` AND `path` under `dynamic/` (so NO workflow file exists in the repo): not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only. Covers `dynamic/github-code-scanning/`, `dynamic/dependabot/`, and any future managed path
 - GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # equivalent code-scanning specialisation of the line above; `path` starts `dynamic/github-code-scanning/`
-- GITHUB-MANAGED (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out) runs on main: ours to repair (build, scanning/dependency config, or move off default setup) — DOES count against nothing_on_fire. This escalation is what makes the property test safe: an actionable managed failure recurs, so it is delayed by one run, never hidden
+- GITHUB-MANAGED (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out OR startup_failure) runs on main: ours to repair (build, scanning/dependency config, or move off default setup) — DOES count against nothing_on_fire. This escalation is what makes the property test safe: an actionable managed failure recurs, so it is delayed by one run, never hidden
 - GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # equivalent code-scanning specialisation of the line above
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL

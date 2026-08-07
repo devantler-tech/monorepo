@@ -1264,8 +1264,15 @@ grep -Fq 'escalation is what makes the property test safe' "${surveyor}" ||
 grep -Fq 'not by `workflow_id` alone' "${surveyor}" ||
   fail "surveyor's streak walk must group by run name, not workflow_id alone (#2704)"
 
-grep -Fq 'select(.name == "<name>")' "${surveyor}" ||
+grep -Fq 'select(.name == $ENV.RUN_NAME)' "${surveyor}" ||
   fail "surveyor's streak-walk query must filter to the run's own name (#2704)"
+
+# A run name is untrusted: a workflow's run-name: can be built from a pull-request title, so a name
+# carrying a quote would terminate an interpolated jq string and the rest would parse as filter
+# syntax. $ENV passes it as data. Pin the absence of the interpolated form too — fixing the query
+# while leaving the old shape documented elsewhere would keep the injectable recipe in circulation.
+grep -Fq 'select(.name == "<name>")' "${surveyor}" &&
+  fail "surveyor must not interpolate an untrusted run name into the --jq filter (#2704)"
 
 # AGENTS.md must carry the same property test, or the two surfaces disagree about what preempts a run.
 grep -Fq 'dynamic/dependabot/' "${constitution}" ||
@@ -1273,6 +1280,26 @@ grep -Fq 'dynamic/dependabot/' "${constitution}" ||
 
 grep -Fq 'never by an enumerated path' "${constitution}" ||
   fail "AGENTS.md rung-0 must state the managed carve-out as a property test, not a path list (#2704)"
+
+# Both halves of the property, not just the paths it currently covers: an edit that dropped either
+# condition would leave the greps above green while the carve-out silently stopped being a property.
+grep -Fq 'event: dynamic' "${constitution}" ||
+  fail "AGENTS.md must require the dynamic event for managed runs (#2704)"
+
+grep -Fq 'path` under `dynamic/`' "${constitution}" ||
+  fail "AGENTS.md must require a dynamic/ path for managed runs (#2704)"
+
+# RED SET — the streak predicate must match telemetry's, which counts startup_failure as red. A
+# managed run whose config will not parse concludes startup_failure on every attempt, so omitting it
+# means such a run can never accumulate a streak and reports NO-ACTION forever with coverage dead.
+grep -Fq 'failure`, `timed_out` OR `startup_failure`' "${surveyor}" ||
+  fail "surveyor's managed streak must treat startup_failure as red, as telemetry does (#2704)"
+
+grep -Fq 'failure OR timed_out OR startup_failure' "${surveyor}" ||
+  fail "surveyor's REPEATED escalation must treat startup_failure as red (#2704)"
+
+grep -Fq 'timed_out` or `startup_failure`) on the next run of `main`' "${constitution}" ||
+  fail "AGENTS.md rung-0 must treat startup_failure as red for managed runs (#2704)"
 
 # ESCALATION — the exemption covers only the FIRST failure of a streak. A scan still failing on the
 # next scheduled run is ours to repair (build, code-scanning config, or advanced setup), and must not
@@ -1311,7 +1338,7 @@ grep -Fq 'Only the first failure of a streak' "${constitution}" ||
 
 # The streak walk must use the same red set and the same branch filter as the red-set query, or it
 # misclassifies timeout streaks and lets pull-request scans pollute the history.
-grep -Fq 'Red means `failure` OR `timed_out`' "${surveyor}" ||
+grep -Fq 'Red means `failure`, `timed_out` OR `startup_failure`' "${surveyor}" ||
   fail "surveyor's streak walk must treat timed_out as red, matching the red set (#2536)"
 
 grep -Fq 'runs?branch=main&per_page=100' "${surveyor}" ||
