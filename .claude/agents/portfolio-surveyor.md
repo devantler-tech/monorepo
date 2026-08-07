@@ -479,19 +479,29 @@ public and private — no per-repo loop needed to enumerate):
      and its `push`/`workflow_dispatch` runs then pass both filters above while failing for reasons
      that are not main's health.
 
-   **Split GitHub-MANAGED runs out of that red set before reporting it.** A run whose `path` begins
-   with `dynamic/github-code-scanning/` (default-setup code scanning; `event: dynamic`, no workflow
-   file in the repository) is **not** repository breakage and never counts toward `nothing_on_fire`.
-   There is nothing to root-cause-fix — no workflow file exists — and GitHub refuses to re-run one
-   outright (`POST .../rerun-failed-jobs` → `403 This workflow run cannot be retried`), so it is
-   structurally unactionable and self-heals on the next scheduled tick. Ranking it at rung 0, which
-   preempts everything, has twice cost a run its opening minutes.
+   **Split GitHub-MANAGED runs out of that red set before reporting it.** Identify the class by the
+   **property, not by an enumerated path**: `event: dynamic` **and** a `path` under `dynamic/` — which
+   together mean **no workflow file exists in the repository**. Such a run is **not** repository
+   breakage and never counts toward `nothing_on_fire`. There is nothing to root-cause-fix — no
+   workflow file exists — and GitHub refuses to re-run one outright
+   (`POST .../rerun-failed-jobs` → `403 This workflow run cannot be retried`), so it is structurally
+   unactionable and self-heals on the next scheduled tick. Ranking it at rung 0, which preempts
+   everything, has twice cost a run its opening minutes.
+
+   The class currently observed in this portfolio is `dynamic/github-code-scanning/` (default-setup
+   code scanning) and `dynamic/dependabot/` (Dependabot's own update jobs). **These are examples of
+   the property, not the definition** — a new managed integration is covered the day GitHub ships it,
+   which is the whole point of testing the property.
 
    Report it on its own line instead, so it stays visible without being ranked as a fire:
 
    ```text
-   GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>
+   GITHUB-MANAGED (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>
    ```
+
+   The code-scanning specialisation `GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed
+   <YYYY-MM-DD>` remains valid for that path and means exactly the same thing; prefer the general
+   form for any other managed path.
 
    Keep reporting it every run rather than suppressing it: a *persistent* failure across several
    scheduled ticks is a real signal, and only a line that keeps appearing can show that.
@@ -531,16 +541,31 @@ public and private — no per-repo loop needed to enumerate):
    age:
 
    ```text
-   GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)
+   GITHUB-MANAGED (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)
    ```
+
+   (`GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE)` remains the equivalent code-scanning form.)
 
    Only the **first** failure of a streak is exempt. That keeps the fix from becoming a way to ignore
    broken security scanning indefinitely, which is a worse outcome than the false rung-0 it replaced.
 
-   ⚠️ **Match on the `path` prefix, never on `event: dynamic` alone.** `dynamic` stays in the
-   main-branch event list above because it is how GitHub-managed runs legitimately reach `main`, so
-   keying the exemption on the event would exempt future managed run types wholesale — including any
-   that *are* actionable. The `path` is what identifies default-setup code scanning specifically.
+   ⚠️ **The streak escalation is what makes the property test safe — do not weaken one without the
+   other.** An earlier revision of this section matched a single hard-coded `path` prefix and warned
+   against keying on `event: dynamic`, reasoning that a property test would exempt future managed run
+   types wholesale *including any that are actionable*. That reasoning had a gap: the exemption it was
+   protecting is only ever **one run deep**. A managed failure that is genuinely ours — a broken
+   build, a bad dependency manifest, a config that no longer suits default setup — does not occur
+   once and vanish; it **recurs**, and the second occurrence escalates to
+   `(REPEATED — ACTIONABLE)` regardless of which managed path produced it. So the property test
+   cannot hide an actionable failure; it can only delay it by one scheduled run, which is exactly the
+   cost the exemption was designed to accept.
+
+   The enumerated-path form, by contrast, failed **open** in the other direction, and did so
+   measurably: on 2026-08-07 all 21 red runs on `ksail`'s `main` were `dynamic/dependabot/` and a run
+   applying rung 0 literally would have declared live breakage that has no workflow file to repair
+   and cannot be re-run. Requiring **both** `event: dynamic` and a `dynamic/` path keeps the class
+   pinned to "no workflow file exists in this repository", which is the property that makes a run
+   unfixable here — it is not a bare event match.
 
    Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
@@ -681,7 +706,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken; a GITHUB-MANAGED-SCAN (NO-ACTION) line never makes this false, but a (REPEATED — ACTIONABLE) one does
+nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
@@ -693,8 +718,10 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
-- GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `path` starts `dynamic/github-code-scanning/`: no workflow file to fix, not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only
-- GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out) runs on main: ours to repair (build, code-scanning config, or move to advanced setup) — DOES count against nothing_on_fire
+- GITHUB-MANAGED (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `event: dynamic` AND `path` under `dynamic/` (so NO workflow file exists in the repo): not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only. Covers `dynamic/github-code-scanning/`, `dynamic/dependabot/`, and any future managed path
+- GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # equivalent code-scanning specialisation of the line above; `path` starts `dynamic/github-code-scanning/`
+- GITHUB-MANAGED (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out) runs on main: ours to repair (build, scanning/dependency config, or move off default setup) — DOES count against nothing_on_fire. This escalation is what makes the property test safe: an actionable managed failure recurs, so it is delayed by one run, never hidden
+- GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # equivalent code-scanning specialisation of the line above
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL

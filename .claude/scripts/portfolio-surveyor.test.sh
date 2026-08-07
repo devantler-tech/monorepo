@@ -1224,8 +1224,43 @@ grep -Fq 'dynamic/github-code-scanning/' "${surveyor}" ||
 grep -Fq 'GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed' "${surveyor}" ||
   fail "surveyor must define the GITHUB-MANAGED-SCAN (NO-ACTION) digest line (#2536)"
 
-grep -Fq 'a GITHUB-MANAGED-SCAN (NO-ACTION) line never makes this false' "${surveyor}" ||
-  fail "surveyor must state that a one-off GitHub-managed scan never sets nothing_on_fire: false (#2536)"
+grep -Fq 'a GITHUB-MANAGED (NO-ACTION) line never makes this false' "${surveyor}" ||
+  fail "surveyor must state that a one-off GitHub-managed run never sets nothing_on_fire: false (#2536)"
+
+# --- The carve-out is a PROPERTY test, not a path allow-list (#2704) ----------
+#
+# Keying the class on one enumerated path failed OPEN for every other managed path: measured
+# 2026-08-07, all 21 red runs on ksail's main were `dynamic/dependabot/`, which the single-path form
+# did not cover, so a run applying rung 0 literally would have declared a fire with no workflow file
+# to repair and no way to re-run it.
+
+grep -Fq 'dynamic/dependabot/' "${surveyor}" ||
+  fail "surveyor must cover Dependabot's managed update runs, not only code scanning (#2704)"
+
+grep -Fq 'GITHUB-MANAGED (NO-ACTION) <repo> <workflow> @<sha> failed' "${surveyor}" ||
+  fail "surveyor must define the general GITHUB-MANAGED (NO-ACTION) digest line (#2704)"
+
+grep -Fq 'GITHUB-MANAGED (REPEATED — ACTIONABLE)' "${surveyor}" ||
+  fail "surveyor must define the general GITHUB-MANAGED (REPEATED — ACTIONABLE) digest line (#2704)"
+
+# The property must require BOTH conditions. `event: dynamic` alone is not the test — the property
+# that makes a run unfixable here is that no workflow file exists in the repository, and the
+# surveyor must say so rather than matching a bare event.
+grep -Fq 'no workflow file exists in the repository' "${surveyor}" ||
+  fail "surveyor must define the managed class by 'no workflow file exists in the repository', not a bare event match (#2704)"
+
+# The streak escalation is the SAFETY NET that makes broadening the class safe. If a future edit
+# broadened the exemption without it, an actionable managed failure could hide indefinitely — so the
+# surveyor must state the coupling explicitly, not merely happen to contain both rules.
+grep -Fq 'escalation is what makes the property test safe' "${surveyor}" ||
+  fail "surveyor must state that the streak escalation is what bounds the broadened property test (#2704)"
+
+# AGENTS.md must carry the same property test, or the two surfaces disagree about what preempts a run.
+grep -Fq 'dynamic/dependabot/' "${constitution}" ||
+  fail "AGENTS.md rung-0 must cover Dependabot's managed runs, not only code scanning (#2704)"
+
+grep -Fq 'never by an enumerated path' "${constitution}" ||
+  fail "AGENTS.md rung-0 must state the managed carve-out as a property test, not a path list (#2704)"
 
 # ESCALATION — the exemption covers only the FIRST failure of a streak. A scan still failing on the
 # next scheduled run is ours to repair (build, code-scanning config, or advanced setup), and must not
@@ -1270,10 +1305,18 @@ grep -Fq 'Red means `failure` OR `timed_out`' "${surveyor}" ||
 grep -Fq 'runs?branch=main&per_page=100' "${surveyor}" ||
   fail "surveyor's streak walk must filter to main, or a PR-triggered managed run pollutes it (#2536)"
 
-# The exemption must key on the run PATH, not on `event: dynamic`, or it would exempt every future
-# GitHub-managed run type — including actionable ones. `dynamic` stays a main-branch event.
-grep -Fq 'never on `event: dynamic` alone' "${surveyor}" ||
-  fail "surveyor must key the GitHub-managed exemption on the run path, not the dynamic event (#2536)"
+# The exemption must never rest on `event: dynamic` ALONE — `dynamic` stays a legitimate main-branch
+# event, so a bare event match would exempt any future managed run type wholesale. #2704 broadened the
+# class from one hard-coded path to a property, and this guard is what keeps that property honest: it
+# requires BOTH the dynamic event and a `dynamic/` path, i.e. "no workflow file exists in the
+# repository". The original #2536 wording ('never on `event: dynamic` alone') stated the same
+# constraint; the assertion now pins the constraint itself rather than that one phrasing, so a
+# rewording cannot drop the protection and a bare-event match still fails.
+grep -Fq 'it is not a bare event match' "${surveyor}" ||
+  fail "surveyor must not key the GitHub-managed exemption on 'event: dynamic' alone (#2536, #2704)"
+
+grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor}" ||
+  fail "surveyor must require BOTH the dynamic event and a dynamic/ path for the managed carve-out (#2536, #2704)"
 
 grep -Fq '`workflow_dispatch`, `dynamic`' "${surveyor}" ||
   fail "surveyor must keep 'dynamic' in the main-branch event list — the exemption is by path (#2536)"
