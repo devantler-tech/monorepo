@@ -816,6 +816,26 @@ if grep -q 'blob-embedded' <<<"$TABLE"; then
   bad "a JWT in a URL path is NOT downgraded to blob-embedded" "$TABLE"
 else ok "a JWT in a URL path is NOT downgraded to blob-embedded"; fi
 
+# (2b) The SAME failure through the `=` boundary, which (2) does not reach: `=`
+# is both a base64 padding character AND the assignment operator, so an
+# assignment whose KEY is a long unbroken alphanumeric run clears the run
+# threshold on its own. `MY_LONG_SECRET_TOKEN=` is safe (underscores break the
+# run) but `myverylongsecrettoken=` is 21 run chars, and its value IS a token —
+# so a boundary class containing `=` labels the most common real leak form as
+# encoding noise. This is why the class is `[+/]`, not `[+/=]`.
+mkdir -p "$FIX/assignrun"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"myverylongsecrettoken=__GHPE__"}]}}\n' > "$FIX/assignrun/s.jsonl"
+subst "$FIX/assignrun/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/assignrun" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$TABLE"; then
+  ok "a token assigned to a long alphanumeric key is still reported"
+else bad "a token assigned to a long alphanumeric key is still reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a token assigned to a long alphanumeric key is NOT downgraded to blob-embedded" "$TABLE"
+else ok "a token assigned to a long alphanumeric key is NOT downgraded to blob-embedded"; fi
+
 # (3) A complete image payload is excluded from the table upstream, so it must
 # not manufacture a blob-embedded row either — the label is derived from the
 # SAME filtered input as the table, not from a second unfiltered scan.

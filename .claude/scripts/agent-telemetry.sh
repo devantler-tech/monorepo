@@ -918,20 +918,31 @@ CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([A-Z0-9
 # So: at least CRED_BLOB_RUN_MIN base64 characters, then a base64 boundary char,
 # then the token. `https://example.test/session/eyJ…` yields a run of
 # `test/session` (12) — under the threshold — and stays a plain high-signal row.
+#
+# 🔴 THE BOUNDARY CLASS EXCLUDES `=`, THOUGH `=` IS A BASE64 CHARACTER. `=` is
+# also the assignment operator, and `<16+ alnum key>=<token>` — the most common
+# real leak form there is — would otherwise satisfy the run AND the shape and be
+# labelled blob-embedded. `MY_LONG_SECRET_TOKEN=` is safe either way (underscores
+# break the run), but `myverylongsecrettoken=ghp_…` is not, and downgrading that
+# is the one direction this detector must never fail in.
+# The trade is deliberate and cheap in the safe direction: a token sitting
+# immediately after base64 padding (`…UFF==ghp_…`) now stays a plain high-signal
+# row, costing one extra triage, where the alternative buries a live credential.
+# `=` stays in the RUN class, because padding legitimately appears inside a blob.
 CRED_BLOB_RUN_MIN=16
-CRED_BLOB_TABLE_RE='[A-Za-z0-9+/=]{'"$CRED_BLOB_RUN_MIN"',}[+/=]'"$CRED_PREFIX_SHAPES_RE"
+CRED_BLOB_TABLE_RE='[A-Za-z0-9+/=]{'"$CRED_BLOB_RUN_MIN"',}[+/]'"$CRED_PREFIX_SHAPES_RE"
 # Strips the run and its boundary char so a blob leg value normalises to the
 # SAME string the table leg produces (whose single boundary char is removed by
 # the shared `s/^[^A-Za-z0-9_-]//` step). If these two ever diverge the label
 # lands on the wrong row, so both legs share one normaliser — see
-# cred_normalise().
-CRED_BLOB_STRIP_RE='^[A-Za-z0-9+/=]{'"$CRED_BLOB_RUN_MIN"',}[+/=]'
+# cred_normalise(). Its boundary class must therefore stay byte-for-byte equal
+# to CRED_BLOB_TABLE_RE's, `=` exclusion included.
+CRED_BLOB_STRIP_RE='^[A-Za-z0-9+/=]{'"$CRED_BLOB_RUN_MIN"',}[+/]'
 # Partition test for an already-extracted match. It must require the SHAPES
 # after the boundary, not merely a long run: a generic assignment with a long
-# key (`myverylongsecretname=value…`) is 20 run chars then `=`, so a
+# key (`myverylongsecretname=value…`) is 20 run chars then a boundary, so a
 # run-only test would classify it as blob AND strip its key, corrupting the
-# value. Requiring the token shape rejects it, because what follows its `=` is
-# not a credential prefix.
+# value.
 CRED_BLOB_ANCHORED_RE='^'"$CRED_BLOB_TABLE_RE"
 # One combined extraction pattern, so the corpus is decoded and scanned ONCE.
 # The blob form is listed first and starts further left than the plain form
