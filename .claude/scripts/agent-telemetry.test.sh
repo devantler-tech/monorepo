@@ -787,7 +787,7 @@ echo "blob-embedded label (base64-run evidence, #2522)"
 
 # (1) Token inside a real base64 run → labelled.
 mkdir -p "$FIX/blobrun"
-printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=QUJDREVGR0hJSktMTU5PUFFS/__GHPE__zz"}]}}\n' > "$FIX/blobrun/s.jsonl"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__GHPE__zz"}]}}\n' > "$FIX/blobrun/s.jsonl"
 subst "$FIX/blobrun/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobrun" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
@@ -878,6 +878,26 @@ if grep -q 'blob-embedded' <<<"$TABLE"; then
   bad "a token in a DEEP URL path is NOT downgraded to blob-embedded" "$TABLE"
 else ok "a token in a DEEP URL path is NOT downgraded to blob-embedded"; fi
 
+# (2e) A SINGLE LONG PATH SEGMENT is not blob evidence either (CodeRabbit Major
+# on the first fix). Excluding `/` from the run stopped multi-segment paths from
+# chaining into one long run, but left the run as a single SEGMENT — and 16 is
+# well under what ordinary segments reach. A bare 32-character hex id is the
+# commonest long segment in a REST URL and cleared the old bar outright, so the
+# threshold is now 40: above every identifier shape that actually occurs, and
+# still reached about half the time by a genuine multi-hundred-character blob.
+mkdir -p "$FIX/urlseg"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"GET https://example.test/0f8e7d6c5b4a392817263544536271a1/__GHPE__ HTTP/1.1"}]}}\n' > "$FIX/urlseg/s.jsonl"
+subst "$FIX/urlseg/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/urlseg" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$TABLE"; then
+  ok "a token after a 32-char hex path segment is still reported"
+else bad "a token after a 32-char hex path segment is still reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a token after a 32-char hex path segment is NOT downgraded to blob-embedded" "$TABLE"
+else ok "a token after a 32-char hex path segment is NOT downgraded to blob-embedded"; fi
+
 # (2d) PARITY INVARIANT between the label test and the strip.
 #
 # Stated honestly: reverting the strip's run class ALONE breaks no behavioural
@@ -891,16 +911,29 @@ else ok "a token in a DEEP URL path is NOT downgraded to blob-embedded"; fi
 #
 # So bind it structurally instead of behaviourally — assert the two classes are
 # byte-identical, which is what the comments on both constants already require.
-BLOB_TABLE_CLASS=$(grep -o "CRED_BLOB_TABLE_RE='\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*='//")
-BLOB_STRIP_CLASS=$(grep -o "CRED_BLOB_STRIP_RE='\^\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*='\^//")
-if [ -n "$BLOB_TABLE_CLASS" ] && [ -n "$BLOB_STRIP_CLASS" ]; then
-  ok "parity control: both blob run classes were located"
-else bad "parity control: both blob run classes were located" \
-  "table='$BLOB_TABLE_CLASS' strip='$BLOB_STRIP_CLASS'"; fi
-if [ "$BLOB_TABLE_CLASS" = "$BLOB_STRIP_CLASS" ]; then
+#
+# BOTH classes are compared, run AND boundary. Comparing only the run leaves the
+# same rot one field over: if the boundary classes drift, the strip removes a
+# different span than the label matched, so an accepted match keeps part of its
+# run inside the credential's value. Extract each regex's run class and its
+# trailing boundary class and require both to agree.
+BLOB_TABLE_RUN=$(grep -o "CRED_BLOB_TABLE_RE='\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*='//")
+BLOB_STRIP_RUN=$(grep -o "CRED_BLOB_STRIP_RE='\^\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*='\^//")
+BLOB_TABLE_BND=$(grep -o "CRED_BLOB_TABLE_RE='.*',}\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*,}//")
+BLOB_STRIP_BND=$(grep -o "CRED_BLOB_STRIP_RE='.*',}\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*,}//")
+if [ -n "$BLOB_TABLE_RUN" ] && [ -n "$BLOB_STRIP_RUN" ] && \
+   [ -n "$BLOB_TABLE_BND" ] && [ -n "$BLOB_STRIP_BND" ]; then
+  ok "parity control: both blob run AND boundary classes were located"
+else bad "parity control: both blob run AND boundary classes were located" \
+  "run: '$BLOB_TABLE_RUN'/'$BLOB_STRIP_RUN'  bnd: '$BLOB_TABLE_BND'/'$BLOB_STRIP_BND'"; fi
+if [ "$BLOB_TABLE_RUN" = "$BLOB_STRIP_RUN" ]; then
   ok "the blob label and strip share one run class (byte-identical)"
 else bad "the blob label and strip share one run class (byte-identical)" \
-  "label=$BLOB_TABLE_CLASS strip=$BLOB_STRIP_CLASS"; fi
+  "label=$BLOB_TABLE_RUN strip=$BLOB_STRIP_RUN"; fi
+if [ "$BLOB_TABLE_BND" = "$BLOB_STRIP_BND" ]; then
+  ok "the blob label and strip share one boundary class (byte-identical)"
+else bad "the blob label and strip share one boundary class (byte-identical)" \
+  "label=$BLOB_TABLE_BND strip=$BLOB_STRIP_BND"; fi
 
 # (3) A complete image payload is excluded from the table upstream, so it must
 # not manufacture a blob-embedded row either — the label is derived from the
@@ -908,7 +941,7 @@ else bad "the blob label and strip share one run class (byte-identical)" \
 mkdir -p "$FIX/blobimg/projects" "$FIX/blobimg/codex/sessions"
 cat > "$FIX/blobimg/codex/sessions/s.jsonl" <<'EOF'
 {"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
-{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFS/__AWS__BBBB"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BBBB"}]}}
 EOF
 sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimg/codex/sessions/s.jsonl" && rm -f "$FIX/blobimg/codex/sessions/s.jsonl.bak"
 subst "$FIX/blobimg/codex/sessions/s.jsonl"

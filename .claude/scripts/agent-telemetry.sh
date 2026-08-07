@@ -950,7 +950,23 @@ CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([A-Z0-9
 # immediately after base64 padding (`…UFF==ghp_…`) now stays a plain high-signal
 # row, costing one extra triage, where the alternative buries a live credential.
 # `=` stays in the RUN class, because padding legitimately appears inside a blob.
-CRED_BLOB_RUN_MIN=16
+#
+# 🔴 THE THRESHOLD MUST CLEAR AN IDENTIFIER SEGMENT, NOT MERELY A WORD. Once `/`
+# leaves the run class the run is a single path SEGMENT, and 16 is far too low
+# for that: a bare 32-character hex id — the commonest long segment in a REST
+# URL — clears it comfortably, so `…/0f8e7d6c…a1b2/ghp_…` was still buried as
+# encoding noise. 16 was only ever calibrated against multi-segment runs, which
+# no longer exist here. 40 clears every identifier shape that actually occurs
+# (32-hex ids, UUID fragments, slugs) while a genuine blob is hundreds of
+# characters with `/` arriving about once per 64, so it still presents a
+# 40-character slash-free stretch roughly half the time.
+#
+# That "roughly half" is the deliberate cost and it is the SAFE half: a blob
+# whose final stretch falls short is reported as a plain high-signal row. The
+# label exists to suppress NOISE, so under-labelling costs one triage while
+# over-labelling buries a live credential. The two directions are never
+# symmetric, and every threshold choice here resolves toward reporting.
+CRED_BLOB_RUN_MIN=40
 CRED_BLOB_TABLE_RE='[A-Za-z0-9+=]{'"$CRED_BLOB_RUN_MIN"',}[+/]'"$CRED_PREFIX_SHAPES_RE"
 # Strips the run and its boundary char so a blob leg value normalises to the
 # SAME string the table leg produces (whose single boundary char is removed by
