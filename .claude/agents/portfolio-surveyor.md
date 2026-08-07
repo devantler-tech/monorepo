@@ -523,7 +523,24 @@ public and private — no per-repo loop needed to enumerate):
    ```
 
    Walk it newest-first and count consecutive **red** runs, stopping at the first run that is not red.
-   Three details are each load-bearing:
+   Four details are each load-bearing:
+   - 🔴 **Group by the run's `name`, not by `workflow_id` alone** — one managed `workflow_id` can
+     aggregate many *independent* jobs. Measured 2026-08-07 on `ksail`: all 24 `dynamic/dependabot/`
+     runs share **one** `workflow_id` (`107623015`) and carry **24 distinct names**, one per
+     dependency and directory (`helm in /pkg/svc/installer/awslbcontroller`,
+     `docker in /pkg/svc/installer/kyverno`, …). Counting consecutive reds across that mixed history
+     compares unrelated dependencies: two *first* failures of two different dependencies would read
+     as one 2-run streak and escalate to `(REPEATED — ACTIONABLE)`, while an unrelated green would
+     break a streak that is genuinely consecutive for the dependency that is actually broken. The
+     `name` is the logical unit whose history means anything. Code scanning is unaffected — its
+     `workflow_id` carries a single stable name, so grouping by name is identical there and strictly
+     more correct here:
+
+     ```sh
+     gh api --paginate \
+       "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" \
+       --jq '[.workflow_runs[] | select(.name == "<name>")]'
+     ```
    - **`branch=main`** — default setup also runs on pull requests, and an unfiltered history mixes
      those in. A failed PR scan would then turn a *first* main failure into `REPEATED`, and an
      intervening successful PR scan would hide two genuinely consecutive main failures. This is the

@@ -1255,6 +1255,18 @@ grep -Fq 'no workflow file exists in the repository' "${surveyor}" ||
 grep -Fq 'escalation is what makes the property test safe' "${surveyor}" ||
   fail "surveyor must state that the streak escalation is what bounds the broadened property test (#2704)"
 
+# The escalation is only a real safety net if the streak is counted over the right unit. One managed
+# workflow_id can aggregate many INDEPENDENT jobs: measured 2026-08-07, ksail's 24 dynamic/dependabot/
+# runs share one workflow_id and carry 24 distinct names. Counting consecutive reds across that mixed
+# history would escalate two unrelated FIRST failures as a streak, and let an unrelated green break a
+# genuine one — so broadening the class without this makes the escalation report noise instead of
+# bounding the exemption.
+grep -Fq 'not by `workflow_id` alone' "${surveyor}" ||
+  fail "surveyor's streak walk must group by run name, not workflow_id alone (#2704)"
+
+grep -Fq 'select(.name == "<name>")' "${surveyor}" ||
+  fail "surveyor's streak-walk query must filter to the run's own name (#2704)"
+
 # AGENTS.md must carry the same property test, or the two surfaces disagree about what preempts a run.
 grep -Fq 'dynamic/dependabot/' "${constitution}" ||
   fail "AGENTS.md rung-0 must cover Dependabot's managed runs, not only code scanning (#2704)"
