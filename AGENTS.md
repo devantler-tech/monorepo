@@ -1000,6 +1000,14 @@ more often than a review. The surveyor has required this positive identification
 the contract did not, and that asymmetry is what let it through — so **never weaken this to a bare
 `commit_id` match again.**
 
+⚠️ **And do not "repair" it by counting inline comments at head instead** — that reads as the obvious
+alternative and is wrong. An inline review comment's `commit_id` tracks the commit its diff position
+currently anchors to, and GitHub **re-anchors it forward** as the head advances, so old comments
+follow the PR. On #2658 all 11 inline comments at the merged head belonged to review objects from
+*earlier* heads, while the two objects actually at that head carried none. Attribute a review by its
+own object or its summary comment; an inline comment's `commit_id` says where it points **now**, never
+when it was made.
+
 🔴 **The `CodeRabbit` commit status is `success` when NO review ran — the `description` is the only
 discriminator.** Auto-review is disabled portfolio-wide, so
 `success — Review skipped: automatic reviews are disabled` is the **default state of every head**,
