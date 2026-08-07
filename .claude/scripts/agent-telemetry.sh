@@ -247,10 +247,15 @@ PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot creat
 CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDCONC=$(mktemp "${TMPDIR:-/tmp}/.agtel_credconc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
-# Blob-embedded evidence set (#2522): the subset of table values that were found
-# inside a base64 run. Holds normalised credential values, so it is created with
-# mktemp's private mode and removed by the same traps as every other scratch.
+# Blob-embedded evidence set (#2522): the subset of table values whose
+# occurrences are ALL inside a base64 run. Holds normalised credential values,
+# so it is created with mktemp's private mode and removed by the same traps as
+# every other scratch.
 CREDBLOB=$(mktemp "${TMPDIR:-/tmp}/.agtel_credblob.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Plain-occurrence set: the values seen OUTSIDE any base64 run. Subtracted from
+# the blob set above so a value seen both ways keeps its plain high-signal row.
+# Same value class as $CREDBLOB, so it gets the same private mode and traps.
+CREDPLAIN=$(mktemp "${TMPDIR:-/tmp}/.agtel_credplain.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Raw credential-table matches from the SINGLE decode pass, partitioned after
 # the fact into the plain and blob-embedded sets (#2522).
 CREDMATCH=$(mktemp "${TMPDIR:-/tmp}/.agtel_credmatch.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
@@ -259,8 +264,8 @@ CREDMATCH=$(mktemp "${TMPDIR:-/tmp}/.agtel_credmatch.XXXXXXXX") || { echo "canno
 SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDMATCH" "$SIGTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDMATCH" "$SIGTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -3025,11 +3030,38 @@ if want safety; then
     # boundary char cred_normalise removes), so the two sets are comparable.
     cred_blob_matches() { grep -aEi "$CRED_BLOB_ANCHORED_RE" "$CREDMATCH" 2>/dev/null \
                           | sed -E "s|$CRED_BLOB_STRIP_RE||"; }
+    cred_plain_matches() { grep -avEi "$CRED_BLOB_ANCHORED_RE" "$CREDMATCH" 2>/dev/null; }
+    # The label needs the ABSENCE of a plain occurrence, not the presence of a
+    # blob one. `cred_normalise` ends in `sort -u`, so a credential seen both
+    # inside an encoded blob and plainly collapses to ONE row; membership in the
+    # blob set alone then labelled that row "likely a chance substring" and
+    # buried the plain occurrence — the genuine exposure evidence, and exactly
+    # the shape a real leak takes (a leaked token appears in prose AND inside an
+    # encoded payload of the same transcript). Subtracting the plain set makes
+    # the set what its name claims: values whose occurrences are ALL blob-embedded.
+    # This is the ambiguity-falls-through-to-the-plain-row rule the label's own
+    # contract states, enforced rather than assumed.
+    cred_plain_matches | cred_normalise > "$CREDPLAIN"
     # Derived from the SAME extracted matches as the table — so a complete image
     # payload, excluded upstream by the decode filter, can no more manufacture a
     # blob label than it can manufacture a table row.
-    cred_blob_matches | cred_normalise > "$CREDBLOB"
-    { cred_blob_matches; grep -avEi "$CRED_BLOB_ANCHORED_RE" "$CREDMATCH" 2>/dev/null; } \
+    #
+    # Subtraction via awk on a FILE, not `comm`: both sides are `sort -u` output,
+    # but `comm` re-compares them itself, so the two would have to agree on
+    # collation as well as on order. Set membership sidesteps that entirely, and
+    # matches the file-reading idiom the label pass already uses below (getline
+    # on an empty or missing file simply yields nothing, whereas the NR==FNR
+    # idiom would silently eat the first data line when the plain set is empty —
+    # which here would drop a real credential's label).
+    cred_blob_matches | cred_normalise \
+      | awk -v plainfile="$CREDPLAIN" '
+          BEGIN {
+            while ((getline _p < plainfile) > 0) if (_p != "") plain[_p] = 1
+            close(plainfile)
+          }
+          !($0 in plain)
+        ' > "$CREDBLOB"
+    { cred_blob_matches; cred_plain_matches; } \
       | cred_normalise |
       # Normalise every match to its UNDERLYING VALUE before any dedup:
       # (1) split compound assignments on `;` — the generic alternative's value

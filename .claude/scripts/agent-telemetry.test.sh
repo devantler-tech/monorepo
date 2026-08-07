@@ -955,6 +955,37 @@ if grep -q 'blob-embedded' <<<"$TABLE"; then
   bad "an excluded image payload produces no blob-embedded row" "$TABLE"
 else ok "an excluded image payload produces no blob-embedded row"; fi
 
+# (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
+# labelled. The label's stated rule is that ambiguity falls through to the plain
+# high-signal row, but membership alone made the set "values with *a* blob
+# occurrence" rather than "values whose occurrences are *all* blob-embedded".
+# `cred_normalise` ends in `sort -u`, so a credential that appears both inside
+# an encoded blob and plainly collapses to ONE row — and that row was labelled
+# "likely a chance substring", burying the plain occurrence, which is the
+# genuine exposure evidence. The label must therefore require the ABSENCE of a
+# plain occurrence, not merely the presence of a blob one.
+#
+# This is the worst direction the label can fail in: it downgrades exactly the
+# credential a real leak produces, since a leaked token routinely appears both
+# in prose and inside an encoded payload of the same transcript.
+mkdir -p "$FIX/blobandplain"
+{
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__GHPE__zz"}]}}\n'
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPE__zz"}]}}\n'
+} > "$FIX/blobandplain/s.jsonl"
+subst "$FIX/blobandplain/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobandplain" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+# CONTROL: the row must exist at all, or the assertion below passes vacuously
+# on an empty table and proves nothing about the label.
+if grep -q 'github-token' <<<"$TABLE"; then
+  ok "control: a token occurring both blob-embedded and plainly is reported"
+else bad "control: a token occurring both blob-embedded and plainly is reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a token ALSO occurring plainly is NOT labelled blob-embedded" "$TABLE"
+else ok "a token ALSO occurring plainly is NOT labelled blob-embedded"; fi
+
 # An ASSIGNMENT-wrapped token (`GITHUB_TOKEN=ghp_…`) is the most common real
 # leak form, and grep's leftmost-match rule hands the whole string to the
 # generic alternative — so the classifier must look INSIDE the value or the
