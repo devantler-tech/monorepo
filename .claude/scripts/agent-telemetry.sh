@@ -944,7 +944,7 @@ CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([A-Z0-9
 # also the assignment operator, and `<16+ alnum key>=<token>` — the most common
 # real leak form there is — would otherwise satisfy the run AND the shape and be
 # labelled blob-embedded. `MY_LONG_SECRET_TOKEN=` is safe either way (underscores
-# break the run), but `myverylongsecrettoken=ghp_…` is not, and downgrading that
+# break the run), but `myverylongsecrettokenusedbytheproductionservice=ghp_…` is not, and downgrading that
 # is the one direction this detector must never fail in.
 # The trade is deliberate and cheap in the safe direction: a token sitting
 # immediately after base64 padding (`…UFF==ghp_…`) now stays a plain high-signal

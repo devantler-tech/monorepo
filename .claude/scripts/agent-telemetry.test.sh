@@ -820,11 +820,13 @@ else ok "a JWT in a URL path is NOT downgraded to blob-embedded"; fi
 # is both a base64 padding character AND the assignment operator, so an
 # assignment whose KEY is a long unbroken alphanumeric run clears the run
 # threshold on its own. `MY_LONG_SECRET_TOKEN=` is safe (underscores break the
-# run) but `myverylongsecrettoken=` is 21 run chars, and its value IS a token —
+# run) but `myverylongsecrettokenusedbytheproductionservice=` is 47 run chars — it MUST clear
+# CRED_BLOB_RUN_MIN, or this test passes on the run length and never reaches the
+# boundary check it exists to guard, and its value IS a token —
 # so a boundary class containing `=` labels the most common real leak form as
 # encoding noise. This is why the class is `[+/]`, not `[+/=]`.
 mkdir -p "$FIX/assignrun"
-printf '{"type":"user","message":{"content":[{"type":"text","text":"myverylongsecrettoken=__GHPE__"}]}}\n' > "$FIX/assignrun/s.jsonl"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"myverylongsecrettokenusedbytheproductionservice=__GHPE__"}]}}\n' > "$FIX/assignrun/s.jsonl"
 subst "$FIX/assignrun/s.jsonl"
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/assignrun" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
