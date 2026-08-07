@@ -1274,6 +1274,16 @@ grep -Fq 'select(.name == $ENV.RUN_NAME)' "${surveyor}" ||
 grep -Fq 'select(.name == "<name>")' "${surveyor}" &&
   fail "surveyor must not interpolate an untrusted run name into the --jq filter (#2704)"
 
+# $ENV closes the jq half only — the value still has to reach the environment intact. A single-quoted
+# literal ends at the first apostrophe, and real run names carry them, so that form breaks in the
+# shell before jq ever sees it. Require the variable handoff, and reject the literal-paste shape:
+# without both, the boundary is merely relocated rather than closed.
+grep -Fq 'RUN_NAME="$run_name" gh api' "${surveyor}" ||
+  fail "surveyor must hand the run name to the environment as a variable, not a literal (#2704)"
+
+grep -Fq "RUN_NAME='<name>'" "${surveyor}" &&
+  fail "surveyor must not paste an untrusted run name in as a single-quoted literal (#2704)"
+
 # AGENTS.md must carry the same property test, or the two surfaces disagree about what preempts a run.
 grep -Fq 'dynamic/dependabot/' "${constitution}" ||
   fail "AGENTS.md rung-0 must cover Dependabot's managed runs, not only code scanning (#2704)"

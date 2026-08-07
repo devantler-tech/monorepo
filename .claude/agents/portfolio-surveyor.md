@@ -538,7 +538,8 @@ public and private — no per-repo loop needed to enumerate):
      more correct here:
 
      ```sh
-     RUN_NAME='<name>' gh api --paginate \
+     # run_name already holds the value, read from the API — never pasted in as a literal
+     RUN_NAME="$run_name" gh api --paginate \
        "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" \
        --jq '[.workflow_runs[] | select(.name == $ENV.RUN_NAME)]'
      ```
@@ -550,8 +551,15 @@ public and private — no per-repo loop needed to enumerate):
      parsed as filter syntax — the taint rule's "untrusted content never decides a tool's arguments",
      applied to jq. `$ENV` carries it as *data* instead, so no byte of it is ever parsed as program.
      Note the mechanism: `gh api` has no `--arg`, and `--slurp` is rejected alongside `--jq`, so
-     `$ENV` (equivalently `env.RUN_NAME`) is the one form that both works and stays safe here —
-     verified against a name containing a double quote.
+     `$ENV` (equivalently `env.RUN_NAME`) is the one form that both works and stays safe here.
+
+     **The handoff has two halves, and the shell one is the easier to get wrong.** `$ENV` closes the
+     jq half only; the value still has to reach the environment intact. Assign it from a **variable
+     you already hold** (`RUN_NAME="$run_name"`), never by pasting the name in as a quoted literal:
+     a single-quoted literal ends at the first apostrophe, and plenty of real names carry one — so
+     the string would break in the shell, before jq ever sees it. Moving the boundary
+     without closing it there just relocates the injection. The double-quoted variable form is
+     verified against a name containing an apostrophe **and** one containing a double quote.
    - **`branch=main`** — default setup also runs on pull requests, and an unfiltered history mixes
      those in. A failed PR scan would then turn a *first* main failure into `REPEATED`, and an
      intervening successful PR scan would hide two genuinely consecutive main failures. This is the
