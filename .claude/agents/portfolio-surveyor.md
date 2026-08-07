@@ -525,24 +525,45 @@ public and private — no per-repo loop needed to enumerate):
 
    Walk it newest-first and count consecutive **red** runs, stopping at the first run that is not red.
    Four details are each load-bearing:
-   - 🔴 **Group by the run's `name`, not by `workflow_id` alone** — one managed `workflow_id` can
-     aggregate many *independent* jobs. Measured 2026-08-07 on `ksail`: all 24 `dynamic/dependabot/`
-     runs share **one** `workflow_id` (`107623015`) and carry **24 distinct names**, one per
-     dependency and directory (`helm in /pkg/svc/installer/awslbcontroller`,
+   - 🔴 **Group by the run's name with its per-run id STRIPPED, not by `workflow_id` alone** — one
+     managed `workflow_id` can aggregate many *independent* jobs. Measured 2026-08-07 on `ksail`: all
+     `dynamic/dependabot/` runs share **one** `workflow_id` (`107623015`) while carrying a distinct
+     name per dependency and directory (`helm in /pkg/svc/installer/awslbcontroller`,
      `docker in /pkg/svc/installer/kyverno`, …). Counting consecutive reds across that mixed history
      compares unrelated dependencies: two *first* failures of two different dependencies would read
      as one 2-run streak and escalate to `(REPEATED — ACTIONABLE)`, while an unrelated green would
-     break a streak that is genuinely consecutive for the dependency that is actually broken. The
-     `name` is the logical unit whose history means anything. Code scanning is unaffected — its
-     `workflow_id` carries a single stable name, so grouping by name is identical there and strictly
-     more correct here:
+     break a streak that is genuinely consecutive for the dependency that is actually broken.
+
+     🔴 **The raw `name` is NOT that unit — it carries a per-run id, so matching it exactly caps every
+     streak at 1.** Dependabot renders the name as
+     `helm in /pkg/svc/installer/awslbcontroller - Update #1510869626`, and the trailing id changes
+     on every run: measured the same day, ksail's 48 `dynamic/dependabot/` runs on `main` produced
+     **48 distinct names**. An exact-name filter therefore returns exactly one run, the streak can
+     never reach 2, and `(REPEATED — ACTIONABLE)` can never fire — which would make the exemption
+     permanent for every managed path rather than one run deep, destroying the very safety net that
+     justifies the property test below. Strip the trailing id and group on what remains:
 
      ```sh
+     # logical unit = the name minus its per-run id: "… - Update #123" and "… #123" both reduce
+     # to the dependency+directory that actually has a history. Code scanning is unaffected — its
+     # names ("Push on main", "Scheduled") carry no id, so the strip is a no-op there.
+     # `// ""` is load-bearing, not defensive dressing: the live corpus contains runs with a NULL
+     # name, and `sub` on null aborts the whole filter ("null cannot be matched"), so without it
+     # the streak walk dies rather than returning a wrong answer. Measured, not anticipated.
      # run_name already holds the value, read from the API — never pasted in as a literal
      RUN_NAME="$run_name" gh api --paginate \
        "repos/devantler-tech/<repo>/actions/workflows/<workflow_id>/runs?branch=main&per_page=100" \
-       --jq '[.workflow_runs[] | select(.name == $ENV.RUN_NAME)]'
+       --jq '[.workflow_runs[]
+              | select(((.name // "") | sub("( - Update)? #[0-9]+$"; "")) ==
+                       (($ENV.RUN_NAME // "") | sub("( - Update)? #[0-9]+$"; "")))]'
      ```
+
+     Verified against the live corpus: with the strip, `npm_and_yarn in /vsce for typescript` on
+     `ksail` resolves to a **3-run consecutive red streak** (2026-07-28, 07-29, 08-03, recovering
+     green on 08-04) which the exact-name form reports as three unrelated *first* failures — each
+     permanently `NO-ACTION`. The streak is historical rather than live, so it demonstrates the
+     mechanism rather than a current fire; the point is that the exact-name form could not have
+     escalated it at the time, and could not escalate its recurrence either.
 
      **Pass the name through the environment — never interpolate it into the `--jq` string.** A run
      name is GitHub-provided data the repository does not control: a workflow's `run-name:` can be

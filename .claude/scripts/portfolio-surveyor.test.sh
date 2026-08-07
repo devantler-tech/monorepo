@@ -1256,16 +1256,34 @@ grep -Fq 'escalation is what makes the property test safe' "${surveyor}" ||
   fail "surveyor must state that the streak escalation is what bounds the broadened property test (#2704)"
 
 # The escalation is only a real safety net if the streak is counted over the right unit. One managed
-# workflow_id can aggregate many INDEPENDENT jobs: measured 2026-08-07, ksail's 24 dynamic/dependabot/
-# runs share one workflow_id and carry 24 distinct names. Counting consecutive reds across that mixed
-# history would escalate two unrelated FIRST failures as a streak, and let an unrelated green break a
-# genuine one — so broadening the class without this makes the escalation report noise instead of
-# bounding the exemption.
+# workflow_id can aggregate many INDEPENDENT jobs: measured 2026-08-07, ksail's dynamic/dependabot/
+# runs share one workflow_id and carry a distinct name per dependency+directory. Counting consecutive
+# reds across that mixed history would escalate two unrelated FIRST failures as a streak, and let an
+# unrelated green break a genuine one — so broadening the class without this makes the escalation
+# report noise instead of bounding the exemption.
 grep -Fq 'not by `workflow_id` alone' "${surveyor}" ||
   fail "surveyor's streak walk must group by run name, not workflow_id alone (#2704)"
 
-grep -Fq 'select(.name == $ENV.RUN_NAME)' "${surveyor}" ||
-  fail "surveyor's streak-walk query must filter to the run's own name (#2704)"
+# 🔴 The RAW name is not that unit — Dependabot appends a per-run id ("… - Update #1510869626"), so
+# ksail's 48 dynamic/dependabot/ runs on main carry 48 DISTINCT names. An exact-name filter returns
+# one run, the streak can never reach 2, and (REPEATED — ACTIONABLE) can never fire — which would
+# make the exemption permanent for every managed path instead of one run deep, destroying the safety
+# net that justifies the property test. Require the id to be stripped before grouping, and pin the
+# absence of the exact-match form so it cannot come back.
+grep -Fq 'sub("( - Update)? #[0-9]+$"; "")' "${surveyor}" ||
+  fail "surveyor's streak walk must strip the per-run id before grouping, or every streak caps at 1 (#2704)"
+
+grep -Fq 'select(.name == $ENV.RUN_NAME)' "${surveyor}" &&
+  fail "surveyor must not match the RAW run name — the per-run id caps every streak at 1 (#2704)"
+
+grep -Fq '$ENV.RUN_NAME' "${surveyor}" ||
+  fail "surveyor's streak-walk query must still filter to the run's own name (#2704)"
+
+# The live corpus contains runs with a NULL name, and jq's sub() on null aborts the entire filter
+# rather than skipping the row — so the streak walk would die instead of answering. Verified by
+# running the query against ksail before adding the guard.
+grep -Fq '(.name // "")' "${surveyor}" ||
+  fail "surveyor's streak-walk query must tolerate a null run name, or sub() aborts the filter (#2704)"
 
 # A run name is untrusted: a workflow's run-name: can be built from a pull-request title, so a name
 # carrying a quote would terminate an interpolated jq string and the rest would parse as filter
