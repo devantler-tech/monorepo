@@ -38,10 +38,49 @@ queries are what the hygiene pentad's unresolved-thread count depends on. A star
 *clean*, which is a **fail-open on the promotion gate**. Never spend the shared budget on a board
 sweep to answer a question a per-issue query answers for ~1 point.
 
-**So: ask per issue, not per board.** For coverage and membership, query the issue's own side —
-`repository(owner:…, name:…){issue(number:N){projectItems(first:20){nodes{project{number}}}}}` —
-which is cheap and distinguishes "on no project" from "on project 5" (negative control: `platform#1`
-→ `[]`, verified non-vacuous).
+**So: ask per issue, not per board.** For coverage and membership, query the issue's own side. That
+read is cheap and it distinguishes "on no project" from "on the board" (negative control:
+`platform#1` → `[]`, verified non-vacuous) — but it carries the *same* three fail-open traps the
+enumeration does, so it gets the same discipline:
+
+- **Identify the board by its `id`, never by `number` alone.** A number is unique only within one
+  owner, so a repository-level project or another owner's project numbered 5 satisfies a
+  number-only match and reports an unboarded issue as covered.
+- **Paginate.** `projectItems(first: N)` truncates exactly like `item-list --limit N`, and here the
+  truncated read produces the *worse* answer: "not on the board" for an issue that is.
+- **Fail closed on the read itself.** An empty `projectItems` and a failed query look identical
+  downstream. Only a successful query may be read as "not on a project"; anything else is
+  **unverified**, which is a different outcome from either answer.
+
+`includeArchived: false` is explicit because an archived item is not on the board for triage — it is
+covered by the archive, not by the sweep, and the default would quietly count it as coverage.
+
+```sh
+# Resolved once per run; a number alone is not an identity.
+BOARD_ID=$(gh api graphql -f query='{organization(login:"devantler-tech"){projectV2(number:5){id}}}' \
+  --jq '.data.organization.projectV2.id') \
+  || { echo "board id lookup failed; refusing" >&2; exit 1; }
+
+# 0 = on the board, 1 = verified absent, 2 = UNVERIFIED (never conflate 1 and 2).
+on_board() { # on_board <owner> <repo> <issue-number>
+  after=null
+  while :; do
+    page=$(gh api graphql -F owner="$1" -F name="$2" -F number="$3" -F after="$after" -f query='
+      query($owner:String!,$name:String!,$number:Int!,$after:String){
+        repository(owner:$owner,name:$name){ issue(number:$number){
+          projectItems(first:100, after:$after, includeArchived:false){
+            nodes{ project{ id } } pageInfo{ hasNextPage endCursor } } } } }') || return 2
+    printf '%s' "$page" | jq -e '.data.repository.issue.projectItems' >/dev/null 2>&1 || return 2
+    if printf '%s' "$page" | jq -e --arg id "$BOARD_ID" \
+         '[.data.repository.issue.projectItems.nodes[].project.id] | index($id)' >/dev/null; then
+      return 0
+    fi
+    printf '%s' "$page" | jq -e '.data.repository.issue.projectItems.pageInfo.hasNextPage' >/dev/null \
+      || return 1
+    after=$(printf '%s' "$page" | jq -r '.data.repository.issue.projectItems.pageInfo.endCursor')
+  done
+}
+```
 
 **If a check genuinely needs the whole board**, pair the enumeration with a mandatory truncation
 guard and treat a trip as a hard failure, never a result:
