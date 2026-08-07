@@ -1270,20 +1270,22 @@ grep -Fq 'not by `workflow_id` alone' "${surveyor}" ||
 # make the exemption permanent for every managed path instead of one run deep, destroying the safety
 # net that justifies the property test. Require the id to be stripped before grouping, and pin the
 # absence of the exact-match form so it cannot come back.
-grep -Fq 'sub("( - Update)? #[0-9]+$"; "")' "${surveyor}" ||
-  fail "surveyor's streak walk must strip the per-run id before grouping, or every streak caps at 1 (#2704)"
+# Pin BOTH OPERANDS WHOLE, never an isolated fragment. A bare `sub(…)` / `$ENV.RUN_NAME` /
+# `(.name // "")` token search passes as long as the token appears ANYWHERE in the document, so the
+# moment prose quotes the old shape — documenting the superseded form is exactly the kind of edit
+# that happens here — the assertion goes vacuous while the executable recipe regresses freely.
+# Each grep below therefore matches one complete operand of the comparison as it appears in the
+# recipe. They are split at the recipe's own line break because `grep -F` is line-oriented: the
+# comparison spans two lines, so a single pattern containing `== (($ENV.RUN_NAME` can never match.
+# (CodeRabbit raised the vacuity; its suggested one-line form had exactly that defect.)
+grep -Fq 'select(((.name // "") | sub("( - Update)? #[0-9]+$"; "")) ==' "${surveyor}" ||
+  fail "surveyor must normalise the API run name (null-safe, id stripped) as the comparison's left operand (#2704)"
+
+grep -Fq '(($ENV.RUN_NAME // "") | sub("( - Update)? #[0-9]+$"; "")))]' "${surveyor}" ||
+  fail "surveyor must normalise \$ENV.RUN_NAME (null-safe, id stripped) as the comparison's right operand (#2704)"
 
 grep -Fq 'select(.name == $ENV.RUN_NAME)' "${surveyor}" &&
   fail "surveyor must not match the RAW run name — the per-run id caps every streak at 1 (#2704)"
-
-grep -Fq '$ENV.RUN_NAME' "${surveyor}" ||
-  fail "surveyor's streak-walk query must still filter to the run's own name (#2704)"
-
-# The live corpus contains runs with a NULL name, and jq's sub() on null aborts the entire filter
-# rather than skipping the row — so the streak walk would die instead of answering. Verified by
-# running the query against ksail before adding the guard.
-grep -Fq '(.name // "")' "${surveyor}" ||
-  fail "surveyor's streak-walk query must tolerate a null run name, or sub() aborts the filter (#2704)"
 
 # A run name is untrusted: a workflow's run-name: can be built from a pull-request title, so a name
 # carrying a quote would terminate an interpolated jq string and the rest would parse as filter
