@@ -63,24 +63,29 @@ BOARD_ID=$(gh api graphql -f query='{organization(login:"devantler-tech"){projec
 
 # 0 = on the board, 1 = verified absent, 2 = UNVERIFIED (never conflate 1 and 2).
 on_board() { # on_board <owner> <repo> <issue-number>
-  after=null
+  _ob_after=null   # prefixed: the function assigns in the caller's scope
   while :; do
-    page=$(gh api graphql -F owner="$1" -F name="$2" -F number="$3" -F after="$after" -f query='
+    _ob_page=$(gh api graphql -F owner="$1" -F name="$2" -F number="$3" -F after="$_ob_after" -f query='
       query($owner:String!,$name:String!,$number:Int!,$after:String){
         repository(owner:$owner,name:$name){ issue(number:$number){
           projectItems(first:100, after:$after, includeArchived:false){
             nodes{ project{ id } } pageInfo{ hasNextPage endCursor } } } } }') || return 2
-    printf '%s' "$page" | jq -e '.data.repository.issue.projectItems' >/dev/null 2>&1 || return 2
-    if printf '%s' "$page" | jq -e --arg id "$BOARD_ID" \
+    printf '%s' "$_ob_page" | jq -e '.data.repository.issue.projectItems' >/dev/null || return 2
+    if printf '%s' "$_ob_page" | jq -e --arg id "$BOARD_ID" \
          '[.data.repository.issue.projectItems.nodes[].project.id] | index($id)' >/dev/null; then
       return 0
     fi
-    printf '%s' "$page" | jq -e '.data.repository.issue.projectItems.pageInfo.hasNextPage' >/dev/null \
+    printf '%s' "$_ob_page" | jq -e '.data.repository.issue.projectItems.pageInfo.hasNextPage' >/dev/null \
       || return 1
-    after=$(printf '%s' "$page" | jq -r '.data.repository.issue.projectItems.pageInfo.endCursor')
+    _ob_after=$(printf '%s' "$_ob_page" | jq -r '.data.repository.issue.projectItems.pageInfo.endCursor')
   done
 }
 ```
+
+(`-F` is what makes the first page's `null` a JSON null rather than the string `"null"`; a later
+cursor that happened to look like a number or boolean would be coerced too, and GraphQL would reject
+it — an error, so `2`, never a wrong answer. `index($id)` returning **0** for the first item is
+truthy to `jq -e`, which fails only on `false` and `null`; do not "fix" that into a length test.)
 
 **If a check genuinely needs the whole board**, pair the enumeration with a mandatory truncation
 guard and treat a trip as a hard failure, never a result:
