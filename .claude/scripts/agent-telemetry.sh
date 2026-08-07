@@ -247,13 +247,25 @@ PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot creat
 CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDCONC=$(mktemp "${TMPDIR:-/tmp}/.agtel_credconc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Blob-embedded evidence set (#2522): the subset of table values whose
+# occurrences are ALL inside a base64 run. Holds normalised credential values,
+# so it is created with mktemp's private mode and removed by the same traps as
+# every other scratch.
+CREDBLOB=$(mktemp "${TMPDIR:-/tmp}/.agtel_credblob.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Plain-occurrence set: the values seen OUTSIDE any base64 run. Subtracted from
+# the blob set above so a value seen both ways keeps its plain high-signal row.
+# Same value class as $CREDBLOB, so it gets the same private mode and traps.
+CREDPLAIN=$(mktemp "${TMPDIR:-/tmp}/.agtel_credplain.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Raw credential-table matches from the SINGLE decode pass, partitioned after
+# the fact into the plain and blob-embedded sets (#2522).
+CREDMATCH=$(mktemp "${TMPDIR:-/tmp}/.agtel_credmatch.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Its OWN scratch, never $CONCTMP. The injection-concentration pass owns that
 # one, and sharing it would make two sections' results depend on which ran last.
 SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$SIGTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$SIGTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -885,7 +897,103 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # start) from blob noise. The anchor costs no true positives and is used ONLY
 # for the leak TABLE; redact() keeps the broad unanchored CRED_RE, so
 # over-redaction is preserved even where the table refuses to count.
-CRED_TABLE_RE='((^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|-----BEGIN ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+# The five PREFIX-identified shapes, factored out because two regexes now need
+# them byte-identically (the table and the blob-evidence scan below). Parity
+# between the detector and redact() has already broken twice; a second hand-kept
+# copy of this alternation would be the third.
+CRED_PREFIX_SHAPES_RE='(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
+CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+
+# BLOB-EMBEDDED EVIDENCE (#2522). The boundary anchor above rejects a token
+# preceded by [A-Za-z0-9_-]. It cannot reject one whose boundary char is `+`,
+# `/` or `=` — those are outside the anchor class AND are base64 characters, so
+# a token shape occurring by chance inside an encoded blob passes the anchor and
+# is counted as a real credential. Measured 2026-07-25: 35 of 113
+# GitHub-token-shaped matches were chance substrings inside Codex
+# `encrypted_content` blobs.
+#
+# 🔴 THE EVIDENCE IS A SURROUNDING RUN, NEVER THE BOUNDARY CHARACTER. #2520
+# tried the latter, reasoning that only `+`/`/` can match mid-blob. True — but
+# it does not follow that `/` MEANS mid-blob: a JWT in a URL path segment takes
+# `/` as its boundary too, so keying on the character would have downgraded a
+# genuinely exposed credential to "probably encoding noise". That is the one
+# direction this detector must never fail in, which is why #2520 shipped
+# without the label and #2522 specified run evidence instead.
+#
+# So: at least CRED_BLOB_RUN_MIN base64 characters, then a base64 boundary char,
+# then the token.
+#
+# 🔴 THE RUN MUST BE UNBROKEN BY `/`, OR AN ORDINARY REST PATH CLEARS IT. `/` was
+# once in the run class, which made the run's LENGTH the only test — and a URL
+# path reaches any length simply by being nested. `test/session` is 12 and
+# passed, but `test/api/v1/sessions` is 20, so the very same JWT was downgraded
+# to "probably encoding noise" purely for sitting one path segment deeper. Both
+# shapes occur constantly in transcripts, and the second is the more common one.
+# Length alone therefore never distinguished a blob from a path; it only looked
+# like it did, because the single fixture chosen happened to sit under the bar.
+#
+# What actually separates them is how the run is BROKEN UP. Base64 emits `/`
+# about once every 64 characters, so a genuine blob carries long slash-free
+# stretches, while a URL path is short segments between slashes. Requiring
+# CRED_BLOB_RUN_MIN base64 characters with no `/` among them keeps the blob
+# evidence and drops the path. `/` remains a valid BOUNDARY char — it is how a
+# blob's own slash introduces the chance substring — it is just no longer
+# something the run may be made of.
+#
+# The residual error is in the SAFE direction, deliberately: a blob whose final
+# slash-free stretch happens to be shorter than the threshold stays a plain
+# high-signal row, costing one extra triage, where the opposite error buries a
+# live credential.
+#
+# 🔴 THE BOUNDARY CLASS EXCLUDES `=`, THOUGH `=` IS A BASE64 CHARACTER. `=` is
+# also the assignment operator, and `<16+ alnum key>=<token>` — the most common
+# real leak form there is — would otherwise satisfy the run AND the shape and be
+# labelled blob-embedded. `MY_LONG_SECRET_TOKEN=` is safe either way (underscores
+# break the run), but `myverylongsecrettokenusedbytheproductionservice=ghp_…` is not, and downgrading that
+# is the one direction this detector must never fail in.
+# The trade is deliberate and cheap in the safe direction: a token sitting
+# immediately after base64 padding (`…UFF==ghp_…`) now stays a plain high-signal
+# row, costing one extra triage, where the alternative buries a live credential.
+# `=` stays in the RUN class, because padding legitimately appears inside a blob.
+#
+# 🔴 THE THRESHOLD MUST CLEAR AN IDENTIFIER SEGMENT, NOT MERELY A WORD. Once `/`
+# leaves the run class the run is a single path SEGMENT, and 16 is far too low
+# for that: a bare 32-character hex id — the commonest long segment in a REST
+# URL — clears it comfortably, so `…/0f8e7d6c…a1b2/ghp_…` was still buried as
+# encoding noise. 16 was only ever calibrated against multi-segment runs, which
+# no longer exist here. 40 clears every identifier shape that actually occurs
+# (32-hex ids, UUID fragments, slugs) while a genuine blob is hundreds of
+# characters with `/` arriving about once per 64, so it still presents a
+# 40-character slash-free stretch roughly half the time.
+#
+# That "roughly half" is the deliberate cost and it is the SAFE half: a blob
+# whose final stretch falls short is reported as a plain high-signal row. The
+# label exists to suppress NOISE, so under-labelling costs one triage while
+# over-labelling buries a live credential. The two directions are never
+# symmetric, and every threshold choice here resolves toward reporting.
+CRED_BLOB_RUN_MIN=40
+CRED_BLOB_TABLE_RE='[A-Za-z0-9+=]{'"$CRED_BLOB_RUN_MIN"',}[+/]'"$CRED_PREFIX_SHAPES_RE"
+# Strips the run and its boundary char so a blob leg value normalises to the
+# SAME string the table leg produces (whose single boundary char is removed by
+# the shared `s/^[^A-Za-z0-9_-]//` step). If these two ever diverge the label
+# lands on the wrong row, so both legs share one normaliser — see
+# cred_normalise(). Its RUN and BOUNDARY classes must therefore stay
+# byte-for-byte equal to CRED_BLOB_TABLE_RE's — the run's `/` exclusion and the
+# boundary's `=` exclusion alike. Tightening the label test alone would leave a
+# no-longer-blob match still carrying its run into the value, which corrupts the
+# credential's identity and is worse than the mislabel it set out to fix.
+CRED_BLOB_STRIP_RE='^[A-Za-z0-9+=]{'"$CRED_BLOB_RUN_MIN"',}[+/]'
+# Partition test for an already-extracted match. It must require the SHAPES
+# after the boundary, not merely a long run: a generic assignment with a long
+# key (`myverylongsecretname=value…`) is 20 run chars then a boundary, so a
+# run-only test would classify it as blob AND strip its key, corrupting the
+# value.
+CRED_BLOB_ANCHORED_RE='^'"$CRED_BLOB_TABLE_RE"
+# One combined extraction pattern, so the corpus is decoded and scanned ONCE.
+# The blob form is listed first and starts further left than the plain form
+# would for the same token, and POSIX alternation is leftmost-longest, so a
+# genuinely blob-embedded token is extracted WITH its run.
+CRED_TABLE_SCAN_RE='('"$CRED_BLOB_TABLE_RE"'|'"$CRED_TABLE_RE"')'
 # The locator's masked-display test, kept as a REGEX rather than a glob and kept
 # byte-for-byte equivalent to the table's own `x ~ /^[a-z0-9_-]+\*\*\*/`. It must
 # stay anchored and must require the WHOLE run before `***` to be class
@@ -2893,17 +3001,68 @@ if want safety; then
           ) catch $raw
       '
     export CRED_DECODE_FILTER
+    # 🔴 DECODE EXACTLY ONCE. One jq startup per session dominated the live
+    # seven-day runtime, which is why the batching above exists — so deriving
+    # the blob-evidence set (#2522) from a SECOND decode pass would silently
+    # undo that work. The corpus is scanned once with the combined pattern and
+    # the two sets are partitioned from the extracted matches, which are a tiny
+    # fraction of the input. The batching contract test pins this: it asserts
+    # exactly ONE credential-table jq invocation, and it caught the two-pass
+    # version of this change.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
       | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
           'awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
       | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
-      | grep -ahoEi "$CRED_TABLE_RE" 2>/dev/null \
-      | tr ';&|' '\n' | grep -v '^$' \
-      | sed -E -e 's/^[^A-Za-z0-9_-]//' \
-        -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
-        -e "s/^[^:=]*[:=][[:space:]]*[\"']?([^=].*)$/\1/" \
-        -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
-      | grep -E . | sort -u |
+      | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null > "$CREDMATCH"
+    # Shared normaliser. BOTH the value list and the blob set run through THIS
+    # function, so the two can never normalise differently — a divergence would
+    # attach the label to the wrong row, which is worse than no label at all.
+    cred_normalise() {
+      tr ';&|' '\n' | grep -v '^$' \
+        | sed -E -e 's/^[^A-Za-z0-9_-]//' \
+          -e "s/^[^:=]*[:=][[:space:]]*[\"']?(.+)$/\1/" \
+          -e "s/^[^:=]*[:=][[:space:]]*[\"']?([^=].*)$/\1/" \
+          -e 's/^([A-Za-z0-9_-]+)\*\*\*+.*$/\1***/' \
+        | grep -E . | sort -u
+    }
+    # A blob match carries its run; stripping run+boundary yields the identical
+    # string the plain leg produces for the same credential (whose single
+    # boundary char cred_normalise removes), so the two sets are comparable.
+    cred_blob_matches() { grep -aEi "$CRED_BLOB_ANCHORED_RE" "$CREDMATCH" 2>/dev/null \
+                          | sed -E "s|$CRED_BLOB_STRIP_RE||"; }
+    cred_plain_matches() { grep -avEi "$CRED_BLOB_ANCHORED_RE" "$CREDMATCH" 2>/dev/null; }
+    # The label needs the ABSENCE of a plain occurrence, not the presence of a
+    # blob one. `cred_normalise` ends in `sort -u`, so a credential seen both
+    # inside an encoded blob and plainly collapses to ONE row; membership in the
+    # blob set alone then labelled that row "likely a chance substring" and
+    # buried the plain occurrence — the genuine exposure evidence, and exactly
+    # the shape a real leak takes (a leaked token appears in prose AND inside an
+    # encoded payload of the same transcript). Subtracting the plain set makes
+    # the set what its name claims: values whose occurrences are ALL blob-embedded.
+    # This is the ambiguity-falls-through-to-the-plain-row rule the label's own
+    # contract states, enforced rather than assumed.
+    cred_plain_matches | cred_normalise > "$CREDPLAIN"
+    # Derived from the SAME extracted matches as the table — so a complete image
+    # payload, excluded upstream by the decode filter, can no more manufacture a
+    # blob label than it can manufacture a table row.
+    #
+    # Subtraction via awk on a FILE, not `comm`: both sides are `sort -u` output,
+    # but `comm` re-compares them itself, so the two would have to agree on
+    # collation as well as on order. Set membership sidesteps that entirely, and
+    # matches the file-reading idiom the label pass already uses below (getline
+    # on an empty or missing file simply yields nothing, whereas the NR==FNR
+    # idiom would silently eat the first data line when the plain set is empty —
+    # which here would drop a real credential's label).
+    cred_blob_matches | cred_normalise \
+      | awk -v plainfile="$CREDPLAIN" '
+          BEGIN {
+            while ((getline _p < plainfile) > 0) if (_p != "") plain[_p] = 1
+            close(plainfile)
+          }
+          !($0 in plain)
+        ' > "$CREDBLOB"
+    { cred_blob_matches; cred_plain_matches; } \
+      | cred_normalise |
       # Normalise every match to its UNDERLYING VALUE before any dedup:
       # (1) split compound assignments on `;` — the generic alternative's value
       #     class includes `;`, so `GITHUB_TOKEN=ghp_…;AWS_…=AKIA…` is ONE
@@ -2941,7 +3100,15 @@ if want safety; then
       #     weak-bucket rows; the asymmetry is chosen — a splittable fragment
       #     only ever reaches a high-signal row by passing a FULL shape regex,
       #     while not splitting silently drops a real second credential.
-    awk '
+    awk -v blobfile="$CREDBLOB" '
+      # Blob-evidence set read as a FILE, never with a here-doc join: getline on
+      # a missing or EMPTY file simply yields nothing, whereas the NR==FNR idiom
+      # silently consumes the first DATA line when the joined file is empty —
+      # which here would drop a real credential from the table.
+      BEGIN {
+        while ((getline _bl < blobfile) > 0) if (_bl != "") blob[_bl] = 1
+        close(blobfile)
+      }
       # FULL-shape validation, not prefix sniffing: a generic value that merely
       # BEGINS like a token (`token=ghp_abcdefgh`, too short to be one) must
       # stay in the weak bucket, or the high-signal rows inherit false
@@ -2972,6 +3139,14 @@ if want safety; then
         # prefix+mask form under these regexes, and the weak generic bucket
         # keeps its own label.
         else if (x ~ /^[a-z0-9_-]+\*\*\*/) s = s " [masked-display]"
+        # BLOB-EMBEDDED (#2522) — a LABEL, never a filter. The row keeps its
+        # shape and its count; only the triage order changes. Applied last so it
+        # composes with [masked-display] rather than replacing it, and applied
+        # ONLY on positive run evidence, so every ambiguous value falls through
+        # to the plain high-signal row. That asymmetry is the whole design: a
+        # missing label costs one extra triage, a wrong label buries a live
+        # credential.
+        if ($0 in blob) s = s " [blob-embedded: inside a base64 run, likely a chance substring]"
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /'
     # Concentration, mirroring the injection detector and placed directly under

@@ -766,6 +766,226 @@ if grep -q 'redacted' < <(grep 'boom' <<<"$ROUT"); then
 else bad "mid-blob token is still redacted on output" "$(printf '%s' "$ROUT" | grep 'boom' | head -1)"; fi
 nocheck "mid-blob raw token never appears" "$ROUT" "$(ex __GHPE__)"
 
+# ── 6d³. blob-embedded LABEL requires base64-run evidence (#2522) ─────────────
+# The boundary anchor above rejects a token whose preceding char is in
+# [A-Za-z0-9_-]. It cannot reject one whose boundary char is `+`, `/` or `=` —
+# those ARE outside the anchor class and are also base64 characters, so a token
+# shape occurring by chance inside an encoded blob is counted as a real
+# credential. Measured 2026-07-25: 35 of 113 GitHub-token-shaped matches were
+# chance substrings inside Codex `encrypted_content` blobs.
+#
+# #2520 tried to key that on the boundary CHARACTER alone. Only `+`/`/` CAN
+# match mid-blob, but that does not make `/` MEAN mid-blob — a JWT in a URL
+# path segment takes `/` as its boundary too, so the label would have downgraded
+# a genuinely exposed credential. The evidence required is therefore a
+# surrounding base64 RUN, never the boundary char.
+#
+# The label NEVER suppresses: the row keeps its shape and its count, so a
+# mislabelled row is still triaged. Ambiguity fails closed to the plain row.
+echo
+echo "blob-embedded label (base64-run evidence, #2522)"
+
+# (1) Token inside a real base64 run → labelled.
+mkdir -p "$FIX/blobrun"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__GHPE__zz"}]}}\n' > "$FIX/blobrun/s.jsonl"
+subst "$FIX/blobrun/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobrun" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  ok "a token inside a base64 run is labelled blob-embedded"
+else bad "a token inside a base64 run is labelled blob-embedded" "$TABLE"; fi
+# NOTHING SUPPRESSED: the shape and its count survive the label.
+if grep -qE '^[[:space:]]+1 github-token' <<<"$TABLE"; then
+  ok "the blob-embedded row keeps its shape and count (no suppression)"
+else bad "the blob-embedded row keeps its shape and count (no suppression)" "$TABLE"; fi
+
+# (2) THE COUNTEREXAMPLE that closed #2520: a JWT as a URL path segment takes
+# `/` as its boundary char, but `test/session` is 12 run chars — under the
+# threshold — so it must stay a plain high-signal row.
+mkdir -p "$FIX/urljwt"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"GET https://example.test/session/__JWT__ HTTP/1.1"}]}}\n' > "$FIX/urljwt/s.jsonl"
+subst "$FIX/urljwt/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/urljwt" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'jwt-like' <<<"$TABLE"; then
+  ok "a JWT in a URL path is still reported"
+else bad "a JWT in a URL path is still reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a JWT in a URL path is NOT downgraded to blob-embedded" "$TABLE"
+else ok "a JWT in a URL path is NOT downgraded to blob-embedded"; fi
+
+# (2b) The SAME failure through the `=` boundary, which (2) does not reach: `=`
+# is both a base64 padding character AND the assignment operator, so an
+# assignment whose KEY is a long unbroken alphanumeric run clears the run
+# threshold on its own. `MY_LONG_SECRET_TOKEN=` is safe (underscores break the
+# run) but `myverylongsecrettokenusedbytheproductionservice=` is 47 run chars — it MUST clear
+# CRED_BLOB_RUN_MIN, or this test passes on the run length and never reaches the
+# boundary check it exists to guard, and its value IS a token —
+# so a boundary class containing `=` labels the most common real leak form as
+# encoding noise. This is why the class is `[+/]`, not `[+/=]`.
+mkdir -p "$FIX/assignrun"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"myverylongsecrettokenusedbytheproductionservice=__GHPE__"}]}}\n' > "$FIX/assignrun/s.jsonl"
+subst "$FIX/assignrun/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/assignrun" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$TABLE"; then
+  ok "a token assigned to a long alphanumeric key is still reported"
+else bad "a token assigned to a long alphanumeric key is still reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a token assigned to a long alphanumeric key is NOT downgraded to blob-embedded" "$TABLE"
+else ok "a token assigned to a long alphanumeric key is NOT downgraded to blob-embedded"; fi
+
+# (2c) 🔴 (2) PASSES ONLY BECAUSE ITS PATH IS SHORT, so it never actually tested
+# the threshold. `test/session` is 12 run chars against a minimum of 16 — one
+# value that happens to sit under the bar, with nothing at or past it. An
+# ordinary REST path clears the bar easily, because `/` was itself in the RUN
+# class: `test/api/v1/sessions` is 20, so the very same JWT is downgraded to
+# "probably encoding noise" purely for being one path segment deeper. Both
+# fixtures below are real-shaped URLs, and both must stay plain high-signal.
+#
+# The discriminator is the UNBROKEN run, not its total length: base64 emits `/`
+# roughly once per 64 characters, so a genuine blob has long slash-free
+# stretches, while a URL path is short segments separated by slashes. Excluding
+# `/` from the run class separates them and fails in the SAFE direction — a blob
+# whose last slash-free stretch happens to be short costs one extra triage,
+# where the alternative buries a live credential.
+mkdir -p "$FIX/urljwtdeep"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"GET https://example.test/api/v1/sessions/__JWT__ HTTP/1.1"}]}}\n' > "$FIX/urljwtdeep/s.jsonl"
+subst "$FIX/urljwtdeep/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/urljwtdeep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'jwt-like' <<<"$TABLE"; then
+  ok "a JWT in a DEEP URL path is still reported"
+else bad "a JWT in a DEEP URL path is still reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a JWT in a DEEP URL path is NOT downgraded to blob-embedded" "$TABLE"
+else ok "a JWT in a DEEP URL path is NOT downgraded to blob-embedded"; fi
+
+# The same defect reaches a github-token, which is the higher-severity half: a
+# token pasted in an API URL is a live credential in a transcript.
+mkdir -p "$FIX/urltokdeep"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"GET https://api.example.test/v2/organizations/tokens/__GHPE__ HTTP/1.1"}]}}\n' > "$FIX/urltokdeep/s.jsonl"
+subst "$FIX/urltokdeep/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/urltokdeep" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$TABLE"; then
+  ok "a token in a DEEP URL path is still reported"
+else bad "a token in a DEEP URL path is still reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a token in a DEEP URL path is NOT downgraded to blob-embedded" "$TABLE"
+else ok "a token in a DEEP URL path is NOT downgraded to blob-embedded"; fi
+
+# (2e) A SINGLE LONG PATH SEGMENT is not blob evidence either (CodeRabbit Major
+# on the first fix). Excluding `/` from the run stopped multi-segment paths from
+# chaining into one long run, but left the run as a single SEGMENT — and 16 is
+# well under what ordinary segments reach. A bare 32-character hex id is the
+# commonest long segment in a REST URL and cleared the old bar outright, so the
+# threshold is now 40: above every identifier shape that actually occurs, and
+# still reached about half the time by a genuine multi-hundred-character blob.
+mkdir -p "$FIX/urlseg"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"GET https://example.test/0f8e7d6c5b4a392817263544536271a1/__GHPE__ HTTP/1.1"}]}}\n' > "$FIX/urlseg/s.jsonl"
+subst "$FIX/urlseg/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/urlseg" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$TABLE"; then
+  ok "a token after a 32-char hex path segment is still reported"
+else bad "a token after a 32-char hex path segment is still reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a token after a 32-char hex path segment is NOT downgraded to blob-embedded" "$TABLE"
+else ok "a token after a 32-char hex path segment is NOT downgraded to blob-embedded"; fi
+
+# (2d) PARITY INVARIANT between the label test and the strip.
+#
+# Stated honestly: reverting the strip's run class ALONE breaks no behavioural
+# assertion above, and I verified that by ablation rather than assuming it. It
+# cannot, because the strip only ever sees matches the label test already
+# accepted, and those carry no `/` in their run — so on reachable input the two
+# classes are equivalent. That makes the strip's class unobservable by example,
+# and an unobservable invariant is exactly the kind that silently rots: loosen
+# the label test later without touching the strip and a no-longer-blob match
+# keeps its run inside the credential's value, corrupting its identity.
+#
+# So bind it structurally instead of behaviourally — assert the two classes are
+# byte-identical, which is what the comments on both constants already require.
+#
+# BOTH classes are compared, run AND boundary. Comparing only the run leaves the
+# same rot one field over: if the boundary classes drift, the strip removes a
+# different span than the label matched, so an accepted match keeps part of its
+# run inside the credential's value. Extract each regex's run class and its
+# trailing boundary class and require both to agree.
+BLOB_TABLE_RUN=$(grep -o "CRED_BLOB_TABLE_RE='\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*='//")
+BLOB_STRIP_RUN=$(grep -o "CRED_BLOB_STRIP_RE='\^\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*='\^//")
+BLOB_TABLE_BND=$(grep -o "CRED_BLOB_TABLE_RE='.*',}\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*,}//")
+BLOB_STRIP_BND=$(grep -o "CRED_BLOB_STRIP_RE='.*',}\[[^]]*\]" "$TARGET" | head -1 | sed "s/.*,}//")
+if [ -n "$BLOB_TABLE_RUN" ] && [ -n "$BLOB_STRIP_RUN" ] && \
+   [ -n "$BLOB_TABLE_BND" ] && [ -n "$BLOB_STRIP_BND" ]; then
+  ok "parity control: both blob run AND boundary classes were located"
+else bad "parity control: both blob run AND boundary classes were located" \
+  "run: '$BLOB_TABLE_RUN'/'$BLOB_STRIP_RUN'  bnd: '$BLOB_TABLE_BND'/'$BLOB_STRIP_BND'"; fi
+if [ "$BLOB_TABLE_RUN" = "$BLOB_STRIP_RUN" ]; then
+  ok "the blob label and strip share one run class (byte-identical)"
+else bad "the blob label and strip share one run class (byte-identical)" \
+  "label=$BLOB_TABLE_RUN strip=$BLOB_STRIP_RUN"; fi
+if [ "$BLOB_TABLE_BND" = "$BLOB_STRIP_BND" ]; then
+  ok "the blob label and strip share one boundary class (byte-identical)"
+else bad "the blob label and strip share one boundary class (byte-identical)" \
+  "label=$BLOB_TABLE_BND strip=$BLOB_STRIP_BND"; fi
+
+# (3) A complete image payload is excluded from the table upstream, so it must
+# not manufacture a blob-embedded row either — the label is derived from the
+# SAME filtered input as the table, not from a second unfiltered scan.
+mkdir -p "$FIX/blobimg/projects" "$FIX/blobimg/codex/sessions"
+cat > "$FIX/blobimg/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BBBB"}]}}
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimg/codex/sessions/s.jsonl" && rm -f "$FIX/blobimg/codex/sessions/s.jsonl.bak"
+subst "$FIX/blobimg/codex/sessions/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimg/projects" CODEX_HOME="$FIX/blobimg/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "an excluded image payload produces no blob-embedded row" "$TABLE"
+else ok "an excluded image payload produces no blob-embedded row"; fi
+
+# (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
+# labelled. The label's stated rule is that ambiguity falls through to the plain
+# high-signal row, but membership alone made the set "values with *a* blob
+# occurrence" rather than "values whose occurrences are *all* blob-embedded".
+# `cred_normalise` ends in `sort -u`, so a credential that appears both inside
+# an encoded blob and plainly collapses to ONE row — and that row was labelled
+# "likely a chance substring", burying the plain occurrence, which is the
+# genuine exposure evidence. The label must therefore require the ABSENCE of a
+# plain occurrence, not merely the presence of a blob one.
+#
+# This is the worst direction the label can fail in: it downgrades exactly the
+# credential a real leak produces, since a leaked token routinely appears both
+# in prose and inside an encoded payload of the same transcript.
+mkdir -p "$FIX/blobandplain"
+{
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__GHPE__zz"}]}}\n'
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPE__zz"}]}}\n'
+} > "$FIX/blobandplain/s.jsonl"
+subst "$FIX/blobandplain/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobandplain" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+# CONTROL: the row must exist at all, or the assertion below passes vacuously
+# on an empty table and proves nothing about the label.
+if grep -q 'github-token' <<<"$TABLE"; then
+  ok "control: a token occurring both blob-embedded and plainly is reported"
+else bad "control: a token occurring both blob-embedded and plainly is reported" "$TABLE"; fi
+if grep -q 'blob-embedded' <<<"$TABLE"; then
+  bad "a token ALSO occurring plainly is NOT labelled blob-embedded" "$TABLE"
+else ok "a token ALSO occurring plainly is NOT labelled blob-embedded"; fi
+
 # An ASSIGNMENT-wrapped token (`GITHUB_TOKEN=ghp_…`) is the most common real
 # leak form, and grep's leftmost-match rule hands the whole string to the
 # generic alternative — so the classifier must look INSIDE the value or the
