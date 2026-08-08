@@ -248,6 +248,14 @@ assert_prose "${constitution}" 'A refusal is scoped to its ROUND, never to the h
 # durable old refusal reads as current forever and the skip never expires.
 assert_prose "${constitution}" 'a refusal justifies skipping only when THIS round has already posted a CodeRabbit request marker' \
   "refusal provenance is not tied to a request marker, so a durable old refusal can read as current"
+# ...and the marker test must NOT be claimed mechanical on its payload alone. At an unchanged SHA the
+# previous round's marker is indistinguishable from this round's by head, provider, comment id or
+# timestamp, so a durable refusal postdates the OLD marker just as well and the restarted round's
+# mandatory first CodeRabbit request is skipped — the same-SHA refutation path this section protects.
+assert_prose "${constitution}" 'do NOT identify its round' \
+  "the marker payload is presented as round-identifying, so a same-SHA restart reuses the old round's marker"
+assert_prose "${constitution}" 'newest RESTARTING ARTIFACT at that head' \
+  "no round boundary is derivable, so the marker test cannot distinguish a restarted round"
 assert_prose "${constitution}" 'a refusal never pre-empts the FIRST CodeRabbit request of a round' \
   "a stale refusal could still pre-empt a round's first CodeRabbit request"
 # The optimisation must not become a way around the gate, nor a shortcut into the local fallback.

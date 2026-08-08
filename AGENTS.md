@@ -1245,8 +1245,22 @@ result at the current head — self-promotion is forbidden before that. Request 
   observation in the new round, and the status is durable, so the old refusal reads as current every
   time and the skip fires forever — the exact behaviour this paragraph forbids. Attribute it instead:
   **a refusal justifies skipping only when THIS round has already posted a CodeRabbit request marker
-  at this head and the refusal postdates that marker.** The markers carry an id and a timestamp for
-  exactly this, so the test is mechanical rather than a judgement about "rounds".
+  at this head and the refusal postdates that marker.**
+  🔴 **A marker's id and timestamp alone do NOT identify its round — derive the boundary, or this
+  test fails in exactly the case it was written for.** At an unchanged SHA the previous round's
+  marker is indistinguishable from this round's: head, provider, comment id and timestamp are all
+  equally "at this head", and a durable refusal postdates the *old* marker just as well as it would
+  a new one. Read literally, the test then skips the restarted round's mandatory first CodeRabbit
+  request — the same-SHA refutation path, which is the one case the paragraph above exists to
+  protect. A payload carrying only `<sha>` and `provider=` cannot answer a question about rounds.
+  **The boundary is the newest RESTARTING ARTIFACT at that head, and the loop already emits one.**
+  A restart follows findings, and findings are fixed-or-refuted with their threads resolved before
+  it, so the newest authenticated disclosed resolution reply at that head is what opens the new
+  round. The test is therefore: **skip only when a CodeRabbit request marker at this head is NEWER
+  than that artifact, and the refusal postdates that marker.** Where no findings have arrived at
+  this head there has been only one round and no artifact, so the marker test stands unqualified.
+  This mirrors the same-head Codex retry rule below, which likewise supersedes findings by
+  "threads resolved → later re-request → later clean marker" rather than by timestamps alone.
   The consequence is deliberate and worth stating plainly: **a refusal never pre-empts the FIRST
   CodeRabbit request of a round.** What the probe kills is re-asking a head *within* a round after it
   has already answered — which is where the measured waste was, since #2720's eight requests were
