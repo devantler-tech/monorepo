@@ -758,3 +758,61 @@ func TestDecode_ValidatesTheAuthorRepresentationLoginSelects(t *testing.T) {
 		}
 	}
 }
+
+// A block quote is how the maintainer shows an example, and CommonMark keeps
+// applying the indented-code-block rule INSIDE one. `>     🤖 Sent by …` is a
+// block quote containing indented code — an example of a marker, not a marker.
+//
+// The code-block gate ran against the raw line, where the leading `>` is content
+// and stops the column count at zero, so the gate never fired; the sender-marker
+// pattern then consumed `>` and every following space itself and matched. The
+// maintainer's own comment was reported as agent output — the one direction this
+// guard must never fail in.
+func TestClassify_IndentedExampleInsideABlockQuoteIsNotASenderMarker(t *testing.T) {
+	examples := []string{
+		">     🤖 Sent by the Agentic Engineer\n\nThat is what the sibling emits; fix the emitter.",
+		">>     🤖 Requested by the Daily AI Engineer\n\nnested quote, still an example",
+		"> \t🤖 Sent by the Agentic Engineer\n\nquoted, then a tab past the stop",
+	}
+	for _, body := range examples {
+		if got := Classify(body); got != Unattributable {
+			t.Errorf("Classify(%q) = %v; want %v — an indented example inside a block quote is not the comment's own voice",
+				body, got, Unattributable)
+		}
+	}
+}
+
+// Control for the test above: the gate must not swallow the shape it exists to
+// catch. A quoted sender marker at ordinary block-quote indentation is exactly
+// the sibling-lane defect (#2584), and stays a violation.
+func TestClassify_OrdinarilyQuotedSenderMarkerIsStillAViolation(t *testing.T) {
+	markers := []string{
+		"> 🤖 Sent by the Agentic Engineer\n\none space after the marker",
+		">    🤖 Requested by the Daily AI Engineer\n\nthree spaces: still a paragraph",
+		"> Requested by the 🤖 Daily AI Engineer\n\nthe measured sibling shape",
+	}
+	for _, body := range markers {
+		if got := Classify(body); got != SenderMarker {
+			t.Errorf("Classify(%q) = %v; want %v", body, got, SenderMarker)
+		}
+	}
+}
+
+// blockquoteContent consumes the marker and at most ONE following space per
+// level, which is what decides whether the remainder reaches column four.
+func TestBlockquoteContent_ConsumesOneSpacePerLevel(t *testing.T) {
+	cases := map[string]string{
+		"> x":           "x",
+		">x":            "x",
+		">     x":       "    x",
+		">>     x":      "    x",
+		"> > x":         "x",
+		"no quote here": "no quote here",
+		"    no quote":  "    no quote",
+	}
+	for line, want := range cases {
+		if got := blockquoteContent(line); got != want {
+			t.Errorf("blockquoteContent(%q) = %q; want %q", line, got, want)
+		}
+	}
+}

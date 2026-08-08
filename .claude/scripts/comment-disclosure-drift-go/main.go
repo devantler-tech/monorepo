@@ -219,6 +219,32 @@ func firstContentLine(body string) (string, bool) {
 	return "", false
 }
 
+// blockquoteContent strips leading block-quote markers and returns the content
+// inside them, KEEPING whatever indentation remains.
+//
+// CommonMark applies the indented-code-block rule inside a block quote, so
+// `>     🤖 Sent by …` is an example of a marker rather than a marker. The
+// code-block gate could not see that: run against the raw line, the leading `>`
+// is content and the column count stops at zero, so the gate never fired and the
+// sender-marker pattern — which consumes `>` and every following space itself —
+// matched the maintainer's own quoted example.
+//
+// A marker consumes at most ONE following space, per CommonMark, which is what
+// makes `>` + five spaces reach column four while `>` + one space does not.
+//
+// A TAB after the marker is deliberately NOT consumed. Partial tab consumption
+// is fiddly to get right, and leaving it makes isMarkdownCodeBlock expand it to
+// column four and classify the line as an example. That errs toward a missed
+// detection rather than toward flagging the control channel — the same asymmetry
+// the rest of this guard is built on.
+func blockquoteContent(line string) string {
+	for strings.HasPrefix(line, ">") {
+		line = line[1:]
+		line = strings.TrimPrefix(line, " ")
+	}
+	return line
+}
+
 // isMarkdownCodeBlock reports whether a line's indentation makes GitHub render
 // it as an indented code block — four or more spaces, or a leading tab
 // (CommonMark; one to three spaces is ordinary text).
@@ -369,8 +395,10 @@ func Classify(body string) Verdict {
 		return Unattributable
 	}
 	// An indented first line is example/quoted text, not the comment's own
-	// voice, so it carries no positive evidence of agent authorship.
-	if isMarkdownCodeBlock(raw) {
+	// voice, so it carries no positive evidence of agent authorship. Measured
+	// INSIDE any block quote, because CommonMark keeps applying the code-block
+	// rule there and a quoted example is still an example.
+	if isMarkdownCodeBlock(blockquoteContent(raw)) {
 		return Unattributable
 	}
 	first := strings.TrimSpace(raw)
