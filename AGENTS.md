@@ -2738,7 +2738,8 @@ normal overlap rather than evidence that a slot is free.
 | **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 07:00, 19:00 |
 | **Cursor** — `cursor/*`, uneven hours at `:30` | 01:30 … 23:30 | — |
 
-Both machine-local Agentic Engineer lanes dispatch **every hour**. Cursor keeps its every-2-hours
+Both machine-local Agentic Engineer lanes are **scheduled** every hour — for what the Claude lane
+actually keeps, see *Scheduled is not delivered* below. Cursor keeps its every-2-hours
 cloud cadence, centered between the two machine-local offsets on uneven hours. The Agent Improver
 keeps its 4×/day rotation (00 Claude, 07 Codex, 12 Claude, 19 Codex) as additional `:00` starts; those
 slots no longer replace an Agentic Engineer tick. This table covers the two scheduled engineering
@@ -2759,9 +2760,22 @@ case is safe by construction — same namespace, same deterministic branch name,
 is refused (see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim
 branch.
 
-**Your Agentic Engineer's next scheduled tick is always one hour later.** The Agent Improver's four
-daily starts are additional work, not replacement slots. That hour is the gap **between runs, not a
-per-run time budget**; it bounds a carry-forward without telling an active run to stop early. Each run works
+🔴 **Scheduled is not delivered — on the Claude lane about a third of ticks never happen.** Measured
+across one identical window (2026-08-02T03:50Z → 2026-08-08T19:50Z, **161 scheduled slots per lane**):
+**Codex dispatched 161/161**, because that scheduler starts a run even when the previous one is still
+open — one run whose record stayed open for 240 minutes did not block any of the four ticks behind it.
+**Claude dispatched 108/161**: its scheduler refuses any dispatch that would overlap the previous run
+of the same task and records it as `per_task_limit`, so **53 ticks — 32.9% — were dropped**, silently,
+producing no artifact anywhere. That is the second consecutive measurement of the same behaviour
+(36.6% over 2026-08-01→08-07), so it is the lane's normal state, not an incident, and the effective
+Claude interval is **~1.5 hours**. The Agent Improver is unaffected: the Claude store records **zero**
+dropped improver dispatches, and the Codex scheduler refuses none.
+**So never time anything off "the next tick."** A carry-forward, a claim-expiry judgement, or a "the
+next run will collect this" decision is wrong about a third of the time on Claude, and always in the
+direction of waiting **longer** than planned — so prefer finishing inside the current run over handing
+work to a tick that may not come. The Agent Improver's four daily starts are additional work, not
+replacement slots. The scheduled interval is the gap **between runs, not a per-run time budget**; it
+bounds a carry-forward without telling an active run to stop early. Each run works
 *The work-selection ladder* top-down — **breakage → every open PR you own or trust, drafts included →
 security issues → bugs → the oldest actionable issue** — capturing new
 non-trivial finds as issues (see *Issue-driven*).
