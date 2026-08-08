@@ -1210,6 +1210,20 @@ result at the current head — self-promotion is forbidden before that. Request 
   and spend the **weekly-limited** Codex quota in its place — inverting the maintainer's own reason for
   the lane order (spend the cheapest-to-exhaust lane first). Re-read per PR instead; the read is free,
   which is the entire point.
+  ⚠️ **Know exactly what this probe does and does not buy.** It cannot prevent the **first** refusal at
+  a **fresh** head: a new SHA carries only the never-reviewed default until some request is spent, so
+  the probe has nothing to read there. What it prevents is every **repeat** at a head already known to
+  be refusing — which is the bulk of the measured waste, since the eight wasted #2720 requests were
+  five rounds of re-asking heads that had already answered.
+  **That residual is accepted deliberately, and the obvious "fix" for it is worse.** Carrying a
+  portfolio-wide refusal forward with a TTL would cover the fresh-head case, and it re-creates the
+  latch this rule exists to forbid: measured 2026-08-08, an agent took #2722's 19:03Z refusal as
+  portfolio-wide, skipped CodeRabbit on #2727 at 19:17Z, and spent the **weekly-limited** Codex lane —
+  while #2727's own head status read `Review skipped: automatic reviews are disabled` and CodeRabbit
+  was in fact serving. Fourteen minutes of inherited state was already too much, against a window that
+  clears in ~28. So a portfolio-wide observation may **inform** how patiently you wait; it may never
+  **replace** the per-head read, and it may never skip a head whose own status says the lane was never
+  asked. One spent request per fresh head is the price of not inverting the lane order.
   ⚠️ **This changes WHICH LANE IS ASKED FIRST, never WHETHER A REVIEW IS REQUIRED.** The green-review
   gate is untouched: every PR still needs one successful current-head review from some lane, or a
   qualifying local review round. Skipping a lane that is *demonstrably refusing at that head* is

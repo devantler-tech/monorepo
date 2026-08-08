@@ -211,7 +211,9 @@ printf '%s' "${green_body}" | grep -Fq "${expected_head:0:10}" ||
   fail "fixture clean-pass comment no longer names the same head; ordering trap not reproduced"
 
 # The contract must be a required PR check, including when its own workflow wiring changes.
-# A provider's rate limit is account-wide and time-boxed, so it is one fact per run, not one per PR.
+# A provider's rate limit is time-boxed and SHORT, so it is one fact PER HEAD, re-read per PR — never
+# one fact per run. The window measurably clears in ~28 minutes, so a run-wide latch skips the free
+# CodeRabbit lane over an expired refusal and spends the weekly-limited Codex lane instead.
 # Measured 2026-08-08: 54 review requests -> 16 real CodeRabbit reviews, 17 rate-limit refusals, and
 # on #2720 all 8 CodeRabbit requests were rate-limited across five rounds because lane priority
 # re-asked it every time. These pin the probe, that it is a READ, and that the gate is untouched.
@@ -223,11 +225,20 @@ assert_prose "${constitution}" 'Do NOT latch that refusal for the whole run' \
   "a short-lived quota refusal could be latched run-wide, burning the weekly Codex lane"
 assert_prose "${constitution}" 'the window cleared inside ~28 minutes' \
   "the measured quota-window duration that refutes a run-wide latch is not recorded"
+# The probe's LIMIT must be stated, or a reader takes it for a stronger guarantee than it is and is
+# surprised by the one unavoidable refusal per fresh head.
+assert_prose "${constitution}" 'cannot prevent the **first** refusal at' \
+  "the probe's fresh-head limit is unstated, so it reads as preventing every refusal"
+# ...and the obvious remedy for that limit must stay closed. A portfolio-wide TTL covers the fresh
+# head and re-creates the latch: measured 2026-08-08, 14 minutes of inherited state already inverted
+# the lane order on #2727 while CodeRabbit was serving at that head.
+assert_prose "${constitution}" 'may never **replace** the per-head read' \
+  "a portfolio-wide quota observation could replace the per-head read, re-creating the latch"
 # The optimisation must not become a way around the gate, nor a shortcut into the local fallback.
 assert_prose "${constitution}" 'never WHETHER A REVIEW IS REQUIRED' \
   "the lane probe could be read as relaxing the green-review gate"
 assert_prose "${constitution}" 'never** evidence for the *Local review round* fallback on its own' \
-  "a run-level quota window could be misread as satisfying the local-review-round evidence bar"
+  "a per-head quota refusal could be misread as satisfying the local-review-round evidence bar"
 
 grep -Fq 'review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}' "${workflow}" ||
   fail "CI does not export the review-provider contract change filter"
