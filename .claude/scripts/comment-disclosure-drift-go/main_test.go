@@ -611,6 +611,78 @@ func TestDecode_ArrayRecordsMustCarryAuthorAndBody(t *testing.T) {
 	}
 }
 
+// Codex P2 (#2720): the BARE input form accepted the JSON literal `null`, which
+// unmarshals into a nil slice WITHOUT error — so an assembler that serialized a
+// missing comment list produced "all 0 ... satisfy" and exit 0. The wrapped form
+// already rejected {"comments":null} explicitly, so the two entry points
+// disagreed about the same malformed payload. Measured before the fix: `null`
+// exited 0 while {"comments":null} exited 2.
+//
+// Pinned in BOTH directions — a fix that rejected every bare payload would pass
+// the negative half while deleting the tool's advertised input path.
+func TestDecode_BarePayloadMustBeAnArray(t *testing.T) {
+	bad := []string{
+		`null`,
+		` null `,
+		`5`,
+		`"a string"`,
+		`true`,
+	}
+	for _, raw := range bad {
+		if _, err := decode([]byte(raw)); err == nil {
+			t.Errorf("decode(%s) succeeded; want an error so a missing payload cannot masquerade as a clean sweep", raw)
+		}
+	}
+	good := []string{
+		`[]`,
+		`[{"id":1,"body":"x","author":"devantler"}]`,
+		`{"comments":[{"id":1,"body":"x","author":"devantler"}]}`,
+	}
+	for _, raw := range good {
+		if _, err := decode([]byte(raw)); err != nil {
+			t.Errorf("decode(%s) failed: %v; the real input path must still work", raw, err)
+		}
+	}
+}
+
+// Codex P2 (#2720): validateRecords TRIMMED the login to decide it was
+// identifiable, while login() returned the untrimmed value for the exact-author
+// comparison — so a padded "devantler " passed validation and was then skipped by
+// Analyse as somebody else's comment. Measured before the fix: this record
+// carrying an undisclosed `@codex review` exited 0 with "all 0 ... satisfy",
+// while the identical record with an unpadded login exited 1 with a VIOLATION.
+//
+// The control is the point: padding alone must not change the verdict from
+// "violation" to "nothing to check".
+func TestDecode_PaddedAuthorIsRejectedRatherThanSilentlySkipped(t *testing.T) {
+	padded := []string{
+		`[{"id":1,"body":"@codex review","author":"devantler "}]`,
+		`[{"id":1,"body":"@codex review","author":" devantler"}]`,
+		`[{"id":1,"body":"@codex review","user":{"login":"devantler "}}]`,
+	}
+	for _, raw := range padded {
+		if _, err := decode([]byte(raw)); err == nil {
+			t.Errorf("decode(%s) succeeded; a padded login is skipped by Analyse, so accepting it reports a clean sweep over an unchecked comment", raw)
+		}
+	}
+	// Control: the same record with an exact login still reaches classification
+	// and still violates. Without this, rejecting every login would "pass".
+	comments, err := decode([]byte(`[{"id":1,"body":"@codex review","author":"devantler"}]`))
+	if err != nil {
+		t.Fatalf("unpadded control rejected: %v", err)
+	}
+	report := Analyse(comments, "devantler")
+	if report.SkippedAuthors != 0 {
+		t.Errorf("unpadded control was skipped as a different author (%d); the exact login must be classified", report.SkippedAuthors)
+	}
+	if report.Considered != 1 {
+		t.Errorf("unpadded control considered %d comments, want 1", report.Considered)
+	}
+	if got := report.Counts[UndisclosedTrigger]; got != 1 {
+		t.Errorf("unpadded control produced %d undisclosed-trigger verdicts, want 1", got)
+	}
+}
+
 // Codex P1 (#2720): the WRAPPED input form bypassed record validation entirely,
 // so {"comments":[{"message":"Not Found"}]} decoded to a zero-valued comment and
 // the guard reported a clean sweep having checked nothing.

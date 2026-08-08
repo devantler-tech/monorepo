@@ -462,25 +462,32 @@ func validateRecords(raw []byte, expected int) error {
 		}
 		author, hasAuthor := record["author"]
 		user, hasUser := record["user"]
-		// Decode the author rather than comparing its RAW JSON against `""`. A
-		// whitespace-only login — "   " — is not the empty string, so a raw
-		// comparison accepts it as identifiable, while login() later returns that
-		// same blank login and Analyse skips the record as somebody else's. The
-		// comment is then never classified and the guard reports a clean sweep: a
-		// fail-open reachable through the advertised --input path, and the second
-		// one found in this validator.
+		// Decode the author rather than comparing its RAW JSON against `""`, and
+		// require the decoded login to be EXACTLY what login() will return.
+		//
+		// Validating a normalised value while comparing an unnormalised one is the
+		// fail-open: a padded "devantler " trims to a non-empty login and passes
+		// here, but login() hands Analyse the padded string, the exact-author
+		// comparison misses, and the record is skipped as somebody else's — so a
+		// comment carrying a real violation is never classified and the guard
+		// reports a clean sweep. A whitespace-only "   " is the same bug with an
+		// empty trim. GitHub logins never contain whitespace, so a padded one is
+		// malformed input: fail closed rather than silently declining to check it.
+		identifiable := func(login string) bool {
+			return login != "" && login == strings.TrimSpace(login)
+		}
 		authored := false
 		if hasAuthor {
 			var login string
 			if err := json.Unmarshal(author, &login); err == nil {
-				authored = strings.TrimSpace(login) != ""
+				authored = identifiable(login)
 			}
 		}
 		if !authored && hasUser {
 			var login struct {
 				Login string `json:"login"`
 			}
-			if err := json.Unmarshal(user, &login); err == nil && strings.TrimSpace(login.Login) != "" {
+			if err := json.Unmarshal(user, &login); err == nil && identifiable(login.Login) {
 				authored = true
 			}
 		}
@@ -491,6 +498,18 @@ func validateRecords(raw []byte, expected int) error {
 	return nil
 }
 
+// isJSONArray reports whether an already-trimmed JSON value is a composite
+// array, judged by its opening token.
+//
+// This is deliberately a SHAPE test, not a decode test: several non-array values
+// unmarshal into a []Comment without error — `null` most importantly — so asking
+// "did it decode?" cannot distinguish a real empty array from a missing payload.
+// The opening token can, and every caller here has already trimmed and
+// non-empty-checked its input, so the first byte is the whole answer.
+func isJSONArray(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "[")
+}
+
 // decode parses a comment payload, accepting either a bare JSON array or an
 // object with a "comments" array.
 func decode(raw []byte) ([]Comment, error) {
@@ -498,8 +517,18 @@ func decode(raw []byte) ([]Comment, error) {
 	if trimmed == "" {
 		return nil, errors.New("empty payload")
 	}
-	var comments []Comment
-	if err := json.Unmarshal([]byte(trimmed), &comments); err == nil {
+	// Dispatch on the payload's ACTUAL top-level shape rather than on whether an
+	// unmarshal happened to succeed. `null` decodes into a nil []Comment without
+	// error, so a shape-blind bare path accepted a missing payload as zero records
+	// and exited 0 claiming a clean sweep — the same fail-open the wrapped form
+	// already rejected, reached through the other entry point. Deciding on the
+	// first token makes both paths enforce one rule and keeps each error specific
+	// to the form the caller actually sent.
+	if isJSONArray(trimmed) {
+		var comments []Comment
+		if err := json.Unmarshal([]byte(trimmed), &comments); err != nil {
+			return nil, fmt.Errorf("payload is not an array of comments: %w", err)
+		}
 		// Validate RECORDS, not just JSON syntax. The --input path is the
 		// advertised way to feed an assembled payload (review comments, replies),
 		// so an incomplete assembly must fail closed rather than classify nothing
@@ -515,6 +544,13 @@ func decode(raw []byte) ([]Comment, error) {
 	// nil slice and report "all 0 comments satisfy" — a swallowed API error
 	// masquerading as a clean sweep, which is the exact fail-open this guard
 	// exists to avoid. Require the key, and require it to be an array.
+	// Require the object token before probing. `null` unmarshals into a nil MAP
+	// as happily as it does into a nil slice, so without this it would reach the
+	// key lookup and be reported as an object missing its "comments" key — naming
+	// the wrong fault to whoever has to fix the payload.
+	if !strings.HasPrefix(trimmed, "{") {
+		return nil, errors.New("payload is neither a comment array nor an object carrying one")
+	}
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(trimmed), &probe); err != nil {
 		return nil, fmt.Errorf("payload is neither a comment array nor an object carrying one: %w", err)
@@ -523,10 +559,12 @@ func decode(raw []byte) ([]Comment, error) {
 	if !ok {
 		return nil, errors.New(`object payload has no "comments" key`)
 	}
-	// JSON null unmarshals into a nil slice WITHOUT error, so an explicit
-	// "comments": null would otherwise pass as zero comments and exit clean.
-	if strings.TrimSpace(string(raw)) == "null" {
-		return nil, errors.New(`object payload has a null "comments" value`)
+	// The value must be an ACTUAL array, not merely something that unmarshals
+	// into one. `null` decodes to a nil slice without error and would pass as
+	// zero comments; requiring the array token also rejects a scalar or object
+	// value, which the same rule now covers for the bare form above.
+	if !isJSONArray(strings.TrimSpace(string(raw))) {
+		return nil, errors.New(`object payload's "comments" value is not an array`)
 	}
 	var wrapped []Comment
 	if err := json.Unmarshal(raw, &wrapped); err != nil {
