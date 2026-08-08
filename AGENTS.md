@@ -1199,8 +1199,14 @@ result at the current head — self-promotion is forbidden before that. Request 
   carries it in its `description` — `Review rate limited` (a quota refusal),
   `Review skipped: automatic reviews are disabled` (the never-reviewed default), or `Review completed`
   (a run happened). So **before each CodeRabbit trigger, read that description on that PR's head**; if
-  it already reads as a quota refusal, do not post the trigger for that round — advance to Codex for
-  that PR and record the usual `cr:no-gate@<sha>`.
+  it reads as a quota refusal **that this round itself produced** — by the round-provenance test below,
+  which is part of this instruction rather than a later refinement of it — do not post the trigger for
+  that round: advance to Codex for that PR and record the usual `cr:no-gate@<sha>`.
+  **A refusal you cannot attribute to this round is **not** a reason to skip — ask.** The status is
+  durable and outlives the quota window, so an unqualified reading of this paragraph sends a same-SHA
+  restart (a refutation that changes no files) straight to the **weekly-limited** lane while the
+  **free** one has long recovered. An operative sentence is what actually gets executed, so the
+  qualification belongs here, not only in the elaboration below.
   🔴 **This read is a NEGATIVE filter only. It can show the lane refusing HERE; it can never show the
   lane serving.** The never-reviewed default means only that nothing has been tried at this head — it
   is a reason to *ask*, never evidence the lane is up. Reading it as "serving" licenses the same

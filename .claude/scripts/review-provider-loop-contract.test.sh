@@ -248,6 +248,12 @@ assert_prose "${constitution}" 'A refusal is scoped to its ROUND, never to the h
 # durable old refusal reads as current forever and the skip never expires.
 assert_prose "${constitution}" 'a refusal justifies skipping only when THIS round has already posted a CodeRabbit request marker' \
   "refusal provenance is not tied to a request marker, so a durable old refusal can read as current"
+# The OPERATIVE instruction must carry the round qualification itself. Stating the skip unconditionally
+# and qualifying it 35 lines later means an agent acts on the unqualified form first and advances to a
+# metered lane before ever reaching the refinement -- the same-SHA restart is then skipped in practice
+# however correct the later prose is. A rule is what its operative sentence says.
+assert_prose "${constitution}" 'A refusal you cannot attribute to this round is **not** a reason to skip' \
+  "the operative skip instruction is unqualified, so a durable prior-round refusal skips CodeRabbit before the round test is reached"
 # ...and the marker test must NOT be claimed mechanical on its payload alone. At an unchanged SHA the
 # previous round's marker is indistinguishable from this round's by head, provider, comment id or
 # timestamp, so a durable refusal postdates the OLD marker just as well and the restarted round's
