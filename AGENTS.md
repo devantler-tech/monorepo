@@ -1270,12 +1270,18 @@ result at the current head — self-promotion is forbidden before that. Request 
   The consequence is deliberate and worth stating plainly: **a refusal never pre-empts the FIRST
   CodeRabbit request of a round.** What the probe kills is re-asking a head *within* a round after it
   has already answered. **Size that saving honestly — most refusals are NOT what it eliminates.**
-  Re-measured on #2720 (2026-08-08): **14 CodeRabbit requests across 12 distinct heads, 10 of them
-  refused — but only 2 were same-head repeats.** Those 2 are the whole saving; the other 12 are each
-  a round's unavoidable first attempt, which this rule deliberately preserves. Counting all 14, or
-  all 10 refusals, as waste this probe removes would credit it with preventing exactly the requests
-  it is written to protect. The read is free; that is what makes that first attempt cheap rather than
-  wasteful.
+  Re-measured on #2720 (2026-08-08): **14 CodeRabbit requests, 10 of them refused — and exactly 2 were
+  second-or-later requests within the same round.** Those 2 are the saving; the other 12 each open a
+  round, and this rule preserves a round's first request on purpose. Counting all 14, or all 10
+  refusals, would credit the probe with preventing exactly the requests it is written to protect.
+  ⚠️ **Classify by ROUND, not by repeated head — the two are not the same test.** A same-SHA fix or
+  refutation opens a new round at an unchanged head, so two requests on one head can be two rounds'
+  protected first attempts rather than a saved repeat; a head-based count silently overstates. Apply
+  the same boundary the skip test uses — the newest restarting artifact at that head — and count only
+  second-or-later requests inside one round. On #2720 both pairs (`0f16c3192e`, `a90875e3ac`) carry no
+  resolution reply between their two requests, so each pair is genuinely one round; the head-based
+  count happened to agree there, which is exactly why it cannot be trusted in general. The read is
+  free; that is what makes a round's first attempt cheap rather than wasteful.
   ⚠️ **This changes WHICH LANE IS ASKED FIRST, never WHETHER A REVIEW IS REQUIRED.** The green-review
   gate is untouched: every PR still needs one successful current-head review from some lane, or a
   qualifying local review round. Skipping a lane that is *demonstrably refusing at that head* is

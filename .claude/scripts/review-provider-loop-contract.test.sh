@@ -226,9 +226,9 @@ printf '%s' "${green_body}" | grep -Fq "${expected_head:0:10}" ||
 # CodeRabbit lane over an expired refusal and spends the weekly-limited Codex lane instead.
 # Measured 2026-08-08: 54 review requests -> 16 real CodeRabbit reviews, 17 rate-limit refusals. On
 # #2720 specifically: 14 CodeRabbit requests across 12 DISTINCT heads, 10 of them refused — but only
-# 2 were same-head repeats. Because the rule preserves each round's first request, those 2 are the
-# ONLY waste this probe removes; the other 12 are unavoidable first attempts. The measurement must
-# keep the two apart or the case for the probe is inflated by refusals it never prevents.
+# 2 were second-or-later requests WITHIN ONE ROUND (classified against the restarting artifact, not
+# merely by repeated head). Those 2 are the only waste this probe removes; the other 12 each open a
+# round, whose first request the rule preserves. Keep the two apart or the case is inflated.
 # These pin the probe, that it is a READ, and that the gate is untouched.
 assert_prose "${constitution}" 'READ a lane'"'"'s quota state before spending a request on it' \
   "constitution does not require reading a lane's quota state before spending a request"
@@ -250,8 +250,13 @@ assert_prose "${constitution}" 'may never **replace** the per-head read' \
 # The measured waste must separate a round's unavoidable FIRST request from a within-round repeat.
 # Counting every refusal as waste overstates what the probe buys and hides whether the marker logic
 # still permits the repeats that ARE preventable.
-assert_prose "${constitution}" 'only 2 were same-head repeats' \
+assert_prose "${constitution}" 'second-or-later requests within the same round' \
   "the measured waste is not split into within-round repeats vs unavoidable first attempts"
+# ...and the split must be classified by ROUND, not by repeated head. A same-SHA refutation opens a
+# new round at an unchanged head, so a head-based count can book two protected first attempts as one
+# saved repeat. The two tests coincided on #2720; that is luck, not equivalence.
+assert_prose "${constitution}" 'Classify by ROUND, not by repeated head' \
+  "the waste metric could count repeated heads instead of within-round repeats, overstating the saving"
 # ...and the retired overstatement must be GONE, not merely supplemented.
 assert_absent "${constitution}" "#2720's eight requests were repeats inside five rounds" \
   "the retired '#2720's eight requests were repeats inside five rounds' overstatement still stands"
