@@ -2713,9 +2713,11 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   **The check is [`comment-disclosure-drift.sh`](.claude/scripts/comment-disclosure-drift.sh)**
   (`--repo <owner>/<repo> --issue <n>`, or `--input <payload>`); exit 1 lists each offending comment
   and names its shape. It reports **positive evidence of agent authorship only** — a `devantler`
-  comment carrying no 🤖 marker is the human maintainer, so flagging it would report the control
-  channel as a defect. That leaves one documented residual: an agent's bare prose note is
-  indistinguishable by shape and is counted `unattributable` rather than passed off as clean.
+  comment matching **no recognised agent shape** is the human maintainer, so flagging it would report
+  the control channel as a defect. Note the recognised shapes are broader than the 🤖 marker alone: a
+  leading review-lane trigger is agent evidence too, because the engineer drives the review lanes and
+  the maintainer does not. That leaves one documented residual: an agent's bare prose note carries no
+  shape at all, so it is counted `unattributable` rather than passed off as clean.
 
 ### Cadence & focus
 **This table IS the deployment's dispatch schedule** — the concrete cadence the plugin's

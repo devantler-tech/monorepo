@@ -163,9 +163,21 @@ rm -f -- "$raw_pages"
 # Shape-check what we are about to classify. A GitHub error object survives
 # flattening as a one-element array with no comment fields, which would classify
 # zero comments and report clean — the fail-open this whole path guards against.
-if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "object" and has("id") and has("body"))' \
-  "$payload" >/dev/null 2>&1; then
-  die "response for repos/${repo}/issues/${issue}/comments is not a non-empty array of comments"
+#
+# An EMPTY array is legitimate: an issue with no comments has nothing to check and
+# must exit 0, not 2. The byte-emptiness of gh's raw output is checked above, so a
+# genuine `[]` is already distinguishable from "gh produced nothing".
+#
+# Every record must carry an identifiable AUTHOR. Without that check a truncated
+# record passes the shape test and is then skipped by the classifier as a
+# non-matching author — a comment silently not checked, reported as clean.
+if ! jq -e '
+      type == "array" and
+      all(.[];
+        type == "object" and has("id") and has("body") and
+        (((.user.login? // "") | length > 0) or ((.author? // "") | length > 0)))
+    ' "$payload" >/dev/null 2>&1; then
+  die "response for repos/${repo}/issues/${issue}/comments is not an array of author-attributed comments"
 fi
 
 "$guard_binary" --author "$author" "${pass_through[@]+"${pass_through[@]}"}" --input "$payload"

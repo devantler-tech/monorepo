@@ -122,6 +122,10 @@ jobs:
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
             comment-disclosure-drift:
+              # AGENTS.md carries the disclosure contract this guard enforces, so a
+              # PR that edits only those rules must still run the job — otherwise
+              # the changed contract ships without its check ever executing.
+              - 'AGENTS.md'
               - '.claude/scripts/comment-disclosure-drift.sh'
               - '.claude/scripts/comment-disclosure-drift.test.sh'
               - '.claude/scripts/comment-disclosure-drift-go/**'

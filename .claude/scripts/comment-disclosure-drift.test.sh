@@ -142,6 +142,34 @@ chmod +x "$stubdir/gh"
 expect_exit 1 "multi-page response is flattened and classified" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --issue 1
 expect_stdout "undisclosed-trigger" "violation on page TWO is found"
 
+# CodeRabbit 🟠 (#2720): an issue with NO comments is legitimate. A valid `[]`
+# must exit 0 (nothing to check), not 2 -- gh's raw output is already checked for
+# byte-emptiness above, so a real `[]` is distinguishable from "gh produced nothing".
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 0 "valid empty comment list exits 0" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --issue 1
+
+# CodeRabbit 🟠 (#2720): a record with no identifiable author previously passed the
+# shape check and was then SKIPPED by the classifier as a non-matching author --
+# a comment silently not checked, reported as clean. It must fail closed instead.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[{"id":1,"body":"@codex review\n\nextra","user":{}}]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 2 "author-less record fails closed" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --issue 1
+
+# The `author` string shape is an equally valid attribution.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[{"id":1,"body":"plain maintainer prose","author":"devantler"}]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 0 "author-string shape is accepted" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --issue 1
+
 # A GitHub error object must not survive as a clean sweep.
 cat >"$stubdir/gh" <<'STUB'
 #!/usr/bin/env bash

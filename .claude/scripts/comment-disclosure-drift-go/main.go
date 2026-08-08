@@ -315,18 +315,19 @@ type Report struct {
 	SkippedAuthors int
 }
 
-// excerpt shortens a line for single-line reporting.
-func excerpt(line string, max int) string {
+// excerpt shortens a line to at most limit RUNES for single-line reporting.
+//
+// The budget is in runes, not bytes, so a multi-byte emoji is never cut in half —
+// which matters here because the emoji is the very thing being reported on. The
+// parameter is not named `max`: that shadows the predeclared identifier and
+// golangci-lint reports it.
+func excerpt(line string, limit int) string {
 	line = strings.TrimSpace(line)
-	if len(line) <= max {
-		return line
-	}
-	// Trim on a rune boundary so a multi-byte emoji is never cut in half.
 	runes := []rune(line)
-	if len(runes) <= max {
+	if len(runes) <= limit {
 		return line
 	}
-	return string(runes[:max]) + "..."
+	return string(runes[:limit]) + "..."
 }
 
 // Analyse classifies every comment authored by the given login.
