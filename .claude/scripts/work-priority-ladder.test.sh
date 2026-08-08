@@ -49,6 +49,20 @@ assert_prose() {
   esac
 }
 
+# The mirror of assert_prose, and the reason this suite needed one. Presence-only assertions cannot
+# see a RETIRED sentence that survived somewhere else in the file: when a policy is widened, the new
+# wording is added where the diff is, while the old contradicting wording sits in the sections the
+# diff never touched. Measured 2026-08-08 on the PR-ownership widening — CodeRabbit anchored 2
+# surviving contradictions, there were actually 4, and all 420 presence assertions across the seven
+# AGENTS.md-guarding suites passed green over every one of them (monorepo#2733 carries the
+# cross-suite measurement). A contract test that only checks what was ADDED proves half the change.
+assert_absent() {
+  case "$2" in
+    *"$1"*) fail "$3" ;;
+    *) ;;
+  esac
+}
+
 # ── 1. the ladder exists and is ordered ──────────────────────────────────────
 grep -Fq '### The work-selection ladder — one ordering, checked top-down every run' "${constitution}" ||
   fail "contract does not define the work-selection ladder"
@@ -160,6 +174,22 @@ assert_prose 'or otherwise run its branch locally' \
 # not revisit, and folding them into "all PRs" would have an agent driving the bots' own lifecycle.
 assert_prose '**Automation-owned Renovate/Dependabot PRs stay excluded**' \
   "${constitution_flat}" "the automation-owned carve-out was swallowed by the all-PRs grant"
+
+# ── the retired wording must STAY retired ────────────────────────────────────
+# One negative assertion per sentence the 2026-08-08 widening replaced. Each of these was PRESENT in
+# AGENTS.md before that change and is ABSENT after it, so every one of them fails on the pre-widening
+# file and passes on the current one — they pin a real transition rather than restating it. They live
+# in four different sections (the issue queue, the bot-PR paragraph, Merge policy, and the trust
+# gate), which is exactly why the presence-only suite missed them: a reviewer anchors where the diff
+# is, and a surviving contradiction lives where the diff is NOT.
+assert_absent 'static-review-only and surfaced to the maintainer' \
+  "${constitution_flat}" "the issue queue still routes external PRs to static review + the maintainer"
+assert_absent 'the external-contributor gate, which stands unchanged' \
+  "${constitution_flat}" "the bot-PR paragraph still claims the whole external gate is unchanged"
+assert_absent '**Never merge external-contributor PRs**' \
+  "${constitution_flat}" "Merge policy still forbids merging external-contributor PRs"
+assert_absent 'never enable auto-merge; never merge' \
+  "${constitution_flat}" "the trust gate still forbids merging an external contributor's PR"
 
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.
