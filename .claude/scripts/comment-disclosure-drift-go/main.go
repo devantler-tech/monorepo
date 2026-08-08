@@ -243,8 +243,30 @@ func firstContentLine(body string) (string, bool) {
 // indented agent comment falls through to Unattributable — a documented false
 // negative, taken deliberately over a false positive, exactly as the
 // trailing-disclosure verdict was.
+// Indentation is measured in COLUMNS, not characters, because that is what
+// CommonMark measures: a tab advances to the next four-column tab stop, so
+// " \t" and "  \t" both reach column 4 and render as an indented code block.
+// Testing only for a leading tab or four literal spaces missed every mixed form,
+// and a maintainer's indented example of a trigger was then classified as a live
+// trigger — a false positive on the control channel.
 func isMarkdownCodeBlock(line string) bool {
-	return strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ")
+	const tabStop = 4
+	column := 0
+	for _, r := range line {
+		switch r {
+		case ' ':
+			column++
+		case '\t':
+			column += tabStop - (column % tabStop)
+		default:
+			return false // content began before column 4
+		}
+		if column >= tabStop {
+			return true
+		}
+	}
+	// A line of nothing but whitespace has no content to misclassify either way.
+	return false
 }
 
 // hasCanonicalPrefix reports whether the body BEGINS WITH the canonical
@@ -476,14 +498,28 @@ func validateRecords(raw []byte, expected int) error {
 		identifiable := func(login string) bool {
 			return login != "" && login == strings.TrimSpace(login)
 		}
+		// Validate the representation login() will SELECT, not whichever one
+		// happens to be valid. login() returns Author whenever it is non-empty, so
+		// falling back to user.login for a malformed author validated a value the
+		// comparison never sees: {"author":"devantler ","user":{"login":"devantler"}}
+		// passed here, then login() returned the padded author, Analyse skipped the
+		// record, and the comment went unchecked. The fallback is correct only when
+		// author is genuinely absent or empty — which is exactly when login() uses it.
 		authored := false
+		selectsAuthor := false
 		if hasAuthor {
 			var login string
 			if err := json.Unmarshal(author, &login); err == nil {
-				authored = identifiable(login)
+				if login != "" {
+					selectsAuthor = true
+					authored = identifiable(login)
+				}
+			} else {
+				// A non-string author is malformed; it must not be rescued below.
+				selectsAuthor = true
 			}
 		}
-		if !authored && hasUser {
+		if !selectsAuthor && hasUser {
 			var login struct {
 				Login string `json:"login"`
 			}
@@ -594,8 +630,12 @@ func main() {
 	// corpus. That is the same fail-open shape decode and validateRecords exist
 	// to prevent, and the shell wrapper passing an unset variable is all it
 	// would take, so refuse it here rather than reporting success.
-	if strings.TrimSpace(*author) == "" {
-		fmt.Fprintln(os.Stderr, "comment-disclosure-drift: --author must be a non-empty login")
+	// Padded as well as empty. No GitHub login carries surrounding whitespace, so
+	// `--author 'devantler '` matches nothing: every real record is skipped as a
+	// different author and the guard exits 0 over an unclassified corpus — the same
+	// clean-sweep fail-open, reached through the flag instead of the payload.
+	if *author == "" || *author != strings.TrimSpace(*author) {
+		fmt.Fprintln(os.Stderr, "comment-disclosure-drift: --author must be a non-empty login with no surrounding whitespace")
 		os.Exit(2)
 	}
 

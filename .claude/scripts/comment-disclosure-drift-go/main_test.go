@@ -701,3 +701,60 @@ func TestDecode_WrappedFormValidatesRecordsToo(t *testing.T) {
 		t.Errorf("valid wrapped payload rejected: %v", err)
 	}
 }
+
+// Codex P1 (#2720): CommonMark expands a tab to the next 4-column tab stop, so a
+// line indented with a space followed by a tab reaches column 4 and renders as an
+// indented code block. isMarkdownCodeBlock recognised only a leading tab or four
+// literal spaces, so such a line was classified as a live trigger — flagging the
+// maintainer's own quoted example. That is the false-positive-on-the-maintainer
+// direction this guard exists to avoid.
+func TestIsMarkdownCodeBlock_ExpandsTabsToFourColumnStops(t *testing.T) {
+	indented := []string{
+		"\t@codex review",
+		"    @codex review",
+		" \t@codex review",
+		"  \t@codex review",
+		"   \t@codex review",
+		"\t\t@codex review",
+	}
+	for _, line := range indented {
+		if !isMarkdownCodeBlock(line) {
+			t.Errorf("isMarkdownCodeBlock(%q) = false; CommonMark renders this as an indented code block", line)
+		}
+	}
+	// Control: fewer than four columns is NOT a code block, so a real flush-left or
+	// lightly-indented trigger is still classified rather than silently exempted.
+	notIndented := []string{
+		"@codex review",
+		" @codex review",
+		"  @codex review",
+		"   @codex review",
+	}
+	for _, line := range notIndented {
+		if isMarkdownCodeBlock(line) {
+			t.Errorf("isMarkdownCodeBlock(%q) = true; under four columns is not a code block", line)
+		}
+	}
+}
+
+// Codex P2 (#2720): validateRecords accepted a record whose `author` was malformed
+// as long as `user.login` was valid — but Comment.login() always prefers a
+// non-empty Author, so the value actually used for the exact-author comparison was
+// never the one validated. Validate the representation login() will SELECT.
+func TestDecode_ValidatesTheAuthorRepresentationLoginSelects(t *testing.T) {
+	// A padded author is not rescued by a valid user.login: login() returns the
+	// padded author, Analyse skips the record, and the comment goes unchecked.
+	raw := `[{"id":1,"body":"@codex review","author":"devantler ","user":{"login":"devantler"}}]`
+	if _, err := decode([]byte(raw)); err == nil {
+		t.Errorf("decode(%s) succeeded; login() selects the padded author, so this record is silently skipped", raw)
+	}
+	// Control: an ABSENT or empty author legitimately falls back to user.login.
+	for _, ok := range []string{
+		`[{"id":1,"body":"x","user":{"login":"devantler"}}]`,
+		`[{"id":1,"body":"x","author":"","user":{"login":"devantler"}}]`,
+	} {
+		if _, err := decode([]byte(ok)); err != nil {
+			t.Errorf("decode(%s) failed: %v; the user.login fallback must still work", ok, err)
+		}
+	}
+}
