@@ -94,6 +94,23 @@ printf '%s' '[{"id":6,"user":{"login":"devantler"},"body":"Drop the human promot
 expect_exit 0 "maintainer prose is not a violation" -- bash "$guard" --input "$tmpdir/maintainer.json"
 expect_stdout "unattributable" "unattributable residual is disclosed on a clean run"
 
+# A four-space-indented first line renders as a Markdown CODE BLOCK, so it SHOWS a
+# trigger rather than issuing one. That is how the maintainer writes an example, and
+# trimming the indentation made his comment byte-identical to an agent's trigger --
+# flagging the control channel, the one direction this guard must never fail in.
+printf '%s' '[{"id":20,"user":{"login":"devantler"},"body":"    @codex review\n\nThat is the trigger to use next time."}]' >"$tmpdir/indented-trigger.json"
+expect_exit 0 "an indented trigger example is not agent evidence" -- bash "$guard" --input "$tmpdir/indented-trigger.json"
+
+# A leading TAB is the other CommonMark code-block form.
+printf '%s' '[{"id":21,"user":{"login":"devantler"},"body":"\t> Requested by the 🤖 Daily AI Engineer - example"}]' >"$tmpdir/indented-sender.json"
+expect_exit 0 "a tab-indented sender marker is not agent evidence" -- bash "$guard" --input "$tmpdir/indented-sender.json"
+
+# ...and the true positive is PRESERVED: one to three spaces is ordinary text in
+# CommonMark, not a code block, so a slightly-indented real trigger still counts.
+printf '%s' '[{"id":22,"html_url":"https://x/22","user":{"login":"devantler"},"body":"   @codex review\n\nhead abc"}]' >"$tmpdir/slight-indent.json"
+expect_exit 1 "a 3-space indented trigger is still a violation" -- bash "$guard" --input "$tmpdir/slight-indent.json"
+expect_stdout "undisclosed-trigger" "3-space indented trigger is named"
+
 # Another author's comment is never the agent's problem.
 printf '%s' '[{"id":7,"user":{"login":"coderabbitai"},"body":"@coderabbitai review\n\nextra"}]' >"$tmpdir/otherauthor.json"
 expect_exit 0 "other authors are skipped" -- bash "$guard" --input "$tmpdir/otherauthor.json"

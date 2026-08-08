@@ -173,7 +173,8 @@ func normalise(body string) string {
 }
 
 // nonEmptyLines returns the body's lines with blank ones removed, each trimmed
-// of surrounding whitespace.
+// of surrounding whitespace. Used for the reported excerpt, where indentation is
+// noise; classification uses firstContentLine instead, which preserves it.
 func nonEmptyLines(body string) []string {
 	var out []string
 	for _, line := range strings.Split(body, "\n") {
@@ -182,6 +183,46 @@ func nonEmptyLines(body string) []string {
 		}
 	}
 	return out
+}
+
+// firstContentLine returns the body's first non-blank line WITH its original
+// leading whitespace, and whether one exists. Classification needs the
+// indentation that nonEmptyLines discards — see isMarkdownCodeBlock.
+func firstContentLine(body string) (string, bool) {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) != "" {
+			return line, true
+		}
+	}
+	return "", false
+}
+
+// isMarkdownCodeBlock reports whether a line's indentation makes GitHub render
+// it as an indented code block — four or more spaces, or a leading tab
+// (CommonMark; one to three spaces is ordinary text).
+//
+// WHY THIS GATES CLASSIFICATION.
+//
+// Both positive-evidence shapes below read the first content line as the
+// comment's OWN VOICE. An indented first line is not that: it is quoted or
+// example text, which is exactly how the maintainer writes a comment that shows
+// a trigger rather than issuing one:
+//
+//	@codex review
+//
+// Trimmed, that is byte-identical to an agent posting the trigger — so the guard
+// reported his comment as `undisclosed-trigger`, i.e. it flagged the control
+// channel as agent output. That is the one direction this guard must never fail
+// in, and no refinement of the trigger match can separate the two, because after
+// trimming there is nothing left to separate.
+//
+// The cost is bounded and measured: every real agent trigger in the portfolio is
+// written flush-left, so requiring flush-left removes no true positive. An
+// indented agent comment falls through to Unattributable — a documented false
+// negative, taken deliberately over a false positive, exactly as the
+// trailing-disclosure verdict was.
+func isMarkdownCodeBlock(line string) bool {
+	return strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ")
 }
 
 // hasCanonicalPrefix reports whether the body BEGINS WITH the canonical
@@ -279,18 +320,24 @@ func Classify(body string) Verdict {
 		return BareTrigger
 	}
 
-	lines := nonEmptyLines(body)
-	if len(lines) == 0 {
+	raw, ok := firstContentLine(body)
+	if !ok {
 		return Unattributable
 	}
+	// An indented first line is example/quoted text, not the comment's own
+	// voice, so it carries no positive evidence of agent authorship.
+	if isMarkdownCodeBlock(raw) {
+		return Unattributable
+	}
+	first := strings.TrimSpace(raw)
 
 	// Trigger evidence first: the engineer drives the review lanes and the
 	// maintainer does not, so a leading trigger is the strongest available signal.
 	// There is deliberately no trailing-disclosure branch — see the note above.
-	if _, ok := triggerPrefix(lines[0]); ok {
+	if _, ok := triggerPrefix(first); ok {
 		return UndisclosedTrigger
 	}
-	if isSenderMarker(lines[0]) {
+	if isSenderMarker(first) {
 		return SenderMarker
 	}
 	return Unattributable
