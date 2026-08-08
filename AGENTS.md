@@ -1195,12 +1195,20 @@ result at the current head — self-promotion is forbidden before that. Request 
   rate-limited** across five rounds, each round re-requesting CodeRabbit first because that is what
   lane priority says. Every one cost a trigger comment, an ack read, a status read and a marker write
   to learn something a free read already knew.
-  **CodeRabbit's serving state is readable with NO write**: the head's `CodeRabbit` commit status
+  **A CodeRabbit REFUSAL is readable with NO write**: the head's `CodeRabbit` commit status
   carries it in its `description` — `Review rate limited` (a quota refusal),
   `Review skipped: automatic reviews are disabled` (the never-reviewed default), or `Review completed`
   (a run happened). So **before each CodeRabbit trigger, read that description on that PR's head**; if
-  it already reads as a quota refusal, do not post the trigger — advance to Codex for that PR and
-  record the usual `cr:no-gate@<sha>`.
+  it already reads as a quota refusal, do not post the trigger for that round — advance to Codex for
+  that PR and record the usual `cr:no-gate@<sha>`.
+  🔴 **This read is a NEGATIVE filter only. It can show the lane refusing HERE; it can never show the
+  lane serving.** The never-reviewed default means only that nothing has been tried at this head — it
+  is a reason to *ask*, never evidence the lane is up. Reading it as "serving" licenses the same
+  inversion from the opposite direction, and it is measured: on 2026-08-08 a run read
+  `Review skipped: automatic reviews are disabled` at 19:29:29Z, correctly asked CodeRabbit on that
+  basis, and was refused **16 seconds later**. The request was still right — asking is how a fresh
+  head learns — but the status had promised nothing, so treat a green-looking default as *unknown*,
+  and never let it override a refusal observed at this same head in this same round.
   🔴 **Do NOT latch that refusal for the whole run — the window is SHORT, and measured.** It is
   tempting to conclude that a rate limit is account-wide and therefore one fact per run. **It is not:**
   on 2026-08-08 monorepo#2722 was requested at 15:10:09Z and refused `Review rate limited` at
@@ -1219,11 +1227,21 @@ result at the current head — self-promotion is forbidden before that. Request 
   portfolio-wide refusal forward with a TTL would cover the fresh-head case, and it re-creates the
   latch this rule exists to forbid: measured 2026-08-08, an agent took #2722's 19:03Z refusal as
   portfolio-wide, skipped CodeRabbit on #2727 at 19:17Z, and spent the **weekly-limited** Codex lane —
-  while #2727's own head status read `Review skipped: automatic reviews are disabled` and CodeRabbit
-  was in fact serving. Fourteen minutes of inherited state was already too much, against a window that
-  clears in ~28. So a portfolio-wide observation may **inform** how patiently you wait; it may never
-  **replace** the per-head read, and it may never skip a head whose own status says the lane was never
-  asked. One spent request per fresh head is the price of not inverting the lane order.
+  while #2727's own head status said the lane had never been asked *there*. That is the whole defect:
+  the skip was justified by another PR's refusal rather than by any evidence about this head. Fourteen
+  minutes of inherited state was already too much, against a window that clears in ~28. So a
+  portfolio-wide observation may **inform** how patiently you wait; it may never **replace** the
+  per-head read, and it may never skip a head whose own status says the lane was never asked. One
+  spent request per fresh head is the price of not inverting the lane order.
+  🔴 **A refusal is scoped to its ROUND, never to the head forever.** The skip above applies to the
+  request round in which it was read. A head's status is durable, so an unconditional "this head once
+  refused, therefore never ask again" would outlive the quota window and break the mandated *restart
+  at CodeRabbit* after findings — most sharply when a finding is **refuted without changing files**,
+  which restarts at the *same* SHA by design and must not create an empty commit. That PR would then
+  advance straight to the **weekly-limited** lane on every subsequent round while the **free** one had
+  long recovered. So on a new round at the same head — after a fix, a refutation, or a later run —
+  re-read the status and ask CodeRabbit again unless the refusal was observed **in this round**. The
+  read is free; that is what makes re-asking cheap rather than wasteful.
   ⚠️ **This changes WHICH LANE IS ASKED FIRST, never WHETHER A REVIEW IS REQUIRED.** The green-review
   gate is untouched: every PR still needs one successful current-head review from some lane, or a
   qualifying local review round. Skipping a lane that is *demonstrably refusing at that head* is

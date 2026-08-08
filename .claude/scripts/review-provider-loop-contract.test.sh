@@ -234,6 +234,15 @@ assert_prose "${constitution}" 'cannot prevent the **first** refusal at' \
 # the lane order on #2727 while CodeRabbit was serving at that head.
 assert_prose "${constitution}" 'may never **replace** the per-head read' \
   "a portfolio-wide quota observation could replace the per-head read, re-creating the latch"
+# The status is a NEGATIVE filter. Measured 2026-08-08: a run read the never-reviewed default at
+# 19:29:29Z, asked on that basis, and was refused 16s later — the default promised nothing. Left
+# unqualified, "serving state is readable" licenses the same inversion from the other direction.
+assert_prose "${constitution}" 'it can never show the lane serving' \
+  "the quota read could be taken as positive evidence that CodeRabbit is serving"
+# ...and a refusal must not outlive its round, or a same-SHA restart after a refutation can never
+# return to the free lane — the refutation path deliberately creates no new commit.
+assert_prose "${constitution}" 'A refusal is scoped to its ROUND, never to the head forever' \
+  "a one-off refusal at a head could permanently skip CodeRabbit there, inverting the lane order"
 # The optimisation must not become a way around the gate, nor a shortcut into the local fallback.
 assert_prose "${constitution}" 'never WHETHER A REVIEW IS REQUIRED' \
   "the lane probe could be read as relaxing the green-review gate"
