@@ -1189,12 +1189,13 @@ result at the current head — self-promotion is forbidden before that. Request 
   comment you author keeps its inline disclosure line.
 
 - **READ a lane's quota state before spending a request on it — the status says so for free.**
-  Rediscovering a refusal by *posting a trigger* is the single largest source of wasted review
-  requests: measured 2026-08-08 over 8 recent monorepo PRs, **54 review requests produced 16 actual
-  CodeRabbit reviews**, with **17 rate-limit refusals** — and on #2720 **all 8 CodeRabbit requests were
-  rate-limited** across five rounds, each round re-requesting CodeRabbit first because that is what
-  lane priority says. Every one cost a trigger comment, an ack read, a status read and a marker write
-  to learn something a free read already knew.
+  Rediscovering a refusal by *posting a trigger* costs a trigger comment, an ack read, a status read
+  and a marker write to learn something a free read already knew. Measured 2026-08-08 over 8 recent
+  monorepo PRs: **54 review requests produced 16 actual CodeRabbit reviews**, with **17 rate-limit
+  refusals**. On #2720 alone: **14 CodeRabbit requests across 12 distinct heads, 10 of them refused**,
+  each round re-requesting CodeRabbit first because that is what lane priority says. **Only the
+  same-head repeats are recoverable** — see the sizing note below, which is deliberately narrower than
+  those totals.
   **A CodeRabbit REFUSAL is readable with NO write**: the head's `CodeRabbit` commit status
   carries it in its `description` — `Review rate limited` (a quota refusal),
   `Review skipped: automatic reviews are disabled` (the never-reviewed default), or `Review completed`
@@ -1227,8 +1228,7 @@ result at the current head — self-promotion is forbidden before that. Request 
   ⚠️ **Know exactly what this probe does and does not buy.** It cannot prevent the **first** refusal at
   a **fresh** head: a new SHA carries only the never-reviewed default until some request is spent, so
   the probe has nothing to read there. What it prevents is every **repeat** at a head already known to
-  be refusing — which is the bulk of the measured waste, since the eight wasted #2720 requests were
-  five rounds of re-asking heads that had already answered.
+  be refusing — a **minority** of the measured waste, not the bulk of it: on #2720, 2 of 14 requests.
   **That residual is accepted deliberately, and the obvious "fix" for it is worse.** Carrying a
   portfolio-wide refusal forward with a TTL would cover the fresh-head case, and it re-creates the
   latch this rule exists to forbid: measured 2026-08-08, an agent took #2722's 19:03Z refusal as
@@ -1269,8 +1269,12 @@ result at the current head — self-promotion is forbidden before that. Request 
   "threads resolved → later re-request → later clean marker" rather than by timestamps alone.
   The consequence is deliberate and worth stating plainly: **a refusal never pre-empts the FIRST
   CodeRabbit request of a round.** What the probe kills is re-asking a head *within* a round after it
-  has already answered — which is where the measured waste was, since #2720's eight requests were
-  repeats inside five rounds. The read is free; that is what makes re-asking cheap rather than
+  has already answered. **Size that saving honestly — most refusals are NOT what it eliminates.**
+  Re-measured on #2720 (2026-08-08): **14 CodeRabbit requests across 12 distinct heads, 10 of them
+  refused — but only 2 were same-head repeats.** Those 2 are the whole saving; the other 12 are each
+  a round's unavoidable first attempt, which this rule deliberately preserves. Counting all 14, or
+  all 10 refusals, as waste this probe removes would credit it with preventing exactly the requests
+  it is written to protect. The read is free; that is what makes that first attempt cheap rather than
   wasteful.
   ⚠️ **This changes WHICH LANE IS ASKED FIRST, never WHETHER A REVIEW IS REQUIRED.** The green-review
   gate is untouched: every PR still needs one successful current-head review from some lane, or a

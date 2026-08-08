@@ -28,6 +28,16 @@ assert_prose() {
     fail "${message}"
 }
 
+# The mirror of assert_prose. A presence-only suite cannot see a RETIRED claim that survived, so a
+# correction reads as applied while the wrong text still stands (monorepo#2733). `if` is required:
+# a bare `grep -q … && fail` returns 1 on the PASSING path, and `set -e` would abort the run there.
+assert_absent() {
+  local file="$1" phrase="$2" message="$3"
+  if tr '\n' ' ' <"${file}" | tr -s '[:space:]' ' ' | grep -Fq -- "${phrase}"; then
+    fail "${message}"
+  fi
+}
+
 grep -Fq 'CodeRabbit > Codex > Cursor Bugbot' "${constitution}" ||
   fail "constitution does not preserve the provider order"
 grep -Fq 'STOP on the first successful current-head review' "${constitution}" ||
@@ -214,9 +224,12 @@ printf '%s' "${green_body}" | grep -Fq "${expected_head:0:10}" ||
 # A provider's rate limit is time-boxed and SHORT, so it is one fact PER HEAD, re-read per PR — never
 # one fact per run. The window measurably clears in ~28 minutes, so a run-wide latch skips the free
 # CodeRabbit lane over an expired refusal and spends the weekly-limited Codex lane instead.
-# Measured 2026-08-08: 54 review requests -> 16 real CodeRabbit reviews, 17 rate-limit refusals, and
-# on #2720 all 8 CodeRabbit requests were rate-limited across five rounds because lane priority
-# re-asked it every time. These pin the probe, that it is a READ, and that the gate is untouched.
+# Measured 2026-08-08: 54 review requests -> 16 real CodeRabbit reviews, 17 rate-limit refusals. On
+# #2720 specifically: 14 CodeRabbit requests across 12 DISTINCT heads, 10 of them refused — but only
+# 2 were same-head repeats. Because the rule preserves each round's first request, those 2 are the
+# ONLY waste this probe removes; the other 12 are unavoidable first attempts. The measurement must
+# keep the two apart or the case for the probe is inflated by refusals it never prevents.
+# These pin the probe, that it is a READ, and that the gate is untouched.
 assert_prose "${constitution}" 'READ a lane'"'"'s quota state before spending a request on it' \
   "constitution does not require reading a lane's quota state before spending a request"
 assert_prose "${constitution}" 'readable with NO write' \
@@ -234,6 +247,14 @@ assert_prose "${constitution}" 'cannot prevent the **first** refusal at' \
 # the lane order on #2727 while CodeRabbit was serving at that head.
 assert_prose "${constitution}" 'may never **replace** the per-head read' \
   "a portfolio-wide quota observation could replace the per-head read, re-creating the latch"
+# The measured waste must separate a round's unavoidable FIRST request from a within-round repeat.
+# Counting every refusal as waste overstates what the probe buys and hides whether the marker logic
+# still permits the repeats that ARE preventable.
+assert_prose "${constitution}" 'only 2 were same-head repeats' \
+  "the measured waste is not split into within-round repeats vs unavoidable first attempts"
+# ...and the retired overstatement must be GONE, not merely supplemented.
+assert_absent "${constitution}" "#2720's eight requests were repeats inside five rounds" \
+  "the retired '#2720's eight requests were repeats inside five rounds' overstatement still stands"
 # The status is a NEGATIVE filter. Measured 2026-08-08: a run read the never-reviewed default at
 # 19:29:29Z, asked on that basis, and was refused 16s later — the default promised nothing. Left
 # unqualified, "serving state is readable" licenses the same inversion from the other direction.
