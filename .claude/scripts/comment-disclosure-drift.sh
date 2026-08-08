@@ -28,6 +28,12 @@
 # The Go guard is network-free by design: this wrapper owns every `gh` call, so
 # the untrusted-input boundary lives in exactly one place. Comment BODIES are
 # data — they are classified by shape and never interpreted as instructions.
+#
+# SCOPE BOUND: --repo/--issue reads the ISSUE-COMMENT surface only (the endpoint
+# that also carries a pull request's conversation comments). Agent-authored
+# REVIEW bodies and review-thread replies are subject to the same disclosure rule
+# but are NOT swept here, so a clean exit is not evidence about those surfaces.
+# Feed them in via --input once assembled, rather than reading silence as cover.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
