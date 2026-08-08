@@ -136,11 +136,36 @@ payload="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-payload.XXXXXX")" ||
 
 # Fail closed on a gh error rather than letting a 5xx become an empty comment set
 # that reports "no violations" — a swallowed 502 is how a broken sweep reads clean.
-if ! gh api "repos/${repo}/issues/${issue}/comments" --paginate >"$payload"; then
+raw_pages=""
+raw_pages="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-pages.XXXXXX")" ||
+  die "failed to allocate page file"
+if ! gh api "repos/${repo}/issues/${issue}/comments" --paginate >"$raw_pages"; then
+  rm -f -- "$raw_pages"
   die "gh could not read repos/${repo}/issues/${issue}/comments"
 fi
-if [ ! -s "$payload" ]; then
+if [ ! -s "$raw_pages" ]; then
+  rm -f -- "$raw_pages"
   die "gh returned an empty payload for repos/${repo}/issues/${issue}/comments"
+fi
+
+# `gh api --paginate` emits ONE JSON ARRAY PER PAGE, concatenated — not a single
+# array. Feeding that straight to the guard makes it exit 2 on any issue with more
+# than one page of comments, i.e. it silently stops checking exactly the busiest
+# discussions. `jq -s` slurps the pages into an array of arrays; flatten(1) makes
+# it the single array the guard expects. (`--slurp` cannot be combined with
+# `--jq`, which is why this is a separate jq pass rather than a gh flag.)
+if ! jq -s 'flatten(1)' "$raw_pages" >"$payload" 2>/dev/null; then
+  rm -f -- "$raw_pages"
+  die "could not flatten the paginated response for repos/${repo}/issues/${issue}/comments"
+fi
+rm -f -- "$raw_pages"
+
+# Shape-check what we are about to classify. A GitHub error object survives
+# flattening as a one-element array with no comment fields, which would classify
+# zero comments and report clean — the fail-open this whole path guards against.
+if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "object" and has("id") and has("body"))' \
+  "$payload" >/dev/null 2>&1; then
+  die "response for repos/${repo}/issues/${issue}/comments is not a non-empty array of comments"
 fi
 
 "$guard_binary" --author "$author" "${pass_through[@]+"${pass_through[@]}"}" --input "$payload"

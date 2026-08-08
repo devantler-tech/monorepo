@@ -2703,10 +2703,13 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   DEFECT, not a stylistic variant.** The disambiguator anchors at position zero, so a trailing
   disclosure publishes your own output as the **maintainer's control channel** — the self-instruction
   loop it exists to close, and the dangerous direction of its deliberately asymmetric error model.
-  Two emitted shapes are known to fail it and both are violations: the disclosure appended **after**
-  the content (typically below a review trigger), and a **non-canonical sender marker** such as
-  `> Requested by the 🤖 Daily AI Engineer`. The one exception stays the **bare review trigger**,
-  whose body must be exactly the command with the disclosure in its own preceding comment.
+  Three emitted shapes fail it and all are violations: the disclosure appended **after** the content
+  (typically below a review trigger), a **non-canonical sender marker** such as
+  `> Requested by the 🤖 Daily AI Engineer`, and a **review trigger posted with no disclosure at all**.
+  The one exception is **Bugbot's trigger specifically** — a body that is exactly `@cursor review`,
+  because Bugbot exact-matches the whole body, so its disclosure goes in its own preceding comment.
+  That carve-out does **not** extend to the other lanes: their trigger belongs in the *same* disclosed
+  comment as its request marker, so a bare `@codex review` or `@coderabbitai review` is a violation.
   **The check is [`comment-disclosure-drift.sh`](.claude/scripts/comment-disclosure-drift.sh)**
   (`--repo <owner>/<repo> --issue <n>`, or `--input <payload>`); exit 1 lists each offending comment
   and names its shape. It reports **positive evidence of agent authorship only** — a `devantler`
