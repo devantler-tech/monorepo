@@ -138,6 +138,29 @@ assert_prose 'A cap is NOT licence to stop early, and it never blocks the floor'
 assert_prose 'the cap redirects a run **from starting toward finishing**, and finishing is unbounded' \
   "${constitution_flat}" "contract does not redirect a capped run toward finishing"
 
+# ── PR ownership: every PR in the portfolio, whoever authored it (maintainer direction 2026-08-08) ──
+# Rung 1 previously meant "own/trusted PRs in YOUR lane", with anyone else's draft stopping at hygiene.
+# The maintainer retired that split interactively. These pin the three parts that a later run could
+# each independently lose: the grant itself, closing as a real terminal state, and the data-only test
+# for whether someone else is mid-flight (he was explicit: "No need to ask, just determine it").
+assert_prose 'is now yours to carry to a **terminal state**, whoever' \
+  "${constitution_flat}" "contract does not grant ownership of PRs authored by others"
+assert_prose '**Three terminal states, and CLOSING is first-class.**' \
+  "${constitution_flat}" "closing a valueless PR is not stated as a terminal state"
+assert_prose 'is decided from data, never by asking' \
+  "${constitution_flat}" "the active-work test does not forbid asking the maintainer"
+
+# The widened MERGE authority must not be read as widening the EXECUTION guardrail. "Be careful" was
+# the maintainer's whole qualifier on contribution PRs, and this is what it has to mean mechanically:
+# CI is the sandbox, the local checkout is not.
+assert_prose 'or otherwise run its branch locally' \
+  "${constitution_flat}" "external-PR ownership no longer forbids running a contributor branch locally"
+
+# Renovate/Dependabot stay out: their carve-out is an ownership boundary the 2026-08-08 direction did
+# not revisit, and folding them into "all PRs" would have an agent driving the bots' own lifecycle.
+assert_prose '**Automation-owned Renovate/Dependabot PRs stay excluded**' \
+  "${constitution_flat}" "the automation-owned carve-out was swallowed by the all-PRs grant"
+
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.
 # shellcheck disable=SC2016
