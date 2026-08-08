@@ -111,6 +111,11 @@ printf '%s' '[{"id":22,"html_url":"https://x/22","user":{"login":"devantler"},"b
 expect_exit 1 "a 3-space indented trigger is still a violation" -- bash "$guard" --input "$tmpdir/slight-indent.json"
 expect_stdout "undisclosed-trigger" "3-space indented trigger is named"
 
+# An empty --author matches no record at all, so the guard would classify nothing and
+# still exit 0 with "all 0 comments satisfy" -- a clean sweep over an unchecked corpus.
+printf '%s' '[{"id":30,"html_url":"https://x/30","user":{"login":"devantler"},"body":"@codex review\n\nhead abc"}]' >"$tmpdir/emptyauthor.json"
+expect_exit 2 "an empty --author fails closed, never a clean sweep" -- bash "$guard" --input "$tmpdir/emptyauthor.json" --author ""
+
 # Another author's comment is never the agent's problem.
 printf '%s' '[{"id":7,"user":{"login":"coderabbitai"},"body":"@coderabbitai review\n\nextra"}]' >"$tmpdir/otherauthor.json"
 expect_exit 0 "other authors are skipped" -- bash "$guard" --input "$tmpdir/otherauthor.json"

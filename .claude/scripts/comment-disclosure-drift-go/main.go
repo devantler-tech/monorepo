@@ -515,6 +515,18 @@ func main() {
 	)
 	flag.Parse()
 
+	// An empty --author matches NOTHING, because validateRecords already rejects
+	// any record without an author. Every comment would land in SkippedAuthors,
+	// Considered would be 0, and the guard would print "all 0 devantler
+	// comment(s) satisfy" and exit 0 — a clean sweep over an unclassified
+	// corpus. That is the same fail-open shape decode and validateRecords exist
+	// to prevent, and the shell wrapper passing an unset variable is all it
+	// would take, so refuse it here rather than reporting success.
+	if strings.TrimSpace(*author) == "" {
+		fmt.Fprintln(os.Stderr, "comment-disclosure-drift: --author must be a non-empty login")
+		os.Exit(2)
+	}
+
 	var (
 		raw []byte
 		err error
