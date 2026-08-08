@@ -1188,30 +1188,35 @@ result at the current head — self-promotion is forbidden before that. Request 
   maintainer instruction. This carve-out covers **only** an exact-match review trigger; every other
   comment you author keeps its inline disclosure line.
 
-- **Establish a lane's quota state ONCE PER RUN, by reading — never by spending a request per PR.**
-  A provider's rate limit is **account-wide and time-boxed**, so during a limited window the answer is
-  identical for every PR in the portfolio. Rediscovering it per PR per round is the single largest
-  source of wasted review requests: measured 2026-08-08 over 8 recent monorepo PRs, **54 review
-  requests produced 16 actual CodeRabbit reviews**, with **17 rate-limit refusals** — and on #2720
-  **all 8 CodeRabbit requests were rate-limited** across five rounds, each round re-requesting
-  CodeRabbit first because that is what lane priority says. Every one of those cost a trigger comment,
-  an ack read, a status read and a marker write to learn a fact the run already had.
+- **READ a lane's quota state before spending a request on it — the status says so for free.**
+  Rediscovering a refusal by *posting a trigger* is the single largest source of wasted review
+  requests: measured 2026-08-08 over 8 recent monorepo PRs, **54 review requests produced 16 actual
+  CodeRabbit reviews**, with **17 rate-limit refusals** — and on #2720 **all 8 CodeRabbit requests were
+  rate-limited** across five rounds, each round re-requesting CodeRabbit first because that is what
+  lane priority says. Every one cost a trigger comment, an ack read, a status read and a marker write
+  to learn something a free read already knew.
   **CodeRabbit's serving state is readable with NO write**: the head's `CodeRabbit` commit status
   carries it in its `description` — `Review rate limited` (a quota refusal),
   `Review skipped: automatic reviews are disabled` (the never-reviewed default), or `Review completed`
-  (a run happened). So before the run's **first** CodeRabbit trigger, read that description on any head
-  the run has already fetched; if it is a quota refusal, record `cr:quota-window` **for the run** and
-  **start the ladder at Codex on every PR that run**, posting no CodeRabbit trigger at all. Re-probe
-  only when a CodeRabbit request does later succeed, or at the start of the next run.
+  (a run happened). So **before each CodeRabbit trigger, read that description on that PR's head**; if
+  it already reads as a quota refusal, do not post the trigger — advance to Codex for that PR and
+  record the usual `cr:no-gate@<sha>`.
+  🔴 **Do NOT latch that refusal for the whole run — the window is SHORT, and measured.** It is
+  tempting to conclude that a rate limit is account-wide and therefore one fact per run. **It is not:**
+  on 2026-08-08 monorepo#2722 was requested at 15:10:09Z and refused `Review rate limited` at
+  15:10:24Z, while monorepo#2723 was requested at 15:38:07Z and returned `Review completed` at
+  15:42:48Z — **the window cleared inside ~28 minutes.** A run-wide latch would therefore skip the
+  **free, unmetered** CodeRabbit lane for the rest of a run over a refusal that had already expired,
+  and spend the **weekly-limited** Codex quota in its place — inverting the maintainer's own reason for
+  the lane order (spend the cheapest-to-exhaust lane first). Re-read per PR instead; the read is free,
+  which is the entire point.
   ⚠️ **This changes WHICH LANE IS ASKED FIRST, never WHETHER A REVIEW IS REQUIRED.** The green-review
   gate is untouched: every PR still needs one successful current-head review from some lane, or a
-  qualifying local review round. Skipping a lane that is *demonstrably refusing* is exactly the
-  "advance on a service failure" the loop already prescribes — this only makes the discovery free. A
-  lane that is **serving** is never skipped, and a run-level `cr:quota-window` is **never** evidence
+  qualifying local review round. Skipping a lane that is *demonstrably refusing at that head* is
+  exactly the "advance on a service failure" the loop already prescribes — this only makes the
+  discovery free. A lane that is **serving** is never skipped, and a quota refusal is **never** evidence
   for the *Local review round* fallback on its own: that still requires all three lanes tried at the
   current head, per its own admissible-evidence rule.
-  The per-PR `cr:no-gate@<sha>` marker is unaffected — it records a provider that genuinely ran and
-  completed without a gate-satisfying artifact, which is a different fact from a quota window.
 - **Only one provider request may be active at a time.** Never fan out or request two reviewers
   concurrently. The priority above sets the order: request one, wait for its substantive outcome,
   then either stop on success, restart after fixes, or advance after a provider/service failure.

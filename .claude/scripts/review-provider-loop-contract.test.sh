@@ -215,12 +215,14 @@ printf '%s' "${green_body}" | grep -Fq "${expected_head:0:10}" ||
 # Measured 2026-08-08: 54 review requests -> 16 real CodeRabbit reviews, 17 rate-limit refusals, and
 # on #2720 all 8 CodeRabbit requests were rate-limited across five rounds because lane priority
 # re-asked it every time. These pin the probe, that it is a READ, and that the gate is untouched.
-assert_prose "${constitution}" 'Establish a lane'"'"'s quota state ONCE PER RUN, by reading' \
-  "constitution does not require a per-run lane quota probe"
+assert_prose "${constitution}" 'READ a lane'"'"'s quota state before spending a request on it' \
+  "constitution does not require reading a lane's quota state before spending a request"
 assert_prose "${constitution}" 'readable with NO write' \
   "the quota probe is not required to be a read rather than a spent request"
-assert_prose "${constitution}" 'start the ladder at Codex on every PR that run' \
-  "a known CodeRabbit quota window does not redirect the ladder for the run"
+assert_prose "${constitution}" 'Do NOT latch that refusal for the whole run' \
+  "a short-lived quota refusal could be latched run-wide, burning the weekly Codex lane"
+assert_prose "${constitution}" 'the window cleared inside ~28 minutes' \
+  "the measured quota-window duration that refutes a run-wide latch is not recorded"
 # The optimisation must not become a way around the gate, nor a shortcut into the local fallback.
 assert_prose "${constitution}" 'never WHETHER A REVIEW IS REQUIRED' \
   "the lane probe could be read as relaxing the green-review gate"
