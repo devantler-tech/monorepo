@@ -243,6 +243,13 @@ assert_prose "${constitution}" 'it can never show the lane serving' \
 # return to the free lane — the refutation path deliberately creates no new commit.
 assert_prose "${constitution}" 'A refusal is scoped to its ROUND, never to the head forever' \
   "a one-off refusal at a head could permanently skip CodeRabbit there, inverting the lane order"
+# ...and that scoping must key on WHICH REQUEST produced the refusal. Scoping it to "observed in this
+# round" is circular: the mandatory pre-trigger read is itself an observation in the new round, so a
+# durable old refusal reads as current forever and the skip never expires.
+assert_prose "${constitution}" 'a refusal justifies skipping only when THIS round has already posted a CodeRabbit request marker' \
+  "refusal provenance is not tied to a request marker, so a durable old refusal can read as current"
+assert_prose "${constitution}" 'a refusal never pre-empts the FIRST CodeRabbit request of a round' \
+  "a stale refusal could still pre-empt a round's first CodeRabbit request"
 # The optimisation must not become a way around the gate, nor a shortcut into the local fallback.
 assert_prose "${constitution}" 'never WHETHER A REVIEW IS REQUIRED' \
   "the lane probe could be read as relaxing the green-review gate"

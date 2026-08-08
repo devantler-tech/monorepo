@@ -1239,9 +1239,19 @@ result at the current head — self-promotion is forbidden before that. Request 
   at CodeRabbit* after findings — most sharply when a finding is **refuted without changing files**,
   which restarts at the *same* SHA by design and must not create an empty commit. That PR would then
   advance straight to the **weekly-limited** lane on every subsequent round while the **free** one had
-  long recovered. So on a new round at the same head — after a fix, a refutation, or a later run —
-  re-read the status and ask CodeRabbit again unless the refusal was observed **in this round**. The
-  read is free; that is what makes re-asking cheap rather than wasteful.
+  long recovered.
+  **Scope it by WHICH REQUEST produced the refusal, never by when you read it.** "Unless the refusal
+  was observed in this round" is circular and does not work: the mandatory pre-trigger read *is* an
+  observation in the new round, and the status is durable, so the old refusal reads as current every
+  time and the skip fires forever — the exact behaviour this paragraph forbids. Attribute it instead:
+  **a refusal justifies skipping only when THIS round has already posted a CodeRabbit request marker
+  at this head and the refusal postdates that marker.** The markers carry an id and a timestamp for
+  exactly this, so the test is mechanical rather than a judgement about "rounds".
+  The consequence is deliberate and worth stating plainly: **a refusal never pre-empts the FIRST
+  CodeRabbit request of a round.** What the probe kills is re-asking a head *within* a round after it
+  has already answered — which is where the measured waste was, since #2720's eight requests were
+  repeats inside five rounds. The read is free; that is what makes re-asking cheap rather than
+  wasteful.
   ⚠️ **This changes WHICH LANE IS ASKED FIRST, never WHETHER A REVIEW IS REQUIRED.** The green-review
   gate is untouched: every PR still needs one successful current-head review from some lane, or a
   qualifying local review round. Skipping a lane that is *demonstrably refusing at that head* is
