@@ -127,6 +127,29 @@ for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
     fail "standalone CodeRabbit pre-merge readiness state remains in ${contract_file}"
   fi
 done
+
+# monorepo#2620 established that an EMPTY CodeRabbit review object is a reply container, not a review.
+# Its fix (#2677) landed only in the surveyor overlay, leaving the contract — the surface every lane
+# reads, and the normative statement of the gate — accepting a bare `commit_id == head` match.
+# Measured over the 60 most recently merged monorepo PRs (2026-08-07): 16 of 19 CodeRabbit review
+# objects sitting at a merged head were empty, and monorepo#2607 and #2658 merged with an empty
+# container as the ONLY head-matching artifact and no Codex or Bugbot green. The gate's own predicate
+# matched a non-review, on the one control standing between an unreviewed change and main.
+#
+# Each assertion pins one COMPLETE operand: `assert_prose` flattens the file first, so the phrase is
+# matched against the words rather than the column the prose happens to wrap at.
+assert_prose "${constitution}" 'positively identified as a review' \
+  "constitution accepts a CodeRabbit review object without identifying it as a review"
+assert_prose "${constitution}" 'an empty object is a reply container, never a review' \
+  "constitution does not reject an empty CodeRabbit reply container at head"
+# The surveyor already carries the guard (#2677). Pinning it here too keeps the two surfaces from
+# drifting apart again in the direction that caused this defect.
+assert_prose "${surveyor}" 'Actionable comments posted:' \
+  "surveyor lost the positive identification of a CodeRabbit review object"
+# The parity checklist gates deletion of the local surveyor overlay, so a rule absent from it is one
+# the overlay removal drops silently — the same guard pattern as 4c above.
+assert_prose "${parity_checklist}" 'CodeRabbit review-object positive identification' \
+  "removing the surveyor overlay would silently drop the review-object identification"
 if grep -Fq 'pre-merge summary parsing' "${parity_checklist}"; then
   fail "plugin-parity checklist can reintroduce the removed pre-merge gate"
 fi
