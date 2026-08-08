@@ -211,6 +211,22 @@ printf '%s' "${green_body}" | grep -Fq "${expected_head:0:10}" ||
   fail "fixture clean-pass comment no longer names the same head; ordering trap not reproduced"
 
 # The contract must be a required PR check, including when its own workflow wiring changes.
+# A provider's rate limit is account-wide and time-boxed, so it is one fact per run, not one per PR.
+# Measured 2026-08-08: 54 review requests -> 16 real CodeRabbit reviews, 17 rate-limit refusals, and
+# on #2720 all 8 CodeRabbit requests were rate-limited across five rounds because lane priority
+# re-asked it every time. These pin the probe, that it is a READ, and that the gate is untouched.
+assert_prose "${constitution}" 'Establish a lane'"'"'s quota state ONCE PER RUN, by reading' \
+  "constitution does not require a per-run lane quota probe"
+assert_prose "${constitution}" 'readable with NO write' \
+  "the quota probe is not required to be a read rather than a spent request"
+assert_prose "${constitution}" 'start the ladder at Codex on every PR that run' \
+  "a known CodeRabbit quota window does not redirect the ladder for the run"
+# The optimisation must not become a way around the gate, nor a shortcut into the local fallback.
+assert_prose "${constitution}" 'never WHETHER A REVIEW IS REQUIRED' \
+  "the lane probe could be read as relaxing the green-review gate"
+assert_prose "${constitution}" 'never** evidence for the *Local review round* fallback on its own' \
+  "a run-level quota window could be misread as satisfying the local-review-round evidence bar"
+
 grep -Fq 'review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}' "${workflow}" ||
   fail "CI does not export the review-provider contract change filter"
 grep -Fq '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md' "${workflow}" ||
