@@ -92,6 +92,7 @@ func TestClassify_LongerLoginIsNotATrigger(t *testing.T) {
 		"@codex-team please clarify this",
 		"@cursorless what do you think?",
 		"@coderabbitai-staging review",
+		"@codex-team review",
 	}
 	for _, body := range bodies {
 		if got := Classify(body); got.violating() {
@@ -148,9 +149,10 @@ func TestClassify_UndisclosedTriggerIsAViolation(t *testing.T) {
 // this would break the one review lane that requires it.
 func TestClassify_BareTriggerIsExempt(t *testing.T) {
 	bodies := []string{
+		// Measured: every real bare trigger is stored as exactly this.
 		"@cursor review",
-		"@cursor review\n",
-		"  @cursor review  \n\n",
+		// CR is a transport artifact, not body content, so it is normalised away.
+		"@cursor review\r",
 	}
 	for _, body := range bodies {
 		if got := Classify(body); got != BareTrigger {
@@ -163,7 +165,10 @@ func TestClassify_BareTriggerIsExempt(t *testing.T) {
 // NOT fire the lane has no claim to the exemption -- exempting it would hide a
 // disclosure violation on a comment that also silently started no review.
 func TestClassify_BugbotExemptionIsByteExact(t *testing.T) {
-	for _, body := range []string{"@Cursor Review", "@cursor  review", "@cursor review please"} {
+	for _, body := range []string{
+		"@Cursor Review", "@cursor  review", "@cursor review please",
+		"  @cursor review  ", "@cursor review\n", "\n@cursor review",
+	} {
 		if got := Classify(body); got == BareTrigger {
 			t.Errorf("%q was exempted; the exemption is byte-exact", body)
 		}
@@ -175,15 +180,7 @@ func TestClassify_BugbotExemptionIsByteExact(t *testing.T) {
 // lanes is a real violation -- and a prefix+word-count rule also wrongly exempted
 // commands that are not review triggers at all.
 func TestClassify_OnlyTheCursorTriggerIsExempt(t *testing.T) {
-	bodies := []string{
-		"@codex review",
-		"@coderabbitai review",
-		"@coderabbitai full review",
-		"@cursor investigate",
-		"@codex fix",
-		"@copilot review",
-	}
-	for _, body := range bodies {
+	for _, body := range []string{"@codex review", "@coderabbitai review", "@coderabbitai full review"} {
 		got := Classify(body)
 		if got == BareTrigger {
 			t.Errorf("%q was exempted; only the exact Cursor trigger is carved out", body)
@@ -191,6 +188,35 @@ func TestClassify_OnlyTheCursorTriggerIsExempt(t *testing.T) {
 		if !got.violating() {
 			t.Errorf("%q: got %q, want a violating verdict", body, got)
 		}
+	}
+}
+
+// Codex P1 (#2720): positive evidence is the complete review COMMAND, not the
+// account. `@codex address that feedback` and friends are things the maintainer
+// plausibly writes, so an account-prefix rule reported his control channel.
+// `@copilot` is not a lane we trigger at all.
+func TestClassify_NonReviewCommandsToThoseAccountsAreNotEvidence(t *testing.T) {
+	bodies := []string{
+		"@codex address that feedback",
+		"@codex please explain this",
+		"@copilot can you implement this issue?",
+		"@copilot review",
+		"@cursor investigate",
+		"@codex fix",
+		"@coderabbitai resolve",
+	}
+	for _, body := range bodies {
+		if got := Classify(body); got.violating() {
+			t.Errorf("non-review command %q classified as violation %q", body, got)
+		}
+	}
+}
+
+// The contract's optional focus suffix must still count as a trigger.
+func TestClassify_ReviewCommandWithFocusSuffixIsATrigger(t *testing.T) {
+	body := "@codex review for concurrency\n\nplease look at the locking"
+	if got := Classify(body); got != UndisclosedTrigger {
+		t.Fatalf("focus-suffixed trigger: got %q, want %q", got, UndisclosedTrigger)
 	}
 }
 
@@ -512,5 +538,24 @@ func TestDecode_ArrayRecordsMustCarryAuthorAndBody(t *testing.T) {
 		if _, err := decode([]byte(raw)); err != nil {
 			t.Errorf("decode(%s) failed: %v", raw, err)
 		}
+	}
+}
+
+// Codex P1 (#2720): the WRAPPED input form bypassed record validation entirely,
+// so {"comments":[{"message":"Not Found"}]} decoded to a zero-valued comment and
+// the guard reported a clean sweep having checked nothing.
+func TestDecode_WrappedFormValidatesRecordsToo(t *testing.T) {
+	bad := []string{
+		`{"comments":[{"message":"Not Found"}]}`,
+		`{"comments":[{"id":1,"body":"x"}]}`,
+		`{"comments":[{"id":1,"user":{"login":"devantler"}}]}`,
+	}
+	for _, raw := range bad {
+		if _, err := decode([]byte(raw)); err == nil {
+			t.Errorf("decode(%s) succeeded; want an error so the guard fails closed", raw)
+		}
+	}
+	if _, err := decode([]byte(`{"comments":[{"id":1,"body":"x","author":"devantler"}]}`)); err != nil {
+		t.Errorf("valid wrapped payload rejected: %v", err)
 	}
 }
