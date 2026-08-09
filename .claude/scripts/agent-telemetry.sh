@@ -1089,8 +1089,9 @@ strip_ansi() {
 # `\t` and `\"` and mask values the table does not exclude. `#` is the delimiter
 # because the alternation needs `|`.
 #
-# 🔴 The mask applies ONLY to records that parse, because that is the condition
-# the table itself applies. The table runs `$raw | fromjson | decoded_strings`
+# 🔴 The mask requires a record that parses — the first of two conditions the
+# parser imposes, the second being key precedence immediately below. The table
+# itself applies this one: it runs `$raw | fromjson | decoded_strings`
 # and falls back to `catch $raw` — so a record that fails to parse is scanned
 # WHOLE and its credentials ARE counted, image payload or not. Masking such a
 # record would leave a counted table row with no concentration entry and no
@@ -1130,17 +1131,62 @@ strip_ansi() {
 # backslash would mask exactly that value and leave a counted row with no
 # locator. `,` and `"` stay excluded for the same reason — they would run the
 # match past the end of the value the table evaluated.
-CRED_MASK_PARSEABLE=$(printf '\001')
-CRED_MASK_UNPARSEABLE=$(printf '\002')
+#
+# 🔴 PARSE-SUCCESS IS NOT THE WHOLE GATE — KEY PRECEDENCE DECIDES TOO. JSON
+# permits a repeated key and `fromjson` keeps the LAST occurrence, so
+# `{"type":"input_image","type":"input_file","image_url":"data:image/…"}` has an
+# effective type of `input_file`: the table does NOT exclude that value and
+# COUNTS any credential in it, while the text still says `input_image` at the
+# first key and the expressions below would mask it. That is a counted row with
+# no locator — the unsafe direction. So the parser decides WHETHER the textual
+# expressions may run at all; they only ever LOCATE.
+#
+# The agreement test is a COUNT: how many times the marker is spelled in the raw
+# line, against how many objects the parser actually sees carrying it. Equality
+# is what licenses the mask. A duplicate key breaks equality in whichever
+# direction it resolves, so the record is declined and scanned — and, crucially,
+# a record whose LAST value is `input_image` still counts 1 == 1 and is still
+# masked. Declining every repeated key would be safe but would silence a payload
+# the table genuinely dropped, so the test is precedence-aware rather than
+# duplicate-averse.
+#
+# Two RESPELLING vetoes close the way two divergences could cancel out and leave
+# the counts equal. Only a `\u` escape can spell `input_image` or the `type` key
+# some other way, so a `\u` inside a `type` VALUE, or inside any KEY, declines
+# the line. Both are conservative: a false veto merely scans a record the table
+# excluded, which is the safe direction. The vetoes are anchored on `type` keys
+# and key-colon pairs, so the `/` a payload is allowed to carry cannot
+# trigger them. What remains uncovered is a record combining an escaped key with
+# a duplicate key so the totals coincide; it is recorded rather than closed,
+# because closing it costs a whole-line rewrite per record.
+#
+# The counting runs inside the SAME `jq -R` pass that already asks the parse
+# question, so this adds no process and no second read of the line.
+CRED_MASK_ELIGIBLE=$(printf '\001')
+CRED_MASK_DECLINED=$(printf '\002')
+# The marker as the raw line spells it, and the two respelling vetoes. Held as
+# constants so the textual question and the sed expressions below cannot drift
+# apart in how they spell the same key.
+CRED_MASK_MARKER_RE='"type"[[:space:]]*:[[:space:]]*"input_image"'
+CRED_MASK_RESPELL_RE='"type"[[:space:]]*:[[:space:]]*"[^"]*\\u|"[^"]*\\u[^"]*"[[:space:]]*:'
 cred_mask_image_payloads() {
-  jq -R -r --arg ok "$CRED_MASK_PARSEABLE" --arg no "$CRED_MASK_UNPARSEABLE" \
-     'if (try (fromjson | true) catch false) then $ok + . else $no + . end' 2>/dev/null \
+  jq -R -r --arg ok "$CRED_MASK_ELIGIBLE" --arg no "$CRED_MASK_DECLINED" \
+     --arg marker "$CRED_MASK_MARKER_RE" --arg respell "$CRED_MASK_RESPELL_RE" \
+     '. as $raw
+      | (try ($raw | fromjson) catch null) as $doc
+      | if $doc == null then $no + $raw
+        elif ([$raw | scan($marker)] | length)
+               == ([$doc | .. | objects | select(.type? == "input_image")] | length)
+             and ($raw | test($respell) | not)
+        then $ok + $raw
+        else $no + $raw
+        end' 2>/dev/null \
   | sed -E \
-    -e "/^${CRED_MASK_PARSEABLE}/{" \
+    -e "/^${CRED_MASK_ELIGIBLE}/{" \
     -e 's#("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \
     -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")#\1 \4#g' \
     -e '}' \
-    -e "s/^[${CRED_MASK_PARSEABLE}${CRED_MASK_UNPARSEABLE}]//"
+    -e "s/^[${CRED_MASK_ELIGIBLE}${CRED_MASK_DECLINED}]//"
 }
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires

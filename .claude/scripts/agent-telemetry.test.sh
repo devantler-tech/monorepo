@@ -1041,6 +1041,41 @@ printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_outpu
 # by both review lanes, which is why it is fixed here rather than deferred.
 printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;charset=utf-8;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
   >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Lines 14 and 15 — a DUPLICATE `type` key, the two orders. JSON permits the
+# repeat and `fromjson` keeps the LAST occurrence, so key precedence — not text
+# order — decides what the table sees. A mask that matches the marker textually
+# reads the FIRST occurrence and can therefore reach the opposite verdict.
+#
+# Line 14 is the unsafe direction and the reason this pair exists: the effective
+# type is `input_file`, so the table does NOT exclude the value and COUNTS the
+# credential in it, while the raw text still says `input_image` at the first key.
+# Masking here leaves a counted table row with no locator — a triager told
+# something was found and given nothing to look at.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","type":"input_file","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 15 is the same construct with the winning value reversed: the effective
+# type IS `input_image`, the table excludes the value, and the mask must too.
+# It is what stops the fix from being "decline anything with a repeated key",
+# which would be safe but would silence a payload the table genuinely dropped.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_file","type":"input_image","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# 🔴 Line 16 — TWO divergences on one line that cancel in the COUNT. The first
+# object repeats `type` and resolves away from `input_image` (text says it once,
+# the parser sees it zero times); the second spells its `type` KEY with a `\u`
+# escape and resolves TO `input_image` (text zero, parser one). The totals are
+# 1 == 1, so counting alone licenses the mask and the textual expression then
+# matches the FIRST object — blanking the credential the table counts.
+#
+# This is the case the respelling veto exists for, and it is the only one that
+# distinguishes the veto from dead code: every single-object respelling is
+# already caught by the count. Verified by ablation — with the veto removed this
+# line masks and the locator below disappears.
+#
+# ONLY the first object carries the credential, and that asymmetry is what gives
+# the assertion teeth: with a token in both payloads, a mask firing on either
+# one leaves the other visible and the output looks identical.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","type":"input_file","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"},{"ty'"${_BS}"'u0070e":"input_image","image_url":"data:image/png;base64,'"${_B64RUN}"'"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
 sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimgnc/codex/sessions/s.jsonl" && rm -f "$FIX/blobimgnc/codex/sessions/s.jsonl.bak"
 subst "$FIX/blobimgnc/codex/sessions/s.jsonl"
 # Control: the appended lines really do carry literal escapes. Without this,
@@ -1059,6 +1094,31 @@ _L11=$(sed -n '11p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
 if grep -qE -- '"image_url":"data:image/png;base64,[A-Za-z0-9+/]*"' <<<"$_L11"; then
   ok "control: line 11 carries an unremarkable, complete data URL"
 else bad "control: line 11 carries an unremarkable, complete data URL" "$_L11"; fi
+# Control: lines 14/15 really carry a REPEATED `type` on disk, and `fromjson`
+# really resolves each to its LAST occurrence. Both halves matter — without the
+# textual check a normalising tool upstream could have collapsed the duplicate,
+# and without the parse check the pair asserts nothing about precedence. The two
+# together are what make the next two assertions a test of parser-vs-text
+# disagreement rather than of two ordinary records.
+_L14=$(sed -n '14p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
+_L15=$(sed -n '15p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
+if [ "$(printf '%s' "$_L14" | jq -r '.payload.output[0].type')" = "input_file" ] &&
+   [ "$(printf '%s' "$_L15" | jq -r '.payload.output[0].type')" = "input_image" ] &&
+   grep -q '"type":"input_image","type":"input_file"' <<<"$_L14" &&
+   grep -q '"type":"input_file","type":"input_image"' <<<"$_L15"; then
+  ok "control: the duplicate-key fixtures parse to their LAST type value"
+else bad "control: the duplicate-key fixtures parse to their LAST type value" "$_L14"; fi
+# Control: line 16 really carries BOTH constructs and they really cancel — the
+# marker is spelled once, the parser sees exactly one `input_image` object, and
+# it is the SECOND one (so the textual match lands on the wrong object). Without
+# this the assertion below could pass on a line where the counts never collided.
+_L16=$(sed -n '16p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
+if [ "$(grep -o '"type":"input_image"' <<<"$_L16" | wc -l | tr -d ' ')" = "1" ] &&
+   [ "$(printf '%s' "$_L16" | jq -r '[.payload.output[]|select(.type=="input_image")]|length')" = "1" ] &&
+   [ "$(printf '%s' "$_L16" | jq -r '.payload.output[0].type')" = "input_file" ] &&
+   grep -q 'u0070e' <<<"$_L16"; then
+  ok "control: line 16's two divergences cancel in the marker count"
+else bad "control: line 16's two divergences cancel in the marker count" "$_L16"; fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimgnc/projects" CODEX_HOME="$FIX/blobimgnc/codex" \
       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
@@ -1144,6 +1204,26 @@ else bad "an ANSI-wrapped image payload keeps its locator, as the table counts i
 if grep -q 'line=13 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
   bad "a MIME-parameterised data URL under input_image is masked" "$CRED"
 else ok "a MIME-parameterised data URL under input_image is masked"; fi
+# 🔴 Line 14 — key precedence, the UNSAFE direction. The raw text opens with
+# `"type":"input_image"`, so a textual marker match says "exclude"; `fromjson`
+# keeps the later `input_file`, so the table does NOT exclude and COUNTS the
+# credential. Masking it would leave a counted row with no locator. (#2742)
+if grep -q 'line=14 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a duplicate-key record whose effective type is input_file keeps its locator"
+else bad "a duplicate-key record whose effective type is input_file keeps its locator" "$CRED"; fi
+# Line 15 — the same construct resolving the other way. The effective type IS
+# `input_image`, so the table excludes the value and the mask must still fire.
+# This is what keeps the fix from degenerating into "decline any repeated key",
+# which would be safe but would silence a payload the table genuinely dropped.
+if grep -q 'line=15 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "a duplicate-key record whose effective type is input_image is masked" "$CRED"
+else ok "a duplicate-key record whose effective type is input_image is masked"; fi
+# 🔴 Line 16 — the marker count agrees while the objects diverge, so counting
+# alone would license the mask and blank a credential the table counts. Only the
+# respelling veto declines it. Removing that veto fails exactly this assertion.
+if grep -q 'line=16 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a record whose two key divergences cancel in the count keeps its locator"
+else bad "a record whose two key divergences cancel in the count keeps its locator" "$CRED"; fi
 
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain
