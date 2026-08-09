@@ -2662,9 +2662,19 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   edge of what is allowed. If the thing you are waiting on is **remote state** (CI, a review, a
   merge, a deploy), any `sleep` — chained, standalone, or split across calls — is the wrong tool:
   arm the watcher, do other actionable work, or end the run and let the next tick collect the
-  result. A bare `sleep` is legitimate only as a **local timer for a process you yourself started**
-  (e.g. bounding a backgrounded windowed render before killing it), never as a wait for a remote
-  system to change state.
+  result. 🔴 **A `sleep` is never the tool for anything the runtime will report to you.** That is
+  the test — **not** who started the process, and **not** whether the state is local. A backgrounded
+  tool call satisfies both of those: you started it, and its output file is on this disk — yet the
+  runtime **announces its completion**, so polling that file is precisely the duplication this
+  bullet forbids two sentences up. Measured over the 7 days to 2026-08-09T22Z, counting only structurally
+  anchored firings: **76 of 141 blocked actions were `sleep N && <poll>`, and 27 of those polled a
+  backgrounded task's own output file** — which is why the report test is stated first rather than
+  left to be inferred from the local/remote split.
+  Wait on an announced result with the runtime's own waiter — **`Monitor` with an
+  until-loop**, which the guard's own refusal already names — or simply do other work until the
+  notification arrives. A bare `sleep` is legitimate only as a **local timer for a process whose
+  completion nothing will report** (e.g. bounding a backgrounded windowed render before killing
+  it), never as a wait for a remote system to change state.
 - **Long-pole first.** Push the change with the **slowest CI first** so its bake overlaps everything
   else; do the fast-CI and no-CI work (issue triage, review-thread replies, memory, reports) during
   the bake. Reversing this — fast item first, slow item last — buys a guaranteed idle tail, which is
