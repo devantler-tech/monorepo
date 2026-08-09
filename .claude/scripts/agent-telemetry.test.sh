@@ -353,6 +353,23 @@ nocheck "codex drop never reports a zero"  "$OUT" "codex engineer dropped dispat
 # must fail closed rather than dividing by a window the store cannot cover.
 check "unspanned window refuses to state a rate" "$OUT" "drop rate: UNKNOWN"
 
+# The minute alone identifies a dropped slot only while the cron covers every hour.
+# Under a finite hour list the runtime still records a poll tick at every hour's :50
+# while a run stays blocked, so counting unscheduled hours would score drops against
+# a two-slot/day denominator and could publish a rate above 100%.
+#
+# Cron hours are LOCAL. The three due-minute fixture records are 09:50/10:50/11:50 UTC
+# = 11:50/12:50/13:50 under this suite's +02:00 host, so `0,12` admits exactly one.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) = "50 0,12 * * *"' \
+  "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(run --section drift)
+check   "a finite hour list excludes unscheduled hours" "$OUT" \
+  "claude engineer dropped dispatches: 1 slot(s)"
+nocheck "an hour-list cron never counts every hour's due minute" "$OUT" \
+  "claude engineer dropped dispatches: 3 slot(s)"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+
 # The covered case: with a 1-day window the records predate the window start, so
 # coverage IS proven and the rate is computed. None of the 24 records fall inside
 # that window, which also proves the due-slot count is window-bounded.

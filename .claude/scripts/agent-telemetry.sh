@@ -3539,18 +3539,39 @@ if want drift; then
   # currently `per_task_limit`, but the field exists precisely because it need not
   # be, and the reported line names that reason — so counting any other skip class
   # would inflate both the count and the rate while claiming to measure one cause.
+  # Matched on the schedule's HOURS as well as its minute. Filtering on the minute
+  # alone is correct only while the cron covers every hour; the moment it does not —
+  # `50 0,12 * * *`, exactly the drift this section exists to diagnose — the runtime
+  # still records a poll tick at every hour's :50 while a run stays blocked, so an
+  # unscheduled hour would be counted as a dropped slot against a denominator of two
+  # slots/day, and the rate could exceed 100%.
+  #
+  # Cron hours are LOCAL (verified: the improver's `0,12` fires at 10:00Z under a
+  # +02:00 offset), so both fields are read through `strflocaltime` rather than
+  # arithmetic on the epoch. That also removes a latent assumption in the minute
+  # test, which only agreed with local time because this host's offset is a whole
+  # number of hours; it would have been wrong on a :30 offset.
   claude_store_skip_slots() {
-    local store="$1" id="$2" minute="$3" since_ms="$4"
+    local store="$1" id="$2" minute="$3" since_ms="$4" hours="$5"
     [ -f "$store" ] || return 0
-    jq -r --arg id "$id" --argjson minute "$minute" --argjson since "$since_ms" '
-      [ .recordedSkips[$id][]?
-        | select(.reason == "per_task_limit")
-        | (.at // empty)
-        | select(. >= $since)
-        | (. / 1000 | floor)
-        | select(((. % 3600) / 60 | floor) == $minute)
-        | (. - (. % 3600))
-      ] | unique | length
+    jq -r --arg id "$id" --argjson minute "$minute" --arg hours "$hours" \
+          --argjson since "$since_ms" '
+      ($hours | split(",")) as $hourset
+      | [ .recordedSkips[$id][]?
+          | select(.reason == "per_task_limit")
+          | (.at // empty)
+          | select(. >= $since)
+          | (. / 1000 | floor)
+          | select((strflocaltime("%M") | tonumber) == $minute)
+          # Bound to a variable first: index(f) evaluates f against the input of
+          # index itself, so $hourset | index(strflocaltime(...)) would apply the
+          # format to the hour ARRAY and abort on "requires parsed datetime inputs".
+          | . as $epoch
+          | select($hours == "*"
+                   or ($hourset
+                       | index($epoch | strflocaltime("%H") | tonumber | tostring)) != null)
+          | strflocaltime("%Y-%m-%dT%H")
+        ] | unique | length
     ' "$store" 2>/dev/null
   }
 
@@ -3768,7 +3789,8 @@ if want drift; then
     if [ -n "$WINDOW_SINCE" ] && [ -n "$SKIP_SINCE_MS" ] \
        && [[ "$CLAUDE_ENG_MINUTE" =~ ^[0-9]+$ ]]; then
       CLAUDE_DROPPED=$(claude_store_skip_slots "$CLAUDE_SCHEDULE_STORE" \
-        daily-ai-assistant "$CLAUDE_ENG_MINUTE" "$SKIP_SINCE_MS")
+        daily-ai-assistant "$CLAUDE_ENG_MINUTE" "$SKIP_SINCE_MS" \
+        "${CLAUDE_ENGINEER_ACTUAL%%@*}")
     fi
     SKIP_FLOOR=""
     [ -n "$CLAUDE_DROPPED" ] \
@@ -3785,11 +3807,25 @@ if want drift; then
       # A rate is stated only when the store's records demonstrably cover the whole
       # window. Records that begin INSIDE it leave the earlier slots unaccounted,
       # and short retention would otherwise masquerade as a low drop rate.
+      # The rate assumes the CURRENT cadence held for the whole window, and the store
+      # carries no schedule history to prove that — a cron changed mid-window would
+      # have its earlier drops classified under the new minute while the denominator
+      # still counts every slot. That case cannot be detected from this surface, so
+      # it is disclosed in the label rather than silently assumed away.
+      #
+      # What CAN be detected is the impossible outcome it produces: more dropped slots
+      # than the window could schedule. That is proof the assumption failed, so it
+      # fails closed instead of publishing a rate above 100%.
+      RATE_TOTAL=$(( CLAUDE_ENG_SLOTS_DAY * SINCE_DAYS ))
       if [ "$SKIP_FLOOR" -le "$SKIP_SINCE_MS" ] \
-         && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ]; then
-        RATE=$(awk -v d="$CLAUDE_DROPPED" -v s="$CLAUDE_ENG_SLOTS_DAY" -v n="$SINCE_DAYS" \
-          'BEGIN { t = s * n; if (t > 0) printf "%.1f%% of %d slot(s)", 100 * d / t, t; else print "UNKNOWN" }')
+         && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
+         && [ "$CLAUDE_DROPPED" -le "$RATE_TOTAL" ]; then
+        RATE=$(awk -v d="$CLAUDE_DROPPED" -v t="$RATE_TOTAL" \
+          'BEGIN { if (t > 0) printf "%.1f%% of %d slot(s) at the current cadence", 100 * d / t, t; else print "UNKNOWN" }')
         echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: $RATE"
+      elif [ -n "$RATE_TOTAL" ] && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
+           && [ "$CLAUDE_DROPPED" -gt "$RATE_TOTAL" ]; then
+        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (more drops than the window schedules — cadence changed within it)"
       else
         echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (skip records do not span the window)"
       fi
