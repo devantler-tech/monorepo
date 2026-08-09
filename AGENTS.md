@@ -2666,7 +2666,7 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   the test — **not** who started the process, and **not** whether the state is local. A backgrounded
   tool call satisfies both of those: you started it, and its output file is on this disk — yet the
   runtime **announces its completion**, so polling that file is precisely the duplication this
-  bullet forbids two sentences up. Measured 2026-08-10 over 7 days, counting only structurally
+  bullet forbids two sentences up. Measured over the 7 days to 2026-08-09T22Z, counting only structurally
   anchored firings: **76 of 141 blocked actions were `sleep N && <poll>`, and 27 of those polled a
   backgrounded task's own output file** — which is why the report test is stated first rather than
   left to be inferred from the local/remote split.

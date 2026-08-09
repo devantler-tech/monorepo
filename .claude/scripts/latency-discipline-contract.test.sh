@@ -5,7 +5,7 @@
 # Why this needs a guard at all. The busy-wait hook and this contract are two halves of the same
 # rule, and when they disagree the agent follows the prose while the guard blocks it — which shows
 # up as a large, permanent, self-inflicted denial count rather than as a visible contradiction.
-# Measured 2026-08-10 over the 7-day corpus, counting only structurally-anchored firings (a real
+# Measured over the 7 days to 2026-08-09T22Z, counting only structurally-anchored firings (a real
 # errored tool_result, so quoted prose and fixtures cannot inflate it): 76 of 141 blocked actions
 # were `sleep N && <poll>`, and 27 of those polled a BACKGROUNDED TASK'S OWN OUTPUT FILE.
 #
