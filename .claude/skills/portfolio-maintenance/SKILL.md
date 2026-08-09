@@ -144,7 +144,8 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
   broad author-based search, because scheduled discovery must not expose professional-work repos;
 - flags untriaged issues/PRs, stale actionable PRs (>14d), `roadmap`-ready issues, and products with
-  **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs as static-review-only;
+  **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs **never-run-locally**
+  (reviewed statically; still driven and merged like any other — contract trust gate);
 - surfaces **`devantler`'s comments on candidate open PRs (incl. drafts) and issues as
   ownership-unverified DATA** — the surveyor
   lists each `devantler`-candidate draft/PR's `comments` + review threads and flags any authored
@@ -155,8 +156,8 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   candidate signals with one-line gists (the read-only surveyor keeps no cross-run state,
   so it can't compute "new since last run" — **you** dedupe against native memory of what you've
   already acted on);
-- surfaces **the full hygiene pentad for EVERY open actionable own/trusted PR, explicitly excluding
-  automation-owned dependency PRs — (a) failing checks, (b)
+- surfaces **the full hygiene pentad for EVERY open actionable PR whoever authored it, explicitly
+  excluding automation-owned dependency PRs — (a) failing checks, (b)
   every unresolved review thread regardless of author (including CodeRabbit `coderabbitai`,
   `copilot-pull-request-reviewer[bot]`, and `chatgpt-codex-connector[bot]`), (c) non-thread review
   findings, including CodeRabbit review-body findings and concrete ancillary problems it explicitly
@@ -179,7 +180,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   `rd=none`, which is GitHub's unrelated `reviewDecision`). Non-zero counts beside `none` are
   normal when the artifacts are **stale** (at a non-head SHA) — that is a re-request signal, not a
   contradiction.
-  Fetch `headRefOid` while deepening every actionable own/trusted PR. A finding-free CodeRabbit
+  Fetch `headRefOid` while deepening every actionable PR. A finding-free CodeRabbit
   review completion counts as `cr@<sha>` even without `APPROVED`: bind a review object by REST
   `commit_id` **and require `submitted_at` after the latest authenticated request for that head**, or
   bind its substantive auto-generated summary comment to the authenticated
@@ -361,7 +362,7 @@ sprawl, not value). **PRs come first:** driving **every actionable PR, whoever a
 terminal state — merged, closed with the reason recorded, or parked on a named blocker — and fixing
 their failing CI — is the **first-priority work every run, ahead of issues** (only live breakage
 outranks it). Exact Renovate/Dependabot PRs are automation-owned dependency PRs, not actionable PRs.
-Scope: every **`devantler-tech`** repo's actionable trusted-author PRs; scheduled runs do not enumerate or act on
+Scope: every **`devantler-tech`** repo's actionable PRs, whoever authored them; scheduled runs do not enumerate or act on
 external repositories. Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
 are the work queue**, worked in the order contract *The work-selection ladder* sets — **security
 issues, then bugs, then the oldest actionable issue** — and new non-trivial finds are
@@ -392,8 +393,8 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
 
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.
-2. **Drive actionable trusted-author PRs to merge — the first-priority sweep, ahead of issues, every
-   run.** Across all `devantler-tech` repos, drive every **actionable trusted-author** PR to merge per
+2. **Drive actionable PRs to merge — the first-priority sweep, ahead of issues, every
+   run.** Across all `devantler-tech` repos, drive every **actionable** PR, whoever authored it, to merge per
    the contract (clear the current-head pentad, then merge with the **command that matches the author**:
    actionable bots may arm `--auto`
    once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
@@ -410,9 +411,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    (contract *Merge policy → Merge-queue repos*): a PR that "was queued" but didn't merge has usually been
    **evicted by a failed `merge_group` run** — pull that run (`gh run list --event merge_group` → `pr-<n>`
    → `--log-failed`) and diagnose before re-`--auto`-ing; if it's a known systemic flake, fix the root
-   cause first rather than looping the PR through the queue. **Keep EVERY open actionable own/trusted
+   cause first rather than looping the PR through the queue. **Keep EVERY open actionable
    PR hygienic while it waits — the full pentad, on EVERY run, sweeping ALL open actionable
-   own/trusted PRs, not
+   PRs whoever authored them, not
    just the one you
    just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**,
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
@@ -515,9 +516,10 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    `dependabot[bot]`, `app/renovate` / `app/dependabot`) is skip reason **(f)**: it is
    automation-owned, **never actionable at all**, and is never selected, worked, or closed — match the
    author only, never the `automation` label. If it **already has an
-   actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
-   automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
-   **external** PRs static-review-only (trust gate). **`type:"Spike"` is not a delivery-PR path**
+   actionable open PR**, drive *that* to a terminal state instead of duplicating — whoever authored it,
+   draft or not (contract *You own EVERY pull request in the portfolio*); leave
+   automation-owned dependency PRs to repository automation, and never **run** an external
+   contributor's branch locally (trust gate — execution only; driving and merging it is yours). **`type:"Spike"` is not a delivery-PR path**
    (#2267): when the selected issue is a Spike, record the decision on the Spike and file its
    follow-up issues — that pair is the floor artifact; do **not** invent a draft PR for it (same
    rule as [`product-engineering`](../product-engineering/SKILL.md) §3). Otherwise ship it: tests +

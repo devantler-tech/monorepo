@@ -111,7 +111,8 @@ public and private — no per-repo loop needed to enumerate):
    cheap branch/title test only selects a candidate; it never grants trust or an exemption. Exit 0
    grants the narrow no-review path. Exit 3 means a trusted, review-required `agent-plugins` updater:
    deepen its normal review surfaces and never report it exempt. Exit 1 leaves the App untrusted and
-   the PR static-review-only. Exit 2 is a survey error and fails closed.
+   the PR never-run-locally — reviewed statically, still drivable and mergeable. Exit 2 is a survey
+   error and fails closed.
    - **`devantler`-authored PRs: classify the CI state, NOT the ownership — report them as
      `OWNERSHIP-UNVERIFIED`, never "MERGE-READY own".** You cannot tell the routine's *own* PRs from the
      **maintainer's interactive** ones (an active feature campaign, `repo-assist`, a hand-driven session):
@@ -198,7 +199,7 @@ public and private — no per-repo loop needed to enumerate):
      counts only P0/P1 as "major". "Latest Codex comment wins" is therefore unsafe; the supersession
      path is the same-SHA one below (all findings resolved, then a later authenticated re-request
      produces the clean marker), never recency.
-   - **(e) Green-review state per open actionable own/trusted PR — no actionable own/trusted PR is promotion- or
+   - **(e) Green-review state per open actionable PR whoever authored it — no actionable PR is promotion- or
      merge-ready without ≥1 green review on top of green CI; a successful current-head review from any one provider completes the review gate**
      (maintainer direction 2026-07-11, clarified 2026-07-22).
      This includes drafts and promoted PRs from humans and actionable trusted bots — EXCEPT trusted
@@ -384,7 +385,7 @@ public and private — no per-repo loop needed to enumerate):
      generous acknowledged window; a result, newer head, or evidenced expiry clears it. **NO
      reviewer auto-reviews anything anymore (maintainer disabled auto-review on both CodeRabbit and
      Copilot code review, 2026-07-12)** — every review exists only because the orchestrator requested
-     it, so a `none`/`*-stale` on any actionable own/trusted PR signals the orchestrator to
+     it, so a `none`/`*-stale` on any actionable PR signals the orchestrator to
      (re-)request one (its
      one-tool-at-a-time, priority-ordered, rate-limit-aware discipline — the surveyor only reports the state).
      Persist provider progression independently as
@@ -768,7 +769,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable own/trusted PR broken; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does
+nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable PR broken, whoever authored it; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
