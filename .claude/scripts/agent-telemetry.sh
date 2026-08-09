@@ -1071,14 +1071,28 @@ strip_ansi() {
 # an escaped payload and the raw surfaces report a credential the table dropped,
 # which is the very divergence this function exists to close.
 #
-# The payload accepts base64 characters and escaped solidus ONLY — deliberately
-# not a `[A-Za-z0-9+/\\]*` class, which would also swallow `\n`, `\t` and `\"`
-# and mask values the table does not exclude. `#` is the delimiter because the
-# alternation needs `|`.
+# `/` is the other legal spelling and `fromjson` normalises it too, so both
+# forms of the solidus are accepted at every position it can occupy.
+#
+# The payload accepts base64 characters and those two solidus spellings ONLY —
+# deliberately not a `[A-Za-z0-9+/\\]*` class, which would also swallow `\n`,
+# `\t` and `\"` and mask values the table does not exclude. `#` is the delimiter
+# because the alternation needs `|`.
+#
+# 🔴 The MEDIA TYPE is `[A-Za-z0-9.+-]*`, not `[^,"]*`, and that narrowness is
+# load-bearing in the OTHER direction. A record carrying an invalid JSON escape
+# (`data:image/\q;base64,…`) fails `fromjson`, so the table's `catch $raw` branch
+# scans the WHOLE raw record and DOES count any credential in it. A media-type
+# class that admitted the stray backslash would mask exactly that record, leaving
+# a table row with no concentration entry and no locator — the unsafe direction.
+# Excluding backslashes here makes the mask decline any record whose escaping it
+# cannot vouch for, which is the same answer the table gives. Real media types
+# (`png`, `jpeg`, `svg+xml`, `webp`) need none of the excluded characters, and
+# the scheme's own solidus is already consumed before this class begins.
 cred_mask_image_payloads() {
   sed -E \
-    -e 's#("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]\\?/[^,"]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/)*={0,2}(")#\1 \3#g' \
-    -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]\\?/[^,"]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/)*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")#\1 \3#g'
+    -e 's#("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \
+    -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")#\1 \4#g'
 }
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
