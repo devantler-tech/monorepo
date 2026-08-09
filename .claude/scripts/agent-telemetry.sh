@@ -3647,6 +3647,90 @@ if want drift; then
     ' "$store" 2>/dev/null
   }
 
+  # ── dropped dispatches ──────────────────────────────────────────────────────
+  # A cron expansion counts SCHEDULED SLOTS. The Claude runtime declines any
+  # dispatch that would overlap the previous run of the same task and records the
+  # refusal as `per_task_limit`, so a slot is not a run. Measured on the live
+  # store: 58 of 168 slots dropped over 2026-08-02→08-09 (34.5%), corroborating
+  # 52/142 (36.6%) and 108/161 (32.9%) from two earlier windows.
+  #
+  # The store writes one record per POLL TICK — roughly every 60s for as long as
+  # the task stays blocked — so raw records overstate badly: 1067 records for 58
+  # real drops, ~18x. Only a record landing in the cron's OWN minute is a dropped
+  # dispatch; every later record in that hour re-refuses a tick already counted.
+  # Distinct-slot counting (truncate to the hour) also absorbs the duplicate that
+  # appears when two poll ticks land inside the same due minute.
+  #
+  # Filtered on the REASON as well as the minute. Every record on the live store is
+  # currently `per_task_limit`, but the field exists precisely because it need not
+  # be, and the reported line names that reason — so counting any other skip class
+  # would inflate both the count and the rate while claiming to measure one cause.
+  # Matched on the schedule's HOURS as well as its minute. Filtering on the minute
+  # alone is correct only while the cron covers every hour; the moment it does not —
+  # `50 0,12 * * *`, exactly the drift this section exists to diagnose — the runtime
+  # still records a poll tick at every hour's :50 while a run stays blocked, so an
+  # unscheduled hour would be counted as a dropped slot against a denominator of two
+  # slots/day, and the rate could exceed 100%.
+  #
+  # Cron hours are LOCAL (verified: the improver's `0,12` fires at 10:00Z under a
+  # +02:00 offset), so both fields are read through `strflocaltime` rather than
+  # arithmetic on the epoch. That also removes a latent assumption in the minute
+  # test, which only agreed with local time because this host's offset is a whole
+  # number of hours; it would have been wrong on a :30 offset.
+  claude_store_skip_slots() {
+    local store="$1" id="$2" minute="$3" since_ms="$4" hours="$5"
+    [ -f "$store" ] || return 0
+    jq -r --arg id "$id" --argjson minute "$minute" --arg hours "$hours" \
+          --argjson since "$since_ms" '
+      ($hours | split(",")) as $hourset
+      | [ .recordedSkips[$id][]?
+          | select(.reason == "per_task_limit")
+          | (.at // empty)
+          | select(. >= $since)
+          | (. / 1000 | floor)
+          | select((strflocaltime("%M") | tonumber) == $minute)
+          # Bound to a variable first: index(f) evaluates f against the input of
+          # index itself, so $hourset | index(strflocaltime(...)) would apply the
+          # format to the hour ARRAY and abort on "requires parsed datetime inputs".
+          | . as $epoch
+          | select($hours == "*"
+                   or ($hourset
+                       | index($epoch | strflocaltime("%H") | tonumber | tostring)) != null)
+          | strflocaltime("%Y-%m-%dT%H")
+        ] | unique | length
+    ' "$store" 2>/dev/null
+  }
+
+  # Earliest skip record, used ONLY to decide whether a rate may be stated. A
+  # denominator of "slots in the window" is only honest when the store's records
+  # actually span that window; if the earliest record falls INSIDE the window the
+  # store cannot account for the earlier slots, and dividing anyway would invent
+  # a low rate out of short retention. Empty means no skip surface at all — which
+  # is UNKNOWN, never zero, since absence on a surface is a claim about that
+  # surface only.
+  claude_store_skip_floor() {
+    local store="$1" id="$2"
+    [ -f "$store" ] || return 0
+    jq -r --arg id "$id" '
+      [ .recordedSkips[$id][]? | (.at // empty) ] | if length == 0 then empty else min end
+    ' "$store" 2>/dev/null
+  }
+
+  # Newest skip record. Coverage alone does not prove the scheduler was RUNNING in
+  # the window: an enabled schedule record plus old skips, with the scheduler having
+  # stopped dispatching entirely, yields floor-covered and zero drops — which would
+  # publish "0.0%" and present a total outage as a window of successful opportunities.
+  # That is the same absence-read-as-health error as a fabricated zero, so the rate
+  # additionally requires positive evidence of activity INSIDE the window: either a
+  # dispatch marker (`lastRunAt`) or a skip record landing in it.
+  claude_store_skip_latest() {
+    local store="$1" id="$2"
+    [ -f "$store" ] || return 0
+    jq -r --arg id "$id" '
+      [ .recordedSkips[$id][]? | (.at // empty) ] | if length == 0 then empty else max end
+    ' "$store" 2>/dev/null
+  }
+
   claude_store_schedule() {
     local store="$1" id="$2" pointer="$3" cron parsed hours minute
     cron=$(claude_store_field "$store" "$id" "$pointer" cronExpression)
@@ -3776,6 +3860,25 @@ if want drift; then
     "$CODEX_IMPROVER_POINTER_ACTUAL" "$CODEX_IMPROVER_STORE_ACTUAL" \
     "$CODEX_IMPROVER_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"
 
+  # Defined before the aggregate gate, not inside it: the per-lane drop reporting
+  # below runs even when the gate fails, and a helper defined only on the success
+  # path left that path computing an EMPTY slot count — which silently downgraded a
+  # measurable drop rate to UNKNOWN. Caught by evaluating the change on the live
+  # store, where the gate does fail; every test fixture measures cleanly, so no
+  # fixture could have exposed it.
+  expand_schedules() {
+    awk -F'@' '
+      NF == 2 {
+        if ($1 == "*") {
+          for (hour = 0; hour <= 23; hour++) print hour ":" $2
+        } else {
+          count = split($1, hours, ",")
+          for (i = 1; i <= count; i++) print hours[i] ":" $2
+        }
+      }
+    '
+  }
+
   if schedule_measured "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
        "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" \
      && schedule_measured "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
@@ -3784,18 +3887,7 @@ if want drift; then
        "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" \
      && schedule_measured "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
        "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"; then
-    expand_schedules() {
-      awk -F'@' '
-        NF == 2 {
-          if ($1 == "*") {
-            for (hour = 0; hour <= 23; hour++) print hour ":" $2
-          } else {
-            count = split($1, hours, ",")
-            for (i = 1; i <= count; i++) print hours[i] ":" $2
-          }
-        }
-      '
-    }
+    :
     ALL_SLOTS=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CLAUDE_IMPROVER_ACTUAL" \
       "$CODEX_ENGINEER_ACTUAL" "$CODEX_IMPROVER_ACTUAL" | expand_schedules)
     COLLISIONS=$(printf '%s\n' "$ALL_SLOTS" | awk '
@@ -3810,10 +3902,98 @@ if want drift; then
     ENGINEER_DISPATCHES=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CODEX_ENGINEER_ACTUAL" \
       | expand_schedules | awk 'NF { count++ } END { print count + 0 }')
     echo "    local simultaneous starts/day: $COLLISIONS"
-    echo "    local engineer dispatches/day: $ENGINEER_DISPATCHES"
+    # "slots scheduled", not "dispatches": this number is the cron expanded, and a
+    # scheduled slot is not a run. The old label read as an actual dispatch count,
+    # which matters because this deployment states hypothesis volume floors in
+    # DISPATCHES — so a floor could be cleared by slots that never ran.
+    echo "    local engineer slots scheduled/day: $ENGINEER_DISPATCHES"
   else
     echo "    local simultaneous starts/day: UNKNOWN (one or more pointers unmeasured)"
-    echo "    local engineer dispatches/day: UNKNOWN (one or more engineer pointers unmeasured)"
+    echo "    local engineer slots scheduled/day: UNKNOWN (one or more engineer pointers unmeasured)"
+  fi
+
+  # Reported OUTSIDE the aggregate gate above, deliberately. That gate requires all
+  # four schedule pointers to be measured because it SUMS both lanes; this figure
+  # needs only the Claude cron minute and the Claude skip records. Measured live
+  # 2026-08-09: the Codex engineer's stored RRULE had lost its BYSECOND=0, so that
+  # lane read UNKNOWN and suppressed the whole block — hiding a Claude drop count
+  # that was fully measurable. A lane's own number must not be hostage to a
+  # sibling lane's unrelated pointer defect.
+  if [ -n "$CLAUDE_ENGINEER_ACTUAL" ]; then
+    CLAUDE_ENG_SLOTS_DAY=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" \
+      | expand_schedules | awk 'NF { count++ } END { print count + 0 }')
+    CLAUDE_ENG_MINUTE=${CLAUDE_ENGINEER_ACTUAL##*@}
+    SKIP_SINCE_MS=$(jq -nr --arg since "$WINDOW_SINCE" '
+      ($since | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor) * 1000
+    ' 2>/dev/null)
+    CLAUDE_DROPPED=""
+    if [ -n "$WINDOW_SINCE" ] && [ -n "$SKIP_SINCE_MS" ] \
+       && [[ "$CLAUDE_ENG_MINUTE" =~ ^[0-9]+$ ]]; then
+      CLAUDE_DROPPED=$(claude_store_skip_slots "$CLAUDE_SCHEDULE_STORE" \
+        daily-ai-assistant "$CLAUDE_ENG_MINUTE" "$SKIP_SINCE_MS" \
+        "${CLAUDE_ENGINEER_ACTUAL%%@*}")
+    fi
+    SKIP_FLOOR=""
+    [ -n "$CLAUDE_DROPPED" ] \
+      && SKIP_FLOOR=$(claude_store_skip_floor "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant)
+    # An absent skip surface and a genuinely drop-free window are indistinguishable
+    # from the count alone: both yield 0. Reporting that 0 would fabricate a clean
+    # lane out of a surface that recorded nothing — the exact error this change
+    # refuses to make for Codex two lines below, and it would be no better here.
+    # An empty floor means no record exists to prove the surface is live, so the
+    # whole figure is UNKNOWN rather than zero.
+    if [ -z "$CLAUDE_DROPPED" ] || [ -z "$SKIP_FLOOR" ]; then
+      echo "    claude engineer dropped dispatches: UNKNOWN (no readable skip record — an absent surface is not a zero)"
+    else
+      # A rate is stated only when the store's records demonstrably cover the whole
+      # window. Records that begin INSIDE it leave the earlier slots unaccounted,
+      # and short retention would otherwise masquerade as a low drop rate.
+      # The rate assumes the CURRENT cadence held for the whole window, and the store
+      # carries no schedule history to prove that — a cron changed mid-window would
+      # have its earlier drops classified under the new minute while the denominator
+      # still counts every slot. That case cannot be detected from this surface, so
+      # it is disclosed in the label rather than silently assumed away.
+      #
+      # What CAN be detected is the impossible outcome it produces: more dropped slots
+      # than the window could schedule. That is proof the assumption failed, so it
+      # fails closed instead of publishing a rate above 100%.
+      #
+      # Coverage is also not liveness. An enabled record plus old skips, with the
+      # scheduler no longer dispatching, is floor-covered with zero drops — and would
+      # publish "0.0%", presenting a total outage as a window of successful
+      # opportunities. So the rate additionally requires positive evidence that the
+      # scheduler was active INSIDE the window: a dispatch marker (`lastRunAt`) or a
+      # skip record landing in it. Without either, the denominator describes slots
+      # nothing was even attempting to fill.
+      RATE_TOTAL=$(( CLAUDE_ENG_SLOTS_DAY * SINCE_DAYS ))
+      SKIP_LATEST=$(claude_store_skip_latest "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant)
+      ACTIVE_IN_WINDOW=0
+      [[ "$CLAUDE_ENGINEER_MARKER" =~ ^[0-9]+$ ]] \
+        && [ $(( CLAUDE_ENGINEER_MARKER * 1000 )) -ge "$SKIP_SINCE_MS" ] && ACTIVE_IN_WINDOW=1
+      [ -n "$SKIP_LATEST" ] && [ "$SKIP_LATEST" -ge "$SKIP_SINCE_MS" ] && ACTIVE_IN_WINDOW=1
+      if [ "$SKIP_FLOOR" -le "$SKIP_SINCE_MS" ] \
+         && [ "$ACTIVE_IN_WINDOW" -eq 1 ] \
+         && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
+         && [ "$CLAUDE_DROPPED" -le "$RATE_TOTAL" ]; then
+        RATE=$(awk -v d="$CLAUDE_DROPPED" -v t="$RATE_TOTAL" \
+          'BEGIN { if (t > 0) printf "%.1f%% of %d slot(s) at the current cadence", 100 * d / t, t; else print "UNKNOWN" }')
+        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: $RATE"
+      elif [ -n "$RATE_TOTAL" ] && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
+           && [ "$CLAUDE_DROPPED" -gt "$RATE_TOTAL" ]; then
+        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (more drops than the window schedules — cadence changed within it)"
+      elif [ "$ACTIVE_IN_WINDOW" -ne 1 ]; then
+        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (no dispatch or skip inside the window — scheduler not proven active)"
+      else
+        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (skip records do not span the window)"
+      fi
+    fi
+    # The Codex `automations` table records dispatches that HAPPENED; it carries no
+    # skip surface, so a Codex drop is visible only as a gap. Reporting 0 here would
+    # fabricate a clean lane out of a surface that cannot record the event.
+    echo "    codex engineer dropped dispatches: UNKNOWN (scheduler store records dispatches only, no skip surface)"
+  else
+    echo "    claude engineer dropped dispatches: UNKNOWN (claude engineer schedule unmeasured)"
+    echo "    codex engineer dropped dispatches: UNKNOWN (scheduler store records dispatches only, no skip surface)"
   fi
 
   echo

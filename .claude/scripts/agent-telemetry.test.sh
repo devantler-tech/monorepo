@@ -163,7 +163,38 @@ cat > "$FIX/claude-store/scheduled-tasks.json" <<EOF
       "cronExpression": "0 0,12 * * *",
       "lastRunAt": "2026-07-25T12:00:00.000Z"
     }
-  ]
+  ],
+  "recordedSkips": {
+    "daily-ai-assistant": [
+      { "at": 1784541000000, "reason": "per_task_limit" },
+      { "at": 1784544600000, "reason": "per_task_limit" },
+      { "at": 1784548200000, "reason": "per_task_limit" },
+      { "at": 1784541059000, "reason": "per_task_limit" },
+      { "at": 1784541065000, "reason": "per_task_limit" },
+      { "at": 1784541125000, "reason": "per_task_limit" },
+      { "at": 1784541185000, "reason": "per_task_limit" },
+      { "at": 1784541245000, "reason": "per_task_limit" },
+      { "at": 1784541305000, "reason": "per_task_limit" },
+      { "at": 1784541365000, "reason": "per_task_limit" },
+      { "at": 1784541425000, "reason": "per_task_limit" },
+      { "at": 1784541485000, "reason": "per_task_limit" },
+      { "at": 1784541545000, "reason": "per_task_limit" },
+      { "at": 1784544665000, "reason": "per_task_limit" },
+      { "at": 1784544725000, "reason": "per_task_limit" },
+      { "at": 1784544785000, "reason": "per_task_limit" },
+      { "at": 1784544845000, "reason": "per_task_limit" },
+      { "at": 1784544905000, "reason": "per_task_limit" },
+      { "at": 1784544965000, "reason": "per_task_limit" },
+      { "at": 1784545025000, "reason": "per_task_limit" },
+      { "at": 1784545085000, "reason": "per_task_limit" },
+      { "at": 1784545145000, "reason": "per_task_limit" },
+      { "at": 1784548265000, "reason": "per_task_limit" },
+      { "at": 1784548325000, "reason": "per_task_limit" },
+      { "at": 1784551505000, "reason": "per_task_limit" },
+      { "at": 1784551565000, "reason": "per_task_limit" },
+      { "at": 1784555400000, "reason": "provider_outage" }
+    ]
+  }
 }
 EOF
 cat > "$FIX/codex/automations/daily-ai-engineer/automation.toml" <<'EOF'
@@ -206,6 +237,11 @@ EOF
 mkdir -p "$FIX/monorepo/.claude"
 
 run() {
+  # TZ is PINNED. Cron hours are local, so the dropped-slot classifier reads local
+  # time — which makes any fixture asserting an hour a function of the host's zone.
+  # Unpinned, the hour-list case passed on a +02:00 developer machine and failed on
+  # the UTC runners, which is a property of the test, not of the code under test.
+  TZ=UTC \
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   CLAUDE_SCHEDULE_STORE_PATH="$FIX/claude-store/scheduled-tasks.json" \
@@ -282,7 +318,102 @@ check "compares Codex improver schedule"  "$OUT" "codex improver:  expected=7,19
 check "reports Codex engineer dispatch advance" "$OUT" "MATCH marker=1785238560676 baseline=1785238559000"
 check "reports Codex improver dispatch advance" "$OUT" "MATCH marker=1785222864850 baseline=1785222863000"
 check "proves staggered local starts"      "$OUT" "local simultaneous starts/day: 0"
-check "proves hourly engineer dispatches"  "$OUT" "local engineer dispatches/day: 48"
+check "proves hourly engineer slots"       "$OUT" "local engineer slots scheduled/day: 48"
+
+# A cron expansion counts SCHEDULED SLOTS, never dispatches. The Claude runtime
+# declines any dispatch that would overlap the previous run of the same task, so
+# a third of this lane's slots never run (58 of 168 measured 2026-08-02→08-09).
+# Labelling the cron total "dispatches" is what let hypothesis volume floors —
+# which are stated in dispatches — be satisfied by runs that never happened.
+#
+# The store records one skip per POLL TICK, roughly every 60s while blocked, so
+# the raw record count overstates dropped dispatches by ~18x on the live store
+# (1067 records, 58 real drops). Only a record landing in the cron's own minute
+# is a dropped dispatch; the rest are re-refusals of a tick already counted.
+# The fixture encodes exactly that: 27 records, of which 3 are distinct due-minute
+# `per_task_limit` slots, 1 is a same-slot duplicate, 22 are off-minute poll noise,
+# and 1 sits in the due minute of an otherwise-empty hour under a DIFFERENT reason.
+# That last one pins the reason filter: the reported line names `per_task_limit`, so
+# counting another skip class would inflate the count while claiming one cause.
+#
+# The last two noise records sit in an hour carrying NO due-minute record, and that
+# asymmetry is load-bearing. An earlier fixture put every noise record in an hour
+# that also held a real drop, so distinct-slot counting returned 3 whether or not
+# the due-minute filter ran — the assertion passed against a wrong implementation
+# and the ablation proved nothing. With hour 12 present as noise only, dropping the
+# filter counts 4 and the test fails, which is what makes it a real check.
+nocheck "never counts poll-tick records as dropped dispatches" "$OUT" "dropped dispatches: 27"
+nocheck "never counts a skip recorded under another reason"     "$OUT" "dropped dispatches: 4 slot(s)"
+check   "counts dropped dispatches by due slot, not poll tick" "$OUT" \
+  "claude engineer dropped dispatches: 3 slot(s)"
+# Codex's store has no skip surface at all — `automations` records dispatches that
+# HAPPENED, so a Codex drop is visible only as a gap. Zero on a surface that cannot
+# record the event is not zero, and reporting 0 here would invent a clean lane.
+check "codex drop is UNKNOWN, never a fabricated zero" "$OUT" \
+  "codex engineer dropped dispatches: UNKNOWN"
+nocheck "codex drop never reports a zero"  "$OUT" "codex engineer dropped dispatches: 0"
+
+# A rate needs the skip records to span the whole window. Here they start well
+# after a 3650-day window opens, so the denominator is unprovable and the rate
+# must fail closed rather than dividing by a window the store cannot cover.
+check "unspanned window refuses to state a rate" "$OUT" "drop rate: UNKNOWN"
+
+# The minute alone identifies a dropped slot only while the cron covers every hour.
+# Under a finite hour list the runtime still records a poll tick at every hour's :50
+# while a run stays blocked, so counting unscheduled hours would score drops against
+# a two-slot/day denominator and could publish a rate above 100%.
+#
+# Cron hours are LOCAL, and `run` pins TZ=UTC so this assertion is host-independent.
+# The three due-minute fixture records are 09:50/10:50/11:50 UTC, so `0,10` admits
+# exactly one of them.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) = "50 0,10 * * *"' \
+  "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(run --section drift)
+check   "a finite hour list excludes unscheduled hours" "$OUT" \
+  "claude engineer dropped dispatches: 1 slot(s)"
+nocheck "an hour-list cron never counts every hour's due minute" "$OUT" \
+  "claude engineer dropped dispatches: 3 slot(s)"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+
+# Coverage is not liveness, and the two must be tested separately.
+#
+# OUTAGE: with a 1-day window the fixture's records and `lastRunAt` both predate it,
+# so the floor covers the window and zero drops are counted — but nothing dispatched
+# and nothing was even refused inside it. Reporting "0.0%" there would present a dead
+# scheduler as 24 successful opportunities, which is the same absence-read-as-health
+# error as a fabricated zero.
+OUT=$(run --section drift --since-days 1)
+check   "an inactive scheduler refuses to state a rate" "$OUT" \
+  "drop rate: UNKNOWN (no dispatch or skip inside the window"
+nocheck "an outage is never reported as a clean 0.0%" "$OUT" "drop rate: 0.0%"
+check   "window bounds the dropped-slot count" "$OUT" \
+  "claude engineer dropped dispatches: 0 slot(s)"
+
+# ACTIVE: same window, but `lastRunAt` now falls inside it, so the scheduler is
+# proven to have dispatched and the denominator describes slots something was
+# actually attempting to fill.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+jq --arg now "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" \
+  '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .lastRunAt) = $now' \
+  "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(run --section drift --since-days 1)
+check "a proven-active scheduler states a rate" "$OUT" "drop rate: 0.0%"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+
+# A store with NO skip surface must read UNKNOWN, never 0. The count alone cannot
+# tell an absent surface from a genuinely drop-free window — both are 0 — and
+# reporting the zero would invent a clean lane, which is precisely the error this
+# section refuses to make for Codex.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+jq 'del(.recordedSkips)' "$FIX/claude-store/scheduled-tasks.json.bak" \
+  > "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(run --section drift)
+check   "absent skip surface reads UNKNOWN" "$OUT" \
+  "claude engineer dropped dispatches: UNKNOWN"
+nocheck "absent skip surface is never a zero" "$OUT" \
+  "claude engineer dropped dispatches: 0 slot(s)"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
 # Removing one pointer must fail closed rather than leaving the schedule surface
 # silently unmeasured. This is the exact blind spot that hid the reverted Codex
@@ -291,6 +422,12 @@ mv "$FIX/codex/automations/agent-improver/automation.toml" \
    "$FIX/codex/automations/agent-improver/automation.toml.missing"
 OUT=$(run --section drift)
 check "missing improver pointer is explicit" "$OUT" "UNKNOWN: codex improver schedule pointer missing"
+# A Codex-side pointer defect must not suppress a fully measurable Claude number.
+# This is the live failure the change was evaluated against: the Codex engineer's
+# stored RRULE had lost BYSECOND=0, the aggregate gate went UNKNOWN, and the Claude
+# drop count — which depends on nothing Codex owns — disappeared with it.
+check "a codex pointer defect does not suppress the claude drop count" "$OUT" \
+  "claude engineer dropped dispatches: 3 slot(s)"
 mv "$FIX/codex/automations/agent-improver/automation.toml.missing" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
@@ -302,7 +439,7 @@ OUT=$(run --section drift)
 check "missing runtime marker is explicit" "$OUT" "UNKNOWN: codex improver change marker missing"
 nocheck "missing runtime marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 check "missing runtime marker invalidates parity total" "$OUT" "local simultaneous starts/day: UNKNOWN"
-check "missing runtime marker invalidates dispatch total" "$OUT" "local engineer dispatches/day: UNKNOWN"
+check "missing runtime marker invalidates dispatch total" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET last_run_at = 1785222864850 WHERE id = 'agent-improver';"
 
@@ -320,7 +457,7 @@ OUT=$(run --section drift)
 check "scheduler-store rewrite is detected" "$OUT" "DRIFT: codex improver schedule pointer=7,19@0 scheduler=6,18@50"
 nocheck "scheduler-store rewrite never claims MATCH" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 check "scheduler-store rewrite invalidates collision total" "$OUT" "local simultaneous starts/day: UNKNOWN"
-check "scheduler-store rewrite invalidates dispatch total" "$OUT" "local engineer dispatches/day: UNKNOWN"
+check "scheduler-store rewrite invalidates dispatch total" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0' WHERE id = 'agent-improver';"
 
