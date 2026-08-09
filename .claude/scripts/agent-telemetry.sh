@@ -3534,11 +3534,17 @@ if want drift; then
   # dispatch; every later record in that hour re-refuses a tick already counted.
   # Distinct-slot counting (truncate to the hour) also absorbs the duplicate that
   # appears when two poll ticks land inside the same due minute.
+  #
+  # Filtered on the REASON as well as the minute. Every record on the live store is
+  # currently `per_task_limit`, but the field exists precisely because it need not
+  # be, and the reported line names that reason — so counting any other skip class
+  # would inflate both the count and the rate while claiming to measure one cause.
   claude_store_skip_slots() {
     local store="$1" id="$2" minute="$3" since_ms="$4"
     [ -f "$store" ] || return 0
     jq -r --arg id "$id" --argjson minute "$minute" --argjson since "$since_ms" '
       [ .recordedSkips[$id][]?
+        | select(.reason == "per_task_limit")
         | (.at // empty)
         | select(. >= $since)
         | (. / 1000 | floor)

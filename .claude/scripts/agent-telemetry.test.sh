@@ -191,7 +191,8 @@ cat > "$FIX/claude-store/scheduled-tasks.json" <<EOF
       { "at": 1784548265000, "reason": "per_task_limit" },
       { "at": 1784548325000, "reason": "per_task_limit" },
       { "at": 1784551505000, "reason": "per_task_limit" },
-      { "at": 1784551565000, "reason": "per_task_limit" }
+      { "at": 1784551565000, "reason": "per_task_limit" },
+      { "at": 1784555400000, "reason": "provider_outage" }
     ]
   }
 }
@@ -324,8 +325,11 @@ check "proves hourly engineer slots"       "$OUT" "local engineer slots schedule
 # the raw record count overstates dropped dispatches by ~18x on the live store
 # (1067 records, 58 real drops). Only a record landing in the cron's own minute
 # is a dropped dispatch; the rest are re-refusals of a tick already counted.
-# The fixture encodes exactly that: 26 records, of which 3 are distinct due-minute
-# slots, 1 is a same-slot duplicate, and 22 are off-minute poll noise.
+# The fixture encodes exactly that: 27 records, of which 3 are distinct due-minute
+# `per_task_limit` slots, 1 is a same-slot duplicate, 22 are off-minute poll noise,
+# and 1 sits in the due minute of an otherwise-empty hour under a DIFFERENT reason.
+# That last one pins the reason filter: the reported line names `per_task_limit`, so
+# counting another skip class would inflate the count while claiming one cause.
 #
 # The last two noise records sit in an hour carrying NO due-minute record, and that
 # asymmetry is load-bearing. An earlier fixture put every noise record in an hour
@@ -333,7 +337,8 @@ check "proves hourly engineer slots"       "$OUT" "local engineer slots schedule
 # the due-minute filter ran — the assertion passed against a wrong implementation
 # and the ablation proved nothing. With hour 12 present as noise only, dropping the
 # filter counts 4 and the test fails, which is what makes it a real check.
-nocheck "never counts poll-tick records as dropped dispatches" "$OUT" "dropped dispatches: 26"
+nocheck "never counts poll-tick records as dropped dispatches" "$OUT" "dropped dispatches: 27"
+nocheck "never counts a skip recorded under another reason"     "$OUT" "dropped dispatches: 4 slot(s)"
 check   "counts dropped dispatches by due slot, not poll tick" "$OUT" \
   "claude engineer dropped dispatches: 3 slot(s)"
 # Codex's store has no skip surface at all — `automations` records dispatches that
