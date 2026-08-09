@@ -46,6 +46,15 @@ assert_engineer_prose() {
     *) fail "$2" ;;
   esac
 }
+# A presence-only guard passes happily while the claim it replaced is still sitting
+# three paragraphs up, so a corrected fact needs BOTH halves pinned: the new statement
+# present AND the superseded one absent. Every contradiction found in this contract so
+# far survived exactly that way.
+refute_prose() {
+  case "${constitution_flat}" in
+    *"$1"*) fail "$2" ;;
+  esac
+}
 
 grep -Fq '### Agent definition locations' "${constitution}" ||
   fail "consumer does not define Agent definition locations"
@@ -300,6 +309,26 @@ assert_prose '`lastRunAt` as its marker; the `SKILL.md` description is not sched
   "runtime-local delivery can mistake Claude loader prose for deployed cadence"
 assert_prose 'A missing or ambiguous store, missing baseline, marker that did not advance, or incomplete recurrence rule is `UNKNOWN`, never `MATCH`.' \
   "runtime-local delivery does not fail closed on incomplete persistence evidence"
+
+# --- Scheduled cadence is not delivered cadence (#2716) -----------------------
+# The schedule fires hourly in both machine-local lanes; only ONE of them keeps it.
+# The Claude runtime refuses a dispatch that would overlap the previous run of the
+# same task and drops it silently, so a third of ticks never happen — while Codex
+# starts the overlapping run instead. A run that plans off "the next tick" is
+# therefore wrong about a third of the time on one lane and right on the other,
+# which is the undeliberate instance asymmetry this contract must state outright.
+assert_prose '`per_task_limit`' \
+  "cadence does not name the mechanism by which Claude dispatches are dropped"
+assert_prose 'Claude dispatched 108/161' \
+  "cadence does not state the measured Claude dispatch shortfall"
+assert_prose 'Codex dispatched 161/161' \
+  "cadence does not state the Codex control that makes the shortfall a lane asymmetry"
+assert_prose 'never time anything off' \
+  "cadence does not tell a run to stop planning against the next scheduled tick"
+# The superseded absolute. Left in place it reads as the operative rule, because it is
+# stated as a flat invariant while the correction reads as a caveat about it.
+refute_prose 'next scheduled tick is always one hour later' \
+  "cadence still asserts an unconditional hourly next tick alongside its own refutation"
 
 # --- The merged spend mandate -------------------------------------------------
 # Spend is a dimension of the Agentic Engineer. The consumer must supply the Spend

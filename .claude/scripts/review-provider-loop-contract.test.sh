@@ -28,6 +28,16 @@ assert_prose() {
     fail "${message}"
 }
 
+# The mirror of assert_prose. A presence-only suite cannot see a RETIRED claim that survived, so a
+# correction reads as applied while the wrong text still stands (monorepo#2733). `if` is required:
+# a bare `grep -q … && fail` returns 1 on the PASSING path, and `set -e` would abort the run there.
+assert_absent() {
+  local file="$1" phrase="$2" message="$3"
+  if tr '\n' ' ' <"${file}" | tr -s '[:space:]' ' ' | grep -Fq -- "${phrase}"; then
+    fail "${message}"
+  fi
+}
+
 grep -Fq 'CodeRabbit > Codex > Cursor Bugbot' "${constitution}" ||
   fail "constitution does not preserve the provider order"
 grep -Fq 'STOP on the first successful current-head review' "${constitution}" ||
@@ -211,6 +221,81 @@ printf '%s' "${green_body}" | grep -Fq "${expected_head:0:10}" ||
   fail "fixture clean-pass comment no longer names the same head; ordering trap not reproduced"
 
 # The contract must be a required PR check, including when its own workflow wiring changes.
+# A provider's rate limit is time-boxed and SHORT, so it is one fact PER HEAD, re-read per PR — never
+# one fact per run. The window measurably clears in ~28 minutes, so a run-wide latch skips the free
+# CodeRabbit lane over an expired refusal and spends the weekly-limited Codex lane instead.
+# Measured 2026-08-08: 54 review requests -> 16 real CodeRabbit reviews, 17 rate-limit refusals. On
+# #2720 specifically: 14 CodeRabbit requests across 12 DISTINCT heads, 10 of them refused — but only
+# 2 were second-or-later requests WITHIN ONE ROUND (classified against the restarting artifact, not
+# merely by repeated head). Those 2 are the only waste this probe removes; the other 12 each open a
+# round, whose first request the rule preserves. Keep the two apart or the case is inflated.
+# These pin the probe, that it is a READ, and that the gate is untouched.
+assert_prose "${constitution}" 'READ a lane'"'"'s quota state before spending a request on it' \
+  "constitution does not require reading a lane's quota state before spending a request"
+assert_prose "${constitution}" 'readable with NO write' \
+  "the quota probe is not required to be a read rather than a spent request"
+assert_prose "${constitution}" 'Do NOT latch that refusal for the whole run' \
+  "a short-lived quota refusal could be latched run-wide, burning the weekly Codex lane"
+assert_prose "${constitution}" 'the window cleared inside ~28 minutes' \
+  "the measured quota-window duration that refutes a run-wide latch is not recorded"
+# The probe's LIMIT must be stated, or a reader takes it for a stronger guarantee than it is and is
+# surprised by the one unavoidable refusal per fresh head.
+assert_prose "${constitution}" 'cannot prevent the **first** refusal at' \
+  "the probe's fresh-head limit is unstated, so it reads as preventing every refusal"
+# ...and the obvious remedy for that limit must stay closed. A portfolio-wide TTL covers the fresh
+# head and re-creates the latch: measured 2026-08-08, 14 minutes of inherited state already inverted
+# the lane order on #2727 while CodeRabbit was serving at that head.
+assert_prose "${constitution}" 'may never **replace** the per-head read' \
+  "a portfolio-wide quota observation could replace the per-head read, re-creating the latch"
+# The measured waste must separate a round's unavoidable FIRST request from a within-round repeat.
+# Counting every refusal as waste overstates what the probe buys and hides whether the marker logic
+# still permits the repeats that ARE preventable.
+assert_prose "${constitution}" 'second-or-later requests within the same round' \
+  "the measured waste is not split into within-round repeats vs unavoidable first attempts"
+# ...and the split must be classified by ROUND, not by repeated head. A same-SHA refutation opens a
+# new round at an unchanged head, so a head-based count can book two protected first attempts as one
+# saved repeat. The two tests coincided on #2720; that is luck, not equivalence.
+assert_prose "${constitution}" 'Classify by ROUND, not by repeated head' \
+  "the waste metric could count repeated heads instead of within-round repeats, overstating the saving"
+# ...and the retired overstatement must be GONE, not merely supplemented.
+assert_absent "${constitution}" "#2720's eight requests were repeats inside five rounds" \
+  "the retired '#2720's eight requests were repeats inside five rounds' overstatement still stands"
+# The status is a NEGATIVE filter. Measured 2026-08-08: a run read the never-reviewed default at
+# 19:29:29Z, asked on that basis, and was refused 16s later — the default promised nothing. Left
+# unqualified, "serving state is readable" licenses the same inversion from the other direction.
+assert_prose "${constitution}" 'it can never show the lane serving' \
+  "the quota read could be taken as positive evidence that CodeRabbit is serving"
+# ...and a refusal must not outlive its round, or a same-SHA restart after a refutation can never
+# return to the free lane — the refutation path deliberately creates no new commit.
+assert_prose "${constitution}" 'A refusal is scoped to its ROUND, never to the head forever' \
+  "a one-off refusal at a head could permanently skip CodeRabbit there, inverting the lane order"
+# ...and that scoping must key on WHICH REQUEST produced the refusal. Scoping it to "observed in this
+# round" is circular: the mandatory pre-trigger read is itself an observation in the new round, so a
+# durable old refusal reads as current forever and the skip never expires.
+assert_prose "${constitution}" 'a refusal justifies skipping only when THIS round has already posted a CodeRabbit request marker' \
+  "refusal provenance is not tied to a request marker, so a durable old refusal can read as current"
+# The OPERATIVE instruction must carry the round qualification itself. Stating the skip unconditionally
+# and qualifying it 35 lines later means an agent acts on the unqualified form first and advances to a
+# metered lane before ever reaching the refinement -- the same-SHA restart is then skipped in practice
+# however correct the later prose is. A rule is what its operative sentence says.
+assert_prose "${constitution}" 'A refusal you cannot attribute to this round is **not** a reason to skip' \
+  "the operative skip instruction is unqualified, so a durable prior-round refusal skips CodeRabbit before the round test is reached"
+# ...and the marker test must NOT be claimed mechanical on its payload alone. At an unchanged SHA the
+# previous round's marker is indistinguishable from this round's by head, provider, comment id or
+# timestamp, so a durable refusal postdates the OLD marker just as well and the restarted round's
+# mandatory first CodeRabbit request is skipped — the same-SHA refutation path this section protects.
+assert_prose "${constitution}" 'do NOT identify its round' \
+  "the marker payload is presented as round-identifying, so a same-SHA restart reuses the old round's marker"
+assert_prose "${constitution}" 'newest RESTARTING ARTIFACT at that head' \
+  "no round boundary is derivable, so the marker test cannot distinguish a restarted round"
+assert_prose "${constitution}" 'a refusal never pre-empts the FIRST CodeRabbit request of a round' \
+  "a stale refusal could still pre-empt a round's first CodeRabbit request"
+# The optimisation must not become a way around the gate, nor a shortcut into the local fallback.
+assert_prose "${constitution}" 'never WHETHER A REVIEW IS REQUIRED' \
+  "the lane probe could be read as relaxing the green-review gate"
+assert_prose "${constitution}" 'never** evidence for the *Local review round* fallback on its own' \
+  "a per-head quota refusal could be misread as satisfying the local-review-round evidence bar"
+
 grep -Fq 'review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}' "${workflow}" ||
   fail "CI does not export the review-provider contract change filter"
 grep -Fq '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md' "${workflow}" ||

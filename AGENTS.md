@@ -1199,6 +1199,107 @@ result at the current head — self-promotion is forbidden before that. Request 
   maintainer instruction. This carve-out covers **only** an exact-match review trigger; every other
   comment you author keeps its inline disclosure line.
 
+- **READ a lane's quota state before spending a request on it — the status says so for free.**
+  Rediscovering a refusal by *posting a trigger* costs a trigger comment, an ack read, a status read
+  and a marker write to learn something a free read already knew. Measured 2026-08-08 over 8 recent
+  monorepo PRs: **54 review requests produced 16 actual CodeRabbit reviews**, with **17 rate-limit
+  refusals**. On #2720 alone: **14 CodeRabbit requests across 12 distinct heads, 10 of them refused**,
+  each round re-requesting CodeRabbit first because that is what lane priority says. **Only the
+  same-head repeats are recoverable** — see the sizing note below, which is deliberately narrower than
+  those totals.
+  **A CodeRabbit REFUSAL is readable with NO write**: the head's `CodeRabbit` commit status
+  carries it in its `description` — `Review rate limited` (a quota refusal),
+  `Review skipped: automatic reviews are disabled` (the never-reviewed default), or `Review completed`
+  (a run happened). So **before each CodeRabbit trigger, read that description on that PR's head**; if
+  it reads as a quota refusal **that this round itself produced** — by the round-provenance test below,
+  which is part of this instruction rather than a later refinement of it — do not post the trigger for
+  that round: advance to Codex for that PR and record the usual `cr:no-gate@<sha>`.
+  **A refusal you cannot attribute to this round is **not** a reason to skip — ask.** The status is
+  durable and outlives the quota window, so an unqualified reading of this paragraph sends a same-SHA
+  restart (a refutation that changes no files) straight to the **weekly-limited** lane while the
+  **free** one has long recovered. An operative sentence is what actually gets executed, so the
+  qualification belongs here, not only in the elaboration below.
+  🔴 **This read is a NEGATIVE filter only. It can show the lane refusing HERE; it can never show the
+  lane serving.** The never-reviewed default means only that nothing has been tried at this head — it
+  is a reason to *ask*, never evidence the lane is up. Reading it as "serving" licenses the same
+  inversion from the opposite direction, and it is measured: on 2026-08-08 a run read
+  `Review skipped: automatic reviews are disabled` at 19:29:29Z, correctly asked CodeRabbit on that
+  basis, and was refused **16 seconds later**. The request was still right — asking is how a fresh
+  head learns — but the status had promised nothing, so treat a green-looking default as *unknown*,
+  and never let it override a refusal observed at this same head in this same round.
+  🔴 **Do NOT latch that refusal for the whole run — the window is SHORT, and measured.** It is
+  tempting to conclude that a rate limit is account-wide and therefore one fact per run. **It is not:**
+  on 2026-08-08 monorepo#2722 was requested at 15:10:09Z and refused `Review rate limited` at
+  15:10:24Z, while monorepo#2723 was requested at 15:38:07Z and returned `Review completed` at
+  15:42:48Z — **the window cleared inside ~28 minutes.** A run-wide latch would therefore skip the
+  **free, unmetered** CodeRabbit lane for the rest of a run over a refusal that had already expired,
+  and spend the **weekly-limited** Codex quota in its place — inverting the maintainer's own reason for
+  the lane order (spend the cheapest-to-exhaust lane first). Re-read per PR instead; the read is free,
+  which is the entire point.
+  ⚠️ **Know exactly what this probe does and does not buy.** It cannot prevent the **first** refusal at
+  a **fresh** head: a new SHA carries only the never-reviewed default until some request is spent, so
+  the probe has nothing to read there. What it prevents is every **repeat** at a head already known to
+  be refusing — a **minority** of the measured waste, not the bulk of it: on #2720, 2 of 14 requests.
+  **That residual is accepted deliberately, and the obvious "fix" for it is worse.** Carrying a
+  portfolio-wide refusal forward with a TTL would cover the fresh-head case, and it re-creates the
+  latch this rule exists to forbid: measured 2026-08-08, an agent took #2722's 19:03Z refusal as
+  portfolio-wide, skipped CodeRabbit on #2727 at 19:17Z, and spent the **weekly-limited** Codex lane —
+  while #2727's own head status said the lane had never been asked *there*. That is the whole defect:
+  the skip was justified by another PR's refusal rather than by any evidence about this head. Fourteen
+  minutes of inherited state was already too much, against a window that clears in ~28. So a
+  portfolio-wide observation may **inform** how patiently you wait; it may never **replace** the
+  per-head read, and it may never skip a head whose own status says the lane was never asked. One
+  spent request per fresh head is the price of not inverting the lane order.
+  🔴 **A refusal is scoped to its ROUND, never to the head forever.** The skip above applies to the
+  request round in which it was read. A head's status is durable, so an unconditional "this head once
+  refused, therefore never ask again" would outlive the quota window and break the mandated *restart
+  at CodeRabbit* after findings — most sharply when a finding is **refuted without changing files**,
+  which restarts at the *same* SHA by design and must not create an empty commit. That PR would then
+  advance straight to the **weekly-limited** lane on every subsequent round while the **free** one had
+  long recovered.
+  **Scope it by WHICH REQUEST produced the refusal, never by when you read it.** "Unless the refusal
+  was observed in this round" is circular and does not work: the mandatory pre-trigger read *is* an
+  observation in the new round, and the status is durable, so the old refusal reads as current every
+  time and the skip fires forever — the exact behaviour this paragraph forbids. Attribute it instead:
+  **a refusal justifies skipping only when THIS round has already posted a CodeRabbit request marker
+  at this head and the refusal postdates that marker.**
+  🔴 **A marker's id and timestamp alone do NOT identify its round — derive the boundary, or this
+  test fails in exactly the case it was written for.** At an unchanged SHA the previous round's
+  marker is indistinguishable from this round's: head, provider, comment id and timestamp are all
+  equally "at this head", and a durable refusal postdates the *old* marker just as well as it would
+  a new one. Read literally, the test then skips the restarted round's mandatory first CodeRabbit
+  request — the same-SHA refutation path, which is the one case the paragraph above exists to
+  protect. A payload carrying only `<sha>` and `provider=` cannot answer a question about rounds.
+  **The boundary is the newest RESTARTING ARTIFACT at that head, and the loop already emits one.**
+  A restart follows findings, and findings are fixed-or-refuted with their threads resolved before
+  it, so the newest authenticated disclosed resolution reply at that head is what opens the new
+  round. The test is therefore: **skip only when a CodeRabbit request marker at this head is NEWER
+  than that artifact, and the refusal postdates that marker.** Where no findings have arrived at
+  this head there has been only one round and no artifact, so the marker test stands unqualified.
+  This mirrors the same-head Codex retry rule below, which likewise supersedes findings by
+  "threads resolved → later re-request → later clean marker" rather than by timestamps alone.
+  The consequence is deliberate and worth stating plainly: **a refusal never pre-empts the FIRST
+  CodeRabbit request of a round.** What the probe kills is re-asking a head *within* a round after it
+  has already answered. **Size that saving honestly — most refusals are NOT what it eliminates.**
+  Re-measured on #2720 (2026-08-08): **14 CodeRabbit requests, 10 of them refused — and exactly 2 were
+  second-or-later requests within the same round.** Those 2 are the saving; the other 12 each open a
+  round, and this rule preserves a round's first request on purpose. Counting all 14, or all 10
+  refusals, would credit the probe with preventing exactly the requests it is written to protect.
+  ⚠️ **Classify by ROUND, not by repeated head — the two are not the same test.** A same-SHA fix or
+  refutation opens a new round at an unchanged head, so two requests on one head can be two rounds'
+  protected first attempts rather than a saved repeat; a head-based count silently overstates. Apply
+  the same boundary the skip test uses — the newest restarting artifact at that head — and count only
+  second-or-later requests inside one round. On #2720 both pairs (`0f16c3192e`, `a90875e3ac`) carry no
+  resolution reply between their two requests, so each pair is genuinely one round; the head-based
+  count happened to agree there, which is exactly why it cannot be trusted in general. The read is
+  free; that is what makes a round's first attempt cheap rather than wasteful.
+  ⚠️ **This changes WHICH LANE IS ASKED FIRST, never WHETHER A REVIEW IS REQUIRED.** The green-review
+  gate is untouched: every PR still needs one successful current-head review from some lane, or a
+  qualifying local review round. Skipping a lane that is *demonstrably refusing at that head* is
+  exactly the "advance on a service failure" the loop already prescribes — this only makes the
+  discovery free. A lane that is **serving** is never skipped, and a quota refusal is **never** evidence
+  for the *Local review round* fallback on its own: that still requires all three lanes tried at the
+  current head, per its own admissible-evidence rule.
 - **Only one provider request may be active at a time.** Never fan out or request two reviewers
   concurrently. The priority above sets the order: request one, wait for its substantive outcome,
   then either stop on success, restart after fixes, or advance after a provider/service failure.
@@ -2848,6 +2949,25 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   (the untrusted-input disambiguator above recognises any `> 🤖 Generated by the …` prefix as
   own-output, including the legacy `Daily AI Engineer` / `Daily AI Assistant` forms). Never pretend to
   be human.
+  🔴 **"Begin" is the whole rule — a disclosure at the END, or anywhere but the first line, is a
+  DEFECT, not a stylistic variant.** The disambiguator anchors at position zero, so a trailing
+  disclosure publishes your own output as the **maintainer's control channel** — the self-instruction
+  loop it exists to close, and the dangerous direction of its deliberately asymmetric error model.
+  Three emitted shapes fail it and all are violations: the disclosure appended **after** the content
+  (typically below a review trigger), a **non-canonical sender marker** such as
+  `> Requested by the 🤖 Daily AI Engineer`, and a **review trigger posted with no disclosure at all**.
+  The one exception is **Bugbot's trigger specifically** — a body that is exactly `@cursor review`,
+  because Bugbot exact-matches the whole body, so its disclosure goes in its own preceding comment.
+  That carve-out does **not** extend to the other lanes: their trigger belongs in the *same* disclosed
+  comment as its request marker, so a bare `@codex review` or `@coderabbitai review` is a violation.
+  **The check is [`comment-disclosure-drift.sh`](.claude/scripts/comment-disclosure-drift.sh)**
+  (`--repo <owner>/<repo> --issue <n>`, or `--input <payload>`); exit 1 lists each offending comment
+  and names its shape. It reports **positive evidence of agent authorship only** — a `devantler`
+  comment matching **no recognised agent shape** is the human maintainer, so flagging it would report
+  the control channel as a defect. Note the recognised shapes are broader than the 🤖 marker alone: a
+  leading review-lane trigger is agent evidence too, because the engineer drives the review lanes and
+  the maintainer does not. That leaves one documented residual: an agent's bare prose note carries no
+  shape at all, so it is counted `unattributable` rather than passed off as clean.
 
 ### Cadence & focus
 **This table IS the deployment's dispatch schedule** — the concrete cadence the plugin's
@@ -2868,7 +2988,8 @@ normal overlap rather than evidence that a slot is free.
 | **Codex** — `codex/*`, hourly at `:10` | Every hour at `:10` | 07:00, 19:00 |
 | **Cursor** — `cursor/*`, uneven hours at `:30` | 01:30 … 23:30 | — |
 
-Both machine-local Agentic Engineer lanes dispatch **every hour**. Cursor keeps its every-2-hours
+Both machine-local Agentic Engineer lanes are **scheduled** every hour — for what the Claude lane
+actually keeps, see *Scheduled is not delivered* below. Cursor keeps its every-2-hours
 cloud cadence, centered between the two machine-local offsets on uneven hours. The Agent Improver
 keeps its 4×/day rotation (00 Claude, 07 Codex, 12 Claude, 19 Codex) as additional `:00` starts; those
 slots no longer replace an Agentic Engineer tick. This table covers the two scheduled engineering
@@ -2889,9 +3010,22 @@ case is safe by construction — same namespace, same deterministic branch name,
 is refused (see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim
 branch.
 
-**Your Agentic Engineer's next scheduled tick is always one hour later.** The Agent Improver's four
-daily starts are additional work, not replacement slots. That hour is the gap **between runs, not a
-per-run time budget**; it bounds a carry-forward without telling an active run to stop early. Each run works
+🔴 **Scheduled is not delivered — on the Claude lane about a third of ticks never happen.** Measured
+across one identical window (2026-08-02T03:50Z → 2026-08-08T19:50Z, **161 scheduled slots per lane**):
+**Codex dispatched 161/161**, because that scheduler starts a run even when the previous one is still
+open — one run whose record stayed open for 240 minutes did not block any of the four ticks behind it.
+**Claude dispatched 108/161**: its scheduler refuses any dispatch that would overlap the previous run
+of the same task and records it as `per_task_limit`, so **53 ticks — 32.9% — were dropped**, silently,
+producing no artifact anywhere. That is the second consecutive measurement of the same behaviour
+(36.6% over 2026-08-01→08-07), so it is the lane's normal state, not an incident, and the effective
+Claude interval is **~1.5 hours**. The Agent Improver is unaffected: the Claude store records **zero**
+dropped improver dispatches, and the Codex scheduler refuses none.
+**So never time anything off "the next tick."** A carry-forward, a claim-expiry judgement, or a "the
+next run will collect this" decision is wrong about a third of the time on Claude, and always in the
+direction of waiting **longer** than planned — so prefer finishing inside the current run over handing
+work to a tick that may not come. The Agent Improver's four daily starts are additional work, not
+replacement slots. The scheduled interval is the gap **between runs, not a per-run time budget**; it
+bounds a carry-forward without telling an active run to stop early. Each run works
 *The work-selection ladder* top-down — **breakage → every open PR you own or trust, drafts included →
 security issues → bugs → the oldest actionable issue** — capturing new
 non-trivial finds as issues (see *Issue-driven*).

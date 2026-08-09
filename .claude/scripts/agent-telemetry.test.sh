@@ -163,7 +163,38 @@ cat > "$FIX/claude-store/scheduled-tasks.json" <<EOF
       "cronExpression": "0 0,12 * * *",
       "lastRunAt": "2026-07-25T12:00:00.000Z"
     }
-  ]
+  ],
+  "recordedSkips": {
+    "daily-ai-assistant": [
+      { "at": 1784541000000, "reason": "per_task_limit" },
+      { "at": 1784544600000, "reason": "per_task_limit" },
+      { "at": 1784548200000, "reason": "per_task_limit" },
+      { "at": 1784541059000, "reason": "per_task_limit" },
+      { "at": 1784541065000, "reason": "per_task_limit" },
+      { "at": 1784541125000, "reason": "per_task_limit" },
+      { "at": 1784541185000, "reason": "per_task_limit" },
+      { "at": 1784541245000, "reason": "per_task_limit" },
+      { "at": 1784541305000, "reason": "per_task_limit" },
+      { "at": 1784541365000, "reason": "per_task_limit" },
+      { "at": 1784541425000, "reason": "per_task_limit" },
+      { "at": 1784541485000, "reason": "per_task_limit" },
+      { "at": 1784541545000, "reason": "per_task_limit" },
+      { "at": 1784544665000, "reason": "per_task_limit" },
+      { "at": 1784544725000, "reason": "per_task_limit" },
+      { "at": 1784544785000, "reason": "per_task_limit" },
+      { "at": 1784544845000, "reason": "per_task_limit" },
+      { "at": 1784544905000, "reason": "per_task_limit" },
+      { "at": 1784544965000, "reason": "per_task_limit" },
+      { "at": 1784545025000, "reason": "per_task_limit" },
+      { "at": 1784545085000, "reason": "per_task_limit" },
+      { "at": 1784545145000, "reason": "per_task_limit" },
+      { "at": 1784548265000, "reason": "per_task_limit" },
+      { "at": 1784548325000, "reason": "per_task_limit" },
+      { "at": 1784551505000, "reason": "per_task_limit" },
+      { "at": 1784551565000, "reason": "per_task_limit" },
+      { "at": 1784555400000, "reason": "provider_outage" }
+    ]
+  }
 }
 EOF
 cat > "$FIX/codex/automations/daily-ai-engineer/automation.toml" <<'EOF'
@@ -206,6 +237,11 @@ EOF
 mkdir -p "$FIX/monorepo/.claude"
 
 run() {
+  # TZ is PINNED. Cron hours are local, so the dropped-slot classifier reads local
+  # time — which makes any fixture asserting an hour a function of the host's zone.
+  # Unpinned, the hour-list case passed on a +02:00 developer machine and failed on
+  # the UTC runners, which is a property of the test, not of the code under test.
+  TZ=UTC \
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   CLAUDE_SCHEDULE_STORE_PATH="$FIX/claude-store/scheduled-tasks.json" \
@@ -282,7 +318,102 @@ check "compares Codex improver schedule"  "$OUT" "codex improver:  expected=7,19
 check "reports Codex engineer dispatch advance" "$OUT" "MATCH marker=1785238560676 baseline=1785238559000"
 check "reports Codex improver dispatch advance" "$OUT" "MATCH marker=1785222864850 baseline=1785222863000"
 check "proves staggered local starts"      "$OUT" "local simultaneous starts/day: 0"
-check "proves hourly engineer dispatches"  "$OUT" "local engineer dispatches/day: 48"
+check "proves hourly engineer slots"       "$OUT" "local engineer slots scheduled/day: 48"
+
+# A cron expansion counts SCHEDULED SLOTS, never dispatches. The Claude runtime
+# declines any dispatch that would overlap the previous run of the same task, so
+# a third of this lane's slots never run (58 of 168 measured 2026-08-02→08-09).
+# Labelling the cron total "dispatches" is what let hypothesis volume floors —
+# which are stated in dispatches — be satisfied by runs that never happened.
+#
+# The store records one skip per POLL TICK, roughly every 60s while blocked, so
+# the raw record count overstates dropped dispatches by ~18x on the live store
+# (1067 records, 58 real drops). Only a record landing in the cron's own minute
+# is a dropped dispatch; the rest are re-refusals of a tick already counted.
+# The fixture encodes exactly that: 27 records, of which 3 are distinct due-minute
+# `per_task_limit` slots, 1 is a same-slot duplicate, 22 are off-minute poll noise,
+# and 1 sits in the due minute of an otherwise-empty hour under a DIFFERENT reason.
+# That last one pins the reason filter: the reported line names `per_task_limit`, so
+# counting another skip class would inflate the count while claiming one cause.
+#
+# The last two noise records sit in an hour carrying NO due-minute record, and that
+# asymmetry is load-bearing. An earlier fixture put every noise record in an hour
+# that also held a real drop, so distinct-slot counting returned 3 whether or not
+# the due-minute filter ran — the assertion passed against a wrong implementation
+# and the ablation proved nothing. With hour 12 present as noise only, dropping the
+# filter counts 4 and the test fails, which is what makes it a real check.
+nocheck "never counts poll-tick records as dropped dispatches" "$OUT" "dropped dispatches: 27"
+nocheck "never counts a skip recorded under another reason"     "$OUT" "dropped dispatches: 4 slot(s)"
+check   "counts dropped dispatches by due slot, not poll tick" "$OUT" \
+  "claude engineer dropped dispatches: 3 slot(s)"
+# Codex's store has no skip surface at all — `automations` records dispatches that
+# HAPPENED, so a Codex drop is visible only as a gap. Zero on a surface that cannot
+# record the event is not zero, and reporting 0 here would invent a clean lane.
+check "codex drop is UNKNOWN, never a fabricated zero" "$OUT" \
+  "codex engineer dropped dispatches: UNKNOWN"
+nocheck "codex drop never reports a zero"  "$OUT" "codex engineer dropped dispatches: 0"
+
+# A rate needs the skip records to span the whole window. Here they start well
+# after a 3650-day window opens, so the denominator is unprovable and the rate
+# must fail closed rather than dividing by a window the store cannot cover.
+check "unspanned window refuses to state a rate" "$OUT" "drop rate: UNKNOWN"
+
+# The minute alone identifies a dropped slot only while the cron covers every hour.
+# Under a finite hour list the runtime still records a poll tick at every hour's :50
+# while a run stays blocked, so counting unscheduled hours would score drops against
+# a two-slot/day denominator and could publish a rate above 100%.
+#
+# Cron hours are LOCAL, and `run` pins TZ=UTC so this assertion is host-independent.
+# The three due-minute fixture records are 09:50/10:50/11:50 UTC, so `0,10` admits
+# exactly one of them.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) = "50 0,10 * * *"' \
+  "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(run --section drift)
+check   "a finite hour list excludes unscheduled hours" "$OUT" \
+  "claude engineer dropped dispatches: 1 slot(s)"
+nocheck "an hour-list cron never counts every hour's due minute" "$OUT" \
+  "claude engineer dropped dispatches: 3 slot(s)"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+
+# Coverage is not liveness, and the two must be tested separately.
+#
+# OUTAGE: with a 1-day window the fixture's records and `lastRunAt` both predate it,
+# so the floor covers the window and zero drops are counted — but nothing dispatched
+# and nothing was even refused inside it. Reporting "0.0%" there would present a dead
+# scheduler as 24 successful opportunities, which is the same absence-read-as-health
+# error as a fabricated zero.
+OUT=$(run --section drift --since-days 1)
+check   "an inactive scheduler refuses to state a rate" "$OUT" \
+  "drop rate: UNKNOWN (no dispatch or skip inside the window"
+nocheck "an outage is never reported as a clean 0.0%" "$OUT" "drop rate: 0.0%"
+check   "window bounds the dropped-slot count" "$OUT" \
+  "claude engineer dropped dispatches: 0 slot(s)"
+
+# ACTIVE: same window, but `lastRunAt` now falls inside it, so the scheduler is
+# proven to have dispatched and the denominator describes slots something was
+# actually attempting to fill.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+jq --arg now "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" \
+  '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .lastRunAt) = $now' \
+  "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(run --section drift --since-days 1)
+check "a proven-active scheduler states a rate" "$OUT" "drop rate: 0.0%"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
+
+# A store with NO skip surface must read UNKNOWN, never 0. The count alone cannot
+# tell an absent surface from a genuinely drop-free window — both are 0 — and
+# reporting the zero would invent a clean lane, which is precisely the error this
+# section refuses to make for Codex.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+jq 'del(.recordedSkips)' "$FIX/claude-store/scheduled-tasks.json.bak" \
+  > "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(run --section drift)
+check   "absent skip surface reads UNKNOWN" "$OUT" \
+  "claude engineer dropped dispatches: UNKNOWN"
+nocheck "absent skip surface is never a zero" "$OUT" \
+  "claude engineer dropped dispatches: 0 slot(s)"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
 # Removing one pointer must fail closed rather than leaving the schedule surface
 # silently unmeasured. This is the exact blind spot that hid the reverted Codex
@@ -291,6 +422,12 @@ mv "$FIX/codex/automations/agent-improver/automation.toml" \
    "$FIX/codex/automations/agent-improver/automation.toml.missing"
 OUT=$(run --section drift)
 check "missing improver pointer is explicit" "$OUT" "UNKNOWN: codex improver schedule pointer missing"
+# A Codex-side pointer defect must not suppress a fully measurable Claude number.
+# This is the live failure the change was evaluated against: the Codex engineer's
+# stored RRULE had lost BYSECOND=0, the aggregate gate went UNKNOWN, and the Claude
+# drop count — which depends on nothing Codex owns — disappeared with it.
+check "a codex pointer defect does not suppress the claude drop count" "$OUT" \
+  "claude engineer dropped dispatches: 3 slot(s)"
 mv "$FIX/codex/automations/agent-improver/automation.toml.missing" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
@@ -302,7 +439,7 @@ OUT=$(run --section drift)
 check "missing runtime marker is explicit" "$OUT" "UNKNOWN: codex improver change marker missing"
 nocheck "missing runtime marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 check "missing runtime marker invalidates parity total" "$OUT" "local simultaneous starts/day: UNKNOWN"
-check "missing runtime marker invalidates dispatch total" "$OUT" "local engineer dispatches/day: UNKNOWN"
+check "missing runtime marker invalidates dispatch total" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET last_run_at = 1785222864850 WHERE id = 'agent-improver';"
 
@@ -320,7 +457,7 @@ OUT=$(run --section drift)
 check "scheduler-store rewrite is detected" "$OUT" "DRIFT: codex improver schedule pointer=7,19@0 scheduler=6,18@50"
 nocheck "scheduler-store rewrite never claims MATCH" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
 check "scheduler-store rewrite invalidates collision total" "$OUT" "local simultaneous starts/day: UNKNOWN"
-check "scheduler-store rewrite invalidates dispatch total" "$OUT" "local engineer dispatches/day: UNKNOWN"
+check "scheduler-store rewrite invalidates dispatch total" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET rrule = 'RRULE:FREQ=DAILY;BYHOUR=7,19;BYMINUTE=0;BYSECOND=0' WHERE id = 'agent-improver';"
 
@@ -954,6 +1091,276 @@ TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/
 if grep -q 'blob-embedded' <<<"$TABLE"; then
   bad "an excluded image payload produces no blob-embedded row" "$TABLE"
 else ok "an excluded image payload produces no blob-embedded row"; fi
+
+# (3b) 🔴 The RAW-LINE surfaces must exclude that payload too. The table decodes
+# and drops a complete `input_image.image_url` structurally; the concentration
+# line and the provenance locator scan raw lines, so before #2522 they reported
+# `across 1 transcript records` and `shape=aws-access-key-id` for a table that
+# was EMPTY — a high-signal locator sending an operator to encoded image bytes.
+# All three surfaces must derive from the same filtered corpus.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimg/projects" CODEX_HOME="$FIX/blobimg/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CRED=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/build\/codegen/p')
+if grep -q 'across 0 transcript records' <<<"$CRED"; then
+  ok "an excluded image payload is not counted by the concentration line"
+else bad "an excluded image payload is not counted by the concentration line" "$CRED"; fi
+if grep -q 'shape=' <<<"$CRED"; then
+  bad "an excluded image payload emits no provenance locator" "$CRED"
+else ok "an excluded image payload emits no provenance locator"; fi
+
+# (3c) CONTROL — the mask must be no broader than the table's own filter, or it
+# silences a locator for a row the table still counts, which is the UNSAFE
+# direction. Three cases in one corpus: a plain credential; a credential in the
+# SAME record as an input_image but OUTSIDE its payload; and an `image_url` data
+# URL on a line carrying NO `input_image` marker (which the table's structural
+# filter does NOT drop, so the raw scans must not drop it either).
+mkdir -p "$FIX/blobimgnc/projects" "$FIX/blobimgnc/codex/sessions"
+cat > "$FIX/blobimgnc/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"message","text":"env GITHUB_TOKEN=__GHPE__"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"},{"type":"input_text","text":"token=__GHPE__"}]}}
+{"type":"response_item","payload":{"type":"message","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq"},{"type":"input_file","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"DATA:IMAGE/png;BASE64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB","type":"input_image"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image\/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq\/__AWS__BB"}]}}
+EOF
+# Lines 9 and 10 are appended rather than written in the heredoc because both
+# need a LITERAL backslash escape in the JSON, and authoring one inline is
+# fragile — several tools along the way normalise `/` to `/`, which would
+# silently turn these into duplicates of the plain case and prove nothing.
+# Build the backslash from its octal code so what lands on disk is unambiguous.
+_BS=$(printf '\134')
+_B64RUN='QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq'
+# Line 9 — INVALID JSON escape in the media type. `fromjson` fails on this
+# record, so the table's `catch $raw` branch scans the whole raw line and DOES
+# count the credential; the mask must therefore decline it and leave the locator.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/'"${_BS}"'q;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 10 — Unicode-escaped solidus in the SCHEME. `fromjson` normalises it, so
+# the table DOES exclude this value and the mask must too.
+#
+# ⚠️ The payload separator before the token stays a REAL `/`, and that is what
+# makes this assertion capable of failing. Escaping it as well puts `f` (the last
+# character of `002f`) immediately before the token, and the credential regex is
+# boundary-anchored — it rejects a match preceded by `[A-Za-z0-9_-]`. The token
+# would then be invisible to the scan whether or not the mask fired, so the
+# assertion passed under the unfixed mask too. Verified: with the separator
+# escaped, the old mask and the new one both yield no locator.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image'"${_BS}"'u002fpng;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 11 — a PERFECTLY WELL-FORMED image payload, with an invalid JSON escape
+# in an UNRELATED field (`"note"`). This is the case the per-record gate exists
+# for: the payload itself is a complete data URL under `input_image`, so every
+# textual test the mask can apply says "exclude it" — but `fromjson` fails on the
+# record as a whole, so the table takes `catch $raw`, scans the entire raw line
+# and DOES count the credential. Masking here would leave a counted table row
+# with no locator, which is the unsafe direction for a leak detector.
+# Distinct from line 9, whose invalid escape sits INSIDE the data URL and is
+# therefore reachable by the media-type character class; nothing about this
+# record's payload is anomalous, so no amount of regex sharpening can see it.
+printf '%s\n' '{"type":"response_item","note":"'"${_BS}"'q","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 12 — the data URL is wrapped in ANSI styling. A raw ESC byte is a control
+# character, which JSON forbids inside a string, so `fromjson` fails on the RAW
+# record and the table's `catch $raw` branch scans it whole and COUNTS the
+# credential. The mask must reach the same verdict, which it can only do if it
+# reads the same bytes the table reads: the table parses the raw file and strips
+# ANSI afterwards, so the mask has to sit on the same side of the strip.
+_E=$(printf '\033')
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"'"${_E}"'[31mdata:image/png;base64,'"${_B64RUN}"'/__AWS__BB'"${_E}"'[0m"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 13 — a standard MIME parameter in the media type. The table's media-type
+# portion is `[^,]*`, so `png;charset=utf-8` matches and the value IS excluded
+# there; a mask accepting only a bare subtype declines it and leaves a locator
+# pointing at image bytes for a value with no table row. Flagged independently
+# by both review lanes, which is why it is fixed here rather than deferred.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;charset=utf-8;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Lines 14 and 15 — a DUPLICATE `type` key, the two orders. JSON permits the
+# repeat and `fromjson` keeps the LAST occurrence, so key precedence — not text
+# order — decides what the table sees. A mask that matches the marker textually
+# reads the FIRST occurrence and can therefore reach the opposite verdict.
+#
+# Line 14 is the unsafe direction and the reason this pair exists: the effective
+# type is `input_file`, so the table does NOT exclude the value and COUNTS the
+# credential in it, while the raw text still says `input_image` at the first key.
+# Masking here leaves a counted table row with no locator — a triager told
+# something was found and given nothing to look at.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","type":"input_file","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 15 is the same construct with the winning value reversed: the effective
+# type IS `input_image`, the table excludes the value, and the mask must too.
+# It is what stops the fix from being "decline anything with a repeated key",
+# which would be safe but would silence a payload the table genuinely dropped.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_file","type":"input_image","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# 🔴 Line 16 — TWO divergences on one line that cancel in the COUNT. The first
+# object repeats `type` and resolves away from `input_image` (text says it once,
+# the parser sees it zero times); the second spells its `type` KEY with a `\u`
+# escape and resolves TO `input_image` (text zero, parser one). The totals are
+# 1 == 1, so counting alone licenses the mask and the textual expression then
+# matches the FIRST object — blanking the credential the table counts.
+#
+# This is the case the respelling veto exists for, and it is the only one that
+# distinguishes the veto from dead code: every single-object respelling is
+# already caught by the count. Verified by ablation — with the veto removed this
+# line masks and the locator below disappears.
+#
+# ONLY the first object carries the credential, and that asymmetry is what gives
+# the assertion teeth: with a token in both payloads, a mask firing on either
+# one leaves the other visible and the output looks identical.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","type":"input_file","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"},{"ty'"${_BS}"'u0070e":"input_image","image_url":"data:image/png;base64,'"${_B64RUN}"'"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimgnc/codex/sessions/s.jsonl" && rm -f "$FIX/blobimgnc/codex/sessions/s.jsonl.bak"
+subst "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Control: the appended lines really do carry literal escapes. Without this,
+# a normalising tool anywhere upstream would turn them into the plain case and
+# the assertions below would pass while testing nothing.
+if grep -q 'u002f' "$FIX/blobimgnc/codex/sessions/s.jsonl" && \
+   grep -q 'image/\\q;base64' "$FIX/blobimgnc/codex/sessions/s.jsonl" && \
+   grep -q '"note":"\\q"' "$FIX/blobimgnc/codex/sessions/s.jsonl"; then
+  ok "control: the escape fixtures carry literal JSON escapes"
+else bad "control: the escape fixtures carry literal JSON escapes" \
+  "$(sed -n '9,11p' "$FIX/blobimgnc/codex/sessions/s.jsonl")"; fi
+# Control: line 11's payload is genuinely well-formed in isolation, so the
+# assertion below is about the RECORD's parse state and not about a malformed
+# data URL the character classes would have caught anyway.
+_L11=$(sed -n '11p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
+if grep -qE -- '"image_url":"data:image/png;base64,[A-Za-z0-9+/]*"' <<<"$_L11"; then
+  ok "control: line 11 carries an unremarkable, complete data URL"
+else bad "control: line 11 carries an unremarkable, complete data URL" "$_L11"; fi
+# Control: lines 14/15 really carry a REPEATED `type` on disk, and `fromjson`
+# really resolves each to its LAST occurrence. Both halves matter — without the
+# textual check a normalising tool upstream could have collapsed the duplicate,
+# and without the parse check the pair asserts nothing about precedence. The two
+# together are what make the next two assertions a test of parser-vs-text
+# disagreement rather than of two ordinary records.
+_L14=$(sed -n '14p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
+_L15=$(sed -n '15p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
+if [ "$(jq -r '.payload.output[0].type' <<<"$_L14")" = "input_file" ] &&
+   [ "$(jq -r '.payload.output[0].type' <<<"$_L15")" = "input_image" ] &&
+   grep -q '"type":"input_image","type":"input_file"' <<<"$_L14" &&
+   grep -q '"type":"input_file","type":"input_image"' <<<"$_L15"; then
+  ok "control: the duplicate-key fixtures parse to their LAST type value"
+else bad "control: the duplicate-key fixtures parse to their LAST type value" "$_L14"; fi
+# Control: line 16 really carries BOTH constructs and they really cancel — the
+# marker is spelled once, the parser sees exactly one `input_image` object, and
+# it is the SECOND one (so the textual match lands on the wrong object). Without
+# this the assertion below could pass on a line where the counts never collided.
+_L16=$(sed -n '16p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
+if [ "$(grep -o '"type":"input_image"' <<<"$_L16" | wc -l | tr -d ' ')" = "1" ] &&
+   [ "$(jq -r '[.payload.output[]|select(.type=="input_image")]|length' <<<"$_L16")" = "1" ] &&
+   [ "$(jq -r '.payload.output[0].type' <<<"$_L16")" = "input_file" ] &&
+   grep -q 'u0070e' <<<"$_L16"; then
+  ok "control: line 16's two divergences cancel in the marker count"
+else bad "control: line 16's two divergences cancel in the marker count" "$_L16"; fi
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimgnc/projects" CODEX_HOME="$FIX/blobimgnc/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CRED=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/build\/codegen/p')
+if grep -q 'line=2 record=response_item shape=github-token' <<<"$CRED"; then
+  ok "a plain credential still gets its locator"
+else bad "a plain credential still gets its locator" "$CRED"; fi
+if grep -q 'line=3 record=response_item shape=github-token' <<<"$CRED"; then
+  ok "a credential beside an image payload still gets its locator"
+else bad "a credential beside an image payload still gets its locator" "$CRED"; fi
+if grep -q 'line=4 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "an image_url without an input_image marker is scanned, as the table scans it"
+else bad "an image_url without an input_image marker is scanned, as the table scans it" "$CRED"; fi
+# The masked payload on line 3 must NOT produce its own locator, or the mask did
+# nothing on the very line the fix targets.
+if grep -q 'line=3 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "the masked payload on the input_image line emits no locator" "$CRED"
+else ok "the masked payload on the input_image line emits no locator"; fi
+# 🔴 The mask is scoped to the OBJECT, not the line. Line 5 carries an
+# `input_image` AND a sibling `input_file` that also holds a complete data URL.
+# The table drops only the `input_image` one (its filter keys on the DIRECT
+# parent), so the sibling's value must keep its locator — a line-wide mask would
+# swallow it and leave a table row nothing points at. (CodeRabbit, 🟠 Major.)
+#
+# ⚠️ ONLY THE SIBLING carries the credential, and that asymmetry is what gives
+# this assertion teeth. With `__AWS__` in BOTH payloads the assertion passes
+# under a broken mask too: a greedy line-wide `.*` masks the LAST `image_url`
+# instead of the first, so exactly one AWS token survives either way and the
+# locator output is byte-identical. Verified — the `[^{}]*` → `.*` ablation
+# failed nothing until the credential was moved to the sibling alone.
+if grep -q 'line=5 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a sibling non-input_image data URL keeps its locator"
+else bad "a sibling non-input_image data URL keeps its locator" "$CRED"; fi
+# The table's data-URL test is case-insensitive (`test(…; \"i\")`), so a
+# mixed-case scheme is excluded there and must be masked here too.
+if grep -q 'line=6 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "a mixed-case data URL under input_image is masked" "$CRED"
+else ok "a mixed-case data URL under input_image is masked"; fi
+# JSON does not guarantee key order, and the table's filter does not care about
+# it, so `image_url` appearing BEFORE its `type` marker must mask identically.
+if grep -q 'line=7 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "an input_image payload masks with image_url before type" "$CRED"
+else ok "an input_image payload masks with image_url before type"; fi
+# 🔴 `\/` is a legal JSON escape for `/`. The table parses the record first, so
+# `fromjson` normalises it and the value IS a complete data URL there and IS
+# excluded — while the raw scans see the unparsed line. A mask that accepts only
+# a bare `/` therefore misses the escaped payload and the raw surfaces report a
+# credential the table dropped. (CodeRabbit round 2.)
+if grep -q 'line=8 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "an escaped-solidus image payload is masked" "$CRED"
+else ok "an escaped-solidus image payload is masked"; fi
+# 🔴 The mask must DECLINE a record whose escaping it cannot vouch for. An
+# invalid JSON escape makes `fromjson` fail, so the table falls back to scanning
+# the whole raw record and counts the credential — masking it here would leave a
+# table row with no locator, the unsafe direction. (Codex P2.)
+if grep -q 'line=9 record=malformed shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a malformed-escape record keeps its locator, as the table counts it"
+else bad "a malformed-escape record keeps its locator, as the table counts it" "$CRED"; fi
+# `/` is the other legal spelling of `/`; `fromjson` normalises it, so the
+# table excludes the value and the mask must too. (Codex P2.)
+if grep -q 'line=10 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "a unicode-escaped-solidus image payload is masked" "$CRED"
+else ok "a unicode-escaped-solidus image payload is masked"; fi
+# 🔴 The gate is per-RECORD, not per-payload. Line 11's data URL is complete and
+# unremarkable, so every textual test says "exclude" — but an invalid escape
+# elsewhere in the record makes `fromjson` fail, the table scans the raw line and
+# counts the credential. The mask must apply only where the record meets the same
+# parse-success condition the table applies. (CodeRabbit, 🟠 Major.)
+if grep -q 'line=11 record=malformed shape=aws-access-key-id' <<<"$CRED"; then
+  ok "an image payload in an unparseable record keeps its locator"
+else bad "an image payload in an unparseable record keeps its locator" "$CRED"; fi
+# 🔴 The gate must read the SAME BYTES the table reads, or asking "does this
+# parse?" answers a different question. The table parses the raw file and strips
+# ANSI afterwards; an ANSI-wrapped data URL therefore fails `fromjson` there, is
+# scanned whole, and IS counted. If the mask sits downstream of the strip it sees
+# a repaired line, judges it parseable, and blanks a payload the table counted —
+# a table row with no locator, the unsafe direction. (Codex P2.)
+if grep -q 'line=12 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "an ANSI-wrapped image payload keeps its locator, as the table counts it"
+else bad "an ANSI-wrapped image payload keeps its locator, as the table counts it" "$CRED"; fi
+# The table's media type is `[^,]*`, so a standard MIME parameter is still a
+# complete data URL there and IS excluded; the mask must reach the same verdict.
+if grep -q 'line=13 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "a MIME-parameterised data URL under input_image is masked" "$CRED"
+else ok "a MIME-parameterised data URL under input_image is masked"; fi
+# 🔴 Line 14 — key precedence, the UNSAFE direction. The raw text opens with
+# `"type":"input_image"`, so a textual marker match says "exclude"; `fromjson`
+# keeps the later `input_file`, so the table does NOT exclude and COUNTS the
+# credential. Masking it would leave a counted row with no locator. (#2742)
+if grep -q 'line=14 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a duplicate-key record whose effective type is input_file keeps its locator"
+else bad "a duplicate-key record whose effective type is input_file keeps its locator" "$CRED"; fi
+# Line 15 — the same construct resolving the other way. The effective type IS
+# `input_image`, so the table excludes the value and the mask must still fire.
+# This is what keeps the fix from degenerating into "decline any repeated key",
+# which would be safe but would silence a payload the table genuinely dropped.
+if grep -q 'line=15 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "a duplicate-key record whose effective type is input_image is masked" "$CRED"
+else ok "a duplicate-key record whose effective type is input_image is masked"; fi
+# 🔴 Line 16 — the marker count agrees while the objects diverge, so counting
+# alone would license the mask and blank a credential the table counts. Only the
+# respelling veto declines it. Removing that veto fails exactly this assertion.
+if grep -q 'line=16 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a record whose two key divergences cancel in the count keeps its locator"
+else bad "a record whose two key divergences cancel in the count keeps its locator" "$CRED"; fi
 
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain

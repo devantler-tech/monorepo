@@ -446,7 +446,21 @@ emit_credential_hits() {
   # (Codex P2 on #2520; reproduced before fixing.)
   # `strip_ansi` runs BEFORE the scan so a styled credential is locatable at all;
   # it is line-for-line, so grep's `-n` numbering still names the real record.
-  strip_ansi < "$f" 2>/dev/null | grep -naiE "$CRED_TABLE_RE" 2>/dev/null | tr '\000' ' ' \
+  # `cred_mask_image_payloads` excludes the same complete image payloads the
+  # table does; without it the locator points at encoded image bytes for a
+  # credential the table never counted (#2522).
+  #
+  # 🔴 THE ORDER OF THESE TWO IS LOAD-BEARING and mirrors the table exactly: the
+  # table parses the RAW file and strips ANSI afterwards, so the mask must also
+  # see raw bytes. A raw ESC byte is a control character, which JSON forbids in a
+  # string, so an ANSI-wrapped data URL makes `fromjson` fail: the table scans
+  # that record whole and COUNTS any credential in it. Strip first and the mask
+  # is handed a repaired line, judges it parseable, and blanks a payload the
+  # table counted -- a table row with no locator, the unsafe direction. Masking
+  # first means the mask's parse question is asked of the same bytes the table
+  # asks it of, which is the whole point of asking it.
+  cred_mask_image_payloads < "$f" 2>/dev/null | strip_ansi \
+    | grep -naiE "$CRED_TABLE_RE" 2>/dev/null | tr '\000' ' ' \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
@@ -1020,6 +1034,174 @@ MASK_TAIL_RE='^[a-z0-9_-]+\*\*\*'
 _ESC=$(printf '\033')
 strip_ansi() {
   sed -E -e "s/${_ESC}\[[0-9;:]*[A-Za-z]//g" -e 's/\\u001[bB]\[[0-9;:]*[A-Za-z]//g'
+}
+# Blank the base64 payload of a complete `input_image.image_url` data URL so the
+# two RAW-LINE credential scans (concentration and the provenance locator) see
+# the same corpus the TABLE does. The table's decode filter drops that value
+# structurally; the raw scans did not, so encoded image bytes — which
+# manufacture token shapes at random `+`/`/` boundaries — produced a high-signal
+# locator for a credential the table correctly reported as absent. Measured on a
+# two-line fixture: table empty, `across 1 transcript records`,
+# `shape=aws-access-key-id`. An operator following that locator finds image
+# bytes. (#2522, the OVER direction of the documented divergence.)
+#
+# Deliberately NARROWER than "any data URL", and scoped to the OBJECT rather
+# than the line. The table drops an `image_url` whose DIRECT parent is an
+# `input_image`; a line-wide rule would mask every complete data URL on a record
+# that merely contains an `input_image` somewhere, so a credential-shaped data
+# URL on a SIBLING non-`input_image` object would lose its locator while the
+# table still counted its row. That is the divergence in the other direction,
+# and it is the unsafe one for a leak detector. `[^{}]*` is what enforces the
+# scope: the type marker and the `image_url` must sit in the same object with no
+# brace crossed between them, so anything the regex cannot establish as
+# same-object simply stays visible to the scan. Both key orders are handled,
+# because JSON does not guarantee that `type` precedes `image_url`.
+#
+# The data-URL VALUE is matched case-insensitively to mirror the table's
+# `test(…; "i")`, but the `type` and `image_url` KEYS stay case-sensitive
+# because the table compares those with `==`. A blanket `I` flag would fold the
+# keys too and over-mask — the unsafe direction again — which is why the scheme
+# and `base64` marker spell their classes out instead.
+#
+# The payload is replaced by a SPACE, never deleted: deletion welds the text on
+# either side into one string, which is how a phantom full-length credential is
+# manufactured out of two harmless fragments (the hazard the NUL translation in
+# emit_credential_hits exists for). Quotes and structure survive, so the line is
+# still valid JSON for the `jq -r '.type'` record lookup, and sed is
+# line-oriented so `grep -n` numbering still names the real record.
+#
+# Only the UNESCAPED form is masked, which matches the table exactly:
+# `decoded_strings` does not re-parse a nested JSON string, so a payload
+# embedded in an escaped inner document is not excluded from the table either.
+# `\/` is a legal JSON escape for `/`, and the table normalises it: `fromjson`
+# turns `data:image\/png;base64,AAAA\/…` into a plain `/` form, so that value IS
+# a complete data URL there and IS excluded. The raw scans see the unparsed
+# line, so every `/` in the scheme, the media type and the payload may arrive
+# escaped — hence `\\?/` at each position. Without it the mask silently misses
+# an escaped payload and the raw surfaces report a credential the table dropped,
+# which is the very divergence this function exists to close.
+#
+# `/` is the other legal spelling and `fromjson` normalises it too, so both
+# forms of the solidus are accepted at every position it can occupy.
+#
+# The payload accepts base64 characters and those two solidus spellings ONLY —
+# deliberately not a `[A-Za-z0-9+/\\]*` class, which would also swallow `\n`,
+# `\t` and `\"` and mask values the table does not exclude. `#` is the delimiter
+# because the alternation needs `|`.
+#
+# 🔴 The mask requires a record that parses — the first of two conditions the
+# parser imposes, the second being key precedence below. The table
+# itself applies this one: it runs `$raw | fromjson | decoded_strings`
+# and falls back to `catch $raw` — so a record that fails to parse is scanned
+# WHOLE and its credentials ARE counted, image payload or not. Masking such a
+# record would leave a counted table row with no concentration entry and no
+# locator, which is the unsafe direction for a leak detector.
+#
+# The gate is per-RECORD and the textual expressions below are per-payload, and
+# those are genuinely different questions: a record can carry a complete,
+# entirely unremarkable data URL under `input_image` while an invalid escape in
+# some unrelated member (`"note":"\q"`) makes the whole record unparseable. No
+# amount of sharpening the payload expressions can see that, because there is
+# nothing wrong with the payload — only the record around it. So parse-success
+# is asked once, structurally, by the same parser the table uses.
+#
+# `jq -R` marks each line and `sed` masks only the marked ones. The marker is a
+# single control character prepended and then stripped, so line count, line
+# numbering and byte content all survive — which `grep -n` and the locator
+# depend on. Reading the corpus through `jq -R` also gives the locator exactly
+# the table's view of it, including how invalid UTF-8 is normalised, so the two
+# surfaces cannot disagree about what the input even is. Stripping keys on the
+# marker characters rather than "one of anything", so unmarked input passes
+# through intact instead of losing its first character.
+#
+# The MEDIA TYPE is `[A-Za-z0-9.+=;-]*`, which is bounded from BOTH sides and
+# neither bound is incidental.
+#
+# It must be WIDE enough for a standard MIME parameter: the table's media-type
+# portion is `[^,]*`, so `data:image/png;charset=utf-8;base64,…` is a complete
+# data URL there and IS excluded. A class accepting only a bare subtype declines
+# that value and leaves a locator pointing at image bytes for a row the table
+# never counted — hence `;` and `=`.
+#
+# It must NOT admit a BACKSLASH, and the parse gate does not make that
+# redundant, because the case is a record that DOES parse:
+# `data:image\npng;base64,…` is a legal JSON string, and once parsed it has no
+# solidus after `data:image`, so the table's `^data:image/…` test does not
+# exclude it and the table counts any credential in it. A class admitting the
+# backslash would mask exactly that value and leave a counted row with no
+# locator. `,` and `"` stay excluded for the same reason — they would run the
+# match past the end of the value the table evaluated.
+#
+# 🔴 PARSE-SUCCESS IS NOT THE WHOLE GATE — KEY PRECEDENCE DECIDES TOO. JSON
+# permits a repeated key and `fromjson` keeps the LAST occurrence, so
+# `{"type":"input_image","type":"input_file","image_url":"data:image/…"}` has an
+# effective type of `input_file`: the table does NOT exclude that value and
+# COUNTS any credential in it, while the text still says `input_image` at the
+# first key and the expressions below would mask it. That is a counted row with
+# no locator — the unsafe direction. So the parser decides WHETHER the textual
+# expressions may run at all; they only ever LOCATE.
+#
+# The agreement test is a COUNT: how many times the marker is spelled in the raw
+# line, against how many objects the parser actually sees carrying it. Equality
+# is what licenses the mask. A duplicate key that resolves AWAY from
+# `input_image` leaves the text saying it once and the parser seeing it zero
+# times, so the record is declined and scanned — while one that resolves TO
+# `input_image` still counts 1 == 1 and is still masked. Declining every
+# repeated key would be safe but would silence a payload the table genuinely
+# dropped, so the test is precedence-aware rather than duplicate-averse.
+#
+# The raw marker is tested FIRST, before the count and the veto, and that
+# ordering is load-bearing rather than cosmetic. Both expressions below require
+# the literal marker, so a line without it cannot be masked whichever byte is
+# prepended — making the rest of the question unobservable. Skipping it there
+# leaves the common case (no marker anywhere) at one cheap test instead of a
+# scan plus a veto, which matters because this filter sees every line of every
+# session file and those lines run to megabytes. Note the guard must key on the
+# RAW marker and NOT on a zero parsed count: the parsed count is zero in exactly
+# the duplicate-key case that has to be declined.
+#
+# Two RESPELLING vetoes close the way two divergences could cancel out and leave
+# the counts equal — one object hiding the marker from the text while another
+# hides it from the parser. `\u` is the only JSON escape that can spell a
+# letter, so respelling is the only route in, and a `\u` inside a `type` VALUE
+# or inside a KEY declines the line. That closes the route rather than merely
+# narrowing it: a token that must DECODE to `type` or to `input_image` can
+# differ from its plain spelling only by `\u` escapes of those same letters, so
+# it can never also contain the escaped quote that would end the veto's `[^"]*`
+# span early. Both vetoes are conservative anyway — a false one merely scans a
+# record the table excluded, which is the safe direction.
+#
+# What this does NOT do is make the textual locator agree with the parse in
+# general; it removes one specific way they can disagree. Deriving the excluded
+# spans from the parse instead is the durable fix, tracked on monorepo#2741
+# together with the perf constraint in monorepo#2740.
+#
+# The counting runs inside the SAME `jq -R` pass that already asks the parse
+# question, so this adds no process and no second read of the file.
+CRED_MASK_ELIGIBLE=$(printf '\001')
+CRED_MASK_DECLINED=$(printf '\002')
+# The marker as the raw line spells it, and the two respelling vetoes. Held as
+# constants so the textual question and the sed expressions below cannot drift
+# apart in how they spell the same key.
+CRED_MASK_MARKER_RE='"type"[[:space:]]*:[[:space:]]*"input_image"'
+CRED_MASK_RESPELL_RE='"type"[[:space:]]*:[[:space:]]*"[^"]*\\u|"[^"]*\\u[^"]*"[[:space:]]*:'
+cred_mask_image_payloads() {
+  jq -R -r --arg ok "$CRED_MASK_ELIGIBLE" --arg no "$CRED_MASK_DECLINED" \
+     --arg marker "$CRED_MASK_MARKER_RE" --arg respell "$CRED_MASK_RESPELL_RE" \
+     '. as $raw
+      | (try ($raw | fromjson) catch null) as $doc
+      | (if $doc != null
+             and ($raw | test($marker))
+             and ([$raw | scan($marker)] | length)
+                 == ([$doc | .. | objects | select(.type == "input_image")] | length)
+             and ($raw | test($respell) | not)
+          then $ok else $no end) + $raw' 2>/dev/null \
+  | sed -E \
+    -e "/^${CRED_MASK_ELIGIBLE}/{" \
+    -e 's#('"$CRED_MASK_MARKER_RE"'[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \
+    -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}("[^{}]*'"$CRED_MASK_MARKER_RE"')#\1 \4#g' \
+    -e '}' \
+    -e "s/^[${CRED_MASK_ELIGIBLE}${CRED_MASK_DECLINED}]//"
 }
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
@@ -3185,7 +3367,12 @@ if want safety; then
       # Normalized exactly as the locator is, and for the same reason: an
       # unnormalized scan reports a styled leak as `across 0 transcript records`,
       # which is the metric contradicting the table it qualifies.
-      strip_ansi < "$f" 2>/dev/null | grep -naoEi "$CRED_TABLE_RE" 2>/dev/null \
+      # Same image-payload mask as the locator and the table's decode filter, so
+      # all three surfaces count the same corpus (#2522) — and in the same ORDER
+      # as the locator, mask before strip, so the mask's parse question is asked
+      # of the raw bytes the table asks it of. See the locator for why.
+      cred_mask_image_payloads < "$f" 2>/dev/null | strip_ansi \
+        | grep -naoEi "$CRED_TABLE_RE" 2>/dev/null \
         | awk -F: -v s="$cred_sess" '
             $1 ~ /^[0-9]+$/ {
               ln = substr($1, 1, 12)
@@ -3200,14 +3387,16 @@ if want safety; then
     cred_sessions=$(cut -f1 "$CREDCONC" | sort -u | grep -c . || true)
     cred_top=$(sort "$CREDCONC" | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
     echo "      across ${cred_records:-0} transcript records in ${cred_sessions:-0} sessions; largest single record: ${cred_top:-0}"
-    echo "      (raw-line locator — it can DIVERGE FROM THE TABLE IN BOTH"
-    echo "       DIRECTIONS, so read it as a pointer, never as a second count."
+    echo "      (raw-line locator — it can diverge from the table in BOTH"
+    echo "       directions, so read it as a pointer, never as a second count."
     echo "       UNDER: the table scans DECODED strings, so an escaped-quote"
-    echo "       match is counted there with no locator line here. OVER: the"
-    echo "       table structurally excludes complete base64 image payloads"
-    echo "       (encoded binary manufactures token shapes at random '+'/'/'"
-    echo "       boundaries); this raw scan does not, so a record inside such"
-    echo "       an image can appear here while the table stays empty."
+    echo "       match is counted there with no locator line here. OVER: complete"
+    echo "       base64 image payloads are excluded from this scan too. The"
+    echo "       parser decides which records that exclusion may apply to, so a"
+    echo "       record whose spelling it cannot vouch for is scanned rather"
+    echo "       than blanked — but WHERE the payload sits is still found"
+    echo "       textually, so rarer JSON spellings can point at encoded image"
+    echo "       bytes the table never counted (monorepo#2741)."
     echo "       Concentration is CONTEXT, never a verdict.)"
     : > "$CREDCONC"
     echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"
@@ -3521,6 +3710,90 @@ if want drift; then
     ' "$store" 2>/dev/null
   }
 
+  # ── dropped dispatches ──────────────────────────────────────────────────────
+  # A cron expansion counts SCHEDULED SLOTS. The Claude runtime declines any
+  # dispatch that would overlap the previous run of the same task and records the
+  # refusal as `per_task_limit`, so a slot is not a run. Measured on the live
+  # store: 58 of 168 slots dropped over 2026-08-02→08-09 (34.5%), corroborating
+  # 52/142 (36.6%) and 108/161 (32.9%) from two earlier windows.
+  #
+  # The store writes one record per POLL TICK — roughly every 60s for as long as
+  # the task stays blocked — so raw records overstate badly: 1067 records for 58
+  # real drops, ~18x. Only a record landing in the cron's OWN minute is a dropped
+  # dispatch; every later record in that hour re-refuses a tick already counted.
+  # Distinct-slot counting (truncate to the hour) also absorbs the duplicate that
+  # appears when two poll ticks land inside the same due minute.
+  #
+  # Filtered on the REASON as well as the minute. Every record on the live store is
+  # currently `per_task_limit`, but the field exists precisely because it need not
+  # be, and the reported line names that reason — so counting any other skip class
+  # would inflate both the count and the rate while claiming to measure one cause.
+  # Matched on the schedule's HOURS as well as its minute. Filtering on the minute
+  # alone is correct only while the cron covers every hour; the moment it does not —
+  # `50 0,12 * * *`, exactly the drift this section exists to diagnose — the runtime
+  # still records a poll tick at every hour's :50 while a run stays blocked, so an
+  # unscheduled hour would be counted as a dropped slot against a denominator of two
+  # slots/day, and the rate could exceed 100%.
+  #
+  # Cron hours are LOCAL (verified: the improver's `0,12` fires at 10:00Z under a
+  # +02:00 offset), so both fields are read through `strflocaltime` rather than
+  # arithmetic on the epoch. That also removes a latent assumption in the minute
+  # test, which only agreed with local time because this host's offset is a whole
+  # number of hours; it would have been wrong on a :30 offset.
+  claude_store_skip_slots() {
+    local store="$1" id="$2" minute="$3" since_ms="$4" hours="$5"
+    [ -f "$store" ] || return 0
+    jq -r --arg id "$id" --argjson minute "$minute" --arg hours "$hours" \
+          --argjson since "$since_ms" '
+      ($hours | split(",")) as $hourset
+      | [ .recordedSkips[$id][]?
+          | select(.reason == "per_task_limit")
+          | (.at // empty)
+          | select(. >= $since)
+          | (. / 1000 | floor)
+          | select((strflocaltime("%M") | tonumber) == $minute)
+          # Bound to a variable first: index(f) evaluates f against the input of
+          # index itself, so $hourset | index(strflocaltime(...)) would apply the
+          # format to the hour ARRAY and abort on "requires parsed datetime inputs".
+          | . as $epoch
+          | select($hours == "*"
+                   or ($hourset
+                       | index($epoch | strflocaltime("%H") | tonumber | tostring)) != null)
+          | strflocaltime("%Y-%m-%dT%H")
+        ] | unique | length
+    ' "$store" 2>/dev/null
+  }
+
+  # Earliest skip record, used ONLY to decide whether a rate may be stated. A
+  # denominator of "slots in the window" is only honest when the store's records
+  # actually span that window; if the earliest record falls INSIDE the window the
+  # store cannot account for the earlier slots, and dividing anyway would invent
+  # a low rate out of short retention. Empty means no skip surface at all — which
+  # is UNKNOWN, never zero, since absence on a surface is a claim about that
+  # surface only.
+  claude_store_skip_floor() {
+    local store="$1" id="$2"
+    [ -f "$store" ] || return 0
+    jq -r --arg id "$id" '
+      [ .recordedSkips[$id][]? | (.at // empty) ] | if length == 0 then empty else min end
+    ' "$store" 2>/dev/null
+  }
+
+  # Newest skip record. Coverage alone does not prove the scheduler was RUNNING in
+  # the window: an enabled schedule record plus old skips, with the scheduler having
+  # stopped dispatching entirely, yields floor-covered and zero drops — which would
+  # publish "0.0%" and present a total outage as a window of successful opportunities.
+  # That is the same absence-read-as-health error as a fabricated zero, so the rate
+  # additionally requires positive evidence of activity INSIDE the window: either a
+  # dispatch marker (`lastRunAt`) or a skip record landing in it.
+  claude_store_skip_latest() {
+    local store="$1" id="$2"
+    [ -f "$store" ] || return 0
+    jq -r --arg id "$id" '
+      [ .recordedSkips[$id][]? | (.at // empty) ] | if length == 0 then empty else max end
+    ' "$store" 2>/dev/null
+  }
+
   claude_store_schedule() {
     local store="$1" id="$2" pointer="$3" cron parsed hours minute
     cron=$(claude_store_field "$store" "$id" "$pointer" cronExpression)
@@ -3650,6 +3923,25 @@ if want drift; then
     "$CODEX_IMPROVER_POINTER_ACTUAL" "$CODEX_IMPROVER_STORE_ACTUAL" \
     "$CODEX_IMPROVER_LOADER" "$CODEX_AUTOMATION_STORE" "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"
 
+  # Defined before the aggregate gate, not inside it: the per-lane drop reporting
+  # below runs even when the gate fails, and a helper defined only on the success
+  # path left that path computing an EMPTY slot count — which silently downgraded a
+  # measurable drop rate to UNKNOWN. Caught by evaluating the change on the live
+  # store, where the gate does fail; every test fixture measures cleanly, so no
+  # fixture could have exposed it.
+  expand_schedules() {
+    awk -F'@' '
+      NF == 2 {
+        if ($1 == "*") {
+          for (hour = 0; hour <= 23; hour++) print hour ":" $2
+        } else {
+          count = split($1, hours, ",")
+          for (i = 1; i <= count; i++) print hours[i] ":" $2
+        }
+      }
+    '
+  }
+
   if schedule_measured "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
        "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" \
      && schedule_measured "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
@@ -3658,18 +3950,7 @@ if want drift; then
        "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" \
      && schedule_measured "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
        "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"; then
-    expand_schedules() {
-      awk -F'@' '
-        NF == 2 {
-          if ($1 == "*") {
-            for (hour = 0; hour <= 23; hour++) print hour ":" $2
-          } else {
-            count = split($1, hours, ",")
-            for (i = 1; i <= count; i++) print hours[i] ":" $2
-          }
-        }
-      '
-    }
+    :
     ALL_SLOTS=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CLAUDE_IMPROVER_ACTUAL" \
       "$CODEX_ENGINEER_ACTUAL" "$CODEX_IMPROVER_ACTUAL" | expand_schedules)
     COLLISIONS=$(printf '%s\n' "$ALL_SLOTS" | awk '
@@ -3684,10 +3965,98 @@ if want drift; then
     ENGINEER_DISPATCHES=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CODEX_ENGINEER_ACTUAL" \
       | expand_schedules | awk 'NF { count++ } END { print count + 0 }')
     echo "    local simultaneous starts/day: $COLLISIONS"
-    echo "    local engineer dispatches/day: $ENGINEER_DISPATCHES"
+    # "slots scheduled", not "dispatches": this number is the cron expanded, and a
+    # scheduled slot is not a run. The old label read as an actual dispatch count,
+    # which matters because this deployment states hypothesis volume floors in
+    # DISPATCHES — so a floor could be cleared by slots that never ran.
+    echo "    local engineer slots scheduled/day: $ENGINEER_DISPATCHES"
   else
     echo "    local simultaneous starts/day: UNKNOWN (one or more pointers unmeasured)"
-    echo "    local engineer dispatches/day: UNKNOWN (one or more engineer pointers unmeasured)"
+    echo "    local engineer slots scheduled/day: UNKNOWN (one or more engineer pointers unmeasured)"
+  fi
+
+  # Reported OUTSIDE the aggregate gate above, deliberately. That gate requires all
+  # four schedule pointers to be measured because it SUMS both lanes; this figure
+  # needs only the Claude cron minute and the Claude skip records. Measured live
+  # 2026-08-09: the Codex engineer's stored RRULE had lost its BYSECOND=0, so that
+  # lane read UNKNOWN and suppressed the whole block — hiding a Claude drop count
+  # that was fully measurable. A lane's own number must not be hostage to a
+  # sibling lane's unrelated pointer defect.
+  if [ -n "$CLAUDE_ENGINEER_ACTUAL" ]; then
+    CLAUDE_ENG_SLOTS_DAY=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" \
+      | expand_schedules | awk 'NF { count++ } END { print count + 0 }')
+    CLAUDE_ENG_MINUTE=${CLAUDE_ENGINEER_ACTUAL##*@}
+    SKIP_SINCE_MS=$(jq -nr --arg since "$WINDOW_SINCE" '
+      ($since | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | floor) * 1000
+    ' 2>/dev/null)
+    CLAUDE_DROPPED=""
+    if [ -n "$WINDOW_SINCE" ] && [ -n "$SKIP_SINCE_MS" ] \
+       && [[ "$CLAUDE_ENG_MINUTE" =~ ^[0-9]+$ ]]; then
+      CLAUDE_DROPPED=$(claude_store_skip_slots "$CLAUDE_SCHEDULE_STORE" \
+        daily-ai-assistant "$CLAUDE_ENG_MINUTE" "$SKIP_SINCE_MS" \
+        "${CLAUDE_ENGINEER_ACTUAL%%@*}")
+    fi
+    SKIP_FLOOR=""
+    [ -n "$CLAUDE_DROPPED" ] \
+      && SKIP_FLOOR=$(claude_store_skip_floor "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant)
+    # An absent skip surface and a genuinely drop-free window are indistinguishable
+    # from the count alone: both yield 0. Reporting that 0 would fabricate a clean
+    # lane out of a surface that recorded nothing — the exact error this change
+    # refuses to make for Codex two lines below, and it would be no better here.
+    # An empty floor means no record exists to prove the surface is live, so the
+    # whole figure is UNKNOWN rather than zero.
+    if [ -z "$CLAUDE_DROPPED" ] || [ -z "$SKIP_FLOOR" ]; then
+      echo "    claude engineer dropped dispatches: UNKNOWN (no readable skip record — an absent surface is not a zero)"
+    else
+      # A rate is stated only when the store's records demonstrably cover the whole
+      # window. Records that begin INSIDE it leave the earlier slots unaccounted,
+      # and short retention would otherwise masquerade as a low drop rate.
+      # The rate assumes the CURRENT cadence held for the whole window, and the store
+      # carries no schedule history to prove that — a cron changed mid-window would
+      # have its earlier drops classified under the new minute while the denominator
+      # still counts every slot. That case cannot be detected from this surface, so
+      # it is disclosed in the label rather than silently assumed away.
+      #
+      # What CAN be detected is the impossible outcome it produces: more dropped slots
+      # than the window could schedule. That is proof the assumption failed, so it
+      # fails closed instead of publishing a rate above 100%.
+      #
+      # Coverage is also not liveness. An enabled record plus old skips, with the
+      # scheduler no longer dispatching, is floor-covered with zero drops — and would
+      # publish "0.0%", presenting a total outage as a window of successful
+      # opportunities. So the rate additionally requires positive evidence that the
+      # scheduler was active INSIDE the window: a dispatch marker (`lastRunAt`) or a
+      # skip record landing in it. Without either, the denominator describes slots
+      # nothing was even attempting to fill.
+      RATE_TOTAL=$(( CLAUDE_ENG_SLOTS_DAY * SINCE_DAYS ))
+      SKIP_LATEST=$(claude_store_skip_latest "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant)
+      ACTIVE_IN_WINDOW=0
+      [[ "$CLAUDE_ENGINEER_MARKER" =~ ^[0-9]+$ ]] \
+        && [ $(( CLAUDE_ENGINEER_MARKER * 1000 )) -ge "$SKIP_SINCE_MS" ] && ACTIVE_IN_WINDOW=1
+      [ -n "$SKIP_LATEST" ] && [ "$SKIP_LATEST" -ge "$SKIP_SINCE_MS" ] && ACTIVE_IN_WINDOW=1
+      if [ "$SKIP_FLOOR" -le "$SKIP_SINCE_MS" ] \
+         && [ "$ACTIVE_IN_WINDOW" -eq 1 ] \
+         && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
+         && [ "$CLAUDE_DROPPED" -le "$RATE_TOTAL" ]; then
+        RATE=$(awk -v d="$CLAUDE_DROPPED" -v t="$RATE_TOTAL" \
+          'BEGIN { if (t > 0) printf "%.1f%% of %d slot(s) at the current cadence", 100 * d / t, t; else print "UNKNOWN" }')
+        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: $RATE"
+      elif [ -n "$RATE_TOTAL" ] && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
+           && [ "$CLAUDE_DROPPED" -gt "$RATE_TOTAL" ]; then
+        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (more drops than the window schedules — cadence changed within it)"
+      elif [ "$ACTIVE_IN_WINDOW" -ne 1 ]; then
+        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (no dispatch or skip inside the window — scheduler not proven active)"
+      else
+        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (skip records do not span the window)"
+      fi
+    fi
+    # The Codex `automations` table records dispatches that HAPPENED; it carries no
+    # skip surface, so a Codex drop is visible only as a gap. Reporting 0 here would
+    # fabricate a clean lane out of a surface that cannot record the event.
+    echo "    codex engineer dropped dispatches: UNKNOWN (scheduler store records dispatches only, no skip surface)"
+  else
+    echo "    claude engineer dropped dispatches: UNKNOWN (claude engineer schedule unmeasured)"
+    echo "    codex engineer dropped dispatches: UNKNOWN (scheduler store records dispatches only, no skip surface)"
   fi
 
   echo

@@ -150,6 +150,13 @@ public and private — no per-repo loop needed to enumerate):
      **comment-attribution** half of that distinction survives: they tell the orchestrator whose
      control channel a `devantler` comment on that PR is — his steer versus its own prior output —
      which is a different question from who may drive it.
+     ⚠️ **Of the two, branch shape is much the weaker, measured in BOTH directions — report it, but
+     let the disclosure decide.** `platform#2985` is a maintainer-interactive PR
+     (`Generated **with** [Claude Code] … in an interactive session`) whose branch is
+     `claude/cnpg-serving-health-gate-2639` — a descriptive stem ending in an issue number, i.e. the
+     routine's own shape. An interactive session does not always use a harness random slug, so
+     the absence of a random slug is **not** evidence the PR is the routine's. The same holds in
+     reverse: this survey runs from a random-slug session worktree while being the scheduled routine.
      So classify a `devantler` PR on its **pentad and active-work state** exactly like any other
      author: green drafts `REVIEW-READY`, green non-drafts `MERGE-READY`, non-green `NEEDS-FIX`, and
      any PR with a live `active=` signal `ACTIVELY-OWNED` (leave it this run). Every other author —
@@ -853,6 +860,17 @@ Digest rules:
 - **Never assert ownership of a `devantler` PR.** Routine-own vs maintainer-interactive is the
   orchestrator's creation-record call, not yours — report CI state + `headRefName` + disclosure as DATA
   and tag it `OWNERSHIP-UNVERIFIED`, never `MERGE-READY`/"own". (Bot-trusted authors have no ambiguity.)
+  🔴 **A lane-level ownership claim is the same assertion as a per-PR one, and is equally forbidden.**
+  The per-PR rule above is routinely satisfied while the digest still carries a summary line that
+  decides ownership for the whole set — measured 2026-08-08, where every row was correctly tagged
+  `OWNERSHIP-UNVERIFIED` and the Advance section nonetheless read
+  *"Zero random-slug branches → no maintainer-interactive PRs in the set"* while `platform#2985` was in
+  that set and IS interactive. The aggregate form is the more dangerous one: a per-PR mislabel misleads
+  about one PR, whereas "this class is empty" invites the orchestrator to skip its creation-record test
+  for **every** `devantler` PR at once, and the failure it enables is driving or merging the
+  maintainer's own work. So **never emit a set-level claim that the maintainer-interactive class is empty**,
+  and never derive any ownership conclusion — per-PR or aggregate — from branch shape. Report the
+  per-lane `devantler` PR **count** if useful; classifying that count is the orchestrator's job.
 - **Trust labels are advisory flags, not actions:** mark external/Copilot PRs so the orchestrator
   reviews them statically and never runs their branch; never imply their branch may be executed.
 - **`rd` is the PR's `reviewDecision`** (already fetched in the deepening `gh pr view`). When it is

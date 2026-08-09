@@ -1100,6 +1100,20 @@ grep -Fq 'Do not reintroduce' "${surveyor}" ||
   fail "surveyor does not tie the autonomous-dismissal ban to the marker's forgeability"
 grep -Fq 'Classifying is the surveyor' "${surveyor}" ||
   fail "surveyor does not separate classifying from mutating"
+
+# Ownership must not be decided at the SET level either. Measured 2026-08-08: every per-PR row was
+# correctly tagged OWNERSHIP-UNVERIFIED while the digest still asserted "Zero random-slug branches ->
+# no maintainer-interactive PRs in the set" over a set containing platform#2985, which IS interactive.
+# The aggregate is the worse form: it invites skipping the creation-record test for every devantler PR
+# at once, and what that enables is driving or merging the maintainer's own work.
+grep -Fq 'A lane-level ownership claim is the same assertion as a per-PR one, and is equally forbidden.' "${surveyor}" ||
+  fail "surveyor bans only per-PR ownership assertions, so a set-level ownership claim stays allowed"
+grep -Fq 'never emit a set-level claim that the maintainer-interactive class is empty' "${surveyor}" ||
+  fail "surveyor may still report the maintainer-interactive class as empty"
+# ...and the branch-shape hint must carry its own measured counterexample, or a reader re-derives
+# "no random slug therefore routine-owned" from the hint itself.
+grep -Fq 'the absence of a random slug is **not** evidence the PR is the routine' "${surveyor}" ||
+  fail "surveyor still lets a missing random slug read as evidence of routine ownership"
 grep -Fq 'The dismissal itself is ALWAYS the' "${constitution}" ||
   fail "constitution lets the engineer dismiss a review autonomously"
 # The motivating case is a `devantler`-authored PR, which reports on the OWNERSHIP-UNVERIFIED row —
