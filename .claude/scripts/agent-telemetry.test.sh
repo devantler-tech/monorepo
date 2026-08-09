@@ -984,6 +984,9 @@ cat > "$FIX/blobimgnc/codex/sessions/s.jsonl" <<'EOF'
 {"type":"response_item","payload":{"type":"message","text":"env GITHUB_TOKEN=__GHPE__"}}
 {"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"},{"type":"input_text","text":"token=__GHPE__"}]}}
 {"type":"response_item","payload":{"type":"message","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"},{"type":"input_file","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"DATA:IMAGE/png;BASE64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB","type":"input_image"}]}}
 EOF
 sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimgnc/codex/sessions/s.jsonl" && rm -f "$FIX/blobimgnc/codex/sessions/s.jsonl.bak"
 subst "$FIX/blobimgnc/codex/sessions/s.jsonl"
@@ -1005,6 +1008,24 @@ else bad "an image_url without an input_image marker is scanned, as the table sc
 if grep -q 'line=3 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
   bad "the masked payload on the input_image line emits no locator" "$CRED"
 else ok "the masked payload on the input_image line emits no locator"; fi
+# 🔴 The mask is scoped to the OBJECT, not the line. Line 5 carries an
+# `input_image` AND a sibling `input_file` that also holds a complete data URL.
+# The table drops only the `input_image` one (its filter keys on the DIRECT
+# parent), so the sibling's value must keep its locator — a line-wide mask would
+# swallow it and leave a table row nothing points at. (CodeRabbit, 🟠 Major.)
+if grep -q 'line=5 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a sibling non-input_image data URL keeps its locator"
+else bad "a sibling non-input_image data URL keeps its locator" "$CRED"; fi
+# The table's data-URL test is case-insensitive (`test(…; \"i\")`), so a
+# mixed-case scheme is excluded there and must be masked here too.
+if grep -q 'line=6 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "a mixed-case data URL under input_image is masked" "$CRED"
+else ok "a mixed-case data URL under input_image is masked"; fi
+# JSON does not guarantee key order, and the table's filter does not care about
+# it, so `image_url` appearing BEFORE its `type` marker must mask identically.
+if grep -q 'line=7 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "an input_image payload masks with image_url before type" "$CRED"
+else ok "an input_image payload masks with image_url before type"; fi
 
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain

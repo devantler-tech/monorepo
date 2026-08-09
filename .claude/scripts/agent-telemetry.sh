@@ -1035,13 +1035,23 @@ strip_ansi() {
 # `shape=aws-access-key-id`. An operator following that locator finds image
 # bytes. (#2522, the OVER direction of the documented divergence.)
 #
-# Deliberately NARROWER than "any data URL". Both of the table's structural
-# conditions are approximated at line granularity — the line must evidence an
-# `input_image` record, and the value must be a COMPLETE data URL under the
-# `image_url` key — because a mask broader than the table's filter would create
-# the divergence in the other direction, silencing a locator for a row the table
-# still counts. That is the unsafe direction for a leak detector, so where the
-# two cannot be matched exactly the mask errs toward scanning.
+# Deliberately NARROWER than "any data URL", and scoped to the OBJECT rather
+# than the line. The table drops an `image_url` whose DIRECT parent is an
+# `input_image`; a line-wide rule would mask every complete data URL on a record
+# that merely contains an `input_image` somewhere, so a credential-shaped data
+# URL on a SIBLING non-`input_image` object would lose its locator while the
+# table still counted its row. That is the divergence in the other direction,
+# and it is the unsafe one for a leak detector. `[^{}]*` is what enforces the
+# scope: the type marker and the `image_url` must sit in the same object with no
+# brace crossed between them, so anything the regex cannot establish as
+# same-object simply stays visible to the scan. Both key orders are handled,
+# because JSON does not guarantee that `type` precedes `image_url`.
+#
+# The data-URL VALUE is matched case-insensitively to mirror the table's
+# `test(…; "i")`, but the `type` and `image_url` KEYS stay case-sensitive
+# because the table compares those with `==`. A blanket `I` flag would fold the
+# keys too and over-mask — the unsafe direction again — which is why the scheme
+# and `base64` marker spell their classes out instead.
 #
 # The payload is replaced by a SPACE, never deleted: deletion welds the text on
 # either side into one string, which is how a phantom full-length credential is
@@ -1054,7 +1064,9 @@ strip_ansi() {
 # `decoded_strings` does not re-parse a nested JSON string, so a payload
 # embedded in an escaped inner document is not excluded from the table either.
 cred_mask_image_payloads() {
-  sed -E '/"type"[[:space:]]*:[[:space:]]*"input_image"/ s|("image_url"[[:space:]]*:[[:space:]]*")data:image/[^,"]*;base64,[A-Za-z0-9+/]*={0,2}(")|\1 \2|g'
+  sed -E \
+    -e 's|("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]/[^,"]*;[bB][aA][sS][eE]64,[A-Za-z0-9+/]*={0,2}(")|\1 \2|g' \
+    -e 's|("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]/[^,"]*;[bB][aA][sS][eE]64,[A-Za-z0-9+/]*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")|\1 \2|g'
 }
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
