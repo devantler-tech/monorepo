@@ -92,7 +92,7 @@ assert_prose 'oldest-updated first across the whole lane' \
   "${constitution_flat}" "rung 1 does not order drafts oldest-updated first across the lane"
 # Markdown backticks are literal prose, not command substitution.
 # shellcheck disable=SC2016
-assert_prose 'Sort the actionable own/trusted set by `updatedAt` ascending' \
+assert_prose 'Sort the actionable non-automation set by `updatedAt` ascending' \
   "${constitution_flat}" "rung 1 does not specify the normative updatedAt ascending sort"
 assert_prose 'a stale draft is not worth reviving' \
   "${constitution_flat}" "rung 1 allows close-and-refile for a draft still worth reviving"
