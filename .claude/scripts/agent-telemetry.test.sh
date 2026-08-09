@@ -376,13 +376,30 @@ nocheck "an hour-list cron never counts every hour's due minute" "$OUT" \
   "claude engineer dropped dispatches: 3 slot(s)"
 mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
-# The covered case: with a 1-day window the records predate the window start, so
-# coverage IS proven and the rate is computed. None of the 24 records fall inside
-# that window, which also proves the due-slot count is window-bounded.
+# Coverage is not liveness, and the two must be tested separately.
+#
+# OUTAGE: with a 1-day window the fixture's records and `lastRunAt` both predate it,
+# so the floor covers the window and zero drops are counted — but nothing dispatched
+# and nothing was even refused inside it. Reporting "0.0%" there would present a dead
+# scheduler as 24 successful opportunities, which is the same absence-read-as-health
+# error as a fabricated zero.
 OUT=$(run --section drift --since-days 1)
-check "covered window states a rate"        "$OUT" "drop rate: 0.0%"
-check "window bounds the dropped-slot count" "$OUT" \
+check   "an inactive scheduler refuses to state a rate" "$OUT" \
+  "drop rate: UNKNOWN (no dispatch or skip inside the window"
+nocheck "an outage is never reported as a clean 0.0%" "$OUT" "drop rate: 0.0%"
+check   "window bounds the dropped-slot count" "$OUT" \
   "claude engineer dropped dispatches: 0 slot(s)"
+
+# ACTIVE: same window, but `lastRunAt` now falls inside it, so the scheduler is
+# proven to have dispatched and the denominator describes slots something was
+# actually attempting to fill.
+cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
+jq --arg now "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" \
+  '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .lastRunAt) = $now' \
+  "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
+OUT=$(run --section drift --since-days 1)
+check "a proven-active scheduler states a rate" "$OUT" "drop rate: 0.0%"
+mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
 # A store with NO skip surface must read UNKNOWN, never 0. The count alone cannot
 # tell an absent surface from a genuinely drop-free window — both are 0 — and

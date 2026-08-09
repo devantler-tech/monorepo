@@ -3590,6 +3590,21 @@ if want drift; then
     ' "$store" 2>/dev/null
   }
 
+  # Newest skip record. Coverage alone does not prove the scheduler was RUNNING in
+  # the window: an enabled schedule record plus old skips, with the scheduler having
+  # stopped dispatching entirely, yields floor-covered and zero drops — which would
+  # publish "0.0%" and present a total outage as a window of successful opportunities.
+  # That is the same absence-read-as-health error as a fabricated zero, so the rate
+  # additionally requires positive evidence of activity INSIDE the window: either a
+  # dispatch marker (`lastRunAt`) or a skip record landing in it.
+  claude_store_skip_latest() {
+    local store="$1" id="$2"
+    [ -f "$store" ] || return 0
+    jq -r --arg id "$id" '
+      [ .recordedSkips[$id][]? | (.at // empty) ] | if length == 0 then empty else max end
+    ' "$store" 2>/dev/null
+  }
+
   claude_store_schedule() {
     local store="$1" id="$2" pointer="$3" cron parsed hours minute
     cron=$(claude_store_field "$store" "$id" "$pointer" cronExpression)
@@ -3816,8 +3831,22 @@ if want drift; then
       # What CAN be detected is the impossible outcome it produces: more dropped slots
       # than the window could schedule. That is proof the assumption failed, so it
       # fails closed instead of publishing a rate above 100%.
+      #
+      # Coverage is also not liveness. An enabled record plus old skips, with the
+      # scheduler no longer dispatching, is floor-covered with zero drops — and would
+      # publish "0.0%", presenting a total outage as a window of successful
+      # opportunities. So the rate additionally requires positive evidence that the
+      # scheduler was active INSIDE the window: a dispatch marker (`lastRunAt`) or a
+      # skip record landing in it. Without either, the denominator describes slots
+      # nothing was even attempting to fill.
       RATE_TOTAL=$(( CLAUDE_ENG_SLOTS_DAY * SINCE_DAYS ))
+      SKIP_LATEST=$(claude_store_skip_latest "$CLAUDE_SCHEDULE_STORE" daily-ai-assistant)
+      ACTIVE_IN_WINDOW=0
+      [[ "$CLAUDE_ENGINEER_MARKER" =~ ^[0-9]+$ ]] \
+        && [ $(( CLAUDE_ENGINEER_MARKER * 1000 )) -ge "$SKIP_SINCE_MS" ] && ACTIVE_IN_WINDOW=1
+      [ -n "$SKIP_LATEST" ] && [ "$SKIP_LATEST" -ge "$SKIP_SINCE_MS" ] && ACTIVE_IN_WINDOW=1
       if [ "$SKIP_FLOOR" -le "$SKIP_SINCE_MS" ] \
+         && [ "$ACTIVE_IN_WINDOW" -eq 1 ] \
          && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
          && [ "$CLAUDE_DROPPED" -le "$RATE_TOTAL" ]; then
         RATE=$(awk -v d="$CLAUDE_DROPPED" -v t="$RATE_TOTAL" \
@@ -3826,6 +3855,8 @@ if want drift; then
       elif [ -n "$RATE_TOTAL" ] && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
            && [ "$CLAUDE_DROPPED" -gt "$RATE_TOTAL" ]; then
         echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (more drops than the window schedules — cadence changed within it)"
+      elif [ "$ACTIVE_IN_WINDOW" -ne 1 ]; then
+        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (no dispatch or skip inside the window — scheduler not proven active)"
       else
         echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (skip records do not span the window)"
       fi
