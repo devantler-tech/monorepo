@@ -1034,6 +1034,13 @@ printf '%s\n' '{"type":"response_item","note":"'"${_BS}"'q","payload":{"type":"c
 _E=$(printf '\033')
 printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"'"${_E}"'[31mdata:image/png;base64,'"${_B64RUN}"'/__AWS__BB'"${_E}"'[0m"}]}}' \
   >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 13 — a standard MIME parameter in the media type. The table's media-type
+# portion is `[^,]*`, so `png;charset=utf-8` matches and the value IS excluded
+# there; a mask accepting only a bare subtype declines it and leaves a locator
+# pointing at image bytes for a value with no table row. Flagged independently
+# by both review lanes, which is why it is fixed here rather than deferred.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;charset=utf-8;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
 sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimgnc/codex/sessions/s.jsonl" && rm -f "$FIX/blobimgnc/codex/sessions/s.jsonl.bak"
 subst "$FIX/blobimgnc/codex/sessions/s.jsonl"
 # Control: the appended lines really do carry literal escapes. Without this,
@@ -1132,6 +1139,11 @@ else bad "an image payload in an unparseable record keeps its locator" "$CRED"; 
 if grep -q 'line=12 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
   ok "an ANSI-wrapped image payload keeps its locator, as the table counts it"
 else bad "an ANSI-wrapped image payload keeps its locator, as the table counts it" "$CRED"; fi
+# The table's media type is `[^,]*`, so a standard MIME parameter is still a
+# complete data URL there and IS excluded; the mask must reach the same verdict.
+if grep -q 'line=13 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "a MIME-parameterised data URL under input_image is masked" "$CRED"
+else ok "a MIME-parameterised data URL under input_image is masked"; fi
 
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain

@@ -1113,14 +1113,23 @@ strip_ansi() {
 # marker characters rather than "one of anything", so unmarked input passes
 # through intact instead of losing its first character.
 #
-# The MEDIA TYPE is `[A-Za-z0-9.+-]*`, not `[^,"]*`, and the gate does NOT make
-# that narrowness redundant. Its remaining job is a record that DOES parse:
+# The MEDIA TYPE is `[A-Za-z0-9.+=;-]*`, which is bounded from BOTH sides and
+# neither bound is incidental.
+#
+# It must be WIDE enough for a standard MIME parameter: the table's media-type
+# portion is `[^,]*`, so `data:image/png;charset=utf-8;base64,…` is a complete
+# data URL there and IS excluded. A class accepting only a bare subtype declines
+# that value and leaves a locator pointing at image bytes for a row the table
+# never counted — hence `;` and `=`.
+#
+# It must NOT admit a BACKSLASH, and the parse gate does not make that
+# redundant, because the case is a record that DOES parse:
 # `data:image\npng;base64,…` is a legal JSON string, and once parsed it has no
 # solidus after `data:image`, so the table's `^data:image/…` test does not
-# exclude it and the table counts any credential in it. A media-type class that
-# admitted the backslash would mask exactly that value and leave a counted row
-# with no locator. Real media types (`png`, `jpeg`, `svg+xml`, `webp`) need none
-# of the excluded characters.
+# exclude it and the table counts any credential in it. A class admitting the
+# backslash would mask exactly that value and leave a counted row with no
+# locator. `,` and `"` stay excluded for the same reason — they would run the
+# match past the end of the value the table evaluated.
 CRED_MASK_PARSEABLE=$(printf '\001')
 CRED_MASK_UNPARSEABLE=$(printf '\002')
 cred_mask_image_payloads() {
@@ -1128,8 +1137,8 @@ cred_mask_image_payloads() {
      'if (try (fromjson | true) catch false) then $ok + . else $no + . end' 2>/dev/null \
   | sed -E \
     -e "/^${CRED_MASK_PARSEABLE}/{" \
-    -e 's#("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \
-    -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")#\1 \4#g' \
+    -e 's#("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \
+    -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")#\1 \4#g' \
     -e '}' \
     -e "s/^[${CRED_MASK_PARSEABLE}${CRED_MASK_UNPARSEABLE}]//"
 }
