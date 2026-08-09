@@ -237,6 +237,11 @@ EOF
 mkdir -p "$FIX/monorepo/.claude"
 
 run() {
+  # TZ is PINNED. Cron hours are local, so the dropped-slot classifier reads local
+  # time — which makes any fixture asserting an hour a function of the host's zone.
+  # Unpinned, the hour-list case passed on a +02:00 developer machine and failed on
+  # the UTC runners, which is a property of the test, not of the code under test.
+  TZ=UTC \
   CLAUDE_PROJECTS_DIR="$FIX/projects" CODEX_HOME="$FIX/codex" \
   MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
   CLAUDE_SCHEDULE_STORE_PATH="$FIX/claude-store/scheduled-tasks.json" \
@@ -358,10 +363,11 @@ check "unspanned window refuses to state a rate" "$OUT" "drop rate: UNKNOWN"
 # while a run stays blocked, so counting unscheduled hours would score drops against
 # a two-slot/day denominator and could publish a rate above 100%.
 #
-# Cron hours are LOCAL. The three due-minute fixture records are 09:50/10:50/11:50 UTC
-# = 11:50/12:50/13:50 under this suite's +02:00 host, so `0,12` admits exactly one.
+# Cron hours are LOCAL, and `run` pins TZ=UTC so this assertion is host-independent.
+# The three due-minute fixture records are 09:50/10:50/11:50 UTC, so `0,10` admits
+# exactly one of them.
 cp "$FIX/claude-store/scheduled-tasks.json" "$FIX/claude-store/scheduled-tasks.json.bak"
-jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) = "50 0,12 * * *"' \
+jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) = "50 0,10 * * *"' \
   "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
 OUT=$(run --section drift)
 check   "a finite hour list excludes unscheduled hours" "$OUT" \
