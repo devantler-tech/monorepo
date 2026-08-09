@@ -53,9 +53,14 @@ bullet="$(
 # Guard the extraction itself. If the terminating anchor ever disappears, awk runs to end-of-file and
 # `bullet` becomes the whole rest of the contract — which silently restores the very scope hole this
 # file exists to avoid, while every assertion still passes.
+# The threshold separates two states that are an order of magnitude apart, and it is deliberately
+# NOT set just above the current size: the bullet is ~380 words, while a runaway extraction (end
+# anchor deleted, awk running to EOF) measures ~7200. A snug bound would fail every legitimate
+# edit to this bullet while reporting a missing anchor — a false message that sends the next
+# reader hunting for a heading that is right there.
 bullet_words="$(printf '%s' "${bullet}" | wc -w | tr -d ' ')"
-[ "${bullet_words}" -lt 400 ] ||
-  fail "latency bullet extracted as ${bullet_words} words — the 'Long-pole first' end anchor is gone, so assertions are no longer scoped to this bullet"
+[ "${bullet_words}" -lt 1200 ] ||
+  fail "latency bullet extracted as ${bullet_words} words, which is runaway-extraction size — the 'Long-pole first' end anchor was probably renamed or removed, so these assertions would no longer be scoped to this bullet"
 
 assert_bullet() {
   case "${bullet}" in
@@ -87,7 +92,7 @@ refute_bullet 'a process you yourself started' \
 
 # 4. The correct primitive is named. A prohibition that does not say what to do instead is the
 #    DevEx tax this repo's own hardening rule forbids, and the guard's refusal already names it.
-assert_bullet 'Monitor' \
+assert_bullet '`Monitor` with an until-loop' \
   "latency bullet forbids the poll without naming the runtime waiter to use instead"
 
 echo "latency discipline contract: OK"
