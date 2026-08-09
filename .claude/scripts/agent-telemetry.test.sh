@@ -984,7 +984,7 @@ cat > "$FIX/blobimgnc/codex/sessions/s.jsonl" <<'EOF'
 {"type":"response_item","payload":{"type":"message","text":"env GITHUB_TOKEN=__GHPE__"}}
 {"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"},{"type":"input_text","text":"token=__GHPE__"}]}}
 {"type":"response_item","payload":{"type":"message","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}}
-{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"},{"type":"input_file","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq"},{"type":"input_file","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
 {"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"DATA:IMAGE/png;BASE64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
 {"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB","type":"input_image"}]}}
 EOF
@@ -1013,6 +1013,13 @@ else ok "the masked payload on the input_image line emits no locator"; fi
 # The table drops only the `input_image` one (its filter keys on the DIRECT
 # parent), so the sibling's value must keep its locator — a line-wide mask would
 # swallow it and leave a table row nothing points at. (CodeRabbit, 🟠 Major.)
+#
+# ⚠️ ONLY THE SIBLING carries the credential, and that asymmetry is what gives
+# this assertion teeth. With `__AWS__` in BOTH payloads the assertion passes
+# under a broken mask too: a greedy line-wide `.*` masks the LAST `image_url`
+# instead of the first, so exactly one AWS token survives either way and the
+# locator output is byte-identical. Verified — the `[^{}]*` → `.*` ablation
+# failed nothing until the credential was moved to the sibling alone.
 if grep -q 'line=5 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
   ok "a sibling non-input_image data URL keeps its locator"
 else bad "a sibling non-input_image data URL keeps its locator" "$CRED"; fi
