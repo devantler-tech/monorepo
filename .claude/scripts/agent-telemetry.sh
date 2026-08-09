@@ -446,7 +446,11 @@ emit_credential_hits() {
   # (Codex P2 on #2520; reproduced before fixing.)
   # `strip_ansi` runs BEFORE the scan so a styled credential is locatable at all;
   # it is line-for-line, so grep's `-n` numbering still names the real record.
-  strip_ansi < "$f" 2>/dev/null | grep -naiE "$CRED_TABLE_RE" 2>/dev/null | tr '\000' ' ' \
+  # `cred_mask_image_payloads` runs between the two so this locator excludes the
+  # same complete image payloads the table does; without it the locator points
+  # at encoded image bytes for a credential the table never counted (#2522).
+  strip_ansi < "$f" 2>/dev/null | cred_mask_image_payloads \
+    | grep -naiE "$CRED_TABLE_RE" 2>/dev/null | tr '\000' ' ' \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
@@ -1020,6 +1024,37 @@ MASK_TAIL_RE='^[a-z0-9_-]+\*\*\*'
 _ESC=$(printf '\033')
 strip_ansi() {
   sed -E -e "s/${_ESC}\[[0-9;:]*[A-Za-z]//g" -e 's/\\u001[bB]\[[0-9;:]*[A-Za-z]//g'
+}
+# Blank the base64 payload of a complete `input_image.image_url` data URL so the
+# two RAW-LINE credential scans (concentration and the provenance locator) see
+# the same corpus the TABLE does. The table's decode filter drops that value
+# structurally; the raw scans did not, so encoded image bytes — which
+# manufacture token shapes at random `+`/`/` boundaries — produced a high-signal
+# locator for a credential the table correctly reported as absent. Measured on a
+# two-line fixture: table empty, `across 1 transcript records`,
+# `shape=aws-access-key-id`. An operator following that locator finds image
+# bytes. (#2522, the OVER direction of the documented divergence.)
+#
+# Deliberately NARROWER than "any data URL". Both of the table's structural
+# conditions are approximated at line granularity — the line must evidence an
+# `input_image` record, and the value must be a COMPLETE data URL under the
+# `image_url` key — because a mask broader than the table's filter would create
+# the divergence in the other direction, silencing a locator for a row the table
+# still counts. That is the unsafe direction for a leak detector, so where the
+# two cannot be matched exactly the mask errs toward scanning.
+#
+# The payload is replaced by a SPACE, never deleted: deletion welds the text on
+# either side into one string, which is how a phantom full-length credential is
+# manufactured out of two harmless fragments (the hazard the NUL translation in
+# emit_credential_hits exists for). Quotes and structure survive, so the line is
+# still valid JSON for the `jq -r '.type'` record lookup, and sed is
+# line-oriented so `grep -n` numbering still names the real record.
+#
+# Only the UNESCAPED form is masked, which matches the table exactly:
+# `decoded_strings` does not re-parse a nested JSON string, so a payload
+# embedded in an escaped inner document is not excluded from the table either.
+cred_mask_image_payloads() {
+  sed -E '/"type"[[:space:]]*:[[:space:]]*"input_image"/ s|("image_url"[[:space:]]*:[[:space:]]*")data:image/[^,"]*;base64,[A-Za-z0-9+/]*={0,2}(")|\1 \2|g'
 }
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
@@ -3185,7 +3220,10 @@ if want safety; then
       # Normalized exactly as the locator is, and for the same reason: an
       # unnormalized scan reports a styled leak as `across 0 transcript records`,
       # which is the metric contradicting the table it qualifies.
-      strip_ansi < "$f" 2>/dev/null | grep -naoEi "$CRED_TABLE_RE" 2>/dev/null \
+      # Same image-payload mask as the locator and the table's decode filter, so
+      # all three surfaces count the same corpus (#2522).
+      strip_ansi < "$f" 2>/dev/null | cred_mask_image_payloads \
+        | grep -naoEi "$CRED_TABLE_RE" 2>/dev/null \
         | awk -F: -v s="$cred_sess" '
             $1 ~ /^[0-9]+$/ {
               ln = substr($1, 1, 12)
@@ -3200,14 +3238,12 @@ if want safety; then
     cred_sessions=$(cut -f1 "$CREDCONC" | sort -u | grep -c . || true)
     cred_top=$(sort "$CREDCONC" | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
     echo "      across ${cred_records:-0} transcript records in ${cred_sessions:-0} sessions; largest single record: ${cred_top:-0}"
-    echo "      (raw-line locator — it can DIVERGE FROM THE TABLE IN BOTH"
-    echo "       DIRECTIONS, so read it as a pointer, never as a second count."
-    echo "       UNDER: the table scans DECODED strings, so an escaped-quote"
-    echo "       match is counted there with no locator line here. OVER: the"
-    echo "       table structurally excludes complete base64 image payloads"
-    echo "       (encoded binary manufactures token shapes at random '+'/'/'"
-    echo "       boundaries); this raw scan does not, so a record inside such"
-    echo "       an image can appear here while the table stays empty."
+    echo "      (raw-line locator — it can still UNDER-count the table, so read"
+    echo "       it as a pointer, never as a second count: the table scans"
+    echo "       DECODED strings, so an escaped-quote match is counted there"
+    echo "       with no locator line here. It no longer OVER-counts — complete"
+    echo "       base64 image payloads are excluded from this scan too, so an"
+    echo "       encoded image cannot appear here while the table stays empty."
     echo "       Concentration is CONTEXT, never a verdict.)"
     : > "$CREDCONC"
     echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"

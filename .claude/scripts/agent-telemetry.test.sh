@@ -955,6 +955,57 @@ if grep -q 'blob-embedded' <<<"$TABLE"; then
   bad "an excluded image payload produces no blob-embedded row" "$TABLE"
 else ok "an excluded image payload produces no blob-embedded row"; fi
 
+# (3b) 🔴 The RAW-LINE surfaces must exclude that payload too. The table decodes
+# and drops a complete `input_image.image_url` structurally; the concentration
+# line and the provenance locator scan raw lines, so before #2522 they reported
+# `across 1 transcript records` and `shape=aws-access-key-id` for a table that
+# was EMPTY — a high-signal locator sending an operator to encoded image bytes.
+# All three surfaces must derive from the same filtered corpus.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimg/projects" CODEX_HOME="$FIX/blobimg/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CRED=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/build\/codegen/p')
+if grep -q 'across 0 transcript records' <<<"$CRED"; then
+  ok "an excluded image payload is not counted by the concentration line"
+else bad "an excluded image payload is not counted by the concentration line" "$CRED"; fi
+if grep -q 'shape=' <<<"$CRED"; then
+  bad "an excluded image payload emits no provenance locator" "$CRED"
+else ok "an excluded image payload emits no provenance locator"; fi
+
+# (3c) CONTROL — the mask must be no broader than the table's own filter, or it
+# silences a locator for a row the table still counts, which is the UNSAFE
+# direction. Three cases in one corpus: a plain credential; a credential in the
+# SAME record as an input_image but OUTSIDE its payload; and an `image_url` data
+# URL on a line carrying NO `input_image` marker (which the table's structural
+# filter does NOT drop, so the raw scans must not drop it either).
+mkdir -p "$FIX/blobimgnc/projects" "$FIX/blobimgnc/codex/sessions"
+cat > "$FIX/blobimgnc/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"message","text":"env GITHUB_TOKEN=__GHPE__"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"},{"type":"input_text","text":"token=__GHPE__"}]}}
+{"type":"response_item","payload":{"type":"message","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}}
+EOF
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimgnc/codex/sessions/s.jsonl" && rm -f "$FIX/blobimgnc/codex/sessions/s.jsonl.bak"
+subst "$FIX/blobimgnc/codex/sessions/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimgnc/projects" CODEX_HOME="$FIX/blobimgnc/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CRED=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/build\/codegen/p')
+if grep -q 'line=2 record=response_item shape=github-token' <<<"$CRED"; then
+  ok "a plain credential still gets its locator"
+else bad "a plain credential still gets its locator" "$CRED"; fi
+if grep -q 'line=3 record=response_item shape=github-token' <<<"$CRED"; then
+  ok "a credential beside an image payload still gets its locator"
+else bad "a credential beside an image payload still gets its locator" "$CRED"; fi
+if grep -q 'line=4 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "an image_url without an input_image marker is scanned, as the table scans it"
+else bad "an image_url without an input_image marker is scanned, as the table scans it" "$CRED"; fi
+# The masked payload on line 3 must NOT produce its own locator, or the mask did
+# nothing on the very line the fix targets.
+if grep -q 'line=3 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "the masked payload on the input_image line emits no locator" "$CRED"
+else ok "the masked payload on the input_image line emits no locator"; fi
+
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain
 # high-signal row, but membership alone made the set "values with *a* blob
