@@ -1103,21 +1103,25 @@ strip_ansi() {
 # marker characters rather than "one of anything", so unmarked input passes
 # through intact instead of losing its first character.
 #
-# The MEDIA TYPE is `[A-Za-z0-9.+-]*`, not `[^,"]*`: real media types (`png`,
-# `jpeg`, `svg+xml`, `webp`) need none of the excluded characters, and refusing
-# a stray backslash keeps the expressions from claiming a payload whose escaping
-# they cannot vouch for even where the record around it parses.
+# The MEDIA TYPE is `[A-Za-z0-9.+-]*`, not `[^,"]*`, and the gate does NOT make
+# that narrowness redundant. Its remaining job is a record that DOES parse:
+# `data:image\npng;base64,…` is a legal JSON string, and once parsed it has no
+# solidus after `data:image`, so the table's `^data:image/…` test does not
+# exclude it and the table counts any credential in it. A media-type class that
+# admitted the backslash would mask exactly that value and leave a counted row
+# with no locator. Real media types (`png`, `jpeg`, `svg+xml`, `webp`) need none
+# of the excluded characters.
 CRED_MASK_PARSEABLE=$(printf '\001')
-CRED_MASK_RAW=$(printf '\002')
+CRED_MASK_UNPARSEABLE=$(printf '\002')
 cred_mask_image_payloads() {
-  jq -R -r --arg ok "$CRED_MASK_PARSEABLE" --arg no "$CRED_MASK_RAW" \
+  jq -R -r --arg ok "$CRED_MASK_PARSEABLE" --arg no "$CRED_MASK_UNPARSEABLE" \
      'if (try (fromjson | true) catch false) then $ok + . else $no + . end' 2>/dev/null \
   | sed -E \
     -e "/^${CRED_MASK_PARSEABLE}/{" \
     -e 's#("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \
     -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")#\1 \4#g' \
     -e '}' \
-    -e "s/^[${CRED_MASK_PARSEABLE}${CRED_MASK_RAW}]//"
+    -e "s/^[${CRED_MASK_PARSEABLE}${CRED_MASK_UNPARSEABLE}]//"
 }
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
