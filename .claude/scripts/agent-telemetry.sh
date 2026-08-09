@@ -1090,7 +1090,7 @@ strip_ansi() {
 # because the alternation needs `|`.
 #
 # 🔴 The mask requires a record that parses — the first of two conditions the
-# parser imposes, the second being key precedence immediately below. The table
+# parser imposes, the second being key precedence below. The table
 # itself applies this one: it runs `$raw | fromjson | decoded_strings`
 # and falls back to `catch $raw` — so a record that fails to parse is scanned
 # WHOLE and its credentials ARE counted, image payload or not. Masking such a
@@ -1143,27 +1143,41 @@ strip_ansi() {
 #
 # The agreement test is a COUNT: how many times the marker is spelled in the raw
 # line, against how many objects the parser actually sees carrying it. Equality
-# is what licenses the mask. A duplicate key breaks equality in whichever
-# direction it resolves, so the record is declined and scanned — and, crucially,
-# a record whose LAST value is `input_image` still counts 1 == 1 and is still
-# masked. Declining every repeated key would be safe but would silence a payload
-# the table genuinely dropped, so the test is precedence-aware rather than
-# duplicate-averse.
+# is what licenses the mask. A duplicate key that resolves AWAY from
+# `input_image` leaves the text saying it once and the parser seeing it zero
+# times, so the record is declined and scanned — while one that resolves TO
+# `input_image` still counts 1 == 1 and is still masked. Declining every
+# repeated key would be safe but would silence a payload the table genuinely
+# dropped, so the test is precedence-aware rather than duplicate-averse.
+#
+# The raw marker is tested FIRST, before the count and the veto, and that
+# ordering is load-bearing rather than cosmetic. Both expressions below require
+# the literal marker, so a line without it cannot be masked whichever byte is
+# prepended — making the rest of the question unobservable. Skipping it there
+# leaves the common case (no marker anywhere) at one cheap test instead of a
+# scan plus a veto, which matters because this filter sees every line of every
+# session file and those lines run to megabytes. Note the guard must key on the
+# RAW marker and NOT on a zero parsed count: the parsed count is zero in exactly
+# the duplicate-key case that has to be declined.
 #
 # Two RESPELLING vetoes close the way two divergences could cancel out and leave
-# the counts equal. Only a `\u` escape can spell `input_image` or the `type` key
-# some other way, so a `\u` inside a `type` VALUE, or inside any KEY, declines
-# the line. Both are conservative: a false veto merely scans a record the table
-# excluded, which is the safe direction. The vetoes are anchored on `type` keys
-# and key-colon pairs, so the `/` a payload is allowed to carry cannot
-# trigger them. `\u` is the only escape that can spell a letter, so no other
-# escape opens this route. The residual is a key whose own text defeats the
-# veto's `[^"]*` span — one containing an escaped quote as well as a `\u` —
-# which is recorded rather than closed, because closing it means re-deriving
-# every excluded span from the parse and rewriting the line per record.
+# the counts equal — one object hiding the marker from the text while another
+# hides it from the parser. `\u` is the only JSON escape that can spell a
+# letter, so respelling is the only route in, and a `\u` inside a `type` VALUE
+# or inside a KEY declines the line. That closes the route rather than merely
+# narrowing it: a token that must DECODE to `type` or to `input_image` can
+# differ from its plain spelling only by `\u` escapes of those same letters, so
+# it can never also contain the escaped quote that would end the veto's `[^"]*`
+# span early. Both vetoes are conservative anyway — a false one merely scans a
+# record the table excluded, which is the safe direction.
+#
+# What this does NOT do is make the textual locator agree with the parse in
+# general; it removes one specific way they can disagree. Deriving the excluded
+# spans from the parse instead is the durable fix, tracked on monorepo#2741
+# together with the perf constraint in monorepo#2740.
 #
 # The counting runs inside the SAME `jq -R` pass that already asks the parse
-# question, so this adds no process and no second read of the line.
+# question, so this adds no process and no second read of the file.
 CRED_MASK_ELIGIBLE=$(printf '\001')
 CRED_MASK_DECLINED=$(printf '\002')
 # The marker as the raw line spells it, and the two respelling vetoes. Held as
@@ -1176,17 +1190,16 @@ cred_mask_image_payloads() {
      --arg marker "$CRED_MASK_MARKER_RE" --arg respell "$CRED_MASK_RESPELL_RE" \
      '. as $raw
       | (try ($raw | fromjson) catch null) as $doc
-      | if $doc == null then $no + $raw
-        elif ([$raw | scan($marker)] | length)
-               == ([$doc | .. | objects | select(.type? == "input_image")] | length)
+      | (if $doc != null
+             and ($raw | test($marker))
+             and ([$raw | scan($marker)] | length)
+                 == ([$doc | .. | objects | select(.type == "input_image")] | length)
              and ($raw | test($respell) | not)
-        then $ok + $raw
-        else $no + $raw
-        end' 2>/dev/null \
+          then $ok else $no end) + $raw' 2>/dev/null \
   | sed -E \
     -e "/^${CRED_MASK_ELIGIBLE}/{" \
-    -e 's#("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \
-    -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")#\1 \4#g' \
+    -e 's#('"$CRED_MASK_MARKER_RE"'[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \
+    -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+=;-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}("[^{}]*'"$CRED_MASK_MARKER_RE"')#\1 \4#g' \
     -e '}' \
     -e "s/^[${CRED_MASK_ELIGIBLE}${CRED_MASK_DECLINED}]//"
 }
@@ -3383,9 +3396,7 @@ if want safety; then
     echo "       record whose spelling it cannot vouch for is scanned rather"
     echo "       than blanked — but WHERE the payload sits is still found"
     echo "       textually, so rarer JSON spellings can point at encoded image"
-    echo "       bytes the table never counted (monorepo#2741). Where the two"
-    echo "       cannot be reconciled the record is scanned, so the exclusion"
-    echo "       errs toward showing a pointer rather than hiding one."
+    echo "       bytes the table never counted (monorepo#2741)."
     echo "       Concentration is CONTEXT, never a verdict.)"
     : > "$CREDCONC"
     echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"

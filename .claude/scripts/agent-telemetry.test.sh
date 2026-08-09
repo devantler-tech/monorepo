@@ -1102,8 +1102,8 @@ else bad "control: line 11 carries an unremarkable, complete data URL" "$_L11"; 
 # disagreement rather than of two ordinary records.
 _L14=$(sed -n '14p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
 _L15=$(sed -n '15p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
-if [ "$(printf '%s' "$_L14" | jq -r '.payload.output[0].type')" = "input_file" ] &&
-   [ "$(printf '%s' "$_L15" | jq -r '.payload.output[0].type')" = "input_image" ] &&
+if [ "$(jq -r '.payload.output[0].type' <<<"$_L14")" = "input_file" ] &&
+   [ "$(jq -r '.payload.output[0].type' <<<"$_L15")" = "input_image" ] &&
    grep -q '"type":"input_image","type":"input_file"' <<<"$_L14" &&
    grep -q '"type":"input_file","type":"input_image"' <<<"$_L15"; then
   ok "control: the duplicate-key fixtures parse to their LAST type value"
@@ -1114,8 +1114,8 @@ else bad "control: the duplicate-key fixtures parse to their LAST type value" "$
 # this the assertion below could pass on a line where the counts never collided.
 _L16=$(sed -n '16p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
 if [ "$(grep -o '"type":"input_image"' <<<"$_L16" | wc -l | tr -d ' ')" = "1" ] &&
-   [ "$(printf '%s' "$_L16" | jq -r '[.payload.output[]|select(.type=="input_image")]|length')" = "1" ] &&
-   [ "$(printf '%s' "$_L16" | jq -r '.payload.output[0].type')" = "input_file" ] &&
+   [ "$(jq -r '[.payload.output[]|select(.type=="input_image")]|length' <<<"$_L16")" = "1" ] &&
+   [ "$(jq -r '.payload.output[0].type' <<<"$_L16")" = "input_file" ] &&
    grep -q 'u0070e' <<<"$_L16"; then
   ok "control: line 16's two divergences cancel in the marker count"
 else bad "control: line 16's two divergences cancel in the marker count" "$_L16"; fi
