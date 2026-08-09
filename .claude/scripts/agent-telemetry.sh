@@ -446,10 +446,20 @@ emit_credential_hits() {
   # (Codex P2 on #2520; reproduced before fixing.)
   # `strip_ansi` runs BEFORE the scan so a styled credential is locatable at all;
   # it is line-for-line, so grep's `-n` numbering still names the real record.
-  # `cred_mask_image_payloads` runs between the two so this locator excludes the
-  # same complete image payloads the table does; without it the locator points
-  # at encoded image bytes for a credential the table never counted (#2522).
-  strip_ansi < "$f" 2>/dev/null | cred_mask_image_payloads \
+  # `cred_mask_image_payloads` excludes the same complete image payloads the
+  # table does; without it the locator points at encoded image bytes for a
+  # credential the table never counted (#2522).
+  #
+  # 🔴 THE ORDER OF THESE TWO IS LOAD-BEARING and mirrors the table exactly: the
+  # table parses the RAW file and strips ANSI afterwards, so the mask must also
+  # see raw bytes. A raw ESC byte is a control character, which JSON forbids in a
+  # string, so an ANSI-wrapped data URL makes `fromjson` fail: the table scans
+  # that record whole and COUNTS any credential in it. Strip first and the mask
+  # is handed a repaired line, judges it parseable, and blanks a payload the
+  # table counted -- a table row with no locator, the unsafe direction. Masking
+  # first means the mask's parse question is asked of the same bytes the table
+  # asks it of, which is the whole point of asking it.
+  cred_mask_image_payloads < "$f" 2>/dev/null | strip_ansi \
     | grep -naiE "$CRED_TABLE_RE" 2>/dev/null | tr '\000' ' ' \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
@@ -3288,8 +3298,10 @@ if want safety; then
       # unnormalized scan reports a styled leak as `across 0 transcript records`,
       # which is the metric contradicting the table it qualifies.
       # Same image-payload mask as the locator and the table's decode filter, so
-      # all three surfaces count the same corpus (#2522).
-      strip_ansi < "$f" 2>/dev/null | cred_mask_image_payloads \
+      # all three surfaces count the same corpus (#2522) — and in the same ORDER
+      # as the locator, mask before strip, so the mask's parse question is asked
+      # of the raw bytes the table asks it of. See the locator for why.
+      cred_mask_image_payloads < "$f" 2>/dev/null | strip_ansi \
         | grep -naoEi "$CRED_TABLE_RE" 2>/dev/null \
         | awk -F: -v s="$cred_sess" '
             $1 ~ /^[0-9]+$/ {

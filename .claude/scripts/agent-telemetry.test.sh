@@ -1025,6 +1025,15 @@ printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_outpu
 # record's payload is anomalous, so no amount of regex sharpening can see it.
 printf '%s\n' '{"type":"response_item","note":"'"${_BS}"'q","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
   >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 12 — the data URL is wrapped in ANSI styling. A raw ESC byte is a control
+# character, which JSON forbids inside a string, so `fromjson` fails on the RAW
+# record and the table's `catch $raw` branch scans it whole and COUNTS the
+# credential. The mask must reach the same verdict, which it can only do if it
+# reads the same bytes the table reads: the table parses the raw file and strips
+# ANSI afterwards, so the mask has to sit on the same side of the strip.
+_E=$(printf '\033')
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"'"${_E}"'[31mdata:image/png;base64,'"${_B64RUN}"'/__AWS__BB'"${_E}"'[0m"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
 sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimgnc/codex/sessions/s.jsonl" && rm -f "$FIX/blobimgnc/codex/sessions/s.jsonl.bak"
 subst "$FIX/blobimgnc/codex/sessions/s.jsonl"
 # Control: the appended lines really do carry literal escapes. Without this,
@@ -1114,6 +1123,15 @@ else ok "a unicode-escaped-solidus image payload is masked"; fi
 if grep -q 'line=11 record=malformed shape=aws-access-key-id' <<<"$CRED"; then
   ok "an image payload in an unparseable record keeps its locator"
 else bad "an image payload in an unparseable record keeps its locator" "$CRED"; fi
+# 🔴 The gate must read the SAME BYTES the table reads, or asking "does this
+# parse?" answers a different question. The table parses the raw file and strips
+# ANSI afterwards; an ANSI-wrapped data URL therefore fails `fromjson` there, is
+# scanned whole, and IS counted. If the mask sits downstream of the strip it sees
+# a repaired line, judges it parseable, and blanks a payload the table counted —
+# a table row with no locator, the unsafe direction. (Codex P2.)
+if grep -q 'line=12 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "an ANSI-wrapped image payload keeps its locator, as the table counts it"
+else bad "an ANSI-wrapped image payload keeps its locator, as the table counts it" "$CRED"; fi
 
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain
