@@ -790,7 +790,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → OWNERSHIP-UNVERIFIED: branch=<headRefName>, disclosure=<yes|no>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (orchestrator applies creation-record test before action; NOT asserted mine — the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
-- <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — review statically only (never auto-drive/merge)
+- <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — never run locally; reviewed statically, then driven to a terminal state like any other PR
 
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
@@ -825,7 +825,7 @@ Digest rules:
   orchestrator's creation-record call, not yours — report CI state + `headRefName` + disclosure as DATA
   and tag it `OWNERSHIP-UNVERIFIED`, never `MERGE-READY`/"own". (Bot-trusted authors have no ambiguity.)
 - **Trust labels are advisory flags, not actions:** mark external/Copilot PRs so the orchestrator
-  reviews them statically; never imply they are mergeable.
+  reviews them statically and never runs their branch; never imply their branch may be executed.
 - **`rd` is the PR's `reviewDecision`** (already fetched in the deepening `gh pr view`). When it is
   `CHANGES_REQUESTED`, sweep **every** review with `state=="CHANGES_REQUESTED"` from the paginated
   `pulls/<n>/reviews` the body-findings step (b) already fetched (`reviewDecision` alone names no

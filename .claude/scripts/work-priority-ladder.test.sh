@@ -29,6 +29,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
+surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 workflow="${repo_root}/.github/workflows/ci.yaml"
 
 fail() {
@@ -41,6 +42,7 @@ fail() {
 # for things that genuinely live on one line (a heading, a table row, an identifier).
 constitution_flat="$(tr '\n' ' ' < "${constitution}" | tr -s '[:space:]' ' ')"
 skill_flat="$(tr '\n' ' ' < "${maintenance_skill}" | tr -s '[:space:]' ' ')"
+surveyor_flat="$(tr '\n' ' ' < "${surveyor}" | tr -s '[:space:]' ' ')"
 
 assert_prose() {
   case "$2" in
@@ -190,6 +192,36 @@ assert_absent '**Never merge external-contributor PRs**' \
   "${constitution_flat}" "Merge policy still forbids merging external-contributor PRs"
 assert_absent 'never enable auto-merge; never merge' \
   "${constitution_flat}" "the trust gate still forbids merging an external contributor's PR"
+
+# ── the CONSUMERS the runtime actually reads must agree, not just AGENTS.md ───
+# The four assertions above pin the contract. They cannot see the two overlays a scheduled run
+# actually loads — the maintenance skill and the surveyor — so the widening could be fully stated in
+# AGENTS.md while the deployed digest still told the orchestrator the opposite. That is not
+# hypothetical: at head 7b69df20 the surveyor's digest row still read "EXTERNAL/Copilot — review
+# statically only (never auto-drive/merge)" and its trust-label rule still said "never imply they are
+# mergeable", both retired by the 2026-08-08 grant. CodeRabbit anchored the first; the second sat
+# eleven lines from a heading the diff never touched.
+#
+# These also pin the SELECTOR the overlays queue on. The predicate was widened from own/trusted to
+# every actionable PR, and a consumer left on the old selector silently re-narrows rung 1 at runtime
+# while every AGENTS.md assertion stays green.
+assert_absent 'never auto-drive/merge' \
+  "${surveyor_flat}" "the surveyor digest still tells the orchestrator not to drive an external PR"
+assert_absent 'never imply they are mergeable' \
+  "${surveyor_flat}" "the surveyor still treats external PRs as unmergeable"
+assert_absent 'own/trusted' \
+  "${surveyor_flat}" "the surveyor still selects PRs on the retired own/trusted predicate"
+assert_absent 'own/trusted' \
+  "${skill_flat}" "the maintenance skill still selects PRs on the retired own/trusted predicate"
+assert_absent 'actionable trusted-author' \
+  "${skill_flat}" "the maintenance skill still scopes its PR sweep to trusted authors"
+assert_absent 'PRs static-review-only (trust gate)' \
+  "${skill_flat}" "the skill still records external PRs as static-review-only rather than never-run-locally"
+
+# The positive half: the execution guardrail must SURVIVE in the consumer that reports these PRs, or
+# the negatives above could be satisfied by deleting the distinction rather than correcting it.
+assert_prose 'never run locally' \
+  "${surveyor_flat}" "the surveyor no longer records that an external branch is never run locally"
 
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.
