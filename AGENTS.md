@@ -1439,9 +1439,17 @@ owned by someone else — and leave it alone this run — when any of these hold
 | Signal | Reading |
 |---|---|
 | A push to its head within the last **~2h** | Someone is mid-flight; do not take over |
-| A **non-agent** comment or review within the last **~2h** | A human or reviewer is engaged right now |
+| A **human** comment or review within the last **~2h** | A person is engaged right now |
 | A review request at the current head, **still inside its provider's response envelope** | That lane owns the next move |
 | An in-flight `merge_group` run for that PR | It is already being merged |
+
+🔴 **A reviewer's COMPLETED output is the opposite of an ownership signal — it is your cue to act.**
+Row 2 says *human* deliberately. A finished CodeRabbit, Codex or Bugbot review is the next move having
+already been made: its findings are ready to fix now, and row 3 already covers the only reviewer state
+that genuinely owns the next move — a request still inside its response envelope. Reading a completed
+bot review as "a reviewer is engaged" parks the PR for ~2h against the mandatory every-run pentad
+sweep, and on an hourly cadence that compounds across runs into findings that age untouched at the
+current head. The maintainer's own review still parks it, because he is a human mid-flight.
 
 Nothing else parks a PR. Age, size, difficulty, an unfamiliar author, a `HANDS-OFF` note inherited from
 memory, or a branch shape you did not create are **not** reasons to skip one — re-verify against live
@@ -1476,6 +1484,16 @@ exercisable runtime surface permanently unpromotable. It does not, because the c
 repository's checks actually exercise the changed behaviour — a test that fails without the change and
 passes with it, an E2E leg that drives the real path — read that run's evidence, judge the result as
 the change's user, and record **which run you read and what it demonstrated** in the readiness comment.
+
+🔴 **This is a MERGE precondition for an external PR, not a promotion one — an outside contributor
+usually opens a PR ready for review, not as a draft.** Every other author here reaches merge through
+promotion, so hanging the condition on that step is safe for them and vacuous for a stranger: a
+non-draft external PR would pass a preflight that reads only `isDraft:false`, `CLEAN`, findings and
+review state, and merge without anyone ever observing its behaviour. That is precisely the case where
+observation matters most. So for **every** external PR, draft or not, the recorded CI-based evaluation
+above is required before the merge, and a `CLEAN` preflight does not substitute for it. Where no check
+exercises the change, there is nothing to read: name that as the blocker and park it, or add the
+coverage that would exercise it.
 A pipeline that only builds and lints observes nothing, so it never satisfies this condition on its own
 (the *Verify it actually WORKS* distinction, unchanged).
 
@@ -1518,12 +1536,20 @@ later breaks `main`, the `main` hotfix path applies without touching the depende
 
 For every other actionable PR — whoever authored it — the merge itself is
 **low-ceremony**: use the current survey pentad plus a **fresh**
-`gh pr view <n> --json number,isDraft,author,headRefOid,mergeStateStatus,statusCheckRollup` immediately
-before merging. It must show `isDraft:false`, owner `devantler-tech`, and
+`gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,headRefOid,mergeStateStatus,statusCheckRollup`
+immediately before merging. ⚠️ **`--repo` is part of the prescription, not an optional convenience** —
+none of those fields carries the *base* repository's identity (`headRepositoryOwner`, where it exists,
+names the contributor's **fork**), so without the flag the command resolves against whatever checkout
+the run happens to be standing in. Across a cross-repo sweep a colliding PR number then reads a
+different repository's PR while appearing to satisfy the ownership check. Pinning `--repo` is what
+makes owner `devantler-tech` an actual test rather than an assumption.
+The result must show `isDraft:false`, owner `devantler-tech`, and
 `mergeStateStatus:CLEAN`; the pentad must show zero review findings and a green review from any lane
 (CodeRabbit, Codex, Cursor Bugbot) —
 or a qualifying clean **local
-review round** under *Local review round*, which is available on own PRs only — whose commit SHA
+review round** under *Local review round*, on the same author terms that section sets: available on
+your own **and on taken-over** PRs (a sibling lane's, the maintainer's interactive, one of our bots'),
+and **never** on an external contributor's — whose commit SHA
 equals that same `headRefOid`. That is **sufficient
 evidence** — then run the merge. **Two documented exceptions to `CLEAN`, and only these two:**
 (a) a `mergeStateStatus` that says `UNSTABLE`/`BLOCKED` while **every** check-run and status on the

@@ -223,6 +223,42 @@ assert_absent 'PRs static-review-only (trust gate)' \
 assert_prose 'never run locally' \
   "${surveyor_flat}" "the surveyor no longer records that an external branch is never run locally"
 
+# ── the widening's remaining reach into the MERGE path ───────────────────────
+# Four further contradictions the widening left behind, each in a section its diff never touched.
+# Grouped here because they share one failure mode: the new eligibility is stated where the change
+# was made, and the old precondition still gates the step that actually runs.
+
+# (1) The merge preflight scoped the local review round to own PRs, while *Local review round* had
+# already been widened to taken-over PRs. A taken-over PR could obtain the fallback review the
+# contract defines for it and still be refused by the preflight that consumes it.
+assert_absent 'which is available on own PRs only' \
+  "${constitution_flat}" "the merge preflight still scopes the local review round to own PRs"
+assert_prose 'available on your own **and on taken-over** PRs' \
+  "${constitution_flat}" "the merge preflight does not carry the widened local-review-round eligibility"
+
+# (2) The preflight demands owner `devantler-tech` from a read that cannot supply it: none of the
+# requested fields carries the BASE repository's identity, and the command was unpinned, so a
+# cross-repo sweep could inspect a colliding PR number in whatever checkout it stood in.
+assert_prose 'gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,headRefOid,mergeStateStatus,statusCheckRollup' \
+  "${constitution_flat}" "the prescribed pre-merge read is not pinned to the base repository with --repo"
+assert_prose '`--repo` is part of the prescription, not an optional convenience' \
+  "${constitution_flat}" "the contract does not say why the pre-merge --repo pin is load-bearing"
+
+# (3) A COMPLETED reviewer artifact was read as "someone is working here", parking the PR ~2h against
+# the mandatory every-run pentad sweep — on an hourly cadence, findings age untouched at the current
+# head. Row 3 already covers the only reviewer state that owns the next move: a request still in its
+# response envelope. The human row must stay human, or the parking returns.
+assert_absent 'A **non-agent** comment or review within the last' \
+  "${constitution_flat}" "a completed bot review still reads as active ownership and parks the PR"
+assert_prose 'A reviewer'"'"'s COMPLETED output is the opposite of an ownership signal' \
+  "${constitution_flat}" "the contract does not say a finished review is a cue to act rather than to park"
+
+# (4) The CI-based user evaluation was hung on PROMOTION, which an external contributor never reaches:
+# they open ready-for-review, so the preflight's isDraft/CLEAN/findings/review check would let a
+# stranger's change merge with nobody having observed its behaviour.
+assert_prose 'This is a MERGE precondition for an external PR, not a promotion one' \
+  "${constitution_flat}" "the external-PR user evaluation is still gated on promotion, which a non-draft PR skips"
+
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.
 # shellcheck disable=SC2016
