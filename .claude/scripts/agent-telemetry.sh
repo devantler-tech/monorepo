@@ -1079,20 +1079,45 @@ strip_ansi() {
 # `\t` and `\"` and mask values the table does not exclude. `#` is the delimiter
 # because the alternation needs `|`.
 #
-# 🔴 The MEDIA TYPE is `[A-Za-z0-9.+-]*`, not `[^,"]*`, and that narrowness is
-# load-bearing in the OTHER direction. A record carrying an invalid JSON escape
-# (`data:image/\q;base64,…`) fails `fromjson`, so the table's `catch $raw` branch
-# scans the WHOLE raw record and DOES count any credential in it. A media-type
-# class that admitted the stray backslash would mask exactly that record, leaving
-# a table row with no concentration entry and no locator — the unsafe direction.
-# Excluding backslashes here makes the mask decline any record whose escaping it
-# cannot vouch for, which is the same answer the table gives. Real media types
-# (`png`, `jpeg`, `svg+xml`, `webp`) need none of the excluded characters, and
-# the scheme's own solidus is already consumed before this class begins.
+# 🔴 The mask applies ONLY to records that parse, because that is the condition
+# the table itself applies. The table runs `$raw | fromjson | decoded_strings`
+# and falls back to `catch $raw` — so a record that fails to parse is scanned
+# WHOLE and its credentials ARE counted, image payload or not. Masking such a
+# record would leave a counted table row with no concentration entry and no
+# locator, which is the unsafe direction for a leak detector.
+#
+# The gate is per-RECORD and the textual expressions below are per-payload, and
+# those are genuinely different questions: a record can carry a complete,
+# entirely unremarkable data URL under `input_image` while an invalid escape in
+# some unrelated member (`"note":"\q"`) makes the whole record unparseable. No
+# amount of sharpening the payload expressions can see that, because there is
+# nothing wrong with the payload — only the record around it. So parse-success
+# is asked once, structurally, by the same parser the table uses.
+#
+# `jq -R` marks each line and `sed` masks only the marked ones. The marker is a
+# single control character prepended and then stripped, so line count, line
+# numbering and byte content all survive — which `grep -n` and the locator
+# depend on. Reading the corpus through `jq -R` also gives the locator exactly
+# the table's view of it, including how invalid UTF-8 is normalised, so the two
+# surfaces cannot disagree about what the input even is. Stripping keys on the
+# marker characters rather than "one of anything", so unmarked input passes
+# through intact instead of losing its first character.
+#
+# The MEDIA TYPE is `[A-Za-z0-9.+-]*`, not `[^,"]*`: real media types (`png`,
+# `jpeg`, `svg+xml`, `webp`) need none of the excluded characters, and refusing
+# a stray backslash keeps the expressions from claiming a payload whose escaping
+# they cannot vouch for even where the record around it parses.
+CRED_MASK_PARSEABLE=$(printf '\001')
+CRED_MASK_RAW=$(printf '\002')
 cred_mask_image_payloads() {
-  sed -E \
+  jq -R -r --arg ok "$CRED_MASK_PARSEABLE" --arg no "$CRED_MASK_RAW" \
+     'if (try (fromjson | true) catch false) then $ok + . else $no + . end' 2>/dev/null \
+  | sed -E \
+    -e "/^${CRED_MASK_PARSEABLE}/{" \
     -e 's#("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}(")#\1 \4#g' \
-    -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")#\1 \4#g'
+    -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE](\\?/|\\u002[fF])[A-Za-z0-9.+-]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/|\\u002[fF])*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")#\1 \4#g' \
+    -e '}' \
+    -e "s/^[${CRED_MASK_PARSEABLE}${CRED_MASK_RAW}]//"
 }
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires

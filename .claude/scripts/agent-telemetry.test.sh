@@ -1013,16 +1013,36 @@ printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_outpu
 # escaped, the old mask and the new one both yield no locator.
 printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image'"${_BS}"'u002fpng;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
   >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 11 — a PERFECTLY WELL-FORMED image payload, with an invalid JSON escape
+# in an UNRELATED field (`"note"`). This is the case the per-record gate exists
+# for: the payload itself is a complete data URL under `input_image`, so every
+# textual test the mask can apply says "exclude it" — but `fromjson` fails on the
+# record as a whole, so the table takes `catch $raw`, scans the entire raw line
+# and DOES count the credential. Masking here would leave a counted table row
+# with no locator, which is the unsafe direction for a leak detector.
+# Distinct from line 9, whose invalid escape sits INSIDE the data URL and is
+# therefore reachable by the media-type character class; nothing about this
+# record's payload is anomalous, so no amount of regex sharpening can see it.
+printf '%s\n' '{"type":"response_item","note":"'"${_BS}"'q","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
 sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimgnc/codex/sessions/s.jsonl" && rm -f "$FIX/blobimgnc/codex/sessions/s.jsonl.bak"
 subst "$FIX/blobimgnc/codex/sessions/s.jsonl"
-# Control: the two appended lines really do carry literal escapes. Without this,
-# a normalising tool anywhere upstream would turn both into the plain case and
-# the two assertions below would pass while testing nothing.
+# Control: the appended lines really do carry literal escapes. Without this,
+# a normalising tool anywhere upstream would turn them into the plain case and
+# the assertions below would pass while testing nothing.
 if grep -q 'u002f' "$FIX/blobimgnc/codex/sessions/s.jsonl" && \
-   grep -q 'image/\\q;base64' "$FIX/blobimgnc/codex/sessions/s.jsonl"; then
+   grep -q 'image/\\q;base64' "$FIX/blobimgnc/codex/sessions/s.jsonl" && \
+   grep -q '"note":"\\q"' "$FIX/blobimgnc/codex/sessions/s.jsonl"; then
   ok "control: the escape fixtures carry literal JSON escapes"
 else bad "control: the escape fixtures carry literal JSON escapes" \
-  "$(sed -n '9,10p' "$FIX/blobimgnc/codex/sessions/s.jsonl")"; fi
+  "$(sed -n '9,11p' "$FIX/blobimgnc/codex/sessions/s.jsonl")"; fi
+# Control: line 11's payload is genuinely well-formed in isolation, so the
+# assertion below is about the RECORD's parse state and not about a malformed
+# data URL the character classes would have caught anyway.
+_L11=$(sed -n '11p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
+if grep -qE -- '"image_url":"data:image/png;base64,[A-Za-z0-9+/]*"' <<<"$_L11"; then
+  ok "control: line 11 carries an unremarkable, complete data URL"
+else bad "control: line 11 carries an unremarkable, complete data URL" "$_L11"; fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimgnc/projects" CODEX_HOME="$FIX/blobimgnc/codex" \
       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
@@ -1086,6 +1106,14 @@ else bad "a malformed-escape record keeps its locator, as the table counts it" "
 if grep -q 'line=10 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
   bad "a unicode-escaped-solidus image payload is masked" "$CRED"
 else ok "a unicode-escaped-solidus image payload is masked"; fi
+# 🔴 The gate is per-RECORD, not per-payload. Line 11's data URL is complete and
+# unremarkable, so every textual test says "exclude" — but an invalid escape
+# elsewhere in the record makes `fromjson` fail, the table scans the raw line and
+# counts the credential. The mask must apply only where the record meets the same
+# parse-success condition the table applies. (CodeRabbit, 🟠 Major.)
+if grep -q 'line=11 record=malformed shape=aws-access-key-id' <<<"$CRED"; then
+  ok "an image payload in an unparseable record keeps its locator"
+else bad "an image payload in an unparseable record keeps its locator" "$CRED"; fi
 
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain
