@@ -218,6 +218,38 @@ assert_absent 'actionable trusted-author' \
 assert_absent 'PRs static-review-only (trust gate)' \
   "${skill_flat}" "the skill still records external PRs as static-review-only rather than never-run-locally"
 
+# The DEEPENING selector is a second, quieter way the surveyor re-narrows rung 1 at runtime. Widening
+# which PRs the orchestrator may drive achieves nothing while the survey still pulls the pentad only
+# for `devantler`/trusted-bot authors: every other PR arrives as a cheap static row carrying no
+# checks, threads, review state or mergeability, and a PR whose pentad was never fetched cannot be
+# reviewed, promoted, merged, closed or parked. The contract reads fully widened; the run cannot act.
+assert_absent 'actionable trusted-bot PRs' \
+  "${surveyor_flat}" "the surveyor still deepens only devantler/trusted-bot PRs, so every other PR arrives unactionable"
+assert_prose 'drafts and non-drafts, whoever authored it' \
+  "${surveyor_flat}" "the surveyor no longer deepens every open PR regardless of author"
+# Trust must survive the widening in the one place it still belongs — which branch may be RUN — or
+# the negative above could be satisfied by deleting the execution distinction rather than rescoping it.
+assert_prose 'Author trust decides EXECUTION, never deepening' \
+  "${surveyor_flat}" "the surveyor no longer separates execution trust from the deepening selector"
+
+# Deepening every PR costs far more API budget than the selector it replaces, and this survey's own
+# pool ran out mid-run (2026-08-09), leaving 40 platform PRs with no pentad at all. Silent truncation
+# is the dangerous shape: an undeepened PR reported as a cheap row is indistinguishable from one that
+# was assessed and found unremarkable, so the run reads a coverage gap as a clean bill of health.
+assert_prose 'NOT-DEEPENED (budget)' \
+  "${surveyor_flat}" "the surveyor may drop PRs on budget exhaustion without declaring the gap"
+
+# The ownership gate keyed on the orchestrator's creation record — which the surveyor cannot read,
+# and which NO maintainer-authored PR can ever satisfy, so it structurally parked exactly the PRs the
+# 2026-08-08 grant made the routine responsible for. It is replaced by signals the survey can observe.
+assert_prose 'report the ACTIVE-WORK signals, not an ownership verdict' \
+  "${surveyor_flat}" "the surveyor still returns an ownership verdict instead of the active-work signals"
+# A finished bot review is the cue to ACT. Reporting it as active work parks the PR for ~2h against
+# the mandatory every-run pentad sweep, which on an hourly cadence compounds into findings that never
+# get fixed — so the one reviewer state that does own the next move is a request still awaiting reply.
+assert_prose 'A COMPLETED bot review is NOT an active-work signal' \
+  "${surveyor_flat}" "the surveyor may report a finished bot review as active work and park the PR"
+
 # The positive half: the execution guardrail must SURVIVE in the consumer that reports these PRs, or
 # the negatives above could be satisfied by deleting the distinction rather than correcting it.
 assert_prose 'never run locally' \
