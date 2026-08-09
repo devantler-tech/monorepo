@@ -1,6 +1,6 @@
 ---
 name: portfolio-maintenance
-description: The run procedure for the Agentic Engineer (the products' primary engineer) — pre-flight, survey the whole devantler-tech portfolio, select the highest-value work (operate first, then advance), act via per-run worktrees and draft PRs (driving actionable trusted-author PRs to merge while leaving automation-owned dependency PRs alone), and report. Use when maintaining or advancing the monorepo's products on a schedule or on request.
+description: The run procedure for the Agentic Engineer (the products' primary engineer) — pre-flight, survey the whole devantler-tech portfolio, select the highest-value work (operate first, then advance), act via per-run worktrees and draft PRs (driving every actionable PR to a terminal state whoever authored it, while leaving automation-owned dependency PRs alone), and report. Use when maintaining or advancing the monorepo's products on a schedule or on request.
 ---
 
 # Portfolio engineering — the run loop
@@ -357,7 +357,8 @@ submodule. Split its work in two, because only one half is path-less:
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
 rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and
-sprawl, not value). **PRs come first:** driving **actionable trusted-author PRs** to merge — and fixing
+sprawl, not value). **PRs come first:** driving **every actionable PR, whoever authored it,** to a
+terminal state — merged, closed with the reason recorded, or parked on a named blocker — and fixing
 their failing CI — is the **first-priority work every run, ahead of issues** (only live breakage
 outranks it). Exact Renovate/Dependabot PRs are automation-owned dependency PRs, not actionable PRs.
 Scope: every **`devantler-tech`** repo's actionable trusted-author PRs; scheduled runs do not enumerate or act on

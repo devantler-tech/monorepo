@@ -1330,9 +1330,23 @@ result at the current head — self-promotion is forbidden before that. Request 
     equal to the current PR head**; the survey reports it as `green_review=self@<sha>`, and it
     stales on the next push exactly like any other green. Findings you raise on your own PR are
     **fixed-or-refuted and their threads resolved** like a bot's, before promotion.
-  - **Never** self-review a PR you did not author as a way to unblock someone else's merge, never
-    self-review to bypass a lane that is merely slow, and never let a self-review substitute for the
-    other hygiene surfaces (CI, threads, non-thread findings, and conflicts).
+  - **A PR you took over is eligible, and it is the stronger case, not the weaker one.** Since
+    2026-08-08 you drive PRs you did not author, so a blanket "never self-review someone else's PR"
+    would strand every taken-over draft the moment all three lanes are down — the exact parking this
+    fallback exists to prevent. Reviewing code you did not write is also genuinely independent, which
+    is more than a self-review on your own diff can claim. So the round is available on a **sibling
+    lane's, the maintainer's interactive, or one of our bots'** PR, on the same terms as your own:
+    clean at a SHA equal to the current head, posted as a real Review, held to the full bar.
+  - 🔴 **An EXTERNAL contributor's PR is the exception — it never qualifies for this fallback.** There
+    the round would make one actor the sole reviewer *and* the merger of a stranger's code, with no
+    independent eye anywhere in the path; a provider outage is not a reason to accept that, and the
+    *extra scrutiny* classes above are precisely where it would hurt. An outside contribution needs a
+    real current-head green from CodeRabbit, Codex or Cursor Bugbot. While every lane is down it is
+    **parked on a named blocker** — that is a terminal state under *You own EVERY pull request in the
+    portfolio*, and the correct one here.
+  - **Never** self-review to bypass a lane that is merely slow, never let a self-review substitute for
+    the other hygiene surfaces (CI, threads, non-thread findings, and conflicts), and never go easy on
+    a diff because clearing it would finish the PR.
 - **Incremental reviews (maintainer direction 2026-07-12): EVERY push to the branch — a review-fix,
   a missed file, a conflict resolution, anything — stales the green and requires re-requesting a
   successful review at the new head.** Fixing a reviewer's findings is not the end of the loop; the
@@ -1453,6 +1467,24 @@ workflow and CI configuration, anything touching `pull_request_target` or permis
 dependencies, install/build scripts, and any change that reads a secret. When one of those is present
 and the contributor's intent is not obvious from the diff, that is a genuine blocker to name, not a
 reason to merge on trust. Everything in *Untrusted input* still applies to their prose.
+
+**So how does an external PR satisfy the third readiness condition?** *Autonomy* requires a draft to be
+**tried and evaluated as a user** before promotion, and the paragraph above forbids exactly the local
+execution that condition normally implies — which would leave every outside contribution with an
+exercisable runtime surface permanently unpromotable. It does not, because the condition asks you to
+**observe the real behaviour**, not to be the one who runs it. CI is the observation surface: where the
+repository's checks actually exercise the changed behaviour — a test that fails without the change and
+passes with it, an E2E leg that drives the real path — read that run's evidence, judge the result as
+the change's user, and record **which run you read and what it demonstrated** in the readiness comment.
+A pipeline that only builds and lints observes nothing, so it never satisfies this condition on its own
+(the *Verify it actually WORKS* distinction, unchanged).
+
+**When no check reaches the behaviour, that is a blocker to name — never a condition to wave.** The
+honest terminal state is then **parked on a named blocker**: say so on the PR and ask the contributor
+for the missing coverage. The two wrong moves are promoting on a build-only green and reaching for the
+local execution the guardrail forbids. Writing the missing check **yourself, on your own branch against
+`main`**, is legitimate and often the best answer — it is your code rather than theirs, and once it
+merges the contribution becomes observable.
 
 **Automation-owned Renovate/Dependabot PRs stay excluded** — that carve-out (maintainer direction
 2026-07-16) is an ownership boundary rather than a hygiene gap, because touching those branches changes
