@@ -955,6 +955,196 @@ if grep -q 'blob-embedded' <<<"$TABLE"; then
   bad "an excluded image payload produces no blob-embedded row" "$TABLE"
 else ok "an excluded image payload produces no blob-embedded row"; fi
 
+# (3b) 🔴 The RAW-LINE surfaces must exclude that payload too. The table decodes
+# and drops a complete `input_image.image_url` structurally; the concentration
+# line and the provenance locator scan raw lines, so before #2522 they reported
+# `across 1 transcript records` and `shape=aws-access-key-id` for a table that
+# was EMPTY — a high-signal locator sending an operator to encoded image bytes.
+# All three surfaces must derive from the same filtered corpus.
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimg/projects" CODEX_HOME="$FIX/blobimg/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CRED=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/build\/codegen/p')
+if grep -q 'across 0 transcript records' <<<"$CRED"; then
+  ok "an excluded image payload is not counted by the concentration line"
+else bad "an excluded image payload is not counted by the concentration line" "$CRED"; fi
+if grep -q 'shape=' <<<"$CRED"; then
+  bad "an excluded image payload emits no provenance locator" "$CRED"
+else ok "an excluded image payload emits no provenance locator"; fi
+
+# (3c) CONTROL — the mask must be no broader than the table's own filter, or it
+# silences a locator for a row the table still counts, which is the UNSAFE
+# direction. Three cases in one corpus: a plain credential; a credential in the
+# SAME record as an input_image but OUTSIDE its payload; and an `image_url` data
+# URL on a line carrying NO `input_image` marker (which the table's structural
+# filter does NOT drop, so the raw scans must not drop it either).
+mkdir -p "$FIX/blobimgnc/projects" "$FIX/blobimgnc/codex/sessions"
+cat > "$FIX/blobimgnc/codex/sessions/s.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"cwd":"__FIX__/monorepo"}}
+{"type":"response_item","payload":{"type":"message","text":"env GITHUB_TOKEN=__GHPE__"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"},{"type":"input_text","text":"token=__GHPE__"}]}}
+{"type":"response_item","payload":{"type":"message","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq"},{"type":"input_file","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"DATA:IMAGE/png;BASE64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB","type":"input_image"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image\/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq\/__AWS__BB"}]}}
+EOF
+# Lines 9 and 10 are appended rather than written in the heredoc because both
+# need a LITERAL backslash escape in the JSON, and authoring one inline is
+# fragile — several tools along the way normalise `/` to `/`, which would
+# silently turn these into duplicates of the plain case and prove nothing.
+# Build the backslash from its octal code so what lands on disk is unambiguous.
+_BS=$(printf '\134')
+_B64RUN='QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq'
+# Line 9 — INVALID JSON escape in the media type. `fromjson` fails on this
+# record, so the table's `catch $raw` branch scans the whole raw line and DOES
+# count the credential; the mask must therefore decline it and leave the locator.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/'"${_BS}"'q;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 10 — Unicode-escaped solidus in the SCHEME. `fromjson` normalises it, so
+# the table DOES exclude this value and the mask must too.
+#
+# ⚠️ The payload separator before the token stays a REAL `/`, and that is what
+# makes this assertion capable of failing. Escaping it as well puts `f` (the last
+# character of `002f`) immediately before the token, and the credential regex is
+# boundary-anchored — it rejects a match preceded by `[A-Za-z0-9_-]`. The token
+# would then be invisible to the scan whether or not the mask fired, so the
+# assertion passed under the unfixed mask too. Verified: with the separator
+# escaped, the old mask and the new one both yield no locator.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image'"${_BS}"'u002fpng;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 11 — a PERFECTLY WELL-FORMED image payload, with an invalid JSON escape
+# in an UNRELATED field (`"note"`). This is the case the per-record gate exists
+# for: the payload itself is a complete data URL under `input_image`, so every
+# textual test the mask can apply says "exclude it" — but `fromjson` fails on the
+# record as a whole, so the table takes `catch $raw`, scans the entire raw line
+# and DOES count the credential. Masking here would leave a counted table row
+# with no locator, which is the unsafe direction for a leak detector.
+# Distinct from line 9, whose invalid escape sits INSIDE the data URL and is
+# therefore reachable by the media-type character class; nothing about this
+# record's payload is anomalous, so no amount of regex sharpening can see it.
+printf '%s\n' '{"type":"response_item","note":"'"${_BS}"'q","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 12 — the data URL is wrapped in ANSI styling. A raw ESC byte is a control
+# character, which JSON forbids inside a string, so `fromjson` fails on the RAW
+# record and the table's `catch $raw` branch scans it whole and COUNTS the
+# credential. The mask must reach the same verdict, which it can only do if it
+# reads the same bytes the table reads: the table parses the raw file and strips
+# ANSI afterwards, so the mask has to sit on the same side of the strip.
+_E=$(printf '\033')
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"'"${_E}"'[31mdata:image/png;base64,'"${_B64RUN}"'/__AWS__BB'"${_E}"'[0m"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Line 13 — a standard MIME parameter in the media type. The table's media-type
+# portion is `[^,]*`, so `png;charset=utf-8` matches and the value IS excluded
+# there; a mask accepting only a bare subtype declines it and leaves a locator
+# pointing at image bytes for a value with no table row. Flagged independently
+# by both review lanes, which is why it is fixed here rather than deferred.
+printf '%s\n' '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;charset=utf-8;base64,'"${_B64RUN}"'/__AWS__BB"}]}}' \
+  >> "$FIX/blobimgnc/codex/sessions/s.jsonl"
+sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimgnc/codex/sessions/s.jsonl" && rm -f "$FIX/blobimgnc/codex/sessions/s.jsonl.bak"
+subst "$FIX/blobimgnc/codex/sessions/s.jsonl"
+# Control: the appended lines really do carry literal escapes. Without this,
+# a normalising tool anywhere upstream would turn them into the plain case and
+# the assertions below would pass while testing nothing.
+if grep -q 'u002f' "$FIX/blobimgnc/codex/sessions/s.jsonl" && \
+   grep -q 'image/\\q;base64' "$FIX/blobimgnc/codex/sessions/s.jsonl" && \
+   grep -q '"note":"\\q"' "$FIX/blobimgnc/codex/sessions/s.jsonl"; then
+  ok "control: the escape fixtures carry literal JSON escapes"
+else bad "control: the escape fixtures carry literal JSON escapes" \
+  "$(sed -n '9,11p' "$FIX/blobimgnc/codex/sessions/s.jsonl")"; fi
+# Control: line 11's payload is genuinely well-formed in isolation, so the
+# assertion below is about the RECORD's parse state and not about a malformed
+# data URL the character classes would have caught anyway.
+_L11=$(sed -n '11p' "$FIX/blobimgnc/codex/sessions/s.jsonl")
+if grep -qE -- '"image_url":"data:image/png;base64,[A-Za-z0-9+/]*"' <<<"$_L11"; then
+  ok "control: line 11 carries an unremarkable, complete data URL"
+else bad "control: line 11 carries an unremarkable, complete data URL" "$_L11"; fi
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/blobimgnc/projects" CODEX_HOME="$FIX/blobimgnc/codex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety --credential-provenance 2>&1)
+CRED=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/build\/codegen/p')
+if grep -q 'line=2 record=response_item shape=github-token' <<<"$CRED"; then
+  ok "a plain credential still gets its locator"
+else bad "a plain credential still gets its locator" "$CRED"; fi
+if grep -q 'line=3 record=response_item shape=github-token' <<<"$CRED"; then
+  ok "a credential beside an image payload still gets its locator"
+else bad "a credential beside an image payload still gets its locator" "$CRED"; fi
+if grep -q 'line=4 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "an image_url without an input_image marker is scanned, as the table scans it"
+else bad "an image_url without an input_image marker is scanned, as the table scans it" "$CRED"; fi
+# The masked payload on line 3 must NOT produce its own locator, or the mask did
+# nothing on the very line the fix targets.
+if grep -q 'line=3 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "the masked payload on the input_image line emits no locator" "$CRED"
+else ok "the masked payload on the input_image line emits no locator"; fi
+# 🔴 The mask is scoped to the OBJECT, not the line. Line 5 carries an
+# `input_image` AND a sibling `input_file` that also holds a complete data URL.
+# The table drops only the `input_image` one (its filter keys on the DIRECT
+# parent), so the sibling's value must keep its locator — a line-wide mask would
+# swallow it and leave a table row nothing points at. (CodeRabbit, 🟠 Major.)
+#
+# ⚠️ ONLY THE SIBLING carries the credential, and that asymmetry is what gives
+# this assertion teeth. With `__AWS__` in BOTH payloads the assertion passes
+# under a broken mask too: a greedy line-wide `.*` masks the LAST `image_url`
+# instead of the first, so exactly one AWS token survives either way and the
+# locator output is byte-identical. Verified — the `[^{}]*` → `.*` ablation
+# failed nothing until the credential was moved to the sibling alone.
+if grep -q 'line=5 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a sibling non-input_image data URL keeps its locator"
+else bad "a sibling non-input_image data URL keeps its locator" "$CRED"; fi
+# The table's data-URL test is case-insensitive (`test(…; \"i\")`), so a
+# mixed-case scheme is excluded there and must be masked here too.
+if grep -q 'line=6 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "a mixed-case data URL under input_image is masked" "$CRED"
+else ok "a mixed-case data URL under input_image is masked"; fi
+# JSON does not guarantee key order, and the table's filter does not care about
+# it, so `image_url` appearing BEFORE its `type` marker must mask identically.
+if grep -q 'line=7 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "an input_image payload masks with image_url before type" "$CRED"
+else ok "an input_image payload masks with image_url before type"; fi
+# 🔴 `\/` is a legal JSON escape for `/`. The table parses the record first, so
+# `fromjson` normalises it and the value IS a complete data URL there and IS
+# excluded — while the raw scans see the unparsed line. A mask that accepts only
+# a bare `/` therefore misses the escaped payload and the raw surfaces report a
+# credential the table dropped. (CodeRabbit round 2.)
+if grep -q 'line=8 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "an escaped-solidus image payload is masked" "$CRED"
+else ok "an escaped-solidus image payload is masked"; fi
+# 🔴 The mask must DECLINE a record whose escaping it cannot vouch for. An
+# invalid JSON escape makes `fromjson` fail, so the table falls back to scanning
+# the whole raw record and counts the credential — masking it here would leave a
+# table row with no locator, the unsafe direction. (Codex P2.)
+if grep -q 'line=9 record=malformed shape=aws-access-key-id' <<<"$CRED"; then
+  ok "a malformed-escape record keeps its locator, as the table counts it"
+else bad "a malformed-escape record keeps its locator, as the table counts it" "$CRED"; fi
+# `/` is the other legal spelling of `/`; `fromjson` normalises it, so the
+# table excludes the value and the mask must too. (Codex P2.)
+if grep -q 'line=10 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "a unicode-escaped-solidus image payload is masked" "$CRED"
+else ok "a unicode-escaped-solidus image payload is masked"; fi
+# 🔴 The gate is per-RECORD, not per-payload. Line 11's data URL is complete and
+# unremarkable, so every textual test says "exclude" — but an invalid escape
+# elsewhere in the record makes `fromjson` fail, the table scans the raw line and
+# counts the credential. The mask must apply only where the record meets the same
+# parse-success condition the table applies. (CodeRabbit, 🟠 Major.)
+if grep -q 'line=11 record=malformed shape=aws-access-key-id' <<<"$CRED"; then
+  ok "an image payload in an unparseable record keeps its locator"
+else bad "an image payload in an unparseable record keeps its locator" "$CRED"; fi
+# 🔴 The gate must read the SAME BYTES the table reads, or asking "does this
+# parse?" answers a different question. The table parses the raw file and strips
+# ANSI afterwards; an ANSI-wrapped data URL therefore fails `fromjson` there, is
+# scanned whole, and IS counted. If the mask sits downstream of the strip it sees
+# a repaired line, judges it parseable, and blanks a payload the table counted —
+# a table row with no locator, the unsafe direction. (Codex P2.)
+if grep -q 'line=12 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  ok "an ANSI-wrapped image payload keeps its locator, as the table counts it"
+else bad "an ANSI-wrapped image payload keeps its locator, as the table counts it" "$CRED"; fi
+# The table's media type is `[^,]*`, so a standard MIME parameter is still a
+# complete data URL there and IS excluded; the mask must reach the same verdict.
+if grep -q 'line=13 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "a MIME-parameterised data URL under input_image is masked" "$CRED"
+else ok "a MIME-parameterised data URL under input_image is masked"; fi
+
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain
 # high-signal row, but membership alone made the set "values with *a* blob
