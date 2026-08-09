@@ -1156,9 +1156,11 @@ strip_ansi() {
 # the line. Both are conservative: a false veto merely scans a record the table
 # excluded, which is the safe direction. The vetoes are anchored on `type` keys
 # and key-colon pairs, so the `/` a payload is allowed to carry cannot
-# trigger them. What remains uncovered is a record combining an escaped key with
-# a duplicate key so the totals coincide; it is recorded rather than closed,
-# because closing it costs a whole-line rewrite per record.
+# trigger them. `\u` is the only escape that can spell a letter, so no other
+# escape opens this route. The residual is a key whose own text defeats the
+# veto's `[^"]*` span — one containing an escaped quote as well as a `\u` —
+# which is recorded rather than closed, because closing it means re-deriving
+# every excluded span from the parse and rewriting the line per record.
 #
 # The counting runs inside the SAME `jq -R` pass that already asks the parse
 # question, so this adds no process and no second read of the line.
@@ -3376,10 +3378,14 @@ if want safety; then
     echo "       directions, so read it as a pointer, never as a second count."
     echo "       UNDER: the table scans DECODED strings, so an escaped-quote"
     echo "       match is counted there with no locator line here. OVER: complete"
-    echo "       base64 image payloads are excluded from this scan too, but that"
-    echo "       exclusion is matched textually while the table computes it by"
-    echo "       parsing, so rarer JSON spellings still slip through and point at"
-    echo "       encoded image bytes the table never counted (monorepo#2741)."
+    echo "       base64 image payloads are excluded from this scan too. The"
+    echo "       parser decides which records that exclusion may apply to, so a"
+    echo "       record whose spelling it cannot vouch for is scanned rather"
+    echo "       than blanked — but WHERE the payload sits is still found"
+    echo "       textually, so rarer JSON spellings can point at encoded image"
+    echo "       bytes the table never counted (monorepo#2741). Where the two"
+    echo "       cannot be reconciled the record is scanned, so the exclusion"
+    echo "       errs toward showing a pointer rather than hiding one."
     echo "       Concentration is CONTEXT, never a verdict.)"
     : > "$CREDCONC"
     echo "    (empty = clean. A HIGH-SIGNAL shape count means rotate the credential AND"
