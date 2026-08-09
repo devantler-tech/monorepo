@@ -628,7 +628,7 @@ actionable work**:
 | # | Rung | What it covers |
 |---|---|---|
 | **0** | **Live breakage** | CI red on `main`, a broken build or site, an urgent security fix. Preempts everything and is the one exception to capture-before-you-build. **A failing GitHub-*managed* run is NOT breakage** — identify the class by the **property, never by an enumerated path**: `event: dynamic` with a `path` under `dynamic/`, meaning **no workflow file exists in the repository** to fix and GitHub refuses to re-run it (`403`). That covers `dynamic/github-code-scanning/*` **and** `dynamic/dependabot/*` and whatever GitHub adds next; each is reported `GITHUB-MANAGED (NO-ACTION)` and never counts against `nothing_on_fire`. **Only the first failure of a streak** — a managed run still red (`failure`, `timed_out` or `startup_failure`) on the next run of `main` is ours to repair (the build, the scanning or dependency configuration, or moving off default setup) and IS actionable (see the surveyor). |
-| **1** | **Open PRs — INCLUDING your own drafts** | Every actionable open PR in the portfolio, **draft and non-draft alike**, whoever authored it — your own lane, a sibling lane, the maintainer's interactive sessions, our bots, and external contributors — driven to a terminal state: merged, closed with the reason recorded, or parked on a **named, live-verified** blocker. Exact `renovate[bot]`/`dependabot[bot]` dependency PRs stay automation-owned and excluded (see *Merge policy*). An external branch is still never run locally (see *Own every PR*). |
+| **1** | **Open PRs — INCLUDING your own drafts** | Every actionable open PR in the portfolio, **draft and non-draft alike**, whoever authored it — your own lane, a sibling lane, the maintainer's interactive sessions, our bots, and external contributors — driven to a terminal state: merged, closed with the reason recorded, or parked on a **named, live-verified** blocker. Exact `renovate[bot]`/`dependabot[bot]` dependency PRs stay automation-owned and excluded (see *Merge policy*). An external branch is still never run locally (see *You own EVERY pull request in the portfolio*). |
 | **2** | **Security issues** | `type:"Security"`, regardless of age. |
 | **3** | **Bugs** | `type:"Bug"`, regardless of age. |
 | **4** | **Oldest actionable issue** | Everything else, oldest-first (see *Drain oldest-first*). |
@@ -850,16 +850,8 @@ mid-flight. Promotion is never gated on who opened the PR. **Cursor App handoff 
 requests, and PR-state mutations, so a local sibling performs that draft's metadata-side hygiene,
 exercises its branch, records the user evaluation, promotes it, and merges it.
 
-**Pushing CODE into a branch another lane owns is narrower than promoting it.** Do it to *repair* a PR
-the active-work test shows is unowned — resolve its conflict, fix its failing check, address a review
-finding its own lane has left sitting — and never as routine parallel work on a branch whose lane is
-live, which is the cross-writer interference the namespace split exists to prevent. Fetch immediately
-before the push and integrate with a merge, never a force-push (see *Two-writer branches*). **An
-external contributor's branch is the one you cannot repair this way at all**: *You own EVERY pull
-request in the portfolio* forbids checking it out locally, so a conflict or red check there is a
-blocker to name on the PR and hand to its author, not something to fix by hand.
-⚠️ **SUPERSEDED 2026-08-08 — a draft you did not author no longer stops at hygiene.** This paragraph
-used to end "another trusted author's draft … gets hygiene, never promotion (its owner promotes)". The
+⚠️ **SUPERSEDED 2026-08-08 — a draft you did not author no longer stops at hygiene.** The promotion
+rule above used to end "another trusted author's draft … gets hygiene, never promotion (its owner promotes)". The
 maintainer retired that split in an interactive session: you now drive **every** PR in the portfolio to
 a terminal state, including his own interactive drafts, the sibling lanes' and outside contributions.
 See *You own EVERY pull request in the portfolio* under *Merge policy* for the grant, the
@@ -871,6 +863,15 @@ cheap. Report every self-promoted merge prominently in the run report. **Definit
 PRs follow this same rule** — their separate human promotion gate was retired by maintainer direction
 2026-07-18, so they self-promote on the same three genuine-readiness conditions (see
 *Self-improvement*).
+
+**Pushing CODE into a branch another lane owns is narrower than promoting it.** Do it to *repair* a PR
+the active-work test shows is unowned — resolve its conflict, fix its failing check, address a review
+finding its own lane has left sitting — and never as routine parallel work on a branch whose lane is
+live, which is the cross-writer interference the namespace split exists to prevent. Fetch immediately
+before the push and integrate with a merge, never a force-push (see *Two-writer branches*). **An
+external contributor's branch is the one you cannot repair this way at all**: *You own EVERY pull
+request in the portfolio* rules out checking it out locally, so a conflict or red check there is a
+blocker to name on the PR and hand to its author, not something to fix by hand.
 **When the prose contract and a runtime permission disagree about self-promotion, the contract
 decides** ([#2248](https://github.com/devantler-tech/monorepo/issues/2248)). The 2026-07-16
 product-work direction and the 2026-07-18 definition-PR direction settle it: self-promoting a
