@@ -987,6 +987,7 @@ cat > "$FIX/blobimgnc/codex/sessions/s.jsonl" <<'EOF'
 {"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq"},{"type":"input_file","image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
 {"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"DATA:IMAGE/png;BASE64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB"}]}}
 {"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"image_url":"data:image/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__AWS__BB","type":"input_image"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":[{"type":"input_image","image_url":"data:image\/png;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq\/__AWS__BB"}]}}
 EOF
 sed -i.bak "s|__FIX__|$FIX|g" "$FIX/blobimgnc/codex/sessions/s.jsonl" && rm -f "$FIX/blobimgnc/codex/sessions/s.jsonl.bak"
 subst "$FIX/blobimgnc/codex/sessions/s.jsonl"
@@ -1033,6 +1034,14 @@ else ok "a mixed-case data URL under input_image is masked"; fi
 if grep -q 'line=7 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
   bad "an input_image payload masks with image_url before type" "$CRED"
 else ok "an input_image payload masks with image_url before type"; fi
+# 🔴 `\/` is a legal JSON escape for `/`. The table parses the record first, so
+# `fromjson` normalises it and the value IS a complete data URL there and IS
+# excluded — while the raw scans see the unparsed line. A mask that accepts only
+# a bare `/` therefore misses the escaped payload and the raw surfaces report a
+# credential the table dropped. (CodeRabbit round 2.)
+if grep -q 'line=8 record=response_item shape=aws-access-key-id' <<<"$CRED"; then
+  bad "an escaped-solidus image payload is masked" "$CRED"
+else ok "an escaped-solidus image payload is masked"; fi
 
 # (4) 🔴 A value with BOTH a blob occurrence AND a plain one must NOT be
 # labelled. The label's stated rule is that ambiguity falls through to the plain

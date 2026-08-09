@@ -1063,10 +1063,22 @@ strip_ansi() {
 # Only the UNESCAPED form is masked, which matches the table exactly:
 # `decoded_strings` does not re-parse a nested JSON string, so a payload
 # embedded in an escaped inner document is not excluded from the table either.
+# `\/` is a legal JSON escape for `/`, and the table normalises it: `fromjson`
+# turns `data:image\/png;base64,AAAA\/…` into a plain `/` form, so that value IS
+# a complete data URL there and IS excluded. The raw scans see the unparsed
+# line, so every `/` in the scheme, the media type and the payload may arrive
+# escaped — hence `\\?/` at each position. Without it the mask silently misses
+# an escaped payload and the raw surfaces report a credential the table dropped,
+# which is the very divergence this function exists to close.
+#
+# The payload accepts base64 characters and escaped solidus ONLY — deliberately
+# not a `[A-Za-z0-9+/\\]*` class, which would also swallow `\n`, `\t` and `\"`
+# and mask values the table does not exclude. `#` is the delimiter because the
+# alternation needs `|`.
 cred_mask_image_payloads() {
   sed -E \
-    -e 's|("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]/[^,"]*;[bB][aA][sS][eE]64,[A-Za-z0-9+/]*={0,2}(")|\1 \2|g' \
-    -e 's|("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]/[^,"]*;[bB][aA][sS][eE]64,[A-Za-z0-9+/]*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")|\1 \2|g'
+    -e 's#("type"[[:space:]]*:[[:space:]]*"input_image"[^{}]*"image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]\\?/[^,"]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/)*={0,2}(")#\1 \3#g' \
+    -e 's#("image_url"[[:space:]]*:[[:space:]]*")[dD][aA][tT][aA]:[iI][mM][aA][gG][eE]\\?/[^,"]*;[bB][aA][sS][eE]64,([A-Za-z0-9+]|\\?/)*={0,2}("[^{}]*"type"[[:space:]]*:[[:space:]]*"input_image")#\1 \3#g'
 }
 # Portable mtime listing. GNU `stat -f` means --file-system (it SUCCEEDS and
 # prints filesystem status), so a `stat -f … || stat -c …` fallback never fires
