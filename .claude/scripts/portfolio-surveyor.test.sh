@@ -1460,4 +1460,32 @@ grep -Fq 'never grep a bolded form' "${surveyor}" ||
 grep -Fq 'Generated **with** [Claude Code]' "${surveyor}" &&
   fail "surveyor must not quote the interactive literal in a bolded form that matches no real body (#2762)"
 
+
+# The two literals are matched with DIFFERENT strictness, and both halves must be pinned or a later
+# edit can silently collapse them back to one rule (CodeRabbit 🟠 Major on #2767). Interactive is
+# matched anywhere; routine is line-anchored, which excludes a mid-sentence quotation of an agent
+# disclosure. A BODY-start anchor is the tempting over-correction and is measurably wrong: over 75
+# open devantler PRs, line-anchored and whole-body both classify 34 routine, while body-anchored
+# drops 7 of them to `none` because the org PR template puts `### Motivation` above the disclosure.
+grep -Fq 'at the start of a line' "${surveyor}" ||
+  fail "surveyor must line-anchor the routine literal, not match it anywhere (#2762)"
+
+grep -Fq 'at the start of a line' "${constitution}" ||
+  fail "AGENTS.md must line-anchor the routine literal (#2762)"
+
+grep -Fq 'anywhere' "${surveyor}" ||
+  fail "surveyor must keep the interactive literal matched anywhere in the body (#2762)"
+
+# `none` is a real third state with its own contract: it means neither literal was found, and it is
+# a synonym for NEITHER party. Asserting only that the enum lists three spellings would pass on a
+# definition that never says what `none` means (CodeRabbit 🟡 Minor on #2767).
+grep -Fq 'neither literal' "${surveyor}" ||
+  fail "surveyor must define `none` as neither literal present (#2762)"
+
+grep -Fq 'not** a synonym for the maintainer' "${surveyor}" ||
+  fail "surveyor must state that `none` is not a synonym for the maintainer's PR (#2762)"
+
+grep -Fq 'resolves it from its creation record' "${surveyor}" ||
+  fail "surveyor must route the `none` case to the orchestrator's creation record (#2762)"
+
 echo "portfolio surveyor contract: all assertions passed"
