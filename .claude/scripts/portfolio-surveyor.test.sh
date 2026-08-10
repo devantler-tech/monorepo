@@ -1404,4 +1404,38 @@ grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor
 grep -Fq '`workflow_dispatch`, `dynamic`' "${surveyor}" ||
   fail "surveyor must keep 'dynamic' in the main-branch event list — the exemption is by path (#2536)"
 
+
+# --- Ownership disclosure is a THREE-valued literal test, not a prefix boolean (#2762) ----------
+# Measured 2026-08-11 over 75 open `devantler`-authored PRs portfolio-wide: the two-valued
+# `disclosure=<yes|no>` field was 100% precise when it said `yes` (26/26 routine) but carried NO
+# information when it said `no` — 49 of 75 rows (65%), collapsing three classes that demand OPPOSITE
+# actions: 5 maintainer-interactive (HANDS-OFF), 7 routine whose disclosure simply is not at position
+# zero, and 37 with no marker at all. Acting on that conflation mutated two of the maintainer's
+# interactive PRs (platform#2985, #3034) via `gh pr update-branch`.
+grep -Fq 'disclosure=<routine|interactive|none>' "${surveyor}" ||
+  fail "surveyor must emit the three-valued ownership disclosure field, not a yes/no boolean (#2762)"
+
+# Position is a red herring and must never be reinstated as the discriminator: platform#2985 carries
+# the maintainer literal at the START of the body and #3034 carries it as a trailing line, so an
+# anchored check misses one of them whichever end it anchors to.
+grep -Fq 'which literal, never where it sits' "${surveyor}" ||
+  fail "surveyor must discriminate ownership by WHICH literal, not by its position (#2762)"
+
+# The interactive literal must be searched over the WHOLE body.
+grep -Fq 'Generated with [Claude Code]' "${surveyor}" ||
+  fail "surveyor must name the maintainer-interactive literal it matches on (#2762)"
+
+# Fail-safe precedence: the contract's own asymmetry — reading the maintainer's PR as the routine's
+# licenses an unrequested mutation, while the reverse merely parks a PR a later run can pick up.
+grep -Fq 'interactive wins' "${surveyor}" ||
+  fail "surveyor must resolve a both-literals body to interactive, the fail-safe direction (#2762)"
+
+# The constitution must name the literal rather than a position-based 'trailer', which is what made
+# the prefix-only reading look correct.
+grep -Fq 'Generated with [Claude Code]' "${constitution}" ||
+  fail "AGENTS.md must name the maintainer-interactive literal (#2762)"
+
+grep -Fq 'position is not the discriminator' "${constitution}" ||
+  fail "AGENTS.md must state that the ownership discriminator is the literal, not its position (#2762)"
+
 echo "portfolio surveyor contract: all assertions passed"
