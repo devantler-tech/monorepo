@@ -970,7 +970,7 @@ green reads as "no review". Rows are in lane-priority order:**
 
 | Lane | Clean/green artifact | Findings artifact | Key to match |
 |---|---|---|---|
-| **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head **on an object positively identified as a review** (body begins `**Actionable comments posted:`), or the auto-generated summary comment updated after the authenticated request, naming the head, and carrying no rate-limit/service marker; the head's `CodeRabbit` commit status corroborates that a review RAN only when its `description` begins `Review completed` |
+| **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head **on an object positively identified as a review** (body begins `**Actionable comments posted:`), or the auto-generated summary comment updated after the authenticated request, naming the head, or a **command-invocation reply carrying a verdict** (`Reviewed pull request #<n> at <sha>` with `<sha>` a prefix of `headRefOid`, plus `I found no actionable issues`) — each carrying no rate-limit/service marker; the head's `CodeRabbit` commit status corroborates that a review RAN only when its `description` begins `Review completed` |
 | **Codex** (`chatgpt-codex-connector[bot]`) | **issue COMMENT** — `Codex Review: Didn't find any major issues` + `**Reviewed commit:** <sha>` (10-char, no `commit_id` field) | review object, `state: COMMENTED`, inline threads — **OR an issue COMMENT carrying a `## Review finding` section** (see below) | clean pass: comment body sha vs `headRefOid[0:10]`; comment-form finding: full 40-char sha in its blob permalinks |
 | **Cursor Bugbot** (`cursor[bot]`) | **CHECK-RUN named `Cursor Bugbot`** (app slug `cursor`), `conclusion: success` — *no review object, no comment* | same check-run with **`conclusion: neutral` AND `output.title: "Bugbot Review"`**, findings as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments` | check-run at `commits/<headRefOid>/check-runs` |
 
@@ -988,7 +988,7 @@ sha in its blob permalinks** — the finding comment carries **no** `**Reviewed 
 is precisely why the marker-based sweep missed it. **`Didn't find any major issues` never clears a P2**:
 the green can be newer than the finding, so recency decides nothing here.
 
-**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head **and positively identified as a review** — its body begins `**Actionable comments posted:`, because **an empty object is a reply container, never a review**, whatever its `commit_id` — or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request and naming the head. Reject auto-generated command replies/acknowledgements and any summary carrying a rate-limit, quota, or service marker saying the review did not run. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
+**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head **and positively identified as a review** — its body begins `**Actionable comments posted:`, because **an empty object is a reply container, never a review**, whatever its `commit_id` — or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request and naming the head, or its **command-invocation reply comment carrying a verdict** — a body stating `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of `headRefOid`**, together with `I found no actionable issues`, updated after that request. **Discriminate on SUBSTANCE, not on comment type:** a command reply carrying no verdict line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a review, and any artifact carrying a rate-limit, quota, or service marker saying the review did not run is rejected whatever its shape. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
 
 🔴 **The empty-container half is not pedantry — it is the dominant shape, and it has reached `main`.**
 Measured over the 60 most recently merged monorepo PRs (2026-08-07): of the CodeRabbit review objects
@@ -1005,8 +1005,24 @@ alternative and is wrong. An inline review comment's `commit_id` tracks the comm
 currently anchors to, and GitHub **re-anchors it forward** as the head advances, so old comments
 follow the PR. On #2658 all 11 inline comments at the merged head belonged to review objects from
 *earlier* heads, while the two objects actually at that head carried none. Attribute a review by its
-own object or its summary comment; an inline comment's `commit_id` says where it points **now**, never
-when it was made.
+own object, its summary comment, or its verdict-bearing command reply; an inline comment's `commit_id`
+says where it points **now**, never when it was made.
+
+🔴 **A finding-free verdict often arrives ONLY in the command-invocation reply — and rejecting that
+whole comment type burns the metered lanes on an already-green head.** Measured on platform#3051 at
+head `992a93caecd1e5a2babe7a6613e467253c2a7cdb` (2026-08-10): the head's status read
+`Review completed`, yet the newest review object was a `bodylen=0` container at the **older**
+`5d9d8f5960`, and the auto-generated summary — refreshed at 08:58:29Z — named **no sha at all**, so
+neither recognised satisfier existed. The verdict lived in comment `5237977883`:
+``@devantler Reviewed pull request `#3051` at `992a93ca`. I found no actionable issues.`` followed by
+four sentences analysing the actual change, then the `✅ Action performed` shell. Every surface a
+sweep is told to check reported `green_review=none` over a real green.
+**This fails closed in the EXPENSIVE direction.** A run trusting that `none` re-requests **free**
+CodeRabbit on a head it already reviewed, then walks down into **weekly-limited Codex** and
+**monthly-limited Bugbot** — spending exactly the quotas the cheapest-lane-first order exists to
+protect, while a finished PR sits parked. The rejected protection was never the *acknowledgement*
+shape itself: it is the absence of a verdict. Keep the discriminator on the verdict line and the
+sha-prefix match, and a bare ack still fails as it always did.
 
 🔴 **The `CodeRabbit` commit status is `success` when NO review ran — the `description` is the only
 discriminator.** Auto-review is disabled portfolio-wide, so
