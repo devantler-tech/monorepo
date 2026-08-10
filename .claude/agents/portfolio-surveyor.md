@@ -257,9 +257,26 @@ public and private — no per-repo loop needed to enumerate):
      never merely a non-empty body — **and** whose head also carries a CodeRabbit commit status whose
      `description` begins `Review completed`, or CodeRabbit's substantive auto-generated summary comment
      (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after the
-     authenticated request and naming `headRefOid`, only when its threads, review-body sections, and
-     explicit ancillary problem count are all zero. **Never count an auto-generated command reply, acknowledgement, quota notice, or service shell as a review completion**; reject the summary too when
-     its body says the review did not run. The qualifying review object `submitted_at` must be later than the latest authenticated CodeRabbit request marker for that head, just as the summary's
+     authenticated request and naming `headRefOid`, or its **command-invocation reply comment carrying
+     a verdict** — a body stating `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of
+     `headRefOid`**, together with `I found no actionable issues`, updated after that request — only
+     when its threads, review-body sections, and explicit ancillary problem count are all zero.
+     **All three artifacts must have `user.login == "coderabbitai[bot]"`**: the reply is matched on
+     plain prose, so without the author bind any account could post those phrases and be read green.
+     **Discriminate a command reply on SUBSTANCE, never on comment type: a reply carrying no verdict
+     line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a
+     review completion**, as are a quota notice and a service shell; reject the summary and the reply
+     alike when the body says the review did not run.
+     🔴 **The verdict-bearing reply is frequently the ONLY satisfier at head.** Measured on
+     platform#3051 (2026-08-10, head `992a93caecd1…`): status `Review completed`, newest review object
+     a `bodylen=0` container at the **older** `5d9d8f5960`, summary comment naming **no sha at all** —
+     so a two-artifact sweep reports `none` over a real green, and the orchestrator then spends
+     weekly-limited Codex and monthly-limited Bugbot on an already-reviewed head. Match the sha as a
+     **prefix** (CodeRabbit writes 8 chars), so a reply naming an older head still fails.
+     ⚠️ **Require BOTH conjuncts — the verdict line alone is a fail-open.** On that same PR, comment
+     `5236900950` states `Reviewed pull request #3051.` with **no `at <sha>` clause** and then
+     `I found no actionable issues`: a real review of an EARLIER head. A verdict naming no sha is
+     `cr-stale` evidence at best and never `cr@<sha>`. The qualifying review object `submitted_at` must be later than the latest authenticated CodeRabbit request marker for that head, just as the summary's
      `updated_at` must be later; this prevents a same-SHA retry from reusing its original review.
      An authenticated fingerprint-matching **`body_findings=0-resolved@<sha>` counts as zero for CodeRabbit success** even when the identical section is repeated in the later review.
      🔴 **An EMPTY review object is a reply container, not a review — `body: ""` never satisfies the gate.**

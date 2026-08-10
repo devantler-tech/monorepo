@@ -183,9 +183,19 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   review completion counts as `cr@<sha>` even without `APPROVED`: bind a review object by REST
   `commit_id` **and require `submitted_at` after the latest authenticated request for that head**, or
   bind its substantive auto-generated summary comment to the authenticated
-  current-head request by `updated_at` plus an explicit head reference, then require zero CodeRabbit
-  threads, body findings, and explicit ancillary problems. Never count an auto-generated command
-  reply/acknowledgement, quota notice, service shell, or summary saying the review did not run.
+  current-head request by `updated_at` plus an explicit head reference, or bind its
+  **command-invocation reply comment carrying a verdict** — a body stating
+  `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of `headRefOid`**, together with
+  `I found no actionable issues`, updated after that request (`updated_at`) — then require zero
+  CodeRabbit threads, body findings, and explicit ancillary problems.
+  ⚠️ **Both conjuncts, always: a verdict can arrive with no `at <sha>` clause** and then reviews an
+  earlier head, so a verdict naming no sha is `cr-stale` evidence at best, never `cr@<sha>`.
+  **Every one of the three artifacts must have `user.login == "coderabbitai[bot]"`** — the reply is
+  matched on plain prose, so without the author bind any account could post the two phrases with the
+  head prefix and be read as a green.
+  **Discriminate a command reply on SUBSTANCE, never on comment type:** a reply carrying no verdict
+  line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a
+  review, as are a quota notice and a service shell; reject any artifact saying the review did not run.
   Treat an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` as zero when the
   identical section repeats.
   🔴 **Corroborate with the head's `CodeRabbit` commit status, and read its `description`, not its
