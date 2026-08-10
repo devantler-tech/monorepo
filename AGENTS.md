@@ -1024,6 +1024,15 @@ protect, while a finished PR sits parked. The rejected protection was never the 
 shape itself: it is the absence of a verdict. Keep the discriminator on the verdict line and the
 sha-prefix match, and a bare ack still fails as it always did.
 
+⚠️ **The verdict line ALONE is a fail-open — CodeRabbit sometimes omits the sha entirely.** On that
+same PR, comment `5236900950` (06:58:19Z) reads ``@devantler Reviewed pull request `#3051`.`` with
+**no `at <sha>` clause**, followed by `I found no actionable issues` and real analysis. It is a
+genuine review of an **earlier** head. Keying the third satisfier on the verdict phrase by itself
+would therefore bless a stale review as current-head green — the exact fail-open direction, and the
+obvious way to "simplify" this rule. **Both conjuncts are required**: the verdict line *and* a sha
+that prefix-matches `headRefOid`. A verdict naming no sha is `cr-stale` evidence at best, never a
+green.
+
 🔴 **The `CodeRabbit` commit status is `success` when NO review ran — the `description` is the only
 discriminator.** Auto-review is disabled portfolio-wide, so
 `success — Review skipped: automatic reviews are disabled` is the **default state of every head**,

@@ -62,6 +62,14 @@ plugin carries them (or an explicit, tested subset):
    monorepo PRs: 16 of 19 objects at a merged head were empty, and two PRs merged with no substantive
    review at the merged commit. Without this a bare `commit_id == head` match reports a non-review as
    a green.
+4e. **CodeRabbit verdict-bearing command reply** (monorepo#2758) — a command-invocation reply counts
+   when it states `Reviewed pull request #<n> at <sha>` with `<sha>` prefix-matching `headRefOid`
+   **and** `I found no actionable issues`; a bare `✅ Action performed` shell stays an
+   acknowledgement. Measured on platform#3051: the head's only satisfier was that reply, because the
+   newest review object was an empty container at an older head and the summary named no sha — so a
+   two-artifact sweep reported `none` and would spend weekly-limited Codex and monthly-limited
+   Bugbot on an already-green head. Both conjuncts are required: comment `5236900950` on that PR
+   carries the verdict with no sha and reviews an earlier head.
 5. **Sequential review coordination state** — authenticated single-phase request marker posted with
    the trigger (the two-phase reservation was retired on measurement 2026-07-25), pending request,
    monotonic artifact-backed or evidenced-expiry no-gate progression,

@@ -178,6 +178,11 @@ for f in "${constitution}" "${surveyor}"; do
     "$(basename "${f}") does not require the reply's sha to PREFIX-match the head, so a reply naming an older head would satisfy the gate"
   assert_prose "${f}" 'is an acknowledgement and never a review' \
     "$(basename "${f}") no longer rejects a bare Action-performed shell, so an acknowledgement carrying no verdict satisfies the gate"
+  # Measured on the same corpus: platform#3051 comment 5236900950 carries the verdict phrase with NO
+  # `at <sha>` clause and reviews an EARLIER head. Dropping the sha conjunct is the obvious
+  # simplification and it fails OPEN, so each surface must keep saying both are required.
+  assert_prose "${f}" 'no `at <sha>` clause' \
+    "$(basename "${f}") does not record that a verdict can omit the sha, so a stale review would satisfy the gate"
 done
 # The refute half: the superseded rule rejected the comment TYPE outright, which is exactly what
 # discarded the verdict. Its return would re-open the defect while every accept assertion above
@@ -190,6 +195,8 @@ assert_absent "${surveyor}" 'Never count an auto-generated command reply, acknow
 # the overlay removal drops silently — the same guard pattern as 4c above.
 assert_prose "${parity_checklist}" 'CodeRabbit review-object positive identification' \
   "removing the surveyor overlay would silently drop the review-object identification"
+assert_prose "${parity_checklist}" 'CodeRabbit verdict-bearing command reply' \
+  "removing the surveyor overlay would silently drop the third CodeRabbit satisfier"
 if grep -Fq 'pre-merge summary parsing' "${parity_checklist}"; then
   fail "plugin-parity checklist can reintroduce the removed pre-merge gate"
 fi

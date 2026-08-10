@@ -270,7 +270,11 @@ public and private — no per-repo loop needed to enumerate):
      a `bodylen=0` container at the **older** `5d9d8f5960`, summary comment naming **no sha at all** —
      so a two-artifact sweep reports `none` over a real green, and the orchestrator then spends
      weekly-limited Codex and monthly-limited Bugbot on an already-reviewed head. Match the sha as a
-     **prefix** (CodeRabbit writes 8 chars), so a reply naming an older head still fails. The qualifying review object `submitted_at` must be later than the latest authenticated CodeRabbit request marker for that head, just as the summary's
+     **prefix** (CodeRabbit writes 8 chars), so a reply naming an older head still fails.
+     ⚠️ **Require BOTH conjuncts — the verdict line alone is a fail-open.** On that same PR, comment
+     `5236900950` states `Reviewed pull request #3051.` with **no `at <sha>` clause** and then
+     `I found no actionable issues`: a real review of an EARLIER head. A verdict naming no sha is
+     `cr-stale` evidence at best and never `cr@<sha>`. The qualifying review object `submitted_at` must be later than the latest authenticated CodeRabbit request marker for that head, just as the summary's
      `updated_at` must be later; this prevents a same-SHA retry from reusing its original review.
      An authenticated fingerprint-matching **`body_findings=0-resolved@<sha>` counts as zero for CodeRabbit success** even when the identical section is repeated in the later review.
      🔴 **An EMPTY review object is a reply container, not a review — `body: ""` never satisfies the gate.**
