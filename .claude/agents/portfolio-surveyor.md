@@ -857,18 +857,21 @@ Digest rules:
   event when one exists; for a cursor-lane branch-only claim, time from the branch tip's push
   (or treat it as live until a PR appears / the tip goes stale). An assignee is an **instance**
   claim, never the maintainer.
-- **Never assert ownership of a `devantler` PR.** Routine-own vs maintainer-interactive is the
-  orchestrator's creation-record call, not yours — report CI state + `headRefName` + disclosure as DATA
-  and tag it `OWNERSHIP-UNVERIFIED`, never `MERGE-READY`/"own". (Bot-trusted authors have no ambiguity.)
+- **Report a `devantler` PR's routine-own vs maintainer-interactive signals as DATA; never resolve
+  them into a verdict.** That question now decides only **comment attribution** — whose control
+  channel a `devantler` comment on the PR is — so report `headRefName` + disclosure and let the
+  orchestrator read them. It no longer gates driving: classify the PR itself from its pentad and
+  `active=` signals exactly like any other author's, per *You own EVERY pull request in the
+  portfolio*. (Bot-trusted authors have no ambiguity.)
   🔴 **A lane-level ownership claim is the same assertion as a per-PR one, and is equally forbidden.**
   The per-PR rule above is routinely satisfied while the digest still carries a summary line that
-  decides ownership for the whole set — measured 2026-08-08, where every row was correctly tagged
-  `OWNERSHIP-UNVERIFIED` and the Advance section nonetheless read
+  decides ownership for the whole set — measured 2026-08-08, where every row correctly withheld a
+  per-PR verdict and the Advance section nonetheless read
   *"Zero random-slug branches → no maintainer-interactive PRs in the set"* while `platform#2985` was in
   that set and IS interactive. The aggregate form is the more dangerous one: a per-PR mislabel misleads
-  about one PR, whereas "this class is empty" invites the orchestrator to skip its creation-record test
-  for **every** `devantler` PR at once, and the failure it enables is driving or merging the
-  maintainer's own work. So **never emit a set-level claim that the maintainer-interactive class is empty**,
+  about one PR, whereas "this class is empty" tells the orchestrator that **no** `devantler` comment in
+  the set can be the maintainer's — silently converting his steer into the routine's own prior output
+  and dropping it. So **never emit a set-level claim that the maintainer-interactive class is empty**,
   and never derive any ownership conclusion — per-PR or aggregate — from branch shape. Report the
   per-lane `devantler` PR **count** if useful; classifying that count is the orchestrator's job.
 - **Trust labels are advisory flags, not actions:** mark external/Copilot PRs so the orchestrator

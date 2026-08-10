@@ -250,6 +250,26 @@ assert_prose 'report the ACTIVE-WORK signals, not an ownership verdict' \
 assert_prose 'A COMPLETED bot review is NOT an active-work signal' \
   "${surveyor_flat}" "the surveyor may report a finished bot review as active work and park the PR"
 
+# ...and the retired gate must be ABSENT, not merely outvoted by the new wording above. The two rules
+# sat in one file at the same head: the new classification at the PR-reporting step, the old
+# prohibition in the reporting-rules section the diff never reached. Presence-only assertions accept
+# both, so the surveyor kept emitting OWNERSHIP-UNVERIFIED and withholding MERGE-READY for every
+# `devantler` PR — defeating the widening's entire purpose while its own contract test passed green.
+assert_absent 'tag it `OWNERSHIP-UNVERIFIED`' \
+  "${surveyor_flat}" "the surveyor still tags a devantler PR OWNERSHIP-UNVERIFIED"
+assert_absent 'never `MERGE-READY`' \
+  "${surveyor_flat}" "the surveyor still forbids classifying a devantler PR MERGE-READY"
+assert_absent 'Never assert ownership of a `devantler` PR' \
+  "${surveyor_flat}" "the surveyor still carries the retired creation-record ownership gate"
+# The positive half, so the negatives above cannot be satisfied by deleting the classification too.
+assert_prose 'green non-drafts `MERGE-READY`' \
+  "${surveyor_flat}" "the surveyor no longer classifies a green devantler non-draft MERGE-READY"
+# What SURVIVES the retirement: branch and disclosure stay, for comment attribution only, and the
+# set-level ownership claim stays banned — an aggregate "no maintainer-interactive PRs here" still
+# misleads the orchestrator about whose control channel a `devantler` comment is.
+assert_prose 'never emit a set-level claim that the maintainer-interactive class is empty' \
+  "${surveyor_flat}" "the surveyor may report the maintainer-interactive class as empty"
+
 # The positive half: the execution guardrail must SURVIVE in the consumer that reports these PRs, or
 # the negatives above could be satisfied by deleting the distinction rather than correcting it.
 assert_prose 'never run locally' \
