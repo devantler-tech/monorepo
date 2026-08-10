@@ -2594,9 +2594,9 @@ if want efficiency; then
     LOCALHOST_RE='(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1)'
     # Claude background tasks expose completion through runtime-owned output
     # files. Reading one after a sleep is therefore a redundant poll even though
-    # the read is local. Require both an executed file-reader command and the
-    # runtime path shape so an arbitrary project tasks/*.output file does not
-    # inherit this classification.
+    # the read is local. The reader and runtime path must occur in that order in
+    # one shell segment, with no redirection before the path: independent matches
+    # would misread `cat local > task.output` as polling the task.
     TASK_READ_RE='(^[[:space:]]*|[;&|][[:space:]]*)(/usr/bin/|/bin/)?(cat|tail|head|wc)([[:space:]]|$)'
     TASK_OUTPUT_RE='/(private/)?tmp/claude-[0-9]+/[^[:space:];|&]+/tasks/[[:alnum:]_-]+\.output([^[:alnum:]_.-]|$)'
     # Shell-level detachment. `nohup … &`, `setsid`, or a trailing `&` returns the
@@ -2680,9 +2680,8 @@ if want efficiency; then
       # A runtime task-output read is executed local text, not a remote call.
       # Keep it separate so the remote-adjacent baseline remains comparable.
       function is_task_output_poll(s,   e) {
-        e = s
-        sub(/(^|[[:space:]])#.*$/, "", e)
-        return (e ~ trre && e ~ tore)
+        e = exec_text(s)
+        return (e ~ (trre "[^;|&<>]*" tore))
       }
       # UNIT: a sleeping LINE, exactly as count_sleeps counts it (grep -c counts
       # matching lines). Counting sleeping COMMANDS instead would make this split

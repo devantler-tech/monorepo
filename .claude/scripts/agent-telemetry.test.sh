@@ -2546,6 +2546,10 @@ cat > "$FIX/wttaskoutput/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttaskoutput" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  bad "the same-command task-output fixture completes" "telemetry exited $rc: $OUT"
+fi
 if grep -qE 'background-task output poll, same command \.+ 1' <<<"$OUT" \
    && grep -qE 'FOREGROUND.*recognised-poll-adjacent \.+ 1' <<<"$OUT"; then
   ok "a sleep polling runtime-owned task output is scored as a busy-wait"
@@ -2568,6 +2572,10 @@ cat > "$FIX/wttasknext/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttasknext" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  bad "the next-command task-output fixture completes" "telemetry exited $rc: $OUT"
+fi
 if grep -qE 'background-task output poll, next command \.+ 1' <<<"$OUT"; then
   ok "an unchained sleep before runtime task output is scored as a redundant wait"
 else bad "an unchained sleep before runtime task output is scored as a redundant wait" "$(printf '%s' "$OUT" | grep -E 'background-task|remote poll|no remote')"; fi
@@ -2581,10 +2589,33 @@ cat > "$FIX/wttasklookalike/s.jsonl" <<'EOF'
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttasklookalike" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  bad "the task-output lookalike fixture completes" "telemetry exited $rc: $OUT"
+fi
 if grep -qE 'background-task output poll, same command \.+ 0' <<<"$OUT" \
    && grep -qE 'no recognised poll adjacent \.+ 1' <<<"$OUT"; then
   ok "a task-output filename lookalike does not count as runtime completion evidence"
 else bad "a task-output filename lookalike does not count as runtime completion evidence" "$(printf '%s' "$OUT" | grep -E 'background-task|recognised poll')"; fi
+
+# The reader and runtime path must belong to the same input operation. A
+# command that reads an ordinary file and writes it to a runtime-shaped output
+# path is not polling that task; independent command-buffer matches inflate the
+# metric by treating the redirection target as a reader operand.
+mkdir -p "$FIX/wttaskredirect"
+cat > "$FIX/wttaskredirect/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tr1","name":"Bash","input":{"command":"sleep 10 && cat README.md > /private/tmp/claude-501/-Users-example-project/tasks/task-789.output"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttaskredirect" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  bad "the task-output redirection fixture completes" "telemetry exited $rc: $OUT"
+fi
+if grep -qE 'background-task output poll, same command \.+ 0' <<<"$OUT" \
+   && grep -qE 'no recognised poll adjacent \.+ 1' <<<"$OUT"; then
+  ok "a runtime-shaped redirection target does not count as a task-output read"
+else bad "a runtime-shaped redirection target does not count as a task-output read" "$(printf '%s' "$OUT" | grep -E 'background-task|recognised poll')"; fi
 
 # The UNCHAINED form: the PreToolUse hook blocks `sleep N && poll`, and sessions
 # adapt by splitting it across two tool calls. Same busy-wait, invisible to the
