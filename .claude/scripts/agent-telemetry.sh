@@ -2597,9 +2597,8 @@ if want efficiency; then
     # the read is local. The reader and runtime path must occur in that order in
     # one shell segment, with no redirection before the path: independent matches
     # would misread `cat local > task.output` as polling the task.
-    TASK_READ_RE='(^[[:space:]]*|[;&|][[:space:]]*)(/usr/bin/|/bin/)?(cat|tail|head|wc)([[:space:]]|$)'
+    TASK_SEGMENT_RE='^[[:space:]]*(/usr/bin/|/bin/)?(cat|tail|head|wc)([[:space:]]|$)'
     TASK_OUTPUT_PATH_RE='/(private/)?tmp/claude-[0-9]+/[^[:space:];|&]+/tasks/[[:alnum:]_-]+\.output'
-    TASK_OUTPUT_RE="${TASK_OUTPUT_PATH_RE}([^[:alnum:]_.-]|$)"
     # Shell-level detachment. `nohup … &`, `setsid`, or a trailing `&` returns the
     # tool call immediately, so the agent is NOT foreground-blocked — that is a
     # compliant way to arm a watcher, and the `run_in_background` flag alone
@@ -2638,13 +2637,13 @@ if want efficiency; then
     # rejects outright ("illegal primary in regular expression"). ENVIRON hands
     # the string over verbatim, which is what keeps ONE regex definition usable
     # by both grep -E and awk instead of forcing a second, drifting copy.
-    export SLEEP_RE REMOTE_RE FETCH_RE LOCALHOST_RE TASK_READ_RE TASK_OUTPUT_PATH_RE TASK_OUTPUT_RE DETACH_RE LOOP_RE
+    export SLEEP_RE REMOTE_RE FETCH_RE LOCALHOST_RE TASK_SEGMENT_RE TASK_OUTPUT_PATH_RE DETACH_RE LOOP_RE
     WT=$(boundary_lines | strip_heredocs $'\003\004' | awk '
       BEGIN { sre = ENVIRON["SLEEP_RE"]; rre = ENVIRON["REMOTE_RE"]
               fre = ENVIRON["FETCH_RE"]; lhre = ENVIRON["LOCALHOST_RE"]
-              trre = ENVIRON["TASK_READ_RE"]; topath = ENVIRON["TASK_OUTPUT_PATH_RE"]
-              tore = ENVIRON["TASK_OUTPUT_RE"]
-              dre = ENVIRON["DETACH_RE"]; lre = ENVIRON["LOOP_RE"] }
+              tsre = ENVIRON["TASK_SEGMENT_RE"]; topath = ENVIRON["TASK_OUTPUT_PATH_RE"]
+              dre = ENVIRON["DETACH_RE"]; lre = ENVIRON["LOOP_RE"]
+              sq = sprintf("%c", 39); dq = sprintf("%c", 34) }
       # Only EXECUTED text can be a poll. A shell comment or a quoted literal
       # that merely mentions a tool (`sleep 5 # check gh later`, or this suite
       # generating its own fixtures) is data, not a command — and counting it let
@@ -2681,16 +2680,90 @@ if want efficiency; then
       }
       # A runtime task-output read is executed local text, not a remote call.
       # Keep it separate so the remote-adjacent baseline remains comparable.
-      function is_task_output_poll(s,   e, raw, qre) {
-        e = exec_text(s)
-        if (e ~ (trre "[^;|&<>]*" tore)) return 1
-        # exec_text intentionally blanks quoted prose, but a quoted path after
-        # an executable reader is still an operand. Match that narrow raw shape
-        # separately while keeping separators and redirections out of the gap.
-        raw = s
-        sub(/(^|[[:space:]])#.*$/, "", raw)
-        qre = "[\"\047]"
-        return (raw ~ (trre "[^;|&<>]*" qre topath qre))
+      function task_boundary(c) {
+        return (c == "" || c ~ /[[:space:]<>]/)
+      }
+      # Quote state at the end of s. Backslash escapes apply outside single
+      # quotes; this is enough to distinguish a shell separator from the same
+      # byte carried inside prose without pretending to implement a shell.
+      function quote_state(s,   i, c, q, esc) {
+        q = ""; esc = 0
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          if (esc) { esc = 0; continue }
+          if (c == "\\" && q != sq) { esc = 1; continue }
+          if (q == "") { if (c == sq || c == dq) q = c }
+          else if (c == q) q = ""
+        }
+        return q
+      }
+      # Is the candidate path a redirection target that does not open it for
+      # reading? Output redirects write it; << and <<< consume delimiter/data
+      # text. One < opens the file and is deliberately allowed.
+      function is_nonread_target(prefix,   t, c, n) {
+        t = prefix
+        sub(/[[:space:]]*$/, "", t)
+        c = substr(t, length(t), 1)
+        if (c == sq || c == dq) {
+          t = substr(t, 1, length(t) - 1)
+          sub(/[[:space:]]*$/, "", t)
+        }
+        c = substr(t, length(t), 1)
+        if (c == ">") return 1
+        if (c != "<") return 0
+        n = 0
+        while (length(t) > n && substr(t, length(t) - n, 1) == "<") n++
+        return (n > 1)
+      }
+      # One unquoted shell segment. Requiring the reader at segment start keeps
+      # a quoted example such as `example; cat path` as data, while the path walk
+      # accepts exact quoted or unquoted tokens and input-redirection targets.
+      function task_segment(seg,   scan, base, p, pend, prefix, prev, after, q, afterq) {
+        if (!match(seg, tsre)) return 0
+        base = RSTART + RLENGTH - 1
+        scan = substr(seg, base + 1)
+        while (match(scan, topath)) {
+          p = base + RSTART
+          pend = p + RLENGTH - 1
+          prefix = substr(seg, 1, p - 1)
+          prev = substr(seg, p - 1, 1)
+          after = substr(seg, pend + 1, 1)
+          q = quote_state(prefix)
+          if (q != "") {
+            afterq = substr(seg, pend + 2, 1)
+            if (prev == q && after == q && task_boundary(afterq) && !is_nonread_target(prefix)) return 1
+          } else if ((prev == "" || prev ~ /[[:space:]<]/) && task_boundary(after) && !is_nonread_target(prefix)) {
+            return 1
+          }
+          base = pend
+          scan = substr(seg, base + 1)
+        }
+        return 0
+      }
+      # Split only on executable shell separators. Separators inside quotes are
+      # ordinary data, which is the distinction the raw regex could not make.
+      function is_task_output_poll(s,   i, c, q, esc, seg, prev) {
+        q = ""; esc = 0; seg = ""
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          prev = (i > 1) ? substr(s, i - 1, 1) : ""
+          if (esc) { seg = seg c; esc = 0; continue }
+          if (c == "\\" && q != sq) { seg = seg c; esc = 1; continue }
+          if (q != "") {
+            seg = seg c
+            if (c == q) q = ""
+            continue
+          }
+          if (c == sq || c == dq) { q = c; seg = seg c; continue }
+          if (c == "#" && (i == 1 || prev ~ /[[:space:]]/)) break
+          if (c ~ /[;&|]/) {
+            if (task_segment(seg)) return 1
+            seg = ""
+            continue
+          }
+          seg = seg c
+        }
+        return task_segment(seg)
       }
       # UNIT: a sleeping LINE, exactly as count_sleeps counts it (grep -c counts
       # matching lines). Counting sleeping COMMANDS instead would make this split

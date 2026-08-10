@@ -2577,7 +2577,7 @@ else bad "a quoted runtime task-output operand remains a recognised read" "$(pri
 # merely mentions both a reader and a runtime-shaped path.
 mkdir -p "$FIX/wttaskquotedprose"
 cat > "$FIX/wttaskquotedprose/s.jsonl" <<'EOF'
-{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tqp1","name":"Bash","input":{"command":"sleep 10 && printf '%s\\n' 'cat \"/private/tmp/claude-501/-Users-example-project/tasks/task-prose.output\"'"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tqp1","name":"Bash","input":{"command":"sleep 10 && printf '%s\\n' 'example; cat \"/private/tmp/claude-501/-Users-example-project/tasks/task-prose.output\"'"}}]}}
 EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttaskquotedprose" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
@@ -2589,6 +2589,39 @@ if grep -qE 'background-task output poll, same command \.+ 0' <<<"$OUT" \
    && grep -qE 'no recognised poll adjacent \.+ 1' <<<"$OUT"; then
   ok "quoted prose naming a task-output read remains non-executable data"
 else bad "quoted prose naming a task-output read remains non-executable data" "$(printf '%s' "$OUT" | grep -E 'background-task|recognised poll')"; fi
+
+# Input redirection still consumes the runtime file. Excluding every angle
+# bracket avoids output-target false positives but also loses this real read.
+mkdir -p "$FIX/wttaskinputredirect"
+cat > "$FIX/wttaskinputredirect/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tir1","name":"Bash","input":{"command":"sleep 10 && wc -l < /private/tmp/claude-501/-Users-example-project/tasks/task-input.output"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttaskinputredirect" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  bad "the task-output input-redirection fixture completes" "telemetry exited $rc: $OUT"
+fi
+if grep -qE 'background-task output poll, same command \.+ 1' <<<"$OUT"; then
+  ok "an input-redirection runtime task-output path remains a recognised read"
+else bad "an input-redirection runtime task-output path remains a recognised read" "$(printf '%s' "$OUT" | grep -E 'background-task|recognised poll')"; fi
+
+# A here-string feeds the path text itself to stdin; it does not open that path.
+# The single-input-redirect allowance must not treat << or <<< targets as reads.
+mkdir -p "$FIX/wttaskherestring"
+cat > "$FIX/wttaskherestring/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"ths1","name":"Bash","input":{"command":"sleep 10 && wc -l <<< /private/tmp/claude-501/-Users-example-project/tasks/task-here.output"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttaskherestring" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  bad "the task-output here-string fixture completes" "telemetry exited $rc: $OUT"
+fi
+if grep -qE 'background-task output poll, same command \.+ 0' <<<"$OUT" \
+   && grep -qE 'no recognised poll adjacent \.+ 1' <<<"$OUT"; then
+  ok "a here-string containing a task-output path is not a file read"
+else bad "a here-string containing a task-output path is not a file read" "$(printf '%s' "$OUT" | grep -E 'background-task|recognised poll')"; fi
 if grep -qE 'no remote poll adjacent \.+ 1   \[not a compliance verdict\]' <<<"$OUT" \
    && ! grep -qF '[local timer — PERMITTED]' <<<"$OUT"; then
   ok "the no-remote bucket no longer claims every local read is permitted"
@@ -2632,6 +2665,23 @@ if grep -qE 'background-task output poll, same command \.+ 0' <<<"$OUT" \
    && grep -qE 'no recognised poll adjacent \.+ 1' <<<"$OUT"; then
   ok "a task-output filename lookalike does not count as runtime completion evidence"
 else bad "a task-output filename lookalike does not count as runtime completion evidence" "$(printf '%s' "$OUT" | grep -E 'background-task|recognised poll')"; fi
+
+# Shell backup suffixes are different files too. The exact path boundary must
+# accept only a real token terminator, not arbitrary punctuation after .output.
+mkdir -p "$FIX/wttasktilde"
+cat > "$FIX/wttasktilde/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tt1","name":"Bash","input":{"command":"sleep 10 && cat /private/tmp/claude-501/-Users-example-project/tasks/task-123.output~"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttasktilde" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  bad "the task-output tilde-lookalike fixture completes" "telemetry exited $rc: $OUT"
+fi
+if grep -qE 'background-task output poll, same command \.+ 0' <<<"$OUT" \
+   && grep -qE 'no recognised poll adjacent \.+ 1' <<<"$OUT"; then
+  ok "a tilde-suffixed task-output lookalike is not exact completion evidence"
+else bad "a tilde-suffixed task-output lookalike is not exact completion evidence" "$(printf '%s' "$OUT" | grep -E 'background-task|recognised poll')"; fi
 
 # The reader and runtime path must belong to the same input operation. A
 # command that reads an ordinary file and writes it to a runtime-shaped output
