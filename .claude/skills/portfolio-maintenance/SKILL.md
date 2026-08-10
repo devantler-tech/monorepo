@@ -133,10 +133,16 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
 - enumerates org-wide in two calls (`gh search prs/issues --owner devantler-tech --state open …`)
   instead of looping `gh pr/issue list` per repo; exact `renovate[bot]`/`dependabot[bot]` search authors
   are **automation-owned dependency PRs** and get only a compact `AUTOMATION-OWNED (NO-ACTION)` line,
-  with no pentad deepening or agent action; then it **deepens every remaining open `devantler`
-  candidate/actionable trusted-bot PR — drafts and promoted PRs —** with a targeted
-  `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid` (heavy fields
-  pulled for those few candidates, not for every PR in every repo); the read-only surveyor always
+  with no pentad deepening or agent action; then it **deepens every remaining open actionable PR —
+  drafts and promoted, whoever authored it —** with a targeted
+  `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid`. **The only
+  exclusion is the exact `renovate[bot]`/`dependabot[bot]` automation identity above**: since the
+  orchestrator drives every other open PR to a terminal state, a selector limited to `devantler` and
+  trusted bots would leave sibling-lane, maintainer-interactive and external PRs with no head, review,
+  conflict or CI evidence — while the pentad line below requires exactly that evidence for them. An
+  external PR is deepened from **metadata only**, which is a read of the GitHub API and never an
+  execution of its branch, so the never-run-locally rule is untouched; the surveyor marks those rows
+  `never-run-locally` for the orchestrator. The read-only surveyor always
   reports `devantler` PRs as ownership-unverified, and the orchestrator's creation record decides
   which are actually its own before any action;
 - checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure

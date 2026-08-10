@@ -245,6 +245,23 @@ assert_prose 'drafts and non-drafts, whoever authored it' \
 assert_prose 'Author trust decides EXECUTION, never deepening' \
   "${surveyor_flat}" "the surveyor no longer separates execution trust from the deepening selector"
 
+# The SAME re-narrowing lives a SECOND time in the loaded procedure overlay, and every assertion
+# above is structurally blind to it — they read the surveyor agent file, not the skill. Measured at
+# head 14e62397 (CodeRabbit, 🟠 Major): the overlay's deepening step still selected `devantler`
+# candidates and trusted bots, while its own pentad line two paragraphs later demanded that evidence
+# for every actionable PR whoever authored it. One file, two selectors, disagreeing — so a run
+# following the overlay literally reports a pentad it never fetched for exactly the PRs the
+# 2026-08-08 grant made it responsible for.
+assert_absent 'candidate/actionable trusted-bot PR' \
+  "${skill_flat}" "the maintenance skill still deepens only devantler/trusted-bot PRs"
+assert_prose 'deepens every remaining open actionable PR' \
+  "${skill_flat}" "the maintenance skill no longer deepens every actionable PR regardless of author"
+# ...and here too the widening must RESCOPE execution trust, not delete it: deepening an external PR
+# reads the GitHub API, which is not running its branch. Without this the negative above could be
+# satisfied by dropping the distinction entirely.
+assert_prose 'never an execution of its branch' \
+  "${skill_flat}" "the maintenance skill no longer separates metadata deepening from branch execution"
+
 # Deepening every PR costs far more API budget than the selector it replaces, and this survey's own
 # pool ran out mid-run (2026-08-09), leaving 40 platform PRs with no pentad at all. Silent truncation
 # is the dangerous shape: an undeepened PR reported as a cheap row is indistinguishable from one that
@@ -323,6 +340,16 @@ assert_prose 'A reviewer'"'"'s COMPLETED output is the opposite of an ownership 
 # stranger's change merge with nobody having observed its behaviour.
 assert_prose 'This is a MERGE precondition for an external PR, not a promotion one' \
   "${constitution_flat}" "the external-PR user evaluation is still gated on promotion, which a non-draft PR skips"
+# ...but DECLARING it a merge precondition is not the same as the merge step REQUIRING it, and the
+# assertion above cannot tell those apart. Measured at head 14e62397 (CodeRabbit, 🟠 Major): the
+# preflight listed `isDraft:false` + owner + `CLEAN` + findings + review state and nothing else, so
+# the operative checklist a run actually executes still merged a build-and-lint-only external PR that
+# no one had observed — the exact hole the declaration was written to close, reopened one section
+# later. Pin the binding itself, and its fail-closed branch.
+assert_prose 'current-head evaluation record' \
+  "${constitution_flat}" "the merge preflight does not require the external-PR behaviour record at head"
+assert_prose 'park the PR on that named blocker' \
+  "${constitution_flat}" "the preflight lets a build-and-lint-only external PR merge instead of parking it"
 
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.

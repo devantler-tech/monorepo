@@ -1651,7 +1651,20 @@ or a qualifying clean **local
 review round** under *Local review round*, on the same author terms that section sets: available on
 your own **and on taken-over** PRs (a sibling lane's, the maintainer's interactive, one of our bots'),
 and **never** on an external contributor's — whose commit SHA
-equals that same `headRefOid`. That is **sufficient
+equals that same `headRefOid`.
+
+🔴 **On an EXTERNAL PR that list is NOT sufficient — it is missing the one condition that PR class
+exists to enforce.** *You own EVERY pull request in the portfolio* makes the recorded CI-based
+behaviour evaluation a **merge** precondition for every outside contribution, draft or not, precisely
+because a stranger's PR usually arrives non-draft and so never passes through promotion. None of the
+fields read above carries it, so a preflight that stops at `isDraft:false` + `CLEAN` + findings +
+review state merges exactly the PR nobody has observed. So for an external author, additionally
+require a **current-head evaluation record** — a disclosed comment naming the **CI run you read** and
+**what behaviour it demonstrated** — whose commit SHA equals that same `headRefOid`, and re-record it
+after any push, since a new head stales it exactly as it stales a green review. **Build-and-lint-only
+CI never satisfies it**, and a `CLEAN` preflight never substitutes for it: where no check exercises
+the change there is nothing to read, so **park the PR on that named blocker** and ask for the missing
+coverage — or add it yourself on your own branch against `main`. That is **sufficient
 evidence** — then run the merge. **Two documented exceptions to `CLEAN`, and only these two:**
 (a) a `mergeStateStatus` that says `UNSTABLE`/`BLOCKED` while **every** check-run and status on the
 head is `success`/`skipped` is simply **stale** — GitHub recomputes it lazily (measured on
