@@ -2535,6 +2535,57 @@ if grep -qE 'no remote poll adjacent \.+ 1' <<<"$OUT"; then
   ok "a sleep bounding a local process is scored PERMITTED, not a violation"
 else bad "a sleep bounding a local process is scored PERMITTED, not a violation" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
+# Polling the runtime-owned output file of a background task is not the local
+# timer above: the runtime itself reports task completion, so sleeping before
+# reading that file is the redundant wait this metric exists to expose. The
+# production break this catches is dropping the runtime-output recogniser,
+# which would put the wait back in the flattering PERMITTED bucket.
+mkdir -p "$FIX/wttaskoutput"
+cat > "$FIX/wttaskoutput/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 10 && cat /private/tmp/claude-501/-Users-example-project/tasks/task-123.output"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttaskoutput" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'background-task output poll, same command \.+ 1' <<<"$OUT" \
+   && grep -qE 'FOREGROUND.*recognised-poll-adjacent \.+ 1' <<<"$OUT"; then
+  ok "a sleep polling runtime-owned task output is scored as a busy-wait"
+else bad "a sleep polling runtime-owned task output is scored as a busy-wait" "$(printf '%s' "$OUT" | grep -E 'background-task|remote poll|no remote')"; fi
+if grep -qE 'no remote poll adjacent \.+ 1   \[not a compliance verdict\]' <<<"$OUT" \
+   && ! grep -qF '[local timer — PERMITTED]' <<<"$OUT"; then
+  ok "the no-remote bucket no longer claims every local read is permitted"
+else bad "the no-remote bucket no longer claims every local read is permitted" "$(printf '%s' "$OUT" | grep -E 'background-task|remote poll|no remote')"; fi
+if ! grep -qF 'violation this adjacency test does not see' <<<"$OUT"; then
+  ok "the report no longer claims runtime-task polls are invisible"
+else bad "the report no longer claims runtime-task polls are invisible" "stale gap note remained"; fi
+
+# The same redundant wait can be split across tool calls, just like the remote
+# unchained form below. Dropping the next-command task-output branch must make
+# this fixture fall back to the unclassified local bucket.
+mkdir -p "$FIX/wttasknext"
+cat > "$FIX/wttasknext/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tn1","name":"Bash","input":{"command":"sleep 10"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tn2","name":"Bash","input":{"command":"tail -n 20 /private/tmp/claude-501/-Users-example-project/tasks/task-456.output"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttasknext" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'background-task output poll, next command \.+ 1' <<<"$OUT"; then
+  ok "an unchained sleep before runtime task output is scored as a redundant wait"
+else bad "an unchained sleep before runtime task output is scored as a redundant wait" "$(printf '%s' "$OUT" | grep -E 'background-task|remote poll|no remote')"; fi
+
+# The suffix is part of the runtime artifact shape. A prefix-only recogniser
+# would classify task-123.output.backup as completion evidence and inflate the
+# busy-wait metric with arbitrary local files.
+mkdir -p "$FIX/wttasklookalike"
+cat > "$FIX/wttasklookalike/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tl1","name":"Bash","input":{"command":"sleep 10 && cat /private/tmp/claude-501/-Users-example-project/tasks/task-123.output.backup"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttasklookalike" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'background-task output poll, same command \.+ 0' <<<"$OUT" \
+   && grep -qE 'no recognised poll adjacent \.+ 1' <<<"$OUT"; then
+  ok "a task-output filename lookalike does not count as runtime completion evidence"
+else bad "a task-output filename lookalike does not count as runtime completion evidence" "$(printf '%s' "$OUT" | grep -E 'background-task|recognised poll')"; fi
+
 # The UNCHAINED form: the PreToolUse hook blocks `sleep N && poll`, and sessions
 # adapt by splitting it across two tool calls. Same busy-wait, invisible to the
 # hook — this is the shape monorepo#2262 tightened the constitution against, and

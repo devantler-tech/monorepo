@@ -2592,6 +2592,13 @@ if want efficiency; then
     # and only count when the target is not a loopback address.
     FETCH_RE='(^|[^[:alnum:]_-])(curl|wget)([[:space:]]|$)'
     LOCALHOST_RE='(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1)'
+    # Claude background tasks expose completion through runtime-owned output
+    # files. Reading one after a sleep is therefore a redundant poll even though
+    # the read is local. Require both an executed file-reader command and the
+    # runtime path shape so an arbitrary project tasks/*.output file does not
+    # inherit this classification.
+    TASK_READ_RE='(^[[:space:]]*|[;&|][[:space:]]*)(/usr/bin/|/bin/)?(cat|tail|head|wc)([[:space:]]|$)'
+    TASK_OUTPUT_RE='/(private/)?tmp/claude-[0-9]+/[^[:space:];|&]+/tasks/[[:alnum:]_-]+\.output([^[:alnum:]_.-]|$)'
     # Shell-level detachment. `nohup … &`, `setsid`, or a trailing `&` returns the
     # tool call immediately, so the agent is NOT foreground-blocked — that is a
     # compliant way to arm a watcher, and the `run_in_background` flag alone
@@ -2630,10 +2637,11 @@ if want efficiency; then
     # rejects outright ("illegal primary in regular expression"). ENVIRON hands
     # the string over verbatim, which is what keeps ONE regex definition usable
     # by both grep -E and awk instead of forcing a second, drifting copy.
-    export SLEEP_RE REMOTE_RE FETCH_RE LOCALHOST_RE DETACH_RE LOOP_RE
+    export SLEEP_RE REMOTE_RE FETCH_RE LOCALHOST_RE TASK_READ_RE TASK_OUTPUT_RE DETACH_RE LOOP_RE
     WT=$(boundary_lines | strip_heredocs $'\003\004' | awk '
       BEGIN { sre = ENVIRON["SLEEP_RE"]; rre = ENVIRON["REMOTE_RE"]
               fre = ENVIRON["FETCH_RE"]; lhre = ENVIRON["LOCALHOST_RE"]
+              trre = ENVIRON["TASK_READ_RE"]; tore = ENVIRON["TASK_OUTPUT_RE"]
               dre = ENVIRON["DETACH_RE"]; lre = ENVIRON["LOOP_RE"] }
       # Only EXECUTED text can be a poll. A shell comment or a quoted literal
       # that merely mentions a tool (`sleep 5 # check gh later`, or this suite
@@ -2668,6 +2676,13 @@ if want efficiency; then
         if (e ~ rre) return 1
         if (e ~ fre && e !~ lhre) return 1
         return 0
+      }
+      # A runtime task-output read is executed local text, not a remote call.
+      # Keep it separate so the remote-adjacent baseline remains comparable.
+      function is_task_output_poll(s,   e) {
+        e = s
+        sub(/(^|[[:space:]])#.*$/, "", e)
+        return (e ~ trre && e ~ tore)
       }
       # UNIT: a sleeping LINE, exactly as count_sleeps counts it (grep -c counts
       # matching lines). Counting sleeping COMMANDS instead would make this split
@@ -2747,6 +2762,16 @@ if want efficiency; then
         for (j = i + 1; j <= nlines; j++) if (is_remote(lines[j])) return 1
         return 0
       }
+      function task_output_after(i,   j, tail, rgn) {
+        rgn = loop_region(i)
+        if (rgn != "" && is_task_output_poll(rgn)) return 1
+        if (match(lines[i], sre)) {
+          tail = substr(lines[i], RSTART + RLENGTH)
+          if (is_task_output_poll(tail)) return 1
+        }
+        for (j = i + 1; j <= nlines; j++) if (is_task_output_poll(lines[j])) return 1
+        return 0
+      }
       # A pending sleep is resolved by the FIRST remote poll in the next command,
       # wherever it sits in that command — position only constrains the command
       # the sleep itself belongs to, which it has already left.
@@ -2763,9 +2788,10 @@ if want efficiency; then
         e = exec_text(buf)
         return (e ~ dre) ? "BG" : "FG"
       }
-      function classify(   i, irem, ec) {
+      function classify(   i, irem, itask, ec) {
         if (!started) return
         irem = is_remote(buf)
+        itask = is_task_output_poll(buf)
         ec = eff_cls()
         # Resolve sleeps left pending by the PREVIOUS command first: they slept
         # without a remote poll after them, so this command decides the bucket.
@@ -2773,6 +2799,7 @@ if want efficiency; then
         # make that call, and the intent is what this metric measures.
         if (pending) {
           if (irem) { n_next += pending; if (pcls=="FG") { fg_rem += pending; fg_next += pending } }
+          else if (itask) { n_task_next += pending; if (pcls=="FG") { fg_task += pending; fg_task_next += pending } }
           else        n_none += pending
           pending = 0
         }
@@ -2785,6 +2812,7 @@ if want efficiency; then
           if (lines[i] !~ sre) continue
           n_tot++
           if (remote_after(i)) { n_same++; if (ec=="FG") fg_rem++ }
+          else if (task_output_after(i)) { n_task_same++; if (ec=="FG") fg_task++ }
           else                 { pending++; pcls = ec }
         }
         nlines = 0; buf = ""; started = 0
@@ -2799,11 +2827,13 @@ if want efficiency; then
                  started = 1; addline(substr($0, i+1)); next }
                  { if (started) addline($0) }
       END { classify(); resolve()
-            printf "%d %d %d %d %d %d", n_tot, n_same, n_next, n_none, fg_rem, fg_next }')
+            printf "%d %d %d %d %d %d %d %d %d %d", n_tot, n_same, n_next, n_task_same, n_task_next, n_none, fg_rem, fg_next, fg_task, fg_task_next }')
     # `read`, not `set --`: the latter would clobber the script's positional
     # parameters. (A here-string is a bash/zsh extension — fine under this
     # file's bash shebang, and never to be copied into a /bin/sh script.)
-    read -r WT_TOT WT_SAME WT_NEXT WT_NONE WT_FGREM WT_FGNEXT <<< "$WT"
+    read -r WT_TOT WT_SAME WT_NEXT WT_TASK_SAME WT_TASK_NEXT WT_NONE WT_FGREM WT_FGNEXT WT_FGTASK WT_FGTASK_NEXT <<< "$WT"
+    WT_NOREMOTE=$((WT_TASK_SAME + WT_TASK_NEXT + WT_NONE))
+    WT_FGALL=$((WT_FGREM + WT_FGTASK))
     # The total is the SUM of the classes, not a separate scan. That makes
     # class-vs-total drift impossible instead of detectable — and a drift
     # warning over a sum would be a vacuous guard, which is worse than none.
@@ -2836,23 +2866,31 @@ if want efficiency; then
     echo "  wait target (WHAT the sleep waits on — the contract's actual line):"
     echo "    ├ remote poll, same command .. ${WT_SAME}   [busy-wait]"
     echo "    ├ remote poll, next command .. ${WT_NEXT}   [busy-wait, UNCHAINED]"
-    echo "    └ no remote poll adjacent .... ${WT_NONE}   [local timer — PERMITTED]"
-    echo "  ⇒ FOREGROUND ∧ remote-adjacent . ${WT_FGREM}   [THE BUSY-WAIT VIOLATION]"
+    echo "    ├ no remote poll adjacent .... ${WT_NOREMOTE}   [not a compliance verdict]"
+    echo "    │  ├ background-task output poll, same command .. ${WT_TASK_SAME}   [redundant wait]"
+    echo "    │  ├ background-task output poll, next command .. ${WT_TASK_NEXT}   [redundant wait, UNCHAINED]"
+    echo "    │  └ no recognised poll adjacent .............. ${WT_NONE}   [local-timer candidate]"
+    echo "  ⇒ FOREGROUND ∧ recognised-poll-adjacent ... ${WT_FGALL}   [PRIMARY BUSY-WAIT ESTIMATE]"
+    echo "  ⇒ FOREGROUND ∧ remote-adjacent . ${WT_FGREM}   [baseline-continuity component]"
+    echo "  ⇒ FOREGROUND ∧ task-output-adjacent ${WT_FGTASK}   [redundant runtime-task poll]"
+    echo "          of which UNCHAINED (task-output, fg) ${WT_FGTASK_NEXT}"
     # The aggregate remote-next bucket mixes in compliant BACKGROUND watchers and
     # unattributed Codex sleeps, so it moves when neither the rule nor foreground
     # behaviour changed. Only this foreground-only figure tests the unchained-wait
     # tightening — trend THIS, never the aggregate.
     echo "      of which UNCHAINED (fg) ... ${WT_FGNEXT}   [tests the #2262 rule]"
     if [ "$SF_COUNT" -gt 0 ]; then
-      echo "    per-session (Claude, n=${SF_COUNT}): $(awk -v a="$WT_FGREM" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← the metric to trend"
+      echo "    per-session (Claude, n=${SF_COUNT}): $(awk -v a="$WT_FGALL" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← the recognised-poll metric to trend"
+      echo "    remote-only continuity (n=${SF_COUNT}): $(awk -v a="$WT_FGREM" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session"
     fi
     if [ "$WT_TOT" != "$SLEEPS" ]; then
       echo "    ⚠️  wait-target total ${WT_TOT} != launch-mode total ${SLEEPS} —"
       echo "        the two passes disagree; treat BOTH as unreliable this run."
     fi
-    echo "    NOTE: 'no remote poll adjacent' is the CONTRACT-PERMITTED case (a"
-    echo "          bare sleep bounding a local process the agent started), so a"
-    echo "          high number there is not waste. The two remote buckets ARE"
+    echo "    NOTE: 'no remote poll adjacent' is not a compliance verdict: it"
+    echo "          contains redundant polls of runtime-owned task output as well"
+    echo "          as bare sleeps bounding local processes. The task-output row"
+    echo "          separates the recognised redundant local class. The two remote buckets ARE"
     echo "          the busy-wait the latency discipline forbids; 'next command'"
     echo "          is the unchained form the PreToolUse hook cannot see, which"
     echo "          is what monorepo#2262 tightened the constitution against."
@@ -2880,9 +2918,9 @@ if want efficiency; then
     echo "          run_in_background says how Bash started the command, never"
     echo "          why the sleep exists. The contract permits a FOREGROUND bare"
     echo "          sleep only as a local timer for a process whose completion"
-    echo "          NOTHING WILL REPORT — not merely one the agent started, so a"
-    echo "          sleep polling a backgrounded task's own output file is a"
-    echo "          violation this adjacency test does not see (monorepo#2752)."
+    echo "          NOTHING WILL REPORT — not merely one the agent started. Polls"
+    echo "          of runtime-owned background-task output are split above from"
+    echo "          otherwise unrecognised local timers."
     echo "          A BACKGROUND sleep can still be a redundant"
     echo "          poll alongside foreground polling. So a foreground count is"
     echo "          a busy-wait CANDIDATE, not a violation, and a background"
