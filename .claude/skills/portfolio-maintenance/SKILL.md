@@ -401,7 +401,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    with bare `gh pr merge <n> --squash` once CLEAN and self-promoted on genuine readiness; incl. majors;
    definition PRs on that same path). External repos are outside scheduled scope;
    an interactive task must first clear the professional-work boundary for the specifically named repo.
-   Never run or merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony**:
+   Never *run* an **external-author** branch on this machine (trust gate) — CI is the sandbox for that,
+   and extra scrutiny goes on workflow, permission, dependency and secret-touching changes. You still
+   review, promote and merge it like any other PR (maintainer direction 2026-08-08). The merge is **low-ceremony**:
    combine the already-collected current-head pentad with one fresh `gh pr view <n>` showing the same
    `headRefOid`, `isDraft:false`, trusted author, and `CLEAN`; merge only when the pentad also has zero
    findings and a green review at that
@@ -456,7 +458,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    review findings — those
    rot on the dashboard. **`coderabbitai[bot]`-authored
    PRs are in this sweep** (fix their CI or close with reasoning — never leave them red for days).
-   Never auto-drive or merge external PRs.
+   **External-author PRs are in this sweep too** (maintainer direction 2026-08-08) — same pentad, same
+   review gate; only their branches are never checked out or run locally, and a conflict or red check
+   there is named on the PR for its author rather than fixed by hand.
    - **Confirm by `state`/`mergedAt`, never by `mergeStateStatus`, in Enable-Auto-Merge repos.** Repos
      with a `🔀 Enable Auto-Merge` workflow (monorepo, actions, reusable-workflows, go-template,
      dotnet-template, skills, plugins, …) arm the `app/botantler` App on **promotion**, so it merges a
@@ -719,7 +723,7 @@ threads-resolved definition PR to merge yourself with bare `gh pr merge <n> --sq
 
 ## Global rules (from the contract — non-negotiable)
 
-Never push to `main`/protected branches. Never merge external PRs; never self-promote or self-merge
+Never push to `main`/protected branches. Never run an external author's branch locally; never self-promote or self-merge
 a PR that misses any genuine-readiness condition (programmatically tested + pentad clear, ≥1 green
 review at head, tried-and-evaluated-as-a-user — contract *Autonomy*) — **definition PRs included,
 held to those same conditions** (their separate gate was retired 2026-07-18; merge the contract's

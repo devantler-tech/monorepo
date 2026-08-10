@@ -218,6 +218,19 @@ assert_absent 'actionable trusted-author' \
 assert_absent 'PRs static-review-only (trust gate)' \
   "${skill_flat}" "the skill still records external PRs as static-review-only rather than never-run-locally"
 
+# ── the three PROHIBITIONS the assertions above could not see ────────────────
+# Measured on this branch at head 55b76859: every assertion above passed while the loaded overlay
+# still forbade merging an external PR in three separate places, one of them seven lines below a
+# sentence in the same list item stating the new rule. A presence-only suite cannot catch that: it
+# pins what the new text SAYS, never what the old text still says elsewhere. These three name the
+# surviving sentences directly, so the suite fails on the unfixed skill instead of passing over it.
+assert_absent 'Never run or merge **external-author** PRs anywhere' \
+  "${skill_flat}" "the merge-path bullet still forbids merging an external-author PR"
+assert_absent 'Never auto-drive or merge external PRs' \
+  "${skill_flat}" "the hygiene sweep still forbids auto-driving an external PR"
+assert_absent 'Never merge external PRs' \
+  "${skill_flat}" "the non-negotiable global rules still forbid merging an external PR"
+
 # The DEEPENING selector is a second, quieter way the surveyor re-narrows rung 1 at runtime. Widening
 # which PRs the orchestrator may drive achieves nothing while the survey still pulls the pentad only
 # for `devantler`/trusted-bot authors: every other PR arrives as a cheap static row carrying no
