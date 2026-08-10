@@ -63,9 +63,12 @@ plugin carries them (or an explicit, tested subset):
    review at the merged commit. Without this a bare `commit_id == head` match reports a non-review as
    a green.
 4e. **CodeRabbit verdict-bearing command reply** (monorepo#2758) — a command-invocation reply counts
-   when it states `Reviewed pull request #<n> at <sha>` with `<sha>` prefix-matching `headRefOid`
-   **and** `I found no actionable issues`; a bare `✅ Action performed` shell stays an
-   acknowledgement. Measured on platform#3051: the head's only satisfier was that reply, because the
+   when it states `Reviewed pull request #<n> at <sha>` with `<sha>` prefix-matching `headRefOid`,
+   **and** `I found no actionable issues`, **and** is updated after the latest authenticated
+   CodeRabbit request marker for that head — the same freshness condition the review object and the
+   summary carry, without which a pre-request reply at the same head satisfies a later round. A bare
+   `✅ Action performed` shell stays an acknowledgement, and a reply carrying a rate-limit, quota, or
+   service marker saying the review did not run is rejected like any other artifact. Measured on platform#3051: the head's only satisfier was that reply, because the
    newest review object was an empty container at an older head and the summary named no sha — so a
    two-artifact sweep reported `none` and would spend weekly-limited Codex and monthly-limited
    Bugbot on an already-green head. Both conjuncts are required: comment `5236900950` on that PR

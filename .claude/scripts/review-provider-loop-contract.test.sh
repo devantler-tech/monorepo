@@ -183,6 +183,11 @@ for f in "${constitution}" "${surveyor}"; do
   # simplification and it fails OPEN, so each surface must keep saying both are required.
   assert_prose "${f}" 'no `at <sha>` clause' \
     "$(basename "${f}") does not record that a verdict can omit the sha, so a stale review would satisfy the gate"
+  # Freshness is the THIRD conjunct and the easiest to lose: without it a reply posted BEFORE the
+  # request satisfies a later round at the same head. The review object and the summary already
+  # carry it, so the reply must too, on every surface that describes the reply.
+  assert_prose "${f}" 'updated after that request' \
+    "$(basename "${f}") does not require the verdict reply to post-date the request, so a pre-request reply satisfies a later round"
 done
 # The refute half: the superseded rule rejected the comment TYPE outright, which is exactly what
 # discarded the verdict. Its return would re-open the defect while every accept assertion above
@@ -195,8 +200,19 @@ assert_absent "${surveyor}" 'Never count an auto-generated command reply, acknow
 # the overlay removal drops silently — the same guard pattern as 4c above.
 assert_prose "${parity_checklist}" 'CodeRabbit review-object positive identification' \
   "removing the surveyor overlay would silently drop the review-object identification"
+# The checklist is what a plugin implementation follows once the local overlay is deleted, so its
+# SUBSTANCE is pinned, not just its section title (monorepo#2759 review): a conjunct present in the
+# two prose surfaces but absent here is a fail-open with every other assertion above still green.
 assert_prose "${parity_checklist}" 'CodeRabbit verdict-bearing command reply' \
   "removing the surveyor overlay would silently drop the third CodeRabbit satisfier"
+assert_prose "${parity_checklist}" 'prefix-matching `headRefOid`' \
+  "parity checklist does not require the reply's sha to prefix-match the head"
+assert_prose "${parity_checklist}" 'I found no actionable issues' \
+  "parity checklist does not require the verdict line, so an acknowledgement would satisfy a plugin implementation"
+assert_prose "${parity_checklist}" 'updated after the latest authenticated' \
+  "parity checklist omits request freshness, so a pre-request reply at the same head satisfies a later round"
+assert_prose "${parity_checklist}" 'stays an acknowledgement' \
+  "parity checklist no longer rejects a bare Action-performed shell"
 if grep -Fq 'pre-merge summary parsing' "${parity_checklist}"; then
   fail "plugin-parity checklist can reintroduce the removed pre-merge gate"
 fi
