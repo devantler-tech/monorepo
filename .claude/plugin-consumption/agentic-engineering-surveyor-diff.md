@@ -66,7 +66,9 @@ plugin carries them (or an explicit, tested subset):
    when it states `Reviewed pull request #<n> at <sha>` with `<sha>` prefix-matching `headRefOid`,
    **and** `I found no actionable issues`, **and** is updated after the latest authenticated
    CodeRabbit request marker for that head — the same freshness condition the review object and the
-   summary carry, without which a pre-request reply at the same head satisfies a later round. A bare
+   summary carry, without which a pre-request reply at the same head satisfies a later round. **All
+   three artifacts must have `user.login == "coderabbitai[bot]"`** — the reply is matched on plain
+   prose, so without the author bind any account could post those phrases and be read as a green. A bare
    `✅ Action performed` shell stays an acknowledgement, and a reply carrying a rate-limit, quota, or
    service marker saying the review did not run is rejected like any other artifact. Measured on platform#3051: the head's only satisfier was that reply, because the
    newest review object was an empty container at an older head and the summary named no sha — so a

@@ -261,6 +261,8 @@ public and private — no per-repo loop needed to enumerate):
      a verdict** — a body stating `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of
      `headRefOid`**, together with `I found no actionable issues`, updated after that request — only
      when its threads, review-body sections, and explicit ancillary problem count are all zero.
+     **All three artifacts must have `user.login == "coderabbitai[bot]"`**: the reply is matched on
+     plain prose, so without the author bind any account could post those phrases and be read green.
      **Discriminate a command reply on SUBSTANCE, never on comment type: a reply carrying no verdict
      line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a
      review completion**, as are a quota notice and a service shell; reject the summary and the reply

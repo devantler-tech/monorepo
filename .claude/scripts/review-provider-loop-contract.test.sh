@@ -169,7 +169,10 @@ assert_prose "${surveyor}" 'Actionable comments posted:' \
 # re-broadened the rule to every command reply, and the REJECT half alone would still pass if the
 # third artifact were dropped again — so each surface asserts that it accepts a verdict-bearing
 # reply AND that a bare acknowledgement remains a non-review.
-for f in "${constitution}" "${surveyor}"; do
+# EVERY deployed surface that describes the CodeRabbit artifacts is in this loop, including the
+# run-loop overlay a scheduled execution actually follows (monorepo#2759 review, P1): a conjunct
+# present in the contract but absent from the overlay is a fail-open with the suite still green.
+for f in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
   assert_prose "${f}" 'command-invocation reply comment carrying a verdict' \
     "$(basename "${f}") does not accept CodeRabbit's verdict-bearing command reply, so a real green at head reads as none"
   assert_prose "${f}" 'I found no actionable issues' \
@@ -188,7 +191,16 @@ for f in "${constitution}" "${surveyor}"; do
   # carry it, so the reply must too, on every surface that describes the reply.
   assert_prose "${f}" 'updated after that request' \
     "$(basename "${f}") does not require the verdict reply to post-date the request, so a pre-request reply satisfies a later round"
+  # The reply is matched on plain prose, not a structural marker, so the author bind is what stops
+  # any account posting the two phrases with the head prefix and being read as a green.
+  assert_prose "${f}" 'user.login == "coderabbitai[bot]"' \
+    "$(basename "${f}") does not bind the CodeRabbit artifacts to the bot author, so a spoofed comment satisfies the gate"
 done
+assert_prose "${parity_checklist}" 'user.login == "coderabbitai[bot]"' \
+  "parity checklist does not bind the artifacts to the bot author, so a plugin implementation would accept a spoofed comment"
+# The overlay's superseded blanket rejection is what Codex found still contradicting the contract.
+assert_absent "${maintenance_skill}" 'Never count an auto-generated command reply/acknowledgement' \
+  "portfolio-maintenance again rejects every CodeRabbit command reply, contradicting the contract at runtime"
 # The refute half: the superseded rule rejected the comment TYPE outright, which is exactly what
 # discarded the verdict. Its return would re-open the defect while every accept assertion above
 # still passed.
