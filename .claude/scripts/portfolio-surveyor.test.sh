@@ -1467,14 +1467,28 @@ grep -Fq 'Generated **with** [Claude Code]' "${surveyor}" &&
 # disclosure. A BODY-start anchor is the tempting over-correction and is measurably wrong: over 75
 # open devantler PRs, line-anchored and whole-body both classify 34 routine, while body-anchored
 # drops 7 of them to `none` because the org PR template puts `### Motivation` above the disclosure.
-grep -Fq 'at the start of a line' "${surveyor}" ||
+grep -Fq 'begins with the marker' "${surveyor}" ||
   fail "surveyor must line-anchor the routine literal, not match it anywhere (#2762)"
 
-grep -Fq 'at the start of a line' "${constitution}" ||
+grep -Fq 'begins with the marker' "${constitution}" ||
   fail "AGENTS.md must line-anchor the routine literal (#2762)"
 
-grep -Fq 'anywhere' "${surveyor}" ||
-  fail "surveyor must keep the interactive literal matched anywhere in the body (#2762)"
+# NOT `grep -Fq 'anywhere'` — that word occurs in unrelated surveyor prose, so the assertion passed
+# regardless of the rule and would have stayed green if the match were swapped for a body-start
+# anchor (Codex P2 on #2767). Worse, ablating EVERY occurrence made it look like it fired. Pin a
+# phrase that exists nowhere else and states the rule itself.
+grep -Fq 'Both literals are matched as a STRUCTURAL LINE, anywhere in the body' "${surveyor}" ||
+  fail "surveyor must match both literals as a structural line anywhere in the body (#2762)"
+
+grep -Fq 'Never a bare substring, and never anchored to the body start' "${surveyor}" ||
+  fail "surveyor must forbid BOTH a bare substring and a body-start anchor (#2762)"
+
+grep -Fq 'structural line' "${constitution}" ||
+  fail "AGENTS.md must require structural-line matching for the ownership literals (#2762)"
+
+# The malformed-placement tolerance must not read as an emission convention (Codex P2 on #2767).
+grep -Fq 'DEFECTS, not the convention' "${constitution}" ||
+  fail "AGENTS.md must mark a below-heading disclosure a defect, not the convention (#2762)"
 
 # `none` is a real third state with its own contract: it means neither literal was found, and it is
 # a synonym for NEITHER party. Asserting only that the enum lists three spellings would pass on a
