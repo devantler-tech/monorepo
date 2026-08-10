@@ -2554,6 +2554,41 @@ if grep -qE 'background-task output poll, same command \.+ 1' <<<"$OUT" \
    && grep -qE 'FOREGROUND.*recognised-poll-adjacent \.+ 1' <<<"$OUT"; then
   ok "a sleep polling runtime-owned task output is scored as a busy-wait"
 else bad "a sleep polling runtime-owned task output is scored as a busy-wait" "$(printf '%s' "$OUT" | grep -E 'background-task|remote poll|no remote')"; fi
+
+# Quoting an executable operand does not turn it into prose. The generic
+# literal stripper deliberately blanks quoted data, so the task-output matcher
+# must recognise a quoted reader operand before applying that broad filter.
+mkdir -p "$FIX/wttaskquoted"
+cat > "$FIX/wttaskquoted/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tq1","name":"Bash","input":{"command":"sleep 10 && cat \"/private/tmp/claude-501/-Users-example-project/tasks/task-quoted.output\""}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttaskquoted" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  bad "the quoted task-output fixture completes" "telemetry exited $rc: $OUT"
+fi
+if grep -qE 'background-task output poll, same command \.+ 1' <<<"$OUT"; then
+  ok "a quoted runtime task-output operand remains a recognised read"
+else bad "a quoted runtime task-output operand remains a recognised read" "$(printf '%s' "$OUT" | grep -E 'background-task|recognised poll')"; fi
+
+# A quoted command example is data, not an executable reader. Preserving quoted
+# operands narrowly must not undo the existing protection against prose that
+# merely mentions both a reader and a runtime-shaped path.
+mkdir -p "$FIX/wttaskquotedprose"
+cat > "$FIX/wttaskquotedprose/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tqp1","name":"Bash","input":{"command":"sleep 10 && printf '%s\\n' 'cat \"/private/tmp/claude-501/-Users-example-project/tasks/task-prose.output\"'"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wttaskquotedprose" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  bad "the quoted task-output prose fixture completes" "telemetry exited $rc: $OUT"
+fi
+if grep -qE 'background-task output poll, same command \.+ 0' <<<"$OUT" \
+   && grep -qE 'no recognised poll adjacent \.+ 1' <<<"$OUT"; then
+  ok "quoted prose naming a task-output read remains non-executable data"
+else bad "quoted prose naming a task-output read remains non-executable data" "$(printf '%s' "$OUT" | grep -E 'background-task|recognised poll')"; fi
 if grep -qE 'no remote poll adjacent \.+ 1   \[not a compliance verdict\]' <<<"$OUT" \
    && ! grep -qF '[local timer — PERMITTED]' <<<"$OUT"; then
   ok "the no-remote bucket no longer claims every local read is permitted"

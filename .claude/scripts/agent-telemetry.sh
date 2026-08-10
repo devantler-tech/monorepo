@@ -2598,7 +2598,8 @@ if want efficiency; then
     # one shell segment, with no redirection before the path: independent matches
     # would misread `cat local > task.output` as polling the task.
     TASK_READ_RE='(^[[:space:]]*|[;&|][[:space:]]*)(/usr/bin/|/bin/)?(cat|tail|head|wc)([[:space:]]|$)'
-    TASK_OUTPUT_RE='/(private/)?tmp/claude-[0-9]+/[^[:space:];|&]+/tasks/[[:alnum:]_-]+\.output([^[:alnum:]_.-]|$)'
+    TASK_OUTPUT_PATH_RE='/(private/)?tmp/claude-[0-9]+/[^[:space:];|&]+/tasks/[[:alnum:]_-]+\.output'
+    TASK_OUTPUT_RE="${TASK_OUTPUT_PATH_RE}([^[:alnum:]_.-]|$)"
     # Shell-level detachment. `nohup … &`, `setsid`, or a trailing `&` returns the
     # tool call immediately, so the agent is NOT foreground-blocked — that is a
     # compliant way to arm a watcher, and the `run_in_background` flag alone
@@ -2637,11 +2638,12 @@ if want efficiency; then
     # rejects outright ("illegal primary in regular expression"). ENVIRON hands
     # the string over verbatim, which is what keeps ONE regex definition usable
     # by both grep -E and awk instead of forcing a second, drifting copy.
-    export SLEEP_RE REMOTE_RE FETCH_RE LOCALHOST_RE TASK_READ_RE TASK_OUTPUT_RE DETACH_RE LOOP_RE
+    export SLEEP_RE REMOTE_RE FETCH_RE LOCALHOST_RE TASK_READ_RE TASK_OUTPUT_PATH_RE TASK_OUTPUT_RE DETACH_RE LOOP_RE
     WT=$(boundary_lines | strip_heredocs $'\003\004' | awk '
       BEGIN { sre = ENVIRON["SLEEP_RE"]; rre = ENVIRON["REMOTE_RE"]
               fre = ENVIRON["FETCH_RE"]; lhre = ENVIRON["LOCALHOST_RE"]
-              trre = ENVIRON["TASK_READ_RE"]; tore = ENVIRON["TASK_OUTPUT_RE"]
+              trre = ENVIRON["TASK_READ_RE"]; topath = ENVIRON["TASK_OUTPUT_PATH_RE"]
+              tore = ENVIRON["TASK_OUTPUT_RE"]
               dre = ENVIRON["DETACH_RE"]; lre = ENVIRON["LOOP_RE"] }
       # Only EXECUTED text can be a poll. A shell comment or a quoted literal
       # that merely mentions a tool (`sleep 5 # check gh later`, or this suite
@@ -2679,9 +2681,16 @@ if want efficiency; then
       }
       # A runtime task-output read is executed local text, not a remote call.
       # Keep it separate so the remote-adjacent baseline remains comparable.
-      function is_task_output_poll(s,   e) {
+      function is_task_output_poll(s,   e, raw, qre) {
         e = exec_text(s)
-        return (e ~ (trre "[^;|&<>]*" tore))
+        if (e ~ (trre "[^;|&<>]*" tore)) return 1
+        # exec_text intentionally blanks quoted prose, but a quoted path after
+        # an executable reader is still an operand. Match that narrow raw shape
+        # separately while keeping separators and redirections out of the gap.
+        raw = s
+        sub(/(^|[[:space:]])#.*$/, "", raw)
+        qre = "[\"\047]"
+        return (raw ~ (trre "[^;|&<>]*" qre topath qre))
       }
       # UNIT: a sleeping LINE, exactly as count_sleeps counts it (grep -c counts
       # matching lines). Counting sleeping COMMANDS instead would make this split
