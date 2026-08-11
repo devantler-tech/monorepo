@@ -2353,7 +2353,9 @@ through the detector rather than the matcher.
 Three review rounds each found another container spelling past this check, which is one finding about
 its direction rather than three findings: stop enumerating the containers that can hide a marker and
 accept one only at a genuine structural position. Two rules do that. First, record the opener's
-container prefix and **close only on a line carrying that same prefix** — inside an open fence every
+container prefix and **close only on a line carrying that same prefix**, comparing the container
+**markers** with their spacing stripped — Markdown does not require a closer to sit at the opener's
+exact alignment, so a raw comparison rejects a valid closer. Inside an open fence every
 line is literal, so a `>` that appears in fenced *content* must never be stripped and read as a
 delimiter. Second, **four or more spaces of indentation at the current depth is an indented code
 block**: it can neither open nor close a fence nor carry a disclosure marker, while three spaces
@@ -2361,6 +2363,19 @@ remain ordinary alignment. Both fail in the dangerous direction if dropped — a
 quotes lands as `interactive` and parks that PR HANDS-OFF permanently — and both fail the *other* way
 if overdone, since a fence that never closes swallows a real trailing marker on the maintainer's own
 PR, so each carries a negative control asserting the closing form still works.
+🔴 **STOP ENUMERATING SPELLINGS — fail safe on a fence still open at the END of the body.** A real
+body does not end mid-fence, so an unclosed one is **proof the parse was wrong**: re-scan it with
+fence-skipping off. That can only *add* marker matches, and `interactive` wins ties, so every future
+close-detection miss parks our own PR rather than exposing the maintainer's to an unrequested
+mutation. This is the whitelist-inversion rule applied one level up — the answer to a fifth round of
+"another container gets past the fence" is a safety net under the whole class, not a sixth case.
+⚠️ **And weigh any further case against measurement: across 476 portfolio PR bodies (2026-08-11) this
+entire container parser changes ZERO verdicts** versus a bare one-`>`/emoji matcher — all 9 bodies
+carrying the interactive literal carry it as a plain line, none fenced, indented, list-wrapped,
+commented or quoted. The spellings still unhandled (`+`/ordered-list openers, HTML comments, nested
+blockquotes, a prose line merely starting with the literal) are therefore **deliberately not
+enumerated**: each is unmeasured, each fails toward a parked own PR, and each proposed fix trades that
+cheap failure for the expensive one. Add one only against measured incidence.
 **Line structure, never a bare substring and never a body-start anchor.** Measured 2026-08-11 across
 the open `devantler` PRs portfolio-wide, line-structural and bare-substring agree **exactly** — same
 classification for every PR — while a body-start anchor displaces **7** routine PRs to `none`; and

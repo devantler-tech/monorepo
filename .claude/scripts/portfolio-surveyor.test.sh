@@ -1591,8 +1591,17 @@ ownership_split() {
   OWN_PREFIX="${pfx}"; OWN_CONTENT="${ln}"
 }
 
-ownership_fixture() {
-  local body ln content ch run rest fchar='' flen=0 fpfx='' inter=0 routine=0
+# A container prefix with its whitespace removed. Markdown lets a closer sit at a different
+# ALIGNMENT from its opener, so comparing raw prefixes rejects valid closers and leaves the fence
+# open to the end of the body. Only the container MARKERS carry depth, so strip the spacing and
+# compare those. This is a PRECISION rule: the fail-safe in `ownership_fixture` is what makes an
+# unrecognised closer SAFE, while this keeps a fence that did close from needing that fallback --
+# without it a documented example is re-exposed and parks our own PR HANDS-OFF.
+ownership_norm_prefix() { local p="$1"; printf '%s' "${p//[[:space:]]/}"; }
+
+# $2 = 1 to skip fenced content, 0 to scan it anyway. Sets OWN_INTER/OWN_ROUTINE/OWN_UNCLOSED.
+ownership_scan() {
+  local body ln content ch run rest fchar='' flen=0 fpfx='' skip="$2" inter=0 routine=0
   body="$(printf '%b' "$1")"
   while IFS= read -r ln; do
     ownership_split "${ln}"
@@ -1608,8 +1617,8 @@ ownership_fixture() {
       while [ "${rest#"${ch}"}" != "${rest}" ]; do run="${run}${ch}"; rest="${rest#"${ch}"}"; done
       if [ "${#run}" -ge 3 ]; then
         if [ -z "${fchar}" ]; then
-          fchar="${ch}"; flen="${#run}"; fpfx="${OWN_PREFIX}"
-        elif [ "${OWN_PREFIX}" = "${fpfx}" ] && [ "${ch}" = "${fchar}" ] &&
+          fchar="${ch}"; flen="${#run}"; fpfx="$(ownership_norm_prefix "${OWN_PREFIX}")"
+        elif [ "$(ownership_norm_prefix "${OWN_PREFIX}")" = "${fpfx}" ] && [ "${ch}" = "${fchar}" ] &&
              [ "${#run}" -ge "${flen}" ] && [ -z "${rest//[[:space:]]/}" ]; then
           fchar=''; flen=0; fpfx=''
         fi
@@ -1618,7 +1627,7 @@ ownership_fixture() {
         continue
       fi
     fi
-    if [ -n "${fchar}" ]; then continue; fi
+    if [ "${skip}" -eq 1 ] && [ -n "${fchar}" ]; then continue; fi
 
     case "${content}" in '🤖'*) content="${content#🤖}" ;; esac
     while [ -n "${content}" ]; do
@@ -1632,6 +1641,25 @@ ownership_fixture() {
     # `routine` would be set there and discarded, and every body would classify `none`. Measured:
     # a counter incremented in a piped loop reads 0 afterwards and 2 through process substitution.
   done < <(printf '%s\n' "${body}")
+  OWN_INTER="${inter}"; OWN_ROUTINE="${routine}"
+  OWN_UNCLOSED=0; [ -n "${fchar}" ] && OWN_UNCLOSED=1
+  return 0
+}
+
+ownership_fixture() {
+  local inter routine
+  ownership_scan "$1" 1
+  inter="${OWN_INTER}"; routine="${OWN_ROUTINE}"
+  # FAIL-SAFE covering the whole class of close-detection bugs. Successive review rounds each found
+  # another container spelling that keeps a fence open past its real closer; enumerating the next one
+  # is the same finding again. An unclosed fence at end of body is instead PROOF the parse was wrong
+  # -- a real body does not end mid-fence -- so re-scan with skipping off. That can only ADD marker
+  # matches, and `interactive` wins ties, so every future close-detection miss now fails toward
+  # parking our own PR rather than toward driving the maintainer's.
+  if [ "${OWN_UNCLOSED}" -eq 1 ]; then
+    ownership_scan "$1" 0
+    inter="${OWN_INTER}"; routine="${OWN_ROUTINE}"
+  fi
 
   if [ "${inter}" -eq 1 ]; then printf 'interactive\n'
   elif [ "${routine}" -eq 1 ]; then printf 'routine\n'
@@ -1729,6 +1757,24 @@ expect_class interactive "${ROUTINE_LINE}\n\n    \`\`\`\n${INTER_LINE}" 'an inde
 expect_class interactive "${ROUTINE_LINE}\n\n> \`\`\`\n> x\n> \`\`\`\n${INTER_LINE}" 'a blockquoted fence closed at ITS OWN depth still closes'
 # Without the second, the cap swallows every indented line; three spaces is alignment, not code.
 expect_class interactive "${ROUTINE_LINE}\n\n   ${INTER_LINE}" 'three spaces is alignment: the marker still counts'
+
+# CLOSER ALIGNMENT. Markdown does not require the closer to sit at the opener's exact indentation.
+# Only container MARKERS carry depth, so the comparison strips spacing. With a raw-prefix compare
+# this fence never closes, the body ends mid-fence, the fail-safe below re-scans, and the example
+# the PR is merely DOCUMENTING is exposed as a real marker -- parking our own PR HANDS-OFF forever.
+# So this rule buys PRECISION (a closed fence keeps hiding its example); the fail-safe below is what
+# buys safety. The fixture is written so the fail-safe cannot mask it: under the ablation the
+# fail-safe is the mechanism that produces the wrong answer, rather than rescuing it.
+expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n${INTER_LINE}\n  \`\`\`\n\ntail" 'a fence whose closer is indented still hides its example'
+
+# FAIL-SAFE for every close-detection spelling this parser does not know. A body that ends with a
+# fence still open was mis-parsed -- real bodies do not end mid-fence -- so the scan is redone
+# without skipping, which can only ADD markers and therefore fails toward parking our own PR.
+# Deleting it restores the swallowing failure for any container spelling not enumerated above.
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n${INTER_LINE}" 'an unclosed fence must not swallow a real trailing marker'
+# Negative control: the fail-safe must not fire on a CLOSED fence, or the fence skip stops working
+# altogether and every documented example is read as a live marker.
+expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n${INTER_LINE}\n\`\`\`\n\ntail" 'a properly closed fence still hides its example'
 # A tab is the blockquote's separator, not content indentation. Counting it as four columns would
 # hide a REAL interactive marker -- the direction that costs the maintainer's PR, not just a parked one.
 expect_class interactive "${ROUTINE_LINE}\n\n>\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated blockquote marker still counts'
