@@ -2932,8 +2932,21 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   That carve-out does **not** extend to the other lanes: their trigger belongs in the *same* disclosed
   comment as its request marker, so a bare `@codex review` or `@coderabbitai review` is a violation.
   **The check is [`comment-disclosure-drift.sh`](.claude/scripts/comment-disclosure-drift.sh)**
-  (`--repo <owner>/<repo> --issue <n>`, or `--input <payload>`); exit 1 lists each offending comment
-  and names its shape. It reports **positive evidence of agent authorship only** — a `devantler`
+  (`--repo <owner>/<repo> --since <ISO-8601-UTC>` to sweep a repo, `--repo <owner>/<repo> --issue <n>`
+  for one discussion, or `--input <payload>`); exit 1 lists each offending comment
+  and names its shape. **Prefer `--since` — it is the only mode that finds drift nobody suspected**,
+  since `--issue` can only be aimed at a discussion someone already doubts. It reads every issue and PR
+  conversation touched since that instant in one paginated call.
+  The two are mutually exclusive, and the timestamp is a literal instant — the caller decides how far
+  back "recent" reaches, because BSD and GNU `date` disagree on relative arithmetic.
+  🔴 **On `--since`, read the findings, not the exit code.** A sweep's per-discussion history is
+  incomplete (`since` selects by *updated* time), so it never grants Bugbot's bare-trigger carve-out and
+  reports **every** bare `@cursor review` — exit 1 is therefore routine on a repo that uses Bugbot and
+  does not by itself mean drift. Verify each reported bare trigger with `--repo <owner>/<repo> --issue
+  <n>`, where the full comment list is present and a legitimate pairing resolves clean. Every other
+  shape it reports is a real finding. [#2781](https://github.com/devantler-tech/monorepo/issues/2781)
+  restores the precision.
+  It reports **positive evidence of agent authorship only** — a `devantler`
   comment matching **no recognised agent shape** is the human maintainer, so flagging it would report
   the control channel as a defect. Note the recognised shapes are broader than the 🤖 marker alone: a
   leading review-lane trigger is agent evidence too, because the engineer drives the review lanes and
