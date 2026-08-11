@@ -350,6 +350,18 @@ assert_prose 'current-head evaluation record' \
   "${constitution_flat}" "the merge preflight does not require the external-PR behaviour record at head"
 assert_prose 'park the PR on that named blocker' \
   "${constitution_flat}" "the preflight lets a build-and-lint-only external PR merge instead of parking it"
+# ...and requiring the record is still not enough, because nothing said WHO may author it or that the
+# run it names must be read. Measured at head 38786ef5 (CodeRabbit, 🟠 Major, Security & Privacy): the
+# record was admitted on the strength of the disclosure prefix, which is a public convention anyone
+# can type — so on an EXTERNAL PR the contributor could post it themselves and satisfy the one
+# condition the paragraph exists to impose on them. Both halves are pinned, because either alone
+# leaves the hole: an unauthenticated record, or an authenticated claim about a run nobody opened.
+assert_prose 'the disclosure prefix is **NOT** authentication' \
+  "${constitution_flat}" "an external contributor can author their own merge precondition"
+assert_prose 'author exactly `devantler`' \
+  "${constitution_flat}" "the external-PR evaluation record is not bound to an authorized author"
+assert_prose 'a record is a claim, not evidence' \
+  "${constitution_flat}" "the cited CI run is taken on trust instead of being read"
 
 # ── CI wiring ─────────────────────────────────────────────────────────────────
 # GitHub expression tokens are literal workflow syntax, not shell expansions.
