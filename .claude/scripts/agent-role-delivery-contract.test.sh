@@ -254,15 +254,21 @@ grep -Fq 'Agent Improver scorecard store' "${constitution}" ||
 grep -Fq 'open verification-hypothesis store' "${constitution}" ||
   fail "Memory does not name the Agent Improver hypothesis store"
 
-# Naming the two stores is NOT the same as requiring a run to read across them. Each of the three
-# assertions below pins a distinct clause, so deleting any one of them fails on its own line rather
-# than being masked by the others.
-grep -Fq "reads the SIBLING instance's scorecard and hypothesis store" "${constitution}" ||
-  fail "Memory does not require the Agent Improver to read the sibling instance's store"
-grep -Fq "sibling's pending hypothesis binds your signature-overlap decisions" "${constitution}" ||
-  fail "Memory does not bind signature-overlap decisions on a sibling's PENDING hypothesis"
-grep -Fq 'Settled is not the same as inconclusive' "${constitution}" ||
-  fail "Memory does not carve NO-VERDICT/NOT-YET-DUE out of the no-re-measure rule, so pending hypotheses could be frozen"
+# Naming the two stores is NOT the same as requiring a run to read across them. Each assertion below
+# pins a distinct clause, so deleting one fails on its own line rather than being masked by another.
+# These use assert_prose (whitespace-flattened) and carry the ORDERING and the SEMANTICS, not just a
+# recognisable prefix or heading: a prefix-only pin stays green while the clause that gives it meaning
+# is deleted, which is a fixture that proves nothing.
+assert_prose "reads the SIBLING instance's scorecard and hypothesis store too, before it scores or opens any hypothesis" \
+  "Memory does not require the sibling-store cross-read BEFORE scoring or opening a hypothesis (the ordering is the rule)"
+assert_prose "sibling's pending hypothesis binds your signature-overlap decisions" \
+  "Memory does not bind signature-overlap decisions on a sibling's PENDING hypothesis"
+assert_prose 'a signature the sibling has already **settled** is **not re-measured**' \
+  "Memory does not forbid re-measuring a signature the sibling has already settled"
+assert_prose 'whatever direction that verdict took and whichever window produced it' \
+  "Memory does not extend the no-re-measure rule to negative verdicts and earlier windows, so both could be re-measured"
+assert_prose 'A sibling `NO-VERDICT`, `NOT-YET-DUE`, or an explicitly unmet measurement floor is **unsettled**, and those stay measurable' \
+  "Memory does not classify NO-VERDICT/NOT-YET-DUE/unmet-floor as unsettled, so pending hypotheses could be frozen"
 
 for authority_row in \
   '| **Prose tightening**' \
