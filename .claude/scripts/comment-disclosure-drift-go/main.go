@@ -523,10 +523,16 @@ func excerpt(line string, limit int) string {
 // BEFORE it, which is what keeps the thread self-documenting. A bare trigger
 // standing alone therefore has no exemption to claim, and judging it per-body in
 // isolation would clear exactly the unpaired case the carve-out excludes.
+//
+// "Immediately before" is a fact about ONE DISCUSSION, so the predecessor is
+// tracked per issue_url rather than as a single global. A repo-wide payload
+// interleaves discussions, and a global predecessor gets both directions wrong:
+// issue A's disclosure would grant issue B's trigger a carve-out it never earned,
+// and a comment from issue B standing between issue A's disclosure and A's trigger
+// would revoke one that is legitimate within A.
 func Analyse(comments []Comment, author string) Report {
 	report := Report{Counts: map[Verdict]int{}}
-	previousWasDisclosure := false
-	previousDiscussion := ""
+	lastWasDisclosure := map[string]bool{}
 	for _, comment := range comments {
 		if comment.login() != author {
 			report.SkippedAuthors++
@@ -534,17 +540,12 @@ func Analyse(comments []Comment, author string) Report {
 		}
 		report.Considered++
 		verdict := Classify(comment.Body)
-		// "Immediately before" means within one discussion. A repo-wide payload
-		// interleaves them, so a disclosure in one issue must not carve out a bare
-		// trigger in another; array adjacency alone is not the pairing.
-		pairedInSameDiscussion := previousWasDisclosure && comment.IssueURL == previousDiscussion
-		if verdict == BareTrigger && !pairedInSameDiscussion {
+		if verdict == BareTrigger && !lastWasDisclosure[comment.IssueURL] {
 			// The exemption is conditional on the pairing; unpaired, it is an
 			// undisclosed trigger like any other.
 			verdict = UndisclosedTrigger
 		}
-		previousWasDisclosure = hasCanonicalPrefix(normalise(comment.Body))
-		previousDiscussion = comment.IssueURL
+		lastWasDisclosure[comment.IssueURL] = hasCanonicalPrefix(normalise(comment.Body))
 		report.Counts[verdict]++
 		if !verdict.violating() {
 			continue

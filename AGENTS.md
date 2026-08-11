@@ -2906,8 +2906,15 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   That carve-out does **not** extend to the other lanes: their trigger belongs in the *same* disclosed
   comment as its request marker, so a bare `@codex review` or `@coderabbitai review` is a violation.
   **The check is [`comment-disclosure-drift.sh`](.claude/scripts/comment-disclosure-drift.sh)**
-  (`--repo <owner>/<repo> --issue <n>`, or `--input <payload>`); exit 1 lists each offending comment
-  and names its shape. It reports **positive evidence of agent authorship only** — a `devantler`
+  (`--repo <owner>/<repo> --since <ISO-8601-UTC>` to sweep a repo, `--repo <owner>/<repo> --issue <n>`
+  for one discussion, or `--input <payload>`); exit 1 lists each offending comment
+  and names its shape. **Prefer `--since` — it is the only mode that finds drift nobody suspected.**
+  `--issue` can only be aimed at a discussion you already doubt, which is how 18 offending comments
+  accumulated across four issues before anyone looked (#2609); `--since` reads every issue and PR
+  conversation touched since that instant in one paginated call, so a regression surfaces on its own.
+  The two are mutually exclusive, and the timestamp is a literal instant — the caller decides how far
+  back "recent" reaches, because BSD and GNU `date` disagree on relative arithmetic.
+  It reports **positive evidence of agent authorship only** — a `devantler`
   comment matching **no recognised agent shape** is the human maintainer, so flagging it would report
   the control channel as a defect. Note the recognised shapes are broader than the 🤖 marker alone: a
   leading review-lane trigger is agent evidence too, because the engineer drives the review lanes and
