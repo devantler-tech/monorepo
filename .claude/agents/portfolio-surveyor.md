@@ -148,8 +148,9 @@ public and private — no per-repo loop needed to enumerate):
      example carries a marker line that is an illustration, not a disclosure. Without this, such a PR
      matches `interactive`, wins the tie against its own real routine disclosure, and is parked
      HANDS-OFF **permanently** — its body never changes, so every later run repeats the verdict.
-     🔴 **A fence is DELIMITER-AWARE, never a boolean toggle.** An opener is a run of **three or
-     more** ` ``` ` or `~~~`; it closes only on a run of the **same character**, **at least as long**
+     🔴 **A fence is DELIMITER-AWARE, never a boolean toggle.**
+     An opener is a run of **three or more** ` ``` ` or `~~~`; it
+     closes only on a run of the **same character**, **at least as long**
      as the opener, and carrying **no info string**. Track the opening character and length — a
      toggle flips on the first token it meets, so an inner `~~~`, a shorter inner run, or an
      ` ```markdown ` opener *inside* the block ends the outer fence early and exposes the very marker
