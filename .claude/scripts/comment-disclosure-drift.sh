@@ -42,6 +42,15 @@
 # endpoint rather than a per-issue fan-out, so the whole repo costs about what a
 # single busy issue does. Pass a literal UTC instant; the caller decides how far
 # back "recent" reaches.
+#
+# KNOWN BOUNDARY EFFECT (--since only): the bare-trigger carve-out needs the
+# disclosure that immediately precedes the trigger, and `since` returns only
+# comments updated after the cutoff. A bare trigger created just inside the window
+# whose disclosure sits just outside it therefore has no visible predecessor and is
+# reported as an `undisclosed-trigger` it does not deserve. This fails in the noisy
+# direction rather than the silent one, so it is a false accusation to re-check with
+# `--issue <n>` on that discussion, never a missed violation. Overlapping the window
+# with the previous sweep avoids it. Tracked for a real fix at monorepo#2781.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -145,7 +154,12 @@ api_path=""
 api_label=""
 if [ -z "$input" ]; then
   if [ -n "$since" ]; then
-    api_path="repos/${repo}/issues/comments?since=${since}&per_page=100"
+    # sort/direction are pinned, not inherited. The guard's carve-out depends on
+    # each discussion being seen oldest-first, and an implicit default is not a
+    # contract -- measured 2026-08-11 the endpoint already returns ascending
+    # created order and these parameters do not change which comments come back
+    # (identical id set), so this costs nothing and removes the dependency.
+    api_path="repos/${repo}/issues/comments?since=${since}&per_page=100&sort=created&direction=asc"
     api_label="repos/${repo}/issues/comments since ${since}"
   else
     api_path="repos/${repo}/issues/${issue}/comments"
@@ -228,6 +242,19 @@ if ! jq -e '
         (((.user.login? // "") | length > 0) or ((.author? // "") | length > 0)))
     ' "$payload" >/dev/null 2>&1; then
   die "response for ${api_label} is not an array of author-attributed comments"
+fi
+
+# The repo-wide path REQUIRES a discussion key on every record. The guard scopes the
+# bare-trigger carve-out per issue_url and treats an absent value as "one discussion"
+# -- which is correct for a hand-assembled --input payload and wrong here: it would
+# collapse every discussion back into one, letting a disclosure in issue A exempt an
+# undisclosed trigger in issue B and report clean. Every real record carries the
+# field (measured: 0 missing across a live window), so its absence means the payload
+# is not what this path assumes rather than a discussion legitimately without one.
+if [ -n "$since" ] && ! jq -e '
+      all(.[]; (.issue_url? // "") | length > 0)
+    ' "$payload" >/dev/null 2>&1; then
+  die "response for ${api_label} has records without issue_url, so discussions cannot be told apart"
 fi
 
 "$guard_binary" --author "$author" "${pass_through[@]+"${pass_through[@]}"}" --input "$payload"
