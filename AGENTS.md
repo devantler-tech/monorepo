@@ -3096,16 +3096,16 @@ step:
    it scores or opens any hypothesis — naming the two stores is not the same as wiring them together.**
    Each run boots into its own store, so without this cross-read a hypothesis opened by one instance can
    never be scored, closed, or respected by the other, and the ledger splits in half. Measured
-   2026-08-11: of ~15 open hypotheses, **exactly one (#28) appeared in both** — Claude held 5/10b/11/14/
-   15/16/18/19/21/27/28 and Codex held 28/29/30/31/32, so **#29–#32 were invisible to Claude**. That cost
-   two things the same day. **A duplicated heavy measurement:** Claude's ledger carried #19 as *"needs
-   attribution next run"* while the Codex run at **05:29Z had already attributed it** (one real
-   instruction-shaped cross-agent handoff, correctly rejected; every other dominant hit traced to loaded
-   definition, memory, telemetry-report or current-run echo). **And an unsatisfiable constraint:** the
-   `agent-improvement` skill's step 5 says to
-   continue only with work that cannot affect a pending hypothesis's tracked signature, yet Codex's
-   memory reads *"Do not change polling classification before those gates"* for its #29/#30 while
-   Claude's own **#10b tracks foreground polling** — the same signature. An instance cannot honour a gate
+   2026-08-11 and stated as an **aggregate on purpose** — the inventories themselves are private runtime
+   state, so this paragraph must not quote them: of roughly fifteen open hypotheses across the two
+   instances, **exactly one was shared**; every other one was visible to only the instance that opened
+   it. That cost two things the same day. **A duplicated heavy measurement:** one instance's ledger
+   carried a provenance question as *"needs attribution next run"* that the other had **already
+   attributed hours earlier**. **And an unsatisfiable constraint:** the `agent-improvement` skill's
+   step 5 says to
+   continue only with work that cannot affect a pending hypothesis's tracked signature — yet one
+   instance held a pending gate over a signature the *other* instance was independently tracking, with
+   no path between them. An instance cannot honour a gate
    it has no path to read, so that rule was unenforceable across instances **by construction**. So: a
    **sibling's pending hypothesis binds your signature-overlap decisions** exactly as your own does, and
    a signature the sibling has already **settled** is **not re-measured** — record its verdict and move

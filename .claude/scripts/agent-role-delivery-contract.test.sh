@@ -254,6 +254,16 @@ grep -Fq 'Agent Improver scorecard store' "${constitution}" ||
 grep -Fq 'open verification-hypothesis store' "${constitution}" ||
   fail "Memory does not name the Agent Improver hypothesis store"
 
+# Naming the two stores is NOT the same as requiring a run to read across them. Each of the three
+# assertions below pins a distinct clause, so deleting any one of them fails on its own line rather
+# than being masked by the others.
+grep -Fq "reads the SIBLING instance's scorecard and hypothesis store" "${constitution}" ||
+  fail "Memory does not require the Agent Improver to read the sibling instance's store"
+grep -Fq "sibling's pending hypothesis binds your signature-overlap decisions" "${constitution}" ||
+  fail "Memory does not bind signature-overlap decisions on a sibling's PENDING hypothesis"
+grep -Fq 'Settled is not the same as inconclusive' "${constitution}" ||
+  fail "Memory does not carve NO-VERDICT/NOT-YET-DUE out of the no-re-measure rule, so pending hypotheses could be frozen"
+
 for authority_row in \
   '| **Prose tightening**' \
   '| **Prose loosening**' \
