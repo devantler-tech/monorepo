@@ -3101,8 +3101,7 @@ step:
    two things the same day. **A duplicated heavy measurement:** Claude's ledger carried #19 as *"needs
    attribution next run"* while the Codex run at **05:29Z had already attributed it** (one real
    instruction-shaped cross-agent handoff, correctly rejected; every other dominant hit traced to loaded
-   definition, memory, telemetry-report or current-run echo) — and provenance is the miner's most
-   expensive section. **And an unsatisfiable constraint:** the `agent-improvement` skill's step 5 says to
+   definition, memory, telemetry-report or current-run echo). **And an unsatisfiable constraint:** the `agent-improvement` skill's step 5 says to
    continue only with work that cannot affect a pending hypothesis's tracked signature, yet Codex's
    memory reads *"Do not change polling classification before those gates"* for its #29/#30 while
    Claude's own **#10b tracks foreground polling** — the same signature. An instance cannot honour a gate
