@@ -288,7 +288,17 @@ assert_prose "The sibling's file remains **its** single source of truth — read
 sibling_fixture="${repo_root}/.claude/scripts/fixtures/agent-improver-sibling-ledger.txt"
 [ -r "${sibling_fixture}" ] ||
   fail "sibling-ledger fixture is missing: ${sibling_fixture}"
-sibling_block="$(awk '/^   🔴 \*\*Each Agent Improver run reads the SIBLING/{f=1} f{print} /read it, never$/{if(f){print "   write it."; exit}}' "${constitution}")"
+# Read the REAL terminating line; never fabricate it. An earlier version printed a literal
+# "   write it." after seeing "read it, never" and exited, so qualifying the rule on its continuation
+# line (e.g. "write it unless its verdict is stale.") produced the ORIGINAL text and the diff passed —
+# a fail-open in the very check meant to close the class. The named assertion misses it too, because
+# the flattened prefix "read it, never write it" is still a substring of the weakened sentence.
+sibling_block="$(awk '
+  /^   🔴 \*\*Each Agent Improver run reads the SIBLING/ { f = 1 }
+  f { print }
+  f && stop { exit }
+  f && /read it, never$/ { stop = 1 }
+' "${constitution}")"
 [ -n "${sibling_block}" ] ||
   fail "Could not locate the sibling-ledger block in AGENTS.md — its opening anchor was removed or reworded"
 if ! printf '%s\n' "${sibling_block}" | diff -q - "${sibling_fixture}" >/dev/null 2>&1; then

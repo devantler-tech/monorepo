@@ -24,4 +24,4 @@
    starve exactly the hypotheses still waiting for the data that would close them. ⚠️ Both stores stay **private runtime state**: cross-*reading* them is
    mandatory, cross-*publishing* them is not permitted, and nothing read this way enters a repository
    artifact or public comment. The sibling's file remains **its** single source of truth — read it, never
-   write it.
+   write it. The
