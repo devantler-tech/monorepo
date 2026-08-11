@@ -123,11 +123,15 @@ if [ -z "$input" ]; then
       *) : ;;
     esac
   fi
-  # GitHub IGNORES an unparseable `since` and returns the most recent comments
-  # instead, so a typo would sweep a narrower window than requested and report the
-  # whole window clean. Validate the shape here rather than trusting the API to
-  # reject it. A literal timestamp keeps this portable: BSD and GNU `date` disagree
-  # on relative arithmetic, so the caller computes the instant, not this script.
+  # A cheap shape check, NOT a safety property -- measured 2026-08-11: GitHub
+  # rejects a `since` it cannot parse with HTTP 422 (and rejects a shape-valid but
+  # impossible instant like 2026-19-39T29:59:69Z the same way), so anything this
+  # glob lets through still fails closed on the gh-error path below. It is here to
+  # name the mistake plainly instead of surfacing a 422, and to not spend a network
+  # call on an obvious typo.
+  #
+  # A literal instant keeps this portable: BSD and GNU `date` disagree on relative
+  # arithmetic, so the caller computes the instant, not this script.
   if [ -n "$since" ]; then
     case "$since" in
       [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]Z) : ;;

@@ -237,9 +237,11 @@ expect_exit 2 "--since needs --repo" -- bash "$guard" --since 2026-08-10T00:00:0
 expect_exit 2 "--since with --input" -- bash "$guard" --input - --since 2026-08-10T00:00:00Z
 # Scope must be unambiguous: one issue OR the repo, never a silent preference.
 expect_exit 2 "--since with --issue is ambiguous" -- bash "$guard" --repo owner/repo --issue 1 --since 2026-08-10T00:00:00Z
-# A malformed timestamp would be sent to GitHub, which IGNORES an unparseable
-# `since` and returns the repo's most recent comments instead -- a narrower window
-# than asked for, reported as if the whole window were clean.
+# A malformed timestamp is rejected locally so the caller reads a plain message
+# rather than a 422, and so an obvious typo costs no network call. Measured
+# 2026-08-11: GitHub answers an unparseable `since` with HTTP 422 -- it does NOT
+# silently widen the window -- so this is defence in depth and a better error, not
+# the only thing between a typo and a falsely-clean sweep.
 #
 # These two MUST run against a gh that would otherwise SUCCEED. Measured while
 # ablating: without a stub, `owner/repo` does not exist, so real gh fails and the
