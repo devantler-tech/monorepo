@@ -139,48 +139,26 @@ public and private — no per-repo loop needed to enumerate):
      **Both literals are matched as a STRUCTURAL LINE, anywhere in the body** — a line whose content,
      after leading whitespace and any blockquote `>` or list `-`/`*` markers, begins with the marker
      (an optional 🤖 may precede it). Never a bare substring, and never anchored to the body start.
-     🔴 **Skip fenced blocks first — and recognise a fence through the SAME container prefix the
-     marker matcher strips**, so a fence opened inside a blockquote or list (`> ```markdown`,
-     `- ``` `) still counts. Tying both to one prefix is what stops them drifting apart: any container
-     the matcher sees through, the fence detector must see through too.
-     Drop every line inside a ` ``` ` or `~~~` fence before matching:
-     a fence does not change line structure, so a PR that *documents* this convention with a fenced
-     example carries a marker line that is an illustration, not a disclosure. Without this, such a PR
-     matches `interactive`, wins the tie against its own real routine disclosure, and is parked
-     HANDS-OFF **permanently** — its body never changes, so every later run repeats the verdict.
-     🔴 **A fence is DELIMITER-AWARE, never a boolean toggle.**
-     An opener is a run of **three or more** ` ``` ` or `~~~`; it
-     closes only on a run of the **same character**, **at least as long**
-     as the opener, and carrying **no info string**. Track the opening character and length — a
-     toggle flips on the first token it meets, so an inner `~~~`, a shorter inner run, or an
-     ` ```markdown ` opener *inside* the block ends the outer fence early and exposes the very marker
-     the example was illustrating. That is the same permanent false HANDS-OFF, reached through the
-     detector instead of the matcher.
-     🔴 **A closer must sit at the opener's OWN container depth, and four spaces is code, not a
-     marker.** Successive review rounds each found another container spelling past this check; that is
-     one finding about the check's direction, so accept a marker only at a genuine structural position
-     rather than enumerating the containers that can hide one. Record the opener's container prefix
-     and **close only on a line carrying that same prefix**, comparing the container **markers** with
-     their spacing stripped — Markdown does not require a closer to sit at the opener's exact
-     alignment, so a raw comparison rejects a valid closer and re-exposes the example beneath it.
-     Inside an open fence every line is
-     literal, so a `>` appearing in fenced *content* must never be stripped and read as a delimiter.
-     And treat **four or more spaces of indentation at the current depth as an indented code block** —
-     it opens no fence, closes none, and carries no marker — while three spaces stay ordinary
-     alignment. Both drop into the permanent false HANDS-OFF if omitted; both swallow a real trailing
-     marker if overapplied, so each needs a control proving the closing form still works.
-     🔴 **Fail safe on any fence still open at the END of the body — do not enumerate the next
-     container spelling.** A real body does not end mid-fence, so an unclosed one is **proof the parse
-     was wrong**: re-scan with fence-skipping off. That can only *add* marker matches, and
-     `interactive` wins ties, so every future close-detection miss parks our own PR instead of
-     exposing the maintainer's to an unrequested mutation.
-     ⚠️ **Measured 2026-08-11 across 476 portfolio PR bodies: this whole container parser changes
-     ZERO verdicts** versus a bare one-`>`/emoji matcher — all 9 bodies carrying the interactive
-     literal carry it as a plain line, none fenced, indented, list-wrapped, commented or quoted. So
-     the spellings still unhandled (`+`/ordered-list openers, HTML comments, nested blockquotes, a
-     prose line merely starting with the literal) are **deliberately not enumerated**: each is
-     unmeasured, each fails toward a parked own PR, and each proposed fix trades that cheap failure
-     for the expensive one. Add one only against measured incidence.
+     🔴 **A marker line counts wherever it appears — there is NO fenced-block suppression, and that
+     is a measured decision.** Across **1029 portfolio PR bodies (2026-08-11)** a full delimiter-aware
+     fence state machine changes **ZERO verdicts** versus this rule: every body carrying either literal
+     carries it as a plain line, none fenced. Six review rounds each found one more container spelling
+     that slipped past such a detector — an unskipped fence, a nested fence, a blockquoted close token,
+     an indented code block, a backtick inside an info string, a raw HTML block — so the detector cost
+     an unbounded enumeration to decide nothing.
+     ⚠️ **The accepted cost is stated, not hidden:** a PR body that **fences an example** of the
+     interactive literal classifies `interactive` and parks itself HANDS-OFF. That is the **cheap**
+     direction — our own PR waits for a human — and its measured incidence is **0**. The expensive
+     direction is a real marker swallowed by a mis-parsed fence, which drives the maintainer's PR;
+     every round of fence repair risked reintroducing exactly that. Restore fence handling only
+     against measured incidence of the cheap failure actually occurring.
+     🔴 **Two structural rules remain, because they serve the MATCHER rather than
+     example-suppression.** Read each line through its Markdown **container prefix** — up to three
+     spaces of alignment, blockquote `>` markers, and `-`/`*` list markers, each consuming its optional
+     following space **or tab** — because the org PR template puts the disclosure under a `- ` bullet,
+     so a container-blind matcher misses real disclosures. And treat
+     **four or more spaces of indentation at the current depth** as an indented code block carrying
+     no marker, while three spaces stay ordinary alignment.
      - `interactive` — a marker line for `Generated with [Claude Code]`. The maintainer's own
        hand-driven session: **HANDS-OFF**.
      - `routine` — no interactive marker line, and a marker line for `Generated by the` (match that

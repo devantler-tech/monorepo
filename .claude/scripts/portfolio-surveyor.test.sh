@@ -1503,39 +1503,26 @@ grep -Fq 'resolves it from its creation record' "${surveyor}" ||
   fail "surveyor must route the \`none\` case to the orchestrator's creation record (#2762)"
 
 
-grep -Fq 'Skip fenced blocks first' "${surveyor}" ||
-  fail "surveyor must exclude fenced blocks before matching an ownership marker (#2762)"
-
-grep -Fq 'after dropping every line inside a' "${constitution}" ||
-  fail "AGENTS.md must exclude fenced blocks before matching an ownership marker (#2762)"
-
-# "Skip fenced blocks" alone is satisfiable by a boolean toggle, which is wrong on a nested example
-# and fails in the permanent-false-HANDS-OFF direction. Both sites must state the closing rule.
-grep -Fq 'DELIMITER-AWARE, never a boolean toggle' "${surveyor}" ||
-  fail "surveyor must require a delimiter-aware fence, not a toggle (#2762)"
-
-grep -Fq 'DELIMITER-AWARE, never a boolean toggle' "${constitution}" ||
-  fail "AGENTS.md must require a delimiter-aware fence, not a toggle (#2762)"
-
-# Pin the CLAUSE, not the bare English. 'same character' and 'at least as long' are ordinary prose an
-# unrelated edit could reintroduce elsewhere, which is the weakness already documented above for
-# 'anywhere'; and a markdown reflow that wraps mid-phrase would silently break a fragment pin. These
-# carry their markdown emphasis, so they exist only as the rule statement itself.
+# NO fenced-block suppression. Six review rounds each found one more container spelling past a fence
+# detector, and a 1029-body portfolio differential (2026-08-11) showed the whole state machine changes
+# ZERO verdicts. Both sites must state that absence explicitly, because a reader who finds no fence
+# rule cannot otherwise tell a deliberate omission from an oversight — and re-adding one silently is
+# exactly how the enumeration loop restarts.
 for _site in "${surveyor}" "${constitution}"; do
   _n="$(basename "${_site}")"
-  grep -Fq 'closes only on a run of the **same character**' "${_site}" ||
-    fail "${_n} must require a closing fence to use the same character as its opener (#2762)"
-  grep -Fq '**at least as long**' "${_site}" ||
-    fail "${_n} must require a closing fence run at least as long as the opener (#2762)"
-  grep -Fq 'carrying **no info string**' "${_site}" ||
-    fail "${_n} must require a closing fence to carry no info string (#2762)"
-  grep -Fq 'three or more' "${_site}" ||
-    fail "${_n} must state the three-character minimum for a fence opener (#2762)"
-  # Both clauses are pinned mid-phrase and deliberately stop short of the wrap point: the AGENTS.md
-  # copy breaks the line at "indented code / block", so pinning the whole bolded span would fail on
-  # a reflow rather than on a real regression.
-  grep -Fq 'close only on a line carrying that same prefix' "${_site}" ||
-    fail "${_n} must anchor a fence closer to the opener's container prefix (#2762)"
+  grep -Fq 'there is NO fenced-block suppression' "${_site}" ||
+    fail "${_n} must state that fenced blocks are NOT suppressed when matching a marker (#2762)"
+  # The absence is only defensible with its measurement and its named cost. Without the cost clause a
+  # later round reads the omission as a bug and "fixes" it; without the measurement the omission has
+  # no evidence behind it.
+  grep -Fq '1029 portfolio PR bodies' "${_site}" ||
+    fail "${_n} must carry the corpus size behind the no-fence decision (#2762)"
+  grep -Fq 'parks itself HANDS-OFF' "${_site}" ||
+    fail "${_n} must name the accepted cost of dropping fence suppression (#2762)"
+  # The two rules that REMAIN serve the matcher, not example-suppression. The org PR template puts the
+  # disclosure under a `- ` bullet, so losing the container prefix loses real disclosures.
+  grep -Fq 'container prefix' "${_site}" ||
+    fail "${_n} must read a marker line through its Markdown container prefix (#2762)"
   grep -Fq 'four or more spaces of indentation at the current depth' "${_site}" ||
     fail "${_n} must exclude Markdown indented code blocks from marker matching (#2762)"
 done
@@ -1545,17 +1532,17 @@ done
 # correctly noted on #2767 that the grep assertions exercise no behaviour, so a rule could be worded
 # correctly and still be unimplementable or wrong on the cases that matter.
 # Split a line into its Markdown CONTAINER PREFIX and the content that follows, setting
-# OWN_PREFIX / OWN_CONTENT / OWN_CODE. Returning the prefix — rather than discarding it as the
-# earlier stripper did — is what lets the fence detector below tell a delimiter apart from fenced
-# CONTENT that merely looks like one.
+# OWN_PREFIX / OWN_CONTENT / OWN_CODE. This is what makes the match STRUCTURAL rather than a bare
+# substring: the org PR template puts the disclosure under a `- ` bullet, so a container-blind
+# matcher misses real disclosures.
 #
 # Containers consumed: up to three spaces of alignment, blockquote `>` markers (plus one optional
 # following space), and `-`/`*` list markers. A list marker counts only when whitespace follows it,
 # so `**bold` keeps its asterisks and stays ordinary prose.
 #
 # OWN_CODE marks a Markdown INDENTED CODE BLOCK — four or more spaces of indentation at the current
-# container depth. Such a line is literal text: it can neither open nor close a fence nor carry a
-# disclosure marker. Without this, four-space-indented example markup is read as the real thing.
+# container depth. Such a line is literal text and carries no disclosure marker. Without this,
+# four-space-indented example markup is read as the real thing.
 ownership_split() {
   local ln="$1" pfx='' n c
   OWN_PREFIX=''; OWN_CONTENT=''; OWN_CODE=0
@@ -1602,35 +1589,21 @@ ownership_split() {
   OWN_PREFIX="${pfx}"; OWN_CONTENT="${ln}"
 }
 
-# $2 = 1 to skip fenced content, 0 to scan it anyway. Sets OWN_INTER/OWN_ROUTINE/OWN_UNCLOSED.
+# Sets OWN_INTER/OWN_ROUTINE. There is deliberately NO fence state here: a marker line counts wherever
+# it appears. Six review rounds each found one more container spelling that got past a delimiter-aware
+# fence detector, and a 1029-body portfolio differential (2026-08-11) measured that the whole state
+# machine changes ZERO verdicts -- so it bought an unbounded enumeration and decided nothing. The cost
+# of dropping it is a PR that FENCES an example of the interactive literal parking itself HANDS-OFF:
+# the cheap direction (our own PR waits for a human), measured incidence 0.
 ownership_scan() {
-  local body ln content ch run rest fchar='' flen=0 fpfx='' skip="$2" inter=0 routine=0
+  local body ln content inter=0 routine=0
   body="$(printf '%b' "$1")"
   while IFS= read -r ln; do
     ownership_split "${ln}"
     content="${OWN_CONTENT}"
 
-    # An indented code block is literal text at every level: not a fence, not a marker.
+    # An indented code block is literal text at every level, so it carries no marker.
     if [ "${OWN_CODE}" -eq 1 ]; then continue; fi
-
-    ch=''
-    case "${content}" in '`'*) ch='`' ;; '~'*) ch='~' ;; esac
-    if [ -n "${ch}" ]; then
-      run=''; rest="${content}"
-      while [ "${rest#"${ch}"}" != "${rest}" ]; do run="${run}${ch}"; rest="${rest#"${ch}"}"; done
-      if [ "${#run}" -ge 3 ]; then
-        if [ -z "${fchar}" ]; then
-          fchar="${ch}"; flen="${#run}"; fpfx="${OWN_PREFIX}"
-        elif [ "${OWN_PREFIX//[[:space:]]/}" = "${fpfx//[[:space:]]/}" ] && [ "${ch}" = "${fchar}" ] &&
-             [ "${#run}" -ge "${flen}" ] && [ -z "${rest//[[:space:]]/}" ]; then
-          fchar=''; flen=0; fpfx=''
-        fi
-        # Either way a fence line carries no marker; and a token at a DIFFERENT container depth is
-        # fenced content rather than this fence's closer, so it must not reopen or close anything.
-        continue
-      fi
-    fi
-    if [ "${skip}" -eq 1 ] && [ -n "${fchar}" ]; then continue; fi
 
     case "${content}" in '🤖'*) content="${content#🤖}" ;; esac
     while [ -n "${content}" ]; do
@@ -1645,29 +1618,14 @@ ownership_scan() {
     # a counter incremented in a piped loop reads 0 afterwards and 2 through process substitution.
   done < <(printf '%s\n' "${body}")
   OWN_INTER="${inter}"; OWN_ROUTINE="${routine}"
-  # Written as an `if`, not `[ -n … ] && OWN_UNCLOSED=1`: the suite runs under `set -e`, where that
-  # AND-list is only exempt because the assignment is its final command. That exemption is real but
-  # easy to break by appending anything after it, and the breakage would be a silent early exit.
-  if [ -n "${fchar}" ]; then OWN_UNCLOSED=1; else OWN_UNCLOSED=0; fi
 }
 
 ownership_fixture() {
-  local inter routine
-  ownership_scan "$1" 1
-  inter="${OWN_INTER}"; routine="${OWN_ROUTINE}"
-  # FAIL-SAFE covering the whole class of close-detection bugs. Successive review rounds each found
-  # another container spelling that keeps a fence open past its real closer; enumerating the next one
-  # is the same finding again. An unclosed fence at end of body is instead PROOF the parse was wrong
-  # -- a real body does not end mid-fence -- so re-scan with skipping off. That can only ADD marker
-  # matches, and `interactive` wins ties, so every future close-detection miss now fails toward
-  # parking our own PR rather than toward driving the maintainer's.
-  if [ "${OWN_UNCLOSED}" -eq 1 ]; then
-    ownership_scan "$1" 0
-    inter="${OWN_INTER}"; routine="${OWN_ROUTINE}"
-  fi
-
-  if [ "${inter}" -eq 1 ]; then printf 'interactive\n'
-  elif [ "${routine}" -eq 1 ]; then printf 'routine\n'
+  ownership_scan "$1"
+  # `interactive` wins ties: reading the maintainer's PR as ours licenses an unrequested mutation,
+  # while the reverse merely parks one of ours until a human looks.
+  if [ "${OWN_INTER}" -eq 1 ]; then printf 'interactive\n'
+  elif [ "${OWN_ROUTINE}" -eq 1 ]; then printf 'routine\n'
   else printf 'none\n'; fi
 }
 
@@ -1684,9 +1642,9 @@ expect_class interactive "text\n\xf0\x9f\xa4\x96 Generated with [Claude Code](ht
 expect_class routine     "### Motivation\n\n- ${ROUTINE_LINE}" 'disclosure under the org template heading'
 expect_class routine     "${ROUTINE_LINE}\n\nbody" 'canonical routine disclosure'
 expect_class none        'no marker at all here' 'unmarked body'
-# the two false-positive shapes this PR closed, in order of discovery:
+# the false-positive shape this PR closed: a bare substring match reads prose ABOUT the convention as
+# a disclosure, so a PR discussing it parks itself HANDS-OFF forever. Line structure is what fixes it.
 expect_class routine     "${ROUTINE_LINE}\n\nwe match Generated with [Claude Code] inline" 'marker quoted mid-sentence must NOT win'
-expect_class routine     "${ROUTINE_LINE}\n\n\`\`\`\n${INTER_LINE}\n\`\`\`" 'marker inside a fence must NOT win'
 
 # `interactive wins` is the fail-safe for a body carrying BOTH markers. No live PR carries both, so it
 # is LATENT — which is exactly why it needs a fixture: nothing else fails if it is removed. Without
@@ -1702,86 +1660,39 @@ expect_class interactive "${INTER_LINE}\n\n${ROUTINE_LINE}" 'both markers, inter
 expect_class none    '**Generated with [Claude Code](https://x)**' 'BOLD interactive text is not a marker'
 expect_class none    '**Generated by the Agentic Engineer**'       'BOLD routine text is not a marker'
 
-# A fence inside a blockquote or list is still a fence. The detector uses the SAME container prefix
-# the marker matcher strips, so the two cannot drift apart: any container the matcher sees through,
-# the fence detector also sees through (Codex P2 -- the 4th shape of "text that looks like a marker").
-expect_class routine "${ROUTINE_LINE}\n\n> \`\`\`markdown\n> > \xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)\n> \`\`\`" 'fence nested in a blockquote must NOT win'
-expect_class routine "- \xf0\x9f\xa4\x96 Generated by the Agentic Engineer\n\n- \`\`\`\n- > \xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)\n- \`\`\`" 'fence nested in a list must NOT win'
+# THE ACCEPTED COST, pinned deliberately so a later round cannot read it as a bug and "fix" it. With
+# no fence state, a body that FENCES an example of the interactive literal classifies `interactive`
+# and parks itself HANDS-OFF. That is the CHEAP direction -- our own PR waits for a human -- and its
+# measured incidence across 1029 portfolio bodies (2026-08-11) is 0. Six review rounds each found one
+# more container spelling past a delimiter-aware detector; deleting these fixtures is how that
+# enumeration restarts, so they state the trade instead of hiding it.
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\n${INTER_LINE}\n\`\`\`" 'a FENCED interactive example still classifies interactive (accepted cost)'
+expect_class interactive "${ROUTINE_LINE}\n\n> \`\`\`markdown\n> > \xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)\n> \`\`\`" 'a fence nested in a blockquote suppresses nothing'
 
-# A fence closes only on the SAME character, a run at least as long as the opener, and no info
-# string. A detector that merely TOGGLES on any fence token gets all three of these wrong, and the
-# failure direction is the worst one available: the marker inside the example reads as a real
-# disclosure, so a PR documenting this very convention classifies `interactive` and parks itself
-# HANDS-OFF permanently -- its body never changes, so every later run repeats the verdict. Measured
-# against the toggling implementation: all three returned `interactive`.
-expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n~~~\n${INTER_LINE}\n~~~\n\`\`\`" 'MIXED delimiter: ~~~ must not close a backtick fence'
-# The inner opener carries NO info string, deliberately. With ` ```markdown ` here the info-string
-# rule rejects the close first, the length rule is never reached, and deleting it leaves the suite
-# green -- measured. Isolating one conjunct per fixture is what makes each of them bite.
-expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\`\n\`\`\`\n${INTER_LINE}\n\`\`\`\n\`\`\`\`" 'NESTED length: a shorter run must not close a longer fence'
-expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n\`\`\` markdown\n${INTER_LINE}\n\`\`\`" 'INFO STRING: a run carrying an info string must not close'
-# The converse, which the line above does NOT cover: an info string is legal on an OPENER. Without
-# this, a change that rejected info strings on openers would leave every assertion green while a
-# language-tagged example block stopped hiding its marker -- the permanent false HANDS-OFF again.
-expect_class routine "${ROUTINE_LINE}\n\n\`\`\`markdown\n${INTER_LINE}\n\`\`\`" 'INFO STRING: an opener may carry an info string'
-# Both documentation sites name `~~~`, but every fixture above opens with backticks, so tilde
-# support was unpinned: deleting the tilde branch from the detector failed nothing -- measured.
-expect_class routine "${ROUTINE_LINE}\n\n~~~\n${INTER_LINE}\n~~~" 'TILDE opener: ~~~ opens a fence in its own right'
+# THE DIRECTION THAT MATTERS: a fence must never swallow a REAL trailing marker, because that drives
+# the maintainer's PR. Each of these was a live defect under some fence implementation -- an unclosed
+# fence, a mixed delimiter, a shorter inner run -- and all three are now structurally unreachable,
+# which is the point of removing the state machine rather than repairing it a seventh time.
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n\`\`\`\n${INTER_LINE}" 'a marker after a closed fence counts'
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n${INTER_LINE}" 'an UNCLOSED fence cannot swallow a real trailing marker'
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\n~~~\nx\n\`\`\`\n${INTER_LINE}" 'a mixed-delimiter body cannot swallow a real trailing marker'
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\`\n\`\`\`\nx\n\`\`\`\n\`\`\`\`\n${INTER_LINE}" 'a nested shorter run cannot swallow a real trailing marker'
 
-# Negative controls for the three above. Without these, a detector that simply never closes a fence
-# would pass every case in this block while silently swallowing the rest of the body -- so each
-# closing form that MUST work is asserted by putting the interactive marker AFTER the close.
-expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n\`\`\`\n${INTER_LINE}" 'an equal-length run DOES close'
-expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n\`\`\`\`\n${INTER_LINE}" 'a longer run DOES close'
-# A fence opener is three or more; an inline code span is not one. Relaxing the minimum to 1 leaves
-# every other assertion green -- measured -- while a single backticked word swallows the rest of the
-# body. That fails toward `routine`, i.e. toward driving a PR that is actually the maintainer's.
-# The code span must START the line: a fence candidate is only ever a LEADING run, so `see \`x\`` is
-# rejected on position and would pass at any minimum -- measured, it was the first shape tried here.
-expect_class interactive "${ROUTINE_LINE}\n\n\`x\` marks the spot\n${INTER_LINE}" 'a 1-char leading run is an inline code span, NOT a fence'
+# A fence TOKEN is not itself a marker line. Without this, a matcher that stopped distinguishing
+# delimiters from content would still pass everything above.
+expect_class none "\`\`\`\n\`\`\`\n~~~\n~~~" 'fence tokens alone carry no marker'
 
-# CONTAINER DEPTH. Inside an open fence, every line is literal -- including one that looks like a
-# closer once its blockquote/list markers are removed. Deriving a fresh prefix from fenced content
-# lets `> \`\`\`` close a fence opened at top level, re-exposing the example marker beneath it.
-# Anchoring the closer to the OPENER's own prefix is what makes fenced content inert.
-expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n> \`\`\`\n${INTER_LINE}\n\`\`\`" 'a blockquoted fence token inside a fence must NOT close it'
-
-# INDENTED CODE BLOCK. Four or more spaces is Markdown's other literal-text form and carries no
-# fence at all, so the fence rules above cannot reach it; only an indentation cap can.
+# INDENTED CODE BLOCK -- four or more spaces at the current depth is Markdown's literal-text form and
+# carries no marker. One of the two rules that REMAIN, because it serves the matcher.
 # The marker here is BARE -- no `>` in front. With a blockquoted marker the split stops at the
 # indentation cap before it would consume the `>`, so the line fails to match for that reason
 # instead and the assertion passes with the code-block skip deleted -- measured vacuous.
 expect_class routine "${ROUTINE_LINE}\n\nExample:\n\n    \xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a four-space indented code block is not a marker line'
-# The same depth must also stop a FENCE opener, or an indented example silently swallows the body.
-expect_class interactive "${ROUTINE_LINE}\n\n    \`\`\`\n${INTER_LINE}" 'an indented fence token opens nothing'
-
-# Negative controls for the two above -- each isolates ONE conjunct, because a fixture whose input is
-# rejected by some other rule first would pass while the rule it names is deleted.
-# Without the first, an over-strict prefix test leaves a blockquoted fence permanently open and
-# swallows a REAL trailing marker -- failing toward driving the maintainer's own PR.
-expect_class interactive "${ROUTINE_LINE}\n\n> \`\`\`\n> x\n> \`\`\`\n${INTER_LINE}" 'a blockquoted fence closed at ITS OWN depth still closes'
-# Without the second, the cap swallows every indented line; three spaces is alignment, not code.
+# A tab counts as four columns, so the cap reaches it too.
+expect_class routine "${ROUTINE_LINE}\n\nExample:\n\n\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-indented code block is not a marker line'
+# Negative control: three spaces is alignment, not code. Without it the cap swallows every indented
+# line and discards a REAL marker -- the direction that costs the maintainer's PR.
 expect_class interactive "${ROUTINE_LINE}\n\n   ${INTER_LINE}" 'three spaces is alignment: the marker still counts'
-# ALIGNMENT IS NOT DEPTH. A closer may be indented relative to its opener and still be the closer, so
-# the prefixes are compared by their container MARKERS with whitespace removed.
-# ⚠️ This fixture is a positive control on the closing form, NOT an isolation of the alignment rule:
-# once the fail-safe below exists it passes with that rule reverted, because the unclosed fence is
-# re-scanned and the trailing marker counted anyway -- measured. The isolating fixture is the next one.
-expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n  \`\`\`\n${INTER_LINE}" 'an indented closer still closes a top-level fence'
-# ISOLATES the alignment rule. Here the example sits INSIDE the fence, so a raw-prefix compare leaves
-# the fence open, the fail-safe re-scans, and the example the PR merely DOCUMENTS is exposed --
-# parking our own PR HANDS-OFF forever. The fail-safe cannot mask this one; under the ablation it is
-# the mechanism producing the wrong answer. So alignment buys PRECISION and the fail-safe buys SAFETY.
-expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n${INTER_LINE}\n  \`\`\`\n\ntail" 'a fence whose closer is indented still hides its example'
-
-# FAIL-SAFE for every close-detection spelling this parser does not know. A body that ends with a
-# fence still open was mis-parsed -- real bodies do not end mid-fence -- so the scan is redone
-# without skipping, which can only ADD markers and therefore fails toward parking our own PR.
-# Deleting it restores the swallowing failure for any container spelling not enumerated above.
-expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n${INTER_LINE}" 'an unclosed fence must not swallow a real trailing marker'
-# Negative control: the fail-safe must not fire on a CLOSED fence, or the fence skip stops working
-# altogether and every documented example is read as a live marker.
-expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n${INTER_LINE}\n\`\`\`\n\ntail" 'a properly closed fence still hides its example'
 # A tab is the blockquote's separator, not content indentation. Counting it as four columns would
 # hide a REAL interactive marker -- the direction that costs the maintainer's PR, not just a parked one.
 expect_class interactive "${ROUTINE_LINE}\n\n>\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated blockquote marker still counts'
