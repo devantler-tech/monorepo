@@ -1131,9 +1131,17 @@ including `libraries/agent-plugins`, the source of the agent definitions every r
 **Key that signal on the AGGREGATE, never on a PR.** One bot PR being red, stale, conflicting or
 review-less remains none of our business, exactly as the paragraph above says. The reportable condition
 is that the **whole ecosystem produced nothing** — nothing created *and* nothing merged over a window
-materially longer than its configured schedule — which no per-PR state can express. Treat it as a
-**currency signal**: report it, and fix its cause on an **agent-owned** branch, exactly as a merged bump
-that breaks `main` is repaired without ever touching the bot PR branch.
+materially longer than its configured schedule — which no per-PR state can express.
+🔴 **Silence alone is NOT the signal — a quiet ecosystem is usually just quiet.** When nothing needs
+updating, zero creations and zero merges are the *correct* output, so the aggregate on its own would
+send a run to "repair" healthy automation. Report it only with positive evidence that the automation was
+**prevented** from delivering: it sits at its configured open-PR limit, or an update is demonstrably
+available and has gone unproposed, or its own most recent run is failing or absent. No such evidence,
+no signal. Derive that evidence by querying the forge directly — the survey digest is a per-PR
+`AUTOMATION-OWNED (NO-ACTION)` line and carries no aggregate history, so it cannot answer this
+([monorepo#2783](https://github.com/devantler-tech/monorepo/issues/2783)). Then treat it as a **currency
+signal**: report it, and fix its cause on an **agent-owned** branch, exactly as a merged bump that
+breaks `main` is repaired without ever touching the bot PR branch.
 
 **Carve-out — trusted programmed bot PRs need NO review.** Two suite-owned paths are intentionally
 gated by required CI and auto-merge rather than an AI review:

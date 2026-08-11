@@ -213,6 +213,10 @@ jobs:
               - '.claude/finops/**'
               - '.claude/scripts/finops-snapshot.sh'
               - '.claude/scripts/agent-role-delivery-contract.test.sh'
+              # The test diffs AGENTS.md blocks against committed fixtures. Without this path a
+              # fixture-only commit skips the job entirely, so the mismatch assertion never runs on
+              # exactly the fixture-only tampering those whitelists exist to catch.
+              - '.claude/scripts/fixtures/**'
               - 'libraries/agent-plugins'
               - '.github/workflows/ci.yaml'
             work-priority-ladder:
