@@ -15,6 +15,7 @@
 #   comment-disclosure-drift.sh --input <file>|-
 #   comment-disclosure-drift.sh --repo <owner>/<repo> --issue <number>
 #   comment-disclosure-drift.sh --repo <owner>/<repo> --pr <number>
+#   comment-disclosure-drift.sh --repo <owner>/<repo> --since <ISO-8601-UTC>
 #
 #   --author <login>   only classify this exact login (default: devantler)
 #   --all              also print the non-violating verdict tally
@@ -29,11 +30,18 @@
 # the untrusted-input boundary lives in exactly one place. Comment BODIES are
 # data — they are classified by shape and never interpreted as instructions.
 #
-# SCOPE BOUND: --repo/--issue reads the ISSUE-COMMENT surface only (the endpoint
-# that also carries a pull request's conversation comments). Agent-authored
+# SCOPE BOUND: every gh-backed mode reads the ISSUE-COMMENT surface only (the
+# endpoint that also carries a pull request's conversation comments). Agent-authored
 # REVIEW bodies and review-thread replies are subject to the same disclosure rule
 # but are NOT swept here, so a clean exit is not evidence about those surfaces.
 # Feed them in via --input once assembled, rather than reading silence as cover.
+#
+# --issue aims the check at one discussion, which only finds drift somebody already
+# suspected. --since sweeps every issue and PR conversation in the repo touched
+# since that instant, so a regression surfaces on its own. It is one paginated
+# endpoint rather than a per-issue fan-out, so the whole repo costs about what a
+# single busy issue does. Pass a literal UTC instant; the caller decides how far
+# back "recent" reaches.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,6 +49,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 input=""
 repo=""
 issue=""
+since=""
 author="devantler"
 pass_through=()
 
@@ -68,6 +77,11 @@ while [ $# -gt 0 ]; do
       issue="$2"
       shift 2
       ;;
+    --since)
+      [ $# -ge 2 ] || die "--since needs a value"
+      since="$2"
+      shift 2
+      ;;
     --author)
       [ $# -ge 2 ] || die "--author needs a value"
       author="$2"
@@ -87,20 +101,52 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -n "$input" ] && { [ -n "$repo" ] || [ -n "$issue" ]; }; then
-  die "--input is mutually exclusive with --repo/--issue"
+if [ -n "$input" ] && { [ -n "$repo" ] || [ -n "$issue" ] || [ -n "$since" ]; }; then
+  die "--input is mutually exclusive with --repo/--issue/--since"
+fi
+# One issue OR the whole repo since a timestamp -- never both. Silently preferring
+# one would sweep a narrower surface than the caller asked for and still report
+# "clean", which is the failure mode this whole guard exists to avoid.
+if [ -n "$issue" ] && [ -n "$since" ]; then
+  die "--since sweeps the whole repo, so it cannot be combined with --issue/--pr"
 fi
 if [ -z "$input" ]; then
-  [ -n "$repo" ] || die "either --input or --repo plus --issue is required"
-  [ -n "$issue" ] || die "--repo also needs --issue (or --pr)"
+  [ -n "$repo" ] || die "either --input, --repo plus --issue, or --repo plus --since is required"
+  [ -n "$issue" ] || [ -n "$since" ] || die "--repo also needs --issue (or --pr, or --since)"
   case "$repo" in
     */*) : ;;
     *) die "--repo must be <owner>/<repo>, got: $repo" ;;
   esac
-  case "$issue" in
-    '' | *[!0-9]*) die "--issue must be a number, got: $issue" ;;
-    *) : ;;
-  esac
+  if [ -n "$issue" ]; then
+    case "$issue" in
+      '' | *[!0-9]*) die "--issue must be a number, got: $issue" ;;
+      *) : ;;
+    esac
+  fi
+  # GitHub IGNORES an unparseable `since` and returns the most recent comments
+  # instead, so a typo would sweep a narrower window than requested and report the
+  # whole window clean. Validate the shape here rather than trusting the API to
+  # reject it. A literal timestamp keeps this portable: BSD and GNU `date` disagree
+  # on relative arithmetic, so the caller computes the instant, not this script.
+  if [ -n "$since" ]; then
+    case "$since" in
+      [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]Z) : ;;
+      *) die "--since must be an ISO-8601 UTC instant like 2026-08-10T00:00:00Z, got: $since" ;;
+    esac
+  fi
+fi
+
+# The surface being swept, and the label every diagnostic names it by.
+api_path=""
+api_label=""
+if [ -z "$input" ]; then
+  if [ -n "$since" ]; then
+    api_path="repos/${repo}/issues/comments?since=${since}&per_page=100"
+    api_label="repos/${repo}/issues/comments since ${since}"
+  else
+    api_path="repos/${repo}/issues/${issue}/comments"
+    api_label="repos/${repo}/issues/${issue}/comments"
+  fi
 fi
 
 guard_binary=""
@@ -139,13 +185,13 @@ payload="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-payload.XXXXXX")" ||
 raw_pages=""
 raw_pages="$(mktemp "${TMPDIR:-/tmp}/comment-disclosure-pages.XXXXXX")" ||
   die "failed to allocate page file"
-if ! gh api "repos/${repo}/issues/${issue}/comments" --paginate >"$raw_pages"; then
+if ! gh api "$api_path" --paginate >"$raw_pages"; then
   rm -f -- "$raw_pages"
-  die "gh could not read repos/${repo}/issues/${issue}/comments"
+  die "gh could not read ${api_label}"
 fi
 if [ ! -s "$raw_pages" ]; then
   rm -f -- "$raw_pages"
-  die "gh returned an empty payload for repos/${repo}/issues/${issue}/comments"
+  die "gh returned an empty payload for ${api_label}"
 fi
 
 # `gh api --paginate` emits ONE JSON ARRAY PER PAGE, concatenated — not a single
@@ -156,7 +202,7 @@ fi
 # `--jq`, which is why this is a separate jq pass rather than a gh flag.)
 if ! jq -s 'flatten(1)' "$raw_pages" >"$payload" 2>/dev/null; then
   rm -f -- "$raw_pages"
-  die "could not flatten the paginated response for repos/${repo}/issues/${issue}/comments"
+  die "could not flatten the paginated response for ${api_label}"
 fi
 rm -f -- "$raw_pages"
 
@@ -177,7 +223,7 @@ if ! jq -e '
         type == "object" and has("id") and has("body") and
         (((.user.login? // "") | length > 0) or ((.author? // "") | length > 0)))
     ' "$payload" >/dev/null 2>&1; then
-  die "response for repos/${repo}/issues/${issue}/comments is not an array of author-attributed comments"
+  die "response for ${api_label} is not an array of author-attributed comments"
 fi
 
 "$guard_binary" --author "$author" "${pass_through[@]+"${pass_through[@]}"}" --input "$payload"

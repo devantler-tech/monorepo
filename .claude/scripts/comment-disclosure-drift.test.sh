@@ -46,6 +46,21 @@ expect_stdout() {
   fi
 }
 
+# expect_stderr <pattern> <label>  -- reads the last expect_exit's stderr.
+# An exit code alone cannot say WHICH rejection fired, and every usage error here
+# shares exit 2; pinning the message is what stops an assertion passing for an
+# unrelated reason.
+expect_stderr() {
+  local pattern="$1" label="$2"
+  if grep -qF -- "$pattern" "$tmpdir/err"; then
+    echo "ok    $label"
+  else
+    echo "FAIL  $label: stderr did not contain: $pattern"
+    sed 's/^/        /' "$tmpdir/err" | head -10
+    failures=$((failures + 1))
+  fi
+}
+
 echo "== Go classifier suite =="
 if (cd "$script_dir/comment-disclosure-drift-go" && go test -race -cover ./...); then
   echo "ok    go test"
@@ -210,6 +225,99 @@ STUB
 chmod +x "$stubdir/gh"
 expect_exit 1 "gh success path classifies" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --issue 1
 expect_stdout "undisclosed-trigger" "gh success path names the shape"
+
+echo
+echo "== wrapper: --since sweeps the REPO, so regression is visible rather than found by chance =="
+# Without a repo-wide mode the check can only be aimed at an issue number somebody
+# already suspects -- which is how #2609's 18 offending comments accumulated across
+# four issues nobody thought to point it at.
+
+expect_exit 2 "--since without a value" -- bash "$guard" --repo owner/repo --since
+expect_exit 2 "--since needs --repo" -- bash "$guard" --since 2026-08-10T00:00:00Z
+expect_exit 2 "--since with --input" -- bash "$guard" --input - --since 2026-08-10T00:00:00Z
+# Scope must be unambiguous: one issue OR the repo, never a silent preference.
+expect_exit 2 "--since with --issue is ambiguous" -- bash "$guard" --repo owner/repo --issue 1 --since 2026-08-10T00:00:00Z
+# A malformed timestamp would be sent to GitHub, which IGNORES an unparseable
+# `since` and returns the repo's most recent comments instead -- a narrower window
+# than asked for, reported as if the whole window were clean.
+#
+# These two MUST run against a gh that would otherwise SUCCEED. Measured while
+# ablating: without a stub, `owner/repo` does not exist, so real gh fails and the
+# assertion passes on exit 2 whether or not the local validation exists at all --
+# it pinned the fake repo, not the check. With a stub that returns a clean `[]`,
+# exit 2 can only come from the local shape check, and the stderr assertion names
+# which rejection fired.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 2 "--since rejects a non-timestamp" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since yesterday
+expect_stderr "ISO-8601" "non-timestamp is rejected by the local shape check"
+expect_exit 2 "--since rejects a date without a time" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10
+expect_stderr "ISO-8601" "date-without-time is rejected by the local shape check"
+# Positive control: the SAME stub, with a well-formed timestamp, must reach the
+# classifier and exit 0 -- otherwise the two assertions above could be passing
+# because the stub itself is broken.
+expect_exit 0 "a well-formed --since reaches the classifier through the same stub" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+
+# THE load-bearing assertion: --since must hit the repo-wide comments endpoint.
+# A sweep that silently read one issue would classify a handful of comments and
+# report the whole repo clean.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$ARGLOG"
+printf '%s' '[{"id":40,"html_url":"https://x/40","user":{"login":"devantler"},"body":"@codex review\n\nhead abc"}]'
+STUB
+chmod +x "$stubdir/gh"
+: >"$tmpdir/args"
+expect_exit 1 "--since classifies and finds the violation" -- env PATH="$stubdir:$PATH" ARGLOG="$tmpdir/args" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+expect_stdout "undisclosed-trigger" "--since names the shape"
+if grep -qF 'repos/owner/repo/issues/comments' "$tmpdir/args" &&
+  grep -qF 'since=2026-08-10T00:00:00Z' "$tmpdir/args" &&
+  ! grep -qE 'repos/owner/repo/issues/[0-9]+/comments' "$tmpdir/args"; then
+  echo "ok    --since queries the repo-wide endpoint with the timestamp"
+else
+  echo "FAIL  --since did not query the repo-wide endpoint; gh args were:"
+  sed 's/^/        /' "$tmpdir/args"
+  failures=$((failures + 1))
+fi
+
+# The fail-closed properties must hold on this path too -- they are per-endpoint,
+# not per-flag, and a sweep that reads clean on a 502 is worse than no sweep.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+echo "HTTP 502: 502 Bad Gateway" >&2
+exit 1
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 2 "--since fails closed on a gh error" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '{"message":"Not Found","documentation_url":"https://docs.github.com"}'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 2 "--since fails closed on an error object" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+
+# Multi-page is the NORMAL case repo-wide (176 comments over ~2 days, measured), so
+# the flatten must apply here or the busiest windows are exactly the unchecked ones.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[{"id":41,"html_url":"https://x/41","user":{"login":"devantler"},"body":"> 🤖 Generated by the Agentic Engineer\n\npage one"}]'
+printf '%s' '[{"id":42,"html_url":"https://x/42","user":{"login":"devantler"},"body":"> Requested by the 🤖 Daily AI Engineer - page two"}]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 1 "--since flattens multiple pages" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+expect_stdout "sender-marker" "--since finds a violation on page TWO"
+
+# A quiet window is legitimately clean and must exit 0, not 2.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 0 "--since on a quiet window exits 0" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
 
 echo
 if [ "$failures" -ne 0 ]; then
