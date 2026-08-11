@@ -1548,4 +1548,12 @@ expect_class none        'no marker at all here' 'unmarked body'
 expect_class routine     "${ROUTINE_LINE}\n\nwe match Generated with [Claude Code] inline" 'marker quoted mid-sentence must NOT win'
 expect_class routine     "${ROUTINE_LINE}\n\n\`\`\`\n${INTER_LINE}\n\`\`\`" 'marker inside a fence must NOT win'
 
+# `interactive wins` is the fail-safe for a body carrying BOTH markers. No live PR carries both, so it
+# is LATENT — which is exactly why it needs a fixture: nothing else fails if it is removed. Without
+# these two cases, reordering the classifier to test ROUTINE before INTER leaves every other fixture
+# green while the mixed case silently becomes `routine`, i.e. "safe to drive the maintainer's PR".
+# Both orders are asserted, because precedence must not depend on which marker appears first.
+expect_class interactive "${ROUTINE_LINE}\n\n${INTER_LINE}" 'both markers, routine first -> interactive wins'
+expect_class interactive "${INTER_LINE}\n\n${ROUTINE_LINE}" 'both markers, interactive first -> interactive wins'
+
 echo "portfolio surveyor contract: all assertions passed"
