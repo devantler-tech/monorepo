@@ -1591,14 +1591,6 @@ ownership_split() {
   OWN_PREFIX="${pfx}"; OWN_CONTENT="${ln}"
 }
 
-# A container prefix with its whitespace removed. Markdown lets a closer sit at a different
-# ALIGNMENT from its opener, so comparing raw prefixes rejects valid closers and leaves the fence
-# open to the end of the body. Only the container MARKERS carry depth, so strip the spacing and
-# compare those. This is a PRECISION rule: the fail-safe in `ownership_fixture` is what makes an
-# unrecognised closer SAFE, while this keeps a fence that did close from needing that fallback --
-# without it a documented example is re-exposed and parks our own PR HANDS-OFF.
-ownership_norm_prefix() { local p="$1"; printf '%s' "${p//[[:space:]]/}"; }
-
 # $2 = 1 to skip fenced content, 0 to scan it anyway. Sets OWN_INTER/OWN_ROUTINE/OWN_UNCLOSED.
 ownership_scan() {
   local body ln content ch run rest fchar='' flen=0 fpfx='' skip="$2" inter=0 routine=0
@@ -1617,8 +1609,8 @@ ownership_scan() {
       while [ "${rest#"${ch}"}" != "${rest}" ]; do run="${run}${ch}"; rest="${rest#"${ch}"}"; done
       if [ "${#run}" -ge 3 ]; then
         if [ -z "${fchar}" ]; then
-          fchar="${ch}"; flen="${#run}"; fpfx="$(ownership_norm_prefix "${OWN_PREFIX}")"
-        elif [ "$(ownership_norm_prefix "${OWN_PREFIX}")" = "${fpfx}" ] && [ "${ch}" = "${fchar}" ] &&
+          fchar="${ch}"; flen="${#run}"; fpfx="${OWN_PREFIX}"
+        elif [ "${OWN_PREFIX//[[:space:]]/}" = "${fpfx//[[:space:]]/}" ] && [ "${ch}" = "${fchar}" ] &&
              [ "${#run}" -ge "${flen}" ] && [ -z "${rest//[[:space:]]/}" ]; then
           fchar=''; flen=0; fpfx=''
         fi
@@ -1757,14 +1749,16 @@ expect_class interactive "${ROUTINE_LINE}\n\n    \`\`\`\n${INTER_LINE}" 'an inde
 expect_class interactive "${ROUTINE_LINE}\n\n> \`\`\`\n> x\n> \`\`\`\n${INTER_LINE}" 'a blockquoted fence closed at ITS OWN depth still closes'
 # Without the second, the cap swallows every indented line; three spaces is alignment, not code.
 expect_class interactive "${ROUTINE_LINE}\n\n   ${INTER_LINE}" 'three spaces is alignment: the marker still counts'
-
-# CLOSER ALIGNMENT. Markdown does not require the closer to sit at the opener's exact indentation.
-# Only container MARKERS carry depth, so the comparison strips spacing. With a raw-prefix compare
-# this fence never closes, the body ends mid-fence, the fail-safe below re-scans, and the example
-# the PR is merely DOCUMENTING is exposed as a real marker -- parking our own PR HANDS-OFF forever.
-# So this rule buys PRECISION (a closed fence keeps hiding its example); the fail-safe below is what
-# buys safety. The fixture is written so the fail-safe cannot mask it: under the ablation the
-# fail-safe is the mechanism that produces the wrong answer, rather than rescuing it.
+# ALIGNMENT IS NOT DEPTH. A closer may be indented relative to its opener and still be the closer, so
+# the prefixes are compared by their container MARKERS with whitespace removed.
+# ⚠️ This fixture is a positive control on the closing form, NOT an isolation of the alignment rule:
+# once the fail-safe below exists it passes with that rule reverted, because the unclosed fence is
+# re-scanned and the trailing marker counted anyway -- measured. The isolating fixture is the next one.
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n  \`\`\`\n${INTER_LINE}" 'an indented closer still closes a top-level fence'
+# ISOLATES the alignment rule. Here the example sits INSIDE the fence, so a raw-prefix compare leaves
+# the fence open, the fail-safe re-scans, and the example the PR merely DOCUMENTS is exposed --
+# parking our own PR HANDS-OFF forever. The fail-safe cannot mask this one; under the ablation it is
+# the mechanism producing the wrong answer. So alignment buys PRECISION and the fail-safe buys SAFETY.
 expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n${INTER_LINE}\n  \`\`\`\n\ntail" 'a fence whose closer is indented still hides its example'
 
 # FAIL-SAFE for every close-detection spelling this parser does not know. A body that ends with a
