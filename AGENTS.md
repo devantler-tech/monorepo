@@ -3108,8 +3108,14 @@ step:
    Claude's own **#10b tracks foreground polling** — the same signature. An instance cannot honour a gate
    it has no path to read, so that rule was unenforceable across instances **by construction**. So: a
    **sibling's pending hypothesis binds your signature-overlap decisions** exactly as your own does, and
-   a signature the sibling has already attributed in the current window is **not re-measured** — record
-   its verdict and move on. ⚠️ Both stores stay **private runtime state**: cross-*reading* them is
+   a signature the sibling has already **settled** is **not re-measured** — record its verdict and move
+   on — **whatever direction that verdict took and whichever window produced it**, until new evidence or
+   a changed signature invalidates it. Scoping this to "attributed in the current window" would have
+   left a sibling's *negative* verdict, and any still-valid verdict from an earlier window, free to be
+   measured again — which is the duplication this paragraph exists to stop.
+   ⚠️ **Settled is not the same as inconclusive.** A sibling `NO-VERDICT`, `NOT-YET-DUE`, or an
+   explicitly unmet measurement floor is **unsettled**, and those stay measurable — freezing them would
+   starve exactly the hypotheses still waiting for the data that would close them. ⚠️ Both stores stay **private runtime state**: cross-*reading* them is
    mandatory, cross-*publishing* them is not permitted, and nothing read this way enters a repository
    artifact or public comment. The sibling's file remains **its** single source of truth — read it, never
    write it. The
