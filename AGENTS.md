@@ -3091,7 +3091,28 @@ step:
    `/Users/homelab-mac-mini/.codex/automations/agent-improver/memory.md`.
    The **open verification-hypothesis store** is
    `/Users/homelab-mac-mini/.claude/projects/-Users-homelab-mac-mini-git-personal-monorepo/memory/agent-improver-routine.md`
-   for Claude and the `Hypotheses / next run` section of the Codex Agent Improver memory file. The
+   for Claude and the `Hypotheses / next run` section of the Codex Agent Improver memory file.
+   🔴 **Each Agent Improver run reads the SIBLING instance's scorecard and hypothesis store too, before
+   it scores or opens any hypothesis — naming the two stores is not the same as wiring them together.**
+   Each run boots into its own store, so without this cross-read a hypothesis opened by one instance can
+   never be scored, closed, or respected by the other, and the ledger splits in half. Measured
+   2026-08-11: of ~15 open hypotheses, **exactly one (#28) appeared in both** — Claude held 5/10b/11/14/
+   15/16/18/19/21/27/28 and Codex held 28/29/30/31/32, so **#29–#32 were invisible to Claude**. That cost
+   two things the same day. **A duplicated heavy measurement:** Claude's ledger carried #19 as *"needs
+   attribution next run"* while the Codex run at **05:29Z had already attributed it** (one real
+   instruction-shaped cross-agent handoff, correctly rejected; every other dominant hit traced to loaded
+   definition, memory, telemetry-report or current-run echo) — and provenance is the miner's most
+   expensive section. **And an unsatisfiable constraint:** the `agent-improvement` skill's step 5 says to
+   continue only with work that cannot affect a pending hypothesis's tracked signature, yet Codex's
+   memory reads *"Do not change polling classification before those gates"* for its #29/#30 while
+   Claude's own **#10b tracks foreground polling** — the same signature. An instance cannot honour a gate
+   it has no path to read, so that rule was unenforceable across instances **by construction**. So: a
+   **sibling's pending hypothesis binds your signature-overlap decisions** exactly as your own does, and
+   a signature the sibling has already attributed in the current window is **not re-measured** — record
+   its verdict and move on. ⚠️ Both stores stay **private runtime state**: cross-*reading* them is
+   mandatory, cross-*publishing* them is not permitted, and nothing read this way enters a repository
+   artifact or public comment. The sibling's file remains **its** single source of truth — read it, never
+   write it. The
    **spend evidence/proposal/realisation ledger** — snapshots, proposals with their confidence, open
    maintainer asks, and the projected-versus-realised record — lives in the engineer's own runtime
    store: `/Users/homelab-mac-mini/.codex/automations/daily-ai-engineer/memory.md` for Codex and the
