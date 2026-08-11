@@ -1462,7 +1462,8 @@ grep -Fq 'Generated **with** [Claude Code]' "${surveyor}" &&
   fail "surveyor must not quote the interactive literal in a bolded form that matches no real body (#2762)"
 
 
-# Both literals use IDENTICAL matching syntax (structural line, fences skipped); only the ownership
+# Both literals use IDENTICAL matching syntax (a structural line, with fenced content NOT suppressed
+# -- see the no-fence-state decision below); only the ownership
 # WEIGHT differs -- interactive decides alone, routine only corroborates. An earlier revision of this
 # PR matched them with different strictness; that framing was an artifact of fixing one literal at a
 # time, and leaving it in the definition let an implementation legitimately match interactive loosely

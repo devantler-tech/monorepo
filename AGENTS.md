@@ -2355,14 +2355,15 @@ failure actually occurring.
 🔴 **Two structural rules remain, because they serve the MATCHER rather than example-suppression.**
 Read each line through its Markdown **container prefix** — up to three spaces of alignment, blockquote
 `>` markers, and `-`/`*` list markers, each consuming its optional following space **or tab** — because
-the org PR template puts the disclosure under a `- ` bullet, so a container-blind matcher misses real
+the org PR template puts the disclosure under a `-` bullet, so a container-blind matcher misses real
 disclosures. And treat **four or more spaces of indentation at the current depth** as an indented code
 block carrying no marker, while three spaces stay ordinary alignment.
 **Line structure, never a bare substring and never a body-start anchor.** Measured 2026-08-11 across
 the open `devantler` PRs portfolio-wide, line-structural and bare-substring agree **exactly** — same
 classification for every PR — while a body-start anchor displaces **7** routine PRs to `none`; and
-unlike a substring match it does **not** fire on a marker quoted mid-sentence, in a fenced example, or
-in bold, so a PR *about* this convention cannot park itself HANDS-OFF forever.
+unlike a substring match it does **not** fire on a marker quoted mid-sentence or in bold, so a PR
+*about* this convention does not park itself HANDS-OFF merely for discussing it. A marker line inside
+a **fenced example** does still match — that is the accepted cost stated above, not an oversight.
 ⚠️ **That 7 is the load-bearing figure; the corpus totals are not.** This corpus is live and its
 absolute counts drift as PRs merge (it moved 76 → 74 during the session that measured it), so
 re-derive any total rather than trusting one written here. The 7 is stable across every snapshot

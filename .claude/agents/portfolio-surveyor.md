@@ -155,7 +155,7 @@ public and private — no per-repo loop needed to enumerate):
      🔴 **Two structural rules remain, because they serve the MATCHER rather than
      example-suppression.** Read each line through its Markdown **container prefix** — up to three
      spaces of alignment, blockquote `>` markers, and `-`/`*` list markers, each consuming its optional
-     following space **or tab** — because the org PR template puts the disclosure under a `- ` bullet,
+     following space **or tab** — because the org PR template puts the disclosure under a `-` bullet,
      so a container-blind matcher misses real disclosures. And treat
      **four or more spaces of indentation at the current depth** as an indented code block carrying
      no marker, while three spaces stay ordinary alignment.
