@@ -130,12 +130,20 @@ public and private — no per-repo loop needed to enumerate):
      needs — the **branch name** (`headRefName`: a
      descriptive `claude/<area>-<desc>` vs a random-slug `claude/<adjective>-<name>-<hex>`) and the
      **three-valued `disclosure`** below — and stop there.
-     **The ownership test is which literal, never where it sits.** Emit one of three values —
-     and note the two literals are matched with deliberately **different strictness**:
+     **The ownership test is which literal, never where it sits.** Emit one of three values.
+     ⚠️ **Matching SYNTAX is identical for both literals; only the ownership WEIGHT differs.**
+     Do not read any asymmetry into how they are matched — an implementation that matched
+     `interactive` more loosely would recreate the permanent false HANDS-OFF this rule exists
+     to prevent. The asymmetry is solely that `interactive` decides alone while `routine` only
+     corroborates the orchestrator's creation record.
      **Both literals are matched as a STRUCTURAL LINE, anywhere in the body** — a line whose content,
      after leading whitespace and any blockquote `>` or list `-`/`*` markers, begins with the marker
      (an optional 🤖 may precede it). Never a bare substring, and never anchored to the body start.
-     🔴 **Skip fenced blocks first.** Drop every line inside a ` ``` ` or `~~~` fence before matching:
+     🔴 **Skip fenced blocks first — and recognise a fence through the SAME container prefix the
+     marker matcher strips**, so a fence opened inside a blockquote or list (`> ```markdown`,
+     `- ``` `) still counts. Tying both to one prefix is what stops them drifting apart: any container
+     the matcher sees through, the fence detector must see through too.
+     Drop every line inside a ` ``` ` or `~~~` fence before matching:
      a fence does not change line structure, so a PR that *documents* this convention with a fenced
      example carries a marker line that is an illustration, not a disclosure. Without this, such a PR
      matches `interactive`, wins the tie against its own real routine disclosure, and is parked
@@ -149,10 +157,17 @@ public and private — no per-repo loop needed to enumerate):
        substring match misclassifies **prose that merely quotes a marker** — an agent PR *about* this
        very convention would hit `interactive` and be parked HANDS-OFF forever, since its body never
        changes. A **body-start** anchor over-corrects the other way, because the org PR template puts
-       `### Motivation` above the disclosure. Measured 2026-08-11 over 75 open `devantler` PRs:
-       line-structural and bare-substring both yield **5** interactive and **34** routine (identical),
-       while a body-start anchor drops **7** routine to `none`; and on a negative control — the marker
-       quoted mid-sentence — bare substring matches and line-structural correctly does not.
+       `### Motivation` above the disclosure.
+       **Measured 2026-08-11 across the open `devantler` PRs portfolio-wide** (n = 74 at the time of
+       writing — ⚠️ **this corpus is LIVE and its absolute counts drift as PRs merge**; it moved
+       76 → 74 during the session that measured it, so treat any total here as a dated snapshot and
+       re-derive rather than trusting it):
+       - line-structural and bare-substring agree **exactly** — same classification for every PR;
+       - a **body-start** anchor displaces **7** routine PRs to `none`. **That 7 is the stable,
+         load-bearing figure**: it held across every snapshot taken (33−26, 34−27, 32−25), because it
+         counts bodies using the org template rather than whatever the corpus size happens to be;
+       - negative control — the marker quoted mid-sentence — bare substring matches, line-structural
+         correctly does not.
        ⚠️ **Asymmetric strength: `interactive` is decisive, `routine` is only corroborating.** The
        routine disclosure also appears on maintainer-interactive PRs, so this value never establishes
        ownership by itself — it is a hint the orchestrator weighs against its creation record.
