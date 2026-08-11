@@ -1117,6 +1117,24 @@ dependency bump breaks `main`, repair that resulting `main` breakage normally on
 branch; never touch the bot PR branch. This actor-wide no-action rule is stronger than the
 trusted-author permissions below and is separate from the narrower programmed-bot review exemption.
 
+🔴 **This carve-out bounds action on INDIVIDUAL PRs; it never licenses ignoring whether the automation
+still runs.** Every prohibition above stands unchanged and absolute — no review request, no comment, no
+rebase/recreate, no rerun, no adaptation commit, no arming auto-merge, no merge, no closing an
+automation-authored issue — whatever state the PR is in. But *whose job is it to mutate these PRs* and
+*is the automation that owns them still alive* are *different questions*, and answering only the first
+silently answered the second with "never look". Measured 2026-08-11: the `gitsubmodule` ecosystem had
+merged nothing since 2026-08-05T20:15Z and created nothing since 2026-08-06T20:14Z, jammed at its
+five-PR limit by four PRs whose required checks never ran — while the same daily job kept creating npm
+PRs under that ecosystem's own limit. Every submodule pin in the portfolio froze for six days,
+including `libraries/agent-plugins`, the source of the agent definitions every run loads
+([monorepo#2779](https://github.com/devantler-tech/monorepo/issues/2779)).
+**Key that signal on the AGGREGATE, never on a PR.** One bot PR being red, stale, conflicting or
+review-less remains none of our business, exactly as the paragraph above says. The reportable condition
+is that the **whole ecosystem produced nothing** — nothing created *and* nothing merged over a window
+materially longer than its configured schedule — which no per-PR state can express. Treat it as a
+**currency signal**: report it, and fix its cause on an **agent-owned** branch, exactly as a merged bump
+that breaks `main` is repaired without ever touching the bot PR branch.
+
 **Carve-out — trusted programmed bot PRs need NO review.** Two suite-owned paths are intentionally
 gated by required CI and auto-merge rather than an AI review:
 - **Programmed agent-skills updater PRs** (maintainer direction 2026-07-23): the shared

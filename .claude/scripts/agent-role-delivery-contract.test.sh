@@ -324,6 +324,52 @@ assert_prose "for *this* engineer that edit is the maintainer's alone" \
   "the never-widen-enforcement prohibition is no longer scoped to the Agentic Engineer"
 assert_prose 'holds a different grant, and *Authority model* authorises it to loosen enforcement' \
   "consumer no longer exempts the agent-improver from the never-widen-enforcement prohibition"
+# The automation-owned carve-out answers "whose job is it to MUTATE these PRs" correctly, and used to
+# answer "is that automation still alive" by accident, with "never look". A six-day total stall of the
+# gitsubmodule ecosystem went unreported that way, freezing every submodule pin including the one that
+# carries the agent definitions (#2779/#2780). Four separate protections, four separate assertions:
+# the scoping, the aggregate keying, the both-halves window, and the restated prohibitions. Deleting
+# any one alone must fail on its own message — the others stay green without it, which is exactly why
+# they are not one compound check.
+assert_prose 'This carve-out bounds action on INDIVIDUAL PRs; it never licenses ignoring whether the automation still runs' \
+  "the automation-owned carve-out no longer separates per-PR hands-off from the automation's own liveness"
+# Without this the signal collapses back into a per-PR judgement, which is precisely the thing the
+# carve-out forbids reasoning about — reintroducing the hands-off pressure it was meant to sidestep.
+assert_prose 'Key that signal on the AGGREGATE, never on a PR' \
+  "queue liveness is no longer keyed on the aggregate, so it could be read as a per-PR hygiene state"
+assert_prose 'nothing created *and* nothing merged over a window materially longer than its configured schedule' \
+  "the dead-queue condition no longer requires BOTH nothing-created and nothing-merged over a window"
+# The addition must never read as a partial re-opening of the hands-off rule. If this restatement goes,
+# an observation duty sits next to the prohibitions with nothing saying they still bind absolutely.
+assert_prose 'Every prohibition above stands unchanged and absolute' \
+  "the queue-liveness clause no longer restates the mutation prohibitions as unchanged"
+# Found by ablation while writing the four above: deleting "One bot PR being red, stale, conflicting or
+# review-less remains none of our business" left all four GREEN. That sentence is what keeps the
+# per-PR case explicitly OUT of the new duty, so without it a run could start treating one red bot PR
+# as the liveness signal — the exact hands-off pressure this clause exists to avoid.
+assert_prose 'One bot PR being red, stale, conflicting or review-less remains none of our business' \
+  "the queue-liveness clause no longer keeps a single red/stale/conflicting bot PR out of scope"
+# WHITELIST, not a fifth named clause chased by a sixth. The two preceding definition PRs converged
+# only after inverting a blacklist, because each review round merely named the next unpinned clause.
+# The named assertions above stay for their specific failure messages; this pins the whole block so a
+# clause nobody thought to name cannot be weakened silently. Extracted by ANCHOR, never line number.
+# BOTH anchor lines are READ FROM THE FILE — an extractor that prints a terminating line it invented
+# cannot detect a change to the thing it invents, which is a fail-open of exactly this check's shape.
+queue_fixture="${repo_root}/.claude/scripts/fixtures/automation-owned-queue-liveness.txt"
+[ -r "${queue_fixture}" ] ||
+  fail "automation-owned queue-liveness fixture is missing: ${queue_fixture}"
+# Exit ON the terminating line, not one line after it. A deferred-exit form captures the blank line
+# that follows the paragraph, and the two capture paths then disagree: a file redirect keeps that
+# blank while `$(…)` strips it, so the fixture and the live block can never compare equal.
+queue_block="$(awk '
+  /^🔴 \*\*This carve-out bounds action on INDIVIDUAL PRs/ { f = 1 }
+  f { print }
+  f && /that breaks `main` is repaired without ever touching the bot PR branch\.$/ { exit }
+' "${constitution}")"
+[ -n "${queue_block}" ] ||
+  fail "automation-owned queue-liveness block not found in ${constitution} (anchors moved or removed)"
+printf '%s\n' "${queue_block}" | diff -u "${queue_fixture}" - > /dev/null ||
+  fail "automation-owned queue-liveness block differs from its fixture; update both deliberately in one commit"
 grep -Fq 'An issue, recommendation, or draft PR is not completion' "${constitution}" ||
   fail "consumer permits a write-capable role to stop before merge"
 grep -Fq '### Writer namespaces' "${constitution}" ||
