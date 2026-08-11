@@ -890,7 +890,11 @@ edit that layer.
 None of this weakens the three readiness conditions or the Cursor lane's measured handoff:
 `app/cursor` is a trusted author but still cannot request a review or clear the green-review gate, so
 a local sibling performs promote/merge once readiness is proven (see *Cursor App handoff* above). An
-untrusted author never self-promotes. Separating agent identity so promotion can stay human-gated on
+untrusted author never self-promotes **their own** PR — that is about who may operate the promotion
+control, never about which PRs **you** may promote. You promote an outside contribution once its three
+readiness conditions hold at the current head and the active-work test clears, exactly as *Autonomy*
+says: promotion is not gated on who opened the PR. Separating agent identity so promotion can stay
+human-gated on
 a distinguishable author remains a longer-term hardening path, not a reason to suspend this meanwhile.
 **Watch the PRs you spawn — don't fire-and-forget.** After opening a PR, set up a **watcher** (a
 background poll of the PR's CI checks + review threads) so the **spawning session reacts while it is
