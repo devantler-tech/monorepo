@@ -1634,8 +1634,10 @@ ownership_scan() {
     # a counter incremented in a piped loop reads 0 afterwards and 2 through process substitution.
   done < <(printf '%s\n' "${body}")
   OWN_INTER="${inter}"; OWN_ROUTINE="${routine}"
-  OWN_UNCLOSED=0; [ -n "${fchar}" ] && OWN_UNCLOSED=1
-  return 0
+  # Written as an `if`, not `[ -n … ] && OWN_UNCLOSED=1`: the suite runs under `set -e`, where that
+  # AND-list is only exempt because the assignment is its final command. That exemption is real but
+  # easy to break by appending anything after it, and the breakage would be a silent early exit.
+  if [ -n "${fchar}" ]; then OWN_UNCLOSED=1; else OWN_UNCLOSED=0; fi
 }
 
 ownership_fixture() {
