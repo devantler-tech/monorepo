@@ -1687,11 +1687,10 @@ expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n~~~\n${INTER_LINE}\n~~~\n\`\`\`
 # green -- measured. Isolating one conjunct per fixture is what makes each of them bite.
 expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\`\n\`\`\`\n${INTER_LINE}\n\`\`\`\n\`\`\`\`" 'NESTED length: a shorter run must not close a longer fence'
 expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n\`\`\` markdown\n${INTER_LINE}\n\`\`\`" 'INFO STRING: a run carrying an info string must not close'
-# The converse, and it needs its own TOP-LEVEL case. An info string is rejected on a CLOSER, but a
-# language tag is exactly how an opener is normally written, so both directions must be pinned.
-# Rejecting info strings on openers does already fail a fixture -- but only a blockquoted one, which
-# also exercises container depth, so the coverage rides on a case testing something else.
-expect_class routine "${ROUTINE_LINE}\n\n\`\`\`markdown\n${INTER_LINE}\n\`\`\`" 'INFO STRING on an OPENER: a language-tagged fence still opens'
+# The converse, which the line above does NOT cover: an info string is legal on an OPENER. Without
+# this, a change that rejected info strings on openers would leave every assertion green while a
+# language-tagged example block stopped hiding its marker -- the permanent false HANDS-OFF again.
+expect_class routine "${ROUTINE_LINE}\n\n\`\`\`markdown\n${INTER_LINE}\n\`\`\`" 'INFO STRING: an opener may carry an info string'
 # Both documentation sites name `~~~`, but every fixture above opens with backticks, so tilde
 # support was unpinned: deleting the tilde branch from the detector failed nothing -- measured.
 expect_class routine "${ROUTINE_LINE}\n\n~~~\n${INTER_LINE}\n~~~" 'TILDE opener: ~~~ opens a fence in its own right'
