@@ -1406,7 +1406,8 @@ grep -Fq '`workflow_dispatch`, `dynamic`' "${surveyor}" ||
 
 
 # --- Ownership disclosure is a THREE-valued literal test, not a prefix boolean (#2762) ----------
-# Measured 2026-08-11 over 75 open `devantler`-authored PRs portfolio-wide: the two-valued
+# Measured 2026-08-11 (snapshot n=75; the corpus is live and drifts, so this documents the ORIGINAL
+# defect rather than a current total): the two-valued
 # `disclosure=<yes|no>` field was 100% precise when it said `yes` (26/26 routine) but carried NO
 # information when it said `no` — 49 of 75 rows (65%), collapsing three classes that demand OPPOSITE
 # actions: 5 maintainer-interactive (HANDS-OFF), 7 routine whose disclosure simply is not at position

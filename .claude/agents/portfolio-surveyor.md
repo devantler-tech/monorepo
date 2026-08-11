@@ -180,7 +180,7 @@ public and private — no per-repo loop needed to enumerate):
      the maintainer literal at the **start** of its body and `platform#3034` carries it as a trailing
      line, so a prefix-only or suffix-only check misses one of them whichever end it anchors to — and
      a routine disclosure sitting under the org template's `### Motivation` heading is not at position
-     zero either. Measured 2026-08-11 over 75 open `devantler` PRs portfolio-wide, a two-valued
+     zero either. Measured 2026-08-11 (a separate, earlier snapshot: n = 75), a two-valued
      prefix boolean put **49 (65%)** into a single `no` bucket spanning all three classes above.
      **Never label a `devantler` PR `MERGE-READY` or "own"**; the orchestrator applies its creation-record
      test and decides whether any action is allowed. (Actionable bot-trusted authors — `app/ksail-bot`
