@@ -280,6 +280,21 @@ assert_prose 'cross-*reading* them is mandatory, cross-*publishing* them is not 
 assert_prose "The sibling's file remains **its** single source of truth — read it, never write it" \
   "Memory does not keep the sibling store read-only, so a run could write to another instance's ledger"
 
+# WHITELIST, not another named clause. Four review rounds each found "clause N is unpinned" — a
+# blacklist that never converges, because the next round just names clause N+1. The named assertions
+# above stay for their specific failure messages; this one closes the CLASS by pinning the whole block
+# verbatim, so ANY deletion or alteration inside it fails, including a clause nobody thought to name.
+# Extracted by ANCHOR rather than line number so unrelated edits elsewhere in AGENTS.md cannot shift it.
+sibling_fixture="${repo_root}/.claude/scripts/fixtures/agent-improver-sibling-ledger.txt"
+[ -r "${sibling_fixture}" ] ||
+  fail "sibling-ledger fixture is missing: ${sibling_fixture}"
+sibling_block="$(awk '/^   🔴 \*\*Each Agent Improver run reads the SIBLING/{f=1} f{print} /read it, never$/{if(f){print "   write it."; exit}}' "${constitution}")"
+[ -n "${sibling_block}" ] ||
+  fail "Could not locate the sibling-ledger block in AGENTS.md — its opening anchor was removed or reworded"
+if ! printf '%s\n' "${sibling_block}" | diff -q - "${sibling_fixture}" >/dev/null 2>&1; then
+  fail "The sibling-ledger block no longer matches its fixture. Intentional edits must update .claude/scripts/fixtures/agent-improver-sibling-ledger.txt in the same commit; run: diff <(awk '/Each Agent Improver run reads the SIBLING/,/write it\./' AGENTS.md) ${sibling_fixture}"
+fi
+
 for authority_row in \
   '| **Prose tightening**' \
   '| **Prose loosening**' \
