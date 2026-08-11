@@ -1609,7 +1609,7 @@ ownership_fixture() {
       if [ "${#run}" -ge 3 ]; then
         if [ -z "${fchar}" ]; then
           fchar="${ch}"; flen="${#run}"; fpfx="${OWN_PREFIX}"
-        elif [ "${OWN_PREFIX}" = "${fpfx}" ] && [ "${ch}" = "${fchar}" ] &&
+        elif [ "${OWN_PREFIX//[[:space:]]/}" = "${fpfx//[[:space:]]/}" ] && [ "${ch}" = "${fchar}" ] &&
              [ "${#run}" -ge "${flen}" ] && [ -z "${rest//[[:space:]]/}" ]; then
           fchar=''; flen=0; fpfx=''
         fi
@@ -1729,6 +1729,11 @@ expect_class interactive "${ROUTINE_LINE}\n\n    \`\`\`\n${INTER_LINE}" 'an inde
 expect_class interactive "${ROUTINE_LINE}\n\n> \`\`\`\n> x\n> \`\`\`\n${INTER_LINE}" 'a blockquoted fence closed at ITS OWN depth still closes'
 # Without the second, the cap swallows every indented line; three spaces is alignment, not code.
 expect_class interactive "${ROUTINE_LINE}\n\n   ${INTER_LINE}" 'three spaces is alignment: the marker still counts'
+# ALIGNMENT IS NOT DEPTH. A closer may be indented relative to its opener and still be the closer, so
+# the prefixes are compared by their container MARKERS with whitespace removed. Comparing raw prefixes
+# leaves the fence open and swallows the trailing marker -- the direction that costs the maintainer's
+# PR, which is why this is asserted rather than left to the container-depth case above.
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n  \`\`\`\n${INTER_LINE}" 'an indented closer still closes a top-level fence'
 # A tab is the blockquote's separator, not content indentation. Counting it as four columns would
 # hide a REAL interactive marker -- the direction that costs the maintainer's PR, not just a parked one.
 expect_class interactive "${ROUTINE_LINE}\n\n>\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated blockquote marker still counts'
