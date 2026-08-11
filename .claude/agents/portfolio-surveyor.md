@@ -142,16 +142,15 @@ public and private — no per-repo loop needed to enumerate):
      🔴 **A marker line counts wherever it appears — there is NO fenced-block suppression, and that
      is a measured decision.** Across **1029 portfolio PR bodies (2026-08-11)** a full delimiter-aware
      fence state machine changes **ZERO verdicts** versus this rule: every body carrying either literal
-     carries it as a plain line, none fenced. Six review rounds each found one more container spelling
-     that slipped past such a detector — an unskipped fence, a nested fence, a blockquoted close token,
-     an indented code block, a backtick inside an info string, a raw HTML block — so the detector cost
-     an unbounded enumeration to decide nothing.
+     carries it as a plain line, none fenced. A fence detector is also unbounded to specify: every
+     container spelling it must skip — an unskipped fence, a nested fence, a blockquoted close token,
+     an indented code block, a backtick inside an info string, a raw HTML block — is another way for
+     it to swallow a real marker, and none of them changes a verdict on this corpus.
      ⚠️ **The accepted cost is stated, not hidden:** a PR body that **fences an example** of the
      interactive literal classifies `interactive` and parks itself HANDS-OFF. That is the **cheap**
      direction — our own PR waits for a human — and its measured incidence is **0**. The expensive
-     direction is a real marker swallowed by a mis-parsed fence, which drives the maintainer's PR;
-     every round of fence repair risked reintroducing exactly that. Restore fence handling only
-     against measured incidence of the cheap failure actually occurring.
+     direction is a real marker swallowed by a mis-parsed fence, which drives the maintainer's PR.
+     Restore fence handling only against measured incidence of the cheap failure actually occurring.
      🔴 **Two structural rules remain, because they serve the MATCHER rather than
      example-suppression.** Read each line through its Markdown **container prefix** — up to three
      spaces of alignment, blockquote `>` markers, and `-`/`*` list markers, each consuming its optional
@@ -169,14 +168,13 @@ public and private — no per-repo loop needed to enumerate):
        very convention would hit `interactive` and be parked HANDS-OFF forever, since its body never
        changes. A **body-start** anchor over-corrects the other way, because the org PR template puts
        `### Motivation` above the disclosure.
-       **Measured 2026-08-11 across the open `devantler` PRs portfolio-wide** (n = 74 at the time of
-       writing — ⚠️ **this corpus is LIVE and its absolute counts drift as PRs merge**; it moved
-       76 → 74 during the session that measured it, so treat any total here as a dated snapshot and
-       re-derive rather than trusting it):
+       **Measured 2026-08-11 across the open `devantler` PRs portfolio-wide** (n = 74 — ⚠️ **this
+       corpus is LIVE and its absolute counts drift as PRs merge**, so any total here is a dated
+       snapshot to re-derive rather than trust):
        - line-structural and bare-substring agree **exactly** — same classification for every PR;
        - a **body-start** anchor displaces **7** routine PRs to `none`. **That 7 is the stable,
-         load-bearing figure**: it held across every snapshot taken (33−26, 34−27, 32−25), because it
-         counts bodies using the org template rather than whatever the corpus size happens to be;
+         load-bearing figure**: it holds across snapshots because it counts bodies using the org
+         template rather than whatever the corpus size happens to be;
        - negative control — the marker quoted mid-sentence — bare substring matches, line-structural
          correctly does not.
        ⚠️ **Asymmetric strength: `interactive` is decisive, `routine` is only corroborating.** The
