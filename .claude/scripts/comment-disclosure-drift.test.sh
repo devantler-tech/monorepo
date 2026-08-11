@@ -251,17 +251,57 @@ expect_exit 2 "--since with --issue is ambiguous" -- bash "$guard" --repo owner/
 # which rejection fired.
 cat >"$stubdir/gh" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"$ARGLOG"
 printf '%s' '[]'
 STUB
 chmod +x "$stubdir/gh"
-expect_exit 2 "--since rejects a non-timestamp" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since yesterday
+: >"$tmpdir/args"
+expect_exit 2 "--since rejects a non-timestamp" -- env PATH="$stubdir:$PATH" ARGLOG="$tmpdir/args" bash "$guard" --repo owner/repo --since yesterday
 expect_stderr "ISO-8601" "non-timestamp is rejected by the local shape check"
-expect_exit 2 "--since rejects a date without a time" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10
+expect_exit 2 "--since rejects a date without a time" -- env PATH="$stubdir:$PATH" ARGLOG="$tmpdir/args" bash "$guard" --repo owner/repo --since 2026-08-10
 expect_stderr "ISO-8601" "date-without-time is rejected by the local shape check"
+# The check must run BEFORE the network call -- "no call spent on an obvious typo"
+# is one of its two stated justifications, and exit codes alone cannot show it. A
+# regression that validated after fetching would still exit 2 here.
+if [ ! -s "$tmpdir/args" ]; then
+  echo "ok    a malformed --since spends no gh call"
+else
+  echo "FAIL  a malformed --since invoked gh; args were:"
+  sed 's/^/        /' "$tmpdir/args"
+  failures=$((failures + 1))
+fi
 # Positive control: the SAME stub, with a well-formed timestamp, must reach the
 # classifier and exit 0 -- otherwise the two assertions above could be passing
-# because the stub itself is broken.
-expect_exit 0 "a well-formed --since reaches the classifier through the same stub" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+# because the stub itself is broken. This one MUST invoke gh, which also proves
+# the emptiness check above measured a real difference and not a broken ARGLOG.
+: >"$tmpdir/args"
+expect_exit 0 "a well-formed --since reaches the classifier through the same stub" -- env PATH="$stubdir:$PATH" ARGLOG="$tmpdir/args" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+if [ -s "$tmpdir/args" ]; then
+  echo "ok    a well-formed --since does invoke gh"
+else
+  echo "FAIL  a well-formed --since never invoked gh, so the no-call assertion above proves nothing"
+  failures=$((failures + 1))
+fi
+
+# The glob is a shape check, not a validity check: a shape-valid but impossible
+# instant passes it and reaches GitHub, which answers 422 (measured 2026-08-11).
+# That must fail closed on the gh-error path rather than reading as a clean sweep --
+# the other half of what the corrected comment in the wrapper claims.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$ARGLOG"
+echo 'gh: The since parameter needs to be in ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ (HTTP 422)' >&2
+exit 1
+STUB
+chmod +x "$stubdir/gh"
+: >"$tmpdir/args"
+expect_exit 2 "a shape-valid impossible instant fails closed on the 422" -- env PATH="$stubdir:$PATH" ARGLOG="$tmpdir/args" bash "$guard" --repo owner/repo --since 2026-19-39T29:59:69Z
+if [ -s "$tmpdir/args" ]; then
+  echo "ok    the impossible instant passed the glob and reached gh"
+else
+  echo "FAIL  the impossible instant was rejected locally, so this fixture no longer covers the 422 path"
+  failures=$((failures + 1))
+fi
 
 # THE load-bearing assertion: --since must hit the repo-wide comments endpoint.
 # A sweep that silently read one issue would classify a handful of comments and
