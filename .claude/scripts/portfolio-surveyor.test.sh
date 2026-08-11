@@ -1531,10 +1531,13 @@ done
 # pins that the stated rule, implemented literally, actually classifies the shapes we depend on. Codex
 # correctly noted on #2767 that the grep assertions exercise no behaviour, so a rule could be worded
 # correctly and still be unimplementable or wrong on the cases that matter.
-# Split a line into its Markdown CONTAINER PREFIX and the content that follows, setting
-# OWN_PREFIX / OWN_CONTENT / OWN_CODE. This is what makes the match STRUCTURAL rather than a bare
-# substring: the org PR template puts the disclosure under a `- ` bullet, so a container-blind
-# matcher misses real disclosures.
+# STRIP a line's Markdown container prefix, setting OWN_CONTENT / OWN_CODE. This is what makes the
+# match STRUCTURAL rather than a bare substring: the org PR template puts the disclosure under a
+# `- ` bullet, so a container-blind matcher misses real disclosures.
+#
+# The prefix is consumed and DISCARDED, never returned. It used to be returned as OWN_PREFIX so the
+# fence detector could anchor a closer to its opener's depth; with no fence state, nothing reads it,
+# and keeping it would be dead code that implies a comparison the classifier no longer makes.
 #
 # Containers consumed: up to three spaces of alignment, blockquote `>` markers (plus one optional
 # following space), and `-`/`*` list markers. A list marker counts only when whitespace follows it,
@@ -1544,8 +1547,8 @@ done
 # container depth. Such a line is literal text and carries no disclosure marker. Without this,
 # four-space-indented example markup is read as the real thing.
 ownership_split() {
-  local ln="$1" pfx='' n c
-  OWN_PREFIX=''; OWN_CONTENT=''; OWN_CODE=0
+  local ln="$1" n c
+  OWN_CONTENT=''; OWN_CODE=0
   while :; do
     n=0
     while :; do
@@ -1555,19 +1558,19 @@ ownership_split() {
         '	') n=$((n + 4)) ;;
         *) break ;;
       esac
-      pfx="${pfx}${c}"; ln="${ln:1}"
+      ln="${ln:1}"
       [ "${n}" -ge 4 ] && { OWN_CODE=1; break; }
     done
     [ "${OWN_CODE}" -eq 1 ] && break
     case "${ln}" in
       '>'*)
-        pfx="${pfx}>"; ln="${ln#>}"
+        ln="${ln#>}"
         # One space OR tab is the blockquote's own separator. Consuming only the space would leave a
         # tab to be counted as four columns by the indentation cap, so a tab-separated blockquote
         # would read as an indented code block and its marker would be MISSED -- the dangerous
         # direction, since a missed interactive marker makes the maintainer's PR look like ours.
         case "${ln}" in
-          ' '*|'	'*) pfx="${pfx}${ln:0:1}"; ln="${ln:1}" ;;
+          ' '*|'	'*) ln="${ln:1}" ;;
         esac
         continue ;;
       '-'' '*|'-''	'*|'*'' '*|'*''	'*)
@@ -1578,15 +1581,15 @@ ownership_split() {
         # `-<tab>🤖 Generated with [Claude Code]` -- a list-wrapped interactive
         # disclosure -- was classified `routine`, i.e. the maintainer's PR read
         # as ours. That is the expensive direction, so both branches must agree.
-        pfx="${pfx}${ln:0:1}"; ln="${ln:1}"
+        ln="${ln:1}"
         case "${ln}" in
-          ' '*|'	'*) pfx="${pfx}${ln:0:1}"; ln="${ln:1}" ;;
+          ' '*|'	'*) ln="${ln:1}" ;;
         esac
         continue ;;
     esac
     break
   done
-  OWN_PREFIX="${pfx}"; OWN_CONTENT="${ln}"
+  OWN_CONTENT="${ln}"
 }
 
 # Sets OWN_INTER/OWN_ROUTINE. There is deliberately NO fence state here: a marker line counts wherever
