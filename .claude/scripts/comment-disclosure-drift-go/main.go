@@ -182,6 +182,13 @@ type Comment struct {
 	Body   string `json:"body"`
 	URL    string `json:"html_url"`
 	Author string `json:"author"`
+	// IssueURL identifies the discussion a comment belongs to. It matters only for
+	// the bare-trigger carve-out, which is granted by the disclosure being the
+	// IMMEDIATELY PRECEDING comment in the SAME discussion. A repo-wide sweep
+	// interleaves discussions in one array, so without this the pairing can span
+	// two of them. Absent (a hand-assembled payload), every record shares the empty
+	// value, which is the single-discussion case the per-issue mode always was.
+	IssueURL string `json:"issue_url"`
 	// User carries the REST shape (`{"user":{"login":...}}`) so a raw
 	// `gh api .../comments` payload can be fed in without reshaping.
 	User struct {
@@ -519,6 +526,7 @@ func excerpt(line string, limit int) string {
 func Analyse(comments []Comment, author string) Report {
 	report := Report{Counts: map[Verdict]int{}}
 	previousWasDisclosure := false
+	previousDiscussion := ""
 	for _, comment := range comments {
 		if comment.login() != author {
 			report.SkippedAuthors++
@@ -526,12 +534,17 @@ func Analyse(comments []Comment, author string) Report {
 		}
 		report.Considered++
 		verdict := Classify(comment.Body)
-		if verdict == BareTrigger && !previousWasDisclosure {
+		// "Immediately before" means within one discussion. A repo-wide payload
+		// interleaves them, so a disclosure in one issue must not carve out a bare
+		// trigger in another; array adjacency alone is not the pairing.
+		pairedInSameDiscussion := previousWasDisclosure && comment.IssueURL == previousDiscussion
+		if verdict == BareTrigger && !pairedInSameDiscussion {
 			// The exemption is conditional on the pairing; unpaired, it is an
 			// undisclosed trigger like any other.
 			verdict = UndisclosedTrigger
 		}
 		previousWasDisclosure = hasCanonicalPrefix(normalise(comment.Body))
+		previousDiscussion = comment.IssueURL
 		report.Counts[verdict]++
 		if !verdict.violating() {
 			continue
