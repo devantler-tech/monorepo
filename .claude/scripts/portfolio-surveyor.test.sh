@@ -1584,7 +1584,18 @@ ownership_split() {
         esac
         continue ;;
       '-'' '*|'-''	'*|'*'' '*|'*''	'*)
-        pfx="${pfx}${ln:0:1}"; ln="${ln:1}"; continue ;;
+        # Consume the list marker AND its separator, for the same reason the
+        # blockquote branch above does: leaving a TAB behind lets the next pass
+        # count it as four columns, read the line as an indented code block, and
+        # discard the marker. The fix was applied to `>` and not here, so
+        # `-<tab>🤖 Generated with [Claude Code]` -- a list-wrapped interactive
+        # disclosure -- was classified `routine`, i.e. the maintainer's PR read
+        # as ours. That is the expensive direction, so both branches must agree.
+        pfx="${pfx}${ln:0:1}"; ln="${ln:1}"
+        case "${ln}" in
+          ' '*|'	'*) pfx="${pfx}${ln:0:1}"; ln="${ln:1}" ;;
+        esac
+        continue ;;
     esac
     break
   done
@@ -1774,5 +1785,10 @@ expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n${INTER_LINE}\n\`\`\`\n\ntail" 
 # A tab is the blockquote's separator, not content indentation. Counting it as four columns would
 # hide a REAL interactive marker -- the direction that costs the maintainer's PR, not just a parked one.
 expect_class interactive "${ROUTINE_LINE}\n\n>\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated blockquote marker still counts'
+# The SAME hazard one container over. The blockquote branch consumed its separator and the list
+# branch did not, so a tab-separated LIST marker hit the four-column cap and the disclosure was
+# discarded -- the maintainer's PR reading as ours. A rule applied to one container and not its
+# sibling is the recurring shape here, so this fixture pins the pair together.
+expect_class interactive "${ROUTINE_LINE}\n\n-\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated LIST marker still counts'
 
 echo "portfolio surveyor contract: all assertions passed"
