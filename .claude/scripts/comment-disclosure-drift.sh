@@ -43,14 +43,23 @@
 # single busy issue does. Pass a literal UTC instant; the caller decides how far
 # back "recent" reaches.
 #
-# KNOWN BOUNDARY EFFECT (--since only): the bare-trigger carve-out needs the
-# disclosure that immediately precedes the trigger, and `since` returns only
-# comments updated after the cutoff. A bare trigger created just inside the window
-# whose disclosure sits just outside it therefore has no visible predecessor and is
-# reported as an `undisclosed-trigger` it does not deserve. This fails in the noisy
-# direction rather than the silent one, so it is a false accusation to re-check with
-# `--issue <n>` on that discussion, never a missed violation. Overlapping the window
-# with the previous sweep avoids it. Tracked for a real fix at monorepo#2781.
+# KNOWN LIMITATION (--since only): a sweep NEVER grants the bare-trigger carve-out,
+# so every bare `@cursor review` in a sweep is reported as `undisclosed-trigger`.
+#
+# Why: `since` selects comments by UPDATED time, so a discussion's returned history
+# is not contiguous. Measured 2026-08-11 — a comment created 21:40:05Z came back in a
+# window starting 22:00:00Z because it was edited at 22:31:08Z. Two records can
+# therefore be ADJACENT in the payload with a real comment between them, and an
+# edited old disclosure can arrive while the comment that truly follows it does not.
+# Adjacency here is not evidence of the pairing the carve-out requires, so granting
+# it would CLEAR a trigger whose real predecessor was never fetched — a fail-open.
+#
+# The cost is a false accusation, not a missed violation: measured 4 of 200 reported
+# on a two-day monorepo window, of which 2 are legitimate Bugbot pairs. Re-check any
+# flagged trigger with `--issue <n>`, where the full comment list is present and the
+# pairing resolves correctly. Because of this, `--since` exits 1 routinely on repos
+# that use Bugbot; treat the listed findings as the signal, not the exit code alone.
+# monorepo#2781 tracks fetching the real predecessor so precision is restored.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -257,4 +266,14 @@ if [ -n "$since" ] && ! jq -e '
   die "response for ${api_label} has records without issue_url, so discussions cannot be told apart"
 fi
 
-"$guard_binary" --author "$author" "${pass_through[@]+"${pass_through[@]}"}" --input "$payload"
+# A sweep payload is non-contiguous per discussion (see KNOWN BOUNDARY EFFECT), so
+# the guard must not grant the bare-trigger carve-out on an adjacency it cannot
+# verify -- that would CLEAR a trigger whose real predecessor was never fetched.
+sweep_flag=()
+if [ -n "$since" ]; then
+  sweep_flag=(--sweep)
+fi
+
+"$guard_binary" --author "$author" \
+  "${sweep_flag[@]+"${sweep_flag[@]}"}" \
+  "${pass_through[@]+"${pass_through[@]}"}" --input "$payload"

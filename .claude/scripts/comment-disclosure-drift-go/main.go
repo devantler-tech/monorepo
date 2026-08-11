@@ -531,6 +531,27 @@ func excerpt(line string, limit int) string {
 // and a comment from issue B standing between issue A's disclosure and A's trigger
 // would revoke one that is legitimate within A.
 func Analyse(comments []Comment, author string) Report {
+	return analyse(comments, author, false)
+}
+
+// AnalyseSweep is Analyse for a repo-wide `--since` payload, where the carve-out is
+// NEVER granted.
+//
+// `since` selects comments by UPDATED time, so a discussion's returned history is
+// not contiguous: an edited old disclosure can arrive while the unchanged comment
+// that really follows it does not (measured 2026-08-11 — a comment created
+// 21:40:05Z came back in a window starting 22:00:00Z, edited at 22:31:08Z). Two
+// records can therefore be adjacent in the payload with a real comment between
+// them, so adjacency here is not evidence of the pairing the carve-out requires.
+// Granting it on that evidence CLEARS a trigger whose true predecessor was never
+// seen, which is a fail-open; refusing it costs a false report on a legitimate pair,
+// which is visible and re-checkable with --issue. monorepo#2781 tracks fetching the
+// real predecessor so precision can be restored.
+func AnalyseSweep(comments []Comment, author string) Report {
+	return analyse(comments, author, true)
+}
+
+func analyse(comments []Comment, author string, sweep bool) Report {
 	report := Report{Counts: map[Verdict]int{}}
 	lastWasDisclosure := map[string]bool{}
 	for _, comment := range comments {
@@ -540,7 +561,7 @@ func Analyse(comments []Comment, author string) Report {
 		}
 		report.Considered++
 		verdict := Classify(comment.Body)
-		if verdict == BareTrigger && !lastWasDisclosure[comment.IssueURL] {
+		if verdict == BareTrigger && (sweep || !lastWasDisclosure[comment.IssueURL]) {
 			// The exemption is conditional on the pairing; unpaired, it is an
 			// undisclosed trigger like any other.
 			verdict = UndisclosedTrigger
@@ -725,6 +746,7 @@ func main() {
 		input  = flag.String("input", "-", `comment JSON file, or "-" for stdin`)
 		author = flag.String("author", "devantler", "only classify comments by this exact login")
 		all    = flag.Bool("all", false, "also print the non-violating verdict tally")
+		sweep  = flag.Bool("sweep", false, "payload is a repo-wide --since sweep: never grant the bare-trigger carve-out")
 	)
 	flag.Parse()
 
@@ -765,6 +787,9 @@ func main() {
 	}
 
 	report := Analyse(comments, *author)
+	if *sweep {
+		report = AnalyseSweep(comments, *author)
+	}
 
 	for _, finding := range report.Findings {
 		location := finding.URL
