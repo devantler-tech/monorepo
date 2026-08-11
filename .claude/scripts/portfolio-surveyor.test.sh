@@ -1531,35 +1531,75 @@ for _site in "${surveyor}" "${constitution}"; do
     fail "${_n} must require a closing fence to carry no info string (#2762)"
   grep -Fq 'three or more' "${_site}" ||
     fail "${_n} must state the three-character minimum for a fence opener (#2762)"
+  # Both clauses are pinned mid-phrase and deliberately stop short of the wrap point: the AGENTS.md
+  # copy breaks the line at "indented code / block", so pinning the whole bolded span would fail on
+  # a reflow rather than on a real regression.
+  grep -Fq 'close only on a line carrying that same prefix' "${_site}" ||
+    fail "${_n} must anchor a fence closer to the opener's container prefix (#2762)"
+  grep -Fq 'four or more spaces of indentation at the current depth' "${_site}" ||
+    fail "${_n} must exclude Markdown indented code blocks from marker matching (#2762)"
 done
 
 # BEHAVIOURAL fixture, not another prose pin. The assertions above pin what the definition SAYS; this
 # pins that the stated rule, implemented literally, actually classifies the shapes we depend on. Codex
 # correctly noted on #2767 that the grep assertions exercise no behaviour, so a rule could be worded
 # correctly and still be unimplementable or wrong on the cases that matter.
-# Strip the shared container prefix: leading whitespace, blockquote `>` markers, and `-`/`*` list
-# markers. A list marker counts only when whitespace follows it, so `**bold` keeps its asterisks and
-# stays ordinary prose. The fence detector and the marker matcher both consume THIS function, which
-# is what stops the two from drifting apart.
-ownership_strip_prefix() {
-  local ln="$1"
-  while [ -n "${ln}" ]; do
+# Split a line into its Markdown CONTAINER PREFIX and the content that follows, setting
+# OWN_PREFIX / OWN_CONTENT / OWN_CODE. Returning the prefix — rather than discarding it as the
+# earlier stripper did — is what lets the fence detector below tell a delimiter apart from fenced
+# CONTENT that merely looks like one.
+#
+# Containers consumed: up to three spaces of alignment, blockquote `>` markers (plus one optional
+# following space), and `-`/`*` list markers. A list marker counts only when whitespace follows it,
+# so `**bold` keeps its asterisks and stays ordinary prose.
+#
+# OWN_CODE marks a Markdown INDENTED CODE BLOCK — four or more spaces of indentation at the current
+# container depth. Such a line is literal text: it can neither open nor close a fence nor carry a
+# disclosure marker. Without this, four-space-indented example markup is read as the real thing.
+ownership_split() {
+  local ln="$1" pfx='' n c
+  OWN_PREFIX=''; OWN_CONTENT=''; OWN_CODE=0
+  while :; do
+    n=0
+    while :; do
+      c="${ln:0:1}"
+      case "${c}" in
+        ' ')  n=$((n + 1)) ;;
+        '	') n=$((n + 4)) ;;
+        *) break ;;
+      esac
+      pfx="${pfx}${c}"; ln="${ln:1}"
+      [ "${n}" -ge 4 ] && { OWN_CODE=1; break; }
+    done
+    [ "${OWN_CODE}" -eq 1 ] && break
     case "${ln}" in
-      ' '*|'	'*)       ln="${ln#?}" ;;
-      '>'*)             ln="${ln#>}" ;;
-      '-'' '*|'-''	'*) ln="${ln#?}" ;;
-      '*'' '*|'*''	'*) ln="${ln#?}" ;;
-      *) break ;;
+      '>'*)
+        pfx="${pfx}>"; ln="${ln#>}"
+        # One space OR tab is the blockquote's own separator. Consuming only the space would leave a
+        # tab to be counted as four columns by the indentation cap, so a tab-separated blockquote
+        # would read as an indented code block and its marker would be MISSED -- the dangerous
+        # direction, since a missed interactive marker makes the maintainer's PR look like ours.
+        case "${ln}" in
+          ' '*|'	'*) pfx="${pfx}${ln:0:1}"; ln="${ln:1}" ;;
+        esac
+        continue ;;
+      '-'' '*|'-''	'*|'*'' '*|'*''	'*)
+        pfx="${pfx}${ln:0:1}"; ln="${ln:1}"; continue ;;
     esac
+    break
   done
-  printf '%s' "${ln}"
+  OWN_PREFIX="${pfx}"; OWN_CONTENT="${ln}"
 }
 
 ownership_fixture() {
-  local body ln content ch run rest fchar='' flen=0 inter=0 routine=0
+  local body ln content ch run rest fchar='' flen=0 fpfx='' inter=0 routine=0
   body="$(printf '%b' "$1")"
   while IFS= read -r ln; do
-    content="$(ownership_strip_prefix "${ln}")"
+    ownership_split "${ln}"
+    content="${OWN_CONTENT}"
+
+    # An indented code block is literal text at every level: not a fence, not a marker.
+    if [ "${OWN_CODE}" -eq 1 ]; then continue; fi
 
     ch=''
     case "${content}" in '`'*) ch='`' ;; '~'*) ch='~' ;; esac
@@ -1568,10 +1608,13 @@ ownership_fixture() {
       while [ "${rest#"${ch}"}" != "${rest}" ]; do run="${run}${ch}"; rest="${rest#"${ch}"}"; done
       if [ "${#run}" -ge 3 ]; then
         if [ -z "${fchar}" ]; then
-          fchar="${ch}"; flen="${#run}"
-        elif [ "${ch}" = "${fchar}" ] && [ "${#run}" -ge "${flen}" ] && [ -z "${rest//[[:space:]]/}" ]; then
-          fchar=''; flen=0
+          fchar="${ch}"; flen="${#run}"; fpfx="${OWN_PREFIX}"
+        elif [ "${OWN_PREFIX}" = "${fpfx}" ] && [ "${ch}" = "${fchar}" ] &&
+             [ "${#run}" -ge "${flen}" ] && [ -z "${rest//[[:space:]]/}" ]; then
+          fchar=''; flen=0; fpfx=''
         fi
+        # Either way a fence line carries no marker; and a token at a DIFFERENT container depth is
+        # fenced content rather than this fence's closer, so it must not reopen or close anything.
         continue
       fi
     fi
@@ -1644,11 +1687,10 @@ expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n~~~\n${INTER_LINE}\n~~~\n\`\`\`
 # green -- measured. Isolating one conjunct per fixture is what makes each of them bite.
 expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\`\n\`\`\`\n${INTER_LINE}\n\`\`\`\n\`\`\`\`" 'NESTED length: a shorter run must not close a longer fence'
 expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n\`\`\` markdown\n${INTER_LINE}\n\`\`\`" 'INFO STRING: a run carrying an info string must not close'
-# The converse, and it needs its own TOP-LEVEL case. An info string is rejected on a CLOSER but a
+# The converse, and it needs its own TOP-LEVEL case. An info string is rejected on a CLOSER, but a
 # language tag is exactly how an opener is normally written, so both directions must be pinned.
-# Rejecting info strings on openers does already fail a fixture -- but only the blockquote one, which
-# also exercises container handling, so the coverage rides on a case testing something else and would
-# be lost the moment that fixture is reworked for #2770.
+# Rejecting info strings on openers does already fail a fixture -- but only a blockquoted one, which
+# also exercises container depth, so the coverage rides on a case testing something else.
 expect_class routine "${ROUTINE_LINE}\n\n\`\`\`markdown\n${INTER_LINE}\n\`\`\`" 'INFO STRING on an OPENER: a language-tagged fence still opens'
 # Both documentation sites name `~~~`, but every fixture above opens with backticks, so tilde
 # support was unpinned: deleting the tilde branch from the detector failed nothing -- measured.
@@ -1665,5 +1707,31 @@ expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n\`\`\`\`\n${INTER_LINE}"
 # The code span must START the line: a fence candidate is only ever a LEADING run, so `see \`x\`` is
 # rejected on position and would pass at any minimum -- measured, it was the first shape tried here.
 expect_class interactive "${ROUTINE_LINE}\n\n\`x\` marks the spot\n${INTER_LINE}" 'a 1-char leading run is an inline code span, NOT a fence'
+
+# CONTAINER DEPTH. Inside an open fence, every line is literal -- including one that looks like a
+# closer once its blockquote/list markers are removed. Deriving a fresh prefix from fenced content
+# lets `> \`\`\`` close a fence opened at top level, re-exposing the example marker beneath it.
+# Anchoring the closer to the OPENER's own prefix is what makes fenced content inert.
+expect_class routine "${ROUTINE_LINE}\n\n\`\`\`\n> \`\`\`\n${INTER_LINE}\n\`\`\`" 'a blockquoted fence token inside a fence must NOT close it'
+
+# INDENTED CODE BLOCK. Four or more spaces is Markdown's other literal-text form and carries no
+# fence at all, so the fence rules above cannot reach it; only an indentation cap can.
+# The marker here is BARE -- no `>` in front. With a blockquoted marker the split stops at the
+# indentation cap before it would consume the `>`, so the line fails to match for that reason
+# instead and the assertion passes with the code-block skip deleted -- measured vacuous.
+expect_class routine "${ROUTINE_LINE}\n\nExample:\n\n    \xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a four-space indented code block is not a marker line'
+# The same depth must also stop a FENCE opener, or an indented example silently swallows the body.
+expect_class interactive "${ROUTINE_LINE}\n\n    \`\`\`\n${INTER_LINE}" 'an indented fence token opens nothing'
+
+# Negative controls for the two above -- each isolates ONE conjunct, because a fixture whose input is
+# rejected by some other rule first would pass while the rule it names is deleted.
+# Without the first, an over-strict prefix test leaves a blockquoted fence permanently open and
+# swallows a REAL trailing marker -- failing toward driving the maintainer's own PR.
+expect_class interactive "${ROUTINE_LINE}\n\n> \`\`\`\n> x\n> \`\`\`\n${INTER_LINE}" 'a blockquoted fence closed at ITS OWN depth still closes'
+# Without the second, the cap swallows every indented line; three spaces is alignment, not code.
+expect_class interactive "${ROUTINE_LINE}\n\n   ${INTER_LINE}" 'three spaces is alignment: the marker still counts'
+# A tab is the blockquote's separator, not content indentation. Counting it as four columns would
+# hide a REAL interactive marker -- the direction that costs the maintainer's PR, not just a parked one.
+expect_class interactive "${ROUTINE_LINE}\n\n>\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated blockquote marker still counts'
 
 echo "portfolio surveyor contract: all assertions passed"

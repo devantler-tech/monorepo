@@ -2349,6 +2349,18 @@ flips on the first fence token it meets, so an inner `~~~`, a shorter inner run,
 ` ```markdown ` opener *inside* the block ends the outer fence early and re-exposes the marker the
 example was illustrating — the same permanent false HANDS-OFF as a missing fence rule, reached
 through the detector rather than the matcher.
+🔴 **A closer must sit at the opener's OWN container depth, and four spaces is code, not a marker.**
+Three review rounds each found another container spelling past this check, which is one finding about
+its direction rather than three findings: stop enumerating the containers that can hide a marker and
+accept one only at a genuine structural position. Two rules do that. First, record the opener's
+container prefix and **close only on a line carrying that same prefix** — inside an open fence every
+line is literal, so a `>` that appears in fenced *content* must never be stripped and read as a
+delimiter. Second, **four or more spaces of indentation at the current depth is an indented code
+block**: it can neither open nor close a fence nor carry a disclosure marker, while three spaces
+remain ordinary alignment. Both fail in the dangerous direction if dropped — an example the PR merely
+quotes lands as `interactive` and parks that PR HANDS-OFF permanently — and both fail the *other* way
+if overdone, since a fence that never closes swallows a real trailing marker on the maintainer's own
+PR, so each carries a negative control asserting the closing form still works.
 **Line structure, never a bare substring and never a body-start anchor.** Measured 2026-08-11 across
 the open `devantler` PRs portfolio-wide, line-structural and bare-substring agree **exactly** — same
 classification for every PR — while a body-start anchor displaces **7** routine PRs to `none`; and
