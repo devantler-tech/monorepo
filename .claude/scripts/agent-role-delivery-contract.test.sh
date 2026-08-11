@@ -254,6 +254,57 @@ grep -Fq 'Agent Improver scorecard store' "${constitution}" ||
 grep -Fq 'open verification-hypothesis store' "${constitution}" ||
   fail "Memory does not name the Agent Improver hypothesis store"
 
+# Naming the two stores is NOT the same as requiring a run to read across them. Each assertion below
+# pins a distinct clause, so deleting one fails on its own line rather than being masked by another.
+# These use assert_prose (whitespace-flattened) and carry the ORDERING and the SEMANTICS, not just a
+# recognisable prefix or heading: a prefix-only pin stays green while the clause that gives it meaning
+# is deleted, which is a fixture that proves nothing.
+assert_prose "reads the SIBLING instance's scorecard and hypothesis store too, before it scores or opens any hypothesis" \
+  "Memory does not require the sibling-store cross-read BEFORE scoring or opening a hypothesis (the ordering is the rule)"
+assert_prose "sibling's pending hypothesis binds your signature-overlap decisions" \
+  "Memory does not bind signature-overlap decisions on a sibling's PENDING hypothesis"
+assert_prose 'a signature the sibling has already **settled** is **not re-measured**' \
+  "Memory does not forbid re-measuring a signature the sibling has already settled"
+assert_prose 'whatever direction that verdict took and whichever window produced it' \
+  "Memory does not extend the no-re-measure rule to negative verdicts and earlier windows, so both could be re-measured"
+assert_prose 'A sibling `NO-VERDICT`, `NOT-YET-DUE`, or an explicitly unmet measurement floor is **unsettled**, and those stay measurable' \
+  "Memory does not classify NO-VERDICT/NOT-YET-DUE/unmet-floor as unsettled, so pending hypotheses could be frozen"
+# Without the escape below a settled verdict becomes PERMANENT: the signature could change, or new
+# evidence arrive, and the hypothesis could still never be measured again.
+assert_prose 'until new evidence or a changed signature invalidates it' \
+  "Memory does not let new evidence or a changed signature invalidate a settled sibling verdict, so verdicts would be permanent"
+# The confidentiality half is privacy-critical and is NOT covered by the read/verdict assertions above:
+# every one of them still passes with the cross-publishing and read-only prohibitions deleted.
+assert_prose 'cross-*reading* them is mandatory, cross-*publishing* them is not permitted, and nothing read this way enters a repository artifact or public comment' \
+  "Memory does not prohibit cross-publishing the sibling store or leaking it into a repository artifact or public comment"
+assert_prose "The sibling's file remains **its** single source of truth — read it, never write it" \
+  "Memory does not keep the sibling store read-only, so a run could write to another instance's ledger"
+
+# WHITELIST, not another named clause. Four review rounds each found "clause N is unpinned" — a
+# blacklist that never converges, because the next round just names clause N+1. The named assertions
+# above stay for their specific failure messages; this one closes the CLASS by pinning the whole block
+# verbatim, so ANY deletion or alteration inside it fails, including a clause nobody thought to name.
+# Extracted by ANCHOR rather than line number so unrelated edits elsewhere in AGENTS.md cannot shift it.
+sibling_fixture="${repo_root}/.claude/scripts/fixtures/agent-improver-sibling-ledger.txt"
+[ -r "${sibling_fixture}" ] ||
+  fail "sibling-ledger fixture is missing: ${sibling_fixture}"
+# Read the REAL terminating line; never fabricate it. An earlier version printed a literal
+# "   write it." after seeing "read it, never" and exited, so qualifying the rule on its continuation
+# line (e.g. "write it unless its verdict is stale.") produced the ORIGINAL text and the diff passed —
+# a fail-open in the very check meant to close the class. The named assertion misses it too, because
+# the flattened prefix "read it, never write it" is still a substring of the weakened sentence.
+sibling_block="$(awk '
+  /^   🔴 \*\*Each Agent Improver run reads the SIBLING/ { f = 1 }
+  f { print }
+  f && stop { exit }
+  f && /read it, never$/ { stop = 1 }
+' "${constitution}")"
+[ -n "${sibling_block}" ] ||
+  fail "Could not locate the sibling-ledger block in AGENTS.md — its opening anchor was removed or reworded"
+if ! printf '%s\n' "${sibling_block}" | diff -q - "${sibling_fixture}" >/dev/null 2>&1; then
+  fail "The sibling-ledger block no longer matches its fixture. Intentional edits must update .claude/scripts/fixtures/agent-improver-sibling-ledger.txt in the same commit; run: diff <(awk '/Each Agent Improver run reads the SIBLING/,/write it\./' AGENTS.md) ${sibling_fixture}"
+fi
+
 for authority_row in \
   '| **Prose tightening**' \
   '| **Prose loosening**' \
