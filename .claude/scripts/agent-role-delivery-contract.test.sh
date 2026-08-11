@@ -269,6 +269,16 @@ assert_prose 'whatever direction that verdict took and whichever window produced
   "Memory does not extend the no-re-measure rule to negative verdicts and earlier windows, so both could be re-measured"
 assert_prose 'A sibling `NO-VERDICT`, `NOT-YET-DUE`, or an explicitly unmet measurement floor is **unsettled**, and those stay measurable' \
   "Memory does not classify NO-VERDICT/NOT-YET-DUE/unmet-floor as unsettled, so pending hypotheses could be frozen"
+# Without the escape below a settled verdict becomes PERMANENT: the signature could change, or new
+# evidence arrive, and the hypothesis could still never be measured again.
+assert_prose 'until new evidence or a changed signature invalidates it' \
+  "Memory does not let new evidence or a changed signature invalidate a settled sibling verdict, so verdicts would be permanent"
+# The confidentiality half is privacy-critical and is NOT covered by the read/verdict assertions above:
+# every one of them still passes with the cross-publishing and read-only prohibitions deleted.
+assert_prose 'cross-*reading* them is mandatory, cross-*publishing* them is not permitted, and nothing read this way enters a repository artifact or public comment' \
+  "Memory does not prohibit cross-publishing the sibling store or leaking it into a repository artifact or public comment"
+assert_prose "The sibling's file remains **its** single source of truth — read it, never write it" \
+  "Memory does not keep the sibling store read-only, so a run could write to another instance's ledger"
 
 for authority_row in \
   '| **Prose tightening**' \
