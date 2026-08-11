@@ -1575,7 +1575,13 @@ ownership_split() {
     case "${ln}" in
       '>'*)
         pfx="${pfx}>"; ln="${ln#>}"
-        [ "${ln:0:1}" = ' ' ] && { pfx="${pfx} "; ln="${ln:1}"; }
+        # One space OR tab is the blockquote's own separator. Consuming only the space would leave a
+        # tab to be counted as four columns by the indentation cap, so a tab-separated blockquote
+        # would read as an indented code block and its marker would be MISSED -- the dangerous
+        # direction, since a missed interactive marker makes the maintainer's PR look like ours.
+        case "${ln}" in
+          ' '*|'	'*) pfx="${pfx}${ln:0:1}"; ln="${ln:1}" ;;
+        esac
         continue ;;
       '-'' '*|'-''	'*|'*'' '*|'*''	'*)
         pfx="${pfx}${ln:0:1}"; ln="${ln:1}"; continue ;;
@@ -1719,5 +1725,8 @@ expect_class interactive "${ROUTINE_LINE}\n\n    \`\`\`\n${INTER_LINE}" 'an inde
 expect_class interactive "${ROUTINE_LINE}\n\n> \`\`\`\n> x\n> \`\`\`\n${INTER_LINE}" 'a blockquoted fence closed at ITS OWN depth still closes'
 # Without the second, the cap swallows every indented line; three spaces is alignment, not code.
 expect_class interactive "${ROUTINE_LINE}\n\n   ${INTER_LINE}" 'three spaces is alignment: the marker still counts'
+# A tab is the blockquote's separator, not content indentation. Counting it as four columns would
+# hide a REAL interactive marker -- the direction that costs the maintainer's PR, not just a parked one.
+expect_class interactive "${ROUTINE_LINE}\n\n>\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated blockquote marker still counts'
 
 echo "portfolio surveyor contract: all assertions passed"
