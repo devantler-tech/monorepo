@@ -295,7 +295,10 @@ early_exit_flag() {
 # or a run of bare characters. `_SQ` exists because the pattern lives in a
 # single-quoted string and cannot hold a bare `'`.
 _SQ=\'
-_ASSIGN_VALUE='("[^"]*"|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|[^[:space:]"'"$_SQ"']+)+'
+# A BARE fragment may also carry a backslash-escaped character, including an
+# escaped space — `LC_ALL=C\ UTF-8` is one word. So the bare run is "characters
+# that are not space, quote or backslash, OR a backslash followed by anything".
+_ASSIGN_VALUE='("[^"]*"|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|([^[:space:]"'"$_SQ"'\]|\\.)+)+'
 PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*='"$_ASSIGN_VALUE"'|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
 unset _SQ _ASSIGN_VALUE
 

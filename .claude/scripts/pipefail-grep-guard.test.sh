@@ -371,6 +371,14 @@ run_guard "$f" && rc=0 || rc=$?
 report "a mixed quoted/unquoted assignment value does not hide the grep" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# A bare fragment may also carry a backslash-escaped character, including an
+# escaped SPACE — `LC_ALL=C\ UTF-8` is a single word.
+f="$(mkscript "assign-escaped-space.sh" \
+  'printf "%s" "$v" | LC_ALL=C\ UTF-8 grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "an escaped space in an assignment value does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
 # ...and two assignment prefixes, the second one quoted — the fragment grammar
 # must not consume the space that separates the prefixes from each other.
 f="$(mkscript "assign-two-prefixes.sh" \
