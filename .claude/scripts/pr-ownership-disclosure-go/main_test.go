@@ -46,6 +46,24 @@ func TestClassify(t *testing.T) {
 			body: "### Motivation\n\n- " + realRoutineLine[2:] + "\n",
 			want: Routine,
 		},
+		// A TAB after the list marker. `-\t` is recognised as a marker, so the
+		// tab must be consumed with it — otherwise it survives into the content
+		// and a real disclosure reads as `none`.
+		{
+			name: "routine marker under a `-` bullet separated by a TAB",
+			body: "### Motivation\n\n-\t" + realRoutineLine[2:] + "\n",
+			want: Routine,
+		},
+		{
+			name: "interactive marker under a `*` bullet separated by a TAB",
+			body: "## Summary\n\n*\t" + realInteractiveLine + "\n",
+			want: Interactive,
+		},
+		{
+			name: "interactive marker under a `-` bullet separated by a TAB",
+			body: "## Summary\n\n-\t" + realInteractiveLine + "\n",
+			want: Interactive,
+		},
 
 		// --- Placements that already worked --------------------------------
 		{

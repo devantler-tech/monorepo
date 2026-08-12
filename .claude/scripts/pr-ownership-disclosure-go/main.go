@@ -128,13 +128,11 @@ func stripContainers(line string) (string, bool) {
 		}
 
 		rest := line[indent:]
-		var marker byte
 		switch {
-		case strings.HasPrefix(rest, ">"):
-			marker = '>'
-		case strings.HasPrefix(rest, "- "), strings.HasPrefix(rest, "* "),
+		case strings.HasPrefix(rest, ">"),
+			strings.HasPrefix(rest, "- "), strings.HasPrefix(rest, "* "),
 			strings.HasPrefix(rest, "-\t"), strings.HasPrefix(rest, "*\t"):
-			marker = rest[0]
+			// A container marker; consumed below.
 		default:
 			return rest, true
 		}
@@ -142,10 +140,12 @@ func stripContainers(line string) (string, bool) {
 		// Consume the marker and at most ONE following space or tab. A second
 		// space is content indentation and must survive, so that four of them
 		// still open an indented code block inside the container.
-		rest = rest[1:]
-		if marker == '>' {
-			rest = expandLeadingTabs(rest)
-		}
+		//
+		// Expand tabs for EVERY marker, not just `>`: the org PR template's
+		// disclosure sits under a `-` bullet, and a `-\t` separator would
+		// otherwise leave the tab in the content, so `lineCarries` would see a
+		// leading tab and report `none` on a real disclosure.
+		rest = expandLeadingTabs(rest[1:])
 		if strings.HasPrefix(rest, " ") {
 			rest = rest[1:]
 		}

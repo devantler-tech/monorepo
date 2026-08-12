@@ -1538,8 +1538,11 @@ grep -Fq 'four or more spaces of indentation at the current depth' "${constituti
 
 # The surveyor must DELEGATE rather than re-derive. Without this the prose could quietly grow a second
 # matcher back and drift from the classifier again.
-grep -Fq 'pr-ownership-disclosure.sh' "${surveyor}" ||
-  fail "portfolio-surveyor.md must call the ownership classifier, not re-derive the match (#2784)"
+# Match the COMPLETE invocation, not just the filename: a bare filename check still passes if the
+# command form or its required --repo/--pr arguments are dropped, leaving an instruction that names
+# the classifier without saying how to run it.
+grep -Fq '.claude/scripts/pr-ownership-disclosure.sh --repo <owner>/<repo> --pr <n>' "${surveyor}" ||
+  fail "portfolio-surveyor.md must carry the full ownership-classifier invocation (#2784)"
 
 # And the classifier must exist, be executable, and actually pin the two matcher rules — otherwise the
 # delegation above points at nothing and the guarantee is lost rather than moved.
