@@ -186,24 +186,62 @@ add_worktree_on() {
     return
   fi
 
-  # No local branch. Refresh this one remote ref before deciding, because the tracking ref may be
-  # absent (never fetched) or stale (fetched before the PR's latest push). Bounded and non-fatal, and
-  # the same call legitimately fails two ways that cannot be told apart cheaply: the branch does not
-  # exist on origin (the ordinary new-branch case), or the remote was unreachable. Both fall through
-  # to creating the branch, so a run whose transport is down while resuming a PR gets a fresh branch
-  # rather than an error. That residual is accepted: distinguishing the two costs another network
-  # call on every add, and a run that cannot reach origin cannot push or open a PR anyway.
-  bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
-    git -C "$repo" fetch --quiet origin \
-    "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
-
-  if git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-    git -C "$repo" worktree add --track -b "$branch" "$wt" "origin/$branch"
+  # No local branch. `no tracking ref` is NOT proof the branch is new — it equally means the fetch
+  # never answered, and a failed fetch leaves refs/remotes/origin/<branch> untouched. Creating from
+  # HEAD on that reading is the silent fork this function exists to prevent, and it is reachable on a
+  # mere TIMEOUT of the bounded call, where the network is fine again seconds later and the run does
+  # go on to push. So classify the remote before deciding, rather than inferring from absence.
+  #
+  # A repo with no origin is checked first and separately: nothing can host the branch there, so
+  # creating it is correct — and `ls-remote` cannot distinguish that from an unreachable remote,
+  # since both exit 128.
+  if ! git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+    git -C "$repo" worktree add -b "$branch" "$wt"
     return
   fi
 
-  # Genuinely new branch — the original behaviour, and still the common case for fresh work.
-  git -C "$repo" worktree add -b "$branch" "$wt"
+  # `--exit-code` is the discriminator: 0 = the branch exists on origin, 2 = origin answered and does
+  # not have it, anything else = we could not ask (transport, auth, timeout).
+  local ls_rc=0
+  bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+    git -C "$repo" ls-remote --exit-code --heads origin "refs/heads/$branch" \
+    >/dev/null 2>&1 || ls_rc=$?
+
+  case "$ls_rc" in
+    0)
+      # Exists on origin. Refresh the tracking ref so we attach to the CURRENT tip rather than a
+      # stale one, then attach. A fetch failure here still leaves a usable lineage below.
+      bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+        git -C "$repo" fetch --quiet origin \
+        "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
+      ;;
+    2)
+      # origin answered and does not have this branch — genuinely new work.
+      git -C "$repo" worktree add -b "$branch" "$wt"
+      return
+      ;;
+    *)
+      # Could not ask. A stale tracking ref is still this branch's own lineage, so prefer it over a
+      # fork and say plainly that its freshness is unverified.
+      if git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        base_freshness_unknown "origin/$branch (remote lookup failed)"
+      else
+        # Nothing to attach to and no way to ask. Creating the branch stays the behaviour here
+        # BECAUSE remote state must never decide whether `add` succeeds — that is a pinned property
+        # of this helper (four "advisory, not fatal" assertions), and failing would block ordinary
+        # new-branch work during any network hiccup. Announce the ambiguity instead of hiding it: the
+        # claim protocol independently compares the remote tip by SHA before pushing, so a fork is
+        # caught there rather than silently kept.
+        echo "worktree-claim: NOTE could not reach origin to check whether '$branch' already exists;" >&2
+        echo "worktree-claim:      creating it locally — VERIFY the remote tip before pushing, because" >&2
+        echo "worktree-claim:      an existing remote branch would be forked, not resumed." >&2
+        git -C "$repo" worktree add -b "$branch" "$wt"
+        return
+      fi
+      ;;
+  esac
+
+  git -C "$repo" worktree add --track -b "$branch" "$wt" "origin/$branch"
 }
 
 cmd_add() {

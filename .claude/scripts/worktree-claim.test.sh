@@ -894,5 +894,58 @@ dup_out="$("$script" add \
 check "a branch already checked out elsewhere is still refused" 2 "$dup_rc" \
   "$dup_out" "git worktree add failed"
 
+# ── an unresolvable remote must not become a silent fork (CodeRabbit, #2810) ────────
+# A fetch failure leaves refs/remotes/origin/<branch> untouched, so "no tracking ref" cannot be read
+# as "the branch does not exist on origin" — it also means "we could not ask". Creating the branch
+# from HEAD there reintroduces exactly the silent fork the remote arm exists to prevent, and the
+# bounded remote call makes it reachable on a mere TIMEOUT, where the network is fine seconds later
+# and the run does go on to push.
+unreach_seed="$tmp/unreach-repo"
+mkdir -p "$unreach_seed"
+git -C "$unreach_seed" init -q -b main
+git -C "$unreach_seed" config user.name "worktree-claim-test"
+git -C "$unreach_seed" config user.email "worktree-claim-test@example.com"
+git -C "$unreach_seed" commit --allow-empty -qm "init"
+git -C "$unreach_seed" remote add origin "$tmp/definitely-not-a-repo.git"
+# Remote state must never decide whether `add` succeeds — a pinned property of this helper, with
+# four "advisory, not fatal" assertions behind it — so this still claims. What it must NOT do is stay
+# silent: the ambiguity is announced, and the claim protocol's own remote-tip SHA comparison before
+# pushing is what actually catches a fork.
+unreach_rc=0
+unreach_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=5 "$script" add \
+  "$unreach_seed" "$tmp/wt-unreach" "claim-unreachable" "session-unreach" 2>&1)" || unreach_rc=$?
+check "an unresolvable remote still claims (advisory, not fatal)" 0 "$unreach_rc" \
+  "$unreach_out" "owner=session-unreach"
+check "an unresolvable remote ANNOUNCES that it could not check for an existing branch" 0 \
+  "$unreach_rc" "$unreach_out" "could not reach origin to check whether"
+check "the announcement names the verification the caller must do" 0 \
+  "$unreach_rc" "$unreach_out" "VERIFY the remote tip before pushing"
+
+# The reachable-remote counterpart MUST still create: `ls-remote --exit-code` answers 2 for "branch
+# absent" and 128 for "could not ask", and only the first is proof the branch is new. Without this
+# the fix above would block every genuinely-new branch.
+absent_seed="$tmp/absent-repo"
+mkdir -p "$absent_seed"
+git -C "$absent_seed" init -q -b main
+git -C "$absent_seed" config user.name "worktree-claim-test"
+git -C "$absent_seed" config user.email "worktree-claim-test@example.com"
+git -C "$absent_seed" commit --allow-empty -qm "init"
+git init -q --bare "$tmp/absent-origin.git"
+git -C "$absent_seed" remote add origin "$tmp/absent-origin.git"
+absent_rc=0
+absent_out="$("$script" add \
+  "$absent_seed" "$tmp/wt-absent" "claim-genuinely-new" "session-absent" 2>&1)" || absent_rc=$?
+check "a branch absent from a REACHABLE remote is still created" 0 "$absent_rc" \
+  "$absent_out" "owner=session-absent"
+
+# A repo with no origin at all is not an unreachable remote — nothing can host the branch, so
+# creating it is correct. `ls-remote` cannot tell these apart (both exit 128), which is why origin's
+# presence is checked separately rather than inferred from the exit code.
+noremote_rc=0
+noremote_out="$("$script" add \
+  "$repo" "$tmp/wt-noremote" "claim-no-remote" "session-noremote" 2>&1)" || noremote_rc=$?
+check "a repo with no origin still creates the branch" 0 "$noremote_rc" \
+  "$noremote_out" "owner=session-noremote"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
