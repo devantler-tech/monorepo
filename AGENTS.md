@@ -1601,7 +1601,7 @@ Conventional-Commit title, then **merge with the command that matches the author
 - an actionable **single-author App** (`github-actions`/`ksail-bot`/`app/cursor`) uses pre-CLEAN
   auto-merge only after the review/current-head parts of that pentad are clear.
   For `app/cursor`, the acting local sibling performs this mutation because the cloud App cannot:
-  `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
+  `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
   tap cask PRs, and KSail release bumps — the carve-out above) the review parts are intentionally absent and
   are NOT required — their required checks, zero threads, and no-conflict state alone gate the
   auto-merge;
@@ -1625,9 +1625,16 @@ two holes the read above already closes:
   can arrive already carrying its own green commit-scoped checks.
 
 So the merge is `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`,
-and the App path is `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash`. A refusal from
-either pin is the guard working: re-read the PR and start the preflight again rather than dropping
-the flag.
+and the App path is
+`gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>`. A refusal
+from either pin is the guard working: re-read the PR and start the preflight again rather than
+dropping the flag.
+
+⚠️ **`--auto` needs the head pin MORE than the direct merge does, not less.** Arming auto-merge
+defers the actual merge to whenever the checks settle, so the gap between the evaluated head and the
+landed commit is not the milliseconds of a direct merge but however long CI takes — and a trusted App
+that pushes during that window has its new commit merged by the arming you already performed. With
+the pin, GitHub refuses instead.
 
 #### You own EVERY pull request in the portfolio — whoever authored it
 
@@ -1733,7 +1740,8 @@ green-review gate are unchanged — this widens **who may drive a PR**, never **
 **Merge-queue repos — root-cause a stall or kick-out BEFORE re-queuing; never blindly re-`--auto`.**
 Some repos gate `main` behind a **GitHub merge queue** (a `Require merge queue` ruleset). On these,
 `gh pr merge --auto` *enqueues* rather than merges, `autoMergeRequest` stays `null` even while queued,
-and the strategy is set by the queue (drop `--squash` — `gh pr merge <n> --repo devantler-tech/<repo> --auto`). **Record per-repo
+and the strategy is set by the queue (drop `--squash`, keep the head pin —
+`gh pr merge <n> --repo devantler-tech/<repo> --auto --match-head-commit <sha>`). **Record per-repo
 whether a merge queue is in use in that repo's `AGENTS.md ## Maintenance`** (confirm once via `gh api
 repos/<owner>/<repo>/rulesets --jq '.[]|select(.name|test("merge queue";"i"))'`), so a run knows the
 merge mechanics without re-deriving them. A PR enters the queue, runs the `merge_group` checks, and is

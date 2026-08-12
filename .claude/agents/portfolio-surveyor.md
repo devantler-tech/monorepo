@@ -125,8 +125,8 @@ public and private — no per-repo loop needed to enumerate):
    same pentad — its `disclosure` value (below) records whose control channel a comment on it is and
    never gates the classification.
    **`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier**:
-   deepen its row only when the cheap search result has branch `deps/agent-skills-update` and exact
-   title `chore(deps): update agent skills`, then require the classifier below to exit 0 or 3. The
+   run the classifier only when the cheap search result has branch `deps/agent-skills-update` and
+   exact title `chore(deps): update agent skills`. The
    cheap branch/title test only selects a candidate; it never grants trust or an exemption. Exit 0
    grants the narrow no-review path. Exit 3 means a genuine, trusted updater PR that still requires
    semantic review — an `agent-plugins` marketplace update, or a `platform`/`ksail` installed-skill
@@ -134,6 +134,15 @@ public and private — no per-repo loop needed to enumerate):
    surfaces and never report it exempt. Exit 1 leaves the App untrusted and the PR
    never-run-locally — reviewed statically, still drivable and mergeable. Exit 2 is a survey error
    and fails closed.
+   🔴 **The branch/title test gates the CLASSIFIER, never the deepening.** A `botantler-1[bot]` PR
+   that does not match that shape is simply an untrusted-author PR, and rung 1 makes it yours to
+   drive like any other — so it takes the **ordinary external-author deepening path**: the same
+   pentad, the same `active=`, the same classification, tagged `NEVER-RUN-LOCALLY`. Letting the
+   candidate test decide whether to deepen at all is what made this class invisible: the PR is
+   declared statically reviewable and mergeable while carrying no pentad and no active-work evidence,
+   so nothing downstream can act on it and nothing reports it as unassessed either. Exits 0/1/2/3
+   describe a **candidate's** outcome; a non-candidate never reaches them and needs no exit code to
+   be deepened.
    - **`devantler`-authored PRs: report the ACTIVE-WORK signals, not an ownership verdict.** The
      routine's own PRs and the **maintainer's interactive** ones are both authored by `devantler` from
      `claude/*` branches and both can be CLEAN + green. That distinction no longer decides whether the
@@ -165,9 +174,19 @@ public and private — no per-repo loop needed to enumerate):
      pushed seconds ago. Getting this wrong is the expensive direction — it reports a live branch as
      unowned and authorises a second lane to push into it. Read the authoritative per-ref push time
      from the repository activity API instead, matching the PR's own `headRefName`:
-     `gh api "repos/<headRepositoryOwner>/<headRepository>/activity?per_page=100" --jq '[.[]|select((.activity_type=="push" or .activity_type=="force_push") and .ref=="refs/heads/<headRefName>")][0].timestamp'`
+     `gh api "repos/<headRepositoryOwner>/<headRepository>/activity?per_page=100&ref=refs/heads/<headRefName>" --jq '[.[]|select(.activity_type=="push" or .activity_type=="force_push")][0].timestamp'`
      — **both event types**, since a `force_push` is exactly the mid-flight rewrite this signal exists
      to catch, and selecting only `push` would return an older ordinary push and read as idle.
+     🔴 **Filter by `ref` in the REQUEST, not only in the `jq`.** The endpoint returns the repository's
+     most recent activity across **every** ref, so a client-side filter searches one page of whatever
+     the repo has been doing lately: past 100 unrelated activities the branch's own push falls off the
+     page, the filter matches nothing, and `[0]` yields `null`. That reads as `pushed:unknown` — and on
+     a busy repository it is likeliest exactly when a two-hour ownership window is live, so the survey
+     either parks the PR indefinitely or, read as idle, authorises a takeover while its author is
+     mid-push. Passing `ref` makes those 100 entries **that branch's** history instead, which is
+     `--paginate`-free and cannot be outrun by unrelated traffic. Verified 2026-08-12 on
+     `devantler-tech/monorepo`: unfiltered, one page spanned **14 distinct refs**; filtered to one
+     branch, every entry was that branch and the newest matched its true last push.
      🔴 **Query the PR's HEAD repository, not the base.** A normal external contribution is pushed to
      the contributor's **fork**, whose pushes never appear in `devantler-tech/<repo>/activity`; asking
      the base repo therefore yields `pushed:unknown` on every external PR forever (parking the class
@@ -252,6 +271,15 @@ public and private — no per-repo loop needed to enumerate):
      execution rather than ownership:** tag an untrusted author's row `NEVER-RUN-LOCALLY` so the
      orchestrator reviews the diff statically, and report whether any CI check actually exercises the
      changed behaviour, since an external PR's merge needs that observation.
+     🔴 **That observation has THREE outcomes, not two — a change with nothing to run is not a change
+     nobody covered.** Report `behaviour_observed=<check-name>` when a check exercises the change,
+     `static` when the diff has **no exercisable runtime surface** (pure docs or configuration
+     consumed elsewhere), and `none` only when a check *could* exercise it but none does. Only `none`
+     is a merge blocker. Collapsing the middle case into `none` marks every external docs or typo fix
+     permanently blocked — the contract carves that class out explicitly (*You own EVERY pull request
+     in the portfolio*: record the equivalent **static** evaluation instead), and a stranger's typo fix
+     cannot grow behavioural coverage, so demanding it protects nothing. Reserve `static` for diffs
+     with genuinely nothing to run; anything with a reachable code path owes the CI reading.
    - **Hygiene pentad per open actionable PR, whoever authored it — including drafts and
      gated/parked PRs, excluding automation-owned dependency PRs.** For every open actionable
      PR (drafts included), report (a)
@@ -941,7 +969,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, active=<pushed:<age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → <REVIEW-READY|MERGE-READY|NEEDS-FIX|ACTIVELY-OWNED>: branch=<headRefName>, disclosure=<routine|interactive|none>, active=<pushed:<age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (`disclosure` tells the orchestrator whose control channel a `devantler` comment on this PR is, NOT whether it may drive it; the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
-- <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — NEVER-RUN-LOCALLY (never run locally); reviewed statically, then driven to a terminal state like any other PR. Carries the same deepened pentad, `active=` and classification as every other row, plus behaviour_observed=<check-name|none> (which CI check actually exercises the change — `none` is the named blocker on its merge, per *You own EVERY pull request in the portfolio*)
+- <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — NEVER-RUN-LOCALLY (never run locally); reviewed statically, then driven to a terminal state like any other PR. Carries the same deepened pentad, `active=` and classification as every other row, plus behaviour_observed=<check-name|static|none> (which CI check actually exercises the change; `static` = no exercisable runtime surface, evaluated statically instead; `none` = a check could exercise it but none does, and is the named blocker on its merge, per *You own EVERY pull request in the portfolio*)
 - NOT-DEEPENED (budget) <repo> ×<n> [#a,#b,…]   # API pool exhausted before these PRs were deepened — they carry NO pentad and were NOT assessed; never report them as clean or actionable
 
 ### Advance

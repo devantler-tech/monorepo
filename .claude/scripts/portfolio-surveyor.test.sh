@@ -122,8 +122,28 @@ grep -Fq 'installed-skill' "${surveyor}" ||
 # shellcheck disable=SC2016
 grep -Fq '`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier' "${surveyor}" ||
   fail "surveyor either misses botantler updater PRs or trusts the App outside the programmed path"
+# The branch/title predicate selects a CLASSIFIER candidate. Letting it also gate whether the row is
+# deepened at all leaves a non-matching botantler PR declared statically reviewable and mergeable
+# while carrying no pentad and no active-work evidence — invisible rather than assessed.
+grep -Fq 'The branch/title test gates the CLASSIFIER, never the deepening' "${surveyor}" ||
+  fail "surveyor can skip deepening a non-updater botantler PR instead of treating it as external"
+grep -Fq 'ordinary external-author deepening path' "${surveyor}" ||
+  fail "surveyor does not route a non-candidate botantler PR through the external deepening path"
 grep -Fq 'ksail-bot[bot]' "${surveyor}" ||
   fail "surveyor does not recognize the exact KSail App identity returned by search"
+# The activity endpoint returns one page across EVERY ref, so a client-side ref filter is outrun by
+# unrelated traffic: the branch's push falls off the page and `pushed:` reads unknown — likeliest
+# exactly when a live ownership window would have parked the PR.
+grep -Fq 'ref=refs/heads/<headRefName>' "${surveyor}" ||
+  fail "surveyor filters repository activity client-side, so a busy repo hides a recent head push"
+grep -Fq 'Filter by `ref` in the REQUEST, not only in the `jq`' "${surveyor}" ||
+  fail "surveyor does not require server-side ref filtering on the push lookup"
+# `none` is a merge blocker, so a diff with nothing to run must have its own state or the whole
+# external docs/typo class is reported permanently blocked.
+grep -Fq 'behaviour_observed=<check-name|static|none>' "${surveyor}" ||
+  fail "surveyor digest cannot represent a static evaluation, so no-runtime-surface PRs read blocked"
+grep -Fq 'That observation has THREE outcomes, not two' "${surveyor}" ||
+  fail "surveyor does not distinguish nothing-to-exercise from nothing-exercises-it"
 grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
   fail "surveyor does not fetch complete current-head commit provenance"
 grep -Fq 'AUTOMATION-OWNED and need NO agent action' "${constitution}" ||
@@ -134,6 +154,17 @@ grep -Fq 'Cursor Automation is a trusted PR author' "${constitution}" ||
   fail "constitution does not trust the maintainer-authorized Cursor Automation author"
 grep -Fq 'For `app/cursor`, the acting local sibling' "${constitution}" ||
   fail "merge policy still tells the permission-limited Cursor App to arm its own merge"
+# EVERY merge mutation carries both pins. `--auto` needs the head pin more than a direct merge does:
+# arming defers the merge until checks settle, so a trusted App pushing inside that window gets its
+# unevaluated commit merged by the arming already performed.
+for merge_mutation in \
+  'gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>' \
+  'gh pr merge <n> --repo devantler-tech/<repo> --auto --match-head-commit <sha>'; do
+  grep -Fq "${merge_mutation}" "${constitution}" ||
+    fail "an App auto-merge path omits --match-head-commit, so it can merge an unevaluated head"
+done
+grep -Fq '`--auto` needs the head pin MORE than the direct merge does' "${constitution}" ||
+  fail "constitution does not explain why arming auto-merge widens the evaluated-head gap"
 grep -Fq "The machine-local agents' **own** PRs" "${constitution}" ||
   fail "self-promotion rule still ambiguously includes the permission-limited Cursor cloud lane"
 grep -Fq '`cursor[bot]` — **exact' "${surveyor}" ||
