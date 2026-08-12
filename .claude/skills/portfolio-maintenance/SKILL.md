@@ -413,14 +413,20 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
 2. **Drive actionable PRs to merge — the first-priority sweep, ahead of issues, every
    run.** Across all `devantler-tech` repos, drive every **actionable** PR, whoever authored it, to merge per
    the contract (clear the current-head pentad, then merge with the **command that matches the author**:
-   actionable bots may arm `--auto`
-   once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
+   the three **trusted single-author Apps** — `github-actions`, `ksail-bot`, `app/cursor` — may arm
+   `--auto` once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
    with bare `gh pr merge <n> --squash` once CLEAN and self-promoted on genuine readiness; incl. majors;
-   definition PRs on that same path). External repos are outside scheduled scope;
+   definition PRs on that same path). **`--auto` is for those named Apps only** — it merges at whatever
+   head passes checks later, so arming it on an untrusted author (`copilot-swe-agent[bot]`, a
+   non-qualifying `app/botantler-1`, any external contributor) would merge a commit nobody evaluated.
+   Those merge directly, after the current-head checks below. External repos are outside scheduled scope;
    an interactive task must first clear the professional-work boundary for the specifically named repo.
    Never *run* an **external-author** branch on this machine (trust gate) — CI is the sandbox for that,
    and extra scrutiny goes on workflow, permission, dependency and secret-touching changes. You still
-   review, promote and merge it like any other PR (maintainer direction 2026-08-08). The merge is **low-ceremony**:
+   review, promote and merge it like any other PR (maintainer direction 2026-08-08) — and an external
+   PR additionally needs the **current-head evaluation record** the contract requires before merge: a
+   `devantler`-authored comment naming the CI run you read and what behaviour it demonstrated, whose
+   SHA equals `headRefOid`, with that run verified via the API as `success` at that same commit. The merge is **low-ceremony**:
    combine the already-collected current-head pentad with one fresh `gh pr view <n>` showing the same
    `headRefOid`, `isDraft:false`, trusted author, and `CLEAN`; merge only when the pentad also has zero
    findings and a green review at that

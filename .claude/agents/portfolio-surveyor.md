@@ -110,7 +110,10 @@ public and private — no per-repo loop needed to enumerate):
    undeepened remainder as `NOT-DEEPENED (budget)` rows naming the count and the repos, never a
    silent cheap row that reads like a completed assessment:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,author,body,files`
-   — do **not** pull `statusCheckRollup` for every PR in every repo.
+   — every **deepened** PR is read with that full field list, `statusCheckRollup` included; a pentad
+   reported without it has no CI evidence behind it. What is prohibited is pulling that field in the
+   **cheap discovery pass** over every PR in every repo, which is what exhausts the pool before
+   deepening starts.
    ⚠️ **Thread state is NOT available here.** `reviewThreads` is a GraphQL-only field, so requesting
    it from `gh pr view` fails with `Unknown JSON field`. Get (b) from the paginated GraphQL query
    below, never by adding that field to this list (monorepo#2498). When the current-head pentad is
