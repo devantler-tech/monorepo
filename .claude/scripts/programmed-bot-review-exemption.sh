@@ -16,15 +16,17 @@ title="$4"
 head="$5"
 files_json="$6"
 commits_json="$7"
-# Optional map of changed installed-skill root -> that skill's `metadata.github-repo` value, resolved
-# by the caller at the PR head (null when the frontmatter is absent or unreadable). Only the
-# installed-skill arm consults it; every other arm classifies without it.
+# Optional map of changed installed-skill root -> that skill's `metadata.github-repo` value, read by
+# the caller at the PR head (null when the frontmatter is absent or unreadable). This is a
+# CORROBORATOR, never an authorization: the value lives inside the payload being classified, so an
+# upstream can write whatever it likes there. Supplying it can only move a root from allowed to
+# review-required — it can never grant the carve-out on its own.
 skill_owners_json="${8-}"
 
-# Skills copied into an installed root come from several upstreams, so the path proves only where a
-# file landed. The reviewed suite upstream is the one whose prose has already been reviewed, and
-# exact equality is what keeps a prefix-extended rename from inheriting the carve-out.
-suite_skill_owner="https://github.com/devantler-tech/agent-skills"
+# The authorization source is a reviewed, version-controlled list kept outside the skills, because
+# an installed root holds copies from many upstreams and the copied frontmatter is authored by the
+# upstream it is meant to identify.
+allowlist_file="$(cd "$(dirname "$0")/.." && pwd)/skill-ownership-allowlist.tsv"
 
 commit_schema='type == "array" and length > 0 and all(.[];
   type == "object" and
@@ -109,17 +111,31 @@ matches_agent_plugins_review_files() {
   ' <<<"${files_json}" >/dev/null
 }
 
-# Ownership must be proven for EVERY changed skill root before the no-review path opens. An absent
-# map, a root the map does not mention, a null value, or any other upstream leaves it unproven, and
-# unproven ownership takes the semantic-review path rather than the carve-out.
+# Every changed skill root must be listed for this repository in the reviewed allowlist, and — when
+# the caller supplies the corroborating map — the copied frontmatter must still agree with it. A root
+# that is absent, or whose declared owner has drifted from the reviewed one, takes the semantic-review
+# path. An unreadable allowlist fails closed for the same reason.
 matches_suite_owned_skills() {
-  [[ -n "${skill_owners_json}" ]] || return 1
+  [[ -r "${allowlist_file}" ]] || return 1
+
+  local allow_json
+  allow_json="$(
+    sed 's/#.*//' "${allowlist_file}" |
+      awk -F'\t' -v repo="${repo}" \
+        'NF >= 3 && $1 == repo { printf "%s\t%s\n", $2, $3 }' |
+      jq -Rn '[inputs | select(length > 0) | split("\t") | {key: .[0], value: .[1]}] | from_entries'
+  )" || return 1
 
   jq -e \
-    --argjson owners "${skill_owners_json}" \
-    --arg suite "${suite_skill_owner}" \
+    --argjson allow "${allow_json}" \
+    --argjson owners "${skill_owners_json:-null}" \
     '[.[] | capture("^(?<root>\\.agents/skills/[^/]+)/").root] | unique
-     | length > 0 and all(.[]; $owners[.] == $suite)' \
+     | length > 0
+     and all(.[];
+       . as $root
+       | ($allow[$root] // null) as $reviewed
+       | $reviewed != null
+       and (($owners | type) != "object" or $owners[$root] == $reviewed))' \
     <<<"${files_json}" >/dev/null
 }
 

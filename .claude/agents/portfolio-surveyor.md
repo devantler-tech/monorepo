@@ -109,8 +109,10 @@ public and private — no per-repo loop needed to enumerate):
    deepen its row only when the cheap search result has branch `deps/agent-skills-update` and exact
    title `chore(deps): update agent skills`, then require the classifier below to exit 0 or 3. The
    cheap branch/title test only selects a candidate; it never grants trust or an exemption. Exit 0
-   grants the narrow no-review path. Exit 3 means a trusted, review-required `agent-plugins` updater:
-   deepen its normal review surfaces and never report it exempt. Exit 1 leaves the App untrusted and
+   grants the narrow no-review path. Exit 3 means a genuine, trusted updater PR that still requires
+   semantic review — an `agent-plugins` marketplace update, or a `platform`/`ksail` installed-skill
+   update whose changed skills are not all allowlisted as suite-owned: deepen its normal review
+   surfaces and never report it exempt. Exit 1 leaves the App untrusted and
    the PR static-review-only. Exit 2 is a survey error and fails closed.
    - **`devantler`-authored PRs: classify the CI state, NOT the ownership — report them as
      `OWNERSHIP-UNVERIFIED`, never "MERGE-READY own".** You cannot tell the routine's *own* PRs from the
@@ -275,12 +277,12 @@ public and private — no per-repo loop needed to enumerate):
      `.claude/scripts/programmed-bot-review-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "$headRefOid" "$files_json" "$commits_json" "$skill_owners_json"`.
      Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the exact API author login.
      For an installed-skill updater PR (any changed path under `.agents/skills/`), `skill_owners_json`
-     is a compact JSON object mapping each changed skill root (`.agents/skills/<name>`) to that
-     skill's own `metadata.github-repo`, read from its `SKILL.md` frontmatter **at `$headRefOid`**,
-     or `null` where the frontmatter is absent or unreadable. Installed roots mix suite-owned and
-     third-party skills, so this is the only signal that separates them; omit it and the classifier
-     fails closed to **3** (trusted, semantic review required) rather than granting the carve-out.
-     Every other arm ignores it, so it may be omitted for release and cask PRs.
+     is an **optional** compact JSON object mapping each changed skill root (`.agents/skills/<name>`)
+     to that skill's own `metadata.github-repo`, read from its `SKILL.md` frontmatter **at
+     `$headRefOid`**, or `null` where the frontmatter is absent or unreadable. It is a corroborator
+     only: the classifier authorizes from its own reviewed allowlist, because that frontmatter is
+     written by the upstream it names. Supplying it can move a PR to **3**, never to 0, so omitting it
+     is safe — and every other arm ignores it entirely.
      Encode all paths from the deepening query as one compact JSON string array in `files_json`. Fetch
      the complete commit list separately from the REST endpoint `repos/devantler-tech/<repo>/pulls/<n>/commits`
      with `gh api --paginate --slurp ... | jq -c 'add | map(...)'` (this `gh` version does not allow
@@ -296,8 +298,9 @@ public and private — no per-repo loop needed to enumerate):
      The list's last SHA must equal `headRefOid`; an agent/maintainer adaptation commit therefore
      revokes the exemption even when the branch, title, and files still look generated. Exit 1 means
      an external/static-only candidate; exit 2 or any query/classifier failure is a survey error
-     and also fails closed; exit 3 is a trusted `agent-plugins` update that follows the normal review
-     gate. **Never infer exemption from a title,
+     and also fails closed; exit 3 is a trusted updater PR of any kind that follows the normal review
+     gate — a marketplace update, or an installed-skill update carrying a skill this suite does not
+     own. **Never infer exemption from a title,
      a dependency name, or a generic release-shaped branch.** The classifier deliberately binds the
      approved repository, PR actor, branch, title/version, current-head commit provenance, and exact
      changed-file set; do not recreate a

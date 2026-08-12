@@ -247,6 +247,7 @@ jobs:
               - '.claude/skills/products/platform/SKILL.md'
               - '.claude/scripts/portfolio-surveyor.test.sh'
               - '.claude/scripts/programmed-bot-review-exemption.sh'
+              - '.claude/skill-ownership-allowlist.tsv'
               - '.github/workflows/ci.yaml'
             product-value:
               - 'AGENTS.md'

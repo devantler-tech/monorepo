@@ -111,8 +111,13 @@ grep -Fq 'the `description` is the discriminator, never the state' "${surveyor}"
   fail "surveyor can read a CodeRabbit status state=success as proof a review ran"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
-grep -Fq 'Exit 3 means a trusted, review-required `agent-plugins` updater' "${surveyor}" ||
-  fail "surveyor cannot distinguish review-bearing marketplace updates from untrusted lookalikes"
+# Exit 3 is no longer marketplace-only: an installed-skill update carrying a skill this suite does
+# not own reaches it too, so pinning the `agent-plugins` phrasing would re-stale the moment that
+# path fires.
+grep -Fq 'Exit 3 means a genuine, trusted updater PR that still requires' "${surveyor}" ||
+  fail "surveyor cannot distinguish review-bearing updater PRs from untrusted lookalikes"
+grep -Fq 'installed-skill' "${surveyor}" ||
+  fail "surveyor does not cover the installed-skill route to a review-required updater PR"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq '`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier' "${surveyor}" ||
@@ -721,45 +726,54 @@ expect_review_required \
   "${agent_plugins_versioned_files}" \
   "${agent_plugins_versioned_commits}"
 
-# Installed-skill roots are populated from SEVERAL upstreams, so the path and the updater's
-# provenance prove who copied a file — never who wrote it. The owner is resolved structurally from
-# each skill's own `metadata.github-repo` and supplied as the eighth argument; only skills owned by
-# the reviewed suite upstream keep the no-review carve-out (#2614).
+# An installed skill root holds copies from many upstreams, and the copied frontmatter naming the
+# upstream is written by that upstream. So authorization comes from the reviewed allowlist beside the
+# classifier, and the frontmatter is only a corroborator that can withdraw the carve-out, never grant
+# it (#2614). `ways-of-working` is the one genuinely suite-owned skill installed in each consumer.
 suite_skill_owner="https://github.com/devantler-tech/agent-skills"
-platform_skills_owners="$(jq -cn --arg o "${suite_skill_owner}" '{
-  ".agents/skills/gitops-cluster-debug": $o,
-  ".agents/skills/gitops-knowledge": $o
+allowed_skills_files='[".agents/skills/ways-of-working/SKILL.md"]'
+allowed_skills_owners="$(jq -cn --arg o "${suite_skill_owner}" '{
+  ".agents/skills/ways-of-working": $o
 }')"
-# `gh-stack` is genuinely third-party. Its update is what carried the unconditional
-# `gh stack merge --yes` instruction that static review caught on agent-plugins#106.
+# The attack this exists to stop: a third-party release edits its own frontmatter to claim the suite
+# upstream, the updater copies that claim verbatim, and a payload-derived check would read it back as
+# proof of ownership.
+forged_owner_claim="$(jq -cn --arg o "${suite_skill_owner}" '{
+  ".agents/skills/gh-stack": $o
+}')"
+# A skill that IS allowlisted but whose copied frontmatter no longer names the reviewed upstream —
+# an upstream handover shows up here before anyone notices it anywhere else.
+drifted_owner_claim='{".agents/skills/ways-of-working":"https://github.com/github/awesome-copilot"}'
+lookalike_owner_claim="$(jq -cn --arg o "${suite_skill_owner}-v2" '{
+  ".agents/skills/ways-of-working": $o
+}')"
+mixed_batch_files='[".agents/skills/ways-of-working/SKILL.md",".agents/skills/gh-stack/SKILL.md"]'
+# `gh-stack` declaring its real third-party upstream — the honest, unforged case.
 ksail_skills_owners='{".agents/skills/gh-stack":"https://github.com/github/gh-stack"}'
-platform_skills_owners_partial="$(jq -cn --arg o "${suite_skill_owner}" '{
-  ".agents/skills/gitops-cluster-debug": $o
-}')"
-platform_skills_owners_unreadable="$(jq -cn --arg o "${suite_skill_owner}" '{
-  ".agents/skills/gitops-cluster-debug": $o,
-  ".agents/skills/gitops-knowledge": null
-}')"
-# A prefix-extended lookalike must not satisfy the suite owner: exact equality is what makes an
-# `agent-skills-v2` rename fail closed rather than inherit the carve-out.
-platform_skills_owners_lookalike="$(jq -cn --arg o "${suite_skill_owner}-v2" '{
-  ".agents/skills/gitops-cluster-debug": $o,
-  ".agents/skills/gitops-knowledge": $o
-}')"
 
 expect_exempt \
-  "Platform programmed agent-skills update" \
+  "Platform update touching only an allowlisted suite-owned skill" \
   "platform" \
   "app/botantler-1" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
   "${platform_skills_head}" \
-  "${platform_skills_files}" \
+  "${allowed_skills_files}" \
   "${platform_skills_commits}" \
-  "${platform_skills_owners}"
+  "${allowed_skills_owners}"
+
+expect_exempt \
+  "allowlist alone authorizes when no corroborating map is supplied" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${allowed_skills_files}" \
+  "${ksail_skills_commits}"
 
 expect_review_required \
-  "KSail agent-skills update touching a third-party skill" \
+  "KSail update touching a third-party skill" \
   "ksail" \
   "app/ksail-bot" \
   "deps/agent-skills-update" \
@@ -767,50 +781,61 @@ expect_review_required \
   "${ksail_skills_head}" \
   "${ksail_skills_files}" \
   "${ksail_skills_commits}" \
-  "${ksail_skills_owners}"
+  "${ksail_skills_owners:-}"
 
 expect_review_required \
-  "agent-skills update with no ownership evidence at all" \
+  "a third-party skill FORGING the suite upstream in its own frontmatter" \
   "ksail" \
   "app/ksail-bot" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
   "${ksail_skills_head}" \
   "${ksail_skills_files}" \
-  "${ksail_skills_commits}"
+  "${ksail_skills_commits}" \
+  "${forged_owner_claim}"
 
 expect_review_required \
-  "agent-skills update whose ownership map omits a changed skill" \
+  "an allowlisted skill whose declared upstream has drifted" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  "${drifted_owner_claim}"
+
+expect_review_required \
+  "an allowlisted skill claimed by a prefix-extended lookalike upstream" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  "${lookalike_owner_claim}"
+
+expect_review_required \
+  "a batch mixing an allowlisted skill with a third-party one" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${mixed_batch_files}" \
+  "${ksail_skills_commits}" \
+  "${allowed_skills_owners}"
+
+expect_review_required \
+  "an installed skill root absent from the allowlist" \
   "platform" \
   "app/botantler-1" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
   "${platform_skills_head}" \
   "${platform_skills_files}" \
-  "${platform_skills_commits}" \
-  "${platform_skills_owners_partial}"
-
-expect_review_required \
-  "agent-skills update whose skill has unreadable provenance" \
-  "platform" \
-  "app/botantler-1" \
-  "deps/agent-skills-update" \
-  "chore(deps): update agent skills" \
-  "${platform_skills_head}" \
-  "${platform_skills_files}" \
-  "${platform_skills_commits}" \
-  "${platform_skills_owners_unreadable}"
-
-expect_review_required \
-  "agent-skills update owned by a prefix-extended lookalike upstream" \
-  "platform" \
-  "app/botantler-1" \
-  "deps/agent-skills-update" \
-  "chore(deps): update agent skills" \
-  "${platform_skills_head}" \
-  "${platform_skills_files}" \
-  "${platform_skills_commits}" \
-  "${platform_skills_owners_lookalike}"
+  "${platform_skills_commits}"
 
 expect_classifier_error \
   "agent-skills update with a malformed ownership map" \
@@ -819,9 +844,9 @@ expect_classifier_error \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
   "${platform_skills_head}" \
-  "${platform_skills_files}" \
+  "${allowed_skills_files}" \
   "${platform_skills_commits}" \
-  '[".agents/skills/gitops-knowledge"]'
+  '[".agents/skills/ways-of-working"]'
 
 expect_exempt \
   "GoReleaser KSail cask" \

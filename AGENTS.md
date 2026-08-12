@@ -1168,10 +1168,24 @@ reviewed suite change from a third-party instruction change riding the same gene
 not hypothetical: the `gh-stack` update carried an unconditional whole-stack merge instruction that
 only semantic review caught, and every mechanical signal on that PR was valid.
 
-So the no-review path additionally requires **proven suite ownership of every changed skill**. Resolve
-each changed skill's owner structurally from its own `metadata.github-repo` **at the PR head** and pass
-the result as the classifier's eighth argument — a JSON object mapping each changed installed-skill
-root to that value, or `null` where the frontmatter is absent or unreadable:
+🔴 **Do NOT resolve that ownership from the skill's own `metadata.github-repo`** — that is the obvious
+design and it is self-attesting. There is no lockfile and no install manifest: the **only** record of a
+skill's origin is frontmatter inside the copied `SKILL.md`, authored by the very upstream it names and
+copied verbatim by the updater. A third-party release that sets
+`metadata.github-repo: https://github.com/devantler-tech/agent-skills` alongside an unsafe instruction
+would then be read back as proof of our ownership and skip review — the same hole one level down.
+
+Authorization comes instead from
+[`.claude/skill-ownership-allowlist.tsv`](.claude/skill-ownership-allowlist.tsv), a reviewed,
+version-controlled list kept **outside** the skills, mapping `<repo>` + `<installed skill root>` to the
+upstream that owns its content. Every changed root must be listed for that repository, or the PR
+returns **3**. Absence is the default, so a newly installed skill and a third-party one are treated
+alike until someone deliberately adds a row through the normal review path.
+
+The classifier's optional eighth argument — a JSON object mapping each changed root to the
+`metadata.github-repo` read at the PR head — is a **corroborator, never an authorization**. Supplying
+it can only withdraw the carve-out, never grant it: it catches an upstream handover, where a skill we
+still allowlist has quietly started declaring someone else. Read it with
 
 ```sh
 # `--jq .content | base64 -d` also works, but BSD and GNU base64 spell the decode flag differently
@@ -1181,11 +1195,9 @@ gh api "repos/devantler-tech/<repo>/contents/<skill-root>/SKILL.md?ref=<head>" \
   yq --front-matter=extract '.metadata.github-repo // "null"'
 ```
 
-Only `https://github.com/devantler-tech/agent-skills` — matched **exactly**, so an
-`agent-skills-v2`-style rename never inherits the carve-out — keeps a skill on the no-review path.
-Anything else returns **3**: an omitted map, a root the map does not mention, a `null`, a third-party
-owner, or a mixed PR where one changed skill is third-party. The PR is the unit, so one unproven skill
-sends the whole PR to semantic review.
+and expect **3** whenever it disagrees with the allowlisted upstream — including a prefix-extended
+`agent-skills-v2`-style lookalike, since the comparison is exact. The PR is the unit, so one unproven
+skill sends the whole PR to semantic review.
 
 Apply either exemption only when `.claude/scripts/programmed-bot-review-exemption.sh` validates the
 exact repository, PR actor, branch, title, current-head commit provenance, changed-file boundary, and
@@ -2217,7 +2229,9 @@ Untrusted (external) authors stay untrusted everywhere.
 **`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs.** The App is
 not added to the general trusted-author set. Its PR may be built when the exact programmed-bot
 classifier named above exits 0 or 3: exit 0 is the no-review auto-merge path, while exit 3 is the
-normal semantic-review path for a genuine `agent-plugins` update. Any other `app/botantler-1` PR
+normal semantic-review path for a genuine updater PR — an `agent-plugins` marketplace update, or a
+`platform`/`ksail` installed-skill update touching a skill this suite does not own. Any other
+`app/botantler-1` PR
 remains external and static-review-only. This path-specific grant covers the updater without trusting
 every PR the App could author.
 **GitHub Copilot — two roles, treated differently:** the maintainer uses Claude Code exclusively, so the
