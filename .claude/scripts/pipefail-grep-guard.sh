@@ -80,9 +80,11 @@
 #   xargs argument parser; extend it here if one ever appears.
 #
 # ESCAPE HATCH
-#   A line carrying `pipefail-grep-guard: allow` (in a comment) is skipped, so a
+#   A line carrying `pipefail-grep-guard: allow` AFTER A `#` is skipped, so a
 #   fixture that must contain the offending text stays possible without turning
-#   the guard off. Say why in the same comment.
+#   the guard off. Say why in the same comment. The `#` is required: the marker
+#   sitting in executable text — an assignment, a string — does NOT disable the
+#   check, or the escape hatch would be reachable by the code it exempts.
 #
 #   A COMMENT LINE BEGINNING WITH `pipefail-grep-guard: allow-file` skips the
 #   whole file. It must open the comment — a mention inside prose, backticks or a
@@ -107,7 +109,20 @@ set -Eeuo pipefail
 # case-sensitive whatever the caller's shell options are.
 shopt -u nocasematch
 
-ALLOW_MARKER='pipefail-grep-guard: allow'
+# The line-level directive is matched only where a `#` introduces it, never as a
+# bare substring of the logical line. A substring test let EXECUTABLE text carry
+# the escape hatch — `marker='pipefail-grep-guard: allow'; printf … | grep -q X`
+# skipped the line while running the very pipeline this guard exists to catch.
+# That is the same fail-open the whole-file directive already closes, one level
+# down, so it gets the same treatment: the marker must sit after a `#` that
+# begins at line start or after whitespace (so a `${v#…}` expansion is not a
+# comment introducer).
+# ⚠️ RESIDUAL, stated rather than papered over: a `#` inside a QUOTED string
+# ahead of the marker still reads as an introducer. Deciding that needs real
+# quote tracking, which this file deliberately does not do (see the trailing-
+# comment note at the probe site). The bar this clears is the reported hole —
+# executable text with no `#` at all — not every constructible bypass.
+ALLOW_LINE_RE='(^|[[:space:]])#.*pipefail-grep-guard:[[:space:]]*allow'
 # The whole-file directive is matched as a COMMENT LINE THAT BEGINS WITH IT, not
 # as a substring anywhere in the file. A substring test made this guard exempt
 # ITSELF: the phrase appears in its own header prose and again in the constant
@@ -334,7 +349,7 @@ scan_file() {
     # line is not stripped — quoting makes that unreliable, and the option walk
     # already refuses to read a word that is not an option.
     [[ "${lines[start]}" =~ ^[[:space:]]*# ]] && continue
-    [[ "$probe" == *"$ALLOW_MARKER"* ]] && continue
+    [[ "$probe" =~ $ALLOW_LINE_RE ]] && continue
 
     [[ "$probe" =~ $PIPE_GREP_RE ]] || continue
 

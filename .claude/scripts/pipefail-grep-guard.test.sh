@@ -331,6 +331,24 @@ run_guard "$f" && rc=0 || rc=$?
 report "negative control: the same line WITHOUT the marker still flags" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# The escape hatch must not be reachable from EXECUTABLE text. A substring test
+# let an assignment carrying the marker skip the line while still running the
+# offending pipeline — the same self-exemption the whole-file directive already
+# closes, one level down.
+f="$(mkscript "allow-marker-in-code.sh" \
+  'marker="pipefail-grep-guard: allow"; printf "%s" "$v" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "the marker in EXECUTABLE text does not suppress the finding" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# A `${v#…}` expansion puts a `#` on the line without opening a comment, so the
+# introducer must be anchored at line start or after whitespace.
+f="$(mkscript "allow-marker-param-expansion.sh" \
+  'x="${v#pipefail-grep-guard: allow}"; printf "%s" "$x" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "a '#' inside a parameter expansion is not a comment introducer" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
 # ---------------------------------------------------------------------------
 # 2d. Multiple findings, multiple files, and the exit contract.
 # ---------------------------------------------------------------------------
