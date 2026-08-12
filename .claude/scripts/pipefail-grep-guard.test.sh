@@ -421,6 +421,27 @@ run_guard "$f" && rc=0 || rc=$?
 report "KNOWN LIMIT: a quoted OPENING '(' inside a substitution is not detected either" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
+# ...and ARITHMETIC expansion, which is a DIFFERENT construct rather than a `$(…)`
+# carrying a paren as data — `$((` is two opening delimiters, so the class stops at
+# the second one. Worth pinning separately because the boundary above reads as being
+# about a delimiter appearing as data, and a reader would reasonably assume a plain
+# `$((1 + 2))` is supported.
+f="$(mkscript "assign-arithmetic-expansion-KNOWN-LIMIT.sh" \
+  "printf '%s' \"\$v\" | A=\$((1 + 2)) grep -q NEEDLE")"
+run_guard "$f" && rc=0 || rc=$?
+report "KNOWN LIMIT: an arithmetic expansion containing whitespace is not detected" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# The WHITESPACE is what makes the case above escape, so pin the other side too: with
+# no spaces the whole `$((1+2))` is consumed by the bare-fragment alternative and the
+# grep IS found. Without this, a later change that widens the expansion classes could
+# lose the no-space case and nothing would notice.
+f="$(mkscript "assign-arithmetic-expansion-no-space.sh" \
+  "printf '%s' \"\$v\" | A=\$((1+2)) grep -q NEEDLE")"
+run_guard "$f" && rc=0 || rc=$?
+report "an arithmetic expansion with NO whitespace does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
 # Double quotes DO honour backslash escapes, so `\"` is a literal quote and does
 # not end the fragment — the space after it is still inside the quoted value.
 f="$(mkscript "assign-escaped-dquote.sh" \

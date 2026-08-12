@@ -332,6 +332,13 @@ _SQ=\'
 # `A=$(printf ')')` does. Stating only the closing one was the third version of
 # this boundary to be too generous, which is itself the argument: each attempt to
 # describe what a regex accepts here has been narrower in reality than in prose.
+#
+# That rule also excludes **arithmetic expansion**, and it is worth naming because
+# it is a DIFFERENT construct rather than a `$(…)` carrying a paren as data: `$((`
+# is two opening delimiters, so `[^()]*` stops at the second. `A=$((1 + 2))` is
+# therefore not consumed. Whitespace is what decides it — `A=$((1+2))` has none, so
+# the bare-fragment alternative swallows it whole and the grep IS still found. Both
+# sides are pinned in the test suite.
 # Everything outside it reads as no-match, which is a SILENT PASS — see
 # monorepo#2797, which replaces the layer with a tokenizer. Do not spend a round
 # extending this; extend the issue instead.
