@@ -25,8 +25,10 @@ skill_owners_json="${8-}"
 
 # The authorization source is a reviewed, version-controlled list kept outside the skills, because
 # an installed root holds copies from many upstreams and the copied frontmatter is authored by the
-# upstream it is meant to identify.
+# upstream it is meant to identify. It may name exactly one upstream: the carve-out exists for
+# content already reviewed here, so any other value is a malformed row rather than another owner.
 allowlist_file="$(cd "$(dirname "$0")/.." && pwd)/skill-ownership-allowlist.tsv"
+suite_skill_owner="https://github.com/devantler-tech/agent-skills"
 
 commit_schema='type == "array" and length > 0 and all(.[];
   type == "object" and
@@ -118,11 +120,20 @@ matches_agent_plugins_review_files() {
 matches_suite_owned_skills() {
   [[ -r "${allowlist_file}" ]] || return 1
 
+  # Every row is validated, not just the ones selected: a row is only ever allowed to name the one
+  # reviewed suite upstream, so an empty or drifted third field is a malformed file rather than a
+  # different owner. Without that, a stray trailing tab yields an empty owner that still compares
+  # unequal to null and would authorize the carve-out with no upstream named at all. A duplicate root
+  # is rejected for the same reason — `from_entries` would silently keep the last one.
   local allow_json
   allow_json="$(
     sed 's/#.*//' "${allowlist_file}" |
-      awk -F'\t' -v repo="${repo}" \
-        'NF >= 3 && $1 == repo { printf "%s\t%s\n", $2, $3 }' |
+      awk -F'\t' -v repo="${repo}" -v suite="${suite_skill_owner}" '
+        { sub(/[ \t]+$/, "") }
+        $0 == "" { next }
+        NF != 3 || $2 !~ /^\.agents\/skills\/[^\/]+$/ || $3 != suite { exit 1 }
+        seen[$1 "\t" $2]++ { exit 1 }
+        $1 == repo { printf "%s\t%s\n", $2, $3 }' |
       jq -Rn '[inputs | select(length > 0) | split("\t") | {key: .[0], value: .[1]}] | from_entries'
   )" || return 1
 

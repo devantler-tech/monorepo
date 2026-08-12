@@ -837,6 +837,17 @@ expect_review_required \
   "${platform_skills_files}" \
   "${platform_skills_commits}"
 
+expect_review_required \
+  "an allowlisted skill whose frontmatter was absent or unreadable" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  '{".agents/skills/ways-of-working":null}'
+
 expect_classifier_error \
   "agent-skills update with a malformed ownership map" \
   "platform" \
@@ -847,6 +858,52 @@ expect_classifier_error \
   "${allowed_skills_files}" \
   "${platform_skills_commits}" \
   '[".agents/skills/ways-of-working"]'
+
+# A malformed allowlist must fail closed rather than authorize. The classifier resolves the file
+# relative to its own directory, so the fixture reproduces that layout exactly — an empty owner
+# column is the shape that matters, because it survives a `!= null` test while naming no upstream.
+expect_allowlist_rejects() {
+  local name="$1" row="$2" tmp rc
+  tmp="$(mktemp -d)"
+  mkdir -p "${tmp}/scripts"
+  cp "${classifier}" "${tmp}/scripts/"
+  printf '%s\n' "${row}" >"${tmp}/skill-ownership-allowlist.tsv"
+  if "${tmp}/scripts/$(basename "${classifier}")" \
+    "platform" "app/botantler-1" "deps/agent-skills-update" \
+    "chore(deps): update agent skills" \
+    "${platform_skills_head}" "${allowed_skills_files}" "${platform_skills_commits}"; then
+    rm -rf "${tmp}"
+    fail "malformed allowlist still granted the no-review carve-out: ${name}"
+  else
+    rc=$?
+  fi
+  rm -rf "${tmp}"
+  [[ "${rc}" -eq 3 ]] ||
+    fail "malformed allowlist did not take the review path: ${name} (exit ${rc})"
+}
+
+# Control: the same harness with a WELL-FORMED row must still authorize, or the four cases below
+# would pass for the trivial reason that the relocated copy never works.
+allowlist_control_tmp="$(mktemp -d)"
+mkdir -p "${allowlist_control_tmp}/scripts"
+cp "${classifier}" "${allowlist_control_tmp}/scripts/"
+printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills\n' \
+  >"${allowlist_control_tmp}/skill-ownership-allowlist.tsv"
+"${allowlist_control_tmp}/scripts/$(basename "${classifier}")" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" "${platform_skills_commits}" ||
+  fail "relocated-classifier control failed: a well-formed allowlist must still grant exit 0"
+rm -rf "${allowlist_control_tmp}"
+
+expect_allowlist_rejects "empty owner column" \
+  "$(printf 'platform\t.agents/skills/ways-of-working\t')"
+expect_allowlist_rejects "owner drifted to another upstream" \
+  "$(printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/github/awesome-copilot')"
+expect_allowlist_rejects "root outside the installed-skill tree" \
+  "$(printf 'platform\t.github/workflows\thttps://github.com/devantler-tech/agent-skills')"
+expect_allowlist_rejects "duplicate root" \
+  "$(printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills\nplatform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills')"
 
 expect_exempt \
   "GoReleaser KSail cask" \
