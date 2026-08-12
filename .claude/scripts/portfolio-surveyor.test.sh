@@ -1520,13 +1520,49 @@ for _site in "${surveyor}" "${constitution}"; do
     fail "${_n} must carry the corpus size behind the no-fence decision (#2762)"
   grep -Fq 'parks itself HANDS-OFF' "${_site}" ||
     fail "${_n} must name the accepted cost of dropping fence suppression (#2762)"
-  # The two rules that REMAIN serve the matcher, not example-suppression. The org PR template puts the
-  # disclosure under a `- ` bullet, so losing the container prefix loses real disclosures.
-  grep -Fq 'container prefix' "${_site}" ||
-    fail "${_n} must read a marker line through its Markdown container prefix (#2762)"
-  grep -Fq 'four or more spaces of indentation at the current depth' "${_site}" ||
-    fail "${_n} must exclude Markdown indented code blocks from marker matching (#2762)"
 done
+
+# The two rules that REMAIN serve the matcher, not example-suppression. The org PR template puts the
+# disclosure under a `- ` bullet, so losing the container prefix loses real disclosures.
+#
+# The CONSTITUTION states them as prose, because a reader deciding whether a PR is the maintainer's
+# needs the rule in front of them. The SURVEYOR does not restate them — it calls the classifier, whose
+# Go tests pin the same two rules executably. Carrying the matcher as prose in both places is what
+# produced the defect this split fixes: on 2026-08-11 a run reported `disclosure=none` for four live
+# maintainer PRs whose interactive literal sat on the LAST line of the body, while the prose above it
+# already forbade position anchoring and already named platform#3034 as the worked example (#2784).
+grep -Fq 'container prefix' "${constitution}" ||
+  fail "AGENTS.md must read a marker line through its Markdown container prefix (#2762)"
+grep -Fq 'four or more spaces of indentation at the current depth' "${constitution}" ||
+  fail "AGENTS.md must exclude Markdown indented code blocks from marker matching (#2762)"
+
+# The surveyor must DELEGATE rather than re-derive. Without this the prose could quietly grow a second
+# matcher back and drift from the classifier again.
+# Match the COMPLETE invocation, not just the filename: a bare filename check still passes if the
+# command form or its required --repo/--pr arguments are dropped, leaving an instruction that names
+# the classifier without saying how to run it.
+grep -Fq '.claude/scripts/pr-ownership-disclosure.sh --repo <owner>/<repo> --pr <n>' "${surveyor}" ||
+  fail "portfolio-surveyor.md must carry the full ownership-classifier invocation (#2784)"
+# The PRESCRIBED form reuses the body the deepening query already returned, so pin that invocation
+# too — otherwise the doc could keep only the fetching mode and quietly reintroduce a second API
+# request per candidate against the survey's own budget.
+grep -Fq '.claude/scripts/pr-ownership-disclosure.sh --input -' "${surveyor}" ||
+  fail "portfolio-surveyor.md must prescribe the body-reusing classifier invocation"
+
+# And the classifier must exist, be executable, and actually pin the two matcher rules — otherwise the
+# delegation above points at nothing and the guarantee is lost rather than moved.
+_classifier="${repo_root}/.claude/scripts/pr-ownership-disclosure.sh"
+_classifier_src="${repo_root}/.claude/scripts/pr-ownership-disclosure-go/main.go"
+_classifier_test="${repo_root}/.claude/scripts/pr-ownership-disclosure-go/main_test.go"
+[ -x "${_classifier}" ] ||
+  fail "pr-ownership-disclosure.sh must exist and be executable (#2784)"
+grep -Fq 'stripContainers' "${_classifier_src}" ||
+  fail "the classifier must strip Markdown container prefixes (#2784)"
+grep -Fq 'codeBlockIndent' "${_classifier_src}" ||
+  fail "the classifier must exclude Markdown indented code blocks (#2784)"
+# The regression itself, pinned executably rather than described.
+grep -Fq 'TestBodyStartAnchorWouldFail' "${_classifier_test}" ||
+  fail "the classifier's tests must pin the body-start-anchor regression (#2784)"
 
 # BEHAVIOURAL fixture, not another prose pin. The assertions above pin what the definition SAYS; this
 # pins that the stated rule, implemented literally, actually classifies the shapes we depend on. Codex
