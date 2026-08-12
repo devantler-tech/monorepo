@@ -62,8 +62,14 @@
 #   worktree-claim-lib.sh sets no pipefail of its own and always runs inside a
 #   caller that does. The here-string form is correct either way.
 #
-#   The command right after the pipe must be grep itself (optionally behind
-#   VAR=value prefixes). `producer | xargs grep -l …` is the same hazard and is
+#   Every tracked shell script means exactly that: a file is in scope when it is
+#   named `*.sh` OR its shebang names a shell, so an extensionless `bin/check`
+#   is scanned too.
+#
+#   The command right after the pipe must be grep itself — optionally behind
+#   VAR=value prefixes, a `command`/`env` wrapper, or an absolute path, since
+#   this header tells the reader to reach for exactly those spellings to escape
+#   a harness shim. `producer | xargs grep -l …` is the same hazard and is
 #   NOT detected — xargs would take the SIGPIPE instead. There is no instance of
 #   it in this repository, so the pattern stays narrow rather than growing an
 #   xargs argument parser; extend it here if one ever appears.
@@ -80,7 +86,8 @@
 #
 # USAGE
 #   pipefail-grep-guard.sh [path ...]
-#       With no paths, scans every tracked *.sh file in the repository.
+#       With no paths, scans every tracked shell script in the repository —
+#       `*.sh` by name, plus any tracked file whose shebang names a shell.
 #
 # EXIT CODES
 #   0  no offending pipeline found
@@ -119,24 +126,51 @@ esac
 # to the end (it must, to prove the absence of a match) and is NOT an offender;
 # `-l` is.
 early_exit_flag() {
-  local rest="$1" tok
+  local rest="$1" tok skip_next=0 letters i ch
   # shellcheck disable=SC2086 # deliberate word splitting: rest is an argv tail
   set -- $rest
   for tok in "$@"; do
+    # The previous option consumed this word as its VALUE, so it is not an
+    # operand and must not stop the walk.
+    if ((skip_next)); then
+      skip_next=0
+      continue
+    fi
     case "$tok" in
       --) return 1 ;;
       --quiet | --silent | --files-with-matches | --max-count | --max-count=*)
         printf '%s' "$tok"
         return 0
         ;;
+      # Long options that take their value as the FOLLOWING word. Without this,
+      # `grep --regexp PAT -q` reads PAT as the pattern operand and returns
+      # before ever seeing -q, so the guard calls a hazardous line clean.
+      --regexp | --file | --after-context | --before-context | --context | \
+        --binary-files | --devices | --directories | --label | --include | \
+        --exclude | --exclude-dir | --exclude-from | --group-separator)
+        skip_next=1
+        continue
+        ;;
       --*) continue ;;
       -*)
-        # A short-option cluster. q, l and m are the early-exit letters; no
-        # other lowercase grep short option uses those characters.
-        if [[ "${tok#-}" == *[qlm]* ]]; then
-          printf '%s' "$tok"
-          return 0
-        fi
+        # Walk the short cluster letter by letter rather than testing the whole
+        # token. A value-taking letter swallows the REST of the cluster when
+        # there is one (`-ePAT`) and the next word when there is not (`-e PAT`),
+        # so `-eq` is -e with pattern "q" — not an early exit.
+        letters="${tok#-}"
+        for ((i = 0; i < ${#letters}; i++)); do
+          ch="${letters:i:1}"
+          case "$ch" in
+            q | l | m)
+              printf '%s' "$tok"
+              return 0
+              ;;
+            e | f | A | B | C | D | d)
+              if ((i + 1 >= ${#letters})); then skip_next=1; fi
+              break
+              ;;
+          esac
+        done
         continue
         ;;
       *) return 1 ;;
@@ -149,7 +183,13 @@ early_exit_flag() {
 # A single `|` (never `||`), optional `VAR=value` prefixes, then grep. The
 # leading `(^|[^|])` is what keeps `||` out: in `a || grep -q x` the character
 # before the second pipe is itself a pipe.
-PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*)(grep|egrep|fgrep)([[:space:]]|$)'
+#
+# `grep` may be reached through a wrapper or an absolute path, and the hazard is
+# identical: this file's own header tells a reader to call `command grep` or
+# /usr/bin/grep to escape the harness shim, so those are the spellings a script
+# following this advice will actually contain. A bare-name-only regex would let
+# every one of them through while the guard reported the file clean.
+PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+|command|env)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
 
 findings=0
 
@@ -166,7 +206,7 @@ scan_file() {
   # Index-based, never `"${lines[@]}"`: bash 3.2 (the macOS system bash) treats
   # an empty array's `[@]` expansion as an unbound variable under `set -u`, so
   # the array form aborts the whole run on the first empty file.
-  local n=${#lines[@]} i probe j joins start
+  local n=${#lines[@]} i probe probe_test base j joins start
   for ((i = 0; i < n; i++)); do
     [[ "${lines[i]}" == *"$ALLOW_FILE_MARKER"* ]] && return 0
   done
@@ -179,14 +219,38 @@ scan_file() {
     # a trailing `\`, or a trailing single `|` with grep on the next line.
     joins=0
     j=$i
-    while ((joins < 4 && j + 1 < n)); do
-      if [[ "$probe" =~ \\$ ]] || { [[ "$probe" =~ [^|]\|[[:space:]]*$ ]] && [[ ! "$probe" =~ \|\|[[:space:]]*$ ]]; }; then
-        probe="${probe%\\} ${lines[j + 1]}"
-        j=$((j + 1))
-        joins=$((joins + 1))
+    while ((joins < 8 && j + 1 < n)); do
+      # A trailing comment does not end a pipeline — `producer | # note` still
+      # continues on the next line. Strip one for the CONTINUATION TEST only,
+      # never from the probe itself, where quoting makes stripping unreliable.
+      # Over-stripping here can only join more lines, which is the safe
+      # direction: the regex still has to match for anything to be reported.
+      probe_test="${probe%%[[:space:]]#*}"
+      if [[ "$probe" =~ \\$ ]] ||
+        { [[ "$probe" =~ [^|]\|[[:space:]]*$ ]] && [[ ! "$probe" =~ \|\|[[:space:]]*$ ]]; }; then
+        base="${probe%\\}"
+      elif [[ "$probe_test" =~ [^|]\|[[:space:]]*$ ]] && [[ ! "$probe_test" =~ \|\|[[:space:]]*$ ]]; then
+        # A trailing comment sits between the pipe and the next line. Continue
+        # from the STRIPPED form: appending to the unstripped one would leave
+        # the comment text between the pipe and the grep, where the pipeline
+        # regex cannot match it. This arm is only reachable when the unstripped
+        # probe does NOT already end in a pipe, so a `#` inside quotes never
+        # routes here and quoted text is never stripped.
+        base="$probe_test"
       else
         break
       fi
+      # Comment-only lines never execute, so a pipeline interrupted by one is
+      # still a pipeline: skip the comment instead of appending it, which would
+      # destroy the trailing `|` the next iteration tests for.
+      if [[ "${lines[j + 1]}" =~ ^[[:space:]]*# ]]; then
+        j=$((j + 1))
+        joins=$((joins + 1))
+        continue
+      fi
+      probe="${base} ${lines[j + 1]}"
+      j=$((j + 1))
+      joins=$((joins + 1))
     done
     # A joined line belongs to this logical line and must not be re-scanned as
     # a probe of its own; otherwise one pipeline is reported once per line it
@@ -228,10 +292,25 @@ main() {
     repo="$(git rev-parse --show-toplevel 2>/dev/null)" ||
       die "not inside a git repository, and no paths were given"
     cd "$repo" || die "cannot enter $repo"
+    # EVERY tracked shell script, which is not the same set as `*.sh`: a script
+    # at a conventional extensionless path (`bin/check`) carries exactly this
+    # hazard, and the guard claims to cover it. Identify those by SHEBANG — the
+    # executable bit alone would sweep in every compiled helper and binary.
+    local first
     while IFS= read -r f; do
-      targets+=("$f")
-    done < <(git ls-files '*.sh')
-    ((${#targets[@]} > 0)) || die "no tracked *.sh files found"
+      case "$f" in
+        *.sh)
+          targets+=("$f")
+          continue
+          ;;
+      esac
+      [[ -f "$f" && -r "$f" ]] || continue
+      IFS= read -r first <"$f" 2>/dev/null || continue
+      case "$first" in
+        '#!'*sh | '#!'*sh[[:space:]]*) targets+=("$f") ;;
+      esac
+    done < <(git ls-files)
+    ((${#targets[@]} > 0)) || die "no tracked shell scripts found"
   fi
 
   # Index-based for the same bash 3.2 reason as scan_file's array walk.

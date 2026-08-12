@@ -132,6 +132,30 @@ flag_case "a negated pipeline (the fail-OPEN direction)" \
 flag_case "the second pipeline on one line" \
   'printf "%s" "$a" | grep -c NEEDLE && printf "%s" "$b" | grep -q NEEDLE'
 
+# grep reached through a wrapper or an absolute path. This file's own header
+# tells the reader to call `command grep` / /usr/bin/grep to escape the harness
+# shim, so these are the spellings a script following that advice contains — and
+# a bare-name-only match let every one of them through as clean.
+flag_case "command grep (the spelling this guard's own docs recommend)" \
+  'printf "%s" "$v" | command grep -q NEEDLE'
+flag_case "env grep" \
+  'printf "%s" "$v" | env grep -q NEEDLE'
+flag_case "an absolute path to grep" \
+  'printf "%s" "$v" | /usr/bin/grep -q NEEDLE'
+flag_case "a wrapper AND an env-var prefix together" \
+  'printf "%s" "$v" | LC_ALL=C command grep -q NEEDLE'
+
+# Options whose value is the FOLLOWING word. The walk used to read that value as
+# the pattern operand and stop, so a -q after it was never seen.
+flag_case "-e PATTERN before -q" \
+  'printf "%s" "$v" | grep -e PATTERN -q'
+flag_case "--regexp PATTERN before -q" \
+  'printf "%s" "$v" | grep --regexp PATTERN -q'
+flag_case "-f FILE before -q" \
+  'printf "%s" "$v" | grep -f patterns.txt -q'
+flag_case "a cluster ending in -e before -q" \
+  'printf "%s" "$v" | grep -ie PATTERN -q'
+
 # ---------------------------------------------------------------------------
 # 2b. Must NOT flag — each control differs from a flagged twin in exactly the
 #     character that matters, so a control that "passes" for the wrong reason
@@ -168,6 +192,15 @@ clean_case "a whole-line comment describing the bug" \
   '# Here-string, not printf | grep -q: grep -q exits at the first match.'
 clean_case "an indented whole-line comment describing the bug" \
   '    # was: printf "%s" "$out" | grep -q PAT'
+# The twin of the -e cases above: here the cluster's value is ATTACHED, so the
+# trailing q is the pattern rather than a flag. Reading the token as a whole
+# instead of letter by letter reported this as an offender.
+clean_case "-eq is -e with the pattern q, not an early exit" \
+  'printf "%s" "$v" | grep -eq PAT'
+clean_case "a wrapper in front of a grep that reads to the end" \
+  'printf "%s" "$v" | command grep -c NEEDLE'
+clean_case "a path-qualified name that merely ENDS in grep" \
+  'printf "%s" "$v" | /opt/bin/notgrep -q NEEDLE'
 
 # ---------------------------------------------------------------------------
 # 2c. Multi-line pipelines, the dedup regression, and the escape hatch.
@@ -188,6 +221,34 @@ f="$(mkscript "cont-trailing-pipe.sh" \
 run_guard "$f" && rc=0 || rc=$?
 report "flags: a pipeline whose pipe ends the line and grep starts the next" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# A comment between the pipe and the grep. The join used to append the comment,
+# which destroyed the trailing `|` it tested for on the next iteration, so the
+# pipeline was dropped and the standalone grep line skipped.
+f="$(mkscript "cont-comment-between.sh" \
+  'printf "%s" "$v" |' \
+  '  # explaining what the next line does' \
+  '  grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "flags: a comment line between the pipe and the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+f="$(mkscript "cont-trailing-comment.sh" \
+  'printf "%s" "$v" | # note' \
+  '  grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "flags: a trailing comment after the pipe does not end the pipeline" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# NEGATIVE CONTROL: comment-skipping must not invent a pipeline where the
+# previous line never ended in one, or every comment above a grep would flag.
+f="$(mkscript "cont-comment-no-pipe.sh" \
+  'printf "%s" "$v" > /tmp/x' \
+  '  # an unrelated comment' \
+  '  grep -q NEEDLE /tmp/x')"
+run_guard "$f" && rc=0 || rc=$?
+report "clean: a comment above a grep with no preceding pipe stays clean" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
 f="$(mkscript "cont-trailing-or.sh" \
   'cached "$1" ||' \
