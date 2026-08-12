@@ -3059,9 +3059,14 @@ Corrected, and cross-validated against the transcripts rather than the skip stor
 dispatched; 31 did not (18.9%)** — 29 of those carrying a refusal (**17.7% genuinely dropped**) and
 **2 carrying no record at all**, so a second failure cause exists that the skip store cannot see (the
 Improver's own missing 2026-08-05 dispatch is one, and it has no `per_task_limit` record either). The
-effective Claude interval is therefore **~1.2 hours**, not 1.5. The Agent Improver is otherwise
-unaffected: the Claude store records **zero** `per_task_limit` skips for it, and the Codex scheduler
-refuses none.
+effective Claude interval is therefore **~1.2 hours**, not 1.5.
+⚠️ **The Improver is NOT proven unaffected — and its zero skip count is exactly why not.** The Claude
+store records **zero** `per_task_limit` skips for it, but the second failure cause above is invisible
+to that store, and the Improver's own missing 2026-08-05 dispatch is one of the two no-record cases.
+So zero skips establishes nothing about its health; reading it as a clean bill is the same
+absence-as-evidence error this whole correction is about. Measure the Improver the same way —
+scheduled slots against actual dispatches — before relying on its four daily starts. The Codex
+scheduler refuses none, which bounds *that* lane's refusal cause and says nothing about this one.
 ⚠️ **Re-derive this ONLY by comparing actual dispatches to scheduled slots** — never by counting skip
 records. Counting them is what produced five mutually-inconsistent readings (32.9%, 36.6%, 44.0%,
 50.0%, 58.3%) across both instances, each re-measured because the last one looked wrong.
