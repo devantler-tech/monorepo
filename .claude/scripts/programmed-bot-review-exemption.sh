@@ -119,6 +119,10 @@ matches_agent_plugins_review_files() {
 # path. An unreadable allowlist fails closed for the same reason.
 matches_suite_owned_skills() {
   [[ -r "${allowlist_file}" ]] || return 1
+  # The corroborator is REQUIRED on this arm. It is what detects an upstream handover on a root we
+  # still allowlist, and a tripwire the caller may omit is one that never fires — so an omitted map
+  # is unproven ownership, not permission. Other arms take seven arguments and never reach here.
+  [[ -n "${skill_owners_json}" ]] || return 1
 
   # Every row is validated, not just the ones selected: a row is only ever allowed to name the one
   # reviewed suite upstream, so an empty or drifted third field is a malformed file rather than a
@@ -146,7 +150,8 @@ matches_suite_owned_skills() {
        . as $root
        | ($allow[$root] // null) as $reviewed
        | $reviewed != null
-       and (($owners | type) != "object" or $owners[$root] == $reviewed))' \
+       and ($owners | type) == "object"
+       and $owners[$root] == $reviewed)' \
     <<<"${files_json}" >/dev/null
 }
 

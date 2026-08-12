@@ -1182,10 +1182,13 @@ upstream that owns its content. Every changed root must be listed for that repos
 returns **3**. Absence is the default, so a newly installed skill and a third-party one are treated
 alike until someone deliberately adds a row through the normal review path.
 
-The classifier's optional eighth argument — a JSON object mapping each changed root to the
+The classifier's eighth argument — a JSON object mapping each changed root to the
 `metadata.github-repo` read at the PR head — is a **corroborator, never an authorization**. Supplying
 it can only withdraw the carve-out, never grant it: it catches an upstream handover, where a skill we
-still allowlist has quietly started declaring someone else. Read it with
+still allowlist has quietly started declaring someone else. It is **required on this arm** and
+omitting it returns **3** — a tripwire the caller may skip is one that never fires, so a missing map
+is unproven ownership rather than permission. The other arms take seven arguments and never consult
+it. Read it with
 
 ```sh
 # `--jq .content | base64 -d` also works, but BSD and GNU base64 spell the decode flag differently

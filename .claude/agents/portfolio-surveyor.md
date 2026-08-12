@@ -277,12 +277,12 @@ public and private — no per-repo loop needed to enumerate):
      `.claude/scripts/programmed-bot-review-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "$headRefOid" "$files_json" "$commits_json" "$skill_owners_json"`.
      Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the exact API author login.
      For an installed-skill updater PR (any changed path under `.agents/skills/`), `skill_owners_json`
-     is an **optional** compact JSON object mapping each changed skill root (`.agents/skills/<name>`)
+     is **required**: a compact JSON object mapping each changed skill root (`.agents/skills/<name>`)
      to that skill's own `metadata.github-repo`, read from its `SKILL.md` frontmatter **at
-     `$headRefOid`**, or `null` where the frontmatter is absent or unreadable. It is a corroborator
-     only: the classifier authorizes from its own reviewed allowlist, because that frontmatter is
-     written by the upstream it names. Supplying it can move a PR to **3**, never to 0, so omitting it
-     is safe — and every other arm ignores it entirely.
+     `$headRefOid`**, or `null` where the frontmatter is absent or unreadable. It is a corroborator,
+     not an authorization — the classifier authorizes from its own reviewed allowlist, because that
+     frontmatter is written by the upstream it names — but omitting it returns **3**, because a
+     tripwire the caller may skip never fires. Every other arm takes seven arguments and ignores it.
      Encode all paths from the deepening query as one compact JSON string array in `files_json`. Fetch
      the complete commit list separately from the REST endpoint `repos/devantler-tech/<repo>/pulls/<n>/commits`
      with `gh api --paginate --slurp ... | jq -c 'add | map(...)'` (this `gh` version does not allow

@@ -762,8 +762,10 @@ expect_exempt \
   "${platform_skills_commits}" \
   "${allowed_skills_owners}"
 
-expect_exempt \
-  "allowlist alone authorizes when no corroborating map is supplied" \
+# The corroborator is what catches an upstream handover on a root we still allowlist, so a caller
+# that omits it must NOT be handed the carve-out — a tripwire the caller may skip never fires.
+expect_review_required \
+  "an allowlisted skill with the corroborating map omitted entirely" \
   "ksail" \
   "app/ksail-bot" \
   "deps/agent-skills-update" \
@@ -860,18 +862,27 @@ expect_classifier_error \
   '[".agents/skills/ways-of-working"]'
 
 # A malformed allowlist must fail closed rather than authorize. The classifier resolves the file
-# relative to its own directory, so the fixture reproduces that layout exactly — an empty owner
-# column is the shape that matters, because it survives a `!= null` test while naming no upstream.
+# relative to its own directory, so the fixture reproduces that layout exactly.
+#
+# ⚠️ Measured, so nobody over-credits these: with the corroborating map now REQUIRED, only the
+# duplicate-root case is caught by the allowlist validation alone. Removing that validation leaves
+# the other three still returning 3, because the map disagrees with the malformed row and catches
+# them first. They are kept as behaviour regressions for the combined gate, not as proof of the
+# parser — the parser's unique contribution is rejecting a duplicate root, which the map cannot see
+# because `from_entries` silently keeps the last one and it agrees with the map.
 expect_allowlist_rejects() {
   local name="$1" row="$2" tmp rc
   tmp="$(mktemp -d)"
   mkdir -p "${tmp}/scripts"
   cp "${classifier}" "${tmp}/scripts/"
   printf '%s\n' "${row}" >"${tmp}/skill-ownership-allowlist.tsv"
+  # Pass a VALID corroborating map, so the only thing left to reject is the allowlist row itself.
+  # Omitting it would make every case below pass for the missing-map reason instead.
   if "${tmp}/scripts/$(basename "${classifier}")" \
     "platform" "app/botantler-1" "deps/agent-skills-update" \
     "chore(deps): update agent skills" \
-    "${platform_skills_head}" "${allowed_skills_files}" "${platform_skills_commits}"; then
+    "${platform_skills_head}" "${allowed_skills_files}" "${platform_skills_commits}" \
+    "${allowed_skills_owners}"; then
     rm -rf "${tmp}"
     fail "malformed allowlist still granted the no-review carve-out: ${name}"
   else
@@ -892,7 +903,8 @@ printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-t
 "${allowlist_control_tmp}/scripts/$(basename "${classifier}")" \
   "platform" "app/botantler-1" "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
-  "${platform_skills_head}" "${allowed_skills_files}" "${platform_skills_commits}" ||
+  "${platform_skills_head}" "${allowed_skills_files}" "${platform_skills_commits}" \
+  "${allowed_skills_owners}" ||
   fail "relocated-classifier control failed: a well-formed allowlist must still grant exit 0"
 rm -rf "${allowlist_control_tmp}"
 
