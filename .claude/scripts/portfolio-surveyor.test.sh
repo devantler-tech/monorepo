@@ -1955,3 +1955,46 @@ expect_class interactive "${ROUTINE_LINE}\n\n>\t\xf0\x9f\xa4\x96 Generated with 
 expect_class interactive "${ROUTINE_LINE}\n\n-\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated LIST marker still counts'
 
 echo "portfolio surveyor contract: all assertions passed"
+
+# ── the four ownership-signal defects Codex found on #2723 ────────────────────────────────────────
+# All four share one shape: a takeover decision resting on a value that is either unreadable, not
+# actually fetched, or produced by the acting run itself. Each is pinned in the surface that has to
+# carry it, and each fails on its own.
+constitution_flat="$(tr '\n' ' ' < "${constitution}" | tr -s ' ')"
+
+# (1) The acting lane's own push must not read as a rival. Pin BOTH halves: the table row's exclusion,
+#     and the survey field that makes it applicable without re-deriving the lane.
+case "${constitution_flat}" in
+  *'within the last **~2h**, **by anyone but you**'*) ;;
+  *) fail "AGENTS.md active-work row still counts the acting lane's own push as someone else's" ;;
+esac
+case "${surveyor_flat}" in
+  *'pushed:<age>@<lane>'*) ;;
+  *) fail "the surveyor does not report the pushing lane, so the consumer cannot discount its own push" ;;
+esac
+
+# (2) `pushed:unknown` must be defined AND expiring — live-forever parks the PR, idle authorises a
+#     takeover on data the survey admits it could not read.
+case "${surveyor_flat}" in
+  *'counts as LIVE while the PR'*'own newest observable timestamp (`updatedAt`) is inside the ~2h window, and stops counting once that elapses'*) ;;
+  *) fail "the surveyor leaves pushed:unknown without an expiring ownership meaning" ;;
+esac
+
+# (3) A thread-only human reply is invisible to a query that fetches just isResolved, and that blindness
+#     authorises taking over live human work — the one direction this signal exists to prevent.
+case "${surveyor_flat}" in
+  *'reviewThreads(first:100, after:$cursor){nodes{isResolved comments(first:100){nodes{author{login} createdAt body}}}'*) ;;
+  *) fail "the surveyor's thread query cannot see a human reply inside an existing thread" ;;
+esac
+
+# (4) `nothing_on_fire: true` alongside undeepened PRs asserts health the survey never measured.
+case "${surveyor_flat}" in
+  *'nothing_on_fire: <true|false|unknown>'*) ;;
+  *) fail "the digest cannot express an unassessed portfolio" ;;
+esac
+case "${surveyor_flat}" in
+  *'EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)` ROW EXISTS'*) ;;
+  *) fail "the digest may still claim nothing_on_fire while PRs went unassessed" ;;
+esac
+
+echo "portfolio surveyor contract: ownership-signal assertions passed"

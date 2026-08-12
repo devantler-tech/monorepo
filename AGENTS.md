@@ -1676,7 +1676,7 @@ owned by someone else — and leave it alone this run — when any of these hold
 
 | Signal | Reading |
 |---|---|
-| A push to its head within the last **~2h** | Someone is mid-flight; do not take over |
+| A push to its head within the last **~2h**, **by anyone but you** | Someone is mid-flight; do not take over |
 | A **human** comment or review within the last **~2h** | A person is engaged right now |
 | A review request at the current head, **still inside its provider's response envelope** | That lane owns the next move |
 | An in-flight `merge_group` run for that PR | It is already being merged |
@@ -1688,6 +1688,18 @@ that genuinely owns the next move — a request still inside its response envelo
 bot review as "a reviewer is engaged" parks the PR for ~2h against the mandatory every-run pentad
 sweep, and on an hourly cadence that compounds across runs into findings that age untouched at the
 current head. The maintainer's own review still parks it, because he is a human mid-flight.
+
+🔴 **Your OWN push is not evidence that someone else is active — row 1 says "by anyone but you" for
+that reason.** Every instance pushes as `devantler`, so a run that has just created or repaired a PR
+meets its own push on the next sweep and reads it as a rival mid-flight, parking its own in-flight work
+behind a signal it produced itself. That is self-blocking of exactly the kind this contract forbids,
+and it bites hardest on the PRs a run is actively driving — the ones rung 1 most wants finished.
+**Resolve it from your creation record plus the branch namespace, never from the login**, which cannot
+distinguish the three instances: a push to a branch in **your own** namespace, on a PR **your creation
+record covers**, is yours and parks nothing. Absent that record, treat the push as someone else's —
+the same asymmetry used elsewhere, since wrongly claiming a push costs a collision while wrongly
+disclaiming one costs a delay. The survey reports the branch's lane alongside the push age so this
+needs no re-derivation; the discount itself is yours to apply, because only you know what you created.
 
 Nothing else parks a PR. Age, size, difficulty, an unfamiliar author, a `HANDS-OFF` note inherited from
 memory, or a branch shape you did not create are **not** reasons to skip one — re-verify against live

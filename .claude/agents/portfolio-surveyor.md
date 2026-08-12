@@ -195,6 +195,26 @@ public and private — no per-repo loop needed to enumerate):
      a same-repo branch those simply resolve to the base repo. When no push record is retrievable —
      including a fork whose activity is not readable — emit `pushed:unknown`, never `none`, which
      asserts an idleness the survey did not observe.
+     🔴 **`pushed:unknown` needs a DEFINED, EXPIRING meaning, or it is a trap in both directions.**
+     Read as live it parks the PR forever, because an unreadable fork stays unreadable and nothing
+     ever converts the value into evidence; read as idle it authorises a takeover on data the survey
+     admits it could not see. Neither is acceptable, so give it the same shape every other signal has:
+     **`pushed:unknown` counts as LIVE while the PR's own newest observable timestamp (`updatedAt`) is
+     inside the ~2h window, and stops counting once that elapses.** That is deliberately the *weakest*
+     defensible proxy — `updatedAt` moves on comments and reviews too, so it over-reports activity,
+     which is the safe direction for a value whose whole point is that the real signal is missing. It
+     expires on its own, so the class the ownership widening exists to admit cannot be parked
+     permanently by an unreadable fork. Emit it as `pushed:unknown@<updatedAt-age>` so the consumer can
+     apply the window without re-deriving it.
+     🔴 **A push by the ACTING lane is not evidence that someone else is active.** Every instance
+     pushes as `devantler`, so a run that has just created or repaired a PR sees its own push and, on
+     the next sweep, reads it as proof of a rival — parking its own in-flight work behind a signal it
+     produced itself. The surveyor cannot resolve this alone (it holds no creation record), so it
+     reports the **actor and the branch namespace** — `pushed:<age>@<lane>` where `<lane>` is the
+     `claude/`/`codex/`/`cursor/` prefix of `headRefName`, or `fork` for an external head — and the
+     consumer discounts a signal from its **own** namespace when its creation record covers that PR.
+     Reporting the lane costs nothing and is the only part the survey can know; the discount is the
+     orchestrator's, because only it knows what it created.
      Keep reporting the **branch name** (`headRefName`) and the body's **disclosure** (match the
      STRUCTURAL prefix, never the actor word — it is "Agentic Engineer" now, and "Daily AI Engineer" /
      "Daily AI Assistant" before the 2026-07-21 rename). ⚠️ **The literals carry no markdown emphasis
@@ -293,8 +313,15 @@ public and private — no per-repo loop needed to enumerate):
      CodeRabbit explicitly reports while it
      is the selected current-head reviewer, (d) `mergeStateStatus` conflicts, and (e) **green-review state**
      (see below). Count all unresolved review threads across all pages, regardless of author. Query
-     `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}` and
-     paginate until `hasNextPage` is false. For (b)'s body surface: CodeRabbit emits non-inline
+     `reviewThreads(first:100, after:$cursor){nodes{isResolved comments(first:100){nodes{author{login} createdAt body}}} pageInfo{hasNextPage endCursor}}`
+     and paginate until `hasNextPage` is false.
+     🔴 **The comment nodes are NOT optional detail — `active=` is blind without them.** A human who
+     replies **inside an existing review thread** leaves no issue comment and no top-level review, so a
+     query fetching only `isResolved` cannot see them and `active=` reports `none` while a person is
+     mid-conversation. That authorises a takeover of live human work, which is the one direction this
+     signal exists to prevent. Compute the newest **human** (non-bot, non-agent-disclosed) author
+     timestamp across thread comments too, and feed it into `human-comment:<age>` alongside the issue
+     comments and top-level reviews. For (b)'s body surface: CodeRabbit emits non-inline
      findings as collapsed sections
      in review bodies, each titled `<emoji> <Category> comments (N)` inside a `<summary>` tag —
      `⚠️ Outside diff range comments (N)`, `🧹 Nitpick comments (N)`, `♻️ Duplicate comments (N)`,
@@ -954,7 +981,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false>   # true only if NO CI red on main AND no actionable PR broken, whoever authored it; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does
+nothing_on_fire: <true|false|unknown>   # true only if NO CI red on main AND no actionable PR broken, whoever authored it; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does. 🔴 EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)` ROW EXISTS: `true` asserts that no actionable PR is broken, which a survey that never assessed those PRs cannot know. `false` is equally wrong — it claims a fire nobody observed. `unknown` is the only honest value, and the orchestrator treats it as "re-survey the undeepened remainder before concluding the portfolio is healthy", never as a clean bill
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
