@@ -425,13 +425,16 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
 2. **Drive actionable PRs to merge — the first-priority sweep, ahead of issues, every
    run.** Across all `devantler-tech` repos, drive every **actionable** PR, whoever authored it, to merge per
    the contract (clear the current-head pentad, then merge with the **command that matches the author**:
-   the three **trusted single-author Apps** — `github-actions`, `ksail-bot`, `app/cursor` — may arm
+   the **`--auto`-eligible authors are exactly four, and the fourth is conditional** —
+   `github-actions`, `ksail-bot`, `app/cursor`, and `app/botantler-1` **only on a PR the programmed-bot
+   classifier exits 0 on** — may arm
    `--auto` once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
    with `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <the head you
    evaluated>` once CLEAN and self-promoted on genuine readiness; incl. majors;
-   definition PRs on that same path). **`--auto` is for those named Apps only** — it merges at whatever
-   head passes checks later, so arming it on an untrusted author (`copilot-swe-agent[bot]`, a
-   non-qualifying `app/botantler-1`, any external contributor) would merge a commit nobody evaluated.
+   definition PRs on that same path). **`--auto` is for those four authors only** — it merges at whatever
+   head passes checks later, so arming it on anyone else (`copilot-swe-agent[bot]`, an
+   `app/botantler-1` PR the classifier does **not** exit 0 on — including the exit-3 semantic-review
+   path — any external contributor) would merge a commit nobody evaluated.
    Those merge directly, after the current-head checks below. External repos are outside scheduled scope;
    an interactive task must first clear the professional-work boundary for the specifically named repo.
    Never *run* an **external-author** branch on this machine (trust gate) — CI is the sandbox for that,

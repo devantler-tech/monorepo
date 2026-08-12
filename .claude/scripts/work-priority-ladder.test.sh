@@ -184,6 +184,21 @@ assert_prose '`app/botantler-1` **only on a PR the programmed-bot classifier exi
 assert_prose 'is **not** `--auto`-eligible and merges directly at an evaluated head' \
   "${constitution_flat}" "contract does not route a non-qualifying app/botantler-1 PR to the direct merge"
 
+# The DEPLOYED run loop is what a run actually follows, so pinning the matrix in the contract alone
+# leaves the ambiguity live where it is read. The skill's own wording said only "non-qualifying
+# `app/botantler-1`" — which implies a qualifying one is eligible without ever placing it in the
+# list, so its preceding three-name list still read as exclusive and an exit-0 updater PR had no
+# prescribed auto-merge path. Mirror both halves here: the closed four-author form, and the absence
+# of the bare three-name list that made it ambiguous.
+assert_absent 'the three **trusted single-author Apps**' \
+  "${skill_flat}" "the maintenance skill still states an exclusive three-App --auto list"
+assert_absent '`--auto` is for those named Apps only' \
+  "${skill_flat}" "the maintenance skill still scopes --auto to an unnamed 'those named Apps' set"
+assert_prose '`--auto`-eligible authors are exactly four, and the fourth is conditional' \
+  "${skill_flat}" "the maintenance skill does not state the --auto author matrix as one closed list"
+assert_prose '`app/botantler-1` **only on a PR the programmed-bot classifier exits 0 on**' \
+  "${skill_flat}" "the maintenance skill does not name the qualifying exit-0 app/botantler-1 --auto path"
+
 # ── PR ownership: every PR in the portfolio, whoever authored it (maintainer direction 2026-08-08) ──
 # Rung 1 previously meant "own/trusted PRs in YOUR lane", with anyone else's draft stopping at hygiene.
 # The maintainer retired that split interactively. These pin the three parts that a later run could
