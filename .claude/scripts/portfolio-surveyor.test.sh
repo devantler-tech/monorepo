@@ -1980,11 +1980,17 @@ case "${surveyor_flat}" in
   *) fail "the surveyor leaves pushed:unknown without an expiring ownership meaning" ;;
 esac
 
-# (3) A thread-only human reply is invisible to a query that fetches just isResolved, and that blindness
-#     authorises taking over live human work — the one direction this signal exists to prevent.
+# (3) A thread-only human reply must be read from the FLAT REST surface. Nesting `comments` inside the
+#     GraphQL thread query paginates PER THREAD, so one cursor cannot drain it and a thread past 100
+#     comments silently drops its newest — exactly where a live human reply sits. A bounded `first:`/
+#     `last:` window has the same hole one size along, so the fix is the surface, not the page size.
 case "${surveyor_flat}" in
-  *'reviewThreads(first:100, after:$cursor){nodes{isResolved comments(first:100){nodes{author{login} createdAt body}}}'*) ;;
-  *) fail "the surveyor's thread query cannot see a human reply inside an existing thread" ;;
+  *'repos/<owner>/<repo>/pulls/<n>/comments" --paginate'*) ;;
+  *) fail "the surveyor does not read thread replies from the flat, fully-drainable REST surface" ;;
+esac
+case "${surveyor_flat}" in
+  *'GraphQL paginates a nested connection **per thread**'*) ;;
+  *) fail "the surveyor does not record why nesting the comments connection is unsafe" ;;
 esac
 
 # (4) `nothing_on_fire: true` alongside undeepened PRs asserts health the survey never measured.

@@ -313,15 +313,23 @@ public and private — no per-repo loop needed to enumerate):
      CodeRabbit explicitly reports while it
      is the selected current-head reviewer, (d) `mergeStateStatus` conflicts, and (e) **green-review state**
      (see below). Count all unresolved review threads across all pages, regardless of author. Query
-     `reviewThreads(first:100, after:$cursor){nodes{isResolved comments(first:100){nodes{author{login} createdAt body}}} pageInfo{hasNextPage endCursor}}`
-     and paginate until `hasNextPage` is false.
-     🔴 **The comment nodes are NOT optional detail — `active=` is blind without them.** A human who
-     replies **inside an existing review thread** leaves no issue comment and no top-level review, so a
-     query fetching only `isResolved` cannot see them and `active=` reports `none` while a person is
-     mid-conversation. That authorises a takeover of live human work, which is the one direction this
-     signal exists to prevent. Compute the newest **human** (non-bot, non-agent-disclosed) author
-     timestamp across thread comments too, and feed it into `human-comment:<age>` alongside the issue
-     comments and top-level reviews. For (b)'s body surface: CodeRabbit emits non-inline
+     `reviewThreads(first:100, after:$cursor){nodes{isResolved} pageInfo{hasNextPage endCursor}}`
+     and paginate until `hasNextPage` is false. That query answers (b)'s **count** and nothing else.
+     🔴 **A human who replies INSIDE an existing review thread is invisible to it — and `active=` must
+     still see them.** Such a reply leaves no issue comment and no top-level review, so a
+     thread query reports `active=none` while a person is mid-conversation, authorising a takeover of
+     live human work — the one direction this signal exists to prevent.
+     🔴 **Read those replies from REST, not by nesting them in the query above.** The obvious repair is
+     `comments(first:100)` inside each thread node, and it is wrong twice: GraphQL paginates a nested
+     connection **per thread**, so one cursor cannot drain it, and a thread that has run past 100
+     comments then silently drops its newest — which is exactly where a live human reply sits, since
+     the newest comment is the one that matters. A bounded `first:`/`last:` window has the same hole one
+     size along. Use the **flat** endpoint instead, which is completely drainable with a single
+     `--paginate` and carries every inline thread comment on the PR:
+     `gh api "repos/<owner>/<repo>/pulls/<n>/comments" --paginate --jq '.[]|"\(.user.login)\t\(.created_at)"'`
+     Take the newest **human** (non-bot, non-agent-disclosed) timestamp from that, and feed it into
+     `human-comment:<age>` alongside the issue comments and top-level reviews. Choosing the flat
+     surface removes the pagination question by construction rather than answering it per thread. For (b)'s body surface: CodeRabbit emits non-inline
      findings as collapsed sections
      in review bodies, each titled `<emoji> <Category> comments (N)` inside a `<summary>` tag —
      `⚠️ Outside diff range comments (N)`, `🧹 Nitpick comments (N)`, `♻️ Duplicate comments (N)`,
