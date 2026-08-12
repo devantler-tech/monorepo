@@ -154,6 +154,36 @@ assert_prose 'A cap is NOT licence to stop early, and it never blocks the floor'
 assert_prose 'the cap redirects a run **from starting toward finishing**, and finishing is unbounded' \
   "${constitution_flat}" "contract does not redirect a capped run toward finishing"
 
+# ── the run floor's escape hatch must expire, like every other ownership signal ────────────────────
+# The floor let a run author nothing when every actionable PR was "correctly maintainer-gated". That
+# phrase is defined NOWHERE and reads as permanent, so it survived the PR-ownership widening as a
+# standing excuse to stop: an agent could park a PR that is neither terminal nor covered by any live
+# signal, which is exactly the passive self-blocking the contract forbids elsewhere. The replacement
+# binds the exception to the data-only active-work test, whose every signal expires.
+assert_absent 'every open actionable PR is correctly maintainer-gated' \
+  "${constitution_flat}" "the retired permanent-sounding 'maintainer-gated' floor exception survived"
+assert_prose 'already terminal or held by a live, unexpired' \
+  "${constitution_flat}" "floor exception is not tied to the live, unexpired active-work signal"
+assert_prose 'That exception is time-bounded, never a standing state' \
+  "${constitution_flat}" "floor exception does not state that it expires — it reads as permanent"
+assert_prose 'no undefined permanent-sounding gate' \
+  "${constitution_flat}" "floor exception does not forbid an undefined gate standing in for a signal"
+
+# ── one author matrix for `--auto`, with the conditional fourth author named ───────────────────────
+# `--auto` merges whatever head passes checks LATER, so eligibility is a question about the AUTHOR.
+# Naming only three Apps while a separate clause granted exit-0 programmed updater PRs the no-review
+# auto path left `app/botantler-1` unplaced: the maintenance overlay's "non-qualifying" wording
+# implies a QUALIFYING one is eligible, but no surface said so outright. Pin the four-author form and
+# the condition, so a later edit cannot silently drop back to the ambiguous bare list.
+assert_absent '(`github-actions`/`ksail-bot`/`app/cursor`) uses pre-CLEAN' \
+  "${constitution_flat}" "the ambiguous bare three-name --auto author list survived"
+assert_prose 'The `--auto`-eligible authors are exactly four, and the fourth is conditional' \
+  "${constitution_flat}" "contract does not state the --auto author matrix as one closed list"
+assert_prose '`app/botantler-1` **only on a PR the programmed-bot classifier exits 0 on**' \
+  "${constitution_flat}" "contract does not condition app/botantler-1's --auto eligibility on classifier exit 0"
+assert_prose 'is **not** `--auto`-eligible and merges directly at an evaluated head' \
+  "${constitution_flat}" "contract does not route a non-qualifying app/botantler-1 PR to the direct merge"
+
 # ── PR ownership: every PR in the portfolio, whoever authored it (maintainer direction 2026-08-08) ──
 # Rung 1 previously meant "own/trusted PRs in YOUR lane", with anyone else's draft stopping at hygiene.
 # The maintainer retired that split interactively. These pin the three parts that a later run could

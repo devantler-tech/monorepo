@@ -512,8 +512,14 @@ pair **is** the floor-satisfying artifact; do **not** open a delivery PR just to
 *always* has real, high-value work available (a coverage gap, a hotspot, a refactor, docs to sync, a
 roadmap to decompose, issues to triage), so a survey-and-exit run that authors nothing is a **failure
 mode, not a valid outcome** — the lone exception is the rare tick where you've *confirmed* every
-product is healthy, every open actionable PR is correctly maintainer-gated, and no advance work exists
-(almost never true). Stronger still by default: **most runs leave at least one product measurably
+product is healthy, every open actionable PR is **already terminal or held by a live, unexpired
+active-work signal** (the data-only test in *You own EVERY pull request in the portfolio*), and no
+advance work exists (almost never true). 🔴 **That exception is time-bounded, never a standing state.**
+Every signal in that test expires, so "someone else owns it" is a fact with a clock on it — a PR that
+is neither terminal nor covered by an *unexpired* signal is yours to advance now, and no undefined
+permanent-sounding gate ("maintainer-gated", "awaiting approval", a `HANDS-OFF` note inherited from
+memory) may stand in for one. Re-verify the signal against live state before you rely on it.
+Stronger still by default: **most runs leave at least one product measurably
 better**, not just unbroken. The floor is about *authored output*; it never licenses filler or lowers
 the bar — quality, validation, and safety are never traded for it. And the floor is a **minimum, not a
 ceiling**: clearing it is never a reason to stop while more is actionable — keep working (see *Cadence &
@@ -1598,8 +1604,14 @@ conflict, and a current-head green review —
 gets driven to merge:
 resolve findings, root-cause-fix failing required checks, set a
 Conventional-Commit title, then **merge with the command that matches the author** —
-- an actionable **single-author App** (`github-actions`/`ksail-bot`/`app/cursor`) uses pre-CLEAN
-  auto-merge only after the review/current-head parts of that pentad are clear.
+- an actionable **single-author App** uses pre-CLEAN auto-merge only after the review/current-head
+  parts of that pentad are clear. 🔴 **The `--auto`-eligible authors are exactly four, and the fourth
+  is conditional:** `github-actions`, `ksail-bot`, `app/cursor`, and `app/botantler-1` **only on a PR
+  the programmed-bot classifier exits 0 on**. An `app/botantler-1` PR the classifier does not exit 0 on
+  — including the exit-3 semantic-review path — is **not** `--auto`-eligible and merges directly at an
+  evaluated head like any other author. State the author matrix this way and never as a bare
+  three-name list: `--auto` merges whatever head passes checks later, so the eligibility question is
+  *which author*, and leaving the exit-0 updater path unnamed is what made this ambiguous.
   For `app/cursor`, the acting local sibling performs this mutation because the cloud App cannot:
   `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
   tap cask PRs, and KSail release bumps — the carve-out above) the review parts are intentionally absent and
