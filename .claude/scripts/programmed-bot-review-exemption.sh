@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-if [[ "$#" -ne 7 ]] || ! command -v jq >/dev/null 2>&1; then
+if [[ "$#" -lt 7 || "$#" -gt 8 ]] || ! command -v jq >/dev/null 2>&1; then
   exit 2
 fi
 
@@ -16,6 +16,15 @@ title="$4"
 head="$5"
 files_json="$6"
 commits_json="$7"
+# Optional map of changed installed-skill root -> that skill's `metadata.github-repo` value, resolved
+# by the caller at the PR head (null when the frontmatter is absent or unreadable). Only the
+# installed-skill arm consults it; every other arm classifies without it.
+skill_owners_json="${8-}"
+
+# Skills copied into an installed root come from several upstreams, so the path proves only where a
+# file landed. The reviewed suite upstream is the one whose prose has already been reviewed, and
+# exact equality is what keeps a prefix-extended rename from inheriting the carve-out.
+suite_skill_owner="https://github.com/devantler-tech/agent-skills"
 
 commit_schema='type == "array" and length > 0 and all(.[];
   type == "object" and
@@ -41,6 +50,12 @@ if [[ ! "${head}" =~ ^[0-9a-f]{40}$ ]] ||
   ! jq -e 'type == "array" and all(.[]; type == "string")' \
     <<<"${files_json}" >/dev/null 2>&1 ||
   ! jq -e "${commit_schema}" <<<"${commits_json}" >/dev/null 2>&1; then
+  exit 2
+fi
+
+if [[ -n "${skill_owners_json}" ]] &&
+  ! jq -e 'type == "object" and all(.[]; type == "string" or type == "null")' \
+    <<<"${skill_owners_json}" >/dev/null 2>&1; then
   exit 2
 fi
 
@@ -92,6 +107,20 @@ matches_agent_plugins_review_files() {
       . == ".claude-plugin/marketplace.json" or
       . == ".github/plugin/marketplace.json")
   ' <<<"${files_json}" >/dev/null
+}
+
+# Ownership must be proven for EVERY changed skill root before the no-review path opens. An absent
+# map, a root the map does not mention, a null value, or any other upstream leaves it unproven, and
+# unproven ownership takes the semantic-review path rather than the carve-out.
+matches_suite_owned_skills() {
+  [[ -n "${skill_owners_json}" ]] || return 1
+
+  jq -e \
+    --argjson owners "${skill_owners_json}" \
+    --arg suite "${suite_skill_owner}" \
+    '[.[] | capture("^(?<root>\\.agents/skills/[^/]+)/").root] | unique
+     | length > 0 and all(.[]; $owners[.] == $suite)' \
+    <<<"${files_json}" >/dev/null
 }
 
 matches_agent_skills_provenance() {
@@ -270,7 +299,8 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
     if [[ "${repo}" != "agent-plugins" ]] &&
       matches_agent_skills_files &&
       matches_agent_skills_provenance; then
-      exit 0
+      matches_suite_owned_skills && exit 0
+      exit 3
     fi
   fi
 fi

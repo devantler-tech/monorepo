@@ -721,6 +721,32 @@ expect_review_required \
   "${agent_plugins_versioned_files}" \
   "${agent_plugins_versioned_commits}"
 
+# Installed-skill roots are populated from SEVERAL upstreams, so the path and the updater's
+# provenance prove who copied a file — never who wrote it. The owner is resolved structurally from
+# each skill's own `metadata.github-repo` and supplied as the eighth argument; only skills owned by
+# the reviewed suite upstream keep the no-review carve-out (#2614).
+suite_skill_owner="https://github.com/devantler-tech/agent-skills"
+platform_skills_owners="$(jq -cn --arg o "${suite_skill_owner}" '{
+  ".agents/skills/gitops-cluster-debug": $o,
+  ".agents/skills/gitops-knowledge": $o
+}')"
+# `gh-stack` is genuinely third-party. Its update is what carried the unconditional
+# `gh stack merge --yes` instruction that static review caught on agent-plugins#106.
+ksail_skills_owners='{".agents/skills/gh-stack":"https://github.com/github/gh-stack"}'
+platform_skills_owners_partial="$(jq -cn --arg o "${suite_skill_owner}" '{
+  ".agents/skills/gitops-cluster-debug": $o
+}')"
+platform_skills_owners_unreadable="$(jq -cn --arg o "${suite_skill_owner}" '{
+  ".agents/skills/gitops-cluster-debug": $o,
+  ".agents/skills/gitops-knowledge": null
+}')"
+# A prefix-extended lookalike must not satisfy the suite owner: exact equality is what makes an
+# `agent-skills-v2` rename fail closed rather than inherit the carve-out.
+platform_skills_owners_lookalike="$(jq -cn --arg o "${suite_skill_owner}-v2" '{
+  ".agents/skills/gitops-cluster-debug": $o,
+  ".agents/skills/gitops-knowledge": $o
+}')"
+
 expect_exempt \
   "Platform programmed agent-skills update" \
   "platform" \
@@ -729,10 +755,22 @@ expect_exempt \
   "chore(deps): update agent skills" \
   "${platform_skills_head}" \
   "${platform_skills_files}" \
-  "${platform_skills_commits}"
+  "${platform_skills_commits}" \
+  "${platform_skills_owners}"
 
-expect_exempt \
-  "KSail programmed agent-skills update" \
+expect_review_required \
+  "KSail agent-skills update touching a third-party skill" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${ksail_skills_files}" \
+  "${ksail_skills_commits}" \
+  "${ksail_skills_owners}"
+
+expect_review_required \
+  "agent-skills update with no ownership evidence at all" \
   "ksail" \
   "app/ksail-bot" \
   "deps/agent-skills-update" \
@@ -740,6 +778,50 @@ expect_exempt \
   "${ksail_skills_head}" \
   "${ksail_skills_files}" \
   "${ksail_skills_commits}"
+
+expect_review_required \
+  "agent-skills update whose ownership map omits a changed skill" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${platform_skills_files}" \
+  "${platform_skills_commits}" \
+  "${platform_skills_owners_partial}"
+
+expect_review_required \
+  "agent-skills update whose skill has unreadable provenance" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${platform_skills_files}" \
+  "${platform_skills_commits}" \
+  "${platform_skills_owners_unreadable}"
+
+expect_review_required \
+  "agent-skills update owned by a prefix-extended lookalike upstream" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${platform_skills_files}" \
+  "${platform_skills_commits}" \
+  "${platform_skills_owners_lookalike}"
+
+expect_classifier_error \
+  "agent-skills update with a malformed ownership map" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${platform_skills_files}" \
+  "${platform_skills_commits}" \
+  '[".agents/skills/gitops-knowledge"]'
 
 expect_exempt \
   "GoReleaser KSail cask" \

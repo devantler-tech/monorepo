@@ -272,8 +272,15 @@ public and private — no per-repo loop needed to enumerate):
      World at Ruin's CD-generated ones on `goreleaser/world-at-ruin`, maintainer direction
      2026-07-18), and KSail release bumps (maintainer direction 2026-07-13, ksail#6095). Apply this
      exemption **only** when the checked-in exact classifier exits 0:
-     `.claude/scripts/programmed-bot-review-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "$headRefOid" "$files_json" "$commits_json"`.
+     `.claude/scripts/programmed-bot-review-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "$headRefOid" "$files_json" "$commits_json" "$skill_owners_json"`.
      Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the exact API author login.
+     For an installed-skill updater PR (any changed path under `.agents/skills/`), `skill_owners_json`
+     is a compact JSON object mapping each changed skill root (`.agents/skills/<name>`) to that
+     skill's own `metadata.github-repo`, read from its `SKILL.md` frontmatter **at `$headRefOid`**,
+     or `null` where the frontmatter is absent or unreadable. Installed roots mix suite-owned and
+     third-party skills, so this is the only signal that separates them; omit it and the classifier
+     fails closed to **3** (trusted, semantic review required) rather than granting the carve-out.
+     Every other arm ignores it, so it may be omitted for release and cask PRs.
      Encode all paths from the deepening query as one compact JSON string array in `files_json`. Fetch
      the complete commit list separately from the REST endpoint `repos/devantler-tech/<repo>/pulls/<n>/commits`
      with `gh api --paginate --slurp ... | jq -c 'add | map(...)'` (this `gh` version does not allow

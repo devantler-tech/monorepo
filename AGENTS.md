@@ -1148,7 +1148,8 @@ gated by required CI and auto-merge rather than an AI review:
 - **Programmed agent-skills updater PRs** (maintainer direction 2026-07-23): the shared
   `update-agent-skills` workflow's exact `deps/agent-skills-update` branch and
   `chore(deps): update agent skills` title in `platform` and `ksail`, authored by
-  those repositories' exact updater App and changing only their generated installed-skill roots.
+  those repositories' exact updater App and changing only their generated installed-skill roots —
+  **and only where every changed skill is owned by the reviewed suite upstream** (see below).
 - **Programmed release PRs** (maintainer direction 2026-07-13, ksail#6095; widened 2026-07-18):
   every product's Homebrew-tap cask PR, including World at Ruin's CD-generated
   `chore(cask): update world-at-ruin to vX.Y.Z` PRs on `goreleaser/world-at-ruin`, plus KSail release
@@ -1160,8 +1161,35 @@ update but cannot prove that its prose preserves authority boundaries. The exact
 3 for a genuine generated marketplace update: that state makes the App trusted and actionable but
 does not grant the no-review carve-out. Only exit 0 grants the carve-out described above.
 
+🔴 **An installed-skill root holds copies from SEVERAL upstreams, so its path proves where a file
+landed and never who wrote it.** `platform` and `ksail` install third-party skills alongside
+suite-owned ones, so actor, branch, title, path and commit provenance together still cannot tell a
+reviewed suite change from a third-party instruction change riding the same generated PR. That gap is
+not hypothetical: the `gh-stack` update carried an unconditional whole-stack merge instruction that
+only semantic review caught, and every mechanical signal on that PR was valid.
+
+So the no-review path additionally requires **proven suite ownership of every changed skill**. Resolve
+each changed skill's owner structurally from its own `metadata.github-repo` **at the PR head** and pass
+the result as the classifier's eighth argument — a JSON object mapping each changed installed-skill
+root to that value, or `null` where the frontmatter is absent or unreadable:
+
+```sh
+# `--jq .content | base64 -d` also works, but BSD and GNU base64 spell the decode flag differently
+# (`-D` vs `-d`), so ask the API for the raw file instead.
+gh api "repos/devantler-tech/<repo>/contents/<skill-root>/SKILL.md?ref=<head>" \
+  -H "Accept: application/vnd.github.raw" |
+  yq --front-matter=extract '.metadata.github-repo // "null"'
+```
+
+Only `https://github.com/devantler-tech/agent-skills` — matched **exactly**, so an
+`agent-skills-v2`-style rename never inherits the carve-out — keeps a skill on the no-review path.
+Anything else returns **3**: an omitted map, a root the map does not mention, a `null`, a third-party
+owner, or a mixed PR where one changed skill is third-party. The PR is the unit, so one unproven skill
+sends the whole PR to semantic review.
+
 Apply either exemption only when `.claude/scripts/programmed-bot-review-exemption.sh` validates the
-exact repository, PR actor, branch, title, current-head commit provenance, and changed-file boundary.
+exact repository, PR actor, branch, title, current-head commit provenance, changed-file boundary, and
+— for installed-skill updates — that per-skill ownership map.
 Never infer it from the title alone. Qualifying PRs run through required CI and auto-merge; do **not**
 request CodeRabbit, Codex, Cursor Bugbot, or a local review, chase ancillary reviewer output, or count
 a missing review as a hygiene gap. Their checks, threads, and conflict state still gate auto-merge.

@@ -35,7 +35,10 @@ inherits it, then migrate consumers. Triage/label issues, drive actionable trust
 leave automation-owned dependency PRs alone, and keep dependency automation & docs current.
 Programmed `chore(deps): update agent skills` PRs are the no-review exception defined in the root
 contract only when `.claude/scripts/programmed-bot-review-exemption.sh` exits 0: let required CI and
-auto-merge decide accepted exemptions, and never spend a review lane on exit-0 exemptions. A genuine
+auto-merge decide accepted exemptions, and never spend a review lane on exit-0 exemptions. Installed
+skill roots hold copies from several upstreams, so exit 0 also requires proving every changed skill is
+owned by this repository — pass the classifier's per-skill `metadata.github-repo` map read at the PR
+head; a third-party or unproven owner returns 3. A genuine
 `agent-plugins` marketplace update is trusted but review-bearing when the classifier exits 3; request
 semantic review because bundled skill prose is executable agent instruction. Route classifier exit 1
 and non-matching lookalikes through the external/static-only path; exit 2 is a fail-closed error.
