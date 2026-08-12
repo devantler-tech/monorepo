@@ -116,8 +116,9 @@ public and private — no per-repo loop needed to enumerate):
    below, never by adding that field to this list (monorepo#2498). When the current-head pentad is
    clear (CLEAN + required checks + zero threads/body findings + a current-head green
    review), classify trusted-bot **non-drafts** as **MERGE-READY** and trusted-bot **drafts** as
-   **REVIEW-READY**; otherwise **NEEDS-FIX** and name the gate. A `devantler` PR always follows the
-   ownership-unverified rule below first.
+   **REVIEW-READY**; otherwise **NEEDS-FIX** and name the gate. A `devantler` PR is classified by that
+   same pentad — its `disclosure` value (below) records whose control channel a comment on it is and
+   never gates the classification.
    **`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier**:
    deepen its row only when the cheap search result has branch `deps/agent-skills-update` and exact
    title `chore(deps): update agent skills`, then require the classifier below to exit 0 or 3. The

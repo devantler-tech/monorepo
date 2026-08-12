@@ -142,9 +142,10 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   conflict or CI evidence — while the pentad line below requires exactly that evidence for them. An
   external PR is deepened from **metadata only**, which is a read of the GitHub API and never an
   execution of its branch, so the never-run-locally rule is untouched; the surveyor marks those rows
-  `never-run-locally` for the orchestrator. The read-only surveyor always
-  reports `devantler` PRs as ownership-unverified, and the orchestrator's creation record decides
-  which are actually its own before any action;
+  `never-run-locally` for the orchestrator. For a `devantler` PR the surveyor reports its branch name
+  and `disclosure` and emits **no ownership verdict**: that field tells the orchestrator whose control
+  channel a `devantler` comment on the PR is, and is never a gate on whether it may drive the PR —
+  which the data-only active-work signals decide;
 - checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure
   --limit 3` each;
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
