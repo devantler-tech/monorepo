@@ -163,7 +163,12 @@ for merge_mutation in \
   grep -Fq "${merge_mutation}" "${constitution}" ||
     fail "an App auto-merge path omits --match-head-commit, so it can merge an unevaluated head"
 done
-grep -Fq '`--auto` needs the head pin MORE than the direct merge does' "${constitution}" ||
+# This pinned "`--auto` needs the head pin MORE than the direct merge does" until 2026-08-12. That
+# sentence carried a false rider — that the pin makes GitHub refuse a merge of a head pushed after
+# arming — and the rider was withdrawn, so pinning the sentence would have held the contract to a
+# claim it no longer makes. The PROPERTY worth guarding is unchanged and is what this now asserts:
+# that arming widens the evaluated-head gap to however long CI takes.
+grep -Fq '`--auto` has the WIDEST exposure window' "${constitution}" ||
   fail "constitution does not explain why arming auto-merge widens the evaluated-head gap"
 grep -Fq "The machine-local agents' **own** PRs" "${constitution}" ||
   fail "self-promotion rule still ambiguously includes the permission-limited Cursor cloud lane"
@@ -2016,3 +2021,38 @@ case "${surveyor_flat}" in
 esac
 
 echo "portfolio surveyor contract: ownership-signal assertions passed"
+
+# ── Codex's round on the same signals: three ways a takeover decision can still be wrong ──────────
+# (5) The flat-endpoint read must KEEP THE BODY. Login+timestamp cannot separate the maintainer from
+#     an agent instance — they share the `devantler` login — and this signal is defined as the newest
+#     HUMAN comment, so without a body there is no disclosure marker to apply and an agent's own
+#     inline reply parks the PR against a signal the routine produced itself.
+case "${surveyor_flat}" in
+  *'\(.user.login)\t\(.created_at)\t\(.body)'*) ;;
+  *) fail "the flat comment read discards the body, so the disclosure test cannot be applied" ;;
+esac
+
+# (6) A lane is NOT one writer: the Agent Improver shares each machine-local namespace, so discounting
+#     a push on lane + creation record alone discards a live SIBLING push and licenses writing over
+#     work in progress.
+case "${surveyor_flat}" in
+  *'match it against the pushes you made this run'*) ;;
+  *) fail "the own-push discount keys on the lane rather than on what this run actually pushed" ;;
+esac
+case "${constitution_flat}" in
+  *'Lane membership is not enough, because a lane is not one writer'*) ;;
+  *) fail "AGENTS.md lets lane membership alone discount a push, discarding sibling activity" ;;
+esac
+
+# (7) `--match-head-commit` pins the ARMING, not the later auto-merge, so the widest exposure window
+#     is unprotected. The contract previously claimed the pin closed it; that claim was withdrawn.
+case "${constitution_flat}" in
+  *'the thing being allowed is the **arming**, not the later merge'*) ;;
+  *) fail "AGENTS.md does not state that --match-head-commit fails to cover the auto-merge window" ;;
+esac
+case "${constitution_flat}" in
+  *'the arming is never the completion'*) ;;
+  *) fail "AGENTS.md does not require confirming what actually landed after arming auto-merge" ;;
+esac
+
+echo "portfolio surveyor contract: takeover-signal round-2 assertions passed"

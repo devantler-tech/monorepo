@@ -215,6 +215,16 @@ public and private — no per-repo loop needed to enumerate):
      consumer discounts a signal from its **own** namespace when its creation record covers that PR.
      Reporting the lane costs nothing and is the only part the survey can know; the discount is the
      orchestrator's, because only it knows what it created.
+     🔴 **A lane is NOT one writer — the discount needs the push to be YOURS, not merely your lane's.**
+     Each machine-local instance shares its namespace with the Agent Improver schedule (see the
+     consumer's *Writer namespaces*), so a sibling role can repair a PR your creation record covers,
+     on a branch in your own namespace. Discounting on lane + creation record alone therefore throws
+     away a genuinely live sibling push and authorises writing over work in progress — the exact
+     collision the namespace split exists to prevent, arrived at from the opposite direction.
+     So discount only when the newest push is one **this run performed**: match it against the pushes
+     you made this run (branch and sha), not against the lane. **Anything you cannot attribute to your
+     own run stays a live signal**, which keeps the asymmetry right — an unattributed push costs a
+     delay, a wrongly-discounted one costs a collision.
      Keep reporting the **branch name** (`headRefName`) and the body's **disclosure** (match the
      STRUCTURAL prefix, never the actor word — it is "Agentic Engineer" now, and "Daily AI Engineer" /
      "Daily AI Assistant" before the 2026-07-21 rename). ⚠️ **The literals carry no markdown emphasis
@@ -326,7 +336,13 @@ public and private — no per-repo loop needed to enumerate):
      the newest comment is the one that matters. A bounded `first:`/`last:` window has the same hole one
      size along. Use the **flat** endpoint instead, which is completely drainable with a single
      `--paginate` and carries every inline thread comment on the PR:
-     `gh api "repos/<owner>/<repo>/pulls/<n>/comments" --paginate --jq '.[]|"\(.user.login)\t\(.created_at)"'`
+     `gh api "repos/<owner>/<repo>/pulls/<n>/comments" --paginate --jq '.[]|"\(.user.login)\t\(.created_at)\t\(.body)"'`
+     🔴 **Keep the BODY. Dropping it makes the signal say the opposite of what it means.** The
+     maintainer and every machine-local instance comment as the same `devantler` login, so login plus
+     timestamp cannot tell them apart — and this signal is defined as the newest **human** comment.
+     Without the body there is no disclosure marker to apply, so an agent's own inline reply counts as
+     human activity and parks the PR for ~2h against a signal the routine produced itself. Apply the
+     same disclosure disambiguator used everywhere else, then take the newest **surviving** timestamp.
      Take the newest **human** (non-bot, non-agent-disclosed) timestamp from that, and feed it into
      `human-comment:<age>` alongside the issue comments and top-level reviews. Choosing the flat
      surface removes the pagination question by construction rather than answering it per thread. For (b)'s body surface: CodeRabbit emits non-inline

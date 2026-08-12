@@ -1642,11 +1642,21 @@ and the App path is
 from either pin is the guard working: re-read the PR and start the preflight again rather than
 dropping the flag.
 
-⚠️ **`--auto` needs the head pin MORE than the direct merge does, not less.** Arming auto-merge
+⚠️ **`--auto` has the WIDEST exposure window, and the head pin does NOT close it.** Arming auto-merge
 defers the actual merge to whenever the checks settle, so the gap between the evaluated head and the
 landed commit is not the milliseconds of a direct merge but however long CI takes — and a trusted App
-that pushes during that window has its new commit merged by the arming you already performed. With
-the pin, GitHub refuses instead.
+that pushes during that window has its new commit merged by the arming you already performed.
+🔴 **Pass the pin anyway, but do not believe it covers that window.** `gh pr merge --help` defines
+`--match-head-commit` as the SHA the head must match *to allow merge*, and with `--auto` the thing
+being allowed is the **arming**, not the later merge — so the flag protects the same instant a direct
+merge protects, and everything after it is unprotected. An earlier version of this paragraph claimed
+"with the pin, GitHub refuses instead"; that was asserted without evidence and is **withdrawn**.
+**So the arming is never the completion.** On any `--auto` path, confirm afterwards what actually
+landed — `gh pr view <n> --repo devantler-tech/<repo> --json state,mergeCommit` — and check the merged
+commit against the head you evaluated. If they differ, a commit nobody assessed reached `main`: say so
+in the report and treat it as breakage to repair, not as a merge that went through. This holds
+whichever way GitHub's post-arm semantics actually work, which is why it is stated as the requirement
+rather than a claim about them.
 
 #### You own EVERY pull request in the portfolio — whoever authored it
 
@@ -1696,7 +1706,12 @@ behind a signal it produced itself. That is self-blocking of exactly the kind th
 and it bites hardest on the PRs a run is actively driving — the ones rung 1 most wants finished.
 **Resolve it from your creation record plus the branch namespace, never from the login**, which cannot
 distinguish the three instances: a push to a branch in **your own** namespace, on a PR **your creation
-record covers**, is yours and parks nothing. Absent that record, treat the push as someone else's —
+record covers**, and that **this run actually made**, is yours and parks nothing. 🔴 **Lane membership
+is not enough, because a lane is not one writer:** your namespace is shared with the Agent Improver
+schedule (*Writer namespaces*), so a sibling role can push to a branch your creation record covers.
+Discounting on lane alone throws away a live sibling push and authorises writing over work in
+progress. Match the push against what **you** pushed this run — branch and sha — not against the
+prefix. Absent that record, treat the push as someone else's —
 the same asymmetry used elsewhere, since wrongly claiming a push costs a collision while wrongly
 disclaiming one costs a delay. The survey reports the branch's lane alongside the push age so this
 needs no re-derivation; the discount itself is yours to apply, because only you know what you created.
