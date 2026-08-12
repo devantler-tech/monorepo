@@ -412,6 +412,15 @@ run_guard "$f" && rc=0 || rc=$?
 report "KNOWN LIMIT: an UNNESTED substitution containing a quoted ')' is not detected either" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
+# ...and the OPENING delimiter, because the class excludes both. An earlier
+# version of the documented boundary named only the closing one, which described
+# the regex as more capable than it is.
+f="$(mkscript "assign-open-paren-substitution-KNOWN-LIMIT.sh" \
+  "printf '%s' \"\$v\" | A=\$(printf '(') grep -q NEEDLE")"
+run_guard "$f" && rc=0 || rc=$?
+report "KNOWN LIMIT: a quoted OPENING '(' inside a substitution is not detected either" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
 # Double quotes DO honour backslash escapes, so `\"` is a literal quote and does
 # not end the fragment — the space after it is still inside the quoted value.
 f="$(mkscript "assign-escaped-dquote.sh" \

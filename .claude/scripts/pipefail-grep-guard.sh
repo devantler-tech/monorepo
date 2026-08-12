@@ -326,10 +326,15 @@ _SQ=\'
 # constant that fixes it: extending the character classes just moves which
 # spelling escapes, which is how four consecutive rounds went.
 #
-# So what is supported is: an expansion whose content contains **no** closing
-# delimiter of its own kind, in any context. Everything else reads as no-match,
-# which is a SILENT PASS — see monorepo#2797, which replaces the layer with a
-# tokenizer. Do not spend a round extending this; extend the issue instead.
+# So what is supported is: an expansion whose content contains **NEITHER
+# delimiter of its own kind — opening OR closing** — in any context. The classes
+# below exclude both (`[^()]`, `[^{}]`), so `A=$(printf '(')` escapes exactly as
+# `A=$(printf ')')` does. Stating only the closing one was the third version of
+# this boundary to be too generous, which is itself the argument: each attempt to
+# describe what a regex accepts here has been narrower in reality than in prose.
+# Everything outside it reads as no-match, which is a SILENT PASS — see
+# monorepo#2797, which replaces the layer with a tokenizer. Do not spend a round
+# extending this; extend the issue instead.
 _ASSIGN_VALUE='("([^"\\]|\\.)*"|\$'"$_SQ"'([^'"$_SQ"'\\]|\\.)*'"$_SQ"'|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|\$\([^()]*\)|`[^`]*`|\$\{[^{}]*\}|([^[:space:]"'"$_SQ"'\\]|\\.)+)+'
 PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*='"$_ASSIGN_VALUE"'|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
 unset _SQ _ASSIGN_VALUE
