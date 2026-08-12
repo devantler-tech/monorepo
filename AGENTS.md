@@ -1765,19 +1765,28 @@ usually opens a PR ready for review, not as a draft.** Every other author here r
 promotion, so hanging the condition on that step is safe for them and vacuous for a stranger: a
 non-draft external PR would pass a preflight that reads only `isDraft:false`, `CLEAN`, findings and
 review state, and merge without anyone ever observing its behaviour. That is precisely the case where
-observation matters most. So for **every** external PR, draft or not, the recorded CI-based evaluation
-above is required before the merge, and a `CLEAN` preflight does not substitute for it. Where no check
-exercises the change, there is nothing to read: name that as the blocker and park it, or add the
-coverage that would exercise it.
+observation matters most. So for **every** external PR, draft or not, the recorded evaluation above is
+required before the merge, and a `CLEAN` preflight does not substitute for it. Where the change has a
+reachable code path but no check exercises it, there is nothing to read: name that as the blocker and
+park it, or add the coverage that would exercise it.
 A pipeline that only builds and lints observes nothing, so it never satisfies this condition on its own
 (the *Verify it actually WORKS* distinction, unchanged).
 
-**When no check reaches the behaviour, that is a blocker to name — never a condition to wave.** The
-honest terminal state is then **parked on a named blocker**: say so on the PR and ask the contributor
-for the missing coverage. The two wrong moves are promoting on a build-only green and reaching for the
-local execution the guardrail forbids. Writing the missing check **yourself, on your own branch against
-`main`**, is legitimate and often the best answer — it is your code rather than theirs, and once it
-merges the contribution becomes observable.
+⚠️ **"No check exercises it" is NOT the same as "there is nothing to exercise" — and the preflight's
+no-runtime-surface carve-out applies here too.** *Autonomy*'s third readiness condition already exempts
+a change with **no exercisable runtime surface** (pure docs or config consumed elsewhere), and that
+exemption is not suspended by the author being external: a stranger's typo fix cannot grow behavioural
+coverage, so demanding it would park that PR class **permanently** rather than protect anything. For
+that class the record attests the equivalent **static** evaluation — trace the change to what consumes
+it, state that it has no runtime surface and why — on the same author bind. Anything with a reachable
+code path still owes the CI reading.
+
+**When a change HAS a reachable code path and no check reaches it, that is a blocker to name — never a
+condition to wave.** The honest terminal state is then **parked on a named blocker**: say so on the PR
+and ask the contributor for the missing coverage. The two wrong moves are promoting on a build-only
+green and reaching for the local execution the guardrail forbids. Writing the missing check
+**yourself, on your own branch against `main`**, is legitimate and often the best answer — it is your
+code rather than theirs, and once it merges the contribution becomes observable.
 
 **Automation-owned Renovate/Dependabot PRs stay excluded** — that carve-out (maintainer direction
 2026-07-16) is an ownership boundary rather than a hygiene gap, because touching those branches changes
