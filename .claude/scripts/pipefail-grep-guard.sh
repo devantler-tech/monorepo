@@ -295,10 +295,21 @@ early_exit_flag() {
 # or a run of bare characters. `_SQ` exists because the pattern lives in a
 # single-quoted string and cannot hold a bare `'`.
 _SQ=\'
-# A BARE fragment may also carry a backslash-escaped character, including an
-# escaped space — `LC_ALL=C\ UTF-8` is one word. So the bare run is "characters
-# that are not space, quote or backslash, OR a backslash followed by anything".
-_ASSIGN_VALUE='("[^"]*"|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|([^[:space:]"'"$_SQ"'\]|\\.)+)+'
+# The four fragment forms a shell assignment value can take, written out ONCE
+# from the actual quoting rules rather than added one at a time as each is
+# reported. Four consecutive review rounds found four shapes of this same grammar
+# (quoted value, mixed fragments, escaped space, escaped quote), each fix shaped
+# by the example that exposed it and survived by the next — so this enumerates
+# the rules instead. Every line below was confirmed by RUNNING it, not read off a
+# manual:
+#   "…"    double quotes DO honour backslash escapes   ->  A="x\" y"   is  x" y
+#   $'…'   ANSI-C quoting DOES honour escapes          ->  $'x\' y'    is  x' y
+#   '…'    single quotes do NOT — a backslash is       ->  B='x\" y'   is  x\" y
+#          LITERAL, so `[^']*` is CORRECT here and
+#          "fixing" it to match the others would be
+#          wrong. Asymmetry on purpose.
+#   bare   backslash escapes work                      ->  C=x\ y      is  x y
+_ASSIGN_VALUE='("([^"\\]|\\.)*"|\$'"$_SQ"'([^'"$_SQ"'\\]|\\.)*'"$_SQ"'|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|([^[:space:]"'"$_SQ"'\\]|\\.)+)+'
 PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*='"$_ASSIGN_VALUE"'|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
 unset _SQ _ASSIGN_VALUE
 

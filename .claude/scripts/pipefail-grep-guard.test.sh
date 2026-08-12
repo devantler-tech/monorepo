@@ -371,6 +371,31 @@ run_guard "$f" && rc=0 || rc=$?
 report "a mixed quoted/unquoted assignment value does not hide the grep" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# Double quotes DO honour backslash escapes, so `\"` is a literal quote and does
+# not end the fragment — the space after it is still inside the quoted value.
+f="$(mkscript "assign-escaped-dquote.sh" \
+  'printf "%s" "$v" | A="x\" y" grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "an escaped double quote inside a quoted assignment value does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# ANSI-C quoting also honours escapes. Not reported by a reviewer — covered because
+# enumerating the quoting rules is what stops the next shape of this class.
+f="$(mkscript "assign-ansi-c-quoting.sh" \
+  "printf '%s' \"\$v\" | A=\$'x\\' y' grep -q NEEDLE")"
+run_guard "$f" && rc=0 || rc=$?
+report "an ANSI-C quoted assignment value does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# ...and the deliberate ASYMMETRY: single quotes do NOT honour escapes — a
+# backslash inside them is literal — so `[^']*` is correct and must not be
+# "fixed" to match the others. This pins that the single-quoted form still works.
+f="$(mkscript "assign-single-quote-literal-backslash.sh" \
+  "printf '%s' \"\$v\" | B='x\\\" y' grep -q NEEDLE")"
+run_guard "$f" && rc=0 || rc=$?
+report "a literal backslash inside a single-quoted assignment value still reaches the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
 # A bare fragment may also carry a backslash-escaped character, including an
 # escaped SPACE — `LC_ALL=C\ UTF-8` is a single word.
 f="$(mkscript "assign-escaped-space.sh" \
