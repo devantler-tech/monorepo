@@ -39,6 +39,7 @@ jobs:
       worktree-claim: ${{ steps.filter.outputs.worktree-claim }}
       renovate-dashboard: ${{ steps.filter.outputs.renovate-dashboard }}
       comment-disclosure-drift: ${{ steps.filter.outputs.comment-disclosure-drift }}
+      pr-ownership-disclosure: ${{ steps.filter.outputs.pr-ownership-disclosure }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,6 +131,17 @@ jobs:
               - '.claude/scripts/comment-disclosure-drift.sh'
               - '.claude/scripts/comment-disclosure-drift.test.sh'
               - '.claude/scripts/comment-disclosure-drift-go/**'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            pr-ownership-disclosure:
+              # AGENTS.md carries the ownership-marker rules this classifier
+              # implements, so a PR editing only those rules must still run the
+              # job — otherwise the changed contract ships unchecked.
+              - 'AGENTS.md'
+              - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/scripts/pr-ownership-disclosure.sh'
+              - '.claude/scripts/pr-ownership-disclosure-go/**'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -248,6 +260,10 @@ jobs:
               - '.claude/scripts/portfolio-surveyor.test.sh'
               - '.claude/scripts/programmed-bot-review-exemption.sh'
               - '.claude/skill-ownership-allowlist.tsv'
+              # The contract test asserts the ownership classifier exists and
+              # pins the matcher rules, so a change to it must re-run the test.
+              - '.claude/scripts/pr-ownership-disclosure.sh'
+              - '.claude/scripts/pr-ownership-disclosure-go/**'
               - '.github/workflows/ci.yaml'
             product-value:
               - 'AGENTS.md'
@@ -614,6 +630,26 @@ jobs:
       - name: Verify the comment disclosure drift guard
         run: bash .claude/scripts/comment-disclosure-drift.test.sh
 
+  test-pr-ownership-disclosure:
+    name: Test PR ownership disclosure classifier
+    needs: changes
+    if: needs.changes.outputs.pr-ownership-disclosure == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/pr-ownership-disclosure-go/go.mod
+          cache: false
+      - name: Verify the PR ownership disclosure classifier
+        run: go -C .claude/scripts/pr-ownership-disclosure-go test ./...
+
   test-memory-hygiene:
     name: Test memory hygiene guard
     needs: changes
@@ -784,6 +820,7 @@ jobs:
       - test-agent-telemetry
       - test-board-add
       - test-comment-disclosure-drift
+      - test-pr-ownership-disclosure
       - test-worktree-claim
       - test-flow-scorecard
       - test-safe-clone
@@ -814,6 +851,7 @@ jobs:
             ${{ needs.test-agent-telemetry.result }}
             ${{ needs.test-board-add.result }}
             ${{ needs.test-comment-disclosure-drift.result }}
+            ${{ needs.test-pr-ownership-disclosure.result }}
             ${{ needs.test-worktree-claim.result }}
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}

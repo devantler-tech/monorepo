@@ -1,0 +1,6 @@
+# `go build ./...` in this directory writes a binary named after the module.
+# The wrapper always compiles a fresh temporary binary from source, so this
+# artifact is never used — and it is a ~3.5 MiB platform-specific executable that
+# Linux CI cannot run. Ignore it so a `git add` of this directory cannot sweep it
+# into the tree.
+/pr-ownership-disclosure
