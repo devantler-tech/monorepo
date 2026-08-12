@@ -584,6 +584,14 @@ report "the finding names the offending flag" \
   "$(yn grep -q 'grep -q stops at the first match' <<<"$out")" "out=$out"
 report "the finding tells the reader what to write instead" \
   "$(yn grep -q 'fix: feed grep without a pipe' <<<"$out")" "out=$out"
+# ...and the replacement it names must not silently drop the producer's exit
+# status. Measured: the piped form returns the producer's 42, `< <(cmd)` returns
+# 0 for the same producer, and the capture form returns 42. Asserted against the
+# SAME output as the two reports above, so all four pin one message.
+report "the fix line offers the form that keeps the producer's status" \
+  "$(yn grep -q 'out="$(cmd)" then <<<"$out"' <<<"$out")" "out=$out"
+report "the fix line warns that process substitution discards that status" \
+  "$(yn grep -q 'DISCARDS the producer status' <<<"$out")" "out=$out"
 
 # ---------------------------------------------------------------------------
 # 2f. Where the command actually ENDS, and what is code rather than data.
@@ -610,6 +618,15 @@ clean_case "an attached semicolon ends the command before the next one's flags" 
   'printf "%s" "$v" | grep MATCH; sort -m /dev/null'
 clean_case "an attached && does the same" \
   'printf "%s" "$v" | grep MATCH&& sort -m /dev/null'
+# `|` ends a command exactly as `;` and `&` do. Listing only two of the three let
+# the same rule reach opposite verdicts on the two spellings.
+clean_case "an attached pipe ends it too, like its ; twin" \
+  'printf "%s" "$v" | grep MATCH| sort -q x'
+# The separator characters are DATA once quoted, and a second copy of this rule
+# further down the walk disagreed: quote removal ran first, so the bare `;`
+# matched an operator arm and the walk returned clean over a real early exit.
+flag_case "a quoted separator as the whole pattern does not end the command" \
+  "printf \"%s\" \"\$v\" | grep ';' -q"
 flag_case "...but an early exit BEFORE that separator is still reported" \
   'printf "%s" "$v" | grep -q MATCH; sort -m /dev/null'
 # Its control: an operator INSIDE quotes is an ordinary character, so the walk
@@ -705,15 +722,10 @@ out="$("$guard" "$f" 2>&1)" && rc=0 || rc=$?
 report "both offenders on one logical line are reported, not just the first" \
   "$(yn test "$(grep -c 'stops at the first match' <<<"$out")" -eq 2)" "rc=$rc out=$out"
 
-# The remediation must not hand the reader a replacement that silently drops the
-# producer's exit status. Measured: the piped form returns the producer's 42, and
-# `< <(cmd)` returns 0 for the same producer.
-f="$(mkscript "message-capture.sh" 'printf "%s" "$v" | grep -q NEEDLE')"
-out="$("$guard" "$f" 2>&1)" && rc=0 || rc=$?
-report "the fix line offers the form that keeps the producer's status" \
-  "$(yn grep -q 'out="$(cmd)" then <<<"$out"' <<<"$out")" "out=$out"
-report "the fix line warns that process substitution discards that status" \
-  "$(yn grep -q 'DISCARDS the producer status' <<<"$out")" "out=$out"
+# Two offenders on one logical line share a file:line and a flag, so the report
+# must name which grep each finding is about.
+report "each finding names the offending fragment, so a pair is distinguishable" \
+  "$(yn test "$(grep -c 'stops at the first match (in `' <<<"$out")" -eq 2)" "out=$out"
 
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2

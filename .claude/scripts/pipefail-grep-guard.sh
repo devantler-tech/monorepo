@@ -217,28 +217,52 @@ heredoc_delimiter() {
 # This is what keeps heredoc skipping from becoming a fail-open in the executable
 # scan: an opener pattern also matches a left shift, and a mis-detected one with
 # no terminator would otherwise suppress every remaining line of the file.
+# Sets HEREDOC_END to the terminator's index and returns 0; returns 1 when the
+# body never closes. Handing back the index it just found lets the caller jump
+# the body rather than re-matching the terminator regex on every line of it.
+HEREDOC_END=-1
 heredoc_terminates() {
   local from="$1" term="$2" k
+  HEREDOC_END=-1
   for ((k = from + 1; k < n; k++)); do
-    [[ "${lines[k]}" =~ ^[[:space:]]*"$term"[[:space:]]*$ ]] && return 0
+    if is_heredoc_terminator "${lines[k]}" "$term"; then
+      HEREDOC_END=$k
+      return 0
+    fi
   done
   return 1
 }
 
+# True when line $1 is the terminator for delimiter $2. The terminator sits on a
+# line of its own, optionally indented — `<<-` strips leading TABS and a plain
+# `<<` requires column 0, but accepting either only ends the body SOONER, which
+# resumes scanning and is the safe direction.
+#
+# One definition for all three callers: the two body-skipping loops below and the
+# lookahead above. Splitting it let the reasoning above live at one site while
+# the other copies read as unexplained.
+is_heredoc_terminator() {
+  [[ "$1" =~ ^[[:space:]]*"$2"[[:space:]]*$ ]]
+}
+
 early_exit_flag() {
-  local rest="$1" tok raw skip_next=0 letters i ch mval want_mval=0 was_quoted had_noglob=0
+  local rest="$1" tok skip_next=0 letters i ch mval want_mval=0 was_quoted
   # The split below wants WORD SPLITTING but not PATHNAME EXPANSION. Unquoted
   # `$rest` gets both, so a pattern like `grep *.log -q` would expand against the
   # working directory: with matching files the flag survives at a different
   # index, and with none bash leaves the word alone — so the walk's input depends
-  # on the caller's cwd. Disable globbing across the split and restore it.
-  [[ $- == *f* ]] && had_noglob=1
+  # on the caller's cwd. The only caller runs this in a command substitution, so
+  # the option dies with the subshell and needs no restore.
   set -f
   # shellcheck disable=SC2086 # deliberate word splitting: rest is an argv tail
   set -- $rest
-  ((had_noglob)) || set +f
-  for raw in "$@"; do
-    tok="$raw"
+  # THE THREE PRE-CHECKS BELOW ARE ORDER-DEPENDENT IN OPPOSITE DIRECTIONS — do
+  # not reorder them without re-reading this. The comment test must run BEFORE
+  # quote removal (`grep "#p" -q` passes #p as the PATTERN, so its -q is a real
+  # early exit, and stripping first would read the word as a comment and return
+  # clean); the separator test must run AFTER it, because it needs to know
+  # whether the word was quoted.
+  for tok in "$@"; do
     # A syntactic comment ends the command's arguments. `grep MATCH # keep -q`
     # is a plain grep that reads its input to the end, but walking past the
     # operand let the `-q` inside the comment read as an option and the guard
@@ -259,7 +283,22 @@ early_exit_flag() {
     # is not grep's. Only an UNQUOTED separator ends it: inside quotes the
     # character is data (`grep "a;b" -q`), and treating that as a terminator
     # would stop before a real `-q` and fail open.
-    if ((was_quoted == 0)) && [[ "$tok" == *[\;\&]* ]]; then
+    #
+    # `|` belongs in this class for the same reason `;` and `&` do. Listing only
+    # two of the three made the rule contradict itself: `… | grep MATCH; sort -q x`
+    # read clean while `… | grep MATCH| sort -q x` was reported, though bash ends
+    # the command identically in both.
+    #
+    # ⚠️ RESIDUAL, stated rather than papered over, and NOT to be closed by adding
+    # more spellings here. `was_quoted` is a quoting model bolted onto a splitter
+    # that has none: it only sees quotes that begin and end one whitespace-free
+    # word, so `grep "a ;b" -q`, `grep a\;b -q` and `grep $'a;b' -q` all read the
+    # separator as unquoted and stop before a real `-q`. This is the same trap the
+    # _ASSIGN_VALUE block below records — extending the character classes just
+    # moves which spelling escapes. Deciding it needs one pass that tracks quote
+    # state and emits (word, quoted?) pairs, which is monorepo#2797; add spellings
+    # to that issue, not to this line.
+    if ((was_quoted == 0)) && [[ "$tok" == *[\;\&\|]* ]]; then
       return 1
     fi
     # The previous option named -m/--max-count without an attached value, so this
@@ -279,13 +318,13 @@ early_exit_flag() {
       continue
     fi
     case "$tok" in
-      # A shell operator ENDS this grep's command. Everything after it belongs to
-      # a different command, and reading its flags as grep's produced a false
-      # POSITIVE: in `printf 'MATCH\n' | grep MATCH && sort -m /dev/null` the
-      # grep reads its input to completion and is perfectly safe, but the walk
-      # ran on into `sort -m` and reported an early exit that cannot happen.
-      # `--` still terminates option parsing; these terminate the command.
-      '&&' | '||' | ';' | ';;' | '|' | '|&' | '&') return 1 ;;
+      # `--` ends option parsing. There is deliberately NO arm for the shell
+      # operators here: the unquoted-separator test above owns them whether or not
+      # whitespace surrounds them, and a second copy did not merely duplicate the
+      # rule — it inverted it on quoted input. `… | grep ';' -q` reaches this case
+      # as the bare `;` (quote removal ran first), matched an operator arm, and
+      # returned CLEAN over a real early exit, while the test above had correctly
+      # treated the quoted character as data.
       --) return 1 ;;
       --quiet | --silent | --files-with-matches)
         printf '%s' "$tok"
@@ -456,13 +495,10 @@ scan_file() {
   # data is a fail-open reachable by anyone who can add a heredoc. Track heredoc
   # bodies and skip them. Anything unrecognised stays scanned, so a parsing gap
   # here costs a missed exemption (safe) rather than a missed hazard.
-  local hd_term="" hd_scan=""
+  local hd_term="" hd_end=-1
   for ((i = 0; i < n; i++)); do
     if [[ -n "$hd_term" ]]; then
-      # The terminator is matched on its own line, optionally indented — `<<-`
-      # strips leading TABS, and a plain `<<` requires column 0, but accepting
-      # either only ends the body sooner, which resumes scanning.
-      [[ "${lines[i]}" =~ ^[[:space:]]*"$hd_term"[[:space:]]*$ ]] && hd_term=""
+      is_heredoc_terminator "${lines[i]}" "$hd_term" && hd_term=""
       continue
     fi
     if heredoc_delimiter "${lines[i]}"; then
@@ -477,10 +513,7 @@ scan_file() {
     # allow-file prepass already skipped it; this scan did not, so a script that
     # emits documentation or a fixture containing `producer | grep -q MATCH`
     # failed the required job over a line that cannot exhibit the hazard.
-    if [[ -n "$hd_scan" ]]; then
-      [[ "${lines[i]}" =~ ^[[:space:]]*"$hd_scan"[[:space:]]*$ ]] && hd_scan=""
-      continue
-    fi
+    ((i <= hd_end)) && continue
     # Note the opening line is still scanned below rather than skipped: it holds
     # real code before the `<<`, and a pipeline there is a genuine hazard.
     #
@@ -492,7 +525,7 @@ scan_file() {
     # form: over-detecting there costs at most a MISSED EXEMPTION, which is safe,
     # while under-detecting is what let a payload line pass as the directive.
     if heredoc_delimiter "${lines[i]}" && heredoc_terminates "$i" "$HEREDOC_TERM"; then
-      hd_scan="$HEREDOC_TERM"
+      hd_end=$HEREDOC_END
     fi
 
     probe="${lines[i]}"
@@ -572,28 +605,28 @@ scan_file() {
 
     [[ "$probe" =~ $PIPE_GREP_RE ]] || continue
 
-    # Re-walk every pipe-into-grep on the probe, not just the first: one line
-    # can carry two of them (`… | grep -q A && … | grep -q B`).
+    # Re-walk every pipe-into-grep on the probe, and REPORT every one of them:
+    # one line can carry two (`… | grep -q A && … | grep -q B`), and stopping at
+    # the first made the developer fix it, rerun CI, and only then discover the
+    # second edit this blocking check requires.
     local tail_="$probe" head_ rest flag
     while [[ "$tail_" =~ $PIPE_GREP_RE ]]; do
       head_="${BASH_REMATCH[0]}"
       rest="${tail_#*"$head_"}"
       if flag="$(early_exit_flag "$rest")"; then
         printf '%s:%d: %s\n' "$file" "$((start + 1))" "$(sed 's/^[[:space:]]*//' <<<"${lines[start]}")"
-        printf '    grep %s stops at the first match; the writer dies of SIGPIPE and pipefail reports THAT.\n' "$flag"
-        # `< <(cmd)` is NOT an unconditional replacement: process substitution
-        # does not surface the producer's status, so `{ printf …; exit 42; } |
-        # grep -q P` returns 42 under pipefail while the redirect form returns 0
-        # and silently accepts the failure. Where the assertion was validating
-        # BOTH production and matching, that swap weakens it — so name the
-        # producer check rather than recommending the swap bare.
+        # Name the offending fragment. Two offenders on one logical line share a
+        # file:line and a flag, so without it the pair prints as two identical
+        # blocks and the reader cannot tell them apart — or tell a genuine pair
+        # from the same finding reported twice.
+        printf '    grep %s stops at the first match (in `%s`); the writer dies of SIGPIPE and pipefail reports THAT.\n' \
+          "$flag" "$(sed 's/^[[:space:]]*//' <<<"$head_")"
+        # Why the capture form leads and process substitution carries a caveat:
+        # see THE FIX THIS GUARD ASKS FOR in the header, which records the three
+        # measured exit codes.
         printf '    fix: feed grep without a pipe — grep %s PAT <<<"$var", or out="$(cmd)" then <<<"$out", or from a file.\n' "$flag"
-        printf '    (< <(cmd) also removes the pipe but DISCARDS the producer status, so it can weaken the assertion.)\n'
-        printf '    with < <(cmd), check the producer separately: it exits 0 even when cmd fails.\n'
+        printf '    note: < <(cmd) removes the pipe too, but DISCARDS the producer status — check it separately.\n'
         findings=$((findings + 1))
-        # Do NOT stop at the first match. One logical line can carry two
-        # offenders (`… | grep -q A && … | grep -q B`), and reporting only the
-        # first makes the developer fix, rerun CI, and discover the second.
       fi
       tail_="$rest"
     done
