@@ -585,6 +585,123 @@ report "the finding names the offending flag" \
 report "the finding tells the reader what to write instead" \
   "$(yn grep -q 'fix: feed grep without a pipe' <<<"$out")" "out=$out"
 
+# ---------------------------------------------------------------------------
+# 2f. Where the command actually ENDS, and what is code rather than data.
+#     Every case below was reported as a live defect and reproduced by running
+#     the pipeline before it was fixed, so each keeps its twin: the fail-OPEN
+#     ones must still flag, and the false-POSITIVE ones must still pass.
+# ---------------------------------------------------------------------------
+# Bash removes the quotes, so grep receives the ordinary -q option. Measured:
+# both spellings exit 141 on a matching pipeline, and the walk read `"-q"` as an
+# operand and called it clean.
+flag_case "a QUOTED early-exit option is still that option" \
+  'printf "%s" "$v" | grep "-q" NEEDLE'
+flag_case "a single-quoted early-exit option too" \
+  "printf \"%s\" \"\$v\" | grep '-q' NEEDLE"
+# Its control: quote removal must not promote a value-consumed word to a flag.
+# `-e` takes the next word, so the `-q` here is grep's PATTERN and the grep reads
+# its input to the end.
+clean_case "a quoted -q consumed by -e is a pattern, not a flag" \
+  'printf "%s" "$v" | grep -e "-q" "$file"'
+
+# Bash operators need no surrounding whitespace, so the walk ran past `MATCH;`
+# into the NEXT command and read its flags as grep's.
+clean_case "an attached semicolon ends the command before the next one's flags" \
+  'printf "%s" "$v" | grep MATCH; sort -m /dev/null'
+clean_case "an attached && does the same" \
+  'printf "%s" "$v" | grep MATCH&& sort -m /dev/null'
+flag_case "...but an early exit BEFORE that separator is still reported" \
+  'printf "%s" "$v" | grep -q MATCH; sort -m /dev/null'
+# Its control: an operator INSIDE quotes is an ordinary character, so the walk
+# must keep going and still see the option that follows.
+flag_case "a semicolon inside the pattern does not end the command" \
+  'printf "%s" "$v" | grep "a;b" -q'
+
+# A trailing comment is prose, not argv. Warning a reader off `-q` in a comment
+# made this required check reject the safe line that comment describes.
+clean_case "a trailing comment mentioning -q is not an option" \
+  'printf "%s" "$v" | grep MATCH # do not replace this with -q'
+flag_case "...but a real early exit carrying a trailing comment still flags" \
+  'printf "%s" "$v" | grep -q MATCH # intentional'
+# Its control: a `#` that OPENS a quoted pattern is not a comment introducer.
+flag_case "a hash inside the pattern does not start a comment" \
+  'printf "%s" "$v" | grep "#p" -q'
+
+# A heredoc body is the script's OUTPUT. Scanning it as code made every
+# documentation- or fixture-generating script demand a suppression.
+f="$(mkscript "heredoc-payload.sh" \
+  'cat <<DOC' \
+  'producer | grep -q MATCH' \
+  'DOC')"
+run_guard "$f" && rc=0 || rc=$?
+report "clean: a heredoc payload is data, not a pipeline that runs" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# Its control, and the reason the terminator must be FOUND before anything is
+# masked: `<<` also appears as a left shift, and over-detecting an opener would
+# hide real code from a required check. No line equals `bits`, so nothing is
+# masked and the hazard below is still reported.
+f="$(mkscript "shift-not-heredoc.sh" \
+  'width=$(( total << bits ))' \
+  'printf "%s" "$v" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "an unterminated <<word is not a heredoc, so the code after it is still scanned" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# ...and code after a heredoc that DOES terminate is scanned normally.
+f="$(mkscript "code-after-heredoc.sh" \
+  'cat <<DOC' \
+  'just text' \
+  'DOC' \
+  'printf "%s" "$v" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "code after a closed heredoc is still scanned" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# The identifier-only opener pattern read `<<'---'` as no heredoc at all, so its
+# payload was honoured as the whole-file directive and the real hazard below it
+# went unreported — the same fail-open the heredoc tracking exists to close.
+f="$(mkscript "punctuation-heredoc-delimiter.sh" \
+  "cat <<'---'" \
+  '# pipefail-grep-guard: allow-file — payload, not a directive' \
+  '---' \
+  'printf "%s" "$v" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "a punctuation heredoc delimiter still hides its payload from the directive" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# A here-string has no body, so it must never open one. The fixture is built so
+# that dropping the exclusion is not merely harmless: the here-string's value
+# ALSO appears as a lone line further down, so the terminator search succeeds and
+# the pipeline between them is masked as payload. Without that coincidence the
+# terminator rule masks the mistake and the assertion passes either way — which
+# is the whole reason this case is spelled out rather than written the obvious
+# way round.
+f="$(mkscript "here-string-not-heredoc.sh" \
+  'grep -q NEEDLE <<<"EOF"' \
+  'printf "%s" "$v" | grep -q NEEDLE' \
+  'EOF')"
+run_guard "$f" && rc=0 || rc=$?
+report "a here-string opens no heredoc, so the code below it is still scanned" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# Reporting only the first offender on a logical line costs the reader a whole
+# CI round to discover the second edit this blocking check requires.
+f="$(mkscript "two-on-one-line.sh" 'printf A | grep -q A && printf B | grep -q B')"
+out="$("$guard" "$f" 2>&1)" && rc=0 || rc=$?
+report "both offenders on one logical line are reported, not just the first" \
+  "$(yn test "$(grep -c 'stops at the first match' <<<"$out")" -eq 2)" "rc=$rc out=$out"
+
+# The remediation must not hand the reader a replacement that silently drops the
+# producer's exit status. Measured: the piped form returns the producer's 42, and
+# `< <(cmd)` returns 0 for the same producer.
+f="$(mkscript "message-capture.sh" 'printf "%s" "$v" | grep -q NEEDLE')"
+out="$("$guard" "$f" 2>&1)" && rc=0 || rc=$?
+report "the fix line offers the form that keeps the producer's status" \
+  "$(yn grep -q 'out="$(cmd)" then <<<"$out"' <<<"$out")" "out=$out"
+report "the fix line warns that process substitution discards that status" \
+  "$(yn grep -q 'DISCARDS the producer status' <<<"$out")" "out=$out"
+
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2
   exit 1

@@ -57,9 +57,23 @@
 #
 # THE FIX THIS GUARD ASKS FOR
 #   Feed grep without a pipe, so there is no writer to kill:
-#     grep -q PAT <<<"$var"          # value already in a variable
-#     grep -q PAT < <(cmd)           # output of a command
-#     grep -q PAT file               # a file
+#     grep -q PAT <<<"$var"                  # value already in a variable
+#     out="$(cmd)"; grep -q PAT <<<"$out"    # output of a command
+#     grep -q PAT file                       # a file
+#
+#   `grep -q PAT < <(cmd)` also removes the pipe, but it is the one replacement
+#   that CHANGES WHAT THE ASSERTION COVERS: a process substitution's exit status
+#   is reported nowhere, so a producer that fails is silently accepted. Measured
+#   on this host, needle present in every case:
+#
+#     { printf 'MATCH\n'; exit 42; } | grep -q MATCH          ->  42
+#     grep -q MATCH < <({ printf 'MATCH\n'; exit 42; })       ->   0
+#     out="$({ printf 'MATCH\n'; exit 42; })"                 ->  42
+#
+#   A pipeline that was validating BOTH successful production and a match keeps
+#   both only in the capture form, which is why that is what the finding prints.
+#   Reach for process substitution where the producer's status genuinely does not
+#   matter, or where it is checked separately.
 #
 # SCOPE
 #   Every tracked shell script, not only the ones that set pipefail themselves.
@@ -193,6 +207,21 @@ heredoc_delimiter() {
     HEREDOC_TERM="${BASH_REMATCH[1]}"
     return 0
   fi
+  return 1
+}
+
+# True when a line reading exactly $2 appears after index $1, i.e. the heredoc
+# opened there actually CLOSES. `lines` and `n` are the caller's, as elsewhere in
+# this file.
+#
+# This is what keeps heredoc skipping from becoming a fail-open in the executable
+# scan: an opener pattern also matches a left shift, and a mis-detected one with
+# no terminator would otherwise suppress every remaining line of the file.
+heredoc_terminates() {
+  local from="$1" term="$2" k
+  for ((k = from + 1; k < n; k++)); do
+    [[ "${lines[k]}" =~ ^[[:space:]]*"$term"[[:space:]]*$ ]] && return 0
+  done
   return 1
 }
 
@@ -454,7 +483,17 @@ scan_file() {
     fi
     # Note the opening line is still scanned below rather than skipped: it holds
     # real code before the `<<`, and a pipeline there is a genuine hazard.
-    heredoc_delimiter "${lines[i]}" && hd_scan="$HEREDOC_TERM"
+    #
+    # Only a heredoc whose terminator actually EXISTS suppresses anything here.
+    # `<<` is also a left shift, and `width=$(( total << bits ))` matches the
+    # opener pattern while naming no terminator — so an unconditional skip ran to
+    # end of file and hid every pipeline below it, which is a fail-OPEN on a
+    # required check. The prepass above deliberately keeps the unconditional
+    # form: over-detecting there costs at most a MISSED EXEMPTION, which is safe,
+    # while under-detecting is what let a payload line pass as the directive.
+    if heredoc_delimiter "${lines[i]}" && heredoc_terminates "$i" "$HEREDOC_TERM"; then
+      hd_scan="$HEREDOC_TERM"
+    fi
 
     probe="${lines[i]}"
     start=$i
@@ -548,7 +587,8 @@ scan_file() {
         # and silently accepts the failure. Where the assertion was validating
         # BOTH production and matching, that swap weakens it — so name the
         # producer check rather than recommending the swap bare.
-        printf '    fix: feed grep without a pipe — grep %s PAT <<<"$var", or from a file.\n' "$flag"
+        printf '    fix: feed grep without a pipe — grep %s PAT <<<"$var", or out="$(cmd)" then <<<"$out", or from a file.\n' "$flag"
+        printf '    (< <(cmd) also removes the pipe but DISCARDS the producer status, so it can weaken the assertion.)\n'
         printf '    with < <(cmd), check the producer separately: it exits 0 even when cmd fails.\n'
         findings=$((findings + 1))
         # Do NOT stop at the first match. One logical line can carry two
