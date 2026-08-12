@@ -170,11 +170,69 @@ esac
 # runs. Only `--` ends option parsing.
 max_count_is_finite() { case "$1" in -*) return 1 ;; *) return 0 ;; esac; }
 
+# --- heredoc detection -----------------------------------------------------
+# Sets HEREDOC_TERM and returns 0 when the line opens a heredoc.
+#
+# A static delimiter is NOT restricted to identifiers: `cat <<'---'` is valid and
+# ends at a line reading `---`. An identifier-only pattern never entered heredoc
+# mode there, so the payload was scanned as code — which is a fail-OPEN in both
+# directions at once: a data line reading like the whole-file directive exempted
+# the real script, and a hazardous pipeline after the terminator went unreported.
+# So accept any quoted delimiter, and fall back to the unquoted identifier form.
+#
+# `<<<` is a HERE-STRING, not a heredoc, and opens no body — matching it would
+# swallow the rest of the file and hide every pipeline after it.
+HEREDOC_TERM=""
+heredoc_delimiter() {
+  local line="$1"
+  HEREDOC_TERM=""
+  [[ "$line" =~ \<\<\< ]] && return 1
+  if [[ "$line" =~ \<\<-?[[:space:]]*\'([^\']+)\' ]] ||
+    [[ "$line" =~ \<\<-?[[:space:]]*\"([^\"]+)\" ]] ||
+    [[ "$line" =~ \<\<-?[[:space:]]*([A-Za-z_][A-Za-z0-9_]*) ]]; then
+    HEREDOC_TERM="${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
 early_exit_flag() {
-  local rest="$1" tok skip_next=0 letters i ch mval want_mval=0
+  local rest="$1" tok raw skip_next=0 letters i ch mval want_mval=0 was_quoted had_noglob=0
+  # The split below wants WORD SPLITTING but not PATHNAME EXPANSION. Unquoted
+  # `$rest` gets both, so a pattern like `grep *.log -q` would expand against the
+  # working directory: with matching files the flag survives at a different
+  # index, and with none bash leaves the word alone — so the walk's input depends
+  # on the caller's cwd. Disable globbing across the split and restore it.
+  [[ $- == *f* ]] && had_noglob=1
+  set -f
   # shellcheck disable=SC2086 # deliberate word splitting: rest is an argv tail
   set -- $rest
-  for tok in "$@"; do
+  ((had_noglob)) || set +f
+  for raw in "$@"; do
+    tok="$raw"
+    # A syntactic comment ends the command's arguments. `grep MATCH # keep -q`
+    # is a plain grep that reads its input to the end, but walking past the
+    # operand let the `-q` inside the comment read as an option and the guard
+    # reported a hazard that does not exist.
+    [[ "$tok" == \#* ]] && return 1
+    # `set -- $rest` preserves quote CHARACTERS, so `grep "-q" MATCH` arrives as
+    # the literal `"-q"` and the walk read it as an operand — while bash removes
+    # the quotes and grep receives the ordinary option. That is a fail-OPEN: the
+    # real pipeline exits 141 under pipefail while the guard reported it clean.
+    # Strip one balanced layer, and remember that we did.
+    was_quoted=0
+    case "$tok" in
+      \"*\") tok="${tok#\"}" && tok="${tok%\"}" && was_quoted=1 ;;
+      \'*\') tok="${tok#\'}" && tok="${tok%\'}" && was_quoted=1 ;;
+    esac
+    # Bash operators do not need surrounding whitespace, so `grep MATCH; sort -m`
+    # splits into the operand `MATCH;` — the command ends there and `sort`'s `-m`
+    # is not grep's. Only an UNQUOTED separator ends it: inside quotes the
+    # character is data (`grep "a;b" -q`), and treating that as a terminator
+    # would stop before a real `-q` and fail open.
+    if ((was_quoted == 0)) && [[ "$tok" == *[\;\&]* ]]; then
+      return 1
+    fi
     # The previous option named -m/--max-count without an attached value, so this
     # word IS that value and decides whether grep stops early.
     if ((want_mval)); then
@@ -369,7 +427,7 @@ scan_file() {
   # data is a fail-open reachable by anyone who can add a heredoc. Track heredoc
   # bodies and skip them. Anything unrecognised stays scanned, so a parsing gap
   # here costs a missed exemption (safe) rather than a missed hazard.
-  local hd_term=""
+  local hd_term="" hd_scan=""
   for ((i = 0; i < n; i++)); do
     if [[ -n "$hd_term" ]]; then
       # The terminator is matched on its own line, optionally indented — `<<-`
@@ -378,14 +436,26 @@ scan_file() {
       [[ "${lines[i]}" =~ ^[[:space:]]*"$hd_term"[[:space:]]*$ ]] && hd_term=""
       continue
     fi
-    if [[ "${lines[i]}" =~ \<\<-?[[:space:]]*\'?\"?([A-Za-z_][A-Za-z0-9_]*)\'?\"? ]]; then
-      hd_term="${BASH_REMATCH[1]}"
+    if heredoc_delimiter "${lines[i]}"; then
+      hd_term="$HEREDOC_TERM"
       continue
     fi
     [[ "${lines[i]}" =~ $ALLOW_FILE_RE ]] && return 0
   done
 
   for ((i = 0; i < n; i++)); do
+    # A heredoc body is DATA the shell only prints, never code it runs. The
+    # allow-file prepass already skipped it; this scan did not, so a script that
+    # emits documentation or a fixture containing `producer | grep -q MATCH`
+    # failed the required job over a line that cannot exhibit the hazard.
+    if [[ -n "$hd_scan" ]]; then
+      [[ "${lines[i]}" =~ ^[[:space:]]*"$hd_scan"[[:space:]]*$ ]] && hd_scan=""
+      continue
+    fi
+    # Note the opening line is still scanned below rather than skipped: it holds
+    # real code before the `<<`, and a pipeline there is a genuine hazard.
+    heredoc_delimiter "${lines[i]}" && hd_scan="$HEREDOC_TERM"
+
     probe="${lines[i]}"
     start=$i
 
@@ -472,9 +542,18 @@ scan_file() {
       if flag="$(early_exit_flag "$rest")"; then
         printf '%s:%d: %s\n' "$file" "$((start + 1))" "$(sed 's/^[[:space:]]*//' <<<"${lines[start]}")"
         printf '    grep %s stops at the first match; the writer dies of SIGPIPE and pipefail reports THAT.\n' "$flag"
-        printf '    fix: feed grep without a pipe — grep %s PAT <<<"$var", or < <(cmd), or from a file.\n' "$flag"
+        # `< <(cmd)` is NOT an unconditional replacement: process substitution
+        # does not surface the producer's status, so `{ printf …; exit 42; } |
+        # grep -q P` returns 42 under pipefail while the redirect form returns 0
+        # and silently accepts the failure. Where the assertion was validating
+        # BOTH production and matching, that swap weakens it — so name the
+        # producer check rather than recommending the swap bare.
+        printf '    fix: feed grep without a pipe — grep %s PAT <<<"$var", or from a file.\n' "$flag"
+        printf '    with < <(cmd), check the producer separately: it exits 0 even when cmd fails.\n'
         findings=$((findings + 1))
-        break
+        # Do NOT stop at the first match. One logical line can carry two
+        # offenders (`… | grep -q A && … | grep -q B`), and reporting only the
+        # first makes the developer fix, rerun CI, and discover the second.
       fi
       tail_="$rest"
     done
