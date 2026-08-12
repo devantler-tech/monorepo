@@ -468,6 +468,17 @@ assert_prose 'Codex dispatched 161/161' \
   "cadence does not state the Codex control that makes the shortfall a lane asymmetry"
 assert_prose 'never time anything off' \
   "cadence does not tell a run to stop planning against the next scheduled tick"
+# A `per_task_limit` record is a per-MINUTE liveness sample of "a run is currently open",
+# not a per-slot drop record — so counting those records, raw or hour-bucketed, counts a
+# slot that merely started LATE as one that never ran. Measured 2026-08-12 over 164 slots:
+# 37 of 66 refused hours dispatched anyway. Without this distinction every run re-derives
+# the rate from the skip store and gets a different answer; four measurements across both
+# instances spanned 32.9%-58.3% doing exactly that. Pin the METHOD, not only the number,
+# or the wrong method comes back the next time someone re-measures.
+assert_prose 'liveness sample' \
+  "cadence does not say what a per_task_limit record actually samples"
+assert_prose 'delayed into the next hour' \
+  "cadence does not distinguish a delayed dispatch from a dropped one"
 # The superseded absolute. Left in place it reads as the operative rule, because it is
 # stated as a flat invariant while the correction reads as a caveat about it.
 refute_prose 'next scheduled tick is always one hour later' \
