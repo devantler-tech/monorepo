@@ -218,12 +218,15 @@ PORTFOLIO_DIR_RE=$(
 
 # True when the session store root is itself under an allowlisted path — then the
 # store contains only in-scope work by construction and needs no dir filtering.
+# The loop is fed by a redirect, not a pipe. Piping it into `grep -q` made grep
+# exit at the first `match` and killed the writer with SIGPIPE; `pipefail` then
+# reported the writer's death, so a store that IS in scope answered "no".
 store_root_in_scope() {
   local p
-  printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
-  | while IFS= read -r p; do
-      case "$CLAUDE_PROJECTS" in "$p"|"$p"/*) echo match ;; esac
-    done | grep -q match
+  while IFS= read -r p; do
+    case "$CLAUDE_PROJECTS" in "$p" | "$p"/*) return 0 ;; esac
+  done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
+  return 1
 }
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "MISSING-DEP: $1" >&2; return 1; }; }
@@ -1585,35 +1588,36 @@ session_files() {
 #      and the scorecard reports one agent while claiming to cover two.
 #      Matched narrowly (basename must equal the portfolio root's) rather than
 #      allowlisting all of $CODEX_HOME/worktrees, which could hold other repos.
+# The loop is fed by a redirect, not a pipe — see store_root_in_scope: piping
+# into `grep -q` under `pipefail` reports the SIGPIPE'd writer, so an in-scope
+# cwd was classified out of scope and that instance silently dropped.
 in_scope_cwd() {
-  local cwd="$1" p
+  local cwd="$1" p url
   [ -n "$cwd" ] || return 1
-  {
-    printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
-    | while IFS= read -r p; do
-        # Form 1: literally under an allowlisted path, at a component boundary.
-        case "$cwd" in "$p"|"$p"/*) echo match ;; esac
-        # Form 2: the Codex instance's own worktree of a portfolio repo. Basename
-        # alone is NOT sufficient — a professional repo checked out as
-        # `$CODEX_HOME/worktrees/<id>/monorepo` would match by name while being
-        # categorically out of scope. Confirm identity by the worktree's actual
-        # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
-        # no remote, not a repo): an unverifiable worktree is excluded.
-        case "$cwd" in
-          "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
-            [ -d "$cwd" ] || continue
-            url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || continue
-            # Anchor the HOST, not a substring: `*github.com/org/*` also matches
-            # `https://notgithub.com/org/…` and internal mirrors that merely
-            # contain the string. Only these exact remote forms count.
-            case "$url" in
-              "git@github.com:$PORTFOLIO_ORG/"*|\
-              "https://github.com/$PORTFOLIO_ORG/"*|\
-              "ssh://git@github.com/$PORTFOLIO_ORG/"*) echo match ;;
-            esac ;;
-        esac
-      done
-  } | grep -q match
+  while IFS= read -r p; do
+    # Form 1: literally under an allowlisted path, at a component boundary.
+    case "$cwd" in "$p" | "$p"/*) return 0 ;; esac
+    # Form 2: the Codex instance's own worktree of a portfolio repo. Basename
+    # alone is NOT sufficient — a professional repo checked out as
+    # `$CODEX_HOME/worktrees/<id>/monorepo` would match by name while being
+    # categorically out of scope. Confirm identity by the worktree's actual
+    # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
+    # no remote, not a repo): an unverifiable worktree is excluded.
+    case "$cwd" in
+      "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
+        [ -d "$cwd" ] || continue
+        url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || continue
+        # Anchor the HOST, not a substring: `*github.com/org/*` also matches
+        # `https://notgithub.com/org/…` and internal mirrors that merely
+        # contain the string. Only these exact remote forms count.
+        case "$url" in
+          "git@github.com:$PORTFOLIO_ORG/"*|\
+          "https://github.com/$PORTFOLIO_ORG/"*|\
+          "ssh://git@github.com/$PORTFOLIO_ORG/"*) return 0 ;;
+        esac ;;
+    esac
+  done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
+  return 1
 }
 
 codex_session_files() {
@@ -3563,8 +3567,8 @@ if want safety; then
     # output stays a CANDIDATE list requiring context, not an assertion of a breach.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
-          if commands_in "$f" 2>/dev/null \
-             | grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))'; then
+          if grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))' \
+             < <(commands_in "$f" 2>/dev/null); then
             commands_in "$f" 2>/dev/null \
               | grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|make [a-z]+)'
           fi
