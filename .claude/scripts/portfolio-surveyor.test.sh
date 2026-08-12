@@ -2068,7 +2068,19 @@ case "${constitution_flat}" in
 esac
 case "${constitution_flat}" in
   *'Compare `headRefOid`, NOT `mergeCommit`'*) ;;
-  *) fail "the contract does not warn that mergeCommit always differs under squash merge" ;;
+  *) fail "the contract does not warn that mergeCommit is not a source-head identity field" ;;
+esac
+# The reason must be stated for ANY strategy, not just squash. An earlier version said "every merge
+# here is a squash", which contradicts the merge-queue section below it — that path deliberately drops
+# `--squash` because the queue picks the strategy — and would have left the check looking optional
+# wherever the claim visibly did not hold.
+case "${constitution_flat}" in
+  *'not a source-head identity field under ANY merge strategy'*) ;;
+  *) fail "the mergeCommit warning is scoped to one merge strategy, so it does not cover merge-queue repos" ;;
+esac
+case "${constitution_flat}" in
+  *'`--squash` is deliberately dropped because the queue chooses the strategy'*) ;;
+  *) fail "the contract does not reconcile the mergeCommit rule with the merge-queue path" ;;
 esac
 
 echo "portfolio surveyor contract: post-arm confirmation assertions passed"

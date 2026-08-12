@@ -1657,13 +1657,16 @@ the head you evaluated. If they differ, the App pushed after you armed and a com
 reached `main`: say so in the report and treat it as breakage to repair, not as a merge that went
 through. This holds whichever way GitHub's post-arm semantics actually work, which is why it is stated
 as the requirement rather than a claim about them.
-🔴 **Compare `headRefOid`, NOT `mergeCommit` — they are different things and the second one always
-differs.** Every merge here is a **squash**, which creates a NEW commit on the base branch, so
-`mergeCommit` is by construction not the source head even when the correct head merged. Measured on
-this repository's own #2795: `headRefOid` `789ac1145e…` merged as `mergeCommit` `9c7a132930…`. Keying
-the check on `mergeCommit` therefore reports false breakage on **every valid squash merge** — which is
-worse than no check, because a guard that always fires is one people learn to ignore. `mergeCommit` is
-for locating the squash commit on `main`; `headRefOid` is what answers "whose head merged".
+🔴 **Compare `headRefOid`, NOT `mergeCommit` — `mergeCommit` is not a source-head identity field under
+ANY merge strategy.** It names the commit created ON THE BASE, which is a different object from the
+head that was merged: a squash condenses the branch into a new commit, a merge commit is new by
+definition, and a rebase rewrites the commits it replays. So the comparison fails on a correct merge
+regardless of which strategy ran — including on the **merge-queue** repos below, where `--squash` is
+deliberately dropped because the queue chooses the strategy. Measured on this repository's own #2795:
+`headRefOid` `789ac1145e…` merged as `mergeCommit` `9c7a132930…`. Keying the check on `mergeCommit`
+therefore reports false breakage on **every valid merge** — which is worse than no check, because a
+guard that always fires is one people learn to ignore. `mergeCommit` is for locating the resulting
+commit on `main`; `headRefOid` is what answers "whose head merged".
 
 #### You own EVERY pull request in the portfolio — whoever authored it
 
