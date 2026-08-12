@@ -869,6 +869,14 @@ git clone -q --bare "$remote_seed" "$remote_origin"
 remote_consumer="$tmp/remote-consumer"
 git clone -q "$remote_origin" "$remote_consumer"
 git -C "$remote_consumer" branch -D "claim-existing-remote" >/dev/null 2>&1 || true
+# Drop the tracking ref too. `git clone` creates one for every remote branch, so leaving it would let
+# this case pass without the fetch ever running — the assertion would hold while the code path it is
+# meant to cover was dead. Clearing it is what makes the fetch load-bearing: ablate the fetch and this
+# block goes RED.
+git -C "$remote_consumer" update-ref -d "refs/remotes/origin/claim-existing-remote"
+check "remote-branch fixture starts with no local and no tracking ref" 0 0 \
+  "$(git -C "$remote_consumer" for-each-ref --format='%(refname)' \
+      'refs/heads/claim-existing-remote' 'refs/remotes/origin/claim-existing-remote' | wc -l | tr -d ' ')" "0"
 
 remote_rc=0
 remote_out="$("$script" add \

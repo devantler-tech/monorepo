@@ -187,9 +187,12 @@ add_worktree_on() {
   fi
 
   # No local branch. Refresh this one remote ref before deciding, because the tracking ref may be
-  # absent (never fetched) or stale (fetched before the PR's latest push). Bounded and non-fatal: a
-  # network failure must not turn `add` into a hard error, but it MUST NOT silently downgrade to a
-  # fork either — hence the explicit NOTE below when the ref stays unresolvable.
+  # absent (never fetched) or stale (fetched before the PR's latest push). Bounded and non-fatal, and
+  # the same call legitimately fails two ways that cannot be told apart cheaply: the branch does not
+  # exist on origin (the ordinary new-branch case), or the remote was unreachable. Both fall through
+  # to creating the branch, so a run whose transport is down while resuming a PR gets a fresh branch
+  # rather than an error. That residual is accepted: distinguishing the two costs another network
+  # call on every add, and a run that cannot reach origin cannot push or open a PR anyway.
   bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
     git -C "$repo" fetch --quiet origin \
     "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
