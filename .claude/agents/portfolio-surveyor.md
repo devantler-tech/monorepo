@@ -41,6 +41,15 @@ public and private — no per-repo loop needed to enumerate):
 
 1. **Open PRs (org-wide, one call):**
    `gh search prs --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,isDraft,labels,updatedAt,url`
+   🔴 **`--limit` is a CAP, not a page size — check whether it truncated, or `nothing_on_fire` is a
+   claim about the first 300 PRs rather than the portfolio.** `gh search prs --help` defines it as the
+   maximum number of results to fetch, so PR 301 is simply **absent**: it is never deepened, never
+   emitted as `NOT-DEEPENED (budget)`, and never contradicts a clean report — the one failure shape
+   the budget rows exist to prevent, arriving through discovery instead of deepening. So compare the
+   returned count against the cap: **if it comes back at exactly 300, discovery is truncated** —
+   re-run partitioned (per repository, or by `--updated` windows) and merge, or emit
+   `DISCOVERY-TRUNCATED (300 cap)` and set `nothing_on_fire:false`, because a rung-1 PR may exist
+   that this survey cannot see. The same applies to the issue call below.
 2. **Open issues (org-wide, one call) — include `assignees` (claim signal) and `author`
    (automation-owned filter):**
    `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,labels,updatedAt,url,assignees`
@@ -174,7 +183,14 @@ public and private — no per-repo loop needed to enumerate):
      pushed seconds ago. Getting this wrong is the expensive direction — it reports a live branch as
      unowned and authorises a second lane to push into it. Read the authoritative per-ref push time
      from the repository activity API instead, matching the PR's own `headRefName`:
-     `gh api "repos/<headRepositoryOwner>/<headRepository>/activity?per_page=100&ref=refs/heads/<headRefName>" --jq '[.[]|select(.activity_type=="push" or .activity_type=="force_push")][0].timestamp'`
+     `gh api "repos/<owner>/<name>/activity?per_page=100&ref=refs/heads/<headRefName>" --jq '[.[]|select(.activity_type=="push" or .activity_type=="force_push")][0].timestamp'`
+     🔴 **`headRepositoryOwner` and `headRepository` are JSON OBJECTS, not strings — extract the
+     scalars first.** `gh` requests them as `headRepositoryOwner{id,login,…}` and
+     `headRepository{id,name,nameWithOwner}` (verified on 2.96.0), so interpolating either field
+     directly builds a path like `repos/{"id":…}/{"id":…}/activity`, which 404s for **every**
+     deepened PR and silently degrades the takeover decision to `pushed:unknown`. Take
+     `.headRepositoryOwner.login` and `.headRepository.name` — or `.headRepository.nameWithOwner`
+     for the whole `<owner>/<name>` segment in one read.
      — **both event types**, since a `force_push` is exactly the mid-flight rewrite this signal exists
      to catch, and selecting only `push` would return an older ordinary push and read as idle.
      🔴 **Filter by `ref` in the REQUEST, not only in the `jq`.** The endpoint returns the repository's
