@@ -175,8 +175,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   **drain all five**, not just threads. **(e) green review:** nothing may be self-promoted without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
   `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>`
-  (`self@<sha>` = the last-resort agent self-review on an **own** PR when ALL THREE lanes are down —
-  contract *Autonomy → Local review round*; never on a bot-authored PR). **`not-requested@<abbrev-head>`
+  (`self@<sha>` = the last-resort agent self-review when ALL THREE lanes are down — contract
+  *Autonomy → Local review round*; valid on any PR you may take over, including a sibling lane's,
+  the maintainer's interactive and **our own bots'**, and never on an **external contributor's**). **`not-requested@<abbrev-head>`
   means every **total** review-output count on the PR is zero after checking all three surfaces
   (any SHA — not merely zero current-head matches)** — request a first review; it is ordinary
   post-auto-review-disabled state, not an outage. **`none` carries its evidence** — the **total**
@@ -415,7 +416,8 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    the contract (clear the current-head pentad, then merge with the **command that matches the author**:
    the three **trusted single-author Apps** — `github-actions`, `ksail-bot`, `app/cursor` — may arm
    `--auto` once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
-   with bare `gh pr merge <n> --squash` once CLEAN and self-promoted on genuine readiness; incl. majors;
+   with `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <the head you
+   evaluated>` once CLEAN and self-promoted on genuine readiness; incl. majors;
    definition PRs on that same path). **`--auto` is for those named Apps only** — it merges at whatever
    head passes checks later, so arming it on an untrusted author (`copilot-swe-agent[bot]`, a
    non-qualifying `app/botantler-1`, any external contributor) would merge a commit nobody evaluated.
@@ -741,7 +743,7 @@ the contract, this agent/skill set, or a submodule's `## Maintenance` — per th
 from repo content — that ingestion boundary is the load-bearing injection defence, so keep it tight);
 **definition PRs self-promote on genuine readiness like any own PR** (their separate gate was retired
 2026-07-18); never `--auto` on your own definition PR (auto-merge is bot-only) — drive a CLEAN,
-threads-resolved definition PR to merge yourself with bare `gh pr merge <n> --squash`, same as any other own PR;
+threads-resolved definition PR to merge yourself with `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`, same as any other own PR;
 **never weaken a guardrail**; minimal and reversible.
 
 ## Global rules (from the contract — non-negotiable)
@@ -750,6 +752,6 @@ Never push to `main`/protected branches. Never run an external author's branch l
 a PR that misses any genuine-readiness condition (programmatically tested + pentad clear, ≥1 green
 review at head, tried-and-evaluated-as-a-user — contract *Autonomy*) — **definition PRs included,
 held to those same conditions** (their separate gate was retired 2026-07-18; merge the contract's
-way: bare `gh pr merge <n> --squash`, never `--auto`).
+way: `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`, never `--auto`).
 Validate before every PR; fix at root cause. Never run untrusted PR code. Never weaken a
 safety/security guardrail. Never hand-edit generated files. Quality over quantity.

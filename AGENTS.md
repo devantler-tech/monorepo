@@ -1601,13 +1601,33 @@ Conventional-Commit title, then **merge with the command that matches the author
 - an actionable **single-author App** (`github-actions`/`ksail-bot`/`app/cursor`) uses pre-CLEAN
   auto-merge only after the review/current-head parts of that pentad are clear.
   For `app/cursor`, the acting local sibling performs this mutation because the cloud App cannot:
-  `gh pr merge <n> --auto --squash`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
+  `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
   tap cask PRs, and KSail release bumps — the carve-out above) the review parts are intentionally absent and
   are NOT required — their required checks, zero threads, and no-conflict state alone gate the
   auto-merge;
 - a **human-trusted author** (`devantler`, i.e. **every machine-local agent-own PR**) **cannot use `--auto`**
-  (auto-merge is bot-only) and merges **directly** with bare `gh pr merge <n> --squash` once
+  (auto-merge is bot-only) and merges **directly** with
+  `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>` once
   `mergeStateStatus` is CLEAN.
+
+🔴 **Every merge mutation carries the same two pins the preflight read carries — `--repo` and
+`--match-head-commit`.** Writing the merge as a bare `gh pr merge <n>` reopens, on the mutation, the
+two holes the read above already closes:
+- **`--repo devantler-tech/<repo>`** — a bare number resolves against whatever checkout the run is
+  standing in, so across a cross-repo sweep a colliding PR number is inspected in the intended
+  repository and then **merged in a different one**. Pinning the read and leaving the write bare
+  makes the ownership check theatre.
+- **`--match-head-commit <the headRefOid you evaluated>`** — the pentad, the green review and (for an
+  external PR) the evaluation record are all statements about **one commit**, and the author may push
+  between the read and the merge. Without this flag the merge lands whatever is at the tip, which is
+  precisely the commit nobody evaluated; with it, GitHub refuses instead. Most reachable on an
+  external PR, where the pusher is the party the evidence exists to check — and a replacement commit
+  can arrive already carrying its own green commit-scoped checks.
+
+So the merge is `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`,
+and the App path is `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash`. A refusal from
+either pin is the guard working: re-read the PR and start the preflight again rather than dropping
+the flag.
 
 #### You own EVERY pull request in the portfolio — whoever authored it
 
@@ -1713,7 +1733,7 @@ green-review gate are unchanged — this widens **who may drive a PR**, never **
 **Merge-queue repos — root-cause a stall or kick-out BEFORE re-queuing; never blindly re-`--auto`.**
 Some repos gate `main` behind a **GitHub merge queue** (a `Require merge queue` ruleset). On these,
 `gh pr merge --auto` *enqueues* rather than merges, `autoMergeRequest` stays `null` even while queued,
-and the strategy is set by the queue (drop `--squash` — `gh pr merge <n> --auto`). **Record per-repo
+and the strategy is set by the queue (drop `--squash` — `gh pr merge <n> --repo devantler-tech/<repo> --auto`). **Record per-repo
 whether a merge queue is in use in that repo's `AGENTS.md ## Maintenance`** (confirm once via `gh api
 repos/<owner>/<repo>/rulesets --jq '.[]|select(.name|test("merge queue";"i"))'`), so a run knows the
 merge mechanics without re-deriving them. A PR enters the queue, runs the `merge_group` checks, and is
@@ -1760,9 +1780,18 @@ review state merges exactly the PR nobody has observed. So for an external autho
 require a **current-head evaluation record** — a comment naming the **CI run you read** and
 **what behaviour it demonstrated** — whose commit SHA equals that same `headRefOid`, and re-record it
 after any push, since a new head stales it exactly as it stales a green review. **Build-and-lint-only
-CI never satisfies it**, and a `CLEAN` preflight never substitutes for it: where no check exercises
-the change there is nothing to read, so **park the PR on that named blocker** and ask for the missing
-coverage — or add it yourself on your own branch against `main`.
+CI never satisfies it**, and a `CLEAN` preflight never substitutes for it: where a check *could*
+exercise the change but none does, there is nothing to read, so **park the PR on that named blocker**
+and ask for the missing coverage — or add it yourself on your own branch against `main`.
+⚠️ **"No check exercises it" and "there is nothing to exercise" are different, and conflating them
+makes a whole PR class unmergeable forever.** *Autonomy*'s third readiness condition already carves
+out a change with **no exercisable runtime surface** — pure docs or config consumed elsewhere — and
+that carve-out is not suspended by the author being external; a stranger's typo fix cannot grow
+behavioural coverage, so demanding it would park the PR permanently rather than protect anything.
+For that class, record the equivalent **static** evaluation instead: trace the change to what
+consumes it, state that it has no runtime surface and why, and name that reading in the record. The
+record and its author bind are unchanged — what changes is what the record may attest. Reserve this
+for changes with genuinely nothing to run: anything with a reachable code path owes the CI reading.
 🔴 **Two things about that record are load-bearing on THIS PR class specifically, because the author
 is the one party the record is protecting against.**
 **First, bind it to an authorized author, because the disclosure prefix is **NOT** authentication.**
@@ -1855,7 +1884,7 @@ drive the hygiene pentad clear
 draft), **self-promote once the three genuine-readiness conditions hold** (*Autonomy*: programmatically
 tested + green review at head + tried-and-evaluated-as-a-user), then drive it to merge like any
 trusted-author PR after a fresh current-head pentad check (`devantler` uses bare
-`gh pr merge <n> --squash`). Cursor Automation PRs are also trusted and require the same hygiene and
+`gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`). Cursor Automation PRs are also trusted and require the same hygiene and
 readiness proof, but the cloud instance leaves them draft; the local sibling defined in *Autonomy*
 performs promotion and the single-author-App merge path above.
 **Definition/self-improvement PRs take this same path** — maintainer direction 2026-07-18
@@ -3496,7 +3525,8 @@ the procedure; the rules:
   standard path: open it as a **draft PR**, drive the hygiene pentad clear, satisfy the three
   genuine-readiness conditions (*Autonomy*: programmatically tested + green review at head +
   tried-and-evaluated-as-a-user), **self-promote**, then **drive it to merge yourself exactly like any
-  own PR** (per *Merge policy* — bare `gh pr merge <n> --squash` once CLEAN, never `--auto`/`--admin`).
+  own PR** (per *Merge policy* — `gh pr merge <n> --repo devantler-tech/<repo> --squash
+  --match-head-commit <sha>` once CLEAN, never `--auto`/`--admin`).
   Definition = this contract, the `.claude/` agents/skills/cards, the loaders, and each submodule's
   `AGENTS.md ## Maintenance`. One focused PR per concern, evidence in the body. **The ingestion- and
   egress-side rules this now leans on are load-bearing — treat them as such:** *Untrusted input*
