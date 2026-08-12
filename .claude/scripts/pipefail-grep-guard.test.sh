@@ -390,16 +390,26 @@ run_guard "$f" && rc=0 || rc=$?
 report "a parameter expansion in an assignment value does not hide the grep" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
-# 🔴 The KNOWN LIMIT, asserted so it is a recorded fact rather than a surprise: a
-# NESTED command substitution is not matched, and cannot be by a regular
-# expression, which has no way to match balanced delimiters. This test pins the
-# CURRENT behaviour (exit 0) deliberately. If it ever starts failing, the layer
-# has been replaced with a real parser and this expectation should be inverted —
-# see monorepo#2797. It is not a licence to leave it; it is a refusal to pretend.
+# 🔴 The KNOWN LIMIT, pinned as fact rather than left as a surprise. Both cases
+# below are the SAME defect: the pattern cannot tell a closing delimiter from a
+# character that merely looks like one, because that needs shell-quote tracking
+# inside the expansion. Nesting is one instance of it, not the rule — an earlier
+# version of this suite pinned only the nested case and the comment claimed
+# general non-nested support, which was an overclaim.
+# These tests assert the CURRENT behaviour (exit 0) deliberately. If either
+# starts failing, a real parser has replaced the layer and the expectation
+# should be inverted — see monorepo#2797. Not a licence to leave it; a refusal
+# to pretend the gap is narrower than it is.
 f="$(mkscript "assign-nested-substitution-KNOWN-LIMIT.sh" \
   "printf '%s' \"\$v\" | A=\$(echo \$(printf 'C UTF-8')) grep -q NEEDLE")"
 run_guard "$f" && rc=0 || rc=$?
-report "KNOWN LIMIT: a NESTED command substitution is not detected (regex cannot match balanced delimiters)" \
+report "KNOWN LIMIT: a NESTED command substitution is not detected" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+f="$(mkscript "assign-quoted-paren-substitution-KNOWN-LIMIT.sh" \
+  "printf '%s' \"\$v\" | A=\$(printf ') ') grep -q NEEDLE")"
+run_guard "$f" && rc=0 || rc=$?
+report "KNOWN LIMIT: an UNNESTED substitution containing a quoted ')' is not detected either" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
 # Double quotes DO honour backslash escapes, so `\"` is a literal quote and does

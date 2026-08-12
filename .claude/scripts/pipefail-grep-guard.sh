@@ -310,16 +310,26 @@ _SQ=\'
 #          wrong. Asymmetry on purpose.
 #   bare   backslash escapes work                      ->  C=x\ y      is  x y
 # A value fragment may also be an EXPANSION whose content contains whitespace:
-# `A=$(printf 'C UTF-8')`, `A=`cmd``, `A=${x-a b}`. These are matched NON-NESTED
-# — `[^)]`/`[^}]`/`[^`]` stops at the first closer.
-# 🔴 **The nested case is NOT covered and cannot be, by this layer.** A command
-# substitution holds arbitrary shell, including further substitutions, and a
-# regular expression cannot match balanced delimiters. `A=$(echo $(cmd))` is a
-# real assignment word this pattern will not consume, and there is no version of
-# this constant that fixes that. It is a genuine, permanent limit of the regex
-# approach rather than one more shape to add — see monorepo#2797, which replaces
-# the layer with a tokenizer. Recorded here so the next reader does not spend a
-# round trying to extend it.
+# `A=$(printf 'C UTF-8')`, `A=`cmd``, `A=${x-a b}`.
+#
+# 🔴 **THE LIMIT, stated accurately — it is NOT "nested substitutions".** An
+# earlier version of this comment said the gap was nesting and claimed general
+# non-nested `$(…)` support. That was an OVERCLAIM: the pattern stops at the
+# first `)`, `}` or backtick, so it also fails on a **single, unnested**
+# substitution whose command merely contains one as data —
+# `A=$(printf ') ')` is a valid assignment word this will not consume.
+#
+# The real boundary is that this layer **cannot tell a delimiter from a
+# character that looks like one**, because deciding that requires tracking shell
+# quoting inside the substitution — the same parsing it cannot do outside it.
+# Nesting is one instance of that, not the rule. There is no version of this
+# constant that fixes it: extending the character classes just moves which
+# spelling escapes, which is how four consecutive rounds went.
+#
+# So what is supported is: an expansion whose content contains **no** closing
+# delimiter of its own kind, in any context. Everything else reads as no-match,
+# which is a SILENT PASS — see monorepo#2797, which replaces the layer with a
+# tokenizer. Do not spend a round extending this; extend the issue instead.
 _ASSIGN_VALUE='("([^"\\]|\\.)*"|\$'"$_SQ"'([^'"$_SQ"'\\]|\\.)*'"$_SQ"'|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|\$\([^()]*\)|`[^`]*`|\$\{[^{}]*\}|([^[:space:]"'"$_SQ"'\\]|\\.)+)+'
 PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*='"$_ASSIGN_VALUE"'|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
 unset _SQ _ASSIGN_VALUE
