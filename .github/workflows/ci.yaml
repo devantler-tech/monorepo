@@ -270,17 +270,14 @@ jobs:
               # The guard scans EVERY tracked shell script, so any shell change
               # can introduce the shape it rejects — an enumerated subset would
               # let a new script land unchecked.
-              - '**/*.sh'
-              # A shell script need not be named `*.sh`: the guard identifies
-              # one by shebang, so the trigger has to reach the conventional
-              # extensionless locations too, or an unsafe pipe in `bin/check`
-              # lands without ever starting this job.
-              - '**/bin/**'
-              - '**/scripts/**'
-              - '**/hooks/**'
-              # Self-gate on the workflow too, so a change that breaks this
-              # job's own wiring still runs the check it gates.
-              - '.github/workflows/ci.yaml'
+              # ANY path. A shell script need not be named `*.sh` — the guard
+              # identifies one by shebang, anywhere in the tree — so any narrower
+              # filter contradicts its stated scope and lets an extensionless
+              # `tools/check` or a repository-root `check` land unscanned. An
+              # enumerated set of "script-ish" directories only moves the gap
+              # rather than closing it. The sweep is ~9s over the whole
+              # repository, so running it unconditionally is the cheaper error.
+              - '**'
             product-value:
               - 'AGENTS.md'
               - '**/[Aa][Dd][Rr]/**'

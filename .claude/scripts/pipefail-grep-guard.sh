@@ -48,7 +48,12 @@
 #   The flag family is the discriminator, confirmed by execution rather than
 #   read from a manual: -q/--quiet/--silent, -l/--files-with-matches and
 #   -m/--max-count all stop early and all reproduce it; -c, -L and a plain grep
-#   read their input to the end and never do.
+#   read their input to the end and never do. One exception: a NEGATIVE max count
+#   is infinity (`grep -m-1`), so grep does not stop and that form is clean.
+#
+#   Options are recognised AFTER the pattern operand too. GNU permutes them to
+#   the front unless POSIXLY_CORRECT is set, so `grep PATTERN -q` is an early exit
+#   on the Linux runner this check runs on. Only `--` ends option parsing.
 #
 # THE FIX THIS GUARD ASKS FOR
 #   Feed grep without a pipe, so there is no writer to kill:
@@ -79,7 +84,10 @@
 #   fixture that must contain the offending text stays possible without turning
 #   the guard off. Say why in the same comment.
 #
-#   `pipefail-grep-guard: allow-file` anywhere in a file skips the whole file.
+#   A COMMENT LINE BEGINNING WITH `pipefail-grep-guard: allow-file` skips the
+#   whole file. It must open the comment — a mention inside prose, backticks or a
+#   string does not count, which is why this very paragraph does not disable the
+#   guard on its own source.
 #   That is for a file whose SUBJECT is this bug — this guard's own self-test
 #   both quotes the offending form as fixture text and executes it on purpose.
 #   Both markers are plain text in a reviewable diff; neither disables the job.
@@ -100,7 +108,15 @@ set -Eeuo pipefail
 shopt -u nocasematch
 
 ALLOW_MARKER='pipefail-grep-guard: allow'
-ALLOW_FILE_MARKER='pipefail-grep-guard: allow-file'
+# The whole-file directive is matched as a COMMENT LINE THAT BEGINS WITH IT, not
+# as a substring anywhere in the file. A substring test made this guard exempt
+# ITSELF: the phrase appears in its own header prose and again in the constant
+# below, so scanning `pipefail-grep-guard.sh` returned before inspecting a single
+# executable line — and the workflow's self-gate could never have caught a
+# pipe-to-quiet-grep introduced into this very file. Requiring the directive to
+# open its comment keeps a deliberate `# pipefail-grep-guard: allow-file — why`
+# working while a mention inside prose, backticks or an assignment does not.
+ALLOW_FILE_RE='^[[:space:]]*#[[:space:]]*pipefail-grep-guard:[[:space:]]*allow-file([[:space:]]|$)'
 
 die() {
   echo "pipefail-grep-guard: $*" >&2
@@ -125,11 +141,34 @@ esac
 # Cluster letters are matched case-sensitively on purpose. `-L` reads its input
 # to the end (it must, to prove the absence of a match) and is NOT an offender;
 # `-l` is.
+#
+# `-m`/`--max-count` is early-exiting for every value EXCEPT a negative one: GNU
+# documents -1 as infinity, where grep does not stop, so `grep -m-1` reads to the
+# end and is not this hazard. Treating the letter as unconditionally early-exiting
+# blocked a pipeline that cannot race.
+#
+# The walk does NOT stop at the first operand. GNU grep permutes options that
+# follow operands to the front unless POSIXLY_CORRECT is set, so
+# `producer | grep PATTERN -q` IS an early exit on the Linux CI runner — stopping
+# at PATTERN reported the hazard clean on the very platform the required check
+# runs. Only `--` ends option parsing.
+max_count_is_finite() { case "$1" in -*) return 1 ;; *) return 0 ;; esac; }
+
 early_exit_flag() {
-  local rest="$1" tok skip_next=0 letters i ch
+  local rest="$1" tok skip_next=0 letters i ch mval want_mval=0
   # shellcheck disable=SC2086 # deliberate word splitting: rest is an argv tail
   set -- $rest
   for tok in "$@"; do
+    # The previous option named -m/--max-count without an attached value, so this
+    # word IS that value and decides whether grep stops early.
+    if ((want_mval)); then
+      want_mval=0
+      if max_count_is_finite "$tok"; then
+        printf '%s' "-m $tok"
+        return 0
+      fi
+      continue
+    fi
     # The previous option consumed this word as its VALUE, so it is not an
     # operand and must not stop the walk.
     if ((skip_next)); then
@@ -138,9 +177,20 @@ early_exit_flag() {
     fi
     case "$tok" in
       --) return 1 ;;
-      --quiet | --silent | --files-with-matches | --max-count | --max-count=*)
+      --quiet | --silent | --files-with-matches)
         printf '%s' "$tok"
         return 0
+        ;;
+      --max-count=*)
+        if max_count_is_finite "${tok#--max-count=}"; then
+          printf '%s' "$tok"
+          return 0
+        fi
+        continue
+        ;;
+      --max-count)
+        want_mval=1
+        continue
         ;;
       # Long options that take their value as the FOLLOWING word. Without this,
       # `grep --regexp PAT -q` reads PAT as the pattern operand and returns
@@ -161,9 +211,20 @@ early_exit_flag() {
         for ((i = 0; i < ${#letters}; i++)); do
           ch="${letters:i:1}"
           case "$ch" in
-            q | l | m)
+            q | l)
               printf '%s' "$tok"
               return 0
+              ;;
+            m)
+              # -m takes a value: the rest of the cluster, else the next word.
+              mval="${letters:i+1}"
+              if [[ -z "$mval" ]]; then
+                want_mval=1
+              elif max_count_is_finite "$mval"; then
+                printf '%s' "$tok"
+                return 0
+              fi
+              break
               ;;
             e | f | A | B | C | D | d)
               if ((i + 1 >= ${#letters})); then skip_next=1; fi
@@ -173,7 +234,9 @@ early_exit_flag() {
         done
         continue
         ;;
-      *) return 1 ;;
+      # NOT a stopping point: an operand. GNU permutes later options to the front,
+      # so `grep PATTERN -q` is an early exit and the walk must keep going.
+      *) continue ;;
     esac
   done
   return 1
@@ -189,7 +252,9 @@ early_exit_flag() {
 # /usr/bin/grep to escape the harness shim, so those are the spellings a script
 # following this advice will actually contain. A bare-name-only regex would let
 # every one of them through while the guard reported the file clean.
-PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+|command|env)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
+# A wrapper may carry its OWN options — `env -i grep -q`, `command -p grep -q` —
+# so an optionless-only match walks past exactly the spellings that reach grep.
+PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
 
 findings=0
 
@@ -208,7 +273,7 @@ scan_file() {
   # the array form aborts the whole run on the first empty file.
   local n=${#lines[@]} i probe probe_test base j joins start
   for ((i = 0; i < n; i++)); do
-    [[ "${lines[i]}" == *"$ALLOW_FILE_MARKER"* ]] && return 0
+    [[ "${lines[i]}" =~ $ALLOW_FILE_RE ]] && return 0
   done
 
   for ((i = 0; i < n; i++)); do
@@ -226,7 +291,15 @@ scan_file() {
       # Over-stripping here can only join more lines, which is the safe
       # direction: the regex still has to match for anything to be reported.
       probe_test="${probe%%[[:space:]]#*}"
-      if [[ "$probe" =~ \\$ ]] ||
+      # The comment-stripped test comes FIRST when a comment was actually
+      # stripped. A comment can itself end in a backslash (`producer | # why \`),
+      # and bash continues that pipeline on the executable text — so letting the
+      # backslash branch win would rebuild `base` from the unstripped comment and
+      # leave its text between the pipe and the grep, where the regex cannot match.
+      if [[ "$probe" != "$probe_test" ]] &&
+        [[ "$probe_test" =~ [^|]\|[[:space:]]*$ ]] && [[ ! "$probe_test" =~ \|\|[[:space:]]*$ ]]; then
+        base="$probe_test"
+      elif [[ "$probe" =~ \\$ ]] ||
         { [[ "$probe" =~ [^|]\|[[:space:]]*$ ]] && [[ ! "$probe" =~ \|\|[[:space:]]*$ ]]; }; then
         base="${probe%\\}"
       elif [[ "$probe_test" =~ [^|]\|[[:space:]]*$ ]] && [[ ! "$probe_test" =~ \|\|[[:space:]]*$ ]]; then

@@ -76,9 +76,15 @@ herestring_failures=0
 matched=0
 for _ in $(seq 1 50); do
   set +e
-  cat "$probe_payload" | grep -q NEEDLE >/dev/null 2>&1
+  # `command grep`, never bare `grep`: under an agent harness the bare name can
+  # resolve to a shim that drains its input instead of exiting at the first
+  # match, and this probe is the one assertion that must exercise the REAL grep.
+  # Through such a shim the piped form never fails, so the proof reports the
+  # class refuted while it is live — the guard's own header measured 0/200 that
+  # way against 200/200 through the system binary.
+  cat "$probe_payload" | command grep -q NEEDLE >/dev/null 2>&1
   piped_rc=$?
-  grep -q NEEDLE <"$probe_payload" >/dev/null 2>&1
+  command grep -q NEEDLE <"$probe_payload" >/dev/null 2>&1
   here_rc=$?
   set -e
   ((piped_rc != 0)) && piped_failures=$((piped_failures + 1))
@@ -156,6 +162,21 @@ flag_case "-f FILE before -q" \
 flag_case "a cluster ending in -e before -q" \
   'printf "%s" "$v" | grep -ie PATTERN -q'
 
+# A wrapper carrying its OWN options still reaches grep.
+flag_case "env with an option before grep" \
+  'printf "%s" "$v" | env -i grep -q NEEDLE'
+flag_case "command with an option before grep" \
+  'printf "%s" "$v" | command -p grep -q NEEDLE'
+
+# GNU grep permutes options that follow operands to the front unless
+# POSIXLY_CORRECT is set, so this IS an early exit — on the Linux runner where
+# the required check actually executes. Stopping the walk at the operand
+# reported it clean on exactly that platform.
+flag_case "an option AFTER the pattern operand (GNU permutes it)" \
+  'printf "%s" "$v" | grep PATTERN -q'
+flag_case "an option after the operand, clustered" \
+  'printf "%s" "$v" | grep PATTERN file -ql'
+
 # ---------------------------------------------------------------------------
 # 2b. Must NOT flag — each control differs from a flagged twin in exactly the
 #     character that matters, so a control that "passes" for the wrong reason
@@ -201,6 +222,15 @@ clean_case "a wrapper in front of a grep that reads to the end" \
   'printf "%s" "$v" | command grep -c NEEDLE'
 clean_case "a path-qualified name that merely ENDS in grep" \
   'printf "%s" "$v" | /opt/bin/notgrep -q NEEDLE'
+# GNU documents a max count of -1 as infinity: grep does not stop, so there is no
+# writer to kill. Treating the -m letter as unconditionally early-exiting blocked
+# a pipeline that cannot race.
+clean_case "-m-1 is infinity, not an early exit" \
+  'printf "%s" "$v" | grep -m-1 PATTERN'
+clean_case "--max-count=-1 is infinity" \
+  'printf "%s" "$v" | grep --max-count=-1 PATTERN'
+clean_case "--max-count -1 as a separate word" \
+  'printf "%s" "$v" | grep --max-count -1 PATTERN'
 
 # ---------------------------------------------------------------------------
 # 2c. Multi-line pipelines, the dedup regression, and the escape hatch.
@@ -248,6 +278,36 @@ f="$(mkscript "cont-comment-no-pipe.sh" \
   '  grep -q NEEDLE /tmp/x')"
 run_guard "$f" && rc=0 || rc=$?
 report "clean: a comment above a grep with no preceding pipe stays clean" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# The comment itself ends in a backslash. Bash continues the pipeline on the
+# executable text, so letting the backslash branch win would rebuild the probe
+# from the unstripped comment and hide the grep behind it.
+f="$(mkscript "cont-comment-backslash.sh" \
+  'printf "%s" "$v" | # rationale \' \
+  '  grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "flags: a trailing comment ending in a backslash still continues the pipe" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# The whole-file directive must be a comment that BEGINS with it. A file that
+# merely MENTIONS the phrase — this guard's own header and constant do — must
+# still be scanned, or the guard silently exempts itself and its self-gate is
+# decorative.
+f="$(mkscript "allow-file-mention-only.sh" \
+  '# The pipefail-grep-guard: allow-file directive is described here in prose.' \
+  'MARKER="pipefail-grep-guard: allow-file"' \
+  'printf "%s" "$v" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "flags: a file that only MENTIONS allow-file is still scanned" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# ...and the positive control: a real directive still exempts the file.
+f="$(mkscript "allow-file-real-directive.sh" \
+  '# pipefail-grep-guard: allow-file — this fixture is about the offending form' \
+  'printf "%s" "$v" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "the real allow-file directive still exempts the whole file" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
 f="$(mkscript "cont-trailing-or.sh" \
