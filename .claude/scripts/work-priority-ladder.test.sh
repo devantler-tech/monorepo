@@ -213,8 +213,14 @@ done
 # ...and bind the non-qualifying result to the direct-merge path in the SKILL. The contract side of
 # this is already asserted above and is deliberately not repeated here — a second copy would pass or
 # fail in lockstep with the first while reading like independent coverage.
-assert_prose 'the classifier does **not** exit 0 on' \
-  "${skill_flat}" "the maintenance skill does not bind the non-qualifying classifier result to the direct merge"
+#
+# Match a CONTIGUOUS span carrying the condition AND its outcome, not the condition alone. Asserting
+# only `the classifier does **not** exit 0 on` proves the skill *mentions* the non-exit-0 case; it
+# proves nothing about where that case is routed, so a later edit could keep the phrase and replace
+# the direct-merge result with any other action while the assertion stayed green. The span below
+# fails if either half is edited away, which is the property actually worth pinning.
+assert_prose 'the classifier does **not** exit 0 on — including the exit-3 semantic-review path — any external contributor) would merge a commit nobody evaluated. Those merge directly' \
+  "${skill_flat}" "the maintenance skill does not bind the non-qualifying classifier result to the direct-merge outcome"
 
 # ── PR ownership: every PR in the portfolio, whoever authored it (maintainer direction 2026-08-08) ──
 # Rung 1 previously meant "own/trusted PRs in YOUR lane", with anyone else's draft stopping at hygiene.
