@@ -1992,6 +1992,18 @@ case "${surveyor_flat}" in
   *'GraphQL paginates a nested connection **per thread**'*) ;;
   *) fail "the surveyor does not record why nesting the comments connection is unsafe" ;;
 esac
+# ...and the SECOND consumer of that query. Narrowing the GraphQL thread query to `isResolved` broke
+# the candidate-maintainer-comment path, which still said to take thread replies from it — recreating
+# the same incomplete-data condition one section over. That path is the maintainer's control channel,
+# so a dropped reply is direction never acted on, not merely a delayed takeover.
+case "${surveyor_flat}" in
+  *'gh api "repos/devantler-tech/<repo>/pulls/<n>/comments" --paginate'*) ;;
+  *) fail "the candidate-comment path does not read thread replies from the flat REST endpoint" ;;
+esac
+case "${surveyor_flat}" in
+  *'Both reads are required — a maintainer steer can live in either'*) ;;
+  *) fail "the candidate-comment path does not require BOTH the issue-comment and thread-reply surfaces" ;;
+esac
 
 # (4) `nothing_on_fire: true` alongside undeepened PRs asserts health the survey never measured.
 case "${surveyor_flat}" in

@@ -626,9 +626,16 @@ public and private — no per-repo loop needed to enumerate):
      fails with `Unknown JSON field`. Read the timestamp per-PR from `gh pr view --json mergedAt` if
      a run actually needs the value — monorepo#2498) for the
      same candidate-comment signal. For each such PR — **including drafts** — also
-     pull `comments`, then the review-thread replies via the paginated GraphQL query above
-     (`reviewThreads` is GraphQL-only, so `gh pr view` cannot return it):
-     `gh pr view <n> --repo devantler-tech/<repo> --json comments`. **Apply the disclosure
+     pull `comments`, then the review-thread replies from the **flat REST endpoint**, the same surface
+     the active-work signal uses and for the same reason (the GraphQL thread query above returns
+     `isResolved` only, and nesting comments inside it cannot be drained by its outer cursor):
+     `gh pr view <n> --repo devantler-tech/<repo> --json comments` and
+     `gh api "repos/devantler-tech/<repo>/pulls/<n>/comments" --paginate`.
+     🔴 **Both reads are required — a maintainer steer can live in either.** He replies inside an
+     existing review thread as readily as he opens a new top-level comment, and the two surfaces do
+     not overlap: `gh pr view --json comments` returns issue comments and never inline thread replies.
+     Reading only one silently drops half his control channel, which is worse here than in the
+     ownership signal — a missed steer is direction never acted on, not merely a delayed takeover. **Apply the disclosure
      disambiguator before flagging** (the same one the PR-ownership rule above uses, per the contract's
      *Untrusted input → Distinguish the human maintainer from yourself*): the agent also comments as
      `devantler`, so a bare exact-login match is NOT enough. A `devantler` comment whose body carries a
