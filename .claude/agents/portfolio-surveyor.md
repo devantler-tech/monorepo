@@ -163,11 +163,11 @@ public and private — no per-repo loop needed to enumerate):
      printf '%s' "$body" | .claude/scripts/pr-ownership-disclosure.sh --input -   # → interactive|routine|none
      ```
 
-     Feed it the `body` field from the per-PR deepening command above rather than `--repo/--pr`. That
-     mode re-fetches a body already in hand, which spends an extra request per candidate against the
-     survey's own API budget and adds a second failure point that can lose the classification after
-     the primary fetch already succeeded. Keep `--repo <owner>/<repo> --pr <n>` for a one-off check
-     where no body has been fetched.
+     Feed it the `body` field from the per-PR deepening command above. The fetching mode —
+     `.claude/scripts/pr-ownership-disclosure.sh --repo <owner>/<repo> --pr <n>` — re-fetches a body
+     already in hand, which spends an extra request per candidate against the survey's own API budget
+     and adds a second failure point that can lose the classification after the primary fetch already
+     succeeded. Keep it only for a one-off check where no body has been fetched.
 
      It prints exactly one of the three values below and exits 2 on a usage error or a failed fetch —
      never a silent `none`. Report its output verbatim; do not second-guess it from the body.
