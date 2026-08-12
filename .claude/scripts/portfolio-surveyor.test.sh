@@ -1977,10 +1977,19 @@ esac
 #     very case (2) below says must stay live. The consumer's rule is a match on branch and sha, so
 #     the signal has to carry that identity rather than leaving it to be recovered from some other
 #     field's payload — assert the complete emitted identity, never a lane-only token.
-case "${surveyor_flat}" in
-  *'pushed:<age>@<lane>:<headRefName>@<headRefOid>'*) ;;
-  *) fail "the push signal omits the branch+sha identity, so the consumer cannot attribute a push to its own run" ;;
-esac
+#     Bind this to EVERY emitted `active=` shape, not to the document. A flattened-document match is
+#     satisfied by the explanatory prose above, so an `active=` template could regress to a lane-only
+#     token while this assertion still passed — coverage that reads real and proves nothing. Compare
+#     the count of lines emitting an `active=` template against those opening it with the complete
+#     identity: any template that drops the branch+sha makes the two differ.
+active_templates=$(grep -c 'active=<' "${surveyor}" || true)
+active_with_identity=$(grep -c 'active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|' "${surveyor}" || true)
+if [ "${active_templates}" -eq 0 ]; then
+  fail "no active= template found in the surveyor, so the push-identity assertion would be vacuous"
+fi
+if [ "${active_templates}" -ne "${active_with_identity}" ]; then
+  fail "an active= template omits the branch+sha identity (${active_with_identity}/${active_templates} carry it), so the consumer cannot attribute a push to its own run"
+fi
 case "${surveyor_flat}" in
   *'The branch and sha are part of the SIGNAL, not left to be cross-referenced'*) ;;
   *) fail "the surveyor does not state that the push identity travels in the signal itself" ;;
@@ -1989,10 +1998,24 @@ esac
 #     the branch+sha rule. Carrying both is worse than carrying only the old one, because a consumer
 #     may follow either — and the lane is SHARED with the Agent Improver, so the retired form
 #     authorises discounting a live sibling push and writing over active work.
-case "${surveyor_flat}" in
-  *'discounts a signal from its **own** namespace when its creation record covers that PR'*)
-    fail "the retired namespace-plus-creation-record discount is still authorised alongside the branch+sha rule" ;;
-esac
+#     Match the AUTHORISING CONSTRUCTION, not one sentence — a reworded grant would otherwise pass.
+#     Note the phrase "creation record" alone cannot be blacklisted: the document uses it correctly in
+#     the prohibition that explains WHY the lane is insufficient, so keying on it would fail on
+#     compliant text. Key on a discount being GRANTED by namespace or creation record instead.
+for retired_grant in \
+  'discounts a signal from its **own** namespace when its creation record covers that PR' \
+  'creation record covers that PR' \
+  'own namespace, and my creation record' \
+  'authorises discounting' \
+  'authorizes discounting'; do
+  case "${surveyor_flat}" in
+    *"${retired_grant}"*)
+      fail "the retired namespace-plus-creation-record discount is still authorised alongside the branch+sha rule (matched: ${retired_grant})" ;;
+  esac
+done
+#     The positive binding above is the real protection: this negative is defence-in-depth and cannot
+#     be made reword-proof by enumeration, which is why the discount condition is also asserted
+#     positively below.
 case "${surveyor_flat}" in
   *'only when that exact branch and sha are ones THIS RUN pushed'*) ;;
   *) fail "the surveyor does not scope the discount to what this run actually pushed" ;;

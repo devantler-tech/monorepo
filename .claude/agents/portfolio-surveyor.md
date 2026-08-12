@@ -216,11 +216,12 @@ public and private — no per-repo loop needed to enumerate):
      consumer discounts a signal **only when that exact branch and sha are ones THIS RUN pushed**.
      Reporting this costs nothing and is the only part the survey can know; the discount is the
      orchestrator's, because only it knows what it pushed.
-     ⚠️ **Namespace-plus-creation-record is the RETIRED form of this rule and must not come back.**
-     "Own namespace, and my creation record covers this PR" authorises discounting a push that a
-     *sibling role* made on a branch the record does covers — the Agent Improver shares the lane — so
-     it licenses writing over active work. The lane is reported for context; it never carries the
-     discount on its own.
+     ⚠️ **Never discount a push because of its lane or a creation record — match branch and sha.**
+     The lane is reported for context only, and it names a namespace the Agent Improver **shares**, so
+     a push arriving in your own namespace may be a live sibling's. A creation record covering the PR
+     does not help either: it establishes that this run created or repaired the PR, never that this
+     run pushed *this* sha. Discount only when `headRefName` and `headRefOid` both match a pair THIS
+     RUN pushed; anything short of that match stays live.
      🔴 **The branch and sha are part of the SIGNAL, not left to be cross-referenced.** The consumer's
      rule below is a match on branch and sha, so a lane-only token cannot satisfy it: the lane names a
      namespace **shared** with the Agent Improver, which is precisely the case the next paragraph says
