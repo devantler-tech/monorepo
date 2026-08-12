@@ -2056,3 +2056,19 @@ case "${constitution_flat}" in
 esac
 
 echo "portfolio surveyor contract: takeover-signal round-2 assertions passed"
+
+# (8) The post-arm confirmation must compare `headRefOid`, never `mergeCommit`. Every merge here is a
+#     SQUASH, which creates a new commit on the base, so `mergeCommit` differs from the source head on
+#     every valid merge — measured on this repo's own #2795, head `789ac1145e…` -> merge `9c7a132930…`.
+#     Keying the check on it would fire on every successful squash merge, and a guard that always fires
+#     is one people learn to ignore.
+case "${constitution_flat}" in
+  *'compare **`headRefOid`** to'*) ;;
+  *) fail "the post-arm confirmation does not compare headRefOid" ;;
+esac
+case "${constitution_flat}" in
+  *'Compare `headRefOid`, NOT `mergeCommit`'*) ;;
+  *) fail "the contract does not warn that mergeCommit always differs under squash merge" ;;
+esac
+
+echo "portfolio surveyor contract: post-arm confirmation assertions passed"

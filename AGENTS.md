@@ -1651,12 +1651,19 @@ that pushes during that window has its new commit merged by the arming you alrea
 being allowed is the **arming**, not the later merge — so the flag protects the same instant a direct
 merge protects, and everything after it is unprotected. An earlier version of this paragraph claimed
 "with the pin, GitHub refuses instead"; that was asserted without evidence and is **withdrawn**.
-**So the arming is never the completion.** On any `--auto` path, confirm afterwards what actually
-landed — `gh pr view <n> --repo devantler-tech/<repo> --json state,mergeCommit` — and check the merged
-commit against the head you evaluated. If they differ, a commit nobody assessed reached `main`: say so
-in the report and treat it as breakage to repair, not as a merge that went through. This holds
-whichever way GitHub's post-arm semantics actually work, which is why it is stated as the requirement
-rather than a claim about them.
+**So the arming is never the completion.** On any `--auto` path, confirm afterwards which HEAD merged:
+`gh pr view <n> --repo devantler-tech/<repo> --json state,headRefOid` — and compare **`headRefOid`** to
+the head you evaluated. If they differ, the App pushed after you armed and a commit nobody assessed
+reached `main`: say so in the report and treat it as breakage to repair, not as a merge that went
+through. This holds whichever way GitHub's post-arm semantics actually work, which is why it is stated
+as the requirement rather than a claim about them.
+🔴 **Compare `headRefOid`, NOT `mergeCommit` — they are different things and the second one always
+differs.** Every merge here is a **squash**, which creates a NEW commit on the base branch, so
+`mergeCommit` is by construction not the source head even when the correct head merged. Measured on
+this repository's own #2795: `headRefOid` `789ac1145e…` merged as `mergeCommit` `9c7a132930…`. Keying
+the check on `mergeCommit` therefore reports false breakage on **every valid squash merge** — which is
+worse than no check, because a guard that always fires is one people learn to ignore. `mergeCommit` is
+for locating the squash commit on `main`; `headRefOid` is what answers "whose head merged".
 
 #### You own EVERY pull request in the portfolio — whoever authored it
 
