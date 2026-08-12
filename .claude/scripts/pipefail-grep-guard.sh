@@ -309,7 +309,18 @@ _SQ=\'
 #          "fixing" it to match the others would be
 #          wrong. Asymmetry on purpose.
 #   bare   backslash escapes work                      ->  C=x\ y      is  x y
-_ASSIGN_VALUE='("([^"\\]|\\.)*"|\$'"$_SQ"'([^'"$_SQ"'\\]|\\.)*'"$_SQ"'|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|([^[:space:]"'"$_SQ"'\\]|\\.)+)+'
+# A value fragment may also be an EXPANSION whose content contains whitespace:
+# `A=$(printf 'C UTF-8')`, `A=`cmd``, `A=${x-a b}`. These are matched NON-NESTED
+# — `[^)]`/`[^}]`/`[^`]` stops at the first closer.
+# 🔴 **The nested case is NOT covered and cannot be, by this layer.** A command
+# substitution holds arbitrary shell, including further substitutions, and a
+# regular expression cannot match balanced delimiters. `A=$(echo $(cmd))` is a
+# real assignment word this pattern will not consume, and there is no version of
+# this constant that fixes that. It is a genuine, permanent limit of the regex
+# approach rather than one more shape to add — see monorepo#2797, which replaces
+# the layer with a tokenizer. Recorded here so the next reader does not spend a
+# round trying to extend it.
+_ASSIGN_VALUE='("([^"\\]|\\.)*"|\$'"$_SQ"'([^'"$_SQ"'\\]|\\.)*'"$_SQ"'|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|\$\([^()]*\)|`[^`]*`|\$\{[^{}]*\}|([^[:space:]"'"$_SQ"'\\]|\\.)+)+'
 PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*='"$_ASSIGN_VALUE"'|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
 unset _SQ _ASSIGN_VALUE
 

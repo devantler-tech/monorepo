@@ -371,6 +371,37 @@ run_guard "$f" && rc=0 || rc=$?
 report "a mixed quoted/unquoted assignment value does not hide the grep" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# An expansion can carry whitespace inside one assignment word.
+f="$(mkscript "assign-command-substitution.sh" \
+  "printf '%s' \"\$v\" | A=\$(printf 'C UTF-8') grep -q NEEDLE")"
+run_guard "$f" && rc=0 || rc=$?
+report "a command substitution in an assignment value does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+f="$(mkscript "assign-backtick-substitution.sh" \
+  'printf "%s" "$v" | A=`printf "C UTF-8"` grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "a backtick substitution in an assignment value does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+f="$(mkscript "assign-parameter-expansion.sh" \
+  'printf "%s" "$v" | A=${x-a b} grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "a parameter expansion in an assignment value does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# 🔴 The KNOWN LIMIT, asserted so it is a recorded fact rather than a surprise: a
+# NESTED command substitution is not matched, and cannot be by a regular
+# expression, which has no way to match balanced delimiters. This test pins the
+# CURRENT behaviour (exit 0) deliberately. If it ever starts failing, the layer
+# has been replaced with a real parser and this expectation should be inverted —
+# see monorepo#2797. It is not a licence to leave it; it is a refusal to pretend.
+f="$(mkscript "assign-nested-substitution-KNOWN-LIMIT.sh" \
+  "printf '%s' \"\$v\" | A=\$(echo \$(printf 'C UTF-8')) grep -q NEEDLE")"
+run_guard "$f" && rc=0 || rc=$?
+report "KNOWN LIMIT: a NESTED command substitution is not detected (regex cannot match balanced delimiters)" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
 # Double quotes DO honour backslash escapes, so `\"` is a literal quote and does
 # not end the fragment — the space after it is still inside the quoted value.
 f="$(mkscript "assign-escaped-dquote.sh" \
