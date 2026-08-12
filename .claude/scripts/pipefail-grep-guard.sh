@@ -123,6 +123,7 @@ shopt -u nocasematch
 # comment note at the probe site). The bar this clears is the reported hole —
 # executable text with no `#` at all — not every constructible bypass.
 ALLOW_LINE_RE='(^|[[:space:]])#.*pipefail-grep-guard:[[:space:]]*allow'
+
 # The whole-file directive is matched as a COMMENT LINE THAT BEGINS WITH IT, not
 # as a substring anywhere in the file. A substring test made this guard exempt
 # ITSELF: the phrase appears in its own header prose and again in the constant
@@ -191,6 +192,13 @@ early_exit_flag() {
       continue
     fi
     case "$tok" in
+      # A shell operator ENDS this grep's command. Everything after it belongs to
+      # a different command, and reading its flags as grep's produced a false
+      # POSITIVE: in `printf 'MATCH\n' | grep MATCH && sort -m /dev/null` the
+      # grep reads its input to completion and is perfectly safe, but the walk
+      # ran on into `sort -m` and reported an early exit that cannot happen.
+      # `--` still terminates option parsing; these terminate the command.
+      '&&' | '||' | ';' | ';;' | '|' | '|&' | '&') return 1 ;;
       --) return 1 ;;
       --quiet | --silent | --files-with-matches)
         printf '%s' "$tok"
@@ -269,7 +277,15 @@ early_exit_flag() {
 # every one of them through while the guard reported the file clean.
 # A wrapper may carry its OWN options — `env -i grep -q`, `command -p grep -q` —
 # so an optionless-only match walks past exactly the spellings that reach grep.
-PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
+# A wrapper option may also take its value as the FOLLOWING word — `env -u NAME
+# grep -q x`, `env -C DIR grep -q x`. `-u` matches the bare-option alternative,
+# but `NAME` then sits between the prefix and `grep` where nothing matches it, so
+# the whole pipeline read as "no grep here" and a real hazard went unreported.
+# The two-word form is listed FIRST so it wins over the bare-option alternative.
+# Kept to env's actual value-taking options rather than "any option plus any
+# word": the loose form would match `foo | bar baz grep`, where grep is an
+# argument to `bar` and not run at all — a false positive.
+PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
 
 findings=0
 
@@ -287,7 +303,26 @@ scan_file() {
   # an empty array's `[@]` expansion as an unbound variable under `set -u`, so
   # the array form aborts the whole run on the first empty file.
   local n=${#lines[@]} i probe probe_test base j joins start
+  # The whole-file directive is honoured only from a SYNTACTIC comment. A heredoc
+  # body is data, not code — a payload line reading
+  # `# pipefail-grep-guard: allow-file — documentation only` looks identical to
+  # the real directive, and exempting the entire script on the strength of quoted
+  # data is a fail-open reachable by anyone who can add a heredoc. Track heredoc
+  # bodies and skip them. Anything unrecognised stays scanned, so a parsing gap
+  # here costs a missed exemption (safe) rather than a missed hazard.
+  local hd_term=""
   for ((i = 0; i < n; i++)); do
+    if [[ -n "$hd_term" ]]; then
+      # The terminator is matched on its own line, optionally indented — `<<-`
+      # strips leading TABS, and a plain `<<` requires column 0, but accepting
+      # either only ends the body sooner, which resumes scanning.
+      [[ "${lines[i]}" =~ ^[[:space:]]*"$hd_term"[[:space:]]*$ ]] && hd_term=""
+      continue
+    fi
+    if [[ "${lines[i]}" =~ \<\<-?[[:space:]]*\'?\"?([A-Za-z_][A-Za-z0-9_]*)\'?\"? ]]; then
+      hd_term="${BASH_REMATCH[1]}"
+      continue
+    fi
     [[ "${lines[i]}" =~ $ALLOW_FILE_RE ]] && return 0
   done
 
@@ -299,7 +334,15 @@ scan_file() {
     # a trailing `\`, or a trailing single `|` with grep on the next line.
     joins=0
     j=$i
-    while ((joins < 8 && j + 1 < n)); do
+    # NO join cap. There used to be one at 8, which silently stopped the walk and
+    # then scanned the truncated probe as if the grep were not there — a pipeline
+    # with nine comment-only lines before its `grep -q` read as clean. The
+    # end-of-file bound below is the only one that is actually correct, and it
+    # terminates: each absorbed line is skipped by `i=$j`, so the whole scan stays
+    # linear in the file. Failing closed on the cap instead was tried and is
+    # worse — it reported 18 ordinary multi-line commands in this repository as
+    # unscannable, which is a DevEx tax paid on every run for no security gain.
+    while ((j + 1 < n)); do
       # A trailing comment does not end a pipeline — `producer | # note` still
       # continues on the next line. Strip one for the CONTINUATION TEST only,
       # never from the probe itself, where quoting makes stripping unreliable.
@@ -314,6 +357,14 @@ scan_file() {
       if [[ "$probe" != "$probe_test" ]] &&
         [[ "$probe_test" =~ [^|]\|[[:space:]]*$ ]] && [[ ! "$probe_test" =~ \|\|[[:space:]]*$ ]]; then
         base="$probe_test"
+      elif [[ "${lines[j]}" =~ ^[[:space:]]*# ]] && [[ "$probe" =~ \\$ ]]; then
+        # A WHOLE-LINE comment ending in `\` does not continue anything: bash
+        # ends the comment at the newline and runs the next line on its own.
+        # Joining here swallowed that next executable line into a comment probe,
+        # so a real `producer | grep -q X` directly under `# note \` was never
+        # scanned. Distinct from a TRAILING comment on a command line, handled
+        # above — there the pipeline is real and the backslash does continue it.
+        break
       elif [[ "$probe" =~ \\$ ]] ||
         { [[ "$probe" =~ [^|]\|[[:space:]]*$ ]] && [[ ! "$probe" =~ \|\|[[:space:]]*$ ]]; }; then
         base="${probe%\\}"
@@ -384,8 +435,13 @@ main() {
     # at a conventional extensionless path (`bin/check`) carries exactly this
     # hazard, and the guard claims to cover it. Identify those by SHEBANG — the
     # executable bit alone would sweep in every compiled helper and binary.
+    # NUL-delimited, because git QUOTES any path outside its safe character set:
+    # a tracked `tést.sh` comes back as the literal `"t\303\251st.sh"`, which
+    # matches neither the `*.sh` case nor a readable file — so the mandatory
+    # sweep skipped it and still reported the repository clean. A guard that
+    # silently omits files fails open, which is the one direction that matters.
     local first
-    while IFS= read -r f; do
+    while IFS= read -r -d '' f; do
       case "$f" in
         *.sh)
           targets+=("$f")
@@ -397,7 +453,7 @@ main() {
       case "$first" in
         '#!'*sh | '#!'*sh[[:space:]]*) targets+=("$f") ;;
       esac
-    done < <(git ls-files)
+    done < <(git ls-files -z)
     ((${#targets[@]} > 0)) || die "no tracked shell scripts found"
   fi
 

@@ -349,6 +349,64 @@ run_guard "$f" && rc=0 || rc=$?
 report "a '#' inside a parameter expansion is not a comment introducer" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# A wrapper option can take its value as the FOLLOWING word. `-u` matched the
+# bare-option alternative, but `UNUSED` then sat between the prefix and `grep`
+# where nothing matched it, so the pipeline read as "no grep here".
+f="$(mkscript "env-value-option.sh" \
+  'producer | env -u UNUSED grep -q MATCH')"
+run_guard "$f" && rc=0 || rc=$?
+report "a value-consuming wrapper option (env -u NAME) does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# ...and the false-POSITIVE direction: a shell operator ends grep's command, so
+# the next command's flags are not grep's. This grep reads its input to the end.
+f="$(mkscript "operator-ends-command.sh" \
+  'printf "MATCH\n" | grep MATCH && sort -m /dev/null')"
+run_guard "$f" && rc=0 || rc=$?
+report "clean: '&& sort -m' is a separate command, not grep's early exit" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# Bash ends a comment at the newline, so a whole-line comment ending in `\` does
+# NOT continue: the next line runs on its own and must still be scanned.
+f="$(mkscript "comment-backslash-no-join.sh" \
+  '# ordinary comment \' \
+  'printf "%s" "$v" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "a whole-line comment ending in backslash does not swallow the next line" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# Any number of comment-only lines may sit between a trailing pipe and its
+# command. The old 8-join cap stopped here and scanned the truncated probe.
+f="$(mkscript "nine-comment-joins.sh" \
+  'producer |' '# c1' '# c2' '# c3' '# c4' '# c5' '# c6' '# c7' '# c8' '# c9' \
+  '  grep -q MATCH')"
+run_guard "$f" && rc=0 || rc=$?
+report "nine comment lines between the pipe and the grep do not hide it" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# A heredoc body is DATA. A payload line that looks like the whole-file directive
+# must not exempt the script — that fail-open is reachable by anyone who can add
+# a heredoc.
+f="$(mkscript "allow-file-in-heredoc.sh" \
+  'cat <<EOF' \
+  '# pipefail-grep-guard: allow-file — documentation only' \
+  'EOF' \
+  'printf "%s" "$v" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "an allow-file directive inside a heredoc body does not exempt the file" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# ...and its positive control: the SAME directive as a real comment still exempts.
+f="$(mkscript "allow-file-real-after-heredoc.sh" \
+  '# pipefail-grep-guard: allow-file — this fixture is about the offending form' \
+  'cat <<EOF' \
+  'payload' \
+  'EOF' \
+  'printf "%s" "$v" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "positive control: a real allow-file comment still exempts a file with a heredoc" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
 # ---------------------------------------------------------------------------
 # 2d. Multiple findings, multiple files, and the exit contract.
 # ---------------------------------------------------------------------------
