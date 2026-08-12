@@ -199,6 +199,23 @@ assert_prose '`--auto`-eligible authors are exactly four, and the fourth is cond
 assert_prose '`app/botantler-1` **only on a PR the programmed-bot classifier exits 0 on**' \
   "${skill_flat}" "the maintenance skill does not name the qualifying exit-0 app/botantler-1 --auto path"
 
+# Asserting the COUNT and the conditional fourth author still leaves the three unconditional names
+# unpinned — a policy edit could swap `github-actions`/`ksail-bot`/`app/cursor` for different authors
+# and every assertion above would still pass, because none of them names who the other three are.
+# `--auto` merges whatever head passes checks later, so WHICH author holds that power is the whole
+# security property; pin the contiguous list in both documents, not just its shape.
+for _doc_pair in "constitution:${constitution_flat}" "skill:${skill_flat}"; do
+  _doc_label="${_doc_pair%%:*}"
+  _doc_text="${_doc_pair#*:}"
+  assert_prose '`github-actions`, `ksail-bot`, `app/cursor`, and `app/botantler-1`' \
+    "${_doc_text}" "the ${_doc_label} does not name the three unconditional --auto authors as a contiguous list"
+done
+# ...and bind the non-qualifying result to the direct-merge path in the SKILL. The contract side of
+# this is already asserted above and is deliberately not repeated here — a second copy would pass or
+# fail in lockstep with the first while reading like independent coverage.
+assert_prose 'the classifier does **not** exit 0 on' \
+  "${skill_flat}" "the maintenance skill does not bind the non-qualifying classifier result to the direct merge"
+
 # ── PR ownership: every PR in the portfolio, whoever authored it (maintainer direction 2026-08-08) ──
 # Rung 1 previously meant "own/trusted PRs in YOUR lane", with anyone else's draft stopping at hygiene.
 # The maintainer retired that split interactively. These pin the three parts that a later run could
