@@ -685,6 +685,19 @@ run_guard "$f" && rc=0 || rc=$?
 report "a here-string opens no heredoc, so the code below it is still scanned" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# Splitting the argv tail must not also do PATHNAME EXPANSION, or the guard's
+# verdict depends on the caller's working directory. The fixture is run from a
+# directory holding a file whose NAME contains a separator, so an expanded glob
+# ends the command before the `-q` that follows it — the same finding, decided by
+# where the sweep happened to be started from.
+globdir="$tmp/globcwd"
+mkdir -p "$globdir"
+: >"$globdir/a;b.txt"
+f="$(mkscript "glob-in-argv.sh" 'printf "%s" "$v" | grep *.txt -q')"
+out="$(cd "$globdir" && "$guard" "$f" 2>&1)" && rc=0 || rc=$?
+report "a glob in grep's arguments is not expanded against the caller's cwd" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
 # Reporting only the first offender on a logical line costs the reader a whole
 # CI round to discover the second edit this blocking check requires.
 f="$(mkscript "two-on-one-line.sh" 'printf A | grep -q A && printf B | grep -q B')"
