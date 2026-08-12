@@ -2057,11 +2057,13 @@ esac
 
 echo "portfolio surveyor contract: takeover-signal round-2 assertions passed"
 
-# (8) The post-arm confirmation must compare `headRefOid`, never `mergeCommit`. Every merge here is a
-#     SQUASH, which creates a new commit on the base, so `mergeCommit` differs from the source head on
-#     every valid merge — measured on this repo's own #2795, head `789ac1145e…` -> merge `9c7a132930…`.
-#     Keying the check on it would fire on every successful squash merge, and a guard that always fires
-#     is one people learn to ignore.
+# (8) The post-arm confirmation must compare `headRefOid`, never `mergeCommit`. `mergeCommit` names the
+#     commit created ON THE BASE, a different object from the head that merged under EVERY strategy —
+#     a squash condenses the branch into a new commit, a merge commit is new by definition, a rebase
+#     rewrites what it replays, and the merge-queue path deliberately drops `--squash` and lets the
+#     queue choose — measured on this repo's own #2795, head `789ac1145e…` -> merge `9c7a132930…`.
+#     Keying the check on it would fire on every valid merge, and a guard that always fires is one
+#     people learn to ignore.
 case "${constitution_flat}" in
   *'compare **`headRefOid`** to'*) ;;
   *) fail "the post-arm confirmation does not compare headRefOid" ;;
