@@ -176,12 +176,45 @@ cmd_mark() {
 # open PR's branch has no local ref, so `-b` SUCCEEDS and silently forks the PR from local HEAD — a
 # worktree that looks correct, carries none of the PR's commits, and would revert it under a plausible
 # diff. Attaching to the fetched remote tip is what makes "resume the PR" mean the PR.
+# warn_if_local_branch_is_behind reports that an existing local branch trails origin, so attaching to
+# it does not silently target an obsolete head. Advisory like every other remote call here: it never
+# decides whether `add` succeeds, and it stays SILENT unless it can positively show the branch is
+# behind — a warning that fires on every ordinary attach is trained away as noise.
+warn_if_local_branch_is_behind() {
+  local repo="$1" branch="$2" behind=""
+
+  git -C "$repo" remote get-url origin >/dev/null 2>&1 || return 0
+  bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+    git -C "$repo" fetch --quiet origin \
+    "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
+  git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch" || return 0
+
+  # Count only commits origin has that the local ref lacks. A branch that is merely AHEAD is ordinary
+  # unpushed work and says nothing about staleness.
+  behind="$(git -C "$repo" rev-list --count "refs/heads/$branch..refs/remotes/origin/$branch" 2>/dev/null)" || return 0
+  case "$behind" in
+    '' | 0) return 0 ;;
+  esac
+
+  echo "worktree-claim: NOTE local '$branch' is $behind commit(s) behind origin — attaching to the" >&2
+  echo "worktree-claim:      LOCAL ref, so this worktree does not carry origin's newer commits." >&2
+  echo "worktree-claim:      Reconcile before working:  git -C $(shquote "$repo") fetch origin $(shquote "$branch")" >&2
+  return 0
+}
+
 add_worktree_on() {
   local repo="$1" wt="$2" branch="$3"
 
   if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
     # Local branch exists: attach to it. git still refuses if it is checked out in another worktree,
     # which is the single-checkout rule doing its job — never bypass it.
+    #
+    # But a local ref left by an earlier run can sit far behind origin, and attaching silently is how
+    # a worktree once came up 56 commits behind its own PR — work targets an obsolete head and only
+    # the push reveals it, by which time the build is spent. Say so. The branch is NOT moved: a
+    # fast-forward here would be a mutation of existing local state, and a diverged branch could be
+    # carrying commits that exist nowhere else.
+    warn_if_local_branch_is_behind "$repo" "$branch"
     git -C "$repo" worktree add "$wt" "$branch"
     return
   fi

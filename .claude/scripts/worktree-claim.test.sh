@@ -947,5 +947,54 @@ noremote_out="$("$script" add \
 check "a repo with no origin still creates the branch" 0 "$noremote_rc" \
   "$noremote_out" "owner=session-noremote"
 
+# ── a STALE local branch must not attach silently (Codex P2, #2810) ────────────────
+# The local arm returned before any remote check, so a local ref left behind by an earlier run
+# attached at its old SHA while origin had moved on. Work then targets an obsolete head and only the
+# eventual push reveals it — the same shape that once produced a worktree 56 commits behind its PR,
+# where a plausible-looking diff would have reverted the PR's own commits.
+stale_seed="$tmp/stale-seed"
+mkdir -p "$stale_seed"
+git -C "$stale_seed" init -q -b main
+git -C "$stale_seed" config user.name "worktree-claim-test"
+git -C "$stale_seed" config user.email "worktree-claim-test@example.com"
+git -C "$stale_seed" commit --allow-empty -qm "init"
+git -C "$stale_seed" checkout -q -b "claim-stale-local"
+git -C "$stale_seed" commit --allow-empty -qm "the commit the local ref will sit at"
+stale_old="$(git -C "$stale_seed" rev-parse HEAD)"
+git -C "$stale_seed" checkout -q main
+stale_origin="$tmp/stale-origin.git"
+git clone -q --bare "$stale_seed" "$stale_origin"
+stale_consumer="$tmp/stale-consumer"
+git clone -q "$stale_origin" "$stale_consumer"
+git -C "$stale_consumer" branch -f "claim-stale-local" "$stale_old"
+# origin advances past the local ref, exactly as a sibling push or review follow-up would.
+git -C "$stale_seed" checkout -q "claim-stale-local"
+git -C "$stale_seed" commit --allow-empty -qm "origin moves ahead"
+git -C "$stale_seed" push -q "$stale_origin" "claim-stale-local"
+git -C "$stale_seed" checkout -q main
+
+stalelocal_rc=0
+stalelocal_out="$("$script" add \
+  "$stale_consumer" "$tmp/wt-stale-local" "claim-stale-local" "session-stalelocal" 2>&1)" || stalelocal_rc=$?
+check "a stale local branch still claims (advisory, not fatal)" 0 "$stalelocal_rc" \
+  "$stalelocal_out" "owner=session-stalelocal"
+check "a stale local branch is ANNOUNCED rather than attached silently" 0 "$stalelocal_rc" \
+  "$stalelocal_out" "behind origin"
+check "the staleness announcement names the branch" 0 "$stalelocal_rc" \
+  "$stalelocal_out" "claim-stale-local"
+
+# A local branch that is already current must stay quiet — otherwise the warning fires on every
+# ordinary attach and is trained away as noise.
+current_consumer="$tmp/current-consumer"
+git clone -q "$stale_origin" "$current_consumer"
+git -C "$current_consumer" branch -f "claim-current-local" "$(git -C "$current_consumer" rev-parse origin/main)"
+currentlocal_rc=0
+currentlocal_out="$("$script" add \
+  "$current_consumer" "$tmp/wt-current-local" "claim-current-local" "session-currentlocal" 2>&1)" || currentlocal_rc=$?
+check "a current local branch claims without a staleness warning" 0 "$currentlocal_rc" \
+  "$currentlocal_out" "owner=session-currentlocal"
+check "no false staleness warning on a branch origin does not have" 0 \
+  "$(grep -qF 'behind origin' <<<"$currentlocal_out" && echo 1 || echo 0)"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
