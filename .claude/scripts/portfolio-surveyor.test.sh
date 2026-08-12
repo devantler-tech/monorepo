@@ -1973,9 +1973,17 @@ case "${constitution_flat}" in
   *'within the last **~2h**, **by anyone but you**'*) ;;
   *) fail "AGENTS.md active-work row still counts the acting lane's own push as someone else's" ;;
 esac
+#     The lane ALONE is not enough: it names a namespace shared with the Agent Improver, which is the
+#     very case (2) below says must stay live. The consumer's rule is a match on branch and sha, so
+#     the signal has to carry that identity rather than leaving it to be recovered from some other
+#     field's payload — assert the complete emitted identity, never a lane-only token.
 case "${surveyor_flat}" in
-  *'pushed:<age>@<lane>'*) ;;
-  *) fail "the surveyor does not report the pushing lane, so the consumer cannot discount its own push" ;;
+  *'pushed:<age>@<lane>:<headRefName>@<headRefOid>'*) ;;
+  *) fail "the push signal omits the branch+sha identity, so the consumer cannot attribute a push to its own run" ;;
+esac
+case "${surveyor_flat}" in
+  *'The branch and sha are part of the SIGNAL, not left to be cross-referenced'*) ;;
+  *) fail "the surveyor does not state that the push identity travels in the signal itself" ;;
 esac
 
 # (2) `pushed:unknown` must be defined AND expiring — live-forever parks the PR, idle authorises a
