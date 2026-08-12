@@ -12,11 +12,32 @@
 #     printf … | grep -q NEEDLE     ->  status 141, PIPESTATUS=(141 0)
 #                                       i.e. writer SIGPIPE'd, grep matched.
 #
-#   It is a race between grep's exit and the writer's next write, so it is
-#   size-BIASED, not size-determined: 80/100 failures at a 100-byte payload and
-#   100/100 from ~1 KB up. A short fixture can pass a hundred times and the same
-#   line still flip in production. Do not try to prove or refute this class with
-#   a length test.
+#   It is a race between grep's exit and the writer's next write. The variable
+#   that decides it is HOW MUCH IS STILL UNWRITTEN AFTER THE MATCH — not the
+#   total payload size. Re-measured with /usr/bin/grep, 50 reps, every fixture
+#   first asserted to match under the no-pipe control:
+#
+#     match FIRST + 8 KB tail   50/50      match LAST after 8 KB      0/50
+#     match FIRST + 1 KB tail   47/50      one short anchored line    0/50
+#     match FIRST + 100 B tail   0/50
+#
+#   So a site whose match lands at or near the END of the stream, or whose
+#   stream is tiny, never fires; a site where the match can land early with
+#   >=1 KB still unwritten fires ~94-100%. (An earlier run recorded 80/100 at a
+#   100-byte payload, which this run could not reproduce — the two differ in
+#   whether those bytes sat before or after the match. Treat the tail as the
+#   variable and re-measure rather than trusting either figure.)
+#
+#   A short fixture can pass a hundred times and the same line still flip in
+#   production. Do not try to prove or refute this class with a length test.
+#
+#   !! MEASURING THIS UNDER AN AGENT HARNESS: check `which grep` FIRST. If it
+#   prints a FUNCTION BODY rather than a path, `grep` has been shimmed (Claude
+#   Code redirects it to ugrep), and the shim does NOT reproduce this class --
+#   the same 4 KB fixture read 0/200 through it and 200/200 through
+#   /usr/bin/grep. The shim is inherited by `bash script.sh` children, so
+#   writing the repro to a file does not escape it. Call /usr/bin/grep or
+#   `command grep` explicitly, or the class looks refuted when it is live.
 #
 #   Both polarities break, and the second one FAILS OPEN:
 #     if  cmd | grep -q PAT   -> matched, reported as not-matched  (noisy)
