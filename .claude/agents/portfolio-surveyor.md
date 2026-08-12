@@ -109,7 +109,9 @@ public and private — no per-repo loop needed to enumerate):
    the run will actually pick up. If the pool runs short, **stop and say so explicitly** — emit the
    undeepened remainder as `NOT-DEEPENED (budget)` rows naming the count and the repos, never a
    silent cheap row that reads like a completed assessment:
-   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,author,body,files`
+   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,headRepositoryOwner,headRepository,author,body,files`
+   (`headRepositoryOwner`/`headRepository` are what make the push-activity read below possible on a
+   fork; on a same-repo branch they resolve to the base repo)
    — every **deepened** PR is read with that full field list, `statusCheckRollup` included; a pentad
    reported without it has no CI evidence behind it. What is prohibited is pulling that field in the
    **cheap discovery pass** over every PR in every repo, which is what exhausts the pool before
@@ -140,9 +142,17 @@ public and private — no per-repo loop needed to enumerate):
      memory) and, worse, **no maintainer-authored PR can ever satisfy it**, which parked exactly the
      PRs the orchestrator is now responsible for.
      What decides is whether **someone is mid-flight right now**, and that is answered from data you
-     *can* read. For **every `devantler` PR, draft or non-draft**, report the four signals of
+     *can* read. For **every actionable PR the orchestrator may drive — whoever authored it**, draft
+     or non-draft: your own lane's, a sibling lane's, the maintainer's interactive, our bots', and an
+     external contributor's alike (only exact `renovate[bot]`/`dependabot[bot]` PRs are excluded as
+     automation-owned) — report the four signals of
      *You own EVERY pull request in the portfolio*, each as an **age**, so the orchestrator applies the
      window rather than re-deriving it:
+     🔴 **Scoping this to `devantler` rows is the defect it looks like a simplification of.** The
+     takeover test is what authorises acting on a PR, so a class that never carries `active=` is
+     either never actionable or actionable with no evidence — and since the 2026-08-08 widening made
+     every author drivable, it becomes the second. An external or Copilot-authored PR mid-merge would
+     read as idle.
      `active=<pushed:<age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>`
      — the newest push to the head, the newest **human** (non-bot, non-agent-disclosed) comment or
      review, a review request at the current head still inside its provider envelope, and an in-flight
@@ -155,9 +165,17 @@ public and private — no per-repo loop needed to enumerate):
      pushed seconds ago. Getting this wrong is the expensive direction — it reports a live branch as
      unowned and authorises a second lane to push into it. Read the authoritative per-ref push time
      from the repository activity API instead, matching the PR's own `headRefName`:
-     `gh api "repos/devantler-tech/<repo>/activity?per_page=100" --jq '[.[]|select(.activity_type=="push" and .ref=="refs/heads/<headRefName>")][0].timestamp'`
-     (`push` and `force_push` both count as activity on that ref). When no push record is retrievable,
-     emit `pushed:unknown` — never `none`, which asserts idleness the survey did not observe.
+     `gh api "repos/<headRepositoryOwner>/<headRepository>/activity?per_page=100" --jq '[.[]|select((.activity_type=="push" or .activity_type=="force_push") and .ref=="refs/heads/<headRefName>")][0].timestamp'`
+     — **both event types**, since a `force_push` is exactly the mid-flight rewrite this signal exists
+     to catch, and selecting only `push` would return an older ordinary push and read as idle.
+     🔴 **Query the PR's HEAD repository, not the base.** A normal external contribution is pushed to
+     the contributor's **fork**, whose pushes never appear in `devantler-tech/<repo>/activity`; asking
+     the base repo therefore yields `pushed:unknown` on every external PR forever (parking the class
+     the ownership widening exists to admit) or, read as idle, authorises action while the contributor
+     is mid-push. Deepen `headRepositoryOwner` and `headRepository` and read activity from there; for
+     a same-repo branch those simply resolve to the base repo. When no push record is retrievable —
+     including a fork whose activity is not readable — emit `pushed:unknown`, never `none`, which
+     asserts an idleness the survey did not observe.
      Keep reporting the **branch name** (`headRefName`) and the body's **disclosure** (match the
      STRUCTURAL prefix, never the actor word — it is "Agentic Engineer" now, and "Daily AI Engineer" /
      "Daily AI Assistant" before the 2026-07-21 rename). ⚠️ **The literals carry no markdown emphasis

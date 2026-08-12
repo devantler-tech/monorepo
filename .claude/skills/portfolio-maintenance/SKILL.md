@@ -298,8 +298,12 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   the hygiene (maintainer direction 2026-07-01) — and so are **`coderabbitai[bot]`-authored PRs**
   (e.g. "CodeRabbit Generated Unit Tests": drive their red CI like any org-installed bot's, or close
   with reasoning).
-- for **merge-queue repos**, reports each queued trusted/own PR's latest `merge_group` run conclusion
-  (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still queued").
+- for **merge-queue repos**, reports **every queued PR's** latest `merge_group` run conclusion,
+  whoever authored it (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still
+  queued"). 🔴 **Not just trusted/own** — an in-flight `merge_group` run is one of the four
+  active-work signals, so restricting it to that subset reports `active=none` on an external or
+  Copilot-authored PR that is *already merging*, and the orchestrator may then promote, close, or
+  fire a second merge against it.
 
 **Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the
 product's `weekly`/live cursor in memory — NOT every run), also spawn the read-only
@@ -428,11 +432,21 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    review, promote and merge it like any other PR (maintainer direction 2026-08-08) — and an external
    PR additionally needs the **current-head evaluation record** the contract requires before merge: a
    `devantler`-authored comment naming the CI run you read and what behaviour it demonstrated, whose
-   SHA equals `headRefOid`, with that run verified via the API as `success` at that same commit. The merge is **low-ceremony**:
-   combine the already-collected current-head pentad with one fresh `gh pr view <n>` showing the same
-   `headRefOid`, `isDraft:false`, trusted author, and `CLEAN`; merge only when the pentad also has zero
+   SHA equals `headRefOid`, with that run verified via the API as `success` at that same commit.
+   ⚠️ **Where the change has genuinely no exercisable runtime surface** — docs or config consumed
+   elsewhere — no such run can exist, so the record instead names the **static** trace: what consumes
+   the change and why there is nothing to run. Requiring a CI run unconditionally would park that
+   class forever (contract *You own EVERY pull request*). Anything with a reachable code path still
+   owes the CI reading. The merge is **low-ceremony**:
+   combine the already-collected current-head pentad with one fresh
+   `gh pr view <n> --repo devantler-tech/<repo>` showing the same
+   `headRefOid`, `isDraft:false`, owner `devantler-tech`, and `CLEAN`; merge only when the pentad also has zero
    findings and a green review at that
-   head. A refused
+   head. 🔴 **Do not re-add a `trusted author` condition here** — trust gates **execution**, never the
+   merge (contract *Trust gate*), so an external PR that has cleared every evaluation and review gate
+   would otherwise be refused at the last step for being external, which is the whole class the
+   2026-08-08 widening exists to admit. Exact `renovate[bot]`/`dependabot[bot]` PRs stay excluded as
+   automation-owned. A refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
    variant-evidence retries. **On merge-queue repos, root-cause a stall/kick-out before re-queuing**
    (contract *Merge policy → Merge-queue repos*): a PR that "was queued" but didn't merge has usually been
