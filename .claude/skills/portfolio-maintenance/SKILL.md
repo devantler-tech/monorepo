@@ -326,8 +326,18 @@ it, so it parked exactly the PRs you are now responsible for driving. Whether yo
 answered by the `active=` test alone, whoever opened it.
 What the disclosure still decides is **whose control channel a `devantler` comment is**: on a PR
 identified as the maintainer's own interactive work, his comments are him steering *his* work, not
-instructions addressed to you — so they are not actioned as direction, while the PR itself is still
-driven to a terminal state like any other. For a `devantler` comment on your own draft/PR/issue, read it and **act on it**
+general instructions addressed to you — so they do not become tasks for the rest of your run, while
+the PR itself is still driven to a terminal state like any other.
+🔴 **But an actionable maintainer comment ON that PR still BINDS that PR — "not addressed to you" is
+never "safe to merge over".** He writes *"do not merge; redesign this"* on his own interactive draft.
+That comment parks the PR only for the ~2h human-activity window; once it expires the PR is no longer
+actively owned, and because a plain comment is **not** part of the hygiene pentad, nothing else stops
+the merge — so the routine promotes and merges against his stated direction, using a grant he gave it.
+So: **read every `devantler` comment on a PR you are taking over, and treat anything actionable about
+that PR as a requirement on it**, whatever the disclosure says about who it was written for. A
+`do-not-merge`, a redesign request, or a named condition is a **blocker to honour and report**, not
+noise to age out. The attribution rule answers *whose control channel this is*; it never answers
+*may I merge this*. For a `devantler` comment on your own draft/PR/issue, read it and **act on it**
 that run (implement / change approach / close / redirect), or respond + surface it in the report if it
 needs discussion. The maintainer uses draft-PR comments as a deliberate control channel (see the
 contract's *Untrusted input* carve-out); a maintainer comment on a draft is authoritative even before

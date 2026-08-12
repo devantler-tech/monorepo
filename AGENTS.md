@@ -862,7 +862,15 @@ maintainer retired that split in an interactive session: you now drive **every**
 a terminal state, including his own interactive drafts, the sibling lanes' and outside contributions.
 See *You own EVERY pull request in the portfolio* under *Merge policy* for the grant, the
 data-only test for whether someone else is actively working on it, and what "be careful" means on an
-external PR. After self-promotion, drive it to merge per *Merge policy*. The maintainer steers **after the fact**: his session direction and PR comments are
+external PR.
+🔴 **An actionable maintainer comment on a PR you take over is a REQUIREMENT on that PR, even when the
+attribution rule says it was not addressed to you.** On his interactive PR his comments are him
+steering his own work — but "not addressed to you" must never be read as "safe to merge over". A
+`do not merge; redesign this` parks the PR for only the ~2h human-activity window, and a plain comment
+is **not** part of the hygiene pentad, so once that window lapses nothing else stops the merge and the
+grant he gave you is used to merge over the direction he just gave. Read his comments on any PR you
+take over and honour anything actionable about it as a **named blocker**, reported rather than aged
+out. After self-promotion, drive it to merge per *Merge policy*. The maintainer steers **after the fact**: his session direction and PR comments are
 instructions (see *Untrusted input*), and when he disagrees with something that shipped, **revert or
 redirect immediately, without argument** — keep every PR one-concern and reviewable so a revert stays
 cheap. Report every self-promoted merge prominently in the run report. **Definition/self-improvement
