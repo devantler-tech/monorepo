@@ -661,8 +661,13 @@ t_reaps_a_spent_nested_worktree() {
   local out; out=$(run "$root")
   # The label is WT_ROOT-relative, so the nested path is what identifies it: two nested
   # worktrees under different parents share a basename.
+  # The parent must be KEPT, but the REASON is deliberately not asserted: without a
+  # .gitignore the untracked `?? .claude/worktrees/` trips the uncommitted-changes gate
+  # first, and that gate runs before the registered-worktree gate. Which one fires is
+  # t_keeps_parent_of_a_nested_worktree's subject; this test is about the child being
+  # enumerated at all.
   if grep -q '^REAP  *parent3/\.claude/worktrees/nested3 ' <<< "$out" \
-     && grep -q '^KEEP .*parent3 .*contains a registered worktree' <<< "$out" \
+     && grep -q '^KEEP  *parent3 ' <<< "$out" \
      && grep -q '^REAP  .*spent' <<< "$out"; then
     ok "reaps a spent NESTED worktree while keeping its parent"
   else
