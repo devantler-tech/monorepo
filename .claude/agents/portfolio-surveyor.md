@@ -208,6 +208,9 @@ public and private — no per-repo loop needed to enumerate):
        authorship by itself — it is a hint the orchestrator weighs against its creation record.
      - `none` — neither literal. This is genuinely unknown, **not** a synonym for the maintainer's and
        **not** a synonym for the routine's; the orchestrator resolves it from its creation record.
+     ⚠️ **The creation record survives here for ATTRIBUTION ONLY** — deciding whose control channel a
+     `devantler` comment is. It is never a gate on whether the PR may be driven; that question is
+     answered by `active=` alone, whoever opened it.
      When a body carries **both** literals, **interactive wins**. The asymmetry is about whose control
      channel a `devantler` comment on that PR is: reading the maintainer's PR as the routine's turns
      his own commentary into an instruction addressed to you, while reading the routine's as his
@@ -403,8 +406,11 @@ public and private — no per-repo loop needed to enumerate):
      `## Self-review (fallback` heading, **a per-lane failure line for ALL THREE lanes — CodeRabbit, Codex and Cursor Bugbot**
      (the fallback is invalid without evidence for every lane), a `Verdict: no P0/P1 findings` line, and a
      `commit_id` equal to the head. Report as `none` if ANY is missing — a self-review with findings,
-     at a stale SHA, or lacking the three-lane evidence does not satisfy the gate. The orchestrator
-     still applies its creation-record test before acting on any `devantler` row.
+     at a stale SHA, or lacking the three-lane evidence does not satisfy the gate. What the
+     orchestrator applies before acting on a `devantler` row is the **`active=` test**, never a
+     creation record: the creation-record gate is retired two sections above, and re-imposing it here
+     would nullify this fallback for exactly the class it was widened to cover — a taken-over
+     maintainer-interactive PR, which no creation record can ever satisfy.
      Fetch `headRefOid` while deepening the PR. Report `cr@<sha>` for a finding-free CodeRabbit
      review completion at the current head even without `APPROVED`: accept a current-head review
      object **whose own `body` BEGINS WITH the recognised CodeRabbit review-artifact marker

@@ -294,6 +294,24 @@ assert_absent 'Never assert ownership of a `devantler` PR' \
 # The positive half, so the negatives above cannot be satisfied by deleting the classification too.
 assert_prose 'green non-drafts `MERGE-READY`' \
   "${surveyor_flat}" "the surveyor no longer classifies a green devantler non-draft MERGE-READY"
+
+# Same drift class, two more surfaces a run LOADS. The retired creation-record gate survived where
+# the widening's diff never reached: the surveyor re-imposed it after the fallback-review rule, which
+# nullifies that fallback for the one class it was widened to cover (a taken-over
+# maintainer-interactive PR can never satisfy a creation record); and the maintenance skill still
+# instructed the run to apply the record before acting. Both passed every presence assertion.
+assert_absent 'still applies its creation-record test before acting on any `devantler` row' \
+  "${surveyor_flat}" "the surveyor re-imposes the retired creation-record gate after fallback review"
+assert_prose 'What the orchestrator applies before acting on a `devantler` row is the **`active=` test**' \
+  "${surveyor_flat}" "the surveyor does not route pre-action gating through the active-work test"
+assert_absent 'apply your creation record to every surfaced' \
+  "${skill_flat}" "the maintenance skill still gates maintainer comments on a creation record"
+assert_prose 'Attribute the COMMENT; never gate on a creation record' \
+  "${skill_flat}" "the maintenance skill does not separate comment attribution from drive authority"
+# The disclosure still decides WHOSE control channel a comment is — retiring the gate must not
+# delete that, or his commentary on his own PR becomes an instruction addressed to the run.
+assert_prose 'his comments are him steering *his* work, not' \
+  "${skill_flat}" "the maintenance skill no longer attributes comments on maintainer-interactive PRs"
 # What SURVIVES the retirement: branch and disclosure stay, for comment attribution only, and the
 # set-level ownership claim stays banned — an aggregate "no maintainer-interactive PRs here" still
 # misleads the orchestrator about whose control channel a `devantler` comment is.
