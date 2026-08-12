@@ -822,5 +822,69 @@ check "failed default discovery still claims successfully" 0 "$symref_rc" \
 check "failed default discovery reports UNKNOWN, not a stale-pointer comparison" 0 "$symref_rc" \
   "$symref_out" "base freshness UNKNOWN"
 
+# ── add attaches to a branch that already exists (monorepo#2776) ───────────────────
+# Rung 1 of the work-selection ladder is "finish an open PR", and that branch exists before the
+# worktree does. `add` hardcoded `-b`, so the mandated helper could only ever create a NEW branch:
+# resuming an open PR fell out of the claim protocol entirely, because the one command that writes
+# the ownership marker refused to run.
+existing_repo="$tmp/existing-repo"
+mkdir -p "$existing_repo"
+git -C "$existing_repo" init -q -b main
+git -C "$existing_repo" config user.name "worktree-claim-test"
+git -C "$existing_repo" config user.email "worktree-claim-test@example.com"
+git -C "$existing_repo" commit --allow-empty -qm "init"
+git -C "$existing_repo" branch "claim-existing-local"
+git -C "$existing_repo" commit --allow-empty -qm "main moves on"
+existing_tip="$(git -C "$existing_repo" rev-parse "claim-existing-local")"
+
+local_rc=0
+local_out="$("$script" add \
+  "$existing_repo" "$tmp/wt-existing-local" "claim-existing-local" "session-existing" 2>&1)" || local_rc=$?
+check "add attaches to an existing local branch" 0 "$local_rc" "$local_out" "owner=session-existing"
+check "existing-branch add writes the marker" 0 \
+  "$([ -f "$tmp/wt-existing-local/.claude-worktree-owner" ] && echo 0 || echo 1)"
+# The point of attaching is landing on THAT branch's commit. Creating a fresh branch from HEAD would
+# also exit 0 and also write a marker, so the exit code alone cannot tell the two apart — assert the
+# checked-out commit, which is the only thing that distinguishes a resumed PR from a silent fork.
+check "existing-branch add lands on that branch's tip, not the repo HEAD" 0 0 \
+  "$(git -C "$tmp/wt-existing-local" rev-parse HEAD)" "$existing_tip"
+check "existing-branch add checks out the branch itself" 0 0 \
+  "$(git -C "$tmp/wt-existing-local" rev-parse --abbrev-ref HEAD)" "claim-existing-local"
+
+# A branch that exists only on the REMOTE is the actual open-PR case: a fresh checkout has no local
+# ref for it. Creating it from the consumer's HEAD would silently fork the PR — the worktree would
+# look plausible and carry none of the PR's commits.
+remote_seed="$tmp/remote-seed"
+mkdir -p "$remote_seed"
+git -C "$remote_seed" init -q -b main
+git -C "$remote_seed" config user.name "worktree-claim-test"
+git -C "$remote_seed" config user.email "worktree-claim-test@example.com"
+git -C "$remote_seed" commit --allow-empty -qm "init"
+git -C "$remote_seed" checkout -q -b "claim-existing-remote"
+git -C "$remote_seed" commit --allow-empty -qm "work that only exists on the PR branch"
+remote_tip="$(git -C "$remote_seed" rev-parse "claim-existing-remote")"
+git -C "$remote_seed" checkout -q main
+remote_origin="$tmp/remote-origin.git"
+git clone -q --bare "$remote_seed" "$remote_origin"
+remote_consumer="$tmp/remote-consumer"
+git clone -q "$remote_origin" "$remote_consumer"
+git -C "$remote_consumer" branch -D "claim-existing-remote" >/dev/null 2>&1 || true
+
+remote_rc=0
+remote_out="$("$script" add \
+  "$remote_consumer" "$tmp/wt-existing-remote" "claim-existing-remote" "session-remote-existing" 2>&1)" || remote_rc=$?
+check "add attaches to a branch that exists only on the remote" 0 "$remote_rc" \
+  "$remote_out" "owner=session-remote-existing"
+check "remote-branch add lands on the remote tip, not the consumer HEAD" 0 0 \
+  "$(git -C "$tmp/wt-existing-remote" rev-parse HEAD)" "$remote_tip"
+
+# Fail-closed regression: attaching must not defeat git's own single-checkout rule. A branch already
+# checked out elsewhere stays refused, so two worktrees can never share one branch.
+dup_rc=0
+dup_out="$("$script" add \
+  "$existing_repo" "$tmp/wt-existing-dup" "claim-existing-local" "session-dup" 2>&1)" || dup_rc=$?
+check "a branch already checked out elsewhere is still refused" 2 "$dup_rc" \
+  "$dup_out" "git worktree add failed"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -16,7 +16,9 @@
 #
 # USAGE
 #   .claude/scripts/worktree-claim.sh add  <repo_path> <worktree_path> <branch> <owner-token>
-#       Create the worktree (git worktree add -b <branch>) and write the marker.
+#       Create the worktree and write the marker. <branch> is created when it does not exist;
+#       when it already exists — locally, or only on origin, as an open PR's branch does — the
+#       worktree attaches to it at that branch's tip instead of forking a new one.
 #       A relative worktree_path is resolved from repo_path.
 #   .claude/scripts/worktree-claim.sh check <worktree_path> <my-owner-token>
 #       Read-only diagnostic: exit 0 if free / mine / expired; exit 3 if a live
@@ -164,6 +166,43 @@ cmd_mark() {
   cmd_acquire "$1" "$2"
 }
 
+# add_worktree_on places the worktree on <branch>, creating that branch only when it does not already
+# exist. Rung 1 of the work-selection ladder is "finish an open PR", whose branch necessarily predates
+# the worktree, so a hardcoded `-b` made the mandated claim helper unusable for the single most common
+# case: it exited 2 with `a branch named '<x>' already exists`, and the caller then improvised a bare
+# `git worktree add` that writes NO ownership marker (monorepo#2776).
+#
+# The remote arm is the one that has to be right rather than merely working. On a fresh checkout an
+# open PR's branch has no local ref, so `-b` SUCCEEDS and silently forks the PR from local HEAD — a
+# worktree that looks correct, carries none of the PR's commits, and would revert it under a plausible
+# diff. Attaching to the fetched remote tip is what makes "resume the PR" mean the PR.
+add_worktree_on() {
+  local repo="$1" wt="$2" branch="$3"
+
+  if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
+    # Local branch exists: attach to it. git still refuses if it is checked out in another worktree,
+    # which is the single-checkout rule doing its job — never bypass it.
+    git -C "$repo" worktree add "$wt" "$branch"
+    return
+  fi
+
+  # No local branch. Refresh this one remote ref before deciding, because the tracking ref may be
+  # absent (never fetched) or stale (fetched before the PR's latest push). Bounded and non-fatal: a
+  # network failure must not turn `add` into a hard error, but it MUST NOT silently downgrade to a
+  # fork either — hence the explicit NOTE below when the ref stays unresolvable.
+  bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+    git -C "$repo" fetch --quiet origin \
+    "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
+
+  if git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    git -C "$repo" worktree add --track -b "$branch" "$wt" "origin/$branch"
+    return
+  fi
+
+  # Genuinely new branch — the original behaviour, and still the common case for fresh work.
+  git -C "$repo" worktree add -b "$branch" "$wt"
+}
+
 cmd_add() {
   local repo="$1" wt="$2" branch="$3" owner="$4"
   [ -d "$repo" ] || fail "repo path is not a directory: $repo"
@@ -179,7 +218,7 @@ cmd_add() {
   fi
   # Create parent so git worktree add can place the tree.
   mkdir -p "$(dirname "$wt")"
-  if ! git -C "$repo" worktree add -b "$branch" "$wt"; then
+  if ! add_worktree_on "$repo" "$wt" "$branch"; then
     fail "git worktree add failed for $wt (branch $branch)"
   fi
   # Claim BEFORE the advisory freshness check, not after. That check makes up to two bounded remote
