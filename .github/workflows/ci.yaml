@@ -40,6 +40,7 @@ jobs:
       renovate-dashboard: ${{ steps.filter.outputs.renovate-dashboard }}
       comment-disclosure-drift: ${{ steps.filter.outputs.comment-disclosure-drift }}
       pr-ownership-disclosure: ${{ steps.filter.outputs.pr-ownership-disclosure }}
+      pipefail-grep-guard: ${{ steps.filter.outputs.pipefail-grep-guard }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -264,6 +265,14 @@ jobs:
               # pins the matcher rules, so a change to it must re-run the test.
               - '.claude/scripts/pr-ownership-disclosure.sh'
               - '.claude/scripts/pr-ownership-disclosure-go/**'
+              - '.github/workflows/ci.yaml'
+            pipefail-grep-guard:
+              # The guard scans EVERY tracked shell script, so any shell change
+              # can introduce the shape it rejects — an enumerated subset would
+              # let a new script land unchecked.
+              - '**/*.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the check it gates.
               - '.github/workflows/ci.yaml'
             product-value:
               - 'AGENTS.md'
@@ -539,6 +548,27 @@ jobs:
       # guard resolves worktree paths with `pwd -P` (macOS /private/tmp symlinks).
       - name: Self-test the submodule-init isolation guard
         run: bash .claude/scripts/submodule-init.test.sh
+
+  test-pipefail-grep-guard:
+    name: Test pipefail grep guard
+    needs: changes
+    if: needs.changes.outputs.pipefail-grep-guard == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The self-test proves the class is real by executing it, then covers each
+      # spelling the guard must catch and each safe shape it must leave alone.
+      - name: Self-test the guard
+        run: bash .claude/scripts/pipefail-grep-guard.test.sh
+      # Then the guard itself over every tracked shell script, so the shape
+      # cannot come back after the sweep that removed it.
+      - name: Reject writers piped into an early-exiting grep
+        run: bash .claude/scripts/pipefail-grep-guard.sh
 
   test-maintainer-preflight:
     name: Test maintainer preflight contract
@@ -827,6 +857,7 @@ jobs:
       - test-branch-cleanup
       - test-worktree-cleanup
       - test-submodule-init
+      - test-pipefail-grep-guard
       - test-maintainer-preflight
       - test-memory-hygiene
       - test-latency-discipline-contract
@@ -858,6 +889,7 @@ jobs:
             ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-submodule-init.result }}
+            ${{ needs.test-pipefail-grep-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
             ${{ needs.test-latency-discipline-contract.result }}
