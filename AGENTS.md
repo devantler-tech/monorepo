@@ -3039,18 +3039,39 @@ case is safe by construction — same namespace, same deterministic branch name,
 is refused (see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim
 branch.
 
-🔴 **Scheduled is not delivered — on the Claude lane about a third of ticks never happen.** Measured
-across one identical window (2026-08-02T03:50Z → 2026-08-08T19:50Z, **161 scheduled slots per lane**):
-**Codex dispatched 161/161**, because that scheduler starts a run even when the previous one is still
-open — one run whose record stayed open for 240 minutes did not block any of the four ticks behind it.
-**Claude dispatched 108/161**: its scheduler refuses any dispatch that would overlap the previous run
-of the same task and records it as `per_task_limit`, so **53 ticks — 32.9% — were dropped**, silently,
-producing no artifact anywhere. That is the second consecutive measurement of the same behaviour
-(36.6% over 2026-08-01→08-07), so it is the lane's normal state, not an incident, and the effective
-Claude interval is **~1.5 hours**. The Agent Improver is unaffected: the Claude store records **zero**
-dropped improver dispatches, and the Codex scheduler refuses none.
+🔴 **Scheduled is not delivered — on the Claude lane about one tick in five never happens.** The two
+machine-local schedulers differ. Measured across 2026-08-02T03:50Z → 2026-08-08T19:50Z (**161 scheduled
+slots per lane**), **Codex dispatched 161/161**, because that scheduler starts a run even when the
+previous one is still open — one run whose record stayed open for 240 minutes did not block any of the
+four ticks behind it. Claude's refuses any dispatch that would overlap the previous run of the same
+task and records it as `per_task_limit`. The reading over that same window was
+**Claude dispatched 108/161** — 53 ticks, 32.9% — with 36.6% over 2026-08-01→08-07. Those measurements
+are preserved as what they were; **both overstate the loss, and the cause is the METHOD, not the lane.**
+
+🔴 **A `per_task_limit` record is a per-minute liveness sample of "a run is currently open" — NOT a
+per-slot drop record.** Measured 2026-08-12: **1871 of 1922 inter-record gaps are 59–60 seconds**, so
+the scheduler re-records a skip every minute a run stays open and one long run writes dozens of them.
+Counting those records — raw, or bucketed by hour — therefore counts a slot that merely started
+**delayed into the next hour** as one that never ran at all. Over 164 slots
+(2026-08-05T12Z → 2026-08-12T07Z), **37 of the 66 refused hours dispatched anyway**.
+
+Corrected, and cross-validated against the transcripts rather than the skip store: **133 of 164 slots
+dispatched; 31 did not (18.9%)** — 29 of those carrying a refusal (**17.7% genuinely dropped**) and
+**2 carrying no record at all**, so a second failure cause exists that the skip store cannot see (the
+Improver's own missing 2026-08-05 dispatch is one, and it has no `per_task_limit` record either). The
+effective Claude interval is therefore **~1.2 hours**, not 1.5.
+⚠️ **The Improver is NOT proven unaffected — and its zero skip count is exactly why not.** The Claude
+store records **zero** `per_task_limit` skips for it, but the second failure cause above is invisible
+to that store, and the Improver's own missing 2026-08-05 dispatch is one of the two no-record cases.
+So zero skips establishes nothing about its health; reading it as a clean bill is the same
+absence-as-evidence error this whole correction is about. Measure the Improver the same way —
+scheduled slots against actual dispatches — before relying on its four daily starts. The Codex
+scheduler refuses none, which bounds *that* lane's refusal cause and says nothing about this one.
+⚠️ **Re-derive this ONLY by comparing actual dispatches to scheduled slots** — never by counting skip
+records. Counting them is what produced five mutually-inconsistent readings (32.9%, 36.6%, 44.0%,
+50.0%, 58.3%) across both instances, each re-measured because the last one looked wrong.
 **So never time anything off "the next tick."** A carry-forward, a claim-expiry judgement, or a "the
-next run will collect this" decision is wrong about a third of the time on Claude, and always in the
+next run will collect this" decision is wrong roughly one time in five on Claude, and always in the
 direction of waiting **longer** than planned — so prefer finishing inside the current run over handing
 work to a tick that may not come. The Agent Improver's four daily starts are additional work, not
 replacement slots. The scheduled interval is the gap **between runs, not a per-run time budget**; it

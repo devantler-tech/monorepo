@@ -342,21 +342,34 @@ check "proves hourly engineer slots"       "$OUT" "local engineer slots schedule
 # the due-minute filter ran — the assertion passed against a wrong implementation
 # and the ablation proved nothing. With hour 12 present as noise only, dropping the
 # filter counts 4 and the test fails, which is what makes it a real check.
-nocheck "never counts poll-tick records as dropped dispatches" "$OUT" "dropped dispatches: 27"
-nocheck "never counts a skip recorded under another reason"     "$OUT" "dropped dispatches: 4 slot(s)"
-check   "counts dropped dispatches by due slot, not poll tick" "$OUT" \
-  "claude engineer dropped dispatches: 3 slot(s)"
+nocheck "never counts poll-tick records as dropped dispatches" "$OUT" "dispatch refusals: 27"
+nocheck "never counts a skip recorded under another reason"     "$OUT" "dispatch refusals: 4 slot(s)"
+check   "counts refusals by due slot, not poll tick" "$OUT" \
+  "claude engineer dispatch refusals: 3 slot(s)"
+# The count is an UPPER BOUND on drops, never a drop count: a refused slot can still
+# dispatch moments later, and 37 of 66 refused hours did (measured 2026-08-12). The
+# label and the disclosure are both pinned, because the failure mode here is not a
+# wrong number — it is a correct number published under the wrong name, which is what
+# produced five mutually-inconsistent "drop rates" from this one surface.
+check   "refusals are published as an upper bound, not a drop count" "$OUT" \
+  "UPPER BOUND on dropped dispatches"
+check   "the disclosure names the only method that yields a drop rate" "$OUT" \
+  "comparing actual dispatches to scheduled slots"
+nocheck "the discredited drop-count label cannot return" "$OUT" \
+  "dropped dispatches: 3 slot(s)"
+nocheck "no drop RATE is published from the refusal surface" "$OUT" \
+  "drop rate:"
 # Codex's store has no skip surface at all — `automations` records dispatches that
 # HAPPENED, so a Codex drop is visible only as a gap. Zero on a surface that cannot
 # record the event is not zero, and reporting 0 here would invent a clean lane.
 check "codex drop is UNKNOWN, never a fabricated zero" "$OUT" \
-  "codex engineer dropped dispatches: UNKNOWN"
-nocheck "codex drop never reports a zero"  "$OUT" "codex engineer dropped dispatches: 0"
+  "codex engineer dispatch refusals: UNKNOWN"
+nocheck "codex drop never reports a zero"  "$OUT" "codex engineer dispatch refusals: 0"
 
 # A rate needs the skip records to span the whole window. Here they start well
 # after a 3650-day window opens, so the denominator is unprovable and the rate
 # must fail closed rather than dividing by a window the store cannot cover.
-check "unspanned window refuses to state a rate" "$OUT" "drop rate: UNKNOWN"
+check "unspanned window refuses to state a rate" "$OUT" "refusal rate: UNKNOWN"
 
 # The minute alone identifies a dropped slot only while the cron covers every hour.
 # Under a finite hour list the runtime still records a poll tick at every hour's :50
@@ -371,9 +384,9 @@ jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) 
   "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
 OUT=$(run --section drift)
 check   "a finite hour list excludes unscheduled hours" "$OUT" \
-  "claude engineer dropped dispatches: 1 slot(s)"
+  "claude engineer dispatch refusals: 1 slot(s)"
 nocheck "an hour-list cron never counts every hour's due minute" "$OUT" \
-  "claude engineer dropped dispatches: 3 slot(s)"
+  "claude engineer dispatch refusals: 3 slot(s)"
 mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
 # Coverage is not liveness, and the two must be tested separately.
@@ -385,10 +398,10 @@ mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tas
 # error as a fabricated zero.
 OUT=$(run --section drift --since-days 1)
 check   "an inactive scheduler refuses to state a rate" "$OUT" \
-  "drop rate: UNKNOWN (no dispatch or skip inside the window"
-nocheck "an outage is never reported as a clean 0.0%" "$OUT" "drop rate: 0.0%"
+  "refusal rate: UNKNOWN (no dispatch or skip inside the window"
+nocheck "an outage is never reported as a clean 0.0%" "$OUT" "refusal rate: 0.0%"
 check   "window bounds the dropped-slot count" "$OUT" \
-  "claude engineer dropped dispatches: 0 slot(s)"
+  "claude engineer dispatch refusals: 0 slot(s)"
 
 # ACTIVE: same window, but `lastRunAt` now falls inside it, so the scheduler is
 # proven to have dispatched and the denominator describes slots something was
@@ -398,7 +411,7 @@ jq --arg now "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" \
   '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .lastRunAt) = $now' \
   "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
 OUT=$(run --section drift --since-days 1)
-check "a proven-active scheduler states a rate" "$OUT" "drop rate: 0.0%"
+check "a proven-active scheduler states a rate" "$OUT" "refusal rate: 0.0%"
 mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
 # A store with NO skip surface must read UNKNOWN, never 0. The count alone cannot
@@ -410,9 +423,9 @@ jq 'del(.recordedSkips)' "$FIX/claude-store/scheduled-tasks.json.bak" \
   > "$FIX/claude-store/scheduled-tasks.json"
 OUT=$(run --section drift)
 check   "absent skip surface reads UNKNOWN" "$OUT" \
-  "claude engineer dropped dispatches: UNKNOWN"
+  "claude engineer dispatch refusals: UNKNOWN"
 nocheck "absent skip surface is never a zero" "$OUT" \
-  "claude engineer dropped dispatches: 0 slot(s)"
+  "claude engineer dispatch refusals: 0 slot(s)"
 mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
 # Removing one pointer must fail closed rather than leaving the schedule surface
@@ -427,7 +440,7 @@ check "missing improver pointer is explicit" "$OUT" "UNKNOWN: codex improver sch
 # stored RRULE had lost BYSECOND=0, the aggregate gate went UNKNOWN, and the Claude
 # drop count — which depends on nothing Codex owns — disappeared with it.
 check "a codex pointer defect does not suppress the claude drop count" "$OUT" \
-  "claude engineer dropped dispatches: 3 slot(s)"
+  "claude engineer dispatch refusals: 3 slot(s)"
 mv "$FIX/codex/automations/agent-improver/automation.toml.missing" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 

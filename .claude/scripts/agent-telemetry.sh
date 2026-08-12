@@ -3832,12 +3832,20 @@ if want drift; then
     ' "$store" 2>/dev/null
   }
 
-  # ── dropped dispatches ──────────────────────────────────────────────────────
+  # ── dispatch refusals ───────────────────────────────────────────────────────
   # A cron expansion counts SCHEDULED SLOTS. The Claude runtime declines any
   # dispatch that would overlap the previous run of the same task and records the
-  # refusal as `per_task_limit`, so a slot is not a run. Measured on the live
-  # store: 58 of 168 slots dropped over 2026-08-02→08-09 (34.5%), corroborating
-  # 52/142 (36.6%) and 108/161 (32.9%) from two earlier windows.
+  # refusal as `per_task_limit`, so a slot is not a run.
+  #
+  # What this metric reports is REFUSALS, which are an UPPER BOUND on drops — not
+  # drops. A refusal says the runtime declined at the due minute; the run can still
+  # start moments later, and measured 2026-08-12, **37 of 66 refused hours
+  # dispatched anyway**. Reading this count as a drop count is what produced five
+  # mutually-inconsistent rates (32.9%, 36.6%, 44.0%, 50.0%, 58.3%) across both
+  # instances — including the 58/168 (34.5%) this comment used to state as fact.
+  # A drop rate is derivable only by comparing ACTUAL DISPATCHES to scheduled slots
+  # (the transcript-cross-validated reading is 31 of 164, 18.9%), which this
+  # surface cannot see, so it is deliberately not published here.
   #
   # The store writes one record per POLL TICK — roughly every 60s for as long as
   # the task stays blocked — so raw records overstate badly: 1067 records for 58
@@ -4128,7 +4136,7 @@ if want drift; then
     # An empty floor means no record exists to prove the surface is live, so the
     # whole figure is UNKNOWN rather than zero.
     if [ -z "$CLAUDE_DROPPED" ] || [ -z "$SKIP_FLOOR" ]; then
-      echo "    claude engineer dropped dispatches: UNKNOWN (no readable skip record — an absent surface is not a zero)"
+      echo "    claude engineer dispatch refusals: UNKNOWN (no readable skip record — an absent surface is not a zero)"
     else
       # A rate is stated only when the store's records demonstrably cover the whole
       # window. Records that begin INSIDE it leave the earlier slots unaccounted,
@@ -4162,23 +4170,28 @@ if want drift; then
          && [ "$CLAUDE_DROPPED" -le "$RATE_TOTAL" ]; then
         RATE=$(awk -v d="$CLAUDE_DROPPED" -v t="$RATE_TOTAL" \
           'BEGIN { if (t > 0) printf "%.1f%% of %d slot(s) at the current cadence", 100 * d / t, t; else print "UNKNOWN" }')
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: $RATE"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: $RATE"
       elif [ -n "$RATE_TOTAL" ] && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
            && [ "$CLAUDE_DROPPED" -gt "$RATE_TOTAL" ]; then
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (more drops than the window schedules — cadence changed within it)"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: UNKNOWN (more refusals than the window schedules — cadence changed within it)"
       elif [ "$ACTIVE_IN_WINDOW" -ne 1 ]; then
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (no dispatch or skip inside the window — scheduler not proven active)"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: UNKNOWN (no dispatch or skip inside the window — scheduler not proven active)"
       else
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (skip records do not span the window)"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: UNKNOWN (skip records do not span the window)"
       fi
+      # Every branch above prints a COUNT, so the qualifier belongs to all four rather than
+      # only the one that also states a rate — a reader who sees `3 slot(s)` beside
+      # `refusal rate: UNKNOWN` needs it just as much, and that is the shape the drift-section
+      # default actually emits.
+      echo "      ^ UPPER BOUND on dropped dispatches, not a drop count — a refused slot may still have dispatched (37 of 66 did, measured 2026-08-12). Derive drops by comparing actual dispatches to scheduled slots."
     fi
     # The Codex `automations` table records dispatches that HAPPENED; it carries no
     # skip surface, so a Codex drop is visible only as a gap. Reporting 0 here would
     # fabricate a clean lane out of a surface that cannot record the event.
-    echo "    codex engineer dropped dispatches: UNKNOWN (scheduler store records dispatches only, no skip surface)"
+    echo "    codex engineer dispatch refusals: UNKNOWN (scheduler store records dispatches only, no skip surface)"
   else
-    echo "    claude engineer dropped dispatches: UNKNOWN (claude engineer schedule unmeasured)"
-    echo "    codex engineer dropped dispatches: UNKNOWN (scheduler store records dispatches only, no skip surface)"
+    echo "    claude engineer dispatch refusals: UNKNOWN (claude engineer schedule unmeasured)"
+    echo "    codex engineer dispatch refusals: UNKNOWN (scheduler store records dispatches only, no skip surface)"
   fi
 
   echo

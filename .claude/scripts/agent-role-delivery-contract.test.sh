@@ -468,6 +468,34 @@ assert_prose 'Codex dispatched 161/161' \
   "cadence does not state the Codex control that makes the shortfall a lane asymmetry"
 assert_prose 'never time anything off' \
   "cadence does not tell a run to stop planning against the next scheduled tick"
+# A `per_task_limit` record is a per-MINUTE liveness sample of "a run is currently open",
+# not a per-slot drop record — so counting those records, raw or hour-bucketed, counts a
+# slot that merely started LATE as one that never ran. Measured 2026-08-12 over 164 slots:
+# 37 of 66 refused hours dispatched anyway. Without this distinction every run re-derives
+# the rate from the skip store and gets a different answer; four measurements across both
+# instances spanned 32.9%-58.3% doing exactly that. Pin the METHOD, not only the number,
+# or the wrong method comes back the next time someone re-measures.
+assert_prose 'liveness sample' \
+  "cadence does not say what a per_task_limit record actually samples"
+assert_prose 'delayed into the next hour' \
+  "cadence does not distinguish a delayed dispatch from a dropped one"
+# The two assertions above are satisfied by the historical EXPLANATION alone, so an edit that
+# dropped the correction while keeping the story would still pass them — which would leave the
+# discredited method as the operative instruction. Pin the DIRECTIVE and the corrected reading,
+# not only the account of why the old one was wrong.
+assert_prose 'comparing actual dispatches to scheduled slots' \
+  "cadence does not name the only method that yields a drop rate"
+assert_prose '133 of 164 slots' \
+  "cadence does not state the corrected, transcript-cross-validated dispatch count"
+# A zero skip count cannot establish the Improver's health: the second failure cause carries no
+# skip record at all, and one of its two instances IS an Improver dispatch. Reading that zero as
+# a clean bill is the same absence-as-evidence error, one lane over.
+assert_prose 'zero skip count is exactly why not' \
+  "cadence still infers Improver health from an absent skip record"
+# `constitution_flat` collapses newlines to single spaces, so the superseded sentence is matched
+# in its flattened form — it was wrapped across two lines in the source.
+refute_prose 'The Agent Improver is otherwise unaffected' \
+  "cadence again declares the Improver unaffected on the strength of a zero skip count"
 # The superseded absolute. Left in place it reads as the operative rule, because it is
 # stated as a flat invariant while the correction reads as a caveat about it.
 refute_prose 'next scheduled tick is always one hour later' \
