@@ -349,6 +349,20 @@ run_guard "$f" && rc=0 || rc=$?
 report "a '#' inside a parameter expansion is not a comment introducer" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# An assignment prefix may quote a value containing whitespace. The unquoted-only
+# form stopped matching at the space, so the pipeline read as containing no grep.
+f="$(mkscript "assign-quoted-value-double.sh" \
+  'printf "%s" "$v" | LC_ALL="C UTF-8" grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "a double-quoted assignment value with whitespace does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+f="$(mkscript "assign-quoted-value-single.sh" \
+  "printf '%s' \"\$v\" | LC_ALL='C UTF-8' grep -q NEEDLE")"
+run_guard "$f" && rc=0 || rc=$?
+report "a single-quoted assignment value with whitespace does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
 # A wrapper option can take its value as the FOLLOWING word. `-u` matched the
 # bare-option alternative, but `UNUSED` then sat between the prefix and `grep`
 # where nothing matched it, so the pipeline read as "no grep here".
