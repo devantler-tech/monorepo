@@ -1985,6 +1985,18 @@ case "${surveyor_flat}" in
   *'The branch and sha are part of the SIGNAL, not left to be cross-referenced'*) ;;
   *) fail "the surveyor does not state that the push identity travels in the signal itself" ;;
 esac
+#     NEGATIVE assertion: the retired lane-plus-creation-record discount must not survive alongside
+#     the branch+sha rule. Carrying both is worse than carrying only the old one, because a consumer
+#     may follow either — and the lane is SHARED with the Agent Improver, so the retired form
+#     authorises discounting a live sibling push and writing over active work.
+case "${surveyor_flat}" in
+  *'discounts a signal from its **own** namespace when its creation record covers that PR'*)
+    fail "the retired namespace-plus-creation-record discount is still authorised alongside the branch+sha rule" ;;
+esac
+case "${surveyor_flat}" in
+  *'only when that exact branch and sha are ones THIS RUN pushed'*) ;;
+  *) fail "the surveyor does not scope the discount to what this run actually pushed" ;;
+esac
 
 # (2) `pushed:unknown` must be defined AND expiring — live-forever parks the PR, idle authorises a
 #     takeover on data the survey admits it could not read.
