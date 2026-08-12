@@ -59,8 +59,8 @@ t_sweeps_root_and_submodules() {
   local root; root=$(make_root)
   local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
                    bash "$SUT" dry-run 24 2>&1)
-  if printf '%s' "$out" | grep -q 'REAP  .*spent-root' \
-     && printf '%s' "$out" | grep -q 'REAP  .*spent-sub'; then
+  if grep -q 'REAP  .*spent-root' <<<"$out" \
+     && grep -q 'REAP  .*spent-sub' <<<"$out"; then
     ok "sweeps the root AND every submodule from .gitmodules"
   else
     bad "sweeps the root AND every submodule from .gitmodules" "$out"
@@ -77,7 +77,7 @@ t_rewrites_session_worktree_root() {
                    bash "$SUT" dry-run 24 2>&1)
   # NB: match the banner's trailing " ===" rather than anchoring with $ — the path is
   # not at end-of-line, so a $ anchor never matches even when the rewrite is correct.
-  if printf '%s' "$out" | grep -qF "root=$root/repo ==="; then
+  if grep -qF "root=$root/repo ===" <<<"$out"; then
     ok "rewrites a session-worktree root to the main checkout"
   else
     bad "rewrites a session-worktree root to the main checkout" \
@@ -100,9 +100,9 @@ t_skips_uninitialised_submodule() {
   mkdir -p "$root/repo/nested/.claude/worktrees"
   local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
                    bash "$SUT" dry-run 24 2>&1)
-  if printf '%s' "$out" | grep -q 'SKIP .*nested .*not initialised' \
-     && printf '%s' "$out" | grep -q 'submodule-init.sh' \
-     && ! printf '%s' "$out" | grep -q 'nested .*broken isolation'; then
+  if grep -q 'SKIP .*nested .*not initialised' <<<"$out" \
+     && grep -q 'submodule-init.sh' <<<"$out" \
+     && ! grep -q 'nested .*broken isolation' <<<"$out"; then
     ok "SKIPs an uninitialised submodule and names it as such"
   else
     bad "SKIPs an uninitialised submodule and names it as such" "$out"
@@ -134,8 +134,8 @@ t_skips_broken_isolation() {
   fi
   local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
                    bash "$SUT" dry-run 24 2>&1)
-  if printf '%s' "$out" | grep -q 'SKIP .*nested .*broken isolation' \
-     && ! printf '%s' "$out" | grep -q 'nested .*not initialised'; then
+  if grep -q 'SKIP .*nested .*broken isolation' <<<"$out" \
+     && ! grep -q 'nested .*not initialised' <<<"$out"; then
     ok "SKIPs a submodule with broken worktree isolation"
   else
     bad "SKIPs a submodule with broken worktree isolation" "$out"
@@ -153,7 +153,7 @@ t_aborts_and_exits_nonzero_on_sweep_failure() {
   local out rc
   out=$(PATH="$shim:$PATH" HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
         bash "$SUT" dry-run 24 2>&1); rc=$?
-  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ABORTING'; then
+  if [ "$rc" -ne 0 ] && grep -q 'ABORTING' <<<"$out"; then
     ok "aborts and exits nonzero when a sweep fails"
   else
     bad "aborts and exits nonzero when a sweep fails" "rc=$rc $(printf '%s' "$out" | tail -3)"
@@ -193,7 +193,7 @@ t_validates_args_even_with_no_worktree_dirs() {
   rm -rf "$root/repo/.claude/worktrees" "$root/repo/nested/.claude/worktrees"
   local out rc
   out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" alpply 24 2>&1); rc=$?
-  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi 'invalid MODE'; then
+  if [ "$rc" -ne 0 ] && grep -qi 'invalid MODE' <<<"$out"; then
     ok "validates MODE even when no repository has a worktree dir"
   else
     bad "validates MODE even when no repository has a worktree dir" "rc=$rc $out"
@@ -209,7 +209,7 @@ t_aborts_on_malformed_gitmodules() {
   printf '[submodule "broken"\n\tpath =\n' > "$root/repo/.gitmodules"
   local out rc
   out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" bash "$SUT" dry-run 24 2>&1); rc=$?
-  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'ABORTING'; then
+  if [ "$rc" -ne 0 ] && grep -q 'ABORTING' <<<"$out"; then
     ok "aborts on a malformed .gitmodules instead of sweeping only the root"
   else
     bad "aborts on a malformed .gitmodules instead of sweeping only the root" "rc=$rc $out"
@@ -230,9 +230,9 @@ t_skips_a_gitmodules_entry_that_is_not_a_gitlink() {
   # caught either by the exact-path check (index entry resolves to nothing) or by the
   # mode check. Both are correct SKIPs; what must hold is that the nested repository is
   # left alone while the root is still swept.
-  if printf '%s' "$out" | grep -q '### SKIP nested' \
+  if grep -q '### SKIP nested' <<<"$out" \
      && [ -d "$root/repo/nested/.claude/worktrees/spent-sub" ] \
-     && printf '%s' "$out" | grep -q 'REAPED .*spent-root'; then
+     && grep -q 'REAPED .*spent-root' <<<"$out"; then
     ok "SKIPs a .gitmodules entry that is not a real gitlink"
   else
     bad "SKIPs a .gitmodules entry that is not a real gitlink" \
@@ -265,7 +265,7 @@ t_gitlink_validation_uses_a_literal_pathspec() {
   local out; out=$(HOME="$root/home" WORKTREE_CLEANUP_ROOT="$root/repo" \
                    bash "$SUT" apply 24 2>&1)
   if [ -f "$root/repo/nested[12]/.claude/worktrees/victim/precious.txt" ] \
-     && printf '%s' "$out" | grep -q 'SKIP nested\[12\]'; then
+     && grep -q 'SKIP nested\[12\]' <<<"$out"; then
     ok "gitlink validation uses a literal pathspec (metacharacter path is SKIPped)"
   else
     bad "gitlink validation uses a literal pathspec (metacharacter path is SKIPped)" \

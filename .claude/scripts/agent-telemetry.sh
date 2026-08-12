@@ -1949,8 +1949,8 @@ if want dispatch; then
       # Prose that merely quotes it is far longer, which is what keeps this
       # tool's own evidence out of its own count.
       if [ "${#lastt}" -le 200 ] \
-         && printf '%s' "$lastt" | grep -qiE "$DH_RE" \
-         && ! printf '%s' "$lastt" | grep -qiE "$DH_NOT_RE" \
+         && grep -qiE "$DH_RE" <<<"$lastt" \
+         && ! grep -qiE "$DH_NOT_RE" <<<"$lastt" \
          && { [ "$sr" = "stop_sequence" ] || [ -z "$sr" ]; }; then
         ended_on_refusal=1
       fi
@@ -3738,7 +3738,7 @@ if want drift; then
       index($2, "**" p "**") && index($2, lane) { print $c; exit }
     ' "$AGENTS_MD" 2>/dev/null)
     [ -n "$cell" ] || return 0
-    if printf '%s\n' "$cell" | grep -qi 'every hour'; then
+    if grep -qi 'every hour' <<<"$cell"; then
       minute=$(printf '%s\n' "$cell" | sed -nE 's/.*:([0-9][0-9]?).*/\1/p')
       schedule_from_parts "*" "$minute"
       return 0

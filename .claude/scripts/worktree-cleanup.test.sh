@@ -67,7 +67,7 @@ t_reaps_spent() {
   local root; root=$(make_repo)
   add_wt "$root" spent pushed
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q '^REAP  .*spent' <<<"$out"; then
     ok "reaps a spent worktree (control)"
   else
     bad "reaps a spent worktree (control)" "$out"
@@ -80,8 +80,8 @@ t_keeps_unpushed() {
   add_wt "$root" spent pushed          # control must still reap
   add_wt "$root" work unpushed
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*work .*unpushed commit' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q 'KEEP .*work .*unpushed commit' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a worktree with unpushed commits"
   else
     bad "KEEPs a worktree with unpushed commits" "$out"
@@ -103,8 +103,8 @@ t_keeps_detached_orphan() {
   # the gate under test (it did exactly that before this line existed)
   touch -t 202001010000 "$root/repo/.claude/worktrees/orph"
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*orph .*unpushed commit' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q 'KEEP .*orph .*unpushed commit' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a detached HEAD on an orphan commit"
   else
     bad "KEEPs a detached HEAD on an orphan commit" "$out"
@@ -118,8 +118,8 @@ t_keeps_dirty() {
   add_wt "$root" dirty pushed
   echo edited >> "$root/repo/.claude/worktrees/dirty/file.txt"   # modified TRACKED file
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*dirty .*uncommitted change' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q 'KEEP .*dirty .*uncommitted change' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a worktree with uncommitted tracked changes"
   else
     bad "KEEPs a worktree with uncommitted tracked changes" "$out"
@@ -137,7 +137,7 @@ t_ignores_tool_noise() {
   # writing into the worktree bumped its mtime — re-age it past the threshold
   touch -t 202001010000 "$root/repo/.claude/worktrees/noisy"
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q '^REAP  .*noisy'; then
+  if grep -q '^REAP  .*noisy' <<<"$out"; then
     ok "treats .codex/ and .agents/ as noise, not work"
   else
     bad "treats .codex/ and .agents/ as noise, not work" "$out"
@@ -152,8 +152,8 @@ t_keeps_untracked_real_file() {
   echo real > "$root/repo/.claude/worktrees/untracked/notes.md"
   touch -t 202001010000 "$root/repo/.claude/worktrees/untracked"
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*untracked .*uncommitted change' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q 'KEEP .*untracked .*uncommitted change' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs an untracked file outside the noise set"
   else
     bad "KEEPs an untracked file outside the noise set" "$out"
@@ -167,8 +167,8 @@ t_keeps_young() {
   add_wt "$root" fresh pushed
   touch "$root/repo/.claude/worktrees/fresh"          # now => younger than 24h
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*fresh .*age .*< 24h' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q 'KEEP .*fresh .*age .*< 24h' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a worktree younger than min_age_hours"
   else
     bad "KEEPs a worktree younger than min_age_hours" "$out"
@@ -184,8 +184,8 @@ t_keeps_active_ownership_claim() {
   "$CLAIM_SUT" mark "$w" "codex-run-unique-123" >/dev/null
   touch -t 202001010000 "$w"
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*claimed .*active ownership claim' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q 'KEEP .*claimed .*active ownership claim' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a clean old worktree with an active ownership claim"
   else
     bad "KEEPs a clean old worktree with an active ownership claim" "$out"
@@ -201,7 +201,7 @@ t_reaps_expired_ownership_claim() {
   printf 'owner=codex-run-expired-123\ncreated_at=2020-01-01T00:00:00Z\n' >"$w/.claude-worktree-owner"
   touch -t 202001010000 "$w"
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q '^REAP  .*expired-claim'; then
+  if grep -q '^REAP  .*expired-claim' <<<"$out"; then
     ok "allows an expired ownership claim to be reaped"
   else
     bad "allows an expired ownership claim to be reaped" "$out"
@@ -223,7 +223,7 @@ t_keeps_active_claim_mutex() {
   touch -t 202001010000 "$w"
   local out; out=$(run "$root" apply)
   if [ -d "$w" ] \
-     && printf '%s' "$out" | grep -q 'KEEP .*mutex-held .*ownership mutex' \
+     && grep -q 'KEEP .*mutex-held .*ownership mutex' <<<"$out" \
      && [ ! -d "$root/repo/.claude/worktrees/spent" ]; then
     ok "KEEPs a worktree while its claim mutex is held"
   else
@@ -241,8 +241,8 @@ t_keeps_live_cwd() {
   sleep 1                                    # let the child establish its CWD
   local out; out=$(run "$root")
   kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-  if printf '%s' "$out" | grep -q 'KEEP .*live .*live process CWD' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q 'KEEP .*live .*live process CWD' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a worktree that is a live process CWD"
   else
     bad "KEEPs a worktree that is a live process CWD" "$out"
@@ -268,9 +268,9 @@ t_keeps_live_cwd_in_subdir_with_regex_metachars() {
   sleep 1
   local out; out=$(run "$root")
   kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-  if printf '%s' "$out" | grep -qF 'live process CWD' \
-     && ! printf '%s' "$out" | grep -qF "REAP   $odd" \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -qF 'live process CWD' <<<"$out" \
+     && ! grep -qF "REAP   $odd" <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a live CWD in a SUBDIR of a regex-metachar-named worktree"
   else
     bad "KEEPs a live CWD in a SUBDIR of a regex-metachar-named worktree" "$out"
@@ -306,9 +306,9 @@ exit 1
 SHIM
   chmod +x "$shim/stat"
   local out; out=$(PATH="$shim:$PATH" "$SUT" "$root/repo" "$root/manifest.tsv" dry-run 24 2>&1)
-  if printf '%s' "$out" | grep -q '^REAP  .*spent' \
-     && printf '%s' "$out" | grep -q 'KEEP .*fresh .*age .*< 24h' \
-     && ! printf '%s' "$out" | grep -qi 'unbound variable'; then
+  if grep -q '^REAP  .*spent' <<<"$out" \
+     && grep -q 'KEEP .*fresh .*age .*< 24h' <<<"$out" \
+     && ! grep -qi 'unbound variable' <<<"$out"; then
     ok "age gate resolves mtime under GNU-style stat"
   else
     bad "age gate resolves mtime under GNU-style stat" "$out"
@@ -327,8 +327,8 @@ t_keeps_locked() {
   git -C "$root/repo" worktree lock "$root/repo/.claude/worktrees/held"
   local out; out=$(run "$root")
   git -C "$root/repo" worktree unlock "$root/repo/.claude/worktrees/held" 2>/dev/null
-  if printf '%s' "$out" | grep -q 'KEEP .*held .*locked' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q 'KEEP .*held .*locked' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a locked worktree"
   else
     bad "KEEPs a locked worktree" "$out"
@@ -368,7 +368,7 @@ t_keeps_staged_gitlink_update() {
   touch -t 202001010000 "$wt"
   local st; st=$(git -C "$wt" status --porcelain | head -1)
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*staged .*uncommitted change'; then
+  if grep -q 'KEEP .*staged .*uncommitted change' <<<"$out"; then
     ok "KEEPs a STAGED submodule gitlink update"
   else
     bad "KEEPs a STAGED submodule gitlink update" "porcelain=[$st] $out"
@@ -417,8 +417,8 @@ t_keeps_parent_of_a_nested_worktree() {
            "FIXTURE did not reproduce '?? .claude/worktrees/': [$st]"; rm -rf "$root"; return ;;
   esac
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*parent .*uncommitted change' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q 'KEEP .*parent .*uncommitted change' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a worktree that contains a nested worktree"
   else
     bad "KEEPs a worktree that contains a nested worktree" "$out"
@@ -524,7 +524,7 @@ t_never_touches_an_unregistered_directory() {
   touch -t 202001010000 "$junk"
   local out; out=$(run "$root" apply)
   if [ -f "$junk/data.txt" ] \
-     && printf '%s' "$out" | grep -q 'KEEP .*not-a-worktree .*not a registered worktree'; then
+     && grep -q 'KEEP .*not-a-worktree .*not a registered worktree' <<<"$out"; then
     ok "never deletes an unregistered directory under the worktree root"
   else
     bad "never deletes an unregistered directory under the worktree root" \
@@ -547,8 +547,8 @@ t_keeps_files_hidden_by_index_flags() {
     git -C "$h" update-index "--$flag" file.txt
     echo "edited invisibly" >> "$h/file.txt"
     local out; out=$(run "$root")
-    if ! printf '%s' "$out" | grep -q "KEEP .*hidden-$flag .*assume-unchanged" \
-       || ! printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+    if ! grep -q "KEEP .*hidden-$flag .*assume-unchanged" <<<"$out" \
+       || ! grep -q '^REAP  .*spent' <<<"$out"; then
       pass_all=0
       bad "KEEPs a worktree whose edits are hidden by index flags ($flag)" "$out"
     fi
@@ -587,7 +587,7 @@ t_index_flag_gate_survives_a_large_index() {
   local out; out=$(run "$root")
   if [ "${bytes:-0}" -lt 65536 ]; then
     bad "index-flag gate survives a large index" "FIXTURE too small: ls-files -v = ${bytes}B (<64K pipe buffer)"
-  elif printf '%s' "$out" | grep -q 'KEEP .*bigidx .*assume-unchanged'; then
+  elif grep -q 'KEEP .*bigidx .*assume-unchanged' <<<"$out"; then
     ok "index-flag gate survives a large index (${bytes}B of ls-files output)"
   else
     bad "index-flag gate survives a large index" "bytes=$bytes $(printf '%s' "$out" | grep bigidx)"
@@ -604,7 +604,7 @@ t_keeps_untracked_when_showUntrackedFiles_is_no() {
   echo "only copy" > "$root/repo/.claude/worktrees/hushed/notes.md"
   touch -t 202001010000 "$root/repo/.claude/worktrees/hushed"
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*hushed .*uncommitted change'; then
+  if grep -q 'KEEP .*hushed .*uncommitted change' <<<"$out"; then
     ok "KEEPs untracked files even under status.showUntrackedFiles=no"
   else
     bad "KEEPs untracked files even under status.showUntrackedFiles=no" "$out"
@@ -634,7 +634,7 @@ t_keeps_parent_of_nested_worktree_even_when_ignored() {
   if [ -n "$st" ]; then
     bad "KEEPs a parent whose nested worktree is hidden by .gitignore" \
         "FIXTURE did not hide it: [$st]"
-  elif printf '%s' "$out" | grep -q 'KEEP .*parent2 .*contains a registered worktree'; then
+  elif grep -q 'KEEP .*parent2 .*contains a registered worktree' <<<"$out"; then
     ok "KEEPs a parent whose nested worktree is hidden by .gitignore"
   else
     bad "KEEPs a parent whose nested worktree is hidden by .gitignore" "$out"
@@ -691,8 +691,8 @@ t_keeps_worktree_with_orphaned_reflog_commit() {
   git -C "$w" reset -q --hard HEAD~1          # HEAD back to the pushed commit
   touch -t 202001010000 "$w"
   local out; out=$(run "$root")
-  if printf '%s' "$out" | grep -q 'KEEP .*reflog .*reflog holds commit' \
-     && printf '%s' "$out" | grep -q '^REAP  .*spent'; then
+  if grep -q 'KEEP .*reflog .*reflog holds commit' <<<"$out" \
+     && grep -q '^REAP  .*spent' <<<"$out"; then
     ok "KEEPs a worktree whose reflog holds an otherwise-unreachable commit"
   else
     bad "KEEPs a worktree whose reflog holds an otherwise-unreachable commit" \
@@ -720,7 +720,7 @@ t_keeps_worktree_with_operation_in_progress() {
   if [ ! -e "$gd/rebase-merge" ] && [ ! -e "$gd/rebase-apply" ]; then
     bad "KEEPs a worktree with a git operation in progress" \
         "FIXTURE produced no rebase state in $gd"
-  elif printf '%s' "$out" | grep -q 'KEEP .*rebasing .*operation in progress'; then
+  elif grep -q 'KEEP .*rebasing .*operation in progress' <<<"$out"; then
     ok "KEEPs a worktree with a git operation in progress"
   else
     bad "KEEPs a worktree with a git operation in progress" "$out"
@@ -753,8 +753,8 @@ t_apply_removes_and_records() {
   local branches; branches=$(awk -F'\t' '$5=="reaped"{print $2}' "$root/manifest.tsv" 2>/dev/null)
   if [ ! -d "$root/repo/.claude/worktrees/spent" ] \
      && [ -d "$root/repo/.claude/worktrees/work" ] \
-     && printf '%s\n' "$branches" | grep -qxF 'claude/spent' \
-     && ! printf '%s\n' "$branches" | grep -qxF 'claude/work'; then
+     && grep -qxF 'claude/spent' <<<"$branches" \
+     && ! grep -qxF 'claude/work' <<<"$branches"; then
     ok "apply removes the spent worktree, records it, and spares the unpushed one"
   else
     bad "apply removes the spent worktree, records it, and spares the unpushed one" \
