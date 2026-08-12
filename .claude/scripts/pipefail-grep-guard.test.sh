@@ -722,10 +722,17 @@ out="$("$guard" "$f" 2>&1)" && rc=0 || rc=$?
 report "both offenders on one logical line are reported, not just the first" \
   "$(yn test "$(grep -c 'stops at the first match' <<<"$out")" -eq 2)" "rc=$rc out=$out"
 
-# Two offenders on one logical line share a file:line and a flag, so the report
-# must name which grep each finding is about.
-report "each finding names the offending fragment, so a pair is distinguishable" \
-  "$(yn test "$(grep -c 'stops at the first match (in `' <<<"$out")" -eq 2)" "out=$out"
+# Two offenders on one logical line share a file:line and a flag, so each block
+# must say which of them it is — otherwise the pair is byte-identical and reads
+# like one finding printed twice.
+report "a pair on one line is numbered, so the two blocks are distinguishable" \
+  "$(yn test "$(grep -c '\[[12] of 2 on this line\]' <<<"$out")" -eq 2)" "out=$out"
+# ...and a lone finding is NOT numbered, or every ordinary report grows a count
+# that is always "1 of 1".
+f="$(mkscript "single-offender.sh" 'printf "%s" "$v" | grep -q A')"
+run_guard "$f" && rc=0 || rc=$?
+report "a single offender carries no of-N counter" \
+  "$(yn test "$(grep -c 'on this line' <<<"$out")" -eq 0)" "rc=$rc out=$out"
 
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2

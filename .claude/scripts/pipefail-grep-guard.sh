@@ -609,26 +609,39 @@ scan_file() {
     # one line can carry two (`… | grep -q A && … | grep -q B`), and stopping at
     # the first made the developer fix it, rerun CI, and only then discover the
     # second edit this blocking check requires.
-    local tail_="$probe" head_ rest flag
+    # Collect this line's offenders before printing any of them, so each block can
+    # say WHICH one it is. Two offenders on one logical line share a file:line and
+    # usually a flag, so the blocks are otherwise byte-identical and the reader
+    # cannot tell a genuine pair from one finding reported twice. Naming the
+    # matched fragment does NOT solve it — the match is the `| grep ` prefix,
+    # identical for both — which only reading the real output made obvious.
+    local tail_="$probe" head_ rest flag k
+    local -a line_flags=()
+    local lf=0
     while [[ "$tail_" =~ $PIPE_GREP_RE ]]; do
       head_="${BASH_REMATCH[0]}"
       rest="${tail_#*"$head_"}"
       if flag="$(early_exit_flag "$rest")"; then
-        printf '%s:%d: %s\n' "$file" "$((start + 1))" "$(sed 's/^[[:space:]]*//' <<<"${lines[start]}")"
-        # Name the offending fragment. Two offenders on one logical line share a
-        # file:line and a flag, so without it the pair prints as two identical
-        # blocks and the reader cannot tell them apart — or tell a genuine pair
-        # from the same finding reported twice.
-        printf '    grep %s stops at the first match (in `%s`); the writer dies of SIGPIPE and pipefail reports THAT.\n' \
-          "$flag" "$(sed 's/^[[:space:]]*//' <<<"$head_")"
-        # Why the capture form leads and process substitution carries a caveat:
-        # see THE FIX THIS GUARD ASKS FOR in the header, which records the three
-        # measured exit codes.
-        printf '    fix: feed grep without a pipe — grep %s PAT <<<"$var", or out="$(cmd)" then <<<"$out", or from a file.\n' "$flag"
-        printf '    note: < <(cmd) removes the pipe too, but DISCARDS the producer status — check it separately.\n'
-        findings=$((findings + 1))
+        line_flags[lf]="$flag"
+        lf=$((lf + 1))
       fi
       tail_="$rest"
+    done
+    for ((k = 0; k < lf; k++)); do
+      flag="${line_flags[k]}"
+      printf '%s:%d: %s\n' "$file" "$((start + 1))" "$(sed 's/^[[:space:]]*//' <<<"${lines[start]}")"
+      if ((lf > 1)); then
+        printf '    [%d of %d on this line] grep %s stops at the first match; the writer dies of SIGPIPE and pipefail reports THAT.\n' \
+          "$((k + 1))" "$lf" "$flag"
+      else
+        printf '    grep %s stops at the first match; the writer dies of SIGPIPE and pipefail reports THAT.\n' "$flag"
+      fi
+      # Why the capture form leads and process substitution carries a caveat:
+      # see THE FIX THIS GUARD ASKS FOR in the header, which records the three
+      # measured exit codes.
+      printf '    fix: feed grep without a pipe — grep %s PAT <<<"$var", or out="$(cmd)" then <<<"$out", or from a file.\n' "$flag"
+      printf '    note: < <(cmd) removes the pipe too, but DISCARDS the producer status — check it separately.\n'
+      findings=$((findings + 1))
     done
   done
 }
