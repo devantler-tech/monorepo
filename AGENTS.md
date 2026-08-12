@@ -985,7 +985,7 @@ green reads as "no review". Rows are in lane-priority order:**
 
 | Lane | Clean/green artifact | Findings artifact | Key to match |
 |---|---|---|---|
-| **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head **on an object positively identified as a review** (body begins `**Actionable comments posted:`), or the auto-generated summary comment updated after the authenticated request, naming the head, and carrying no rate-limit/service marker; the head's `CodeRabbit` commit status corroborates that a review RAN only when its `description` begins `Review completed` |
+| **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head **on an object positively identified as a review** (body begins `**Actionable comments posted:`), or the auto-generated summary comment updated after the authenticated request, naming the head, or a **command-invocation reply carrying a verdict** (`Reviewed pull request #<n> at <sha>` with `<sha>` a prefix of `headRefOid`, plus `I found no actionable issues`) — each carrying no rate-limit/service marker; the head's `CodeRabbit` commit status corroborates that a review RAN only when its `description` begins `Review completed` |
 | **Codex** (`chatgpt-codex-connector[bot]`) | **issue COMMENT** — `Codex Review: Didn't find any major issues` + `**Reviewed commit:** <sha>` (10-char, no `commit_id` field) | review object, `state: COMMENTED`, inline threads — **OR an issue COMMENT carrying a `## Review finding` section** (see below) | clean pass: comment body sha vs `headRefOid[0:10]`; comment-form finding: full 40-char sha in its blob permalinks |
 | **Cursor Bugbot** (`cursor[bot]`) | **CHECK-RUN named `Cursor Bugbot`** (app slug `cursor`), `conclusion: success` — *no review object, no comment* | same check-run with **`conclusion: neutral` AND `output.title: "Bugbot Review"`**, findings as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments` | check-run at `commits/<headRefOid>/check-runs` |
 
@@ -1003,7 +1003,7 @@ sha in its blob permalinks** — the finding comment carries **no** `**Reviewed 
 is precisely why the marker-based sweep missed it. **`Didn't find any major issues` never clears a P2**:
 the green can be newer than the finding, so recency decides nothing here.
 
-**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head **and positively identified as a review** — its body begins `**Actionable comments posted:`, because **an empty object is a reply container, never a review**, whatever its `commit_id` — or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request and naming the head. Reject auto-generated command replies/acknowledgements and any summary carrying a rate-limit, quota, or service marker saying the review did not run. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
+**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head **and positively identified as a review** — its body begins `**Actionable comments posted:`, because **an empty object is a reply container, never a review**, whatever its `commit_id` — or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request and naming the head, or its **command-invocation reply comment carrying a verdict** — a body stating `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of `headRefOid`**, together with `I found no actionable issues`, updated after that request. **All three artifacts must have `user.login == "coderabbitai[bot]"`** — the reply is matched on plain prose rather than a structural marker, so without the author bind any account could post those two phrases with the head prefix and be read as a green. **Discriminate on SUBSTANCE, not on comment type:** a command reply carrying no verdict line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a review, and any artifact carrying a rate-limit, quota, or service marker saying the review did not run is rejected whatever its shape. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
 
 🔴 **The empty-container half is not pedantry — it is the dominant shape, and it has reached `main`.**
 Measured over the 60 most recently merged monorepo PRs (2026-08-07): of the CodeRabbit review objects
@@ -1020,8 +1020,33 @@ alternative and is wrong. An inline review comment's `commit_id` tracks the comm
 currently anchors to, and GitHub **re-anchors it forward** as the head advances, so old comments
 follow the PR. On #2658 all 11 inline comments at the merged head belonged to review objects from
 *earlier* heads, while the two objects actually at that head carried none. Attribute a review by its
-own object or its summary comment; an inline comment's `commit_id` says where it points **now**, never
-when it was made.
+own object, its summary comment, or its verdict-bearing command reply; an inline comment's `commit_id`
+says where it points **now**, never when it was made.
+
+🔴 **A finding-free verdict often arrives ONLY in the command-invocation reply — and rejecting that
+whole comment type burns the metered lanes on an already-green head.** Measured on platform#3051 at
+head `992a93caecd1e5a2babe7a6613e467253c2a7cdb` (2026-08-10): the head's status read
+`Review completed`, yet the newest review object was a `bodylen=0` container at the **older**
+`5d9d8f5960`, and the auto-generated summary — refreshed at 08:58:29Z — named **no sha at all**, so
+neither recognised satisfier existed. The verdict lived in comment `5237977883`:
+``@devantler Reviewed pull request `#3051` at `992a93ca`. I found no actionable issues.`` followed by
+four sentences analysing the actual change, then the `✅ Action performed` shell. Every surface a
+sweep is told to check reported `green_review=none` over a real green.
+**This fails closed in the EXPENSIVE direction.** A run trusting that `none` re-requests **free**
+CodeRabbit on a head it already reviewed, then walks down into **weekly-limited Codex** and
+**monthly-limited Bugbot** — spending exactly the quotas the cheapest-lane-first order exists to
+protect, while a finished PR sits parked. The rejected protection was never the *acknowledgement*
+shape itself: it is the absence of a verdict. Keep the discriminator on the verdict line and the
+sha-prefix match, and a bare ack still fails as it always did.
+
+⚠️ **The verdict line ALONE is a fail-open — CodeRabbit sometimes omits the sha entirely.** On that
+same PR, comment `5236900950` (06:58:19Z) reads ``@devantler Reviewed pull request `#3051`.`` with
+**no `at <sha>` clause**, followed by `I found no actionable issues` and real analysis. It is a
+genuine review of an **earlier** head. Keying the third satisfier on the verdict phrase by itself
+would therefore bless a stale review as current-head green — the exact fail-open direction, and the
+obvious way to "simplify" this rule. **Both conjuncts are required**: the verdict line *and* a sha
+that prefix-matches `headRefOid`. A verdict naming no sha is `cr-stale` evidence at best, never a
+green.
 
 🔴 **The `CodeRabbit` commit status is `success` when NO review ran — the `description` is the only
 discriminator.** Auto-review is disabled portfolio-wide, so
@@ -1107,12 +1132,39 @@ dependency bump breaks `main`, repair that resulting `main` breakage normally on
 branch; never touch the bot PR branch. This actor-wide no-action rule is stronger than the
 trusted-author permissions below and is separate from the narrower programmed-bot review exemption.
 
+🔴 **This carve-out bounds action on INDIVIDUAL PRs; it never licenses ignoring whether the automation
+still runs.** Every prohibition above stands unchanged and absolute — no review request, no comment, no
+rebase/recreate, no rerun, no adaptation commit, no arming auto-merge, no merge, no closing an
+automation-authored issue — whatever state the PR is in. But *whose job is it to mutate these PRs* and
+*is the automation that owns them still alive* are *different questions*, and answering only the first
+silently answered the second with "never look". Measured 2026-08-11: the `gitsubmodule` ecosystem had
+merged nothing since 2026-08-05T20:15Z and created nothing since 2026-08-06T20:14Z, jammed at its
+five-PR limit by five PRs that cannot drain — four never received a CI run at all, the fifth is red —
+while the same daily job kept creating npm PRs under that ecosystem's own limit. Every submodule pin in the portfolio froze for six days,
+including `libraries/agent-plugins`, the source of the agent definitions every run loads
+([monorepo#2779](https://github.com/devantler-tech/monorepo/issues/2779)).
+**Key that signal on the AGGREGATE, never on a PR.** One bot PR being red, stale, conflicting or
+review-less remains none of our business, exactly as the paragraph above says. The reportable condition
+is that the **whole ecosystem produced nothing** — nothing created *and* nothing merged over a window
+materially longer than its configured schedule — which no per-PR state can express.
+🔴 **Silence alone is NOT the signal — a quiet ecosystem is usually just quiet.** When nothing needs
+updating, zero creations and zero merges are the *correct* output, so the aggregate on its own would
+send a run to "repair" healthy automation. Report it only with positive evidence that the automation was
+**prevented** from delivering: it sits at its configured open-PR limit, or an update is demonstrably
+available and has gone unproposed, or its own most recent run is failing or absent. No such evidence,
+no signal. Derive that evidence by querying the forge directly — the survey digest is a per-PR
+`AUTOMATION-OWNED (NO-ACTION)` line and carries no aggregate history, so it cannot answer this
+([monorepo#2783](https://github.com/devantler-tech/monorepo/issues/2783)). Then treat it as a **currency
+signal**: report it, and fix its cause on an **agent-owned** branch, exactly as a merged bump that
+breaks `main` is repaired without ever touching the bot PR branch.
+
 **Carve-out — trusted programmed bot PRs need NO review.** Two suite-owned paths are intentionally
 gated by required CI and auto-merge rather than an AI review:
 - **Programmed agent-skills updater PRs** (maintainer direction 2026-07-23): the shared
   `update-agent-skills` workflow's exact `deps/agent-skills-update` branch and
   `chore(deps): update agent skills` title in `platform` and `ksail`, authored by
-  those repositories' exact updater App and changing only their generated installed-skill roots.
+  those repositories' exact updater App and changing only their generated installed-skill roots —
+  **and only where every changed skill is owned by the reviewed suite upstream** (see below).
 - **Programmed release PRs** (maintainer direction 2026-07-13, ksail#6095; widened 2026-07-18):
   every product's Homebrew-tap cask PR, including World at Ruin's CD-generated
   `chore(cask): update world-at-ruin to vX.Y.Z` PRs on `goreleaser/world-at-ruin`, plus KSail release
@@ -1124,8 +1176,50 @@ update but cannot prove that its prose preserves authority boundaries. The exact
 3 for a genuine generated marketplace update: that state makes the App trusted and actionable but
 does not grant the no-review carve-out. Only exit 0 grants the carve-out described above.
 
+🔴 **An installed-skill root holds copies from SEVERAL upstreams, so its path proves where a file
+landed and never who wrote it.** `platform` and `ksail` install third-party skills alongside
+suite-owned ones, so actor, branch, title, path and commit provenance together still cannot tell a
+reviewed suite change from a third-party instruction change riding the same generated PR. That gap is
+not hypothetical: the `gh-stack` update carried an unconditional whole-stack merge instruction that
+only semantic review caught, and every mechanical signal on that PR was valid.
+
+🔴 **Do NOT resolve that ownership from the skill's own `metadata.github-repo`** — that is the obvious
+design and it is self-attesting. There is no lockfile and no install manifest: the **only** record of a
+skill's origin is frontmatter inside the copied `SKILL.md`, authored by the very upstream it names and
+copied verbatim by the updater. A third-party release that sets
+`metadata.github-repo: https://github.com/devantler-tech/agent-skills` alongside an unsafe instruction
+would then be read back as proof of our ownership and skip review — the same hole one level down.
+
+Authorization comes instead from
+[`.claude/skill-ownership-allowlist.tsv`](.claude/skill-ownership-allowlist.tsv), a reviewed,
+version-controlled list kept **outside** the skills, mapping `<repo>` + `<installed skill root>` to the
+upstream that owns its content. Every changed root must be listed for that repository, or the PR
+returns **3**. Absence is the default, so a newly installed skill and a third-party one are treated
+alike until someone deliberately adds a row through the normal review path.
+
+The classifier's eighth argument — a JSON object mapping each changed root to the
+`metadata.github-repo` read at the PR head — is a **corroborator, never an authorization**. Supplying
+it can only withdraw the carve-out, never grant it: it catches an upstream handover, where a skill we
+still allowlist has quietly started declaring someone else. It is **required on this arm** and
+omitting it returns **3** — a tripwire the caller may skip is one that never fires, so a missing map
+is unproven ownership rather than permission. The other arms take seven arguments and never consult
+it. Read it with
+
+```sh
+# `--jq .content | base64 -d` also works, but BSD and GNU base64 spell the decode flag differently
+# (`-D` vs `-d`), so ask the API for the raw file instead.
+gh api "repos/devantler-tech/<repo>/contents/<skill-root>/SKILL.md?ref=<head>" \
+  -H "Accept: application/vnd.github.raw" |
+  yq --front-matter=extract '.metadata.github-repo // "null"'
+```
+
+and expect **3** whenever it disagrees with the allowlisted upstream — including a prefix-extended
+`agent-skills-v2`-style lookalike, since the comparison is exact. The PR is the unit, so one unproven
+skill sends the whole PR to semantic review.
+
 Apply either exemption only when `.claude/scripts/programmed-bot-review-exemption.sh` validates the
-exact repository, PR actor, branch, title, current-head commit provenance, and changed-file boundary.
+exact repository, PR actor, branch, title, current-head commit provenance, changed-file boundary, and
+— for installed-skill updates — that per-skill ownership map.
 Never infer it from the title alone. Qualifying PRs run through required CI and auto-merge; do **not**
 request CodeRabbit, Codex, Cursor Bugbot, or a local review, chase ancillary reviewer output, or count
 a missing review as a hygiene gap. Their checks, threads, and conflict state still gate auto-merge.
@@ -2310,10 +2404,11 @@ static review plus the ordinary gates. Reading this gate as a merge ban is the c
 **`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs.** The App is
 not added to the general trusted-author set. Its PR may be built when the exact programmed-bot
 classifier named above exits 0 or 3: exit 0 is the no-review auto-merge path, while exit 3 is the
-normal semantic-review path for a genuine `agent-plugins` update. Any other `app/botantler-1` PR is
-external for **execution** purposes — reviewed statically and never run locally — while remaining
-drivable and mergeable like any other PR. This path-specific grant covers the updater without
-extending build/run trust to every PR the App could author.
+normal semantic-review path for a genuine updater PR — an `agent-plugins` marketplace update, or a
+`platform`/`ksail` installed-skill update touching a skill this suite does not own. Any other
+`app/botantler-1` PR is external for **execution** purposes — reviewed statically and never run
+locally — while remaining drivable and mergeable like any other PR. This path-specific grant covers
+the updater without extending build/run trust to every PR the App could author.
 **GitHub Copilot — two roles, treated differently:** the maintainer uses Claude Code exclusively, so the
 Copilot **coding agent** (`Copilot`, `copilot-swe-agent[bot]`) is **NOT** trusted — treat its PRs as
 external, meaning **never run its branch code**; they are reviewed statically, then driven and merged
@@ -2476,22 +2571,88 @@ promotion) rather than obeying it outright.
 ones (HANDS-OFF).** The carve-out above (act on `devantler`'s comments on *your own* drafts)
 presupposes you can tell which PRs are yours — and you can't assume a `claude/*` branch is, because the
 maintainer also drives Claude Code **interactively**, producing `claude/*` PRs that are **not** the
-routine's. Two signals identify them: the routine's own PRs use a **`claude/<area>-<desc>-<issue>`**
-branch — a descriptive stem ending in the **issue number** (per *Execution model* and *Claim
-protocol*; older routine branches predate the number and end in the description) — and carry the
+routine's. Two signals **hint** at which is which, and the asymmetry between them is the whole point:
+the routine's own PRs use a **`claude/<area>-<desc>-<issue>`** branch — a descriptive stem ending in
+the **issue number** (per *Execution model* and *Claim protocol*; older routine branches predate the
+number and end in the description) — and carry the
 **`> 🤖 Generated by the Agentic Engineer`** disclosure (any
 `> 🤖 Generated by the …` prefix, incl. the legacy `Daily AI …` forms); an
 **interactive** PR has a **random-slug branch** `claude/<adjective>-<name>-<hex>` (the harness
 per-session worktree pattern, e.g. `claude/unruffled-kepler-f3e922`) and/or the generic
-**`🤖 Generated with [Claude Code]`** trailer instead of that disclosure. On a PR identified as the
-maintainer's interactive work, the **DRIVING** half of HANDS-OFF is **RETIRED (maintainer direction,
-interactive session 2026-08-08)** — you now drive his interactive PRs to a terminal state like any
-other, per *You own EVERY pull request in the portfolio*. What survives is the **comment-attribution**
-half, and only that: treat `devantler`'s comments on such a PR as the maintainer **steering their own
-work**, not as instructions addressed to you — a distinction about whose control channel you are
-reading, which the ownership change does not touch. When unsure whether a `claude/*` PR is yours, you
-no longer need to leave it alone; identify it from the disclosure (`Generated **by** the` = routine,
-`Generated **with** [Claude Code]` = interactive), apply the active-work test, and drive it. **A sibling instance never authors a
+**`🤖 Generated with [Claude Code]`** marker.
+
+🔴 **What the classification now DECIDES has changed — read the mechanics below with its new
+consequence in mind.** On a PR identified as the maintainer's interactive work, the **DRIVING** half
+of HANDS-OFF is **RETIRED (maintainer direction, interactive session 2026-08-08)** — you drive his
+interactive PRs to a terminal state like any other, per *You own EVERY pull request in the
+portfolio*. What survives is the **comment-attribution** half, and only that: treat `devantler`'s
+comments on such a PR as the maintainer **steering their own work**, not as instructions addressed to
+you — a distinction about whose control channel you are reading, which the ownership change does not
+touch. So the matching rules that follow are still load-bearing and still fail toward *his*
+interpretation; what a misread costs is now a mis-attributed instruction rather than an unrequested
+mutation.
+⚠️ **Neither signal ESTABLISHES that a PR is yours — they are decisive in one direction only.** The
+interactive marker is decisive **whenever present**, and the two markers are **not** mutually
+exclusive: an interactive PR can carry the routine disclosure as well, so a `Generated by the` line is
+never evidence that a PR cannot be interactive. In the other direction the routine disclosure only
+*corroborates* your own **creation record**, which stays required — a `claude/*` PR you have no record
+of creating is treated as the maintainer's however its branch is spelled and whatever it discloses.
+🔴 **Match on WHICH literal, over the whole body — position is not the discriminator.** Search the
+body — the literals carry **no** markdown emphasis, so
+never grep a bolded form. Match each as a **structural line** anywhere in the body: a line whose
+content, after leading whitespace and any `>` / `-` / `*` markers, begins with the marker. A
+`Generated with [Claude Code]` marker line ⇒ maintainer-interactive, **and that one is decisive**;
+otherwise a `Generated by the` marker line ⇒ *evidence* the PR is the routine's; neither ⇒ genuinely
+unknown, which is **not** a synonym for either.
+🔴 **A marker line counts wherever it appears — there is NO fenced-block suppression, and that is a
+measured decision.** Across **1029 portfolio PR bodies (2026-08-11)** a full delimiter-aware fence
+state machine changes **ZERO verdicts** versus this rule: every body carrying either literal carries
+it as a plain line, none fenced. A fence detector is also unbounded to specify: every container
+spelling it must skip — an unskipped fence, a nested fence, a blockquoted close token, an indented
+code block, a backtick inside an info string, a raw HTML block — is another way for it to swallow a
+real marker, and none of them changes a verdict on this corpus.
+⚠️ **The accepted cost is stated, not hidden:** a PR body that **fences an example** of the interactive
+literal classifies `interactive`, so his comments on our own PR would be read as him steering his own
+work rather than instructing us. That is the **cheap** direction — a steer we can ask for again — and
+its measured incidence is **0**. The expensive direction is a real marker swallowed by a mis-parsed
+fence, which reads the maintainer's own commentary on his own PR as instructions to us. Restore fence
+handling only against measured incidence of the cheap failure actually occurring.
+🔴 **Two structural rules remain, because they serve the MATCHER rather than example-suppression.**
+Read each line through its Markdown **container prefix** — up to three spaces of alignment, blockquote
+`>` markers, and `-`/`*` list markers, each consuming its optional following space **or tab** — because
+the org PR template puts the disclosure under a `-` bullet, so a container-blind matcher misses real
+disclosures. And treat **four or more spaces of indentation at the current depth** as an indented code
+block carrying no marker, while three spaces stay ordinary alignment.
+**Line structure, never a bare substring and never a body-start anchor.** Measured 2026-08-11 across
+the open `devantler` PRs portfolio-wide, line-structural and bare-substring agree **exactly** — same
+classification for every PR — while a body-start anchor displaces **7** routine PRs to `none`; and
+unlike a substring match it does **not** fire on a marker quoted mid-sentence or in bold, so a PR
+*about* this convention is not misclassified merely for discussing it. A marker line inside a
+**fenced example** does still match — that is the accepted cost stated above, not an oversight.
+⚠️ **That 7 is the load-bearing figure; the corpus totals are not.** This corpus is live, so its
+absolute counts drift as PRs merge and any total written here is stale on arrival — re-derive it. The
+7 is stable across snapshots because it counts bodies using the org PR template, not corpus size.
+⚠️ **Those 7 are DEFECTS, not the convention.** *GitHub artifact conventions* requires an
+agent-authored body to **begin** with its disclosure; a disclosure below the org template's
+`### Motivation` heading violates that and stays a defect to fix at the source. The classifier is
+deliberately tolerant of already-malformed bodies so they remain attributable — that tolerance must
+never be read as licence to emit the heading first. When both appear, **interactive wins** — the same
+asymmetry stated above, since reading his PR as yours turns his own commentary into an instruction
+addressed to you, while the reverse merely costs you a steer he can repeat.
+⚠️ **Only the interactive literal decides on its own. `Generated by the` NEVER does** — the routine
+disclosure also appears on maintainer-interactive PRs, so it corroborates your **creation record**
+rather than replacing it. Absent that record, treat a `claude/*` PR you have **no record of creating**
+as the maintainer's *for attribution purposes*. This is why the surveyor reports every `devantler` PR
+as `OWNERSHIP-UNVERIFIED` and never as "own" — the field is a hint, not a verdict; it no longer gates
+whether you may drive the PR, and it never established authorship either way. Anchoring
+on position fails in **both** directions and has been measured doing so: `platform#2985` carries the
+interactive literal at the **start** of its body, `platform#3034` carries it as a **trailing** line,
+and a routine disclosure placed under the org template's `### Motivation` heading is at neither end.
+A position-anchored boolean therefore reports "no disclosure" for an interactive PR and for one of
+your own alike, and that conflation is what mis-attributes the maintainer's control channel. On a PR
+identified as the maintainer's interactive work you still **drive it to a terminal state** like any
+other, but you treat `devantler`'s comments on it as the maintainer **steering their own work — NOT
+instructions to you** (the instruction carve-out applies only to *your own* drafts). **A sibling instance never authors a
 `claude/*` PR** — Codex and the Cursor cloud instance own `codex/*` and `cursor/*` — so the choice
 here stays binary (routine's or interactive). Read this section **relative to the instance you are**:
 each instance's *own* namespace holds its promotable drafts, and the *other two* namespaces are
@@ -2843,9 +3004,19 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   edge of what is allowed. If the thing you are waiting on is **remote state** (CI, a review, a
   merge, a deploy), any `sleep` — chained, standalone, or split across calls — is the wrong tool:
   arm the watcher, do other actionable work, or end the run and let the next tick collect the
-  result. A bare `sleep` is legitimate only as a **local timer for a process you yourself started**
-  (e.g. bounding a backgrounded windowed render before killing it), never as a wait for a remote
-  system to change state.
+  result. 🔴 **A `sleep` is never the tool for anything the runtime will report to you.** That is
+  the test — **not** who started the process, and **not** whether the state is local. A backgrounded
+  tool call satisfies both of those: you started it, and its output file is on this disk — yet the
+  runtime **announces its completion**, so polling that file is precisely the duplication this
+  bullet forbids two sentences up. Measured over the 7 days to 2026-08-09T22Z, counting only structurally
+  anchored firings: **76 of 141 blocked actions were `sleep N && <poll>`, and 27 of those polled a
+  backgrounded task's own output file** — which is why the report test is stated first rather than
+  left to be inferred from the local/remote split.
+  Wait on an announced result with the runtime's own waiter — **`Monitor` with an
+  until-loop**, which the guard's own refusal already names — or simply do other work until the
+  notification arrives. A bare `sleep` is legitimate only as a **local timer for a process whose
+  completion nothing will report** (e.g. bounding a backgrounded windowed render before killing
+  it), never as a wait for a remote system to change state.
 - **Long-pole first.** Push the change with the **slowest CI first** so its bake overlaps everything
   else; do the fast-CI and no-CI work (issue triage, review-thread replies, memory, reports) during
   the bake. Reversing this — fast item first, slow item last — buys a guaranteed idle tail, which is
@@ -2993,8 +3164,21 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   That carve-out does **not** extend to the other lanes: their trigger belongs in the *same* disclosed
   comment as its request marker, so a bare `@codex review` or `@coderabbitai review` is a violation.
   **The check is [`comment-disclosure-drift.sh`](.claude/scripts/comment-disclosure-drift.sh)**
-  (`--repo <owner>/<repo> --issue <n>`, or `--input <payload>`); exit 1 lists each offending comment
-  and names its shape. It reports **positive evidence of agent authorship only** — a `devantler`
+  (`--repo <owner>/<repo> --since <ISO-8601-UTC>` to sweep a repo, `--repo <owner>/<repo> --issue <n>`
+  for one discussion, or `--input <payload>`); exit 1 lists each offending comment
+  and names its shape. **Prefer `--since` — it is the only mode that finds drift nobody suspected**,
+  since `--issue` can only be aimed at a discussion someone already doubts. It reads every issue and PR
+  conversation touched since that instant in one paginated call.
+  The two are mutually exclusive, and the timestamp is a literal instant — the caller decides how far
+  back "recent" reaches, because BSD and GNU `date` disagree on relative arithmetic.
+  🔴 **On `--since`, read the findings, not the exit code.** A sweep's per-discussion history is
+  incomplete (`since` selects by *updated* time), so it never grants Bugbot's bare-trigger carve-out and
+  reports **every** bare `@cursor review` — exit 1 is therefore routine on a repo that uses Bugbot and
+  does not by itself mean drift. Verify each reported bare trigger with `--repo <owner>/<repo> --issue
+  <n>`, where the full comment list is present and a legitimate pairing resolves clean. Every other
+  shape it reports is a real finding. [#2781](https://github.com/devantler-tech/monorepo/issues/2781)
+  restores the precision.
+  It reports **positive evidence of agent authorship only** — a `devantler`
   comment matching **no recognised agent shape** is the human maintainer, so flagging it would report
   the control channel as a defect. Note the recognised shapes are broader than the 🤖 marker alone: a
   leading review-lane trigger is agent evidence too, because the engineer drives the review lanes and
@@ -3237,7 +3421,34 @@ step:
    `/Users/homelab-mac-mini/.codex/automations/agent-improver/memory.md`.
    The **open verification-hypothesis store** is
    `/Users/homelab-mac-mini/.claude/projects/-Users-homelab-mac-mini-git-personal-monorepo/memory/agent-improver-routine.md`
-   for Claude and the `Hypotheses / next run` section of the Codex Agent Improver memory file. The
+   for Claude and the `Hypotheses / next run` section of the Codex Agent Improver memory file.
+   🔴 **Each Agent Improver run reads the SIBLING instance's scorecard and hypothesis store too, before
+   it scores or opens any hypothesis — naming the two stores is not the same as wiring them together.**
+   Each run boots into its own store, so without this cross-read a hypothesis opened by one instance can
+   never be scored, closed, or respected by the other, and the ledger splits in half. Measured
+   2026-08-11 and stated as an **aggregate on purpose** — the inventories themselves are private runtime
+   state, so this paragraph must not quote them: of roughly fifteen open hypotheses across the two
+   instances, **exactly one was shared**; every other one was visible to only the instance that opened
+   it. That cost two things the same day. **A duplicated heavy measurement:** one instance's ledger
+   carried a provenance question as *"needs attribution next run"* that the other had **already
+   attributed hours earlier**. **And an unsatisfiable constraint:** the `agent-improvement` skill's
+   step 5 says to
+   continue only with work that cannot affect a pending hypothesis's tracked signature — yet one
+   instance held a pending gate over a signature the *other* instance was independently tracking, with
+   no path between them. An instance cannot honour a gate
+   it has no path to read, so that rule was unenforceable across instances **by construction**. So: a
+   **sibling's pending hypothesis binds your signature-overlap decisions** exactly as your own does, and
+   a signature the sibling has already **settled** is **not re-measured** — record its verdict and move
+   on — **whatever direction that verdict took and whichever window produced it**, until new evidence or
+   a changed signature invalidates it. Scoping this to "attributed in the current window" would have
+   left a sibling's *negative* verdict, and any still-valid verdict from an earlier window, free to be
+   measured again — which is the duplication this paragraph exists to stop.
+   ⚠️ **Settled is not the same as inconclusive.** A sibling `NO-VERDICT`, `NOT-YET-DUE`, or an
+   explicitly unmet measurement floor is **unsettled**, and those stay measurable — freezing them would
+   starve exactly the hypotheses still waiting for the data that would close them. ⚠️ Both stores stay **private runtime state**: cross-*reading* them is
+   mandatory, cross-*publishing* them is not permitted, and nothing read this way enters a repository
+   artifact or public comment. The sibling's file remains **its** single source of truth — read it, never
+   write it. The
    **spend evidence/proposal/realisation ledger** — snapshots, proposals with their confidence, open
    maintainer asks, and the projected-versus-realised record — lives in the engineer's own runtime
    store: `/Users/homelab-mac-mini/.codex/automations/daily-ai-engineer/memory.md` for Codex and the

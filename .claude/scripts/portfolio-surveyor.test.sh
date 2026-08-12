@@ -111,8 +111,13 @@ grep -Fq 'the `description` is the discriminator, never the state' "${surveyor}"
   fail "surveyor can read a CodeRabbit status state=success as proof a review ran"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
-grep -Fq 'Exit 3 means a trusted, review-required `agent-plugins` updater' "${surveyor}" ||
-  fail "surveyor cannot distinguish review-bearing marketplace updates from untrusted lookalikes"
+# Exit 3 is no longer marketplace-only: an installed-skill update carrying a skill this suite does
+# not own reaches it too, so pinning the `agent-plugins` phrasing would re-stale the moment that
+# path fires.
+grep -Fq 'Exit 3 means a genuine, trusted updater PR that still requires' "${surveyor}" ||
+  fail "surveyor cannot distinguish review-bearing updater PRs from untrusted lookalikes"
+grep -Fq 'installed-skill' "${surveyor}" ||
+  fail "surveyor does not cover the installed-skill route to a review-required updater PR"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq '`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier' "${surveyor}" ||
@@ -721,8 +726,111 @@ expect_review_required \
   "${agent_plugins_versioned_files}" \
   "${agent_plugins_versioned_commits}"
 
+# An installed skill root holds copies from many upstreams, and the copied frontmatter naming the
+# upstream is written by that upstream. So authorization comes from the reviewed allowlist beside the
+# classifier, and the frontmatter is only a corroborator that can withdraw the carve-out, never grant
+# it (#2614). `ways-of-working` is the one genuinely suite-owned skill installed in each consumer.
+suite_skill_owner="https://github.com/devantler-tech/agent-skills"
+allowed_skills_files='[".agents/skills/ways-of-working/SKILL.md"]'
+allowed_skills_owners="$(jq -cn --arg o "${suite_skill_owner}" '{
+  ".agents/skills/ways-of-working": $o
+}')"
+# The attack this exists to stop: a third-party release edits its own frontmatter to claim the suite
+# upstream, the updater copies that claim verbatim, and a payload-derived check would read it back as
+# proof of ownership.
+forged_owner_claim="$(jq -cn --arg o "${suite_skill_owner}" '{
+  ".agents/skills/gh-stack": $o
+}')"
+# A skill that IS allowlisted but whose copied frontmatter no longer names the reviewed upstream —
+# an upstream handover shows up here before anyone notices it anywhere else.
+drifted_owner_claim='{".agents/skills/ways-of-working":"https://github.com/github/awesome-copilot"}'
+lookalike_owner_claim="$(jq -cn --arg o "${suite_skill_owner}-v2" '{
+  ".agents/skills/ways-of-working": $o
+}')"
+mixed_batch_files='[".agents/skills/ways-of-working/SKILL.md",".agents/skills/gh-stack/SKILL.md"]'
+# `gh-stack` declaring its real third-party upstream — the honest, unforged case.
+ksail_skills_owners='{".agents/skills/gh-stack":"https://github.com/github/gh-stack"}'
+
 expect_exempt \
-  "Platform programmed agent-skills update" \
+  "Platform update touching only an allowlisted suite-owned skill" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  "${allowed_skills_owners}"
+
+# The corroborator is what catches an upstream handover on a root we still allowlist, so a caller
+# that omits it must NOT be handed the carve-out — a tripwire the caller may skip never fires.
+expect_review_required \
+  "an allowlisted skill with the corroborating map omitted entirely" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${allowed_skills_files}" \
+  "${ksail_skills_commits}"
+
+expect_review_required \
+  "KSail update touching a third-party skill" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${ksail_skills_files}" \
+  "${ksail_skills_commits}" \
+  "${ksail_skills_owners:-}"
+
+expect_review_required \
+  "a third-party skill FORGING the suite upstream in its own frontmatter" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${ksail_skills_files}" \
+  "${ksail_skills_commits}" \
+  "${forged_owner_claim}"
+
+expect_review_required \
+  "an allowlisted skill whose declared upstream has drifted" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  "${drifted_owner_claim}"
+
+expect_review_required \
+  "an allowlisted skill claimed by a prefix-extended lookalike upstream" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  "${lookalike_owner_claim}"
+
+expect_review_required \
+  "a batch mixing an allowlisted skill with a third-party one" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${mixed_batch_files}" \
+  "${ksail_skills_commits}" \
+  "${allowed_skills_owners}"
+
+expect_review_required \
+  "an installed skill root absent from the allowlist" \
   "platform" \
   "app/botantler-1" \
   "deps/agent-skills-update" \
@@ -731,15 +839,83 @@ expect_exempt \
   "${platform_skills_files}" \
   "${platform_skills_commits}"
 
-expect_exempt \
-  "KSail programmed agent-skills update" \
-  "ksail" \
-  "app/ksail-bot" \
+expect_review_required \
+  "an allowlisted skill whose frontmatter was absent or unreadable" \
+  "platform" \
+  "app/botantler-1" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
-  "${ksail_skills_head}" \
-  "${ksail_skills_files}" \
-  "${ksail_skills_commits}"
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  '{".agents/skills/ways-of-working":null}'
+
+expect_classifier_error \
+  "agent-skills update with a malformed ownership map" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  '[".agents/skills/ways-of-working"]'
+
+# A malformed allowlist must fail closed rather than authorize. The classifier resolves the file
+# relative to its own directory, so the fixture reproduces that layout exactly.
+#
+# ⚠️ Measured, so nobody over-credits these: with the corroborating map now REQUIRED, only the
+# duplicate-root case is caught by the allowlist validation alone. Removing that validation leaves
+# the other three still returning 3, because the map disagrees with the malformed row and catches
+# them first. They are kept as behaviour regressions for the combined gate, not as proof of the
+# parser — the parser's unique contribution is rejecting a duplicate root, which the map cannot see
+# because `from_entries` silently keeps the last one and it agrees with the map.
+expect_allowlist_rejects() {
+  local name="$1" row="$2" tmp rc
+  tmp="$(mktemp -d)"
+  mkdir -p "${tmp}/scripts"
+  cp "${classifier}" "${tmp}/scripts/"
+  printf '%s\n' "${row}" >"${tmp}/skill-ownership-allowlist.tsv"
+  # Pass a VALID corroborating map, so the only thing left to reject is the allowlist row itself.
+  # Omitting it would make every case below pass for the missing-map reason instead.
+  if "${tmp}/scripts/$(basename "${classifier}")" \
+    "platform" "app/botantler-1" "deps/agent-skills-update" \
+    "chore(deps): update agent skills" \
+    "${platform_skills_head}" "${allowed_skills_files}" "${platform_skills_commits}" \
+    "${allowed_skills_owners}"; then
+    rm -rf "${tmp}"
+    fail "malformed allowlist still granted the no-review carve-out: ${name}"
+  else
+    rc=$?
+  fi
+  rm -rf "${tmp}"
+  [[ "${rc}" -eq 3 ]] ||
+    fail "malformed allowlist did not take the review path: ${name} (exit ${rc})"
+}
+
+# Control: the same harness with a WELL-FORMED row must still authorize, or the four cases below
+# would pass for the trivial reason that the relocated copy never works.
+allowlist_control_tmp="$(mktemp -d)"
+mkdir -p "${allowlist_control_tmp}/scripts"
+cp "${classifier}" "${allowlist_control_tmp}/scripts/"
+printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills\n' \
+  >"${allowlist_control_tmp}/skill-ownership-allowlist.tsv"
+"${allowlist_control_tmp}/scripts/$(basename "${classifier}")" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" "${platform_skills_commits}" \
+  "${allowed_skills_owners}" ||
+  fail "relocated-classifier control failed: a well-formed allowlist must still grant exit 0"
+rm -rf "${allowlist_control_tmp}"
+
+expect_allowlist_rejects "empty owner column" \
+  "$(printf 'platform\t.agents/skills/ways-of-working\t')"
+expect_allowlist_rejects "owner drifted to another upstream" \
+  "$(printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/github/awesome-copilot')"
+expect_allowlist_rejects "root outside the installed-skill tree" \
+  "$(printf 'platform\t.github/workflows\thttps://github.com/devantler-tech/agent-skills')"
+expect_allowlist_rejects "duplicate root" \
+  "$(printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills\nplatform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills')"
 
 expect_exempt \
   "GoReleaser KSail cask" \
@@ -1403,5 +1579,348 @@ grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor
 
 grep -Fq '`workflow_dispatch`, `dynamic`' "${surveyor}" ||
   fail "surveyor must keep 'dynamic' in the main-branch event list — the exemption is by path (#2536)"
+
+
+# --- Ownership disclosure is a THREE-valued literal test, not a prefix boolean (#2762) ----------
+# Measured 2026-08-11 (snapshot n=75; the corpus is live and drifts, so this documents the ORIGINAL
+# defect rather than a current total): the two-valued
+# `disclosure=<yes|no>` field was 100% precise when it said `yes` (26/26 routine) but carried NO
+# information when it said `no` — 49 of 75 rows (65%), collapsing three classes that demand OPPOSITE
+# actions: 5 maintainer-interactive (HANDS-OFF), 7 routine whose disclosure simply is not at position
+# zero, and 37 with no marker at all. Acting on that conflation mutated two of the maintainer's
+# interactive PRs (platform#2985, #3034) via `gh pr update-branch`.
+grep -Fq 'disclosure=<routine|interactive|none>' "${surveyor}" ||
+  fail "surveyor must emit the three-valued ownership disclosure field, not a yes/no boolean (#2762)"
+
+# Position is a red herring and must never be reinstated as the discriminator: platform#2985 carries
+# the maintainer literal at the START of the body and #3034 carries it as a trailing line, so an
+# anchored check misses one of them whichever end it anchors to.
+grep -Fq 'which literal, never where it sits' "${surveyor}" ||
+  fail "surveyor must discriminate ownership by WHICH literal, not by its position (#2762)"
+
+# The interactive literal must be searched over the WHOLE body.
+grep -Fq 'Generated with [Claude Code]' "${surveyor}" ||
+  fail "surveyor must name the maintainer-interactive literal it matches on (#2762)"
+
+# Fail-safe precedence: the contract's own asymmetry — reading the maintainer's PR as the routine's
+# licenses an unrequested mutation, while the reverse merely parks a PR a later run can pick up.
+grep -Fq 'interactive wins' "${surveyor}" ||
+  fail "surveyor must resolve a both-literals body to interactive, the fail-safe direction (#2762)"
+
+# The constitution must name the literal rather than a position-based 'trailer', which is what made
+# the prefix-only reading look correct.
+grep -Fq 'Generated with [Claude Code]' "${constitution}" ||
+  fail "AGENTS.md must name the maintainer-interactive literal (#2762)"
+
+grep -Fq 'position is not the discriminator' "${constitution}" ||
+  fail "AGENTS.md must state that the ownership discriminator is the literal, not its position (#2762)"
+
+
+# The two literals are NOT symmetric, and collapsing them is the P1 Codex caught on #2767: only the
+# interactive literal is decisive. `Generated by the` also appears on maintainer-interactive PRs, so
+# it corroborates the orchestrator's creation record rather than replacing it — the surveyor keeps
+# every such PR OWNERSHIP-UNVERIFIED and a `routine` value is never authority to write.
+grep -Fq 'is decisive, `routine` is only corroborating' "${surveyor}" ||
+  fail "surveyor must mark the routine literal corroborating, not decisive (#2762)"
+
+grep -Fq 'NEVER does' "${constitution}" ||
+  fail "AGENTS.md must deny the routine literal standalone ownership authority (#2762)"
+
+# The literals carry no markdown emphasis. A bolded quotation of them in prose is what trains the
+# next implementer to grep a string that matches nothing (the same trap recorded at t1058).
+grep -Fq 'never grep a bolded form' "${constitution}" ||
+  fail "AGENTS.md must warn that the ownership literals carry no markdown emphasis (#2762)"
+
+grep -Fq 'never grep a bolded form' "${surveyor}" ||
+  fail "surveyor must warn that the interactive literal carries no markdown emphasis (#2762)"
+
+grep -Fq 'Generated **with** [Claude Code]' "${surveyor}" &&
+  fail "surveyor must not quote the interactive literal in a bolded form that matches no real body (#2762)"
+
+
+# Both literals use IDENTICAL matching syntax (a structural line, with fenced content NOT suppressed
+# -- see the no-fence-state decision below); only the ownership
+# WEIGHT differs -- interactive decides alone, routine only corroborates. An earlier revision of this
+# PR matched them with different strictness; that framing was an artifact of fixing one literal at a
+# time, and leaving it in the definition let an implementation legitimately match interactive loosely
+# and recreate the permanent false HANDS-OFF (Codex P2). Both halves are pinned so neither drifts.
+grep -Fq 'begins with the marker' "${surveyor}" ||
+  fail "surveyor must line-anchor the routine literal, not match it anywhere (#2762)"
+
+grep -Fq 'begins with the marker' "${constitution}" ||
+  fail "AGENTS.md must line-anchor the routine literal (#2762)"
+
+# NOT `grep -Fq 'anywhere'` — that word occurs in unrelated surveyor prose, so the assertion passed
+# regardless of the rule and would have stayed green if the match were swapped for a body-start
+# anchor (Codex P2 on #2767). Worse, ablating EVERY occurrence made it look like it fired. Pin a
+# phrase that exists nowhere else and states the rule itself.
+grep -Fq 'Both literals are matched as a STRUCTURAL LINE, anywhere in the body' "${surveyor}" ||
+  fail "surveyor must match both literals as a structural line anywhere in the body (#2762)"
+
+grep -Fq 'Never a bare substring, and never anchored to the body start' "${surveyor}" ||
+  fail "surveyor must forbid BOTH a bare substring and a body-start anchor (#2762)"
+
+grep -Fq 'structural line' "${constitution}" ||
+  fail "AGENTS.md must require structural-line matching for the ownership literals (#2762)"
+
+# The malformed-placement tolerance must not read as an emission convention (Codex P2 on #2767).
+grep -Fq 'DEFECTS, not the convention' "${constitution}" ||
+  fail "AGENTS.md must mark a below-heading disclosure a defect, not the convention (#2762)"
+
+# `none` is a real third state with its own contract: it means neither literal was found, and it is
+# a synonym for NEITHER party. Asserting only that the enum lists three spellings would pass on a
+# definition that never says what `none` means (CodeRabbit 🟡 Minor on #2767).
+grep -Fq 'neither literal' "${surveyor}" ||
+  fail "surveyor must define \`none\` as neither literal present (#2762)"
+
+grep -Fq 'not** a synonym for the maintainer' "${surveyor}" ||
+  fail "surveyor must state that \`none\` is not a synonym for the maintainer's PR (#2762)"
+
+grep -Fq 'resolves it from its creation record' "${surveyor}" ||
+  fail "surveyor must route the \`none\` case to the orchestrator's creation record (#2762)"
+
+
+# NO fenced-block suppression. Six review rounds each found one more container spelling past a fence
+# detector, and a 1029-body portfolio differential (2026-08-11) showed the whole state machine changes
+# ZERO verdicts. Both sites must state that absence explicitly, because a reader who finds no fence
+# rule cannot otherwise tell a deliberate omission from an oversight — and re-adding one silently is
+# exactly how the enumeration loop restarts.
+for _site in "${surveyor}" "${constitution}"; do
+  _n="$(basename "${_site}")"
+  grep -Fq 'there is NO fenced-block suppression' "${_site}" ||
+    fail "${_n} must state that fenced blocks are NOT suppressed when matching a marker (#2762)"
+  # The absence is only defensible with its measurement and its named cost. Without the cost clause a
+  # later round reads the omission as a bug and "fixes" it; without the measurement the omission has
+  # no evidence behind it.
+  grep -Fq '1029 portfolio PR bodies' "${_site}" ||
+    fail "${_n} must carry the corpus size behind the no-fence decision (#2762)"
+  # The cost is now an ATTRIBUTION cost, not a parked PR: the driving half of HANDS-OFF was retired
+  # on 2026-08-08, so a fenced example misreads whose control channel a `devantler` comment is rather
+  # than freezing the PR. What must still be stated is that the cost is named and measured.
+  grep -Fq 'fences an example' "${_site}" ||
+    fail "${_n} must name the accepted cost of dropping fence suppression (#2762)"
+  grep -Fq 'measured incidence is **0**' "${_site}" ||
+    fail "${_n} must state the measured incidence of that accepted cost (#2762)"
+done
+
+# The two rules that REMAIN serve the matcher, not example-suppression. The org PR template puts the
+# disclosure under a `- ` bullet, so losing the container prefix loses real disclosures.
+#
+# The CONSTITUTION states them as prose, because a reader deciding whether a PR is the maintainer's
+# needs the rule in front of them. The SURVEYOR does not restate them — it calls the classifier, whose
+# Go tests pin the same two rules executably. Carrying the matcher as prose in both places is what
+# produced the defect this split fixes: on 2026-08-11 a run reported `disclosure=none` for four live
+# maintainer PRs whose interactive literal sat on the LAST line of the body, while the prose above it
+# already forbade position anchoring and already named platform#3034 as the worked example (#2784).
+grep -Fq 'container prefix' "${constitution}" ||
+  fail "AGENTS.md must read a marker line through its Markdown container prefix (#2762)"
+grep -Fq 'four or more spaces of indentation at the current depth' "${constitution}" ||
+  fail "AGENTS.md must exclude Markdown indented code blocks from marker matching (#2762)"
+
+# The surveyor must DELEGATE rather than re-derive. Without this the prose could quietly grow a second
+# matcher back and drift from the classifier again.
+# Match the COMPLETE invocation, not just the filename: a bare filename check still passes if the
+# command form or its required --repo/--pr arguments are dropped, leaving an instruction that names
+# the classifier without saying how to run it.
+grep -Fq '.claude/scripts/pr-ownership-disclosure.sh --repo <owner>/<repo> --pr <n>' "${surveyor}" ||
+  fail "portfolio-surveyor.md must carry the full ownership-classifier invocation (#2784)"
+# The PRESCRIBED form reuses the body the deepening query already returned, so pin that invocation
+# too — otherwise the doc could keep only the fetching mode and quietly reintroduce a second API
+# request per candidate against the survey's own budget.
+grep -Fq '.claude/scripts/pr-ownership-disclosure.sh --input -' "${surveyor}" ||
+  fail "portfolio-surveyor.md must prescribe the body-reusing classifier invocation"
+
+# And the classifier must exist, be executable, and actually pin the two matcher rules — otherwise the
+# delegation above points at nothing and the guarantee is lost rather than moved.
+_classifier="${repo_root}/.claude/scripts/pr-ownership-disclosure.sh"
+_classifier_src="${repo_root}/.claude/scripts/pr-ownership-disclosure-go/main.go"
+_classifier_test="${repo_root}/.claude/scripts/pr-ownership-disclosure-go/main_test.go"
+[ -x "${_classifier}" ] ||
+  fail "pr-ownership-disclosure.sh must exist and be executable (#2784)"
+grep -Fq 'stripContainers' "${_classifier_src}" ||
+  fail "the classifier must strip Markdown container prefixes (#2784)"
+grep -Fq 'codeBlockIndent' "${_classifier_src}" ||
+  fail "the classifier must exclude Markdown indented code blocks (#2784)"
+# The regression itself, pinned executably rather than described.
+grep -Fq 'TestBodyStartAnchorWouldFail' "${_classifier_test}" ||
+  fail "the classifier's tests must pin the body-start-anchor regression (#2784)"
+
+# BEHAVIOURAL fixture, not another prose pin. The assertions above pin what the definition SAYS; this
+# pins that the stated rule, implemented literally, actually classifies the shapes we depend on. Codex
+# correctly noted on #2767 that the grep assertions exercise no behaviour, so a rule could be worded
+# correctly and still be unimplementable or wrong on the cases that matter.
+# STRIP a line's Markdown container prefix, setting OWN_CONTENT / OWN_CODE. This is what makes the
+# match STRUCTURAL rather than a bare substring: the org PR template puts the disclosure under a
+# `- ` bullet, so a container-blind matcher misses real disclosures.
+#
+# The prefix is consumed and DISCARDED, never returned. It used to be returned as OWN_PREFIX so the
+# fence detector could anchor a closer to its opener's depth; with no fence state, nothing reads it,
+# and keeping it would be dead code that implies a comparison the classifier no longer makes.
+#
+# Containers consumed: up to three spaces of alignment, blockquote `>` markers (plus one optional
+# following space), and `-`/`*` list markers. A list marker counts only when whitespace follows it,
+# so `**bold` keeps its asterisks and stays ordinary prose.
+#
+# OWN_CODE marks a Markdown INDENTED CODE BLOCK — four or more spaces of indentation at the current
+# container depth. Such a line is literal text and carries no disclosure marker. Without this,
+# four-space-indented example markup is read as the real thing.
+ownership_split() {
+  local ln="$1" n c
+  OWN_CONTENT=''; OWN_CODE=0
+  while :; do
+    n=0
+    while :; do
+      c="${ln:0:1}"
+      case "${c}" in
+        ' ')  n=$((n + 1)) ;;
+        '	') n=$((n + 4)) ;;
+        *) break ;;
+      esac
+      ln="${ln:1}"
+      [ "${n}" -ge 4 ] && { OWN_CODE=1; break; }
+    done
+    [ "${OWN_CODE}" -eq 1 ] && break
+    case "${ln}" in
+      '>'*)
+        ln="${ln#>}"
+        # One space OR tab is the blockquote's own separator. Consuming only the space would leave a
+        # tab to be counted as four columns by the indentation cap, so a tab-separated blockquote
+        # would read as an indented code block and its marker would be MISSED -- the dangerous
+        # direction, since a missed interactive marker makes the maintainer's PR look like ours.
+        case "${ln}" in
+          ' '*|'	'*) ln="${ln:1}" ;;
+        esac
+        continue ;;
+      '-'' '*|'-''	'*|'*'' '*|'*''	'*)
+        # Consume the list marker AND its separator, for the same reason the
+        # blockquote branch above does: leaving a TAB behind lets the next pass
+        # count it as four columns, read the line as an indented code block, and
+        # discard the marker. The fix was applied to `>` and not here, so
+        # `-<tab>🤖 Generated with [Claude Code]` -- a list-wrapped interactive
+        # disclosure -- was classified `routine`, i.e. the maintainer's PR read
+        # as ours. That is the expensive direction, so both branches must agree.
+        ln="${ln:1}"
+        case "${ln}" in
+          ' '*|'	'*) ln="${ln:1}" ;;
+        esac
+        continue ;;
+    esac
+    break
+  done
+  OWN_CONTENT="${ln}"
+}
+
+# Sets OWN_INTER/OWN_ROUTINE. There is deliberately NO fence state here: a marker line counts wherever
+# it appears. Six review rounds each found one more container spelling that got past a delimiter-aware
+# fence detector, and a 1029-body portfolio differential (2026-08-11) measured that the whole state
+# machine changes ZERO verdicts -- so it bought an unbounded enumeration and decided nothing. The cost
+# of dropping it is a PR that FENCES an example of the interactive literal parking itself HANDS-OFF:
+# the cheap direction (our own PR waits for a human), measured incidence 0.
+ownership_scan() {
+  local body ln content inter=0 routine=0
+  body="$(printf '%b' "$1")"
+  while IFS= read -r ln; do
+    ownership_split "${ln}"
+    content="${OWN_CONTENT}"
+
+    # An indented code block is literal text at every level, so it carries no marker.
+    if [ "${OWN_CODE}" -eq 1 ]; then continue; fi
+
+    case "${content}" in '🤖'*) content="${content#🤖}" ;; esac
+    while [ -n "${content}" ]; do
+      case "${content}" in ' '*|'	'*) content="${content#?}" ;; *) break ;; esac
+    done
+    case "${content}" in
+      'Generated with [Claude Code]'*) inter=1 ;;
+      'Generated by the'*) routine=1 ;;
+    esac
+    # Process substitution, never a pipe: a piped `while` runs in a subshell, so `inter` and
+    # `routine` would be set there and discarded, and every body would classify `none`. Measured:
+    # a counter incremented in a piped loop reads 0 afterwards and 2 through process substitution.
+  done < <(printf '%s\n' "${body}")
+  OWN_INTER="${inter}"; OWN_ROUTINE="${routine}"
+}
+
+ownership_fixture() {
+  ownership_scan "$1"
+  # `interactive` wins ties: reading the maintainer's PR as ours licenses an unrequested mutation,
+  # while the reverse merely parks one of ours until a human looks.
+  if [ "${OWN_INTER}" -eq 1 ]; then printf 'interactive\n'
+  elif [ "${OWN_ROUTINE}" -eq 1 ]; then printf 'routine\n'
+  else printf 'none\n'; fi
+}
+
+expect_class() {
+  got="$(ownership_fixture "$2")"
+  [ "$got" = "$1" ] || fail "ownership classifier: expected $1, got $got — for: $3 (#2762)"
+}
+
+ROUTINE_LINE='> \xf0\x9f\xa4\x96 Generated by the Agentic Engineer'
+INTER_LINE='> \xf0\x9f\xa4\x96 Generated with [Claude Code](https://claude.com/claude-code)'
+
+expect_class interactive "${INTER_LINE}" 'leading marker line (#2985 shape)'
+expect_class interactive "text\n\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'trailing marker line (#3034 shape)'
+expect_class routine     "### Motivation\n\n- ${ROUTINE_LINE}" 'disclosure under the org template heading'
+expect_class routine     "${ROUTINE_LINE}\n\nbody" 'canonical routine disclosure'
+expect_class none        'no marker at all here' 'unmarked body'
+# the false-positive shape this PR closed: a bare substring match reads prose ABOUT the convention as
+# a disclosure, so a PR discussing it parks itself HANDS-OFF forever. Line structure is what fixes it.
+expect_class routine     "${ROUTINE_LINE}\n\nwe match Generated with [Claude Code] inline" 'marker quoted mid-sentence must NOT win'
+
+# `interactive wins` is the fail-safe for a body carrying BOTH markers. No live PR carries both, so it
+# is LATENT — which is exactly why it needs a fixture: nothing else fails if it is removed. Without
+# these two cases, reordering the classifier to test ROUTINE before INTER leaves every other fixture
+# green while the mixed case silently becomes `routine`, i.e. "safe to drive the maintainer's PR".
+# Both orders are asserted, because precedence must not depend on which marker appears first.
+expect_class interactive "${ROUTINE_LINE}\n\n${INTER_LINE}" 'both markers, routine first -> interactive wins'
+expect_class interactive "${INTER_LINE}\n\n${ROUTINE_LINE}" 'both markers, interactive first -> interactive wins'
+
+# Markdown-bold text is NOT a marker line. `[\s>*\-]*` accepted `**` as a prefix, so a bolded literal
+# in ordinary prose classified as a disclosure — the same false-positive family as the mid-sentence
+# and fenced cases, and the reason the contract says the literals carry no emphasis (CodeRabbit).
+expect_class none    '**Generated with [Claude Code](https://x)**' 'BOLD interactive text is not a marker'
+expect_class none    '**Generated by the Agentic Engineer**'       'BOLD routine text is not a marker'
+
+# THE ACCEPTED COST, pinned deliberately so a later round cannot read it as a bug and "fix" it. With
+# no fence state, a body that FENCES an example of the interactive literal classifies `interactive`
+# and parks itself HANDS-OFF. That is the CHEAP direction -- our own PR waits for a human -- and its
+# measured incidence across 1029 portfolio bodies (2026-08-11) is 0. Six review rounds each found one
+# more container spelling past a delimiter-aware detector; deleting these fixtures is how that
+# enumeration restarts, so they state the trade instead of hiding it.
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\n${INTER_LINE}\n\`\`\`" 'a FENCED interactive example still classifies interactive (accepted cost)'
+expect_class interactive "${ROUTINE_LINE}\n\n> \`\`\`markdown\n> > \xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)\n> \`\`\`" 'a fence nested in a blockquote suppresses nothing'
+
+# THE DIRECTION THAT MATTERS: a fence must never swallow a REAL trailing marker, because that drives
+# the maintainer's PR. Each of these was a live defect under some fence implementation -- an unclosed
+# fence, a mixed delimiter, a shorter inner run -- and all three are now structurally unreachable,
+# which is the point of removing the state machine rather than repairing it a seventh time.
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n\`\`\`\n${INTER_LINE}" 'a marker after a closed fence counts'
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\nx\n${INTER_LINE}" 'an UNCLOSED fence cannot swallow a real trailing marker'
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\n~~~\nx\n\`\`\`\n${INTER_LINE}" 'a mixed-delimiter body cannot swallow a real trailing marker'
+expect_class interactive "${ROUTINE_LINE}\n\n\`\`\`\`\n\`\`\`\nx\n\`\`\`\n\`\`\`\`\n${INTER_LINE}" 'a nested shorter run cannot swallow a real trailing marker'
+
+# A fence TOKEN is not itself a marker line. Without this, a matcher that stopped distinguishing
+# delimiters from content would still pass everything above.
+expect_class none "\`\`\`\n\`\`\`\n~~~\n~~~" 'fence tokens alone carry no marker'
+
+# INDENTED CODE BLOCK -- four or more spaces at the current depth is Markdown's literal-text form and
+# carries no marker. One of the two rules that REMAIN, because it serves the matcher.
+# The marker here is BARE -- no `>` in front. With a blockquoted marker the split stops at the
+# indentation cap before it would consume the `>`, so the line fails to match for that reason
+# instead and the assertion passes with the code-block skip deleted -- measured vacuous.
+expect_class routine "${ROUTINE_LINE}\n\nExample:\n\n    \xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a four-space indented code block is not a marker line'
+# A tab counts as four columns, so the cap reaches it too.
+expect_class routine "${ROUTINE_LINE}\n\nExample:\n\n\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-indented code block is not a marker line'
+# Negative control: three spaces is alignment, not code. Without it the cap swallows every indented
+# line and discards a REAL marker -- the direction that costs the maintainer's PR.
+expect_class interactive "${ROUTINE_LINE}\n\n   ${INTER_LINE}" 'three spaces is alignment: the marker still counts'
+# A tab is the blockquote's separator, not content indentation. Counting it as four columns would
+# hide a REAL interactive marker -- the direction that costs the maintainer's PR, not just a parked one.
+expect_class interactive "${ROUTINE_LINE}\n\n>\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated blockquote marker still counts'
+# The SAME hazard one container over. The blockquote branch consumed its separator and the list
+# branch did not, so a tab-separated LIST marker hit the four-column cap and the disclosure was
+# discarded -- the maintainer's PR reading as ours. A rule applied to one container and not its
+# sibling is the recurring shape here, so this fixture pins the pair together.
+expect_class interactive "${ROUTINE_LINE}\n\n-\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated LIST marker still counts'
 
 echo "portfolio surveyor contract: all assertions passed"

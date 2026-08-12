@@ -100,8 +100,10 @@ grep -Fq 'a finding-free current-head CodeRabbit review completion is `cr@<sha>`
   fail "a successful CodeRabbit review still cannot satisfy the review gate"
 grep -Fq 'auto-generated summary comment' "${surveyor}" ||
   fail "CodeRabbit success has no recognizable substantive completion artifact"
-grep -Fq 'Never count an auto-generated command reply, acknowledgement, quota notice, or service shell as a review completion' "${surveyor}" ||
-  fail "CodeRabbit acknowledgement can be mistaken for a successful review"
+# The protection is that an acknowledgement is not a review — not that a whole comment type is
+# discarded. The verdict-bearing form of that same type is the third satisfier pinned below.
+assert_prose "${surveyor}" 'is an acknowledgement and never a review' \
+  "CodeRabbit acknowledgement can be mistaken for a successful review"
 grep -Fq 'review object `submitted_at` must be later than the latest authenticated CodeRabbit request marker' "${surveyor}" ||
   fail "an old same-head CodeRabbit review can satisfy a later retry"
 grep -Fq 'Missing or delayed pre-merge output never blocks promotion' "${constitution}" ||
@@ -156,10 +158,73 @@ assert_prose "${constitution}" 'an empty object is a reply container, never a re
 # drifting apart again in the direction that caused this defect.
 assert_prose "${surveyor}" 'Actionable comments posted:' \
   "surveyor lost the positive identification of a CodeRabbit review object"
+
+# monorepo#2758, measured on platform#3051 head 992a93caecd1: the head's status read
+# `Review completed`, the newest review object was an empty container at an OLDER head, and the
+# summary comment named no sha at all — so the finding-free verdict existed ONLY in the
+# command-invocation reply. Rejecting that comment TYPE reported `green_review=none` over a real
+# green and sent the run down into weekly-limited Codex and monthly-limited Bugbot.
+#
+# Both halves are pinned deliberately. The ACCEPT half alone would still pass if a later edit
+# re-broadened the rule to every command reply, and the REJECT half alone would still pass if the
+# third artifact were dropped again — so each surface asserts that it accepts a verdict-bearing
+# reply AND that a bare acknowledgement remains a non-review.
+# EVERY deployed surface that describes the CodeRabbit artifacts is in this loop, including the
+# run-loop overlay a scheduled execution actually follows (monorepo#2759 review, P1): a conjunct
+# present in the contract but absent from the overlay is a fail-open with the suite still green.
+for f in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
+  assert_prose "${f}" 'command-invocation reply comment carrying a verdict' \
+    "$(basename "${f}") does not accept CodeRabbit's verdict-bearing command reply, so a real green at head reads as none"
+  assert_prose "${f}" 'I found no actionable issues' \
+    "$(basename "${f}") does not pin the verdict line that discriminates a review from an acknowledgement"
+  assert_prose "${f}" 'prefix of `headRefOid`' \
+    "$(basename "${f}") does not require the reply's sha to PREFIX-match the head, so a reply naming an older head would satisfy the gate"
+  assert_prose "${f}" 'is an acknowledgement and never a review' \
+    "$(basename "${f}") no longer rejects a bare Action-performed shell, so an acknowledgement carrying no verdict satisfies the gate"
+  # Measured on the same corpus: platform#3051 comment 5236900950 carries the verdict phrase with NO
+  # `at <sha>` clause and reviews an EARLIER head. Dropping the sha conjunct is the obvious
+  # simplification and it fails OPEN, so each surface must keep saying both are required.
+  assert_prose "${f}" 'no `at <sha>` clause' \
+    "$(basename "${f}") does not record that a verdict can omit the sha, so a stale review would satisfy the gate"
+  # Freshness is the THIRD conjunct and the easiest to lose: without it a reply posted BEFORE the
+  # request satisfies a later round at the same head. The review object and the summary already
+  # carry it, so the reply must too, on every surface that describes the reply.
+  assert_prose "${f}" 'updated after that request' \
+    "$(basename "${f}") does not require the verdict reply to post-date the request, so a pre-request reply satisfies a later round"
+  # The reply is matched on plain prose, not a structural marker, so the author bind is what stops
+  # any account posting the two phrases with the head prefix and being read as a green.
+  assert_prose "${f}" 'user.login == "coderabbitai[bot]"' \
+    "$(basename "${f}") does not bind the CodeRabbit artifacts to the bot author, so a spoofed comment satisfies the gate"
+done
+assert_prose "${parity_checklist}" 'user.login == "coderabbitai[bot]"' \
+  "parity checklist does not bind the artifacts to the bot author, so a plugin implementation would accept a spoofed comment"
+# The overlay's superseded blanket rejection is what Codex found still contradicting the contract.
+assert_absent "${maintenance_skill}" 'Never count an auto-generated command reply/acknowledgement' \
+  "portfolio-maintenance again rejects every CodeRabbit command reply, contradicting the contract at runtime"
+# The refute half: the superseded rule rejected the comment TYPE outright, which is exactly what
+# discarded the verdict. Its return would re-open the defect while every accept assertion above
+# still passed.
+assert_absent "${constitution}" 'Reject auto-generated command replies/acknowledgements' \
+  "constitution again rejects every CodeRabbit command reply, discarding the verdict-bearing one"
+assert_absent "${surveyor}" 'Never count an auto-generated command reply, acknowledgement, quota notice, or service shell as a review completion' \
+  "surveyor again rejects every CodeRabbit command reply, discarding the verdict-bearing one"
 # The parity checklist gates deletion of the local surveyor overlay, so a rule absent from it is one
 # the overlay removal drops silently — the same guard pattern as 4c above.
 assert_prose "${parity_checklist}" 'CodeRabbit review-object positive identification' \
   "removing the surveyor overlay would silently drop the review-object identification"
+# The checklist is what a plugin implementation follows once the local overlay is deleted, so its
+# SUBSTANCE is pinned, not just its section title (monorepo#2759 review): a conjunct present in the
+# two prose surfaces but absent here is a fail-open with every other assertion above still green.
+assert_prose "${parity_checklist}" 'CodeRabbit verdict-bearing command reply' \
+  "removing the surveyor overlay would silently drop the third CodeRabbit satisfier"
+assert_prose "${parity_checklist}" 'prefix-matching `headRefOid`' \
+  "parity checklist does not require the reply's sha to prefix-match the head"
+assert_prose "${parity_checklist}" 'I found no actionable issues' \
+  "parity checklist does not require the verdict line, so an acknowledgement would satisfy a plugin implementation"
+assert_prose "${parity_checklist}" 'updated after the latest authenticated' \
+  "parity checklist omits request freshness, so a pre-request reply at the same head satisfies a later round"
+assert_prose "${parity_checklist}" 'stays an acknowledgement' \
+  "parity checklist no longer rejects a bare Action-performed shell"
 if grep -Fq 'pre-merge summary parsing' "${parity_checklist}"; then
   fail "plugin-parity checklist can reintroduce the removed pre-merge gate"
 fi
