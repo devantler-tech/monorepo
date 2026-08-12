@@ -1,0 +1,18 @@
+# Installed skill roots whose content is authored in the reviewed suite upstream, and which may
+# therefore keep the programmed-updater no-review carve-out.
+#
+# This file is the AUTHORIZATION source, and it is deliberately separate from the skills themselves.
+# A skill's own `metadata.github-repo` is written by whoever authors that skill upstream and copied
+# verbatim into the installed root, so reading it to decide whether its change needs review lets an
+# upstream grant itself the carve-out by editing one line of its own frontmatter. There is no other
+# install record — no lockfile, no manifest — so the trusted list has to live here, in a reviewed
+# file, and a change to it goes through the normal review path like any other.
+#
+# Absent from this list means semantic review, so a newly installed skill and a third-party one are
+# treated the same until someone deliberately adds a row.
+#
+# Format: <repo>\t<installed skill root>\t<upstream that owns its content>
+# Lines beginning with `#` and blank lines are ignored.
+
+ksail	.agents/skills/ways-of-working	https://github.com/devantler-tech/agent-skills
+platform	.agents/skills/ways-of-working	https://github.com/devantler-tech/agent-skills

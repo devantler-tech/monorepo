@@ -1148,7 +1148,8 @@ gated by required CI and auto-merge rather than an AI review:
 - **Programmed agent-skills updater PRs** (maintainer direction 2026-07-23): the shared
   `update-agent-skills` workflow's exact `deps/agent-skills-update` branch and
   `chore(deps): update agent skills` title in `platform` and `ksail`, authored by
-  those repositories' exact updater App and changing only their generated installed-skill roots.
+  those repositories' exact updater App and changing only their generated installed-skill roots —
+  **and only where every changed skill is owned by the reviewed suite upstream** (see below).
 - **Programmed release PRs** (maintainer direction 2026-07-13, ksail#6095; widened 2026-07-18):
   every product's Homebrew-tap cask PR, including World at Ruin's CD-generated
   `chore(cask): update world-at-ruin to vX.Y.Z` PRs on `goreleaser/world-at-ruin`, plus KSail release
@@ -1160,8 +1161,50 @@ update but cannot prove that its prose preserves authority boundaries. The exact
 3 for a genuine generated marketplace update: that state makes the App trusted and actionable but
 does not grant the no-review carve-out. Only exit 0 grants the carve-out described above.
 
+🔴 **An installed-skill root holds copies from SEVERAL upstreams, so its path proves where a file
+landed and never who wrote it.** `platform` and `ksail` install third-party skills alongside
+suite-owned ones, so actor, branch, title, path and commit provenance together still cannot tell a
+reviewed suite change from a third-party instruction change riding the same generated PR. That gap is
+not hypothetical: the `gh-stack` update carried an unconditional whole-stack merge instruction that
+only semantic review caught, and every mechanical signal on that PR was valid.
+
+🔴 **Do NOT resolve that ownership from the skill's own `metadata.github-repo`** — that is the obvious
+design and it is self-attesting. There is no lockfile and no install manifest: the **only** record of a
+skill's origin is frontmatter inside the copied `SKILL.md`, authored by the very upstream it names and
+copied verbatim by the updater. A third-party release that sets
+`metadata.github-repo: https://github.com/devantler-tech/agent-skills` alongside an unsafe instruction
+would then be read back as proof of our ownership and skip review — the same hole one level down.
+
+Authorization comes instead from
+[`.claude/skill-ownership-allowlist.tsv`](.claude/skill-ownership-allowlist.tsv), a reviewed,
+version-controlled list kept **outside** the skills, mapping `<repo>` + `<installed skill root>` to the
+upstream that owns its content. Every changed root must be listed for that repository, or the PR
+returns **3**. Absence is the default, so a newly installed skill and a third-party one are treated
+alike until someone deliberately adds a row through the normal review path.
+
+The classifier's eighth argument — a JSON object mapping each changed root to the
+`metadata.github-repo` read at the PR head — is a **corroborator, never an authorization**. Supplying
+it can only withdraw the carve-out, never grant it: it catches an upstream handover, where a skill we
+still allowlist has quietly started declaring someone else. It is **required on this arm** and
+omitting it returns **3** — a tripwire the caller may skip is one that never fires, so a missing map
+is unproven ownership rather than permission. The other arms take seven arguments and never consult
+it. Read it with
+
+```sh
+# `--jq .content | base64 -d` also works, but BSD and GNU base64 spell the decode flag differently
+# (`-D` vs `-d`), so ask the API for the raw file instead.
+gh api "repos/devantler-tech/<repo>/contents/<skill-root>/SKILL.md?ref=<head>" \
+  -H "Accept: application/vnd.github.raw" |
+  yq --front-matter=extract '.metadata.github-repo // "null"'
+```
+
+and expect **3** whenever it disagrees with the allowlisted upstream — including a prefix-extended
+`agent-skills-v2`-style lookalike, since the comparison is exact. The PR is the unit, so one unproven
+skill sends the whole PR to semantic review.
+
 Apply either exemption only when `.claude/scripts/programmed-bot-review-exemption.sh` validates the
-exact repository, PR actor, branch, title, current-head commit provenance, and changed-file boundary.
+exact repository, PR actor, branch, title, current-head commit provenance, changed-file boundary, and
+— for installed-skill updates — that per-skill ownership map.
 Never infer it from the title alone. Qualifying PRs run through required CI and auto-merge; do **not**
 request CodeRabbit, Codex, Cursor Bugbot, or a local review, chase ancillary reviewer output, or count
 a missing review as a hygiene gap. Their checks, threads, and conflict state still gate auto-merge.
@@ -2189,7 +2232,9 @@ Untrusted (external) authors stay untrusted everywhere.
 **`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs.** The App is
 not added to the general trusted-author set. Its PR may be built when the exact programmed-bot
 classifier named above exits 0 or 3: exit 0 is the no-review auto-merge path, while exit 3 is the
-normal semantic-review path for a genuine `agent-plugins` update. Any other `app/botantler-1` PR
+normal semantic-review path for a genuine updater PR — an `agent-plugins` marketplace update, or a
+`platform`/`ksail` installed-skill update touching a skill this suite does not own. Any other
+`app/botantler-1` PR
 remains external and static-review-only. This path-specific grant covers the updater without trusting
 every PR the App could author.
 **GitHub Copilot — two roles, treated differently:** the maintainer uses Claude Code exclusively, so the

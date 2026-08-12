@@ -111,8 +111,13 @@ grep -Fq 'the `description` is the discriminator, never the state' "${surveyor}"
   fail "surveyor can read a CodeRabbit status state=success as proof a review ran"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
-grep -Fq 'Exit 3 means a trusted, review-required `agent-plugins` updater' "${surveyor}" ||
-  fail "surveyor cannot distinguish review-bearing marketplace updates from untrusted lookalikes"
+# Exit 3 is no longer marketplace-only: an installed-skill update carrying a skill this suite does
+# not own reaches it too, so pinning the `agent-plugins` phrasing would re-stale the moment that
+# path fires.
+grep -Fq 'Exit 3 means a genuine, trusted updater PR that still requires' "${surveyor}" ||
+  fail "surveyor cannot distinguish review-bearing updater PRs from untrusted lookalikes"
+grep -Fq 'installed-skill' "${surveyor}" ||
+  fail "surveyor does not cover the installed-skill route to a review-required updater PR"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq '`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier' "${surveyor}" ||
@@ -721,8 +726,111 @@ expect_review_required \
   "${agent_plugins_versioned_files}" \
   "${agent_plugins_versioned_commits}"
 
+# An installed skill root holds copies from many upstreams, and the copied frontmatter naming the
+# upstream is written by that upstream. So authorization comes from the reviewed allowlist beside the
+# classifier, and the frontmatter is only a corroborator that can withdraw the carve-out, never grant
+# it (#2614). `ways-of-working` is the one genuinely suite-owned skill installed in each consumer.
+suite_skill_owner="https://github.com/devantler-tech/agent-skills"
+allowed_skills_files='[".agents/skills/ways-of-working/SKILL.md"]'
+allowed_skills_owners="$(jq -cn --arg o "${suite_skill_owner}" '{
+  ".agents/skills/ways-of-working": $o
+}')"
+# The attack this exists to stop: a third-party release edits its own frontmatter to claim the suite
+# upstream, the updater copies that claim verbatim, and a payload-derived check would read it back as
+# proof of ownership.
+forged_owner_claim="$(jq -cn --arg o "${suite_skill_owner}" '{
+  ".agents/skills/gh-stack": $o
+}')"
+# A skill that IS allowlisted but whose copied frontmatter no longer names the reviewed upstream —
+# an upstream handover shows up here before anyone notices it anywhere else.
+drifted_owner_claim='{".agents/skills/ways-of-working":"https://github.com/github/awesome-copilot"}'
+lookalike_owner_claim="$(jq -cn --arg o "${suite_skill_owner}-v2" '{
+  ".agents/skills/ways-of-working": $o
+}')"
+mixed_batch_files='[".agents/skills/ways-of-working/SKILL.md",".agents/skills/gh-stack/SKILL.md"]'
+# `gh-stack` declaring its real third-party upstream — the honest, unforged case.
+ksail_skills_owners='{".agents/skills/gh-stack":"https://github.com/github/gh-stack"}'
+
 expect_exempt \
-  "Platform programmed agent-skills update" \
+  "Platform update touching only an allowlisted suite-owned skill" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  "${allowed_skills_owners}"
+
+# The corroborator is what catches an upstream handover on a root we still allowlist, so a caller
+# that omits it must NOT be handed the carve-out — a tripwire the caller may skip never fires.
+expect_review_required \
+  "an allowlisted skill with the corroborating map omitted entirely" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${allowed_skills_files}" \
+  "${ksail_skills_commits}"
+
+expect_review_required \
+  "KSail update touching a third-party skill" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${ksail_skills_files}" \
+  "${ksail_skills_commits}" \
+  "${ksail_skills_owners:-}"
+
+expect_review_required \
+  "a third-party skill FORGING the suite upstream in its own frontmatter" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${ksail_skills_files}" \
+  "${ksail_skills_commits}" \
+  "${forged_owner_claim}"
+
+expect_review_required \
+  "an allowlisted skill whose declared upstream has drifted" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  "${drifted_owner_claim}"
+
+expect_review_required \
+  "an allowlisted skill claimed by a prefix-extended lookalike upstream" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  "${lookalike_owner_claim}"
+
+expect_review_required \
+  "a batch mixing an allowlisted skill with a third-party one" \
+  "ksail" \
+  "app/ksail-bot" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${ksail_skills_head}" \
+  "${mixed_batch_files}" \
+  "${ksail_skills_commits}" \
+  "${allowed_skills_owners}"
+
+expect_review_required \
+  "an installed skill root absent from the allowlist" \
   "platform" \
   "app/botantler-1" \
   "deps/agent-skills-update" \
@@ -731,15 +839,83 @@ expect_exempt \
   "${platform_skills_files}" \
   "${platform_skills_commits}"
 
-expect_exempt \
-  "KSail programmed agent-skills update" \
-  "ksail" \
-  "app/ksail-bot" \
+expect_review_required \
+  "an allowlisted skill whose frontmatter was absent or unreadable" \
+  "platform" \
+  "app/botantler-1" \
   "deps/agent-skills-update" \
   "chore(deps): update agent skills" \
-  "${ksail_skills_head}" \
-  "${ksail_skills_files}" \
-  "${ksail_skills_commits}"
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  '{".agents/skills/ways-of-working":null}'
+
+expect_classifier_error \
+  "agent-skills update with a malformed ownership map" \
+  "platform" \
+  "app/botantler-1" \
+  "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" \
+  "${allowed_skills_files}" \
+  "${platform_skills_commits}" \
+  '[".agents/skills/ways-of-working"]'
+
+# A malformed allowlist must fail closed rather than authorize. The classifier resolves the file
+# relative to its own directory, so the fixture reproduces that layout exactly.
+#
+# ⚠️ Measured, so nobody over-credits these: with the corroborating map now REQUIRED, only the
+# duplicate-root case is caught by the allowlist validation alone. Removing that validation leaves
+# the other three still returning 3, because the map disagrees with the malformed row and catches
+# them first. They are kept as behaviour regressions for the combined gate, not as proof of the
+# parser — the parser's unique contribution is rejecting a duplicate root, which the map cannot see
+# because `from_entries` silently keeps the last one and it agrees with the map.
+expect_allowlist_rejects() {
+  local name="$1" row="$2" tmp rc
+  tmp="$(mktemp -d)"
+  mkdir -p "${tmp}/scripts"
+  cp "${classifier}" "${tmp}/scripts/"
+  printf '%s\n' "${row}" >"${tmp}/skill-ownership-allowlist.tsv"
+  # Pass a VALID corroborating map, so the only thing left to reject is the allowlist row itself.
+  # Omitting it would make every case below pass for the missing-map reason instead.
+  if "${tmp}/scripts/$(basename "${classifier}")" \
+    "platform" "app/botantler-1" "deps/agent-skills-update" \
+    "chore(deps): update agent skills" \
+    "${platform_skills_head}" "${allowed_skills_files}" "${platform_skills_commits}" \
+    "${allowed_skills_owners}"; then
+    rm -rf "${tmp}"
+    fail "malformed allowlist still granted the no-review carve-out: ${name}"
+  else
+    rc=$?
+  fi
+  rm -rf "${tmp}"
+  [[ "${rc}" -eq 3 ]] ||
+    fail "malformed allowlist did not take the review path: ${name} (exit ${rc})"
+}
+
+# Control: the same harness with a WELL-FORMED row must still authorize, or the four cases below
+# would pass for the trivial reason that the relocated copy never works.
+allowlist_control_tmp="$(mktemp -d)"
+mkdir -p "${allowlist_control_tmp}/scripts"
+cp "${classifier}" "${allowlist_control_tmp}/scripts/"
+printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills\n' \
+  >"${allowlist_control_tmp}/skill-ownership-allowlist.tsv"
+"${allowlist_control_tmp}/scripts/$(basename "${classifier}")" \
+  "platform" "app/botantler-1" "deps/agent-skills-update" \
+  "chore(deps): update agent skills" \
+  "${platform_skills_head}" "${allowed_skills_files}" "${platform_skills_commits}" \
+  "${allowed_skills_owners}" ||
+  fail "relocated-classifier control failed: a well-formed allowlist must still grant exit 0"
+rm -rf "${allowlist_control_tmp}"
+
+expect_allowlist_rejects "empty owner column" \
+  "$(printf 'platform\t.agents/skills/ways-of-working\t')"
+expect_allowlist_rejects "owner drifted to another upstream" \
+  "$(printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/github/awesome-copilot')"
+expect_allowlist_rejects "root outside the installed-skill tree" \
+  "$(printf 'platform\t.github/workflows\thttps://github.com/devantler-tech/agent-skills')"
+expect_allowlist_rejects "duplicate root" \
+  "$(printf 'platform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills\nplatform\t.agents/skills/ways-of-working\thttps://github.com/devantler-tech/agent-skills')"
 
 expect_exempt \
   "GoReleaser KSail cask" \
