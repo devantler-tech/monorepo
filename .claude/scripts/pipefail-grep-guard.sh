@@ -285,14 +285,19 @@ early_exit_flag() {
 # Kept to env's actual value-taking options rather than "any option plus any
 # word": the loose form would match `foo | bar baz grep`, where grep is an
 # argument to `bar` and not run at all — a false positive.
-# An assignment prefix may QUOTE a value containing whitespace — `LC_ALL="C UTF-8"
-# grep -q x` is a legal prefix, and the unquoted-only form stopped matching at the
-# space, so the whole pipeline read as containing no grep. Accept a double- or
-# single-quoted value as well. `_SQ` exists because the pattern lives in a
+# An assignment prefix may quote a value containing whitespace, and a shell WORD
+# is a sequence of adjacent fragments that need not agree on quoting:
+# `LC_ALL="C UTF-8"`, `LC_ALL='C UTF-8'` and `LC_ALL=C" UTF-8"` are all one word.
+# Matching only the fully-quoted or fully-unquoted shapes left the mixed form
+# unmatched, so the pipeline read as containing no grep at all — the same
+# fail-open twice over, because the value grammar was wrong rather than the quote
+# characters. Model the value as one-or-more fragments instead, each a quoted run
+# or a run of bare characters. `_SQ` exists because the pattern lives in a
 # single-quoted string and cannot hold a bare `'`.
 _SQ=\'
-PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|[^[:space:]]+)|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
-unset _SQ
+_ASSIGN_VALUE='("[^"]*"|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|[^[:space:]"'"$_SQ"']+)+'
+PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*='"$_ASSIGN_VALUE"'|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
+unset _SQ _ASSIGN_VALUE
 
 findings=0
 

@@ -363,6 +363,22 @@ run_guard "$f" && rc=0 || rc=$?
 report "a single-quoted assignment value with whitespace does not hide the grep" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# A shell WORD is adjacent fragments that need not agree on quoting, so matching
+# only the fully-quoted and fully-unquoted shapes left the mixed one unmatched.
+f="$(mkscript "assign-mixed-quoting.sh" \
+  'printf "%s" "$v" | LC_ALL=C" UTF-8" grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "a mixed quoted/unquoted assignment value does not hide the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# ...and two assignment prefixes, the second one quoted — the fragment grammar
+# must not consume the space that separates the prefixes from each other.
+f="$(mkscript "assign-two-prefixes.sh" \
+  'printf "%s" "$v" | A=1 B="x y" grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "two assignment prefixes, the second quoted, still reach the grep" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
 # A wrapper option can take its value as the FOLLOWING word. `-u` matched the
 # bare-option alternative, but `UNUSED` then sat between the prefix and `grep`
 # where nothing matched it, so the pipeline read as "no grep here".
