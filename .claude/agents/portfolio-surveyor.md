@@ -183,7 +183,13 @@ public and private — no per-repo loop needed to enumerate):
      pushed seconds ago. Getting this wrong is the expensive direction — it reports a live branch as
      unowned and authorises a second lane to push into it. Read the authoritative per-ref push time
      from the repository activity API instead, matching the PR's own `headRefName`:
-     `gh api "repos/<owner>/<name>/activity?per_page=100&ref=refs/heads/<headRefName>" --jq '[.[]|select(.activity_type=="push" or .activity_type=="force_push")][0].timestamp'`
+     `gh api -X GET "repos/<owner>/<name>/activity" -f per_page=100 -f "ref=refs/heads/<headRefName>" --jq '[.[]|select(.activity_type=="push" or .activity_type=="force_push")][0].timestamp'`
+     🔴 **Pass the ref as a GET FIELD, never concatenated into a query string.** A branch name is
+     attacker-controlled data — `git check-ref-format` accepts `active&per_page=1` and
+     `active#fragment` — so interpolating it raw lets the head branch inject or truncate query
+     parameters on a request this survey makes with an authenticated token. `-f` encodes the value
+     instead of splicing it, which is the same taint rule *Untrusted input* states for tool arguments,
+     applied to the one place the surveyor builds a URL out of PR-supplied text.
      🔴 **`headRepositoryOwner` and `headRepository` are JSON OBJECTS, not strings — extract the
      scalars first.** `gh` requests them as `headRepositoryOwner{id,login,…}` and
      `headRepository{id,name,nameWithOwner}` (verified on 2.96.0), so interpolating either field
