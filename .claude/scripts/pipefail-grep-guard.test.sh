@@ -125,6 +125,8 @@ flag_case "egrep -q" \
   'printf "%s" "$v" | egrep -q NEEDLE'
 flag_case "an env-var prefix before grep" \
   'printf "%s" "$v" | LC_ALL=C grep -q NEEDLE'
+flag_case "a |& pipe carrying stderr too" \
+  'build_it |& grep -q NEEDLE'
 flag_case "a negated pipeline (the fail-OPEN direction)" \
   'if ! printf "%s" "$v" | grep -q NEEDLE; then echo bad; fi'
 flag_case "the second pipeline on one line" \

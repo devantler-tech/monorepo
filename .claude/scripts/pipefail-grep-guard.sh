@@ -41,6 +41,12 @@
 #   worktree-claim-lib.sh sets no pipefail of its own and always runs inside a
 #   caller that does. The here-string form is correct either way.
 #
+#   The command right after the pipe must be grep itself (optionally behind
+#   VAR=value prefixes). `producer | xargs grep -l …` is the same hazard and is
+#   NOT detected — xargs would take the SIGPIPE instead. There is no instance of
+#   it in this repository, so the pattern stays narrow rather than growing an
+#   xargs argument parser; extend it here if one ever appears.
+#
 # ESCAPE HATCH
 #   A line carrying `pipefail-grep-guard: allow` (in a comment) is skipped, so a
 #   fixture that must contain the offending text stays possible without turning
@@ -122,7 +128,7 @@ early_exit_flag() {
 # A single `|` (never `||`), optional `VAR=value` prefixes, then grep. The
 # leading `(^|[^|])` is what keeps `||` out: in `a || grep -q x` the character
 # before the second pipe is itself a pipe.
-PIPE_GREP_RE='(^|[^|])\|[[:space:]]*(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*)(grep|egrep|fgrep)([[:space:]]|$)'
+PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*)(grep|egrep|fgrep)([[:space:]]|$)'
 
 findings=0
 
