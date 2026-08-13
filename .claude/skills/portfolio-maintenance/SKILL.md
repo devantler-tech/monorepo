@@ -676,9 +676,14 @@ For each selected product:
    The `<session-owner-token>` is **unique to one runtime invocation** and stable only for renewals
    within that run: derive it as `<lane>-<trusted-runtime-run-or-thread-id>`. Never use a stable
    agent, schedule, or lane slug, because overlapping ticks would then impersonate the same owner.
-   **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*`. Never write
-   a sibling's lane: it breaks draft ownership, and a `claude/*` branch from another instance would
-   be swept by the Claude tick's cleanup. (Issue-less hotfixes and trivial obvious fixes keep plain
+   **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*`. Never open NEW
+   work in a sibling's lane: it breaks draft ownership, and a `claude/*` branch from another instance
+   would be swept by the Claude tick's cleanup. ⚠️ **REPAIR is the exception** (contract *Autonomy*):
+   you may push into a sibling lane's branch to *repair* a PR the active-work test shows is unowned —
+   resolve its conflict, fix its failing check, address a finding its own lane left sitting — fetching
+   immediately before and integrating with a merge, never a force-push. What stays forbidden is
+   routine parallel work on a branch whose lane is live. **An external contributor's branch is never
+   repaired this way at all** — it is never checked out locally, so name the blocker and hand it back. (Issue-less hotfixes and trivial obvious fixes keep plain
    `<lane>/<area>-<desc>` — they go straight to a PR, so no claim window applies.) **Immediately
    before editing a worktree this session did not create**, atomically reserve it with
    `.claude/scripts/worktree-claim.sh acquire <wt> <session-owner-token>`. **Only exit 0 authorizes

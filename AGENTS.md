@@ -2533,7 +2533,9 @@ static review plus the ordinary gates. Reading this gate as a merge ban is the c
 2026-08-08.
 **`app/botantler-1` is narrowly trusted only for programmed agent-skills updater PRs.** The App is
 not added to the general trusted-author set. Its PR may be built when the exact programmed-bot
-classifier named above exits 0 or 3: exit 0 is the no-review auto-merge path, while exit 3 is the
+classifier named above exits 0 or 3: exit 0 is the **no-review** path — which is a **direct,
+head-pinned merge, NEVER `--auto`** (see *Merge policy*: this App's permission comes from a classifier
+result about one specific commit, and `--auto` cannot carry a condition) — while exit 3 is the
 normal semantic-review path for a genuine updater PR — an `agent-plugins` marketplace update, or a
 `platform`/`ksail` installed-skill update touching a skill this suite does not own. Any other
 `app/botantler-1` PR is external for **execution** purposes — reviewed statically and never run

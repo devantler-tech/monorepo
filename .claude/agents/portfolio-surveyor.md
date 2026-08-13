@@ -62,6 +62,13 @@ public and private — no per-repo loop needed to enumerate):
    red `main`, so folding it into a health field mislabels a backlog gap as breakage. Emit
    `DISCOVERY-TRUNCATED (issues, 300 cap)` on its own line and leave `nothing_on_fire` decided by the
    PR and `main` evidence alone.
+   ⚠️ **But that row still CONSTRAINS the consumer, and saying only what it does not touch left that
+   unstated.** Rungs 2–4 select by severity and then by age, so an incomplete issue set cannot support
+   *"this is the oldest actionable issue"* — the one older than the cap is exactly the one the search
+   dropped. Under this row the orchestrator treats every rung-2/3/4 pick as **provisional**: complete
+   the discovery by partitioning (per repo, or by date range) before claiming an issue as oldest, and
+   never record "oldest actionable" in an artifact on the strength of a truncated read. This bounds
+   *issue selection* only; it is still not breakage and still never moves `nothing_on_fire`.
 2. **Open issues (org-wide, one call) — include `assignees` (claim signal) and `author`
    (automation-owned filter):**
    `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,labels,updatedAt,url,assignees`
