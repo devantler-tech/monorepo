@@ -1121,5 +1121,91 @@ check "the stale-local hint targets the WORKTREE" 0 0 \
 check "the stale-local hint does NOT target the repo checkout" 0 \
   "$(grep -qF 'stale-consumer' <<<"$stalelocal_hint" && echo 1 || echo 0)"
 
+# ── resuming a remote branch in a NARROW-REFSPEC clone ─────────────────────────────────────────
+# `worktree add --track <start>` does not ask whether the ref EXISTS; it asks whether git considers
+# it a trackable remote branch, and that answer comes from `remote.origin.fetch`. In a single-branch
+# clone the explicit refspec fetch above still creates refs/remotes/origin/<branch>, and the add is
+# still refused with `cannot set up tracking information` — leaving NO worktree at all. Resuming an
+# open PR is rung-1 work, so this arm failing is the helper being unusable for its commonest case.
+narrowfetch_origin="$tmp/narrowfetch-origin.git"
+git init -q --bare -b main "$narrowfetch_origin"
+narrowfetch_seed="$tmp/narrowfetch-seed"
+git init -q -b main "$narrowfetch_seed"
+git -C "$narrowfetch_seed" config user.name "worktree-claim-test"
+git -C "$narrowfetch_seed" config user.email "worktree-claim-test@example.com"
+git -C "$narrowfetch_seed" commit --allow-empty -qm "base"
+git -C "$narrowfetch_seed" remote add origin "$narrowfetch_origin"
+git -C "$narrowfetch_seed" push -q origin main
+git -C "$narrowfetch_seed" checkout -qb "claim-narrowfetch"
+git -C "$narrowfetch_seed" commit --allow-empty -qm "pr-work"
+git -C "$narrowfetch_seed" push -q origin "claim-narrowfetch"
+narrowfetch_tip="$(git -C "$narrowfetch_origin" rev-parse "claim-narrowfetch")"
+
+# --single-branch is what a shallow CI checkout and `gh repo clone -- --depth` both produce.
+narrowfetch_consumer="$tmp/narrowfetch-consumer"
+git clone -q --single-branch --branch main "$narrowfetch_origin" "$narrowfetch_consumer"
+# Guards the arm below: without a narrowed refspec this fixture proves nothing, and a later "tidy-up"
+# of the clone flags would silently make every assertion here vacuous.
+check "precondition: the consumer's refspec does NOT map the PR branch" 0 \
+  "$(git -C "$narrowfetch_consumer" config remote.origin.fetch |
+     grep -qF 'refs/heads/*' && echo 1 || echo 0)"
+
+narrowfetch_rc=0
+narrowfetch_out="$("$script" add \
+  "$narrowfetch_consumer" "$tmp/wt-narrowfetch" "claim-narrowfetch" "session-narrowfetch" 2>&1)" || narrowfetch_rc=$?
+check "a narrow-refspec clone still resumes an existing remote branch" 0 "$narrowfetch_rc" \
+  "$narrowfetch_out" "owner=session-narrowfetch"
+check "the narrow-refspec claim actually creates the worktree" 0 \
+  "$([ -d "$tmp/wt-narrowfetch" ] && echo 0 || echo 1)"
+# The whole point of resuming: land on the PR's commit, not a fork from local HEAD.
+check "the narrow-refspec worktree lands on the remote tip" 0 0 \
+  "$(git -C "$tmp/wt-narrowfetch" rev-parse HEAD 2>/dev/null || echo none)" "$narrowfetch_tip"
+
+# ── a failed refresh must not let behind=0 read as "current" ────────────────────────────────────
+# The local-branch arm counts `behind` against refs/remotes/origin/<branch>. When the fetch fails,
+# that ref is whatever the last successful fetch left — so a local branch equal to that obsolete
+# cache counts 0 and the arm stays silent, which is indistinguishable from a genuinely current
+# branch. A zero measured against an unrefreshed ref is not evidence; it is the absence of evidence.
+behindfail_origin="$tmp/behindfail-origin.git"
+git init -q --bare -b main "$behindfail_origin"
+behindfail_seed="$tmp/behindfail-seed"
+git init -q -b main "$behindfail_seed"
+git -C "$behindfail_seed" config user.name "worktree-claim-test"
+git -C "$behindfail_seed" config user.email "worktree-claim-test@example.com"
+git -C "$behindfail_seed" commit --allow-empty -qm "init"
+git -C "$behindfail_seed" remote add origin "$behindfail_origin"
+git -C "$behindfail_seed" push -q origin main
+git -C "$behindfail_seed" checkout -qb "claim-behindfail"
+git -C "$behindfail_seed" commit --allow-empty -qm "v1"
+git -C "$behindfail_seed" push -q origin "claim-behindfail"
+
+# Clone at v1 so the LOCAL branch and the CACHED tracking ref agree...
+behindfail_consumer="$tmp/behindfail-consumer"
+git clone -q "$behindfail_origin" "$behindfail_consumer"
+git -C "$behindfail_consumer" branch "claim-behindfail" "origin/claim-behindfail"
+# ...then advance origin. The consumer is never told, so a failed fetch leaves behind=0 against a
+# ref that is now one commit stale.
+git -C "$behindfail_seed" commit --allow-empty -qm "v2"
+git -C "$behindfail_seed" push -q origin "claim-behindfail"
+check "precondition: local and cached agree while origin has moved on" 0 \
+  "$([ "$(git -C "$behindfail_consumer" rev-parse claim-behindfail)" \
+     = "$(git -C "$behindfail_consumer" rev-parse refs/remotes/origin/claim-behindfail)" ] &&
+     [ "$(git -C "$behindfail_consumer" rev-parse claim-behindfail)" \
+     != "$(git -C "$behindfail_origin" rev-parse claim-behindfail)" ] && echo 0 || echo 1)"
+
+behindfail_rc=0
+behindfail_out="$(PATH="$fetchfail_stub:$PATH" "$script" add \
+  "$behindfail_consumer" "$tmp/wt-behindfail" "claim-behindfail" "session-behindfail" 2>&1)" || behindfail_rc=$?
+check "an unrefreshable local branch still claims (advisory, not fatal)" 0 "$behindfail_rc" \
+  "$behindfail_out" "owner=session-behindfail"
+# Assert on the branch-specific line. `warn_if_base_is_stale` also emits an UNKNOWN for origin/HEAD
+# under the same stub, so a whole-transcript match for "UNKNOWN" passes even with this fix reverted —
+# verified by reverting it and watching the unisolated form stay green.
+behindfail_line="$(grep 'origin/claim-behindfail' <<<"$behindfail_out" || true)"
+check "a behind=0 measured against an unrefreshed ref reports UNKNOWN, not silence" 0 \
+  "$([ -n "$behindfail_line" ] && echo 0 || echo 1)"
+check "the UNKNOWN names the failed refresh as the reason" 0 0 \
+  "$behindfail_line" "refresh failed"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
