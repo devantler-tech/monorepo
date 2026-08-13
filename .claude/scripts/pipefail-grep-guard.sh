@@ -216,7 +216,11 @@ mask_quoted() {
     # exhibit this hazard. So `$(` suspends the quoted run and its body is emitted
     # as code; the matching `)` resumes it. Depth is tracked because a
     # substitution can contain another.
-    if [[ "$c" == '$' && "${s:i+1:1}" == '(' ]]; then
+    # ...but ONLY where bash would actually substitute. Single quotes suppress it
+    # entirely, so `'example: $(producer | grep -q MATCH)'` is literal text;
+    # entering this branch regardless exposed that text as code and reported a
+    # safe script. The state test must come first.
+    if [[ "$q" != "'" && "$c" == '$' && "${s:i+1:1}" == '(' ]]; then
       saved_q[depth]="$q"
       depth=$((depth + 1))
       q=""

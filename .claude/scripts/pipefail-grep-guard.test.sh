@@ -971,6 +971,17 @@ flag_case "a pipeline inside a double-quoted command substitution still runs" \
 clean_case "the same text as a plain quoted string is not a pipeline" \
   "printf '%s\\n' 'out=| grep -q MATCH'"
 
+# Single quotes suppress command substitution entirely, so a `$(` inside them is
+# literal text. Treating it as executable — as the substitution support briefly
+# did — exposed the inner pipeline and reported a safe script.
+clean_case "a \$( inside single quotes is literal, not a substitution" \
+  "printf '%s\\n' 'example: \$(producer | grep -q MATCH)'"
+
+# ...and its twin, so the control above cannot pass by substitution support
+# simply being removed: inside DOUBLE quotes the same text really does run.
+flag_case "a \$( inside double quotes is a substitution and does run" \
+  'printf "%s\n" "$(producer | grep -q MATCH)"'
+
 # A trailing comment is prose. This is the probe-site twin of the heredoc
 # scanner's rule, and both now go through one implementation.
 clean_case "pipeline-shaped prose in a trailing comment is not a pipeline" \
