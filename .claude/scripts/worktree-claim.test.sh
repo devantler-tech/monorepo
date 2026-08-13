@@ -1109,8 +1109,17 @@ check "no false STALE warning when the refresh succeeds" 0 \
 # the operator learns the warning is noise. The hint must name the fast-forward in the WORKTREE.
 check "the stale-local hint names a merge, not another fetch" 0 "$stalelocal_rc" \
   "$stalelocal_out" "merge --ff-only"
-check "the stale-local hint targets the WORKTREE, not the repo" 0 "$stalelocal_rc" \
-  "$stalelocal_out" "wt-stale-local"
+# Assert against the HINT LINE, not the whole transcript. `git worktree add` echoes the worktree path
+# itself ("Preparing worktree ..."), so a whole-output match for that path passes no matter what the
+# hint targets — verified: repointing the hint at $repo left the suite fully green. Isolating the line
+# is what makes this assertion capable of failing for the reason it exists.
+stalelocal_hint="$(grep 'Reconcile before working' <<<"$stalelocal_out" || true)"
+check "a reconcile hint was actually emitted (guards the two checks below)" 0 \
+  "$([ -n "$stalelocal_hint" ] && echo 0 || echo 1)"
+check "the stale-local hint targets the WORKTREE" 0 0 \
+  "$stalelocal_hint" "wt-stale-local"
+check "the stale-local hint does NOT target the repo checkout" 0 \
+  "$(grep -qF 'stale-consumer' <<<"$stalelocal_hint" && echo 1 || echo 0)"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
