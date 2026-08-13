@@ -146,9 +146,17 @@ public and private — no per-repo loop needed to enumerate):
    same pentad — its `disclosure` value (below) records whose control channel a comment on it is and
    never gates the classification.
    **`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier**:
-   run the classifier only when the cheap search result has branch `deps/agent-skills-update` and
-   exact title `chore(deps): update agent skills`. The
-   cheap branch/title test only selects a candidate; it never grants trust or an exemption. Exit 0
+   run the classifier only when the PR has branch `deps/agent-skills-update` and
+   exact title `chore(deps): update agent skills`.
+   🔴 **Apply that test AFTER the deepening read, not to the discovery result — the discovery call
+   cannot answer it.** `gh search prs` has its own field vocabulary and **rejects `headRefName`**
+   outright (verified 2026-08-13: `Unknown JSON field: "headRefName"`), and the discovery call above
+   does not request a branch field at all. So a branch test written against the search result can
+   never be satisfied, the exit-0 arm is never reached, and a qualifying updater silently loses the
+   review exemption and auto-merge eligibility it was granted — a carve-out that fails closed by
+   being unreachable rather than by being refused. Take the branch from the per-PR read that actually
+   returns `headRefName`. The
+   branch/title test only selects a candidate; it never grants trust or an exemption. Exit 0
    grants the narrow no-review path. Exit 3 means a genuine, trusted updater PR that still requires
    semantic review — an `agent-plugins` marketplace update, or a `platform`/`ksail` installed-skill
    update whose changed skills are not all allowlisted as suite-owned: deepen its normal review
@@ -198,9 +206,16 @@ public and private — no per-repo loop needed to enumerate):
      match this PR:
      ```sh
      gh api graphql -f owner=<owner> -f name=<name> -f query='
-       query($owner:String!,$name:String!){repository(owner:$owner,name:$name){
-         mergeQueue(branch:"main"){entries(first:50){nodes{position pullRequest{number}}}}}}'
+       query($owner:String!,$name:String!,$after:String){repository(owner:$owner,name:$name){
+         mergeQueue(branch:"main"){entries(first:50,after:$after){
+           pageInfo{hasNextPage endCursor} nodes{position pullRequest{number}}}}}}'
      ```
+     🔴 **Paginate — `first:50` is a page, not the queue.** A queue holding more than 50 entries drops
+     everything past the first page, so a PR at position 51+ carries no `merge-group:` and reads as
+     idle: the survey then invites a takeover of a PR that is **already merging**, which is the exact
+     outcome this signal exists to prevent. Follow `pageInfo{hasNextPage endCursor}` with `after:`
+     until the target PR is found or the queue is exhausted; stop early on the match, since the common
+     case resolves on page one.
      A matching entry ⇒ `merge-group:queued@<position>`. **The query answers "is there a queue here?"
      by itself — verified 2026-08-13: a repo with no merge queue returns `mergeQueue: null`, while a
      queue with nothing in it returns an entries object with `nodes: []`.** Those are different
