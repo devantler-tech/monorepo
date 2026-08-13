@@ -293,7 +293,7 @@ HEREDOC_TERMS=()
 HEREDOC_DASH=()
 HEREDOC_COUNT=0
 heredoc_delimiters() {
-  local raw="$1" s d m i len dash
+  local raw="$1" s d frag m i len dash
   HEREDOC_TERMS=()
   HEREDOC_DASH=()
   HEREDOC_COUNT=0
@@ -354,30 +354,53 @@ heredoc_delimiters() {
       s="${s#-}"
     fi
     while [[ "$s" == [[:space:]]* ]]; do s="${s#?}"; done
-    case "$s" in
-      "'"*)
-        d="${s#\'}"
-        [[ "$d" == *"'"* ]] || continue # unbalanced quote: not a delimiter we can trust
-        d="${d%%\'*}"
-        ;;
-      '"'*)
-        d="${s#\"}"
-        [[ "$d" == *'"'* ]] || continue
-        d="${d%%\"*}"
-        ;;
-      \\*)
-        d="${s#\\}"
-        d="${d%%[[:space:];\&|<>()]*}"
-        ;;
-      # An unquoted delimiter is an ordinary shell WORD, not an identifier:
-      # `cat <<+++` is valid and ends at a line reading `+++`. Restricting this to
-      # identifiers meant such an opener was not recognised at all, so its payload
-      # was read as code — and a payload line reading like the whole-file directive
-      # exempted the script. A word ends at whitespace or a shell metacharacter.
-      *)
-        d="${s%%[[:space:];\&|<>()]*}"
-        ;;
-    esac
+    # A DELIMITER IS A WORD, AND A WORD IS A RUN OF ADJACENT FRAGMENTS THAT NEED
+    # NOT AGREE ON QUOTING. Bash removes the quotes, so `<<E"OF"` and `<<E'OF'`
+    # both name the terminator `EOF`, and `<<+++` names `+++` — an unquoted
+    # delimiter is an ordinary word, not an identifier.
+    #
+    # Storing the raw spelling meant the terminator was never found, the body was
+    # never masked, and the payload was scanned as executable code: a FALSE
+    # POSITIVE on a valid script. Handling only the fully-quoted and fully-bare
+    # shapes is the same mistake the assignment-value grammar below already
+    # records — a word is fragments, so parse fragments.
+    #
+    # An unbalanced quote leaves `d` empty and the opener is skipped, which masks
+    # nothing. That is the conservative direction here: the payload stays scanned.
+    d=""
+    while [[ -n "$s" ]]; do
+      case "$s" in
+        "'"*)
+          frag="${s#\'}"
+          [[ "$frag" == *"'"* ]] || {
+            d=""
+            break
+          }
+          s="${frag#*\'}"
+          d+="${frag%%\'*}"
+          ;;
+        '"'*)
+          frag="${s#\"}"
+          [[ "$frag" == *'"'* ]] || {
+            d=""
+            break
+          }
+          s="${frag#*\"}"
+          d+="${frag%%\"*}"
+          ;;
+        \\?*)
+          d+="${s:1:1}"
+          s="${s:2}"
+          ;;
+        [[:space:]]* | ';'* | '&'* | '|'* | '<'* | '>'* | '('* | ')'*) break ;;
+        *)
+          frag="${s%%[[:space:];\&|<>()\'\"\\]*}"
+          [[ -n "$frag" ]] || break
+          d+="$frag"
+          s="${s#"$frag"}"
+          ;;
+      esac
+    done
     [[ -n "$d" ]] || continue
     HEREDOC_TERMS[HEREDOC_COUNT]="$d"
     HEREDOC_DASH[HEREDOC_COUNT]="$dash"

@@ -936,6 +936,30 @@ run_guard "$f" && rc=0 || rc=$?
 report "positive control: a \${v#pat} expansion still leaves the heredoc detectable" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
+# A delimiter is a WORD, and a word is adjacent fragments that need not agree on
+# quoting: bash removes the quotes, so all three of these name `EOF`. Storing the
+# raw spelling meant the terminator was never found and the payload was scanned as
+# executable code — a false positive on a valid script.
+for spelling in 'E"OF"' "E'OF'" '\EOF'; do
+  f="$(mkscript "mixed-delimiter-$(printf '%s' "$spelling" | tr -c 'a-zA-Z0-9' '-').sh" \
+    "cat <<$spelling" \
+    'producer | grep -q MATCH' \
+    'EOF')"
+  run_guard "$f" && rc=0 || rc=$?
+  report "clean: the delimiter <<$spelling names EOF after quote removal" \
+    "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+done
+
+# Its control: an UNBALANCED quote is not a delimiter this can trust, so nothing
+# is masked and the payload stays scanned — the conservative direction.
+f="$(mkscript "unbalanced-delimiter-quote.sh" \
+  'cat <<E"OF' \
+  'producer | grep -q MATCH' \
+  'EOF')"
+run_guard "$f" && rc=0 || rc=$?
+report "an unparsable delimiter masks nothing rather than guessing" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2
   exit 1
