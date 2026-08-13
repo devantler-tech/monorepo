@@ -730,8 +730,7 @@ _SQ=\'
 # The four fragment forms a shell assignment value can take, enumerated from the
 # quoting rules rather than one shape at a time — a value is a WORD, and a word is
 # adjacent fragments that need not agree on quoting, so matching a single shape
-# leaves the others unmatched. Every line below is confirmed by RUNNING it, not
-# read off a manual:
+# leaves the others unmatched:
 #   "…"    double quotes DO honour backslash escapes   ->  A="x\" y"   is  x" y
 #   $'…'   ANSI-C quoting DOES honour escapes          ->  $'x\' y'    is  x' y
 #   '…'    single quotes do NOT — a backslash is       ->  B='x\" y'   is  x\" y
