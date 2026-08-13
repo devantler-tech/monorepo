@@ -246,9 +246,12 @@ public and private — no per-repo loop needed to enumerate):
      observation of an idle queue, not a failed read — confirmed by a bogus-field control, which
      errors `undefinedField` rather than returning empty. Where only the run is available, correlate a
      bounded `--event merge_group` listing on its `headBranch` (`pr-<n>`); **sort explicitly by
-     `created_at` and take the newest** rather than trusting the endpoint's order, which is not
+     `createdAt` and take the newest** rather than trusting the endpoint's order, which is not
      reliably newest-first and will hand back an arbitrary stale window that makes a live merge look
-     idle. Only a run still **in progress** is an ownership signal — a completed or evicted one is not,
+     idle. **`createdAt` is the CLI's spelling, matching `headBranch` above; REST's `created_at` is a
+     different surface's vocabulary and `gh run list --json` rejects it — and rejects the WHOLE
+     request, so one wrong field name returns a field list instead of runs and the correlation reads
+     as "no merge_group run" rather than as an error.** Only a run still **in progress** is an ownership signal — a completed or evicted one is not,
      and an eviction is work to root-cause rather than a reason to stand off.
      ⚠️ **Emit `merge-group:` only on repos that actually gate `main` behind a queue** (recorded per
      repo in its `AGENTS.md ## Maintenance`); elsewhere the alternative simply never occurs, and this
