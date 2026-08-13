@@ -99,9 +99,10 @@
 #   command name does not appear as a word where this grammar looks for it.
 #   Detecting it means parsing an option's value as a command line, which is the
 #   wrapper-level twin of the quoting problem that monorepo#2797 replaces this
-#   layer to solve. There is no instance in this repository. Recorded rather than
-#   patched, because adding one more spelling to the prefix grammar is what four
-#   earlier rounds already showed does not converge.
+#   layer to solve. There is no instance in this repository. Deferred there rather
+#   than patched here: the prefix grammar matches command WORDS, so a command built
+#   inside an option value is outside what it can express, and widening the grammar
+#   moves which spelling escapes rather than closing the class.
 #
 # ESCAPE HATCH
 #   A line carrying `pipefail-grep-guard: allow` AFTER A `#` is skipped, so a
@@ -594,12 +595,12 @@ early_exit_flag() {
     fi
     case "$tok" in
       # `--` ends option parsing. There is deliberately NO arm for the shell
-      # operators here: the unquoted-separator test above owns them whether or not
-      # whitespace surrounds them, and a second copy did not merely duplicate the
-      # rule — it inverted it on quoted input. `… | grep ';' -q` reaches this case
-      # as the bare `;` (quote removal ran first), matched an operator arm, and
-      # returned CLEAN over a real early exit, while the test above had correctly
-      # treated the quoted character as data.
+      # operators here: the unquoted-separator test above owns them, whether or not
+      # whitespace surrounds them. A second copy would not merely duplicate that
+      # rule, it would invert it on quoted input — quote removal runs first, so
+      # `… | grep ';' -q` arrives here as a bare `;` and an operator arm would
+      # report CLEAN over a real early exit, while the test above correctly treats
+      # the quoted character as data.
       --) return 1 ;;
       --quiet | --silent | --files-with-matches)
         printf '%s' "$tok"
@@ -767,8 +768,8 @@ _SQ=\'
 # the bare-fragment alternative swallows it whole and the grep IS still found. Both
 # sides are pinned in the test suite.
 # Everything outside it reads as no-match, which is a SILENT PASS — see
-# monorepo#2797, which replaces the layer with a tokenizer. Do not spend a round
-# extending this; extend the issue instead.
+# monorepo#2797, which replaces the layer with a tokenizer. Extend that issue
+# rather than these character classes.
 _ASSIGN_VALUE='("([^"\\]|\\.)*"|\$'"$_SQ"'([^'"$_SQ"'\\]|\\.)*'"$_SQ"'|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|\$\([^()]*\)|`[^`]*`|\$\{[^{}]*\}|([^[:space:]"'"$_SQ"'\\]|\\.)+)+'
 PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*('"$_ASSIGN_VALUE"')?|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
 unset _SQ _ASSIGN_VALUE
