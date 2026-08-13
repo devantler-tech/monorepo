@@ -2290,3 +2290,36 @@ case "${constitution_flat}" in
 esac
 
 echo "portfolio surveyor contract: post-arm confirmation assertions passed"
+
+# A consumer requirement with no producer is not a requirement. Both assertions below pin the
+# SURVEYOR side of a rule the maintenance skill and the constitution already state, because that is
+# the half a prose edit silently drops: the consumer reads a field the digest never emits, or
+# promises a blocker over a discovery pass that cannot see it.
+
+# An EVICTED PR is the opposite of an owned one — nothing holds it and repairing it is the run's job —
+# so the completed merge_group conclusion cannot ride on `active=`, which means "leave it alone".
+# The queue's checks run on a synthetic ref, so no head-level rollup can substitute.
+case "${surveyor_flat}" in
+  *'merge-group-result:<conclusion>@<runId>'*) ;;
+  *) fail "the surveyor emits no completed merge_group result, so an eviction is invisible to the consumer that requires it" ;;
+esac
+case "${surveyor_flat}" in
+  *'emitted whether or not the PR is currently queued'*) ;;
+  *) fail "the completed merge_group result is not required independently of the ownership signal" ;;
+esac
+grep -Fq 'merge_group_result=' "${surveyor}" ||
+  fail "the digest row grammar carries no merge_group_result field for the consumer to read"
+
+# The persistent maintainer-blocker promise covers every PR the orchestrator drives, so scoping the
+# discovery pass to `devantler`-authored PRs leaves it unenforceable on bot and external PRs: after
+# the generic ~2h activity signal lapses, a live `do not merge` disappears from the digest entirely.
+case "${surveyor_flat}" in
+  *'The open-PR half is author-agnostic'*) ;;
+  *) fail "maintainer-comment discovery is still author-scoped, so a blocker on a bot or external PR is never surfaced" ;;
+esac
+case "${surveyor_flat}" in
+  *'every actionable open PR already enumerated for the pentad'*) ;;
+  *) fail "the widened maintainer-comment sweep does not reuse the enumerated pentad set" ;;
+esac
+
+echo "portfolio surveyor contract: producer-for-every-consumer assertions passed"
