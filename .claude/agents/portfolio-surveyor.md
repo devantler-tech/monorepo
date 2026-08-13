@@ -177,11 +177,15 @@ public and private — no per-repo loop needed to enumerate):
    outright (verified 2026-08-13: `Unknown JSON field: "headRefName"`), and the discovery call above
    does not request a branch field at all. So a branch test written against the search result can
    never be satisfied, the exit-0 arm is never reached, and a qualifying updater silently loses the
-   review exemption and auto-merge eligibility it was granted — a carve-out that fails closed by
+   review exemption it was granted — a carve-out that fails closed by
    being unreachable rather than by being refused. Take the branch from the per-PR read that actually
    returns `headRefName`. The
    branch/title test only selects a candidate; it never grants trust or an exemption. Exit 0
-   grants the narrow no-review path. Exit 3 means a genuine, trusted updater PR that still requires
+   grants the narrow no-review path — **and nothing more**: `app/botantler-1` is never `--auto`
+   eligible, because that exemption is a statement about ONE commit and `--auto` merges whatever head
+   passes checks later. Its merge is a fresh classifier run at the current head followed by a
+   head-pinned direct merge (see the contract's *Merge policy*). Do not restate it as auto-merge
+   eligibility here: a loaded definition that promises the opposite is how the unsafe path returns. Exit 3 means a genuine, trusted updater PR that still requires
    semantic review — an `agent-plugins` marketplace update, or a `platform`/`ksail` installed-skill
    update whose changed skills are not all allowlisted as suite-owned: deepen its normal review
    surfaces and never report it exempt. Exit 1 leaves the App untrusted and the PR
@@ -273,7 +277,7 @@ public and private — no per-repo loop needed to enumerate):
      `merge-group:` says *someone owns this, leave it alone*, which is the exact opposite of what an
      **evicted** PR needs: nothing owns it, its run finished red, and repairing it is the orchestrator's
      job. Report the newest **completed** run from the same bounded listing as
-     `merge-group-result:<conclusion>@<runId>`, **emitted whether or not the PR is currently queued**,
+     `merge_group_result=<conclusion>@<runId>`, **emitted whether or not the PR is currently queued**,
      and never as an `active=` alternative. Without it an eviction is invisible — the queue's checks run
      on a synthetic ref, so the head's `statusCheckRollup` cannot show them either — and the PR reads
      simply idle, which is the state that invites the blind re-queue *Merge policy* records against
@@ -281,7 +285,7 @@ public and private — no per-repo loop needed to enumerate):
      whatever the run reports (`failure`, `success`, `cancelled`, …), and `none` when the listing is
      empty. The orchestrator reads a failure here as *root-cause before re-queuing*, never as an
      ownership claim.
-     ⚠️ **Emit `merge-group:` and `merge-group-result:` only on repos that actually gate `main` behind a
+     ⚠️ **Emit `merge-group:` and `merge_group_result=` only on repos that actually gate `main` behind a
      queue** (recorded per repo in its `AGENTS.md ## Maintenance`); elsewhere the alternative simply
      never occurs, and this query is skipped rather than run per PR.
      🔴 **`pushed:` needs a real PUSH timestamp, and neither field you already have is one.**
@@ -1218,7 +1222,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → <REVIEW-READY|MERGE-READY|NEEDS-FIX|ACTIVELY-OWNED>: branch=<headRefName>, disclosure=<routine|interactive|none>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>|none>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (`disclosure` tells the orchestrator whose control channel a `devantler` comment on this PR is, NOT whether it may drive it; the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
-- <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — NEVER-RUN-LOCALLY (never run locally); reviewed statically, then driven to a terminal state like any other PR. Carries the same deepened pentad, `active=` and classification as every other row, plus behaviour_observed=<check-name|static|none> (which CI check actually exercises the change; `static` = no exercisable runtime surface, evaluated statically instead; `none` = a check could exercise it but none does, and is the named blocker on its merge, per *You own EVERY pull request in the portfolio*)
+- <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — NEVER-RUN-LOCALLY (never run locally); reviewed statically, then driven to a terminal state like any other PR. Carries the same deepened pentad, `active=`, merge_group_result=<<conclusion>@<runId>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, and classification as every other row, plus behaviour_observed=<check-name|static|none> (which CI check actually exercises the change; `static` = no exercisable runtime surface, evaluated statically instead; `none` = a check could exercise it but none does, and is the named blocker on its merge, per *You own EVERY pull request in the portfolio*). **`rd=` and `merge_group_result=` are NOT optional on this row just because its author is external** — an eviction is invisible in the head pentad (the queue's checks run on a synthetic ref) and a human CHANGES_REQUESTED is not one of the candidate-maintainer-comment surfaces, so omitting either loses a persistent block once the generic ~2h human-activity signal expires and the PR reads ready. This row takes the plain `<author>` form for `rd=`, with no `agent(…)`/`human(…)` qualifier: that qualifier exists only to tell a sibling instance's `devantler` review from the maintainer's, and an external author is neither
 - NOT-DEEPENED (budget) <repo> ×<n> [#a,#b,…]   # API pool exhausted before these PRs were deepened — they carry NO pentad and were NOT assessed; never report them as clean or actionable
 
 ### Advance

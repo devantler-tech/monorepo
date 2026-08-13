@@ -315,7 +315,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   `statusCheckRollup` cannot show them either — and the PR reads simply idle, which is precisely the
   state that invites the blind re-queue *Merge policy* records against platform#2337. So report the
   newest **completed** `merge_group` conclusion as a separate result/blocker field —
-  `merge-group-result:<conclusion>@<runId>` — emitted whether or not the PR is currently queued. A
+  `merge_group_result=<conclusion>@<runId>` — emitted whether or not the PR is currently queued. A
   failure there is a root-cause-before-requeue instruction, never an ownership claim.
 
 **Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the

@@ -1843,8 +1843,16 @@ green-review gate are unchanged — this widens **who may drive a PR**, never **
 **Merge-queue repos — root-cause a stall or kick-out BEFORE re-queuing; never blindly re-`--auto`.**
 Some repos gate `main` behind a **GitHub merge queue** (a `Require merge queue` ruleset). On these,
 `gh pr merge --auto` *enqueues* rather than merges, `autoMergeRequest` stays `null` even while queued,
-and the strategy is set by the queue (drop `--squash`, keep the head pin —
-`gh pr merge <n> --repo devantler-tech/<repo> --auto --match-head-commit <sha>`). **Record per-repo
+and the strategy is set by the queue, so **drop `--squash` and keep the head pin**.
+🔴 **A merge queue does NOT widen who may use `--auto`.** The author matrix above is a closed list of
+three — `github-actions`, `ksail-bot`, `app/cursor` — and prescribing `--auto` here unconditionally
+would put `devantler`, an external contributor and the classifier-conditioned updater through exactly
+the deferred path their author policy forbids. It is also unnecessary: on a queue-gated branch, a PR
+whose checks have passed is **added to the queue by a plain merge**, so the enqueue happens either way.
+So the three `--auto` authors use
+`gh pr merge <n> --repo devantler-tech/<repo> --auto --match-head-commit <sha>`, and **every other
+author enqueues with `gh pr merge <n> --repo devantler-tech/<repo> --match-head-commit <sha>`** once
+the gates are clear. **Record per-repo
 whether a merge queue is in use in that repo's `AGENTS.md ## Maintenance`** (confirm once via `gh api
 repos/<owner>/<repo>/rulesets --jq '.[]|select(.name|test("merge queue";"i"))'`), so a run knows the
 merge mechanics without re-deriving them. A PR enters the queue, runs the `merge_group` checks, and is

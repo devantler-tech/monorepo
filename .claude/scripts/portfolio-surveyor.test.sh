@@ -2300,7 +2300,7 @@ echo "portfolio surveyor contract: post-arm confirmation assertions passed"
 # so the completed merge_group conclusion cannot ride on `active=`, which means "leave it alone".
 # The queue's checks run on a synthetic ref, so no head-level rollup can substitute.
 case "${surveyor_flat}" in
-  *'merge-group-result:<conclusion>@<runId>'*) ;;
+  *'merge_group_result=<conclusion>@<runId>'*) ;;
   *) fail "the surveyor emits no completed merge_group result, so an eviction is invisible to the consumer that requires it" ;;
 esac
 case "${surveyor_flat}" in
@@ -2323,3 +2323,40 @@ case "${surveyor_flat}" in
 esac
 
 echo "portfolio surveyor contract: producer-for-every-consumer assertions passed"
+
+# One field, one spelling. The producer prose, the consumer skill and every digest row must name the
+# completed merge_group result identically, or the surveyor cannot satisfy both and a consumer
+# following the other spelling reads nothing where an eviction was reported.
+grep -Fq 'merge-group-result' "${surveyor}" &&
+  fail "the surveyor still carries a second spelling of the merge_group result field"
+grep -Fq 'merge-group-result' "${maintenance_skill}" &&
+  fail "the maintenance skill still carries a second spelling of the merge_group result field"
+
+# The external/Copilot row is swept and merged like any other, so it needs the two signals that
+# persist past the generic ~2h activity window: an eviction (invisible in the head pentad, since the
+# queue runs on a synthetic ref) and a human CHANGES_REQUESTED (not a candidate-maintainer-comment
+# surface). Omitting either lets the row read ready over a live block.
+external_row="$(grep -F 'EXTERNAL/Copilot — NEVER-RUN-LOCALLY' "${surveyor}" || true)"
+[ -n "${external_row}" ] || fail "the external/Copilot digest row is missing entirely"
+case "${external_row}" in
+  *'merge_group_result=<<conclusion>@<runId>|none>'*) ;;
+  *) fail "the external/Copilot row omits merge_group_result, so an eviction there is invisible" ;;
+esac
+case "${external_row}" in
+  *'rd=<APPROVED|CHANGES_REQUESTED:'*) ;;
+  *) fail "the external/Copilot row omits rd=, so a human CHANGES_REQUESTED is lost once the activity window expires" ;;
+esac
+
+# A merge queue changes the strategy, never the closed three-author `--auto` list.
+case "${constitution_flat}" in
+  *'A merge queue does NOT widen who may use `--auto`'*) ;;
+  *) fail "the merge-queue path can still push a non-App author through auto-merge" ;;
+esac
+
+# The surveyor must not re-promise the updater auto-merge eligibility the contract withdrew.
+case "${surveyor_flat}" in
+  *'`app/botantler-1` is never `--auto` eligible'*) ;;
+  *) fail "the surveyor does not record that the exit-0 updater exemption excludes auto-merge" ;;
+esac
+
+echo "portfolio surveyor contract: round-8 field-consistency assertions passed"
