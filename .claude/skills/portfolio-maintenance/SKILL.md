@@ -315,13 +315,21 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   `statusCheckRollup` cannot show them either — and the PR reads simply idle, which is precisely the
   state that invites the blind re-queue *Merge policy* records against platform#2337. So report the
   newest **completed** `merge_group` conclusion as a separate result/blocker field —
-  `merge_group_result=<conclusion>@<runId>@<sourceHead>` — emitted whether or not the PR is currently
+  `merge_group_result=<conclusion>@<runId>@<runCreatedAt>` — emitted whether or not the PR is currently
   queued. A failure there is a root-cause-before-requeue instruction, never an ownership claim.
-  `<sourceHead>` is the head the run actually evaluated: merge-group runs correlate to a PR only by
-  `pr-<n>`, which survives every push, so without it a diagnosed-and-repaired eviction keeps reporting
-  as a live failure. When that head is no longer the PR's, the field reads `stale@<runId>` and claims
-  nothing about the current head — never re-queue and never re-diagnose on a stale result. An empty
-  listing is `none`.
+  🔴 **The third component is a TIMESTAMP, not a SHA — a merge-group run's head is not recoverable as
+  the PR's head.** The run's `head_sha` is the queue's synthetic merge commit and the
+  `gh-readonly-queue/…` ref's trailing sha is the **base** at enqueue, so neither yields the
+  contributing PR head; a `sourceHead`-shaped field could only ever be filled with a value that never
+  equals `headRefOid`, marking every completed run stale and hiding the very failures this field
+  exists to surface. **Staleness is therefore keyed on TIME**, which *is* recoverable from both sides:
+  when the PR's head was pushed **after** `<runCreatedAt>` — the `pushed:` timestamp the row already
+  carries — the field reads `stale@<runId>` and claims nothing about the current head; never re-queue
+  and never re-diagnose on a stale result. Where the push time is `unknown` the result cannot be
+  attributed in time: it is reported with its `createdAt` for the orchestrator to diagnose, never
+  silently treated as current. A result that cannot be attributed at all is `none`, never a
+  conclusion — as is an empty listing. **Read the third component as a time; comparing it to a SHA
+  will never match.**
 
 **Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the
 product's `weekly`/live cursor in memory — NOT every run), also spawn the read-only

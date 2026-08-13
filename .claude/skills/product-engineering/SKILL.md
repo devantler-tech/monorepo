@@ -164,11 +164,21 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    execute the probe against a **trusted/routine-owned** winner's branch, but for an
    **external-contributor** winner it is **static review only** (the trust gate is not relaxed by a
    lost race). If an
-   **actionable trusted-author** PR already
-   exists, drive *that* one instead of duplicating — a non-draft to merge, a **routine-owned draft**
-   to genuine readiness → self-promotion → merge (contract *Autonomy*); leave
-   automation-owned dependency PRs to repository automation, other authors' drafts to their owners,
-   and external PRs per the trust gate. For a big design, write/extend an ADR or system-design note
+   **actionable** PR already
+   exists — **whoever authored it** — drive *that* one instead of duplicating. You own every PR in the
+   portfolio (contract *You own EVERY pull request in the portfolio*), so a sibling lane's draft, the
+   maintainer's interactive one, or an outside contribution is rung-1 work to carry to a terminal
+   state — merged, closed with the reason recorded, or parked on a **named, live-verified** blocker —
+   never work to hand back to its author. A non-draft goes to merge; a draft goes to genuine
+   readiness → promotion → merge (contract *Autonomy*), once the data-only active-work test shows
+   nobody else is mid-flight. Three boundaries survive that widening.
+   The **automation-owned dependency PRs** (exact `renovate[bot]`/`dependabot[bot]`)
+   stay with repository automation; an **external
+   contribution** is driven and merged but its branch is **never run locally** — static review only,
+   CI is the execution surface, with extra scrutiny on workflow, permission, dependency and
+   secret-touching changes; and on the maintainer's **interactive** PRs his comments are him steering
+   his own work rather than instructions to you.
+   For a big design, write/extend an ADR or system-design note
    first and link it. In a repository that uses ADRs, every ADR lives under **`docs/adr/`**; do not
    create or keep ADRs in another folder. Repositories without ADRs do not need to introduce them.
 2. Isolate a worktree, implement at the **root cause**, and **write tests** that pin the new behaviour
