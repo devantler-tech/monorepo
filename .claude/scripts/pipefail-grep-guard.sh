@@ -308,11 +308,29 @@ mask_quoted() {
 # `x`, and a `${v#…}` expansion is not an introducer either, since its `#` follows
 # a word character.
 strip_comment() {
-  local m="$1" raw="$2" i
+  local m="$1" raw="$2" i depth=0
   _code_mask="$m"
   _code_raw="$raw"
   for ((i = 0; i < ${#m}; i++)); do
+    # Track `${…}` nesting. Bash does not start a comment inside a parameter
+    # expansion, so a `#` there is expansion syntax whatever precedes it.
+    #
+    # The "follows a word character" rule below already covers `${v#pat}`, but it
+    # does NOT cover a `#` that follows one of the introducer characters INSIDE
+    # the expansion: `${v:-|#foo}` truncates the line at the `|#`, discarding
+    # every command after it. That is a SILENT MISS — the pipeline the guard
+    # exists to catch simply disappears before the scan sees it.
+    if [[ "${m:i:1}" == '$' && "${m:i+1:1}" == '{' ]]; then
+      depth=$((depth + 1))
+      ((i++))
+      continue
+    fi
+    if ((depth > 0)) && [[ "${m:i:1}" == '}' ]]; then
+      depth=$((depth - 1))
+      continue
+    fi
     [[ "${m:i:1}" == '#' ]] || continue
+    ((depth > 0)) && continue
     ((i == 0)) && return 1
     case "${m:i-1:1}" in
       [[:space:]] | ';' | '&' | '|' | '(' | ')')

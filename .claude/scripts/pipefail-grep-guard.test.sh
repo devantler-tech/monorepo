@@ -1166,6 +1166,17 @@ out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
 report "a non-shell interpreter is not swept" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
+# Bash starts no comment inside a parameter expansion, so a `#` there is
+# expansion syntax however it is preceded. Treating `${v:-|#foo}`'s hash as an
+# introducer truncated the line and discarded every command behind it — the
+# pipeline vanished before the scan reached it, which is a silent miss.
+flag_case "a hash inside a parameter expansion does not truncate the line" \
+  'x=${v:-|#foo}; producer | grep -q MATCH'
+# The control differs only in being a REAL trailing comment: the pipeline behind
+# a genuine `#` is not code, so it must stay clean.
+clean_case "a genuine trailing comment still ends the code" \
+  'x=1 # producer | grep -q MATCH'
+
 # --- release-flag expiry ---------------------------------------------------
 # `ENFORCE_PIPEFAIL_GREP_GUARD` gates the repository-wide sweep in ci.yaml. It is
 # a RELEASE flag, so it is short-lived by contract and #2821 owns activating then
