@@ -595,13 +595,13 @@ report "the fix line warns that process substitution discards that status" \
 
 # ---------------------------------------------------------------------------
 # 2f. Where the command actually ENDS, and what is code rather than data.
-#     Every case below was reported as a live defect and reproduced by running
-#     the pipeline before it was fixed, so each keeps its twin: the fail-OPEN
-#     ones must still flag, and the false-POSITIVE ones must still pass.
+#     Each case keeps its twin, because both directions must hold: the fail-OPEN
+#     ones must flag, and the false-POSITIVE ones must pass. A fixture without its
+#     twin can be satisfied by breaking the rule in the other direction.
 # ---------------------------------------------------------------------------
-# Bash removes the quotes, so grep receives the ordinary -q option. Measured:
-# both spellings exit 141 on a matching pipeline, and the walk read `"-q"` as an
-# operand and called it clean.
+# Bash removes the quotes, so grep receives the ordinary -q option: both
+# spellings exit 141 on a matching pipeline, and a walk over the raw word reads
+# `"-q"` as an operand.
 flag_case "a QUOTED early-exit option is still that option" \
   'printf "%s" "$v" | grep "-q" NEEDLE'
 flag_case "a single-quoted early-exit option too" \
@@ -1044,20 +1044,19 @@ clean_case "an unrelated long option is not an abbreviation of an early exit" \
 # ---------------------------------------------------------------------------
 # 2i. KNOWN LIMITS, pinned as fact rather than left as surprises.
 #
-#     Each was reported, reproduced, and deliberately NOT patched: closing them
-#     needs real shell parsing — arithmetic contexts, grouping parentheses, and a
-#     masker that preserves command words — which is monorepo#2797, not another
-#     spelling added to a regex. Twelve review rounds on this file produced ~33
-#     defects at a rate that never declined, and one of those rounds found a
-#     regression introduced while fixing the previous one.
+#     Each is reproduced and deliberately NOT patched: closing them needs real
+#     shell parsing — arithmetic contexts, grouping parentheses, and a masker that
+#     preserves command words — which the guard's line-oriented matching cannot
+#     express, and which monorepo#2797 owns. Widening a regex moves which spelling
+#     escapes rather than closing the class.
 #
 #     They are asserted at their CURRENT behaviour so the gaps are visible, a
 #     change to any of them is deliberate, and a Go implementation inherits them
 #     as a ready-made corpus. Enforcement is default-off, so none of them gates
 #     anything today.
 # ---------------------------------------------------------------------------
-# Reported as `$((total << bits))`, which is handled; the gap needs the SPACED
-# form, so the class is real and the reported fixture was not. Verify the class.
+# The SPACED form is the one that reaches this gap: `$((total << bits))` is
+# handled, so the fixture must keep its inner spaces to exercise it.
 f="$(mkscript "known-limit-arith-shift.sh" \
   'width=$(( total << bits ))' \
   'producer | grep -q MATCH' \
@@ -1066,8 +1065,8 @@ run_guard "$f" && rc=0 || rc=$?
 report "KNOWN LIMIT: a spaced arithmetic shift can look like a heredoc opener" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
-# Reported as `$(( producer | grep ))`, which is handled because no early-exit
-# flag is present; it needs a flag to be reported at all.
+# An early-exit flag is required to reach this gap: without one the walk finds
+# nothing to report, so `$(( producer | grep ))` is clean for a different reason.
 f="$(mkscript "known-limit-arith-or.sh" 'value=$(( a | grep -q ))')"
 run_guard "$f" && rc=0 || rc=$?
 report "KNOWN LIMIT: arithmetic bitwise-OR can read as a pipeline" \
