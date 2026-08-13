@@ -617,15 +617,6 @@ early_exit_flag() {
         want_mval=1
         continue
         ;;
-      # Long options that take their value as the FOLLOWING word. Without this,
-      # `grep --regexp PAT -q` reads PAT as the pattern operand and returns
-      # before ever seeing -q, so the guard calls a hazardous line clean.
-      --regexp | --file | --after-context | --before-context | --context | \
-        --binary-files | --devices | --directories | --label | --include | \
-        --exclude | --exclude-dir | --exclude-from | --group-separator)
-        skip_next=1
-        continue
-        ;;
       --*)
         # GNU accepts any UNAMBIGUOUS ABBREVIATION of a long option, so
         # `grep --quie MATCH` is `--quiet` on the Linux runner this check gates.
@@ -655,6 +646,35 @@ early_exit_flag() {
             return 0
           fi
           want_mval=1
+          continue
+        fi
+        # Long options whose value is the FOLLOWING word. Matched by PREFIX for the
+        # same reason as the early-exit options above — GNU accepts any unambiguous
+        # abbreviation — and handling the full and abbreviated spellings in one
+        # place is what keeps them from drifting apart.
+        #
+        # What consuming the value buys is precisely ONE direction: it prevents
+        # FALSE POSITIVES. `grep --reg -q MATCH` is `--regexp` with the pattern
+        # `-q`, so the line is safe, and without this the walk reads that `-q` as
+        # an early-exit flag and blocks a valid script.
+        #
+        # It cannot cause a MISSED hazard, because an operand is not a stopping
+        # point (see the `*)` arm): GNU permutes later options to the front, so the
+        # walk continues past an unconsumed value and would still find a real `-q`
+        # behind it. Measured by ablation — removing this loop fails only the
+        # abbreviated clean case, not the two flag cases.
+        #
+        # An attached value (`--regexp=PAT`) consumes nothing extra, so it falls
+        # through — there is no following word to skip.
+        if [[ "$tok" != *=* ]]; then
+          for lopt in --regexp --file --after-context --before-context --context \
+            --binary-files --devices --directories --label --include \
+            --exclude --exclude-dir --exclude-from --group-separator; do
+            if [[ "$lopt" == "$tok"* ]]; then
+              skip_next=1
+              break
+            fi
+          done
         fi
         continue
         ;;

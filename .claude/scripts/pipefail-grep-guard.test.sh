@@ -1041,6 +1041,20 @@ clean_case "an abbreviated --max-count of -1 is still infinity" \
 clean_case "an unrelated long option is not an abbreviation of an early exit" \
   'producer | grep --invert-match MATCH'
 
+# Abbreviation applies to VALUE-TAKING options too. This is the case that moves
+# with the fix: `--reg` is `--regexp`, so `-q` is its value — grep's PATTERN, not
+# an early exit — and reporting it blocks a valid script.
+clean_case "an abbreviated --regexp consumes the following word as its value" \
+  'producer | grep --reg -q MATCH'
+# The two below pin the FLAG direction and are deliberately NOT discriminating
+# for value-consumption: an operand does not stop the walk, so a real `-q` behind
+# a value is found either way (ablation: removing the consumption loop fails only
+# the case above). They guard against a future change that stops the walk early.
+flag_case "a real -q behind a consumed --regexp value is still found" \
+  'producer | grep --regexp PAT -q MATCH'
+flag_case "an attached --regexp= value consumes nothing extra" \
+  'producer | grep --regexp=PAT -q MATCH'
+
 # ---------------------------------------------------------------------------
 # 2i. KNOWN LIMITS, pinned as fact rather than left as surprises.
 #
