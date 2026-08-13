@@ -727,13 +727,11 @@ early_exit_flag() {
 # or a run of bare characters. `_SQ` exists because the pattern lives in a
 # single-quoted string and cannot hold a bare `'`.
 _SQ=\'
-# The four fragment forms a shell assignment value can take, written out ONCE
-# from the actual quoting rules rather than added one at a time as each is
-# reported. Four consecutive review rounds found four shapes of this same grammar
-# (quoted value, mixed fragments, escaped space, escaped quote), each fix shaped
-# by the example that exposed it and survived by the next — so this enumerates
-# the rules instead. Every line below was confirmed by RUNNING it, not read off a
-# manual:
+# The four fragment forms a shell assignment value can take, enumerated from the
+# quoting rules rather than one shape at a time — a value is a WORD, and a word is
+# adjacent fragments that need not agree on quoting, so matching a single shape
+# leaves the others unmatched. Every line below is confirmed by RUNNING it, not
+# read off a manual:
 #   "…"    double quotes DO honour backslash escapes   ->  A="x\" y"   is  x" y
 #   $'…'   ANSI-C quoting DOES honour escapes          ->  $'x\' y'    is  x' y
 #   '…'    single quotes do NOT — a backslash is       ->  B='x\" y'   is  x\" y
@@ -744,19 +742,17 @@ _SQ=\'
 # A value fragment may also be an EXPANSION whose content contains whitespace:
 # `A=$(printf 'C UTF-8')`, `A=`cmd``, `A=${x-a b}`.
 #
-# 🔴 **THE LIMIT, stated accurately — it is NOT "nested substitutions".** An
-# earlier version of this comment said the gap was nesting and claimed general
-# non-nested `$(…)` support. That was an OVERCLAIM: the pattern stops at the
-# first `)`, `}` or backtick, so it also fails on a **single, unnested**
-# substitution whose command merely contains one as data —
-# `A=$(printf ') ')` is a valid assignment word this will not consume.
+# 🔴 **THE LIMIT is NOT "nested substitutions"** — that description is too
+# generous. The pattern stops at the first `)`, `}` or backtick, so it also fails
+# on a **single, unnested** substitution whose command merely contains one as
+# data: `A=$(printf ') ')` is a valid assignment word this will not consume.
 #
 # The real boundary is that this layer **cannot tell a delimiter from a
 # character that looks like one**, because deciding that requires tracking shell
 # quoting inside the substitution — the same parsing it cannot do outside it.
 # Nesting is one instance of that, not the rule. There is no version of this
-# constant that fixes it: extending the character classes just moves which
-# spelling escapes, which is how four consecutive rounds went.
+# constant that fixes it: extending the character classes moves which spelling
+# escapes rather than closing the class.
 #
 # So what is supported is: an expansion whose content contains **NEITHER
 # delimiter of its own kind — opening OR closing** — in any context. The classes
@@ -894,14 +890,12 @@ scan_file() {
     # a trailing `\`, or a trailing single `|` with grep on the next line.
     joins=0
     j=$i
-    # NO join cap. There used to be one at 8, which silently stopped the walk and
-    # then scanned the truncated probe as if the grep were not there — a pipeline
-    # with nine comment-only lines before its `grep -q` read as clean. The
-    # end-of-file bound below is the only one that is actually correct, and it
-    # terminates: each absorbed line is skipped by `i=$j`, so the whole scan stays
-    # linear in the file. Failing closed on the cap instead was tried and is
-    # worse — it reported 18 ordinary multi-line commands in this repository as
-    # unscannable, which is a DevEx tax paid on every run for no security gain.
+    # NO join cap: the end-of-file bound is the only correct one. A fixed cap
+    # either truncates the probe — scanning it as if the grep were not there, so a
+    # pipeline with more comment lines than the cap reads clean — or fails closed,
+    # which marks ordinary multi-line commands unscannable. This terminates
+    # regardless: each absorbed line is skipped by `i=$j`, so the scan stays linear
+    # in the file.
     while ((j + 1 < n)); do
       # Never continue a command INTO a heredoc body: those lines are the
       # heredoc's data, so appending them would scan output as code.
