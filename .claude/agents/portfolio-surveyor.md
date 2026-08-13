@@ -201,7 +201,13 @@ public and private — no per-repo loop needed to enumerate):
        query($owner:String!,$name:String!){repository(owner:$owner,name:$name){
          mergeQueue(branch:"main"){entries(first:50){nodes{position pullRequest{number}}}}}}'
      ```
-     A matching entry ⇒ `merge-group:queued@<position>`. Where only the run is available, correlate a
+     A matching entry ⇒ `merge-group:queued@<position>`. **The query answers "is there a queue here?"
+     by itself — verified 2026-08-13: a repo with no merge queue returns `mergeQueue: null`, while a
+     queue with nothing in it returns an entries object with `nodes: []`.** Those are different
+     states and the read distinguishes them for free, so the per-repo `AGENTS.md` note is a cost
+     optimisation (skip the call) rather than the only way to know. An empty `nodes` list is a real
+     observation of an idle queue, not a failed read — confirmed by a bogus-field control, which
+     errors `undefinedField` rather than returning empty. Where only the run is available, correlate a
      bounded `--event merge_group` listing on its `headBranch` (`pr-<n>`); **sort explicitly by
      `created_at` and take the newest** rather than trusting the endpoint's order, which is not
      reliably newest-first and will hand back an arbitrary stale window that makes a live merge look
