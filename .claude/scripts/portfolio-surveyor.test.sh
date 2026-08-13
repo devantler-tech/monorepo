@@ -2099,6 +2099,42 @@ if [ "${active_templates}" -ne "${active_with_unknown}" ]; then
   fail "an active= template omits pushed:unknown@<updatedAt-age> (${active_with_unknown}/${active_templates} carry it), so the surveyor must break its own grammar or collapse an unreadable push to none"
 fi
 
+# (6a) `active=` carries EVERY signal that holds, not the strongest one. The template's `|` reads as
+#      a choice, and a one-of encoding is lossy for an any-of test whose consumer DISCOUNTS some
+#      alternatives: the orchestrator discards `pushed:` when the branch and SHA are its own, so a
+#      row that emitted only the push collapses to unowned and a concurrent human-comment signal —
+#      true at the same instant, never emitted — is gone. That authorises the takeover the signal
+#      exists to prevent, which is the same defect shape as (6), one level up.
+case "${surveyor_flat}" in
+  *'emit EVERY signal that holds, `+`-joined'*) ;;
+  *) fail "the active= field does not state that every holding signal is emitted, so a one-of encoding can drop a live signal the consumer needed" ;;
+esac
+case "${surveyor_flat}" in
+  *'the consumer discounts some of them'*) ;;
+  *) fail "the active= field does not say the consumer discounts some alternatives, which is why a strongest-only encoding is lossy" ;;
+esac
+
+# (6b) The deepened read must refresh the two fields that are NOT derivable from the head SHA.
+#      `updatedAt` backs `pushed:unknown@<updatedAt-age>`, which on a fork (where push activity is
+#      deliberately unread) is the only activity evidence there is; `title` feeds the updater
+#      branch/title predicate, and editing a title changes no SHA. Aging or classifying from the
+#      org-search snapshot therefore stays wrong for as long as the survey runs, while every
+#      head-derived field looks correctly refreshed.
+deepen_read=$(grep -F 'gh pr view <n> --repo devantler-tech/<repo> --json number,state' "${surveyor}" || true)
+if [ -z "${deepen_read}" ]; then
+  fail "the deepened per-PR read was not found, so the field-list assertions would be vacuous"
+fi
+for _field in updatedAt title; do
+  case "${deepen_read}" in
+    *",${_field},"*) ;;
+    *) fail "the deepened per-PR read omits ${_field}, so a value that changes without the head SHA is consumed from the stale org-search snapshot" ;;
+  esac
+done
+case "${surveyor_flat}" in
+  *'SUPERSEDES the org-search value'*) ;;
+  *) fail "the surveyor does not state that deepened fields supersede the org-search snapshot" ;;
+esac
+
 # (7) A same-repository branch outside the three agent namespaces (`deps/agent-skills-update`, a
 #     release branch) had NO legal <lane> value, though those PRs are inside the takeover test.
 case "${surveyor_flat}" in

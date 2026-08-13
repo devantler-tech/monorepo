@@ -130,7 +130,18 @@ public and private — no per-repo loop needed to enumerate):
    the run will actually pick up. If the pool runs short, **stop and say so explicitly** — emit the
    undeepened remainder as `NOT-DEEPENED (budget)` rows naming the count and the repos, never a
    silent cheap row that reads like a completed assessment:
-   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,headRepositoryOwner,headRepository,author,body,files`
+   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,updatedAt,title,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,headRepositoryOwner,headRepository,author,body,files`
+   🔴 **Every field this read returns SUPERSEDES the org-search value for the rest of the survey —
+   including the two that are not about the head.** The search snapshot is minutes old by the time a
+   PR is deepened, and a field can change without the head SHA changing, so "we refreshed the head"
+   never implies the rest of the row is current:
+   - **`updatedAt`** feeds `pushed:unknown@<updatedAt-age>`. On a **fork**, where the push-activity
+     read is deliberately skipped, that age is the *only* activity evidence — so aging it from the
+     discovery timestamp can put a contributor who pushed thirty seconds ago outside the two-hour
+     window and authorise a takeover while they are still working.
+   - **`title`** feeds the updater branch/title predicate. Editing a title does **not** change the
+     head SHA, so a PR discovered with the exact updater title keeps its exit-0 no-review treatment
+     on the stale value after the current title has stopped qualifying.
    (`headRepositoryOwner`/`headRepository` are what let the push-activity read below decide whether the
    head is in-scope at all: on a same-repo branch they resolve to the base repo and the read proceeds;
    on a **fork** they are what identifies it as out-of-portfolio, so the read is SKIPPED — see the
@@ -196,7 +207,16 @@ public and private — no per-repo loop needed to enumerate):
      `active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>`
      — the newest push to the head, the newest **human** (non-bot, non-agent-disclosed) comment or
      review, a review request at the current head still inside its provider envelope, and an in-flight
-     `merge_group` run. 🔴 **A COMPLETED bot review is NOT an active-work signal** — it is the cue to
+     `merge_group` run.
+     🔴 **That `|` is the token VOCABULARY, not a choice — emit EVERY signal that holds, `+`-joined
+     in the order listed** (`none` appears only alone, meaning no signal held). These are independent
+     any-of signals and **the consumer discounts some of them**, so reporting only the strongest is
+     lossy in exactly the case that matters: the orchestrator discounts `pushed:` when the branch and
+     SHA are its own, so a row carrying only the push collapses to "unowned" and every other signal
+     true at that moment is already gone. The live shape is a human commenting while the acting run
+     pushes — the push is discounted as self, the human comment was never emitted, and the PR reads
+     idle while someone is engaged with it. Expiry works the same way: one signal aging out must
+     never take a still-live one with it. 🔴 **A COMPLETED bot review is NOT an active-work signal** — it is the cue to
      act, so never report it here; only a request still awaiting its answer belongs in
      `review-envelope`.
      🔴 **`merge-group:` needs its OWN query — no field you already hold can answer it.** A queued PR's
