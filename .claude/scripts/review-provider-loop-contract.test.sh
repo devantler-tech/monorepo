@@ -489,6 +489,11 @@ grep -Fq 'review-provider-loop-contract: ${{ steps.filter.outputs.review-provide
   fail "CI does not export the review-provider contract change filter"
 grep -Fq '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md' "${workflow}" ||
   fail "parity-checklist changes do not trigger the review-provider contract check"
+# The captured review bodies are inputs to this test, so a fixture-only edit can
+# invalidate a regression case. Without the fixture path in the filter that edit
+# skips this job and CI stays green over a case that no longer reproduces.
+grep -Fq '.claude/scripts/fixtures/**' "${workflow}" ||
+  fail "fixture changes do not trigger the review-provider contract check"
 grep -Fq 'test-review-provider-loop-contract:' "${workflow}" ||
   fail "CI does not define the review-provider contract test job"
 grep -Fq 'run: bash .claude/scripts/review-provider-loop-contract.test.sh' "${workflow}" ||
