@@ -196,10 +196,26 @@ max_count_is_finite() { case "$1" in -*) return 1 ;; *) return 0 ;; esac; }
 # to decide whether a `<<` is an operator; see monorepo#2797 for the tokenizer
 # that would let the argv walk share it.
 mask_quoted() {
-  local s="$1" out="" c q="" i
+  local s="$1" out="" c q="" i esc=0
   for ((i = 0; i < ${#s}; i++)); do
     c="${s:i:1}"
+    # ANSI-C quoting: `$'…'` DOES honour backslash escapes, unlike a plain `'…'`.
+    # Treating it as an ordinary single-quoted run ended it at the `\'` in
+    # `A=$'x\' y'`, so the rest of the line read as quoted and a REAL pipeline
+    # after it was masked away — a fail-open the suite caught.
+    if [[ -z "$q" && "$c" == '$' && "${s:i+1:1}" == "'" ]]; then
+      q="'"
+      esc=1
+      out+=xx
+      i=$((i + 1))
+      continue
+    fi
     if [[ -n "$q" ]]; then
+      if ((esc)) && [[ "$c" == '\' ]] && ((i + 1 < ${#s})); then
+        out+=xx
+        i=$((i + 1))
+        continue
+      fi
       # THE TWO QUOTE TYPES ESCAPE DIFFERENTLY, and treating them alike breaks
       # one case or the other. Inside DOUBLE quotes a backslash escapes the next
       # character, so `"text\" <<EOF"` is one word and its `<<EOF` is TEXT —
@@ -212,7 +228,10 @@ mask_quoted() {
         i=$((i + 1))
         continue
       fi
-      [[ "$c" == "$q" ]] && q=""
+      if [[ "$c" == "$q" ]]; then
+        q=""
+        esc=0 # must clear with the run, or a later plain '…' inherits escaping
+      fi
       out+=x
       continue
     fi
@@ -271,10 +290,12 @@ mask_quoted() {
 # delimiter is then read from the ORIGINAL at the same offset, because a delimiter
 # may legitimately be quoted (`<<'---'`) and masking would erase its text.
 HEREDOC_TERMS=()
+HEREDOC_DASH=()
 HEREDOC_COUNT=0
 heredoc_delimiters() {
-  local raw="$1" s d m i len
+  local raw="$1" s d m i len dash
   HEREDOC_TERMS=()
+  HEREDOC_DASH=()
   HEREDOC_COUNT=0
   # Cheap reject FIRST. Masking walks the line character by character, and this
   # runs on every line of every scanned file — doing it unconditionally pushed a
@@ -311,7 +332,14 @@ heredoc_delimiters() {
     fi
     # Read the delimiter from the UNMASKED line at this offset.
     s="${raw:i+2}"
-    s="${s#-}" # the <<- form, which strips leading tabs from the body
+    dash=0
+    if [[ "$s" == -* ]]; then
+      # `<<-` strips leading TABS from the body and from its terminator. Which
+      # form opened the body decides how its terminator is matched, so it is
+      # recorded per delimiter rather than discarded here.
+      dash=1
+      s="${s#-}"
+    fi
     while [[ "$s" == [[:space:]]* ]]; do s="${s#?}"; done
     case "$s" in
       "'"*)
@@ -326,15 +354,20 @@ heredoc_delimiters() {
         ;;
       \\*)
         d="${s#\\}"
-        d="${d%%[![:alnum:]_]*}"
+        d="${d%%[[:space:];\&|<>()]*}"
         ;;
-      [A-Za-z_]*)
-        d="${s%%[![:alnum:]_]*}"
+      # An unquoted delimiter is an ordinary shell WORD, not an identifier:
+      # `cat <<+++` is valid and ends at a line reading `+++`. Restricting this to
+      # identifiers meant such an opener was not recognised at all, so its payload
+      # was read as code — and a payload line reading like the whole-file directive
+      # exempted the script. A word ends at whitespace or a shell metacharacter.
+      *)
+        d="${s%%[[:space:];\&|<>()]*}"
         ;;
-      *) continue ;; # an expansion or operator, not a static delimiter
     esac
     [[ -n "$d" ]] || continue
     HEREDOC_TERMS[HEREDOC_COUNT]="$d"
+    HEREDOC_DASH[HEREDOC_COUNT]="$dash"
     HEREDOC_COUNT=$((HEREDOC_COUNT + 1))
   done
   ((HEREDOC_COUNT > 0))
@@ -353,10 +386,10 @@ heredoc_delimiters() {
 # the body rather than re-matching the terminator regex on every line of it.
 HEREDOC_END=-1
 heredoc_terminates() {
-  local from="$1" term="$2" k
+  local from="$1" term="$2" dash="$3" k
   HEREDOC_END=-1
   for ((k = from + 1; k < n; k++)); do
-    if is_heredoc_terminator "${lines[k]}" "$term"; then
+    if is_heredoc_terminator "${lines[k]}" "$term" "$dash"; then
       HEREDOC_END=$k
       return 0
     fi
@@ -364,10 +397,16 @@ heredoc_terminates() {
   return 1
 }
 
-# True when line $1 is the terminator for delimiter $2. The terminator sits on a
-# line of its own, optionally indented — `<<-` strips leading TABS and a plain
-# `<<` requires column 0, but accepting either only ends the body SOONER, which
-# resumes scanning and is the safe direction.
+# True when line $1 is the terminator for delimiter $2 opened with the `<<-` form
+# in $3 (1 for `<<-`, 0 for a plain `<<`).
+#
+# 🔴 ENDING THE BODY EARLY IS NOT THE SAFE DIRECTION, despite reading like it.
+# A plain `<<EOF` requires its terminator at COLUMN 0; an indented `  EOF` is
+# payload. Accepting any indentation ends the body at that payload line, and then
+# the REST of the payload is treated as code — so a payload line reading
+# `# pipefail-grep-guard: allow-file` becomes a real directive and exempts the
+# whole file, hiding a genuine offender below. `<<-` strips leading TABS only,
+# never spaces.
 #
 # One definition for all three callers: the two body-skipping loops below and the
 # lookahead above. Splitting it let the reasoning above live at one site while
@@ -377,7 +416,11 @@ is_heredoc_terminator() {
   # it is recompiled per call, and this runs against every line a lookahead walks.
   # Measured ~3× cheaper over the repository than going straight to the regex.
   [[ "$1" == *"$2"* ]] || return 1
-  [[ "$1" =~ ^[[:space:]]*"$2"[[:space:]]*$ ]]
+  if (($3)); then
+    [[ "$1" =~ ^$'\t'*"$2"[[:space:]]*$ ]]
+  else
+    [[ "$1" =~ ^"$2"[[:space:]]*$ ]]
+  fi
 }
 
 early_exit_flag() {
@@ -412,6 +455,11 @@ early_exit_flag() {
     case "$tok" in
       \"*\") tok="${tok#\"}" && tok="${tok%\"}" && was_quoted=1 ;;
       \'*\') tok="${tok#\'}" && tok="${tok%\'}" && was_quoted=1 ;;
+      # An unquoted backslash escapes the next character and is REMOVED, so
+      # `grep \-q MATCH` hands grep an ordinary `-q`. Leaving it attached made the
+      # walk read `\-q` as an operand and call a hazardous pipeline clean — the
+      # same fail-open as the quoted spelling, one escape further out.
+      \\*) tok="${tok#\\}" ;;
     esac
     # Bash operators do not need surrounding whitespace, so `grep MATCH; sort -m`
     # splits into the operand `MATCH;` — the command ends there and `sort`'s `-m`
@@ -612,6 +660,12 @@ findings=0
 scan_file() {
   local file="$1"
   [[ -r "$file" ]] || die "cannot read $file"
+  # A REGULAR file, not merely a readable one. A tracked `*.sh` symlink pointing
+  # at a character device — `/dev/zero` is the demonstrated case — passes a
+  # readability test and then feeds the line reader an endless stream with no
+  # newline, so this required job hangs instead of failing. `-f` follows symlinks,
+  # so a symlink to a real script still scans normally.
+  [[ -f "$file" ]] || die "not a regular file: $file"
 
   local -a lines=()
   local line
@@ -622,7 +676,7 @@ scan_file() {
   # Index-based, never `"${lines[@]}"`: bash 3.2 (the macOS system bash) treats
   # an empty array's `[@]` expansion as an unbound variable under `set -u`, so
   # the array form aborts the whole run on the first empty file.
-  local n=${#lines[@]} i probe probe_test base j joins start
+  local n=${#lines[@]} i probe probe_mask probe_test base j joins start
   # The whole-file directive is honoured only from a SYNTACTIC comment. A heredoc
   # body is data, not code — a payload line reading
   # `# pipefail-grep-guard: allow-file — documentation only` looks identical to
@@ -632,11 +686,11 @@ scan_file() {
   # here costs a missed exemption (safe) rather than a missed hazard.
   # Pending terminators, consumed in the order bash reads their bodies. A QUEUE
   # rather than a single value, because one opener line can start several.
-  local -a hd_pending=()
+  local -a hd_pending=() hd_pending_dash=()
   local hd_n=0 hd_at=0 q
   for ((i = 0; i < n; i++)); do
     if ((hd_at < hd_n)); then
-      is_heredoc_terminator "${lines[i]}" "${hd_pending[hd_at]}" && hd_at=$((hd_at + 1))
+      is_heredoc_terminator "${lines[i]}" "${hd_pending[hd_at]}" "${hd_pending_dash[hd_at]}" && hd_at=$((hd_at + 1))
       continue
     fi
     if heredoc_delimiters "${lines[i]}"; then
@@ -645,6 +699,7 @@ scan_file() {
       hd_at=0
       for ((q = 0; q < HEREDOC_COUNT; q++)); do
         hd_pending[hd_n]="${HEREDOC_TERMS[q]}"
+        hd_pending_dash[hd_n]="${HEREDOC_DASH[q]}"
         hd_n=$((hd_n + 1))
       done
       continue
@@ -692,7 +747,7 @@ scan_file() {
     hd_last=$i
     hd_ok=1
     for ((q = 0; q < HEREDOC_COUNT; q++)); do
-      if heredoc_terminates "$hd_from" "${HEREDOC_TERMS[q]}"; then
+      if heredoc_terminates "$hd_from" "${HEREDOC_TERMS[q]}" "${HEREDOC_DASH[q]}"; then
         hd_last=$HEREDOC_END
         hd_from=$HEREDOC_END
       else
@@ -734,6 +789,15 @@ scan_file() {
       # Over-stripping here can only join more lines, which is the safe
       # direction: the regex still has to match for anything to be reported.
       probe_test="${probe%%[[:space:]]#*}"
+      # `|` is an operator, so it ends a word and a `#` straight after it opens a
+      # comment with no whitespace between: `producer |# note` continues on the
+      # next line exactly as `producer | # note` does. Matching only the
+      # whitespace-prefixed form left the comment text between the pipe and the
+      # grep, so the line never joined and a real offender went unreported. Keep
+      # the pipe — the continuation test below is what looks for it.
+      case "$probe_test" in
+        *'|#'*) probe_test="${probe_test%%|#*}|" ;;
+      esac
       # The comment-stripped test comes FIRST when a comment was actually
       # stripped. A comment can itself end in a backslash (`producer | # why \`),
       # and bash continues that pipeline on the executable text — so letting the
@@ -787,7 +851,25 @@ scan_file() {
     [[ "${lines[start]}" =~ ^[[:space:]]*# ]] && continue
     [[ "$probe" =~ $ALLOW_LINE_RE ]] && continue
 
+    # Cheap reject on the raw line first: this is the hot path, and the masking
+    # walk below is per-character. Only a line that already looks like a
+    # pipe-into-grep pays for it.
     [[ "$probe" =~ $PIPE_GREP_RE ]] || continue
+
+    # THE PIPE MUST BE AN OPERATOR, NOT TEXT. `printf '%s\n' 'producer | grep -q
+    # MATCH'` prints documentation and runs no pipeline at all, but a raw match
+    # read the quoted text as live code and failed this required job — forcing
+    # documentation and fixture generators to carry suppressions for code they
+    # never execute. Match on the masked copy; the offsets still index the raw
+    # line, which is where the option walk has to read its arguments from.
+    case "$probe" in
+      *[\'\"\\]*)
+        mask_quoted "$probe"
+        probe_mask="$_masked"
+        ;;
+      *) probe_mask="$probe" ;;
+    esac
+    [[ "$probe_mask" =~ $PIPE_GREP_RE ]] || continue
 
     # Re-walk every pipe-into-grep on the probe, and REPORT every one of them:
     # one line can carry two (`… | grep -q A && … | grep -q B`), and stopping at
@@ -799,17 +881,24 @@ scan_file() {
     # cannot tell a genuine pair from one finding reported twice. Naming the
     # matched fragment does NOT solve it — the match is the `| grep ` prefix,
     # identical for both — which only reading the real output made obvious.
-    local tail_="$probe" head_ rest flag k
+    # Walk the MASKED copy to find each pipe-into-grep, and take the arguments
+    # from the RAW copy at the same offset — masking preserves length, so one
+    # index serves both. Reading arguments from the mask would hand the option
+    # walk a row of `x`s instead of `-q`.
+    local tail_m="$probe_mask" tail_r="$probe" head_ pre rest flag k off
     local -a line_flags=()
     local lf=0
-    while [[ "$tail_" =~ $PIPE_GREP_RE ]]; do
+    while [[ "$tail_m" =~ $PIPE_GREP_RE ]]; do
       head_="${BASH_REMATCH[0]}"
-      rest="${tail_#*"$head_"}"
+      pre="${tail_m%%"$head_"*}"
+      off=$((${#pre} + ${#head_}))
+      rest="${tail_r:off}"
       if flag="$(early_exit_flag "$rest")"; then
         line_flags[lf]="$flag"
         lf=$((lf + 1))
       fi
-      tail_="$rest"
+      tail_m="${tail_m:off}"
+      tail_r="$rest"
     done
     # Trim once, outside the loop: every offender on this line prints the SAME
     # source line, so doing it per offender re-forked `sed` on an identical

@@ -847,6 +847,70 @@ run_guard "$f" && rc=0 || rc=$?
 report "a single offender carries no of-N counter" \
   "$(yn test "$(grep -c 'on this line' <<<"$out")" -eq 0)" "rc=$rc out=$out"
 
+# ---------------------------------------------------------------------------
+# 2g. What is an OPERATOR and what is merely text that looks like one. Every
+#     fail-open below puts a real offender where the false masking would hide it,
+#     so each passes only if nothing was wrongly masked.
+# ---------------------------------------------------------------------------
+# An unquoted delimiter is an ordinary shell WORD: `cat <<+++` is valid.
+f="$(mkscript "punctuation-delimiter-unquoted.sh" \
+  'cat <<+++' \
+  '# pipefail-grep-guard: allow-file — payload, not a directive' \
+  '+++' \
+  'printf "%s" "$v" | grep -q REAL')"
+run_guard "$f" && rc=0 || rc=$?
+report "an unquoted punctuation delimiter still hides its payload from the directive" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# A plain `<<EOF` needs its terminator at column 0; an indented one is payload.
+# Ending the body there makes the REST of the payload read as code, so a payload
+# directive line exempts the file.
+f="$(mkscript "indented-terminator-is-payload.sh" \
+  'cat <<EOF' \
+  '  EOF' \
+  '# pipefail-grep-guard: allow-file — payload, not a directive' \
+  'EOF' \
+  'printf "%s" "$v" | grep -q REAL')"
+run_guard "$f" && rc=0 || rc=$?
+report "a space-indented line does not terminate a plain heredoc" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# ...and its control: `<<-` DOES accept a tab-indented terminator, so the body
+# really ends there and the offender below it is scanned.
+f="$(mkscript "dash-heredoc-tab-terminator.sh" \
+  'cat <<-EOF' \
+  'payload' \
+  "$(printf '\tEOF')" \
+  'printf "%s" "$v" | grep -q REAL')"
+run_guard "$f" && rc=0 || rc=$?
+report "positive control: <<- accepts a tab-indented terminator" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# An unquoted backslash is removed by bash, so grep receives an ordinary -q.
+flag_case "a backslash-escaped early-exit option is still that option" \
+  'printf "%s" "$v" | grep \-q NEEDLE'
+
+# A pipeline inside a quoted string is documentation, not code.
+clean_case "a quoted pipeline is text the script prints, not a pipeline it runs" \
+  "printf '%s\\n' 'producer | grep -q MATCH'"
+
+# `|` ends a word, so a `#` straight after it opens a comment with no space.
+f="$(mkscript "comment-attached-to-pipe.sh" \
+  'producer |# note' \
+  '  grep -q MATCH')"
+run_guard "$f" && rc=0 || rc=$?
+report "a comment attached to the pipe does not stop the join" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# A tracked *.sh symlink to a character device is readable and endless. Reading it
+# hung this required job; it must fail in a controlled way instead.
+ln -s /dev/zero "$tmp/hang.sh" 2>/dev/null || true
+if [[ -L "$tmp/hang.sh" ]]; then
+  out="$(ulimit -t 10; "$guard" "$tmp/hang.sh" 2>&1)" && rc=0 || rc=$?
+  report "a non-regular tracked script is a controlled error, not a hang" \
+    "$(yn test "$rc" -eq 2)" "rc=$rc out=$out"
+fi
+
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2
   exit 1
