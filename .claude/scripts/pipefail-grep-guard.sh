@@ -343,6 +343,58 @@ strip_comment() {
   return 0
 }
 
+# --- cross-line quote state ------------------------------------------------
+# The quote state at the END of a line, given the state at its start:
+#   0 code, 1 inside '…', 2 inside "…"
+#
+# The whole-file allow directive is honoured only from a SYNTACTIC comment, and
+# a physical line inside a multi-line STRING is data exactly as a heredoc body
+# is. Without this, a quoted payload containing a line that begins
+# `# pipefail-grep-guard: allow-file` exempted the entire script — a fail-open
+# anyone who can add a string could reach.
+#
+# Deliberately biased: where this cannot tell, it prefers to report a line as
+# QUOTED. Being wrong that way costs a missed exemption and the file is scanned
+# anyway; being wrong the other way skips the whole file, which is the direction
+# that hides hazards.
+#
+# Single quotes honour no escapes; double quotes and code do. A `#` that starts a
+# comment ends the line's quote significance, so an apostrophe in prose
+# (`# don't`) cannot leak an open quote into the following lines.
+_QUOTE_STATE=0
+advance_quote_state() {
+  local s="$1" st="$2" i c prev=''
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$st" in
+      0)
+        case "$c" in
+          '\') ((i++)) ;;
+          "'") st=1 ;;
+          '"') st=2 ;;
+          '#')
+            # Same introducer rule as strip_comment: a `#` opens a comment only
+            # at the start of a word.
+            if [[ -z "$prev" ]]; then break; fi
+            case "$prev" in
+              [[:space:]] | ';' | '&' | '|' | '(' | ')') break ;;
+            esac
+            ;;
+        esac
+        ;;
+      1) [[ "$c" == "'" ]] && st=0 ;;
+      2)
+        case "$c" in
+          '\') ((i++)) ;;
+          '"') st=0 ;;
+        esac
+        ;;
+    esac
+    prev="$c"
+  done
+  _QUOTE_STATE="$st"
+}
+
 # --- heredoc detection -----------------------------------------------------
 # Sets HEREDOC_TERMS/HEREDOC_COUNT to EVERY static delimiter the line opens, in
 # the order bash reads their bodies, and returns 0 when there is at least one.
@@ -855,7 +907,7 @@ scan_file() {
   # Pending terminators, consumed in the order bash reads their bodies. A QUEUE
   # rather than a single value, because one opener line can start several.
   local -a hd_pending=() hd_pending_dash=()
-  local hd_n=0 hd_at=0 q
+  local hd_n=0 hd_at=0 q qstate=0
   for ((i = 0; i < n; i++)); do
     if ((hd_at < hd_n)); then
       is_heredoc_terminator "${lines[i]}" "${hd_pending[hd_at]}" "${hd_pending_dash[hd_at]}" && hd_at=$((hd_at + 1))
@@ -872,7 +924,15 @@ scan_file() {
       done
       continue
     fi
-    [[ "${lines[i]}" =~ $ALLOW_FILE_RE ]] && return 0
+    # A line that STARTS inside a multi-line string is data, so a directive
+    # spelled there is payload rather than an exemption. The state is advanced
+    # for every line either way, so a later real directive is still seen once
+    # the string closes.
+    if ((qstate == 0)) && [[ "${lines[i]}" =~ $ALLOW_FILE_RE ]]; then
+      return 0
+    fi
+    advance_quote_state "${lines[i]}" "$qstate"
+    qstate=$_QUOTE_STATE
   done
 
   # Mark every heredoc BODY line before scanning, rather than detecting openers

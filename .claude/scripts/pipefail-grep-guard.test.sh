@@ -1177,6 +1177,40 @@ flag_case "a hash inside a parameter expansion does not truncate the line" \
 clean_case "a genuine trailing comment still ends the code" \
   'x=1 # producer | grep -q MATCH'
 
+# The whole-file escape hatch is honoured only from a syntactic comment. A
+# physical line inside a multi-line STRING is data, exactly as a heredoc body is,
+# so a quoted payload spelling the directive must not exempt the script — the
+# real pipe-to-grep below it still has to be reported.
+f="$(mkscript "allow-file-inside-multiline-string.sh" \
+  'doc="first line' \
+  '# pipefail-grep-guard: allow-file — payload, not a directive' \
+  'last line"' \
+  'producer | grep -q MATCH')"
+run_guard "$f" && rc=0 || rc=$?
+report "an allow-file marker inside a multi-line string is not a directive" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# The control differs only in where the marker sits: once the string has CLOSED,
+# the very same line is a real comment and does exempt the file.
+f="$(mkscript "allow-file-after-string-closes.sh" \
+  'doc="first line' \
+  'last line"' \
+  '# pipefail-grep-guard: allow-file — a genuine directive' \
+  'producer | grep -q MATCH')"
+run_guard "$f" && rc=0 || rc=$?
+report "an allow-file marker after the string closes is still honoured" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# An apostrophe inside a trailing comment must not leak an open quote into the
+# lines after it, or every later directive would be read as quoted data.
+f="$(mkscript "apostrophe-in-comment.sh" \
+  'x=1 # it does not open a quote' \
+  '# pipefail-grep-guard: allow-file — still a directive' \
+  'producer | grep -q MATCH')"
+run_guard "$f" && rc=0 || rc=$?
+report "an apostrophe in a comment does not leak an open quote" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
 # --- release-flag expiry ---------------------------------------------------
 # `ENFORCE_PIPEFAIL_GREP_GUARD` gates the repository-wide sweep in ci.yaml. It is
 # a RELEASE flag, so it is short-lived by contract and #2821 owns activating then
