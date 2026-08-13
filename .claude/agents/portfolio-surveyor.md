@@ -312,8 +312,14 @@ public and private — no per-repo loop needed to enumerate):
      Fetch `headRefOid` while deepening the PR. Report `cr@<sha>` for a finding-free CodeRabbit
      review completion at the current head even without `APPROVED`: accept a current-head review
      object **whose own `body` BEGINS WITH the recognised CodeRabbit review-artifact marker
-     `**Actionable comments posted:`** — a positive identification of the matched object as a review,
-     never merely a non-empty body — **and** whose head also carries a CodeRabbit commit status whose
+     `**Actionable comments posted:`, after stripping any leading HTML comments** — a positive
+     identification of the matched object as a review,
+     never merely a non-empty body. CodeRabbit prefixes every real body with an agent-hint block
+     (`<!-- coderabbit-cli-agent-hint:v3 … -->`), so an unstripped BEGINS-WITH test matches **no**
+     genuine current review and reports `green_review=none` over a real green (monorepo#2819;
+     measured 2026-08-13 on four substantive bodies across monorepo#2810 and #2723). Strip only the
+     LEADING comments and keep the match anchored — a marker further in is not a review, and an
+     empty container still fails. **And** the head must also carry a CodeRabbit commit status whose
      `description` begins `Review completed`, or CodeRabbit's substantive auto-generated summary comment
      (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after the
      authenticated request and naming `headRefOid`, or its **command-invocation reply comment carrying
@@ -355,7 +361,9 @@ public and private — no per-repo loop needed to enumerate):
      `bodylen=0` container at 16:22:58Z **and** a genuine `bodylen=5573` review at 16:33:34Z under one
      `Review completed` status — had the container carried text, a status conjunct would have blessed
      it. So match the artifact itself: every real CodeRabbit review body observed across monorepo and
-     platform begins `**Actionable comments posted: N**`. The status stays a **required corroborator**
+     platform begins `**Actionable comments posted: N**` **once its leading HTML comments are
+     stripped** — the agent-hint block now sits in front of that marker (monorepo#2819), so the strip
+     is part of the match rather than an allowance. The status stays a **required corroborator**
      of run-completion — it reads `Review completed` for a review that ran and `Review skipped: …` or
      `Review rate limited` when none did, and note that `state=success` accompanies all three, so
      the `description` is the discriminator, never the state.

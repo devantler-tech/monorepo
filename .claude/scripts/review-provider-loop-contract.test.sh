@@ -159,6 +159,93 @@ assert_prose "${constitution}" 'an empty object is a reply container, never a re
 assert_prose "${surveyor}" 'Actionable comments posted:' \
   "surveyor lost the positive identification of a CodeRabbit review object"
 
+# monorepo#2819: CodeRabbit now emits every real review body behind an agent-hint HTML comment, so a
+# body that BEGINS WITH the marker no longer describes any genuine review. Measured on four
+# substantive review objects (monorepo#2810 at 07:18:36Z and 10:56:58Z, monorepo#2723 on 2026-08-12
+# at 20:33:20Z and 21:59:21Z) — all four carry the prefix. The identification fails CLOSED, so a real
+# current-head review reads as "no review" and the run walks down into weekly-limited Codex and
+# monthly-limited Bugbot: the exact inversion the cheapest-lane-first order exists to prevent.
+#
+# The rule is prose an agent executes, so the drift risk is a later edit quietly restoring the bare
+# BEGINS-WITH test at one of the five sites. The fixture below is REAL captured output rather than a
+# hand-written sample, and the OLD rule is kept as a live ablation: it must FAIL on that fixture, or
+# the fixture no longer reproduces the defect this guard was filed against.
+cr_hint_fixture="${repo_root}/.claude/scripts/fixtures/coderabbit-review-body-hint-prefix-2819.txt"
+[ -r "${cr_hint_fixture}" ] ||
+  fail "the captured CodeRabbit hint-prefixed review body fixture is missing"
+
+# Remove leading HTML comment blocks (and the whitespace around them), then apply the unchanged
+# BEGINS-WITH test. An unterminated comment stops the strip rather than consuming the whole body.
+strip_leading_html_comments() {
+  local body="$1" rest
+  while :; do
+    body="${body#"${body%%[![:space:]]*}"}"
+    case "${body}" in
+      '<!--'*)
+        rest="${body#*-->}"
+        [ "${rest}" = "${body}" ] && break
+        body="${rest}"
+        ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "${body}"
+}
+
+# The fixed rule: prefix-tolerant, but still ANCHORED — never a substring search.
+cr_body_identifies_as_review() {
+  case "$(strip_leading_html_comments "$1")" in
+    '**Actionable comments posted:'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The rule as it stood before #2819, kept ONLY as the ablation below.
+cr_body_identifies_pre_2819() {
+  case "$1" in
+    '**Actionable comments posted:'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cr_hint_body="$(cat "${cr_hint_fixture}")"
+
+# ABLATION — the defect must still reproduce on real data, or this guard proves nothing.
+if cr_body_identifies_pre_2819 "${cr_hint_body}"; then
+  fail "the captured fixture no longer reproduces #2819 — the pre-fix rule matched it, so this guard is vacuous"
+fi
+cr_body_identifies_as_review "${cr_hint_body}" ||
+  fail "prefix-tolerant identification does not recognise a real hint-prefixed CodeRabbit review body"
+
+# NEGATIVE CONTROLS — the empty-container rejection (#2620/#2677) must survive the widening, and
+# stripping comments must not turn arbitrary prose into a review.
+if cr_body_identifies_as_review ""; then
+  fail "an empty CodeRabbit reply container is identified as a review"
+fi
+if cr_body_identifies_as_review "<!-- coderabbit-cli-agent-hint:v3
+-->"; then
+  fail "a body carrying only the hint comment is identified as a review"
+fi
+if cr_body_identifies_as_review "> [!TIP]
+> For best results, initiate chat on the files or code changes."; then
+  fail "a CodeRabbit chat acknowledgement is identified as a review"
+fi
+# The marker must still be at the START of the stripped body — a mention further in is not a review.
+if cr_body_identifies_as_review "Some prose that merely mentions **Actionable comments posted: 2**"; then
+  fail "identification degraded from an anchored match to a substring search"
+fi
+
+# The five prose sites that state the rule. Pinned individually so a partial fix cannot pass.
+assert_prose "${constitution}" 'after stripping any leading HTML comments' \
+  "constitution's CodeRabbit identification is not prefix-tolerant, so a real review reads as none"
+assert_prose "${surveyor}" 'after stripping any leading HTML comments' \
+  "surveyor's CodeRabbit identification is not prefix-tolerant, so a real review reads as none"
+assert_prose "${parity_checklist}" 'after stripping any leading HTML comments' \
+  "surveyor parity checklist does not carry the prefix-tolerant identification"
+# The widening must not become a bare commit_id match — the empty-container measurement still stands.
+assert_prose "${constitution}" 'never weaken this to a bare' \
+  "constitution lost the prohibition on weakening identification to a bare commit_id match"
+
 # monorepo#2758, measured on platform#3051 head 992a93caecd1: the head's status read
 # `Review completed`, the newest review object was an empty container at an OLDER head, and the
 # summary comment named no sha at all — so the finding-free verdict existed ONLY in the
