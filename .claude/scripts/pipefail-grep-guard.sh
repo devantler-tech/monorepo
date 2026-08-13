@@ -421,7 +421,7 @@ strip_comment() {
     # exists to catch simply disappears before the scan sees it.
     if [[ "${m:i:1}" == '$' && "${m:i+1:1}" == '{' ]]; then
       depth=$((depth + 1))
-      ((i++))
+      ((++i))
       continue
     fi
     if ((depth > 0)) && [[ "${m:i:1}" == '}' ]]; then
@@ -468,7 +468,7 @@ advance_quote_state() {
     case "$st" in
       0)
         case "$c" in
-          '\') ((i++)) ;;
+          '\') ((++i)) ;;
           "'") st=1 ;;
           '"') st=2 ;;
           '#')
@@ -484,7 +484,7 @@ advance_quote_state() {
       1) [[ "$c" == "'" ]] && st=0 ;;
       2)
         case "$c" in
-          '\') ((i++)) ;;
+          '\') ((++i)) ;;
           '"') st=0 ;;
         esac
         ;;
@@ -1300,7 +1300,7 @@ main() {
     # matches neither the `*.sh` case nor a readable file — so the mandatory
     # sweep skipped it and still reported the repository clean. A guard that
     # silently omits files fails open, which is the one direction that matters.
-    local first
+    local first f
     while IFS= read -r -d '' f; do
       case "$f" in
         *.sh)

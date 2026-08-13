@@ -1047,7 +1047,13 @@ report "a delimiter with trailing whitespace does not terminate a heredoc" \
 #     the sweep is conditional and the self-test is not.
 # ---------------------------------------------------------------------------
 ci="$here/../../.github/workflows/ci.yaml"
-if [[ -r "$ci" ]]; then
+# An unreadable workflow must FAIL rather than skip: a conditional that silently
+# drops its own assertions is the same silent-omission direction this guard's
+# header rejects — the suite would print no case for the gate and still exit 0,
+# so a moved or renamed workflow reads exactly like a gate that is still pinned.
+if [[ ! -r "$ci" ]]; then
+  report "the rollout gate could be inspected" no "cannot read $ci"
+else
   report "the repository-wide sweep is gated behind a default-off variable" \
     "$(yn grep -q "if: vars.ENFORCE_PIPEFAIL_GREP_GUARD == 'true'" "$ci")" "ci=$ci"
   report "the OFF state reports rather than silently skipping" \
@@ -1164,7 +1170,7 @@ flag_case "an assignment prefix proper still reaches the grep" \
   'producer | WRAPPED=1 grep -q MATCH'
 
 # ---------------------------------------------------------------------------
-# 2i. Shebang classification, which only runs in the repository-wide sweep and
+# 2j. Shebang classification, which only runs in the repository-wide sweep and
 #     therefore needs a throwaway git repository rather than a bare fixture file.
 # ---------------------------------------------------------------------------
 # The sweep identifies extensionless scripts by their INTERPRETER. A `*sh` suffix
@@ -1319,8 +1325,33 @@ report "the ENFORCE_PIPEFAIL_GREP_GUARD release flag has not passed its expiry" 
   "$(yn test "$today" -lt "$flag_expiry")" \
   "today=$today expiry=$flag_expiry — activate and remove the flag per #2821"
 
+# ---------------------------------------------------------------------------
+# 2k. The guard must SURVIVE the input, not only judge it correctly.
+# ---------------------------------------------------------------------------
+# A standalone `((i++))` returns the value BEFORE the increment, so at zero it
+# exits 1 — and under this guard's own `set -e` that aborts the run. The quote
+# walker hits exactly that when a line's FIRST character is a backslash, so the
+# guard died before reporting the offending pipeline two lines later: an
+# unreported hazard, the fail-open direction.
+#
+# ⚠️ This case is PLATFORM-DEPENDENT and passes vacuously on the developer Mac.
+# bash 3.2 does not apply errexit to a failing arithmetic command; bash 5 does.
+# Measured 2026-08-13: identical input, identical script — bash 3.2.57 reported
+# the offender, bash 5.3.15 produced NO output at all. CI runs on Linux, so the
+# case is live exactly where the guard is enforced, and green here is not proof.
+f="$(mkscript "lead-backslash.sh" \
+  '\ls /tmp' \
+  'printf "%s" "$v" | grep -q NEEDLE')"
+run_guard "$f" && rc=0 || rc=$?
+report "a line starting with a backslash does not abort the walk" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+# The offender must actually be NAMED: an abort also exits 1, so the status alone
+# cannot tell "found it" from "died before finding it".
+report "and the offending pipeline is still reported" \
+  "$(yn grep -qF -- 'grep -q NEEDLE' <<<"$out")" "rc=$rc out=$out"
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2
   exit 1
 fi
 echo "pipefail-grep-guard self-test: all cases passed"
+
