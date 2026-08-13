@@ -181,7 +181,7 @@ cmd_mark() {
 # decides whether `add` succeeds, and it stays SILENT unless it can positively show the branch is
 # behind — a warning that fires on every ordinary attach is trained away as noise.
 warn_if_local_branch_is_behind() {
-  local repo="$1" branch="$2" behind=""
+  local repo="$1" branch="$2" wt="$3" behind=""
 
   git -C "$repo" remote get-url origin >/dev/null 2>&1 || return 0
   bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
@@ -198,7 +198,15 @@ warn_if_local_branch_is_behind() {
 
   echo "worktree-claim: NOTE local '$branch' is $behind commit(s) behind origin — attaching to the" >&2
   echo "worktree-claim:      LOCAL ref, so this worktree does not carry origin's newer commits." >&2
-  echo "worktree-claim:      Reconcile before working:  git -C $(shquote "$repo") fetch origin $(shquote "$branch")" >&2
+  # The remediation must MOVE something. `fetch` was already run above and only updates
+  # refs/remotes/origin/<branch>, so printing it advertises a command this function has just
+  # executed and which leaves the worktree exactly as stale — the operator follows the hint,
+  # observes nothing change, and learns to distrust the warning. Name the fast-forward in the
+  # WORKTREE, which is where the branch is now checked out and the only place HEAD can advance.
+  # `--ff-only` is deliberate: it advances the clean case and REFUSES a diverged branch rather than
+  # writing a merge commit nobody asked for, which is the same reason `add` never moves the ref
+  # itself.
+  echo "worktree-claim:      Reconcile before working:  git -C $(shquote "$wt") merge --ff-only $(shquote "origin/$branch")" >&2
   return 0
 }
 
@@ -214,7 +222,7 @@ add_worktree_on() {
     # the push reveals it, by which time the build is spent. Say so. The branch is NOT moved: a
     # fast-forward here would be a mutation of existing local state, and a diverged branch could be
     # carrying commits that exist nowhere else.
-    warn_if_local_branch_is_behind "$repo" "$branch"
+    warn_if_local_branch_is_behind "$repo" "$branch" "$wt"
     git -C "$repo" worktree add "$wt" "$branch"
     return
   fi
@@ -235,10 +243,14 @@ add_worktree_on() {
 
   # `--exit-code` is the discriminator: 0 = the branch exists on origin, 2 = origin answered and does
   # not have it, anything else = we could not ask (transport, auth, timeout).
-  local ls_rc=0
-  bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
-    git -C "$repo" ls-remote --exit-code --heads origin "refs/heads/$branch" \
-    >/dev/null 2>&1 || ls_rc=$?
+  # Keep the OUTPUT, not just the exit code: `ls-remote` prints `<sha>\t<ref>`, so the answer that
+  # tells us the branch exists also tells us origin's true tip. That is the only freshness reference
+  # available when the fetch below fails, and discarding it is what let a stale cached ref attach
+  # silently.
+  local ls_rc=0 ls_out="" remote_tip=""
+  ls_out="$(bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+    git -C "$repo" ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)" || ls_rc=$?
+  remote_tip="${ls_out%%[![:xdigit:]]*}"
 
   case "$ls_rc" in
     0)
@@ -266,6 +278,19 @@ add_worktree_on() {
         echo "worktree-claim:      reset onto origin/$branch before committing or pushing." >&2
         git -C "$repo" worktree add -b "$branch" "$wt"
         return
+      fi
+      # A cached ref EXISTS — but existence is not freshness. If the fetch failed, that ref is
+      # whatever the last successful fetch left behind, and attaching to it resumes the PR at an
+      # obsolete head with no warning: the exact silent-staleness failure this arm was added to
+      # prevent, arriving through the fallback instead of the fork. We can actually check, because
+      # `ls-remote` already told us origin's tip — so compare, and say so when they differ. Advisory
+      # like everything else here: it never decides whether `add` succeeds.
+      local cached_tip=""
+      cached_tip="$(git -C "$repo" rev-parse --verify --quiet "refs/remotes/origin/$branch")" || cached_tip=""
+      if [ -n "$remote_tip" ] && [ -n "$cached_tip" ] && [ "$remote_tip" != "$cached_tip" ]; then
+        echo "worktree-claim: NOTE could not refresh '$branch'; the cached origin/$branch is STALE" >&2
+        echo "worktree-claim:      (cached ${cached_tip%"${cached_tip#??????????}"} vs origin ${remote_tip%"${remote_tip#??????????}"}). Attaching to the cached tip —" >&2
+        echo "worktree-claim:      re-fetch and reset before committing, or this resumes an old head." >&2
       fi
       ;;
     2)

@@ -1052,5 +1052,65 @@ check "an unfetchable existing branch is announced as a FORK, not a resume" 0 "$
 check "the fork warning states the branch exists on origin" 0 "$fetchfail_rc" \
   "$fetchfail_out" "EXISTS on origin"
 
+# ── a CACHED tracking ref that is STALE, when the refresh fails ────────────────────────────────
+# The guard above proves a cached ref EXISTS; existence is not freshness. With the fetch failing,
+# that ref is whatever the last successful fetch left, so attaching resumes the PR at an obsolete
+# head — the same silent staleness the fork branch warns about, arriving through the fallback
+# instead. `ls-remote` already returned origin's tip, so this is checkable rather than unknowable.
+stalecache_origin="$tmp/stalecache-origin.git"
+git init -q --bare "$stalecache_origin"
+stalecache_seed="$tmp/stalecache-seed"
+git init -q "$stalecache_seed"
+git -C "$stalecache_seed" config user.name "worktree-claim-test"
+git -C "$stalecache_seed" config user.email "worktree-claim-test@example.com"
+git -C "$stalecache_seed" commit --allow-empty -qm "init"
+git -C "$stalecache_seed" branch -M main
+git -C "$stalecache_seed" checkout -qb "claim-stalecache"
+git -C "$stalecache_seed" commit --allow-empty -qm "v1"
+git -C "$stalecache_seed" remote add origin "$stalecache_origin"
+git -C "$stalecache_seed" push -q origin main claim-stalecache
+
+# Clone WHILE the branch is at v1, so the tracking ref is cached and genuinely current...
+stalecache_consumer="$tmp/stalecache-consumer"
+git clone -q "$stalecache_origin" "$stalecache_consumer"
+stalecache_cached="$(git -C "$stalecache_consumer" rev-parse refs/remotes/origin/claim-stalecache)"
+# ...then advance origin, which is what makes the cache stale without touching the consumer.
+git -C "$stalecache_seed" commit --allow-empty -qm "v2"
+git -C "$stalecache_seed" push -q origin claim-stalecache
+stalecache_tip="$(git -C "$stalecache_origin" rev-parse claim-stalecache)"
+check "precondition: the cached ref and origin's tip actually differ" 0 \
+  "$([ "$stalecache_cached" != "$stalecache_tip" ] && echo 0 || echo 1)"
+
+stalecache_rc=0
+stalecache_out="$(PATH="$fetchfail_stub:$PATH" "$script" add \
+  "$stalecache_consumer" "$tmp/wt-stalecache" "claim-stalecache" "session-stalecache" 2>&1)" || stalecache_rc=$?
+check "a stale cached ref still claims (advisory, not fatal)" 0 "$stalecache_rc" \
+  "$stalecache_out" "owner=session-stalecache"
+check "an unrefreshable cached ref is announced as STALE" 0 "$stalecache_rc" \
+  "$stalecache_out" "is STALE"
+# Naming both SHAs is what makes the warning actionable rather than vague: the operator can see
+# which head they are on and which one they wanted.
+check "the stale-cache warning names the cached AND the origin sha" 0 "$stalecache_rc" \
+  "$stalecache_out" "${stalecache_cached:0:10}"
+
+# The complement, and the reason this cannot just always warn: when the fetch SUCCEEDS the cached
+# ref is current, so the warning must stay silent or it fires on every ordinary attach.
+freshcache_consumer="$tmp/freshcache-consumer"
+git clone -q "$stalecache_origin" "$freshcache_consumer"
+freshcache_rc=0
+freshcache_out="$("$script" add \
+  "$freshcache_consumer" "$tmp/wt-freshcache" "claim-stalecache" "session-freshcache" 2>&1)" || freshcache_rc=$?
+check "no false STALE warning when the refresh succeeds" 0 \
+  "$(grep -qF 'is STALE' <<<"$freshcache_out" && echo 1 || echo 0)"
+
+# ── the stale-LOCAL remediation must move something ────────────────────────────────────────────
+# It used to print `git fetch origin <branch>` — a command this function has already run, and which
+# only updates refs/remotes/origin/<branch>. Following it leaves the worktree exactly as stale, so
+# the operator learns the warning is noise. The hint must name the fast-forward in the WORKTREE.
+check "the stale-local hint names a merge, not another fetch" 0 "$stalelocal_rc" \
+  "$stalelocal_out" "merge --ff-only"
+check "the stale-local hint targets the WORKTREE, not the repo" 0 "$stalelocal_rc" \
+  "$stalelocal_out" "wt-stale-local"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
