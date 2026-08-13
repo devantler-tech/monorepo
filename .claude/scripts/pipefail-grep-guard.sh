@@ -195,6 +195,42 @@ esac
 # runs. Only `--` ends option parsing.
 max_count_is_finite() { case "$1" in -*) return 1 ;; *) return 0 ;; esac; }
 
+# Resolve the command `env` would execute, given a shebang line with `#!` already
+# removed. env's own options come first, so the operand is not simply the second
+# word. Value-taking options consume their value; `-S`/`--split-string` introduces
+# a command line whose FIRST word is the command, attached (`-Sbash`) or separate
+# (`-S bash`); `--` ends option parsing. Prints the empty string when no operand
+# remains, which resolves to no shell and leaves the file out of scope — the same
+# answer as before for a shebang that genuinely names none.
+env_operand() {
+  local rest="$1" tok
+  rest="${rest#"${rest%%[![:space:]]*}"}"
+  rest="${rest#"${rest%%[[:space:]]*}"}" # drop env's own path
+  while :; do
+    rest="${rest#"${rest%%[![:space:]]*}"}"
+    [[ -n "$rest" ]] || break
+    tok="${rest%%[[:space:]]*}"
+    case "$tok" in
+      --) rest="${rest#--}"; break ;;
+      -S | --split-string) rest="${rest#"$tok"}" ;;
+      --split-string=*) rest="${rest#--split-string=}" ;;
+      -S?*) rest="${rest#-S}" ;;
+      --unset=* | --chdir=*) rest="${rest#"$tok"}" ;;
+      -u | -C | --unset | --chdir)
+        # Consume the option AND the separate word carrying its value.
+        rest="${rest#"$tok"}"
+        rest="${rest#"${rest%%[![:space:]]*}"}"
+        rest="${rest#"${rest%%[[:space:]]*}"}"
+        ;;
+      -*) rest="${rest#"$tok"}" ;;
+      [A-Za-z_]*=*) rest="${rest#"$tok"}" ;; # NAME=value assignment
+      *) break ;;
+    esac
+  done
+  rest="${rest#"${rest%%[![:space:]]*}"}"
+  printf '%s' "${rest%%[[:space:]]*}"
+}
+
 # Replace the CONTENTS of quoted runs with `x`, so a character that is only
 # meaningful OUTSIDE quotes is not read as meaningful inside them. Sets `_masked`
 # to a string of exactly the same length as its input, so an index into one also
@@ -588,6 +624,13 @@ is_heredoc_terminator() {
 
 early_exit_flag() {
   local rest="$1" tok skip_next=0 letters i ch mval want_mval=0 was_quoted lopt
+  # `-m`/`--max-count` is the one early-exit option a LATER option can undo: grep
+  # keeps only the last value, and a negative one is infinity. So the max-count
+  # verdict is held in `m_pending` and decided when the command ends, not at the
+  # first occurrence — `grep -m1 -m-1 MATCH` reads the whole stream and is safe,
+  # and reporting it blocks a valid command assembled from a default plus an
+  # override. `-q`/`-l` still answer immediately: nothing later un-quiets grep.
+  local m_pending=""
   # The split below wants WORD SPLITTING but not PATHNAME EXPANSION. Unquoted
   # `$rest` gets both, so a pattern like `grep *.log -q` would expand against the
   # working directory: with matching files the flag survives at a different
@@ -608,7 +651,10 @@ early_exit_flag() {
     # is a plain grep that reads its input to the end, but walking past the
     # operand let the `-q` inside the comment read as an option and the guard
     # reported a hazard that does not exist.
-    [[ "$tok" == \#* ]] && return 1
+    # `break`, not `return`: a max-count seen BEFORE the terminator is still in
+    # effect, so the verdict is settled once after the loop. Every exit from this
+    # walk goes through that one place.
+    [[ "$tok" == \#* ]] && break
     # `set -- $rest` preserves quote CHARACTERS, so `grep "-q" MATCH` arrives as
     # the literal `"-q"` and the walk read it as an operand — while bash removes
     # the quotes and grep receives the ordinary option. That is a fail-OPEN: the
@@ -645,15 +691,18 @@ early_exit_flag() {
     # state and emits (word, quoted?) pairs, which is monorepo#2797; add spellings
     # to that issue, not to this line.
     if ((was_quoted == 0)) && [[ "$tok" == *[\;\&\|]* ]]; then
-      return 1
+      break
     fi
     # The previous option named -m/--max-count without an attached value, so this
     # word IS that value and decides whether grep stops early.
     if ((want_mval)); then
       want_mval=0
       if max_count_is_finite "$tok"; then
-        printf '%s' "-m $tok"
-        return 0
+        m_pending="-m $tok"
+      else
+        # Infinity: grep reads to the end, and this REPLACES any earlier finite
+        # value rather than merely failing to set one.
+        m_pending=""
       fi
       continue
     fi
@@ -671,15 +720,16 @@ early_exit_flag() {
       # `… | grep ';' -q` arrives here as a bare `;` and an operator arm would
       # report CLEAN over a real early exit, while the test above correctly treats
       # the quoted character as data.
-      --) return 1 ;;
+      --) break ;;
       --quiet | --silent | --files-with-matches)
         printf '%s' "$tok"
         return 0
         ;;
       --max-count=*)
         if max_count_is_finite "${tok#--max-count=}"; then
-          printf '%s' "$tok"
-          return 0
+          m_pending="$tok"
+        else
+          m_pending=""
         fi
         continue
         ;;
@@ -711,9 +761,12 @@ early_exit_flag() {
         mval="${tok%%=*}"
         if [[ "--max-count" == "$mval"* ]]; then
           if [[ "$tok" == *=* ]]; then
-            max_count_is_finite "${tok#*=}" || continue
-            printf '%s' "$tok"
-            return 0
+            if max_count_is_finite "${tok#*=}"; then
+              m_pending="$tok"
+            else
+              m_pending=""
+            fi
+            continue
           fi
           want_mval=1
           continue
@@ -767,8 +820,9 @@ early_exit_flag() {
               if [[ -z "$mval" ]]; then
                 want_mval=1
               elif max_count_is_finite "$mval"; then
-                printf '%s' "$tok"
-                return 0
+                m_pending="$tok"
+              else
+                m_pending=""
               fi
               break
               ;;
@@ -785,6 +839,13 @@ early_exit_flag() {
       *) continue ;;
     esac
   done
+  # The command has ended — by running out of words or by hitting a terminator.
+  # Only now is the max-count final, because any occurrence could have been
+  # overridden by a later one.
+  if [[ -n "$m_pending" ]]; then
+    printf '%s' "$m_pending"
+    return 0
+  fi
   return 1
 }
 
@@ -847,9 +908,9 @@ _SQ=\'
 # So what is supported is: an expansion whose content contains **NEITHER
 # delimiter of its own kind — opening OR closing** — in any context. The classes
 # below exclude both (`[^()]`, `[^{}]`), so `A=$(printf '(')` escapes exactly as
-# `A=$(printf ')')` does. Stating only the closing one was the third version of
-# this boundary to be too generous, which is itself the argument: each attempt to
-# describe what a regex accepts here has been narrower in reality than in prose.
+# `A=$(printf ')')` does. Excluding only the closing delimiter would be too
+# generous: what these classes accept is always narrower than a prose summary of
+# them, so read the classes rather than any description of them.
 #
 # That rule also excludes **arithmetic expansion**, and it is worth naming because
 # it is a DIFFERENT construct rather than a `$(…)` carrying a paren as data: `$((`
@@ -1198,17 +1259,19 @@ main() {
       # which keeps `shellcheck` (ends in `sh`, is not a shell) out.
       case "$first" in
         '#!'*)
-          local shebang interp arg base
+          local shebang interp base
           shebang="${first#\#!}"
-          # Collapse leading blanks, then split off the first two words.
+          # Collapse leading blanks, then split off the interpreter word.
           shebang="${shebang#"${shebang%%[![:space:]]*}"}"
           interp="${shebang%%[[:space:]]*}"
-          arg="${shebang#"$interp"}"
-          arg="${arg#"${arg%%[![:space:]]*}"}"
-          arg="${arg%%[[:space:]]*}"
           base="${interp##*/}"
+          # `env` runs an OPERAND, and its own options stand in front of it. The
+          # first word after `env` is therefore not always the command: with
+          # `#!/usr/bin/env -S bash` it is `-S`, which resolves to no shell and
+          # omits the file from the sweep — the fail-open direction this whole
+          # block exists to avoid. Walk env's options to reach the operand.
           case "$base" in
-            env | env[0-9.]*) base="${arg##*/}" ;;
+            env | env[0-9.]*) base="$(env_operand "$shebang")"; base="${base##*/}" ;;
           esac
           # Strip a version suffix: ksh93 -> ksh, bash5 -> bash, sh5.2 -> sh.
           while [[ "$base" == *[0-9.] ]]; do base="${base%[0-9.]}"; done

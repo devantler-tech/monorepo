@@ -151,8 +151,9 @@ flag_case "an absolute path to grep" \
 flag_case "a wrapper AND an env-var prefix together" \
   'printf "%s" "$v" | LC_ALL=C command grep -q NEEDLE'
 
-# Options whose value is the FOLLOWING word. The walk used to read that value as
-# the pattern operand and stop, so a -q after it was never seen.
+# Options whose value is the FOLLOWING word. The walk must consume that value
+# rather than reading it as the pattern operand, or an early-exit flag standing
+# after it is never seen.
 flag_case "-e PATTERN before -q" \
   'printf "%s" "$v" | grep -e PATTERN -q'
 flag_case "--regexp PATTERN before -q" \
@@ -232,6 +233,27 @@ clean_case "--max-count=-1 is infinity" \
 clean_case "--max-count -1 as a separate word" \
   'printf "%s" "$v" | grep --max-count -1 PATTERN'
 
+# grep keeps only the LAST max-count, so a finite value that a later option
+# overrides with infinity does not stop the read. Answering at the first
+# occurrence reports an offender for a command that cannot race — the
+# false-positive direction, which blocks a valid script assembled from a default
+# option plus an overriding one. Both orders are pinned so the rule cannot be
+# satisfied by simply always preferring one of them.
+clean_case "a finite max-count overridden by a later infinite one" \
+  'printf "%s" "$v" | grep -m1 -m-1 MATCH'
+clean_case "an infinite max-count overridden in the long spelling" \
+  'printf "%s" "$v" | grep --max-count=1 --max-count=-1 MATCH'
+clean_case "a separate-word infinite override" \
+  'printf "%s" "$v" | grep -m 1 -m -1 MATCH'
+flag_case "an infinite max-count overridden by a later finite one" \
+  'printf "%s" "$v" | grep -m-1 -m1 MATCH'
+flag_case "a finite max-count still fires when nothing overrides it" \
+  'printf "%s" "$v" | grep -m1 MATCH'
+# A terminator ends the command, but a max-count seen BEFORE it is still in
+# effect — deferring the verdict must not lose it.
+flag_case "a finite max-count before a shell separator" \
+  'printf "%s" "$v" | grep -m1 MATCH; true'
+
 # ---------------------------------------------------------------------------
 # 2c. Multi-line pipelines, the dedup regression, and the escape hatch.
 # ---------------------------------------------------------------------------
@@ -252,9 +274,9 @@ run_guard "$f" && rc=0 || rc=$?
 report "flags: a pipeline whose pipe ends the line and grep starts the next" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
-# A comment between the pipe and the grep. The join used to append the comment,
-# which destroyed the trailing `|` it tested for on the next iteration, so the
-# pipeline was dropped and the standalone grep line skipped.
+# A comment between the pipe and the grep. The join must drop the comment rather
+# than append it: appending destroys the trailing `|` the next iteration tests
+# for, which drops the pipeline and skips the standalone grep line.
 f="$(mkscript "cont-comment-between.sh" \
   'printf "%s" "$v" |' \
   '  # explaining what the next line does' \
@@ -1158,6 +1180,38 @@ r="$(mkrepo "shebang-via-env" '#!/usr/bin/env bash')"
 out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
 report "an env-dispatched shebang resolves to the shell in its argument" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# `env` runs an OPERAND, and its own options come first — so the shell is not
+# always the second word. `-S`/`--split-string` is the spelling that matters:
+# reading `-S` as the command resolves to no shell and drops the file from the
+# sweep entirely, the same silent omission the versioned-shebang case above
+# exists for. All four spellings GNU env accepts are pinned.
+r="$(mkrepo "shebang-env-split-string" '#!/usr/bin/env -S bash')"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "an env -S shebang resolves to the shell after the option" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+r="$(mkrepo "shebang-env-split-attached" '#!/usr/bin/env -Sbash -x')"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "an env -S shebang with an attached value is swept" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+r="$(mkrepo "shebang-env-split-long" '#!/usr/bin/env --split-string=bash -x')"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "an env --split-string= shebang is swept" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+r="$(mkrepo "shebang-env-valued-option" '#!/usr/bin/env -u FOO bash')"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "an env option consuming a separate value still reaches the shell" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# The control changes only the operand: walking env's options must reach the
+# real command, not treat every env shebang as a shell.
+r="$(mkrepo "shebang-env-split-not-a-shell" '#!/usr/bin/env -S python3')"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "an env -S shebang naming a non-shell is not swept" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
 # The control keeps the needle and changes only the interpreter: a non-shell
 # script is not this guard's subject, so the same line must stay clean.
