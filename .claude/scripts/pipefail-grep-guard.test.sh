@@ -1020,6 +1020,53 @@ if [[ -r "$ci" ]]; then
     "$(yn test "$(grep -c 'pipefail-grep-guard.test.sh' "$ci")" -ge 1)" "ci=$ci"
 fi
 
+# An empty assignment value is still an assignment prefix: `LC_ALL= grep -q` runs
+# grep with that variable cleared.
+flag_case "an EMPTY assignment prefix still reaches the grep" \
+  'producer | LC_ALL= grep -q MATCH'
+
+# ---------------------------------------------------------------------------
+# 2i. KNOWN LIMITS, pinned as fact rather than left as surprises.
+#
+#     Each was reported, reproduced, and deliberately NOT patched: closing them
+#     needs real shell parsing — arithmetic contexts, grouping parentheses, and a
+#     masker that preserves command words — which is monorepo#2797, not another
+#     spelling added to a regex. Twelve review rounds on this file produced ~33
+#     defects at a rate that never declined, and one of those rounds found a
+#     regression introduced while fixing the previous one.
+#
+#     They are asserted at their CURRENT behaviour so the gaps are visible, a
+#     change to any of them is deliberate, and a Go implementation inherits them
+#     as a ready-made corpus. Enforcement is default-off, so none of them gates
+#     anything today.
+# ---------------------------------------------------------------------------
+# Reported as `$((total << bits))`, which is handled; the gap needs the SPACED
+# form, so the class is real and the reported fixture was not. Verify the class.
+f="$(mkscript "known-limit-arith-shift.sh" \
+  'width=$(( total << bits ))' \
+  'producer | grep -q MATCH' \
+  'bits')"
+run_guard "$f" && rc=0 || rc=$?
+report "KNOWN LIMIT: a spaced arithmetic shift can look like a heredoc opener" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# Reported as `$(( producer | grep ))`, which is handled because no early-exit
+# flag is present; it needs a flag to be reported at all.
+f="$(mkscript "known-limit-arith-or.sh" 'value=$(( a | grep -q ))')"
+run_guard "$f" && rc=0 || rc=$?
+report "KNOWN LIMIT: arithmetic bitwise-OR can read as a pipeline" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+f="$(mkscript "known-limit-grouping-parens.sh" 'out="$( (:) ; producer | grep -q MATCH )"')"
+run_guard "$f" && rc=0 || rc=$?
+report "KNOWN LIMIT: a grouping ')' inside a substitution ends it early" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+f="$(mkscript "known-limit-quoted-command-word.sh" 'producer | "grep" -q MATCH')"
+run_guard "$f" && rc=0 || rc=$?
+report "KNOWN LIMIT: a quoted command word is erased by masking" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2
   exit 1
