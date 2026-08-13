@@ -282,7 +282,9 @@ attributed="$(printf '%s' "${finding_body}" |
 [ "${attributed}" = "${expected_head}" ] ||
   fail "documented blob-permalink attribution did not recover the reviewed head (got '${attributed}')"
 # The clean pass names the SAME head 41s later, so recency must never decide between them.
-printf '%s' "${green_body}" | grep -Fq "${expected_head:0:10}" ||
+# A here-string, not a pipe: `grep -q` exits at the first match, so the writer dies of SIGPIPE and
+# `pipefail` reports THAT — the assertion failed while the fixture genuinely named the head.
+grep -Fq -- "${expected_head:0:10}" <<<"${green_body}" ||
   fail "fixture clean-pass comment no longer names the same head; ordering trap not reproduced"
 
 # The contract must be a required PR check, including when its own workflow wiring changes.
