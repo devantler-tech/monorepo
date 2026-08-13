@@ -131,8 +131,10 @@ public and private — no per-repo loop needed to enumerate):
    undeepened remainder as `NOT-DEEPENED (budget)` rows naming the count and the repos, never a
    silent cheap row that reads like a completed assessment:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,headRepositoryOwner,headRepository,author,body,files`
-   (`headRepositoryOwner`/`headRepository` are what make the push-activity read below possible on a
-   fork; on a same-repo branch they resolve to the base repo)
+   (`headRepositoryOwner`/`headRepository` are what let the push-activity read below decide whether the
+   head is in-scope at all: on a same-repo branch they resolve to the base repo and the read proceeds;
+   on a **fork** they are what identifies it as out-of-portfolio, so the read is SKIPPED — see the
+   boundary rule there)
    — every **deepened** PR is read with that full field list, `statusCheckRollup` included; a pentad
    reported without it has no CI evidence behind it. What is prohibited is pulling that field in the
    **cheap discovery pass** over every PR in every repo, which is what exhausts the pool before
@@ -263,14 +265,22 @@ public and private — no per-repo loop needed to enumerate):
      `--paginate`-free and cannot be outrun by unrelated traffic. Verified 2026-08-12 on
      `devantler-tech/monorepo`: unfiltered, one page spanned **14 distinct refs**; filtered to one
      branch, every entry was that branch and the newest matched its true last push.
-     🔴 **Query the PR's HEAD repository, not the base.** A normal external contribution is pushed to
-     the contributor's **fork**, whose pushes never appear in `devantler-tech/<repo>/activity`; asking
-     the base repo therefore yields `pushed:unknown` on every external PR forever (parking the class
-     the ownership widening exists to admit) or, read as idle, authorises action while the contributor
-     is mid-push. Deepen `headRepositoryOwner` and `headRepository` and read activity from there; for
-     a same-repo branch those simply resolve to the base repo. When no push record is retrievable —
-     including a fork whose activity is not readable — emit `pushed:unknown`, never `none`, which
-     asserts an idleness the survey did not observe.
+     🔴 **Query the PR's HEAD repository ONLY when it is inside `devantler-tech` — NEVER a fork.**
+     A same-repo branch's head repository resolves to the base repo, and reading its activity is
+     ordinary in-scope work. A normal external contribution, however, is pushed to the contributor's
+     **fork**, and `repos/<external-owner>/<fork>/activity` is an authenticated read of a repository
+     outside the portfolio. That is exactly what *Portfolio-only* at the top of this file forbids, and
+     what the constitutional boundary excludes even from read-only metadata inspection — so the
+     surveyor must never issue it, whatever the ownership signal would be worth.
+     ⚠️ **The boundary wins over the signal, and the fallback is already defined.** Deepen
+     `headRepositoryOwner` / `headRepository`, compare the owner to `devantler-tech`, and read activity
+     only on a match; for a fork, emit **`pushed:unknown@<updatedAt-age>`** without the read. That is
+     the conservative direction and it does **not** park the class the ownership widening exists to
+     admit, because `pushed:unknown` is defined immediately below as **expiring** — it counts as live
+     only while the PR's own `updatedAt` is inside the ~2h window, then stops. A fork therefore
+     degrades to a weaker, self-clearing signal rather than either an unauthorized read or a permanent
+     park. When no push record is retrievable for an in-scope head, emit `pushed:unknown` for the same
+     reason — never `none`, which asserts an idleness the survey did not observe.
      🔴 **`pushed:unknown` needs a DEFINED, EXPIRING meaning, or it is a trap in both directions.**
      Read as live it parks the PR forever, because an unreadable fork stays unreadable and nothing
      ever converts the value into evidence; read as idle it authorises a takeover on data the survey
@@ -1113,11 +1123,13 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false|unknown>   # true only if NO CI red on main AND no actionable PR broken, whoever authored it; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does. 🔴 EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)` ROW EXISTS: `true` asserts that no actionable PR is broken, which a survey that never assessed those PRs cannot know. `false` is equally wrong — it claims a fire nobody observed. `unknown` is the only honest value, and the orchestrator treats it as "re-survey the undeepened remainder before concluding the portfolio is healthy", never as a clean bill
+nothing_on_fire: <true|false|unknown>   # true only if NO CI red on main AND no actionable PR broken, whoever authored it; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does. 🔴 EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)` OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS (the issue-truncation row never affects this field): `true` asserts that no actionable PR is broken, which a survey that never assessed those PRs cannot know. `false` is equally wrong — it claims a fire nobody observed. `unknown` is the only honest value, and the orchestrator treats it as "re-survey the undeepened remainder before concluding the portfolio is healthy", never as a clean bill
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
 ### Operate
+- DISCOVERY-TRUNCATED (prs, 300 cap)   # the org PR search returned exactly the cap and could not be completed by partitioning this survey: a rung-1 PR may exist that this digest never saw. REQUIRES `nothing_on_fire: unknown` — `true` asserts no actionable PR is broken, which an incomplete discovery cannot know, and `false` claims a fire nobody observed
+- DISCOVERY-TRUNCATED (issues, 300 cap)   # the org ISSUE search returned exactly the cap. Reported SEPARATELY and does NOT touch `nothing_on_fire`: issues are rungs 2–4, so a missing one delays lower-rung work and says nothing about a broken PR or a red `main`. Emitting it as a fire would mislabel a backlog gap as breakage
 - CANDIDATE-MAINTAINER-COMMENT <repo> #<n> (draft?) — `devantler`: "<one-line gist>" → orchestrator reads the PR's own disclosure marker: a comment on HIS interactive PR is him steering his own work, not an instruction to the routine
 - CANDIDATE-MAINTAINER-ISSUE-COMMENT <repo> #<n> — `devantler`: "<one-line gist>" → orchestrator decides whether the comment is addressed to it; an issue has no author-disclosure marker, so treat it as a maintainer instruction candidate
 - CANDIDATE-SIBLING-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance

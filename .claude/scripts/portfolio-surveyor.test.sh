@@ -2059,9 +2059,25 @@ case "${surveyor_flat}" in
   *) fail "the digest cannot express an unassessed portfolio" ;;
 esac
 case "${surveyor_flat}" in
-  *'EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)` ROW EXISTS'*) ;;
-  *) fail "the digest may still claim nothing_on_fire while PRs went unassessed" ;;
+  *'EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)` OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS'*) ;;
+  *) fail "the digest may still claim nothing_on_fire while PRs went unassessed or undiscovered" ;;
 esac
+# Truncated discovery is unassessed coverage exactly as an undeepened PR is, so both must drive the
+# health field — but only the PR one. Pinning the issue row's EXCLUSION matters as much: issues are
+# rungs 2-4, so letting them set `unknown` would report a backlog gap as portfolio breakage and pin
+# the ladder at rung 0 on every survey above the cap.
+case "${surveyor_flat}" in
+  *'the issue-truncation row never affects this field'*) ;;
+  *) fail "truncated issue discovery may still drive nothing_on_fire, mislabelling a backlog gap as breakage" ;;
+esac
+# The rows themselves must exist in the emitted grammar, or the fallback above requires output the
+# digest has no shape for — the same promised-but-unemittable defect this round is closing elsewhere.
+for truncation_row in 'DISCOVERY-TRUNCATED (prs, 300 cap)' 'DISCOVERY-TRUNCATED (issues, 300 cap)'; do
+  case "${surveyor_flat}" in
+    *"- ${truncation_row}"*) ;;
+    *) fail "the digest grammar defines no ${truncation_row} row, so truncation cannot be reported" ;;
+  esac
+done
 
 echo "portfolio surveyor contract: ownership-signal assertions passed"
 
@@ -2111,6 +2127,20 @@ esac
 case "${surveyor_flat}" in
   *'Truncated ISSUE discovery is reported SEPARATELY and never touches `nothing_on_fire` at all'*) ;;
   *) fail "truncated issue discovery still feeds the health field, mislabelling a backlog gap as breakage" ;;
+esac
+
+# (10) The fork-activity read is an authenticated GET against a repository OUTSIDE the portfolio,
+#      which this agent's own Portfolio-only rule and the constitutional boundary both forbid even
+#      read-only. The signal is not worth the breach, and it does not have to be: `pushed:unknown`
+#      is defined as EXPIRING, so a fork degrades to a weaker self-clearing value rather than either
+#      an unauthorized read or a permanent park.
+case "${surveyor_flat}" in
+  *'NEVER a fork'*) ;;
+  *) fail "the surveyor may still read a fork's activity, breaching the portfolio boundary" ;;
+esac
+case "${surveyor_flat}" in
+  *'compare the owner to `devantler-tech`, and read activity'*) ;;
+  *) fail "the surveyor does not gate the activity read on the head repo being in-scope" ;;
 esac
 
 echo "portfolio surveyor contract: promised-but-unemittable signal assertions passed"
@@ -2179,6 +2209,22 @@ esac
 case "${constitution_flat}" in
   *'no longer contains it'*) ;;
   *) fail "the contract does not require carrying an unconfirmed arming forward past the open-PR enumeration" ;;
+esac
+
+# (10) `app/botantler-1` is `--auto`-eligible CONDITIONALLY — on what the classifier returned for a
+#      specific commit — and `--auto` carries no condition forward. It defers the merge and
+#      re-evaluates nothing, so an updater push during that window lands a head the classifier never
+#      ran on, possibly one that needs the very review the exit-0 path waives. The head pin does not
+#      help: it gates the arming, not the later merge, so the post-arm check only detects the breach
+#      after it reaches `main`. The other three eligible authors are eligible by AUTHOR, which a later
+#      head cannot change — which is exactly why this one must merge directly instead.
+case "${constitution_flat}" in
+  *'so it merges DIRECTLY, at the evaluated head, never with `--auto`'*) ;;
+  *) fail "a conditional classifier exemption may still be armed with --auto and inherited by an unevaluated head" ;;
+esac
+case "${constitution_flat}" in
+  *'re-run the classifier at the current head'*) ;;
+  *) fail "the contract does not require re-running the classifier at the head it actually merges" ;;
 esac
 # The reason must be stated for ANY strategy, not just squash. An earlier version said "every merge
 # here is a squash", which contradicts the merge-queue section below it — that path deliberately drops

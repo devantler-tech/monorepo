@@ -1620,6 +1620,17 @@ Conventional-Commit title, then **merge with the command that matches the author
   evaluated head like any other author. State the author matrix this way and never as a bare
   three-name list: `--auto` merges whatever head passes checks later, so the eligibility question is
   *which author*, and leaving the exit-0 updater path unnamed is what made this ambiguous.
+  🔴 **`app/botantler-1` is conditional on a CLASSIFIER RESULT, and `--auto` cannot carry a condition
+  — so it merges DIRECTLY, at the evaluated head, never with `--auto`.** The other three are eligible
+  by *author*, which a later head cannot change; this one is eligible by *what the classifier returned
+  for a specific commit*. `--auto` defers the merge until checks pass and re-evaluates nothing, so an
+  updater push during that window lands a replacement head the classifier never ran on — a head that
+  might return exit 1 or 3, i.e. one requiring the very review the exit-0 path waives. The head pin
+  does not close it either: `--match-head-commit` gates the **arming**, not the later merge, so the
+  post-arm confirmation detects the violation only after it has reached `main`. Wait for the checks,
+  re-run the classifier at the current head, and merge with
+  `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`. Reserving `--auto`
+  for unconditional authors is what keeps that exemption tied to the commit it was granted for.
   For `app/cursor`, the acting local sibling performs this mutation because the cloud App cannot:
   `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
   tap cask PRs, and KSail release bumps — the carve-out above) the review parts are intentionally absent and
