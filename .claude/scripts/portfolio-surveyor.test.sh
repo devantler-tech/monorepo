@@ -122,8 +122,28 @@ grep -Fq 'installed-skill' "${surveyor}" ||
 # shellcheck disable=SC2016
 grep -Fq '`botantler-1[bot]` is a candidate only for the programmed agent-skills updater classifier' "${surveyor}" ||
   fail "surveyor either misses botantler updater PRs or trusts the App outside the programmed path"
+# The branch/title predicate selects a CLASSIFIER candidate. Letting it also gate whether the row is
+# deepened at all leaves a non-matching botantler PR declared statically reviewable and mergeable
+# while carrying no pentad and no active-work evidence — invisible rather than assessed.
+grep -Fq 'The branch/title test gates the CLASSIFIER, never the deepening' "${surveyor}" ||
+  fail "surveyor can skip deepening a non-updater botantler PR instead of treating it as external"
+grep -Fq 'ordinary external-author deepening path' "${surveyor}" ||
+  fail "surveyor does not route a non-candidate botantler PR through the external deepening path"
 grep -Fq 'ksail-bot[bot]' "${surveyor}" ||
   fail "surveyor does not recognize the exact KSail App identity returned by search"
+# The activity endpoint returns one page across EVERY ref, so a client-side ref filter is outrun by
+# unrelated traffic: the branch's push falls off the page and `pushed:` reads unknown — likeliest
+# exactly when a live ownership window would have parked the PR.
+grep -Fq 'ref=refs/heads/<headRefName>' "${surveyor}" ||
+  fail "surveyor filters repository activity client-side, so a busy repo hides a recent head push"
+grep -Fq 'Filter by `ref` in the REQUEST, not only in the `jq`' "${surveyor}" ||
+  fail "surveyor does not require server-side ref filtering on the push lookup"
+# `none` is a merge blocker, so a diff with nothing to run must have its own state or the whole
+# external docs/typo class is reported permanently blocked.
+grep -Fq 'behaviour_observed=<check-name|static|none|unknown>' "${surveyor}" ||
+  fail "surveyor digest cannot represent a static evaluation, so no-runtime-surface PRs read blocked"
+grep -Fq 'That observation has THREE outcomes, not two' "${surveyor}" ||
+  fail "surveyor does not distinguish nothing-to-exercise from nothing-exercises-it"
 grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
   fail "surveyor does not fetch complete current-head commit provenance"
 grep -Fq 'AUTOMATION-OWNED and need NO agent action' "${constitution}" ||
@@ -134,6 +154,22 @@ grep -Fq 'Cursor Automation is a trusted PR author' "${constitution}" ||
   fail "constitution does not trust the maintainer-authorized Cursor Automation author"
 grep -Fq 'For `app/cursor`, the acting local sibling' "${constitution}" ||
   fail "merge policy still tells the permission-limited Cursor App to arm its own merge"
+# EVERY merge mutation carries both pins. `--auto` needs the head pin more than a direct merge does:
+# arming defers the merge until checks settle, so a trusted App pushing inside that window gets its
+# unevaluated commit merged by the arming already performed.
+for merge_mutation in \
+  'gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>' \
+  'gh pr merge <n> --repo devantler-tech/<repo> --auto --match-head-commit <sha>'; do
+  grep -Fq "${merge_mutation}" "${constitution}" ||
+    fail "an App auto-merge path omits --match-head-commit, so it can merge an unevaluated head"
+done
+# This pinned "`--auto` needs the head pin MORE than the direct merge does" until 2026-08-12. That
+# sentence carried a false rider — that the pin makes GitHub refuse a merge of a head pushed after
+# arming — and the rider was withdrawn, so pinning the sentence would have held the contract to a
+# claim it no longer makes. The PROPERTY worth guarding is unchanged and is what this now asserts:
+# that arming widens the evaluated-head gap to however long CI takes.
+grep -Fq '`--auto` has the WIDEST exposure window' "${constitution}" ||
+  fail "constitution does not explain why arming auto-merge widens the evaluated-head gap"
 grep -Fq "The machine-local agents' **own** PRs" "${constitution}" ||
   fail "self-promotion rule still ambiguously includes the permission-limited Cursor cloud lane"
 grep -Fq '`cursor[bot]` — **exact' "${surveyor}" ||
@@ -1694,8 +1730,13 @@ for _site in "${surveyor}" "${constitution}"; do
   # no evidence behind it.
   grep -Fq '1029 portfolio PR bodies' "${_site}" ||
     fail "${_n} must carry the corpus size behind the no-fence decision (#2762)"
-  grep -Fq 'parks itself HANDS-OFF' "${_site}" ||
+  # The cost is now an ATTRIBUTION cost, not a parked PR: the driving half of HANDS-OFF was retired
+  # on 2026-08-08, so a fenced example misreads whose control channel a `devantler` comment is rather
+  # than freezing the PR. What must still be stated is that the cost is named and measured.
+  grep -Fq 'fences an example' "${_site}" ||
     fail "${_n} must name the accepted cost of dropping fence suppression (#2762)"
+  grep -Fq 'measured incidence is **0**' "${_site}" ||
+    fail "${_n} must state the measured incidence of that accepted cost (#2762)"
 done
 
 # The two rules that REMAIN serve the matcher, not example-suppression. The org PR template puts the
@@ -1919,3 +1960,444 @@ expect_class interactive "${ROUTINE_LINE}\n\n>\t\xf0\x9f\xa4\x96 Generated with 
 expect_class interactive "${ROUTINE_LINE}\n\n-\t\xf0\x9f\xa4\x96 Generated with [Claude Code](https://x)" 'a tab-separated LIST marker still counts'
 
 echo "portfolio surveyor contract: all assertions passed"
+
+# ── the four ownership-signal defects Codex found on #2723 ────────────────────────────────────────
+# All four share one shape: a takeover decision resting on a value that is either unreadable, not
+# actually fetched, or produced by the acting run itself. Each is pinned in the surface that has to
+# carry it, and each fails on its own.
+constitution_flat="$(tr '\n' ' ' < "${constitution}" | tr -s ' ')"
+
+# (1) The acting lane's own push must not read as a rival. Pin BOTH halves: the table row's exclusion,
+#     and the survey field that makes it applicable without re-deriving the lane.
+case "${constitution_flat}" in
+  *'within the last **~2h**, **by anyone but you**'*) ;;
+  *) fail "AGENTS.md active-work row still counts the acting lane's own push as someone else's" ;;
+esac
+#     The lane ALONE is not enough: it names a namespace shared with the Agent Improver, which is the
+#     very case (2) below says must stay live. The consumer's rule is a match on branch and sha, so
+#     the signal has to carry that identity rather than leaving it to be recovered from some other
+#     field's payload — assert the complete emitted identity, never a lane-only token.
+#     Bind this to EVERY emitted `active=` shape, not to the document. A flattened-document match is
+#     satisfied by the explanatory prose above, so an `active=` template could regress to a lane-only
+#     token while this assertion still passed — coverage that reads real and proves nothing. Compare
+#     the count of lines emitting an `active=` template against those opening it with the complete
+#     identity: any template that drops the branch+sha makes the two differ.
+#     The needle is the identity ITSELF, not `active=<pushed:…` — the template opens with the
+#     `none|` alternative so that the joined-signal grammar is expressible (a flat `<a|b|…|none>`
+#     choice cannot say "emit every signal that holds"). Anchoring the needle to the old opening
+#     would count zero and report every template as identity-less, which is a false failure; anchoring
+#     it to the identity keeps the property this assertion actually guards — every emitted template
+#     spells the complete branch+sha, never a lane-only token.
+active_templates=$(grep -c 'active=<' "${surveyor}" || true)
+active_with_identity=$(grep -c 'pushed:<age>@<lane>:<headRefName>@<headRefOid>|' "${surveyor}" || true)
+if [ "${active_templates}" -eq 0 ]; then
+  fail "no active= template found in the surveyor, so the push-identity assertion would be vacuous"
+fi
+if [ "${active_templates}" -ne "${active_with_identity}" ]; then
+  fail "an active= template omits the branch+sha identity (${active_with_identity}/${active_templates} carry it), so the consumer cannot attribute a push to its own run"
+fi
+case "${surveyor_flat}" in
+  *'The branch and sha are part of the SIGNAL, not left to be cross-referenced'*) ;;
+  *) fail "the surveyor does not state that the push identity travels in the signal itself" ;;
+esac
+#     NEGATIVE assertion: the retired lane-plus-creation-record discount must not survive alongside
+#     the branch+sha rule. Carrying both is worse than carrying only the old one, because a consumer
+#     may follow either — and the lane is SHARED with the Agent Improver, so the retired form
+#     authorises discounting a live sibling push and writing over active work.
+#     Match the AUTHORISING CONSTRUCTION, not one sentence — a reworded grant would otherwise pass.
+#     Note the phrase "creation record" alone cannot be blacklisted: the document uses it correctly in
+#     the prohibition that explains WHY the lane is insufficient, so keying on it would fail on
+#     compliant text. Key on a discount being GRANTED by namespace or creation record instead.
+for retired_grant in \
+  'discounts a signal from its **own** namespace when its creation record covers that PR' \
+  'creation record covers that PR' \
+  'own namespace, and my creation record' \
+  'authorises discounting' \
+  'authorizes discounting'; do
+  case "${surveyor_flat}" in
+    *"${retired_grant}"*)
+      fail "the retired namespace-plus-creation-record discount is still authorised alongside the branch+sha rule (matched: ${retired_grant})" ;;
+  esac
+done
+#     The positive binding above is the real protection: this negative is defence-in-depth and cannot
+#     be made reword-proof by enumeration, which is why the discount condition is also asserted
+#     positively below.
+case "${surveyor_flat}" in
+  *'only when that exact branch and sha are ones THIS RUN pushed'*) ;;
+  *) fail "the surveyor does not scope the discount to what this run actually pushed" ;;
+esac
+
+# (2) `pushed:unknown` must be defined AND expiring — live-forever parks the PR, idle authorises a
+#     takeover on data the survey admits it could not read.
+case "${surveyor_flat}" in
+  *'counts as LIVE while the PR'*'own newest observable timestamp (`updatedAt`) is inside the ~2h window, and stops counting once that elapses'*) ;;
+  *) fail "the surveyor leaves pushed:unknown without an expiring ownership meaning" ;;
+esac
+
+# (3) A thread-only human reply must be read from the FLAT REST surface. Nesting `comments` inside the
+#     GraphQL thread query paginates PER THREAD, so one cursor cannot drain it and a thread past 100
+#     comments silently drops its newest — exactly where a live human reply sits. A bounded `first:`/
+#     `last:` window has the same hole one size along, so the fix is the surface, not the page size.
+case "${surveyor_flat}" in
+  *'repos/<owner>/<repo>/pulls/<n>/comments" --paginate'*) ;;
+  *) fail "the surveyor does not read thread replies from the flat, fully-drainable REST surface" ;;
+esac
+case "${surveyor_flat}" in
+  *'GraphQL paginates a nested connection **per thread**'*) ;;
+  *) fail "the surveyor does not record why nesting the comments connection is unsafe" ;;
+esac
+# ...and the SECOND consumer of that query. Narrowing the GraphQL thread query to `isResolved` broke
+# the candidate-maintainer-comment path, which still said to take thread replies from it — recreating
+# the same incomplete-data condition one section over. That path is the maintainer's control channel,
+# so a dropped reply is direction never acted on, not merely a delayed takeover.
+case "${surveyor_flat}" in
+  *'gh api "repos/devantler-tech/<repo>/pulls/<n>/comments" --paginate'*) ;;
+  *) fail "the candidate-comment path does not read thread replies from the flat REST endpoint" ;;
+esac
+case "${surveyor_flat}" in
+  *'Both other reads remain required — a maintainer steer can live in any of the three'*) ;;
+  *) fail "the candidate-comment path does not require ALL THREE candidate-comment surfaces" ;;
+esac
+
+# (4) `nothing_on_fire: true` alongside undeepened PRs asserts health the survey never measured.
+case "${surveyor_flat}" in
+  *'nothing_on_fire: <true|false|unknown>'*) ;;
+  *) fail "the digest cannot express an unassessed portfolio" ;;
+esac
+case "${surveyor_flat}" in
+  *'EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)` OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS'*) ;;
+  *) fail "the digest may still claim nothing_on_fire while PRs went unassessed or undiscovered" ;;
+esac
+# Truncated discovery is unassessed coverage exactly as an undeepened PR is, so both must drive the
+# health field — but only the PR one. Pinning the issue row's EXCLUSION matters as much: issues are
+# rungs 2-4, so letting them set `unknown` would report a backlog gap as portfolio breakage and pin
+# the ladder at rung 0 on every survey above the cap.
+case "${surveyor_flat}" in
+  *'the issue-truncation row never affects this field'*) ;;
+  *) fail "truncated issue discovery may still drive nothing_on_fire, mislabelling a backlog gap as breakage" ;;
+esac
+# The rows themselves must exist in the emitted grammar, or the fallback above requires output the
+# digest has no shape for — the same promised-but-unemittable defect this round is closing elsewhere.
+for truncation_row in 'DISCOVERY-TRUNCATED (prs, 300 cap)' 'DISCOVERY-TRUNCATED (issues, 300 cap)'; do
+  case "${surveyor_flat}" in
+    *"- ${truncation_row}"*) ;;
+    *) fail "the digest grammar defines no ${truncation_row} row, so truncation cannot be reported" ;;
+  esac
+done
+
+echo "portfolio surveyor contract: ownership-signal assertions passed"
+
+# ── Signals the grammar PROMISED that no implementation could actually emit ───────────────────────
+# Each of these is the same defect shape: a rule elsewhere requires a value, and the emitted grammar
+# has no alternative for it — so a conforming implementation must either break the grammar or drop
+# the signal. Dropping reads as `active=none`, which authorises exactly the takeover the signal
+# exists to prevent. Assert against the EMITTED templates, never the prose describing them: the
+# explanatory paragraphs contain these tokens too, so a flat-document match passes while every
+# template omits them (that is how the identity token stayed inert for weeks).
+
+# (6) `pushed:unknown@<updatedAt-age>` — required whenever fork activity is unreadable.
+active_templates=$(grep -c 'active=<' "${surveyor}" || true)
+active_with_unknown=$(grep 'active=<' "${surveyor}" | grep -cF 'pushed:unknown@<updatedAt-age>' || true)
+if [ "${active_templates}" -eq 0 ]; then
+  fail "no active= template found in the surveyor, so the pushed:unknown assertion would be vacuous"
+fi
+if [ "${active_templates}" -ne "${active_with_unknown}" ]; then
+  fail "an active= template omits pushed:unknown@<updatedAt-age> (${active_with_unknown}/${active_templates} carry it), so the surveyor must break its own grammar or collapse an unreadable push to none"
+fi
+
+# (6a) `active=` carries EVERY signal that holds, not the strongest one. The template's `|` reads as
+#      a choice, and a one-of encoding is lossy for an any-of test whose consumer DISCOUNTS some
+#      alternatives: the orchestrator discards `pushed:` when the branch and SHA are its own, so a
+#      row that emitted only the push collapses to unowned and a concurrent human-comment signal —
+#      true at the same instant, never emitted — is gone. That authorises the takeover the signal
+#      exists to prevent, which is the same defect shape as (6), one level up.
+case "${surveyor_flat}" in
+  *'emit EVERY signal that holds, `+`-joined'*) ;;
+  *) fail "the active= field does not state that every holding signal is emitted, so a one-of encoding can drop a live signal the consumer needed" ;;
+esac
+case "${surveyor_flat}" in
+  *'the consumer discounts some of them'*) ;;
+  *) fail "the active= field does not say the consumer discounts some alternatives, which is why a strongest-only encoding is lossy" ;;
+esac
+
+# (6b) The deepened read must refresh the two fields that are NOT derivable from the head SHA.
+#      `updatedAt` backs `pushed:unknown@<updatedAt-age>`, which on a fork (where push activity is
+#      deliberately unread) is the only activity evidence there is; `title` feeds the updater
+#      branch/title predicate, and editing a title changes no SHA. Aging or classifying from the
+#      org-search snapshot therefore stays wrong for as long as the survey runs, while every
+#      head-derived field looks correctly refreshed.
+deepen_read=$(grep -F 'gh pr view <n> --repo devantler-tech/<repo> --json number,state' "${surveyor}" || true)
+if [ -z "${deepen_read}" ]; then
+  fail "the deepened per-PR read was not found, so the field-list assertions would be vacuous"
+fi
+for _field in updatedAt title; do
+  case "${deepen_read}" in
+    *",${_field},"*) ;;
+    *) fail "the deepened per-PR read omits ${_field}, so a value that changes without the head SHA is consumed from the stale org-search snapshot" ;;
+  esac
+done
+case "${surveyor_flat}" in
+  *'SUPERSEDES the org-search value'*) ;;
+  *) fail "the surveyor does not state that deepened fields supersede the org-search snapshot" ;;
+esac
+
+# (7) A same-repository branch outside the three agent namespaces (`deps/agent-skills-update`, a
+#     release branch) had NO legal <lane> value, though those PRs are inside the takeover test.
+case "${surveyor_flat}" in
+  *'`base` for any other same-repository branch'*) ;;
+  *) fail "the surveyor defines no lane token for a same-repo branch outside the agent namespaces, so a trusted-bot push cannot be reported" ;;
+esac
+
+# (8) `merge-group:` was unreachable: the queue's checks run on a synthetic ref, so neither
+#     statusCheckRollup nor autoMergeRequest can supply it, and no query was prescribed.
+case "${surveyor_flat}" in
+  *'mergeQueue(branch:"main")'*) ;;
+  *) fail "the surveyor promises a merge-group signal but prescribes no query that can produce it" ;;
+esac
+case "${surveyor_flat}" in
+  *'`autoMergeRequest` stays **`null` while queued**'*) ;;
+  *) fail "the surveyor does not record why autoMergeRequest cannot stand in for the merge-queue read" ;;
+esac
+
+# (9) Truncated discovery must not claim a fire nobody observed. `false` asserts live breakage, which
+#     pins the ladder at rung 0 on every survey while the portfolio sits above the cap; and truncated
+#     ISSUE discovery is lower-rung work that must not touch the health field at all.
+case "${surveyor_flat}" in
+  *'`DISCOVERY-TRUNCATED (prs, 300 cap)` and set `nothing_on_fire: unknown`'*) ;;
+  *) fail "truncated PR discovery still claims an observed fire instead of an unassessed portfolio" ;;
+esac
+case "${surveyor_flat}" in
+  *'Truncated ISSUE discovery is reported SEPARATELY and never touches `nothing_on_fire` at all'*) ;;
+  *) fail "truncated issue discovery still feeds the health field, mislabelling a backlog gap as breakage" ;;
+esac
+
+# (10) The fork-activity read is an authenticated GET against a repository OUTSIDE the portfolio,
+#      which this agent's own Portfolio-only rule and the constitutional boundary both forbid even
+#      read-only. The signal is not worth the breach, and it does not have to be: `pushed:unknown`
+#      is defined as EXPIRING, so a fork degrades to a weaker self-clearing value rather than either
+#      an unauthorized read or a permanent park.
+case "${surveyor_flat}" in
+  *'NEVER a fork'*) ;;
+  *) fail "the surveyor may still read a fork's activity, breaching the portfolio boundary" ;;
+esac
+case "${surveyor_flat}" in
+  *'compare the owner to `devantler-tech`, and read activity'*) ;;
+  *) fail "the surveyor does not gate the activity read on the head repo being in-scope" ;;
+esac
+
+echo "portfolio surveyor contract: promised-but-unemittable signal assertions passed"
+
+# ── Codex's round on the same signals: three ways a takeover decision can still be wrong ──────────
+# (5) The flat-endpoint read must KEEP THE BODY. Login+timestamp cannot separate the maintainer from
+#     an agent instance — they share the `devantler` login — and this signal is defined as the newest
+#     HUMAN comment, so without a body there is no disclosure marker to apply and an agent's own
+#     inline reply parks the PR against a signal the routine produced itself.
+case "${surveyor_flat}" in
+  *'\(.user.login)\t\(.created_at)\t\(.body)'*) ;;
+  *) fail "the flat comment read discards the body, so the disclosure test cannot be applied" ;;
+esac
+
+# (6) A lane is NOT one writer: the Agent Improver shares each machine-local namespace, so discounting
+#     a push on lane + creation record alone discards a live SIBLING push and licenses writing over
+#     work in progress.
+case "${surveyor_flat}" in
+  *'match it against the pushes you made this run'*) ;;
+  *) fail "the own-push discount keys on the lane rather than on what this run actually pushed" ;;
+esac
+case "${constitution_flat}" in
+  *'Lane membership is not enough, because a lane is not one writer'*) ;;
+  *) fail "AGENTS.md lets lane membership alone discount a push, discarding sibling activity" ;;
+esac
+
+# (7) `--match-head-commit` pins the ARMING, not the later auto-merge, so the widest exposure window
+#     is unprotected. The contract previously claimed the pin closed it; that claim was withdrawn.
+case "${constitution_flat}" in
+  *'the thing being allowed is the **arming**, not the later merge'*) ;;
+  *) fail "AGENTS.md does not state that --match-head-commit fails to cover the auto-merge window" ;;
+esac
+case "${constitution_flat}" in
+  *'the arming is never the completion'*) ;;
+  *) fail "AGENTS.md does not require confirming what actually landed after arming auto-merge" ;;
+esac
+
+echo "portfolio surveyor contract: takeover-signal round-2 assertions passed"
+
+# (8) The post-arm confirmation must compare `headRefOid`, never `mergeCommit`. `mergeCommit` names the
+#     commit created ON THE BASE, a different object from the head that merged under EVERY strategy —
+#     a squash condenses the branch into a new commit, a merge commit is new by definition, a rebase
+#     rewrites what it replays, and the merge-queue path deliberately drops `--squash` and lets the
+#     queue choose — measured on this repo's own #2795, head `789ac1145e…` -> merge `9c7a132930…`.
+#     Keying the check on it would fire on every valid merge, and a guard that always fires is one
+#     people learn to ignore.
+case "${constitution_flat}" in
+  *'compare **`headRefOid`** to'*) ;;
+  *) fail "the post-arm confirmation does not compare headRefOid" ;;
+esac
+case "${constitution_flat}" in
+  *'Compare `headRefOid`, NOT `mergeCommit`'*) ;;
+  *) fail "the contract does not warn that mergeCommit is not a source-head identity field" ;;
+esac
+
+# (9) …and it must WAIT for `state: MERGED`. Read straight after arming — the natural next step —
+#     the PR is still OPEN carrying the head just evaluated, so the SHAs match and the check reports
+#     success at the one moment it cannot have observed the merge. That is worse than no check: it
+#     manufactures a passing record for precisely the window the guard covers. The merge can also
+#     land after the run ends, and a merged PR leaves the open-PR enumeration, so an unconfirmed
+#     arming is never revisited unless it is carried forward explicitly.
+case "${constitution_flat}" in
+  *'The comparison counts ONLY once `state` reads `MERGED`'*) ;;
+  *) fail "the post-arm confirmation can be satisfied by a read taken while the PR is still OPEN" ;;
+esac
+case "${constitution_flat}" in
+  *'no longer contains it'*) ;;
+  *) fail "the contract does not require carrying an unconfirmed arming forward past the open-PR enumeration" ;;
+esac
+
+# (10) `app/botantler-1` is NEVER `--auto`-eligible — not on any classifier result, exit 0 included.
+#      Its permission comes from what the classifier returned for a SPECIFIC COMMIT, and `--auto`
+#      carries no condition forward: it defers the merge and re-evaluates nothing, so an updater push
+#      during that window lands a head the classifier never ran on, possibly one that needs the very
+#      review the exit-0 path waives. The head pin does not help: it gates the arming, not the later
+#      merge, so the post-arm check only detects the breach after it reaches `main`. The three
+#      eligible authors are eligible by AUTHOR, which a later head cannot change — which is exactly
+#      why this one merges directly at the head it was evaluated on instead.
+#
+#      Assert the EXCLUSION, not a phrasing of the direct-merge outcome. The predecessor of this
+#      assertion pinned "merges DIRECTLY … never with `--auto`" while the contract's own author
+#      matrix, two sentences earlier, still listed the updater among four `--auto`-eligible authors —
+#      so the contract contradicted itself and this guard stayed green over it, and the deployed
+#      overlay went on authorising the arming. The exclusion is the property; the merge command is
+#      its consequence and is pinned separately below.
+case "${constitution_flat}" in
+  *'is NEVER `--auto`-eligible — not even on exit 0'*) ;;
+  *) fail "a conditional classifier exemption may still be armed with --auto and inherited by an unevaluated head" ;;
+esac
+case "${constitution_flat}" in
+  *'re-run the classifier at the current head'*) ;;
+  *) fail "the contract does not require re-running the classifier at the head it actually merges" ;;
+esac
+# The reason must be stated for ANY strategy, not just squash. An earlier version said "every merge
+# here is a squash", which contradicts the merge-queue section below it — that path deliberately drops
+# `--squash` because the queue picks the strategy — and would have left the check looking optional
+# wherever the claim visibly did not hold.
+case "${constitution_flat}" in
+  *'not a source-head identity field under ANY merge strategy'*) ;;
+  *) fail "the mergeCommit warning is scoped to one merge strategy, so it does not cover merge-queue repos" ;;
+esac
+case "${constitution_flat}" in
+  *'`--squash` is deliberately dropped because the queue chooses the strategy'*) ;;
+  *) fail "the contract does not reconcile the mergeCommit rule with the merge-queue path" ;;
+esac
+
+echo "portfolio surveyor contract: post-arm confirmation assertions passed"
+
+# A consumer requirement with no producer is not a requirement. Both assertions below pin the
+# SURVEYOR side of a rule the maintenance skill and the constitution already state, because that is
+# the half a prose edit silently drops: the consumer reads a field the digest never emits, or
+# promises a blocker over a discovery pass that cannot see it.
+
+# An EVICTED PR is the opposite of an owned one — nothing holds it and repairing it is the run's job —
+# so the completed merge_group conclusion cannot ride on `active=`, which means "leave it alone".
+# The queue's checks run on a synthetic ref, so no head-level rollup can substitute.
+case "${surveyor_flat}" in
+  *'merge_group_result=<conclusion>@<runId>@<runCreatedAt>'*) ;;
+  *) fail "the surveyor emits no completed merge_group result, so an eviction is invisible to the consumer that requires it" ;;
+esac
+case "${surveyor_flat}" in
+  *'emitted whether or not the PR is currently queued'*) ;;
+  *) fail "the completed merge_group result is not required independently of the ownership signal" ;;
+esac
+grep -Fq 'merge_group_result=' "${surveyor}" ||
+  fail "the digest row grammar carries no merge_group_result field for the consumer to read"
+
+# The persistent maintainer-blocker promise covers every PR the orchestrator drives, so scoping the
+# discovery pass to `devantler`-authored PRs leaves it unenforceable on bot and external PRs: after
+# the generic ~2h activity signal lapses, a live `do not merge` disappears from the digest entirely.
+case "${surveyor_flat}" in
+  *'The open-PR half is author-agnostic'*) ;;
+  *) fail "maintainer-comment discovery is still author-scoped, so a blocker on a bot or external PR is never surfaced" ;;
+esac
+case "${surveyor_flat}" in
+  *'every actionable open PR already enumerated for the pentad'*) ;;
+  *) fail "the widened maintainer-comment sweep does not reuse the enumerated pentad set" ;;
+esac
+
+echo "portfolio surveyor contract: producer-for-every-consumer assertions passed"
+
+# One field, one spelling. The producer prose, the consumer skill and every digest row must name the
+# completed merge_group result identically, or the surveyor cannot satisfy both and a consumer
+# following the other spelling reads nothing where an eviction was reported.
+grep -Fq 'merge-group-result' "${surveyor}" &&
+  fail "the surveyor still carries a second spelling of the merge_group result field"
+grep -Fq 'merge-group-result' "${maintenance_skill}" &&
+  fail "the maintenance skill still carries a second spelling of the merge_group result field"
+
+# The external/Copilot row is swept and merged like any other, so it needs the two signals that
+# persist past the generic ~2h activity window: an eviction (invisible in the head pentad, since the
+# queue runs on a synthetic ref) and a human CHANGES_REQUESTED (not a candidate-maintainer-comment
+# surface). Omitting either lets the row read ready over a live block.
+external_row="$(grep -F 'EXTERNAL/Copilot — NEVER-RUN-LOCALLY' "${surveyor}" || true)"
+[ -n "${external_row}" ] || fail "the external/Copilot digest row is missing entirely"
+case "${external_row}" in
+  *'merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>'*) ;;
+  *) fail "the external/Copilot row omits merge_group_result, so an eviction there is invisible" ;;
+esac
+case "${external_row}" in
+  *'rd=<APPROVED|CHANGES_REQUESTED:'*) ;;
+  *) fail "the external/Copilot row omits rd=, so a human CHANGES_REQUESTED is lost once the activity window expires" ;;
+esac
+
+# A merge queue changes the strategy, never the closed three-author `--auto` list.
+case "${constitution_flat}" in
+  *'A merge queue does NOT widen who may use `--auto`'*) ;;
+  *) fail "the merge-queue path can still push a non-App author through auto-merge" ;;
+esac
+
+# The surveyor must not re-promise the updater auto-merge eligibility the contract withdrew.
+case "${surveyor_flat}" in
+  *'`app/botantler-1` is never `--auto` eligible'*) ;;
+  *) fail "the surveyor does not record that the exit-0 updater exemption excludes auto-merge" ;;
+esac
+
+echo "portfolio surveyor contract: round-8 field-consistency assertions passed"
+
+# A merge_group run is correlated by `pr-<n>`, which survives every push — so without binding the
+# result to WHEN it ran, the newest completed run keeps reporting an eviction the PR has already
+# answered, and the consumer re-diagnoses or blocks a ready PR on every run.
+case "${surveyor_flat}" in
+  *'Bind the result to WHEN it ran'*) ;;
+  *) fail "the merge_group result is not bound in time, so a repaired eviction blocks forever" ;;
+esac
+
+# ...and the reason it is bound in TIME rather than by head: a merge_group run's `headSha` is the
+# synthetic queue commit, never the contributing PR's head (measured on platform#3035 — run
+# head_sha 977218004e, queue branch pr-3035-56536122b2, PR headRefOid c8d669236f: three distinct
+# objects). A `headSha == headRefOid` test therefore reports EVERY completed run as stale, hiding
+# the queue failures this field exists to surface and re-permitting the blind re-queue.
+case "${surveyor_flat}" in
+  *'is NOT the contributing PR'*'head'*) ;;
+  *) fail "the surveyor does not record that merge_group headSha is the synthetic queue commit, so the stale test can be rebuilt on it" ;;
+esac
+
+# A top-level COMMENTED review body is neither an issue comment nor an inline comment, so the two
+# prescribed reads miss a maintainer `do not merge` entirely; it then carries only the expiring
+# activity signal and no rd=CHANGES_REQUESTED, and the PR merges over a live instruction.
+case "${surveyor_flat}" in
+  *'THREE surfaces, not two'*) ;;
+  *) fail "maintainer review BODIES are still unswept, so a persistent requirement there expires silently" ;;
+esac
+
+# behaviour_observed gates an external PR's merge, and the deepening read cannot tell whether a green
+# check exercised the change — so a guess is either an unobserved merge or a parked contribution.
+case "${surveyor_flat}" in
+  *'Name the EVIDENCE, or emit `unknown`'*) ;;
+  *) fail "behaviour_observed can still be guessed from data that cannot support the classification" ;;
+esac
+
+# A title edit changes no commit, so the head pin cannot catch it — and the squash subject is the title.
+case "${constitution_flat}" in
+  *'`title` is in that list because the head pin does NOT cover it'*) ;;
+  *) fail "the merge preflight does not re-validate the title, so a late edit can corrupt the changelog" ;;
+esac
+
+echo "portfolio surveyor contract: round-9 evidence-and-staleness assertions passed"
