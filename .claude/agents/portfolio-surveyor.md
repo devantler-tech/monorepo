@@ -862,10 +862,21 @@ public and private — no per-repo loop needed to enumerate):
      and an outside contributor's PRs — so scoping this search to `--author devantler` no longer matches
      its own stated purpose. His *"this was the wrong call, revert it"* on an external PR **the routine
      merged** would reach nobody. Filter authors only to drop the **automation-owned** Renovate/Dependabot
-     merges, exactly as everywhere else (bounded: `gh search prs --owner devantler-tech --merged
-     --merged-at ">=<UTC date 3 days ago>" --limit 100 --json number,repository,author,url`, then
-     discard the exact automation identities client-side — the search surface has no negated-author
-     qualifier). ⚠️ **This widens the candidate set materially**, and each candidate costs a comments
+     merges, exactly as everywhere else, then discard the exact automation identities client-side —
+     the search surface has no negated-author qualifier.
+     🔴 **Partition the window, because `--limit` is a TOTAL-RESULTS cap and truncation is silent.**
+     `gh search prs --help` defines `--limit` as *"Maximum number of results to fetch"*, not a page
+     size, so a single `--merged-at ">=<3 days ago>"` query returning exactly the cap is
+     indistinguishable from one that dropped the remainder — and dropping it loses precisely the
+     maintainer follow-up this sweep exists to find. Widening the pass to every author is what makes
+     the cap bind: the portfolio merges tens of PRs a day once bot merges are included, so three days
+     across ~22 repos plausibly exceeds 100. Run it as **one query per 24h slice**, each
+     `--merged-at "<from>..<to>"`, and treat **any slice returning exactly its cap as truncated** —
+     narrow that slice further (by half-day, then by repo) until it comes back under, or report it
+     explicitly as an unswept window. Never report the retrospective half as complete off a query
+     that returned exactly its limit:
+     `gh search prs --owner devantler-tech --merged --merged-at "<from>..<to>" --limit 100 --json number,repository,author,url`
+     ⚠️ **This widens the candidate set materially**, and each candidate costs a comments
      read, so it competes with the deepening budget above: when the pool runs short, emit the unswept
      remainder explicitly like any other budget shortfall rather than silently truncating a steering
      sweep. A merged PR can no longer be held by a blocker, so this half is about **direction for future
