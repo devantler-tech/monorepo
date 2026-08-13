@@ -416,7 +416,7 @@ assert_prose 'available on your own **and on taken-over** PRs' \
 # (2) The preflight demands owner `devantler-tech` from a read that cannot supply it: none of the
 # requested fields carries the BASE repository's identity, and the command was unpinned, so a
 # cross-repo sweep could inspect a colliding PR number in whatever checkout it stood in.
-assert_prose 'gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,headRefOid,mergeStateStatus,statusCheckRollup' \
+assert_prose 'gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup' \
   "${constitution_flat}" "the prescribed pre-merge read is not pinned to the base repository with --repo"
 assert_prose '`--repo` is part of the prescription, not an optional convenience' \
   "${constitution_flat}" "the contract does not say why the pre-merge --repo pin is load-bearing"
