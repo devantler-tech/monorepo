@@ -208,9 +208,9 @@ warn_if_local_branch_is_behind() {
   behind="$(git -C "$repo" rev-list --count "refs/heads/$branch..refs/remotes/origin/$branch" 2>/dev/null)" || return 0
   case "$behind" in
     '' | 0)
-      # A non-zero `behind` stays reportable even on a failed refresh — origin demonstrably has those
-      # commits, so the warning is true and useful. Only the ZERO answer is uninformative, and only
-      # when the refresh failed; say so instead of returning the silence that means "current".
+      # Only the ZERO answer is uninformative here, and only when the refresh failed; say so instead
+      # of returning the silence that means "current". (The non-zero answer has its own failed-refresh
+      # arm below — it is reportable, but not as verified origin state.)
       #
       # Spelled as an `if`, not `[ ... ] && cmd`: under `set -e` that AND-list exits non-zero whenever
       # the test is FALSE, and a standalone list in statement position is not an exempt context — so
@@ -221,6 +221,22 @@ warn_if_local_branch_is_behind() {
       return 0
       ;;
   esac
+
+  # A count is only origin's state when the ref it was measured against was actually refreshed. On a
+  # FAILED refresh the cached ref is whatever the last successful fetch wrote, so those commits may
+  # have been force-pushed away or the branch deleted outright — in which case origin does not carry
+  # them at all. Report the count (it is still the best available signal) but never as origin's
+  # current state, and withhold the fast-forward hint: `merge --ff-only origin/<branch>` against a
+  # dropped branch resurrects work that no longer exists there, which is worse than no hint.
+  if [ "$fetch_rc" -ne 0 ]; then
+    # The caveat rides on the SAME line as the count, not a continuation line: an operator who reads
+    # only the headline must not carry away a number that reads as origin's verified state.
+    echo "worktree-claim: NOTE local '$branch' is $behind commit(s) behind the CACHED origin/$branch — UNVERIFIED" >&2
+    echo "worktree-claim:      (the refresh FAILED). Origin may have moved past it, force-pushed over" >&2
+    echo "worktree-claim:      it, or dropped the branch. Re-fetch and confirm origin still has these" >&2
+    echo "worktree-claim:      commits before reconciling." >&2
+    return 0
+  fi
 
   echo "worktree-claim: NOTE local '$branch' is $behind commit(s) behind origin — attaching to the" >&2
   echo "worktree-claim:      LOCAL ref, so this worktree does not carry origin's newer commits." >&2
@@ -371,7 +387,14 @@ add_worktree_on() {
   # neither could — that is the pre-existing behaviour, not a new path, and it stays reachable rather
   # than turning an unresolvable ref into a hard failure of `add`.
   if [ -n "$pinned_tip" ]; then
-    git -C "$repo" worktree add -b "$branch" "$wt" "$pinned_tip"
+    # KEEP this status explicitly. `add_worktree_on` is called as `if ! add_worktree_on ...`, which
+    # suppresses errexit for its entire body, so a refused creation does not abort here — and the
+    # advisory `|| true` tracking call below would then supply the function's exit status, reporting
+    # a worktree git refused as successfully claimed. Every other arm ends in `return` immediately
+    # after its `worktree add`, so this is the one path where a later command can mask the failure.
+    local add_rc=0
+    git -C "$repo" worktree add -b "$branch" "$wt" "$pinned_tip" || add_rc=$?
+    [ "$add_rc" -eq 0 ] || return "$add_rc"
     # Tracking is a convenience, restored separately and advisorily. `worktree add --track` couples it
     # to branch creation, so its refusal takes the whole add down with it; a separate call cannot.
     # `|| true` is what keeps that true — the worktree is already correctly created at the verified

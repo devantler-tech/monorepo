@@ -1267,5 +1267,105 @@ check "an absent tracking ref after a failed refresh reports UNKNOWN, not silenc
 check "that UNKNOWN also names the failed refresh as the reason" 0 0 \
   "$nocache_line" "refresh failed"
 
+# ── a NON-ZERO behind measured against an unrefreshed ref is not origin's state ────────────────
+# The behind=0 case above is handled. The non-zero one was argued safe because "origin demonstrably
+# has those commits" — but the count is measured against the CACHED ref, which a failed fetch leaves
+# at whatever the last successful fetch wrote. If the branch was since deleted or force-pushed on
+# origin, those commits are not on origin at all, and the emitted hint tells the operator to
+# `merge --ff-only origin/<branch>` — resurrecting work that no longer exists there. A count is only
+# origin's state when the ref it was measured against was actually refreshed.
+behindstale_origin="$tmp/behindstale-origin.git"
+git init -q --bare -b main "$behindstale_origin"
+behindstale_seed="$tmp/behindstale-seed"
+git init -q -b main "$behindstale_seed"
+git -C "$behindstale_seed" config user.name "worktree-claim-test"
+git -C "$behindstale_seed" config user.email "worktree-claim-test@example.com"
+git -C "$behindstale_seed" commit --allow-empty -qm "init"
+git -C "$behindstale_seed" remote add origin "$behindstale_origin"
+git -C "$behindstale_seed" push -q origin main
+git -C "$behindstale_seed" checkout -qb "claim-behindstale"
+git -C "$behindstale_seed" commit --allow-empty -qm "v1"
+behindstale_v1="$(git -C "$behindstale_seed" rev-parse HEAD)"
+git -C "$behindstale_seed" commit --allow-empty -qm "v2"
+git -C "$behindstale_seed" push -q origin "claim-behindstale"
+
+# The consumer caches origin at v2 while its local branch stays at v1, so behind=1 is measurable...
+behindstale_consumer="$tmp/behindstale-consumer"
+git clone -q "$behindstale_origin" "$behindstale_consumer"
+git -C "$behindstale_consumer" branch "claim-behindstale" "$behindstale_v1"
+# ...and then the branch is DELETED on origin. The cached ref survives that, which is exactly why
+# the count keeps reading 1 while origin no longer carries the branch at all.
+git -C "$behindstale_origin" update-ref -d refs/heads/claim-behindstale
+check "precondition: behind is measurable while origin no longer has the branch" 0 \
+  "$([ "$(git -C "$behindstale_consumer" rev-list --count \
+       claim-behindstale..refs/remotes/origin/claim-behindstale)" = "1" ] &&
+     ! git -C "$behindstale_origin" show-ref --verify --quiet refs/heads/claim-behindstale &&
+     echo 0 || echo 1)"
+
+behindstale_rc=0
+behindstale_out="$(PATH="$fetchfail_stub:$PATH" "$script" add \
+  "$behindstale_consumer" "$tmp/wt-behindstale" "claim-behindstale" "session-behindstale" 2>&1)" ||
+  behindstale_rc=$?
+check "an unverifiable behind-count still claims (advisory, not fatal)" 0 "$behindstale_rc" \
+  "$behindstale_out" "owner=session-behindstale"
+# Isolate the branch's own NOTE line. `warn_if_base_is_stale` emits its own UNKNOWN for origin/HEAD
+# under this stub, so a whole-transcript match for "UNVERIFIED" would pass with the fix reverted.
+behindstale_line="$(grep 'behind the CACHED' <<<"$behindstale_out" || true)"
+check "a behind-count from a failed refresh is announced against the CACHED ref" 0 \
+  "$([ -n "$behindstale_line" ] && echo 0 || echo 1)"
+check "that announcement marks the count UNVERIFIED" 0 0 \
+  "$behindstale_line" "UNVERIFIED"
+# The hint is the actionable half, and the ff-merge is what would resurrect deleted work. It must not
+# be offered when the refresh that would have proven origin's state failed.
+check "no authoritative ff-merge hint is offered on an unverified count" 0 \
+  "$(grep -qF 'merge --ff-only' <<<"$behindstale_out" && echo 1 || echo 0)"
+
+# ── a FAILED pinned worktree creation must not report success ──────────────────────────────────
+# `add_worktree_on` is invoked as `if ! add_worktree_on ...`, which suppresses errexit for its whole
+# body. On the pinned path the creation's status is therefore not fatal, and the advisory
+# `branch --set-upstream-to ... || true` that follows it returns 0 — so the function's status is the
+# TRACKING call's, and a worktree git refused is announced as claimed. A post-checkout hook that
+# rejects the checkout is the real, unstubbed shape of this: git exits non-zero having already
+# created the directory, so the directory's existence proves nothing about success.
+pinfail_origin="$tmp/pinfail-origin.git"
+git init -q --bare -b main "$pinfail_origin"
+pinfail_seed="$tmp/pinfail-seed"
+git init -q -b main "$pinfail_seed"
+git -C "$pinfail_seed" config user.name "worktree-claim-test"
+git -C "$pinfail_seed" config user.email "worktree-claim-test@example.com"
+git -C "$pinfail_seed" commit --allow-empty -qm "init"
+git -C "$pinfail_seed" remote add origin "$pinfail_origin"
+git -C "$pinfail_seed" push -q origin main
+git -C "$pinfail_seed" checkout -qb "claim-pinfail"
+git -C "$pinfail_seed" commit --allow-empty -qm "work that lives on origin"
+git -C "$pinfail_seed" push -q origin "claim-pinfail"
+
+# A plain clone caches origin/claim-pinfail with no local branch — the state that takes the remote
+# arm, resolves a pinned tip, and reaches the pinned creation.
+pinfail_consumer="$tmp/pinfail-consumer"
+git clone -q "$pinfail_origin" "$pinfail_consumer"
+check "precondition: cached tracking ref present and no local branch (pinned path)" 0 \
+  "$(git -C "$pinfail_consumer" show-ref --verify --quiet refs/remotes/origin/claim-pinfail &&
+     ! git -C "$pinfail_consumer" show-ref --verify --quiet refs/heads/claim-pinfail &&
+     echo 0 || echo 1)"
+cat >"$pinfail_consumer/.git/hooks/post-checkout" <<'HOOK'
+#!/bin/sh
+echo "post-checkout refuses this checkout" >&2
+exit 7
+HOOK
+chmod +x "$pinfail_consumer/.git/hooks/post-checkout"
+
+pinfail_rc=0
+pinfail_out="$("$script" add \
+  "$pinfail_consumer" "$tmp/wt-pinfail" "claim-pinfail" "session-pinfail" 2>&1)" || pinfail_rc=$?
+check "a refused pinned creation does NOT exit 0" 1 \
+  "$([ "$pinfail_rc" -ne 0 ] && echo 1 || echo 0)"
+# The success line is what a caller and the run report read as "the lane is mine". Emitting it over a
+# refused checkout is the actual harm — the exit code alone could be lost in a pipeline.
+check "a refused pinned creation does not announce ownership" 0 \
+  "$(grep -qF 'owner=session-pinfail' <<<"$pinfail_out" && echo 1 || echo 0)"
+check "a refused pinned creation says the worktree add failed" 0 0 \
+  "$pinfail_out" "git worktree add failed"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
