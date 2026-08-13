@@ -1773,6 +1773,16 @@ the request is spent, not in flight: it reserves nothing, and the PR is yours to
 `no-gate` marker and continue down the lane order. Treat a reviewer that never responds as an
 unavailable lane, never as an owner.
 
+🔴 **What expires is the ACTIVITY signal, never an actionable maintainer REQUIREMENT.** The four rows
+above answer "is someone mid-flight right now", and that question is correctly time-boxed. A
+maintainer comment saying `do not merge` or asking for a redesign answers a different question —
+whether the change is wanted as it stands — and nothing about it becomes less true two hours later.
+Read categorically, this paragraph retires his comment as an owner *and* leaves nothing else holding
+the PR: a plain comment is not part of the hygiene pentad, so the merge proceeds over the direction he
+just gave, using the very grant he gave to give it. So an actionable requirement in a maintainer
+comment is a **named blocker** carried until it is satisfied or he withdraws it — reported each run,
+never aged out. Only its *ownership* claim expires; its *content* does not.
+
 **External-contributor PRs — what "be careful" means, concretely.** The merge authority widened; the
 **execution guardrail did NOT**, and the maintainer's "be careful" is exactly that distinction. You may
 now review, drive and merge an outside contribution, but you still **never check out, build, test,

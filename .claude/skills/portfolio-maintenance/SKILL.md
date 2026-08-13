@@ -307,6 +307,16 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   fire a second merge against it. **That state comes from the surveyor's own merge-queue read** (its
   `merge-group:` signal) — neither `statusCheckRollup` nor `autoMergeRequest` can supply it, since the
   queue's checks run on a synthetic ref and `autoMergeRequest` stays `null` while queued.
+  🔴 **A COMPLETED failed `merge_group` run needs its OWN field, because `active=` structurally cannot
+  carry it.** `merge-group:` is an **ownership** signal, emitted only while a PR is queued or its run
+  is in progress — both meaning *leave it alone*. An **evicted** PR is the opposite state: nothing
+  owns it, its run finished red, and repairing it is this run's job. Carried only on the ownership
+  signal the eviction is invisible — the queue's checks run on a synthetic ref, so the head's
+  `statusCheckRollup` cannot show them either — and the PR reads simply idle, which is precisely the
+  state that invites the blind re-queue *Merge policy* records against platform#2337. So report the
+  newest **completed** `merge_group` conclusion as a separate result/blocker field —
+  `merge-group-result:<conclusion>@<runId>` — emitted whether or not the PR is currently queued. A
+  failure there is a root-cause-before-requeue instruction, never an ownership claim.
 
 **Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the
 product's `weekly`/live cursor in memory — NOT every run), also spawn the read-only

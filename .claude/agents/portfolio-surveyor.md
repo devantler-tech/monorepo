@@ -137,11 +137,15 @@ public and private — no per-repo loop needed to enumerate):
    the run will actually pick up. If the pool runs short, **stop and say so explicitly** — emit the
    undeepened remainder as `NOT-DEEPENED (budget)` rows naming the count and the repos, never a
    silent cheap row that reads like a completed assessment:
-   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,updatedAt,title,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,headRepositoryOwner,headRepository,author,body,files`
+   `gh pr view <n> --repo devantler-tech/<repo> --json number,state,isDraft,updatedAt,title,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,headRepositoryOwner,headRepository,author,body,files`
    🔴 **Every field this read returns SUPERSEDES the org-search value for the rest of the survey —
-   including the two that are not about the head.** The search snapshot is minutes old by the time a
+   including the three that are not about the head.** The search snapshot is minutes old by the time a
    PR is deepened, and a field can change without the head SHA changing, so "we refreshed the head"
    never implies the rest of the row is current:
+   - **`isDraft`** decides the MERGE-READY/REVIEW-READY split below. Converting a PR to or from draft
+     changes no SHA, so a PR promoted between discovery and this read classifies on the stale value —
+     reporting a newly promoted PR as `REVIEW-READY`, or a newly drafted one as `MERGE-READY`, which
+     is the direction that feeds a draft into the merge path.
    - **`updatedAt`** feeds `pushed:unknown@<updatedAt-age>`. On a **fork**, where the push-activity
      read is deliberately skipped, that age is the *only* activity evidence — so aging it from the
      discovery timestamp can put a contributor who pushed thirty seconds ago outside the two-hour
@@ -443,7 +447,17 @@ public and private — no per-repo loop needed to enumerate):
      reverse: this survey runs from a random-slug session worktree while being the scheduled routine.
      So classify a `devantler` PR on its **pentad and active-work state** exactly like any other
      author: green drafts `REVIEW-READY`, green non-drafts `MERGE-READY`, non-green `NEEDS-FIX`, and
-     any PR with a live `active=` signal `ACTIVELY-OWNED` (leave it this run). Every other author —
+     any PR with a live `active=` signal `ACTIVELY-OWNED`.
+     🔴 **`ACTIVELY-OWNED` is a REPORT of the raw signals, never an instruction to leave the PR —
+     because the one discount that decides it is not yours to apply.** The contract's active-work
+     test discounts a push **the acting run itself made** (branch + sha, this run), and only the
+     orchestrator holds that creation record; this subagent cannot. So a PR whose *sole* signal is the
+     orchestrator's own push arrives here indistinguishable from a live rival, and an emitted "leave
+     it this run" would have the run park the PR it just repaired — self-blocking produced by the
+     survey rather than by any real contention. Emit the evidence
+     (`active=pushed:<age>@<lane>:<headRefName>@<headRefOid>`, the comment/review age, the request
+     envelope) so the orchestrator can subtract its own push and decide; never emit a stand-down
+     directive. Every other author —
      `app/ksail-bot` (reported as `ksail-bot[bot]` on the search surface), `github-actions[bot]`,
      `coderabbitai[bot]`, `cursor[bot]`, `Copilot`, and external contributors — takes those same
      four classifications on the same evidence. **One author-dependent addition, and it is about
