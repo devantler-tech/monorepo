@@ -247,6 +247,26 @@ add_worktree_on() {
       bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
         git -C "$repo" fetch --quiet origin \
         "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || true
+      # The fetch is advisory, but the attach below is NOT: it names `origin/$branch`, so if the
+      # fetch failed and nothing cached that ref, `worktree add --track` dies on
+      # `invalid reference` and `add` FAILS — remote state deciding whether `add` succeeds, which
+      # is the property the `*)` arm below is written to preserve. `ls-remote` succeeding and the
+      # fetch failing is not exotic: `bounded_remote` gives the fetch a short timeout, so a merely
+      # SLOW remote trips it while the network is fine, and a branch this checkout has never
+      # fetched has no cached ref to fall back on — exactly the resume-an-open-PR case `add` gained
+      # this arm for.
+      if ! git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        # We KNOW the branch exists on origin (ls-remote said so) and we could not retrieve it, so
+        # creating it locally forks a real PR branch. Say that precisely rather than reusing the
+        # `*)` wording, which reports the opposite situation (origin unreachable, existence
+        # unknown). The claim protocol compares the remote tip by SHA before pushing, so the fork
+        # is caught there — the same safety net the `*)` arm relies on.
+        echo "worktree-claim: NOTE '$branch' EXISTS on origin but could not be fetched; creating it" >&2
+        echo "worktree-claim:      locally from HEAD — this is a FORK, not a resume. Re-fetch and" >&2
+        echo "worktree-claim:      reset onto origin/$branch before committing or pushing." >&2
+        git -C "$repo" worktree add -b "$branch" "$wt"
+        return
+      fi
       ;;
     2)
       # origin answered and does not have this branch — genuinely new work.

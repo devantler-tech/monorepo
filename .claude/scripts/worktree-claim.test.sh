@@ -996,5 +996,61 @@ check "a current local branch claims without a staleness warning" 0 "$currentloc
 check "no false staleness warning on a branch origin does not have" 0 \
   "$(grep -qF 'behind origin' <<<"$currentlocal_out" && echo 1 || echo 0)"
 
+# ── ls-remote SUCCEEDS but the fetch fails, with no cached tracking ref ────────────────────────
+# The remote arm attaches with `--track … origin/$branch`. That ref only exists if the fetch landed,
+# so when `ls-remote` says the branch exists and the fetch then fails on a checkout that has never
+# fetched it, `worktree add` dies on `invalid reference` and `add` FAILS — remote state deciding
+# whether `add` succeeds, which every "advisory, not fatal" assertion above exists to prevent. The
+# combination is not exotic: `bounded_remote` gives the fetch a short timeout, so a merely SLOW
+# remote trips it while `ls-remote` already succeeded, and resuming an open PR is exactly the case
+# with no cached ref. The stub fails ONLY `fetch`, so `ls-remote` still answers 0 — without that
+# asymmetry the run would take the `*)` arm and this case would never be exercised.
+fetchfail_origin="$tmp/fetchfail-origin.git"
+git init -q --bare "$fetchfail_origin"
+fetchfail_seed="$tmp/fetchfail-seed"
+git clone -q "$fetchfail_origin" "$fetchfail_seed" 2>/dev/null || git init -q "$fetchfail_seed"
+git -C "$fetchfail_seed" config user.name "worktree-claim-test"
+git -C "$fetchfail_seed" config user.email "worktree-claim-test@example.com"
+git -C "$fetchfail_seed" commit --allow-empty -qm "init"
+git -C "$fetchfail_seed" branch -M main
+git -C "$fetchfail_seed" checkout -qb "claim-fetchfail"
+git -C "$fetchfail_seed" commit --allow-empty -qm "work that only exists on origin"
+git -C "$fetchfail_seed" remote add origin "$fetchfail_origin" 2>/dev/null || true
+git -C "$fetchfail_seed" push -q origin main claim-fetchfail
+
+# Clone WITHOUT the branch's tracking ref, but keep the normal wildcard refspec — a narrowed
+# refspec would fail `--track` for an unrelated reason and mask what this fixture measures.
+fetchfail_consumer="$tmp/fetchfail-consumer"
+git clone -q --single-branch --branch main "$fetchfail_origin" "$fetchfail_consumer"
+git -C "$fetchfail_consumer" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+check "precondition: the branch has NO cached tracking ref" 0 \
+  "$(git -C "$fetchfail_consumer" show-ref --verify --quiet refs/remotes/origin/claim-fetchfail && echo 1 || echo 0)"
+
+fetchfail_stub="$tmp/fetchfail-stub"
+mkdir -p "$fetchfail_stub"
+cat >"$fetchfail_stub/git" <<STUB
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  [ "\$arg" = "fetch" ] && exit 1
+done
+exec "$real_git" "\$@"
+STUB
+chmod +x "$fetchfail_stub/git"
+
+fetchfail_rc=0
+fetchfail_out="$(PATH="$fetchfail_stub:$PATH" "$script" add \
+  "$fetchfail_consumer" "$tmp/wt-fetchfail" "claim-fetchfail" "session-fetchfail" 2>&1)" || fetchfail_rc=$?
+check "an unfetchable existing branch still claims (advisory, not fatal)" 0 "$fetchfail_rc" \
+  "$fetchfail_out" "owner=session-fetchfail"
+check "the unfetchable-branch claim actually creates the worktree" 0 \
+  "$([ -d "$tmp/wt-fetchfail" ] && echo 0 || echo 1)"
+# Silence here would be the dangerous outcome: origin POSITIVELY has this branch, so creating it
+# locally forks a real PR rather than resuming it. The warning is what sends the operator to
+# re-fetch before pushing, and it must say which of the two situations this is.
+check "an unfetchable existing branch is announced as a FORK, not a resume" 0 "$fetchfail_rc" \
+  "$fetchfail_out" "FORK, not a resume"
+check "the fork warning states the branch exists on origin" 0 "$fetchfail_rc" \
+  "$fetchfail_out" "EXISTS on origin"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
