@@ -193,7 +193,66 @@ esac
 # `producer | grep PATTERN -q` IS an early exit on the Linux CI runner — stopping
 # at PATTERN reported the hazard clean on the very platform the required check
 # runs. Only `--` ends option parsing.
-max_count_is_finite() { case "$1" in -*) return 1 ;; *) return 0 ;; esac; }
+# True only for a max-count that can actually stop grep mid-stream. Two values
+# cannot: a NEGATIVE count is infinity, and ZERO selects nothing, so grep never
+# reaches a match to stop at and the pipeline's failure means "no match" in both
+# the ordinary and the negated form — which is the correct reading rather than
+# the misreported-match this guard exists to catch. Reporting either blocks a
+# safe command, the false-positive direction that keeps enforcement latent.
+#
+# Zero is decided by VALUE, never by a leading-`0` glob: `-m01` is one, so a
+# pattern like `0*` would read a real early exit as harmless — the fail-open
+# direction. Strip leading zeros and test what remains, which needs no arithmetic
+# on an unvalidated string.
+max_count_is_finite() {
+  local v="$1"
+  case "$v" in
+    -*) return 1 ;;        # negative: infinity, grep reads to the end
+    '') return 1 ;;        # no value: grep errors out, so the pipeline never races
+    *[!0-9]*) return 0 ;;  # not a bare decimal — stay conservative and report it
+  esac
+  while [ "${v#0}" != "$v" ]; do v="${v#0}"; done
+  [ -n "$v" ] || return 1  # every digit was a zero
+  return 0
+}
+
+# Take the next whitespace-delimited token from `$1`, honouring single and double
+# quotes so a quoted value containing a space stays ONE token. Sets `_env_tok` to
+# the token exactly as written (quotes included), so the caller can strip precisely
+# it off the front. `env -S` splits its string with those quoting rules, so a raw
+# whitespace split reads `#!/usr/bin/env -S LABEL='a b' bash` as the two tokens
+# `LABEL='a` and `b'` — making `b'` the command, resolving to no shell, and
+# dropping the file from the sweep. An unterminated quote consumes the remainder,
+# which is what a shell would do with the same malformed line.
+env_next_token() {
+  local s="$1" i=0 c q='' out=''
+  while [[ "$i" -lt "${#s}" ]]; do
+    c="${s:i:1}"
+    if [[ -n "$q" ]]; then
+      out="$out$c"
+      [[ "$c" == "$q" ]] && q=''
+    else
+      case "$c" in
+        [[:space:]]) break ;;
+        \' | \") q="$c" && out="$out$c" ;;
+        *) out="$out$c" ;;
+      esac
+    fi
+    i=$((i + 1))
+  done
+  _env_tok="$out"
+}
+
+# Strip ONE balanced layer of quotes, so `env -S 'bash' -x` resolves to `bash`
+# rather than to a name no shell list can match.
+env_dequote() {
+  local w="$1"
+  case "$w" in
+    \'*\') w="${w#\'}" && w="${w%\'}" ;;
+    \"*\") w="${w#\"}" && w="${w%\"}" ;;
+  esac
+  printf '%s' "$w"
+}
 
 # Resolve the command `env` would execute, given a shebang line with `#!` already
 # removed. env's own options come first, so the operand is not simply the second
@@ -203,13 +262,14 @@ max_count_is_finite() { case "$1" in -*) return 1 ;; *) return 0 ;; esac; }
 # remains, which resolves to no shell and leaves the file out of scope — the same
 # answer as before for a shebang that genuinely names none.
 env_operand() {
-  local rest="$1" tok
+  local rest="$1" tok _env_tok
   rest="${rest#"${rest%%[![:space:]]*}"}"
   rest="${rest#"${rest%%[[:space:]]*}"}" # drop env's own path
   while :; do
     rest="${rest#"${rest%%[![:space:]]*}"}"
     [[ -n "$rest" ]] || break
-    tok="${rest%%[[:space:]]*}"
+    env_next_token "$rest"
+    tok="$_env_tok"
     case "$tok" in
       --) rest="${rest#--}"; break ;;
       -S | --split-string) rest="${rest#"$tok"}" ;;
@@ -217,10 +277,12 @@ env_operand() {
       -S?*) rest="${rest#-S}" ;;
       --unset=* | --chdir=*) rest="${rest#"$tok"}" ;;
       -u | -C | --unset | --chdir)
-        # Consume the option AND the separate word carrying its value.
+        # Consume the option AND the separate word carrying its value — through the
+        # same quote-aware reader, since that value can be quoted too.
         rest="${rest#"$tok"}"
         rest="${rest#"${rest%%[![:space:]]*}"}"
-        rest="${rest#"${rest%%[[:space:]]*}"}"
+        env_next_token "$rest"
+        rest="${rest#"$_env_tok"}"
         ;;
       -*) rest="${rest#"$tok"}" ;;
       [A-Za-z_]*=*) rest="${rest#"$tok"}" ;; # NAME=value assignment
@@ -228,7 +290,8 @@ env_operand() {
     esac
   done
   rest="${rest#"${rest%%[![:space:]]*}"}"
-  printf '%s' "${rest%%[[:space:]]*}"
+  env_next_token "$rest"
+  env_dequote "$_env_tok"
 }
 
 # Replace the CONTENTS of quoted runs with `x`, so a character that is only

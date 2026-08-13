@@ -249,6 +249,22 @@ flag_case "an infinite max-count overridden by a later finite one" \
   'printf "%s" "$v" | grep -m-1 -m1 MATCH'
 flag_case "a finite max-count still fires when nothing overrides it" \
   'printf "%s" "$v" | grep -m1 MATCH'
+
+# A max-count of ZERO selects nothing, so grep never reaches a match to stop at:
+# the pipeline's failure means "no match" in both the plain and the negated form,
+# which is the correct reading rather than the misreported match this guard
+# targets. Reporting it blocks a safe command.
+clean_case "a zero max-count cannot stop at a match" \
+  'printf "%s" "$v" | grep -m0 MATCH'
+clean_case "a zero max-count in the long spelling" \
+  'printf "%s" "$v" | grep --max-count=0 MATCH'
+clean_case "zero written with padding is still zero" \
+  'printf "%s" "$v" | grep -m00 MATCH'
+# The discriminator for zero is the VALUE, not a leading `0`. A glob such as `0*`
+# would swallow this case — a real early exit read as harmless, which is the
+# fail-open direction.
+flag_case "a leading zero does not make a finite count zero" \
+  'printf "%s" "$v" | grep -m01 MATCH'
 # A terminator ends the command, but a max-count seen BEFORE it is still in
 # effect — deferring the verdict must not lose it.
 flag_case "a finite max-count before a shell separator" \
@@ -415,9 +431,9 @@ report "a parameter expansion in an assignment value does not hide the grep" \
 # 🔴 The KNOWN LIMIT, pinned as fact rather than left as a surprise. Both cases
 # below are the SAME defect: the pattern cannot tell a closing delimiter from a
 # character that merely looks like one, because that needs shell-quote tracking
-# inside the expansion. Nesting is one instance of it, not the rule — an earlier
-# version of this suite pinned only the nested case and the comment claimed
-# general non-nested support, which was an overclaim.
+# inside the expansion. Nesting is one instance of it, not the rule: pinning only
+# the nested case would state the limit too narrowly, because a non-nested
+# expansion carrying either delimiter as data escapes exactly the same way.
 # These tests assert the CURRENT behaviour (exit 0) deliberately. If either
 # starts failing, a real parser has replaced the layer and the expectation
 # should be inverted — see monorepo#2797. Not a licence to leave it; a refusal
@@ -1152,8 +1168,8 @@ flag_case "an assignment prefix proper still reaches the grep" \
 #     therefore needs a throwaway git repository rather than a bare fixture file.
 # ---------------------------------------------------------------------------
 # The sweep identifies extensionless scripts by their INTERPRETER. A `*sh` suffix
-# test misses every versioned shell, so `#!/usr/bin/ksh93` was skipped while the
-# sweep still reported the repository clean — silent omission, the one direction
+# test misses every versioned shell, so `#!/usr/bin/ksh93` goes unswept while the
+# sweep still reports the repository clean — silent omission, the one direction
 # that fails open.
 mkrepo() {
   local dir="$tmp/$1" shebang="$2"
@@ -1205,6 +1221,27 @@ r="$(mkrepo "shebang-env-valued-option" '#!/usr/bin/env -u FOO bash')"
 out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
 report "an env option consuming a separate value still reaches the shell" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# `env -S` splits its string with shell quoting rules, so a quoted value carrying
+# a space is ONE token. A raw whitespace split reads this line's tokens as
+# `LABEL='a` and `b'`, making `b'` the command — no shell matches, and the file
+# leaves the sweep silently.
+r="$(mkrepo "shebang-env-quoted-assignment" "#!/usr/bin/env -S LABEL='a b' bash")"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "an env -S assignment with a quoted space still reaches the shell" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+r="$(mkrepo "shebang-env-quoted-double" '#!/usr/bin/env -S LABEL="a b" bash')"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "the same holds for a double-quoted assignment value" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# The control changes only the operand: quote-aware tokenising must reach the real
+# command, not wave every -S shebang through.
+r="$(mkrepo "shebang-env-quoted-not-a-shell" "#!/usr/bin/env -S LABEL='a b' python3")"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "a quoted-assignment -S shebang naming a non-shell is not swept" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
 
 # The control changes only the operand: walking env's options must reach the
 # real command, not treat every env shebang as a shell.
