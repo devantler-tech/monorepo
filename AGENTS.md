@@ -1613,29 +1613,30 @@ gets driven to merge:
 resolve findings, root-cause-fix failing required checks, set a
 Conventional-Commit title, then **merge with the command that matches the author** —
 - an actionable **single-author App** uses pre-CLEAN auto-merge only after the review/current-head
-  parts of that pentad are clear. 🔴 **The `--auto`-eligible authors are exactly four, and the fourth
-  is conditional:** `github-actions`, `ksail-bot`, `app/cursor`, and `app/botantler-1` **only on a PR
-  the programmed-bot classifier exits 0 on**. An `app/botantler-1` PR the classifier does not exit 0 on
-  — including the exit-3 semantic-review path — is **not** `--auto`-eligible and merges directly at an
-  evaluated head like any other author. State the author matrix this way and never as a bare
-  three-name list: `--auto` merges whatever head passes checks later, so the eligibility question is
-  *which author*, and leaving the exit-0 updater path unnamed is what made this ambiguous.
-  🔴 **`app/botantler-1` is conditional on a CLASSIFIER RESULT, and `--auto` cannot carry a condition
-  — so it merges DIRECTLY, at the evaluated head, never with `--auto`.** The other three are eligible
-  by *author*, which a later head cannot change; this one is eligible by *what the classifier returned
-  for a specific commit*. `--auto` defers the merge until checks pass and re-evaluates nothing, so an
-  updater push during that window lands a replacement head the classifier never ran on — a head that
-  might return exit 1 or 3, i.e. one requiring the very review the exit-0 path waives. The head pin
-  does not close it either: `--match-head-commit` gates the **arming**, not the later merge, so the
-  post-arm confirmation detects the violation only after it has reached `main`. Wait for the checks,
-  re-run the classifier at the current head, and merge with
-  `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`. Reserving `--auto`
-  for unconditional authors is what keeps that exemption tied to the commit it was granted for.
+  parts of that pentad are clear. 🔴 **The `--auto`-eligible authors are exactly three, and every one
+  of them is eligible unconditionally:** `github-actions`, `ksail-bot`, and `app/cursor`. Eligibility
+  there is a property of the **author**, which a later head cannot change — which is exactly what
+  `--auto` needs, because it merges whatever head passes checks later and re-evaluates nothing.
+  🔴 **`app/botantler-1` is NEVER `--auto`-eligible — not even on exit 0 — because its permission
+  comes from a CLASSIFIER RESULT about one specific commit, and `--auto` cannot carry a condition.**
+  Exit 0 waives the **review** requirement for that head; it never waives the requirement to merge
+  **directly, at the head you evaluated**. Arming `--auto` on it lets an updater push during the
+  wait land a replacement head the classifier never ran on — a head that might return exit 1 or 3,
+  i.e. one requiring the very review the exit-0 path waives. The head pin does not close it either:
+  `--match-head-commit` gates the **arming**, not the later merge, so the post-arm confirmation
+  detects the violation only after it has reached `main`. So: wait for the checks, **re-run the
+  classifier at the current head immediately before merging** — a result from an earlier head is a
+  statement about a commit that is no longer being merged — and merge with
+  `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`. Reserving
+  `--auto` for the three unconditional authors is what keeps that exemption tied to the commit it was
+  granted for. State the matrix as this three-plus-one split and **never as a flat four-name list**:
+  appending the updater to the three author-scoped names puts a commit-scoped permission in an
+  author-scoped list, which is what made the unsafe arming look prescribed.
   For `app/cursor`, the acting local sibling performs this mutation because the cloud App cannot:
   `gh pr merge <n> --repo devantler-tech/<repo> --auto --squash --match-head-commit <sha>`; for **trusted programmed bot PRs** (exit-0 agent-skills updater PRs,
   tap cask PRs, and KSail release bumps — the carve-out above) the review parts are intentionally absent and
-  are NOT required — their required checks, zero threads, and no-conflict state alone gate the
-  auto-merge;
+  are NOT required — their required checks, zero threads, and no-conflict state alone gate the merge,
+  which for the exit-0 updater is the head-pinned **direct** merge above, never `--auto`;
 - a **human-trusted author** (`devantler`, i.e. **every machine-local agent-own PR**) **cannot use `--auto`**
   (auto-merge is bot-only) and merges **directly** with
   `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>` once

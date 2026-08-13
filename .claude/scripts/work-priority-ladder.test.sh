@@ -169,58 +169,67 @@ assert_prose 'That exception is time-bounded, never a standing state' \
 assert_prose 'no undefined permanent-sounding gate' \
   "${constitution_flat}" "floor exception does not forbid an undefined gate standing in for a signal"
 
-# ── one author matrix for `--auto`, with the conditional fourth author named ───────────────────────
-# `--auto` merges whatever head passes checks LATER, so eligibility is a question about the AUTHOR.
-# Naming only three Apps while a separate clause granted exit-0 programmed updater PRs the no-review
-# auto path left `app/botantler-1` unplaced: the maintenance overlay's "non-qualifying" wording
-# implies a QUALIFYING one is eligible, but no surface said so outright. Pin the four-author form and
-# the condition, so a later edit cannot silently drop back to the ambiguous bare list.
+# ── `--auto` is for AUTHOR-scoped permissions only; a classifier result is COMMIT-scoped ───────────
+# `--auto` merges whatever head passes checks LATER and re-evaluates nothing, so it can only ever
+# carry a permission that a later head cannot invalidate — i.e. one held by the AUTHOR.
+#
+# The earlier form of this guard pinned a flat four-name list, `app/botantler-1` included "on a PR
+# the classifier exits 0 on". That is a COMMIT-scoped permission sitting in an author-scoped list,
+# and listing it there is what made the unsafe arming read as prescribed: exit 0 waives the REVIEW
+# for one head, never the requirement to merge at that same head. An updater push during the
+# `--auto` wait lands a replacement head the classifier never ran on — possibly an exit-1/3 head
+# needing the very review exit 0 waived — and `--match-head-commit` does not close it, because it
+# gates the ARMING, not the later merge. So pin the three-plus-one split in both surfaces, and pin
+# the re-run that keeps the exemption tied to the commit it was granted for.
 assert_absent '(`github-actions`/`ksail-bot`/`app/cursor`) uses pre-CLEAN' \
   "${constitution_flat}" "the ambiguous bare three-name --auto author list survived"
-assert_prose 'The `--auto`-eligible authors are exactly four, and the fourth is conditional' \
-  "${constitution_flat}" "contract does not state the --auto author matrix as one closed list"
-assert_prose '`app/botantler-1` **only on a PR the programmed-bot classifier exits 0 on**' \
-  "${constitution_flat}" "contract does not condition app/botantler-1's --auto eligibility on classifier exit 0"
-assert_prose 'is **not** `--auto`-eligible and merges directly at an evaluated head' \
-  "${constitution_flat}" "contract does not route a non-qualifying app/botantler-1 PR to the direct merge"
+assert_prose 'The `--auto`-eligible authors are exactly three, and every one of them is eligible unconditionally' \
+  "${constitution_flat}" "contract does not state the --auto author matrix as three unconditional authors"
+assert_prose '`app/botantler-1` is NEVER `--auto`-eligible — not even on exit 0' \
+  "${constitution_flat}" "contract does not exclude app/botantler-1 from --auto on every classifier result"
+assert_prose 're-run the classifier at the current head immediately before merging' \
+  "${constitution_flat}" "contract does not require a classifier re-run at the head being merged"
 
-# The DEPLOYED run loop is what a run actually follows, so pinning the matrix in the contract alone
-# leaves the ambiguity live where it is read. The skill's own wording said only "non-qualifying
-# `app/botantler-1`" — which implies a qualifying one is eligible without ever placing it in the
-# list, so its preceding three-name list still read as exclusive and an exit-0 updater PR had no
-# prescribed auto-merge path. Mirror both halves here: the closed four-author form, and the absence
-# of the bare three-name list that made it ambiguous.
+# The DEPLOYED run loop is what a run actually follows, so fixing the contract alone leaves the
+# unsafe path live where it is read — which is exactly what happened: the contract gained the
+# direct-merge requirement while this overlay still listed the updater among the `--auto` authors,
+# so scheduled runs kept following the unsafe path. Mirror both halves here.
 assert_absent 'the three **trusted single-author Apps**' \
   "${skill_flat}" "the maintenance skill still states an exclusive three-App --auto list"
 assert_absent '`--auto` is for those named Apps only' \
   "${skill_flat}" "the maintenance skill still scopes --auto to an unnamed 'those named Apps' set"
-assert_prose '`--auto`-eligible authors are exactly four, and the fourth is conditional' \
-  "${skill_flat}" "the maintenance skill does not state the --auto author matrix as one closed list"
-assert_prose '`app/botantler-1` **only on a PR the programmed-bot classifier exits 0 on**' \
-  "${skill_flat}" "the maintenance skill does not name the qualifying exit-0 app/botantler-1 --auto path"
+assert_prose '`--auto`-eligible authors are exactly three, and every one of them is eligible unconditionally' \
+  "${skill_flat}" "the maintenance skill does not state the --auto author matrix as three unconditional authors"
+assert_prose '`app/botantler-1` is never `--auto`-eligible, not even on exit 0' \
+  "${skill_flat}" "the maintenance skill does not exclude app/botantler-1 from --auto on every classifier result"
 
-# Asserting the COUNT and the conditional fourth author still leaves the three unconditional names
-# unpinned — a policy edit could swap `github-actions`/`ksail-bot`/`app/cursor` for different authors
-# and every assertion above would still pass, because none of them names who the other three are.
-# `--auto` merges whatever head passes checks later, so WHICH author holds that power is the whole
-# security property; pin the contiguous list in both documents, not just its shape.
+# Asserting the COUNT leaves the three names unpinned — a policy edit could swap
+# `github-actions`/`ksail-bot`/`app/cursor` for different authors and every assertion above would
+# still pass. `--auto` merges whatever head passes checks later, so WHICH author holds that power is
+# the whole security property; pin the contiguous list in both documents, not just its shape. The
+# trailing `and` before `app/cursor` (rather than a comma) is what makes this fail if a fourth name
+# is appended to the list — the exact regression this guard exists to catch.
 for _doc_pair in "constitution:${constitution_flat}" "skill:${skill_flat}"; do
   _doc_label="${_doc_pair%%:*}"
   _doc_text="${_doc_pair#*:}"
-  assert_prose '`github-actions`, `ksail-bot`, `app/cursor`, and `app/botantler-1`' \
-    "${_doc_text}" "the ${_doc_label} does not name the three unconditional --auto authors as a contiguous list"
+  assert_prose '`github-actions`, `ksail-bot`, and `app/cursor`' \
+    "${_doc_text}" "the ${_doc_label} does not name the three unconditional --auto authors as a closed contiguous list"
+  assert_absent '`github-actions`, `ksail-bot`, `app/cursor`, and `app/botantler-1`' \
+    "${_doc_text}" "the ${_doc_label} still lists app/botantler-1 in the --auto author list"
 done
-# ...and bind the non-qualifying result to the direct-merge path in the SKILL. The contract side of
-# this is already asserted above and is deliberately not repeated here — a second copy would pass or
-# fail in lockstep with the first while reading like independent coverage.
+
+# ...and bind the exit-0 result to the direct-merge outcome in the SKILL. The contract side is
+# asserted above and deliberately not repeated — a second copy would pass or fail in lockstep with
+# the first while reading like independent coverage.
 #
-# Match a CONTIGUOUS span carrying the condition AND its outcome, not the condition alone. Asserting
-# only `the classifier does **not** exit 0 on` proves the skill *mentions* the non-exit-0 case; it
-# proves nothing about where that case is routed, so a later edit could keep the phrase and replace
-# the direct-merge result with any other action while the assertion stayed green. The span below
-# fails if either half is edited away, which is the property actually worth pinning.
-assert_prose 'the classifier does **not** exit 0 on — including the exit-3 semantic-review path — any external contributor) would merge a commit nobody evaluated. Those merge directly' \
-  "${skill_flat}" "the maintenance skill does not bind the non-qualifying classifier result to the direct-merge outcome"
+# Match a CONTIGUOUS span carrying the classifier re-run AND the head-pinned direct merge it feeds.
+# Asserting the re-run alone proves the skill *mentions* re-running; it proves nothing about what
+# the result is then used for, so a later edit could keep the phrase and re-arm `--auto` behind it
+# while the assertion stayed green. This span fails if either half is edited away.
+assert_prose 'Re-run the classifier at the current head immediately before the merge' \
+  "${skill_flat}" "the maintenance skill does not require a classifier re-run at the head being merged"
+assert_prose 'then merge head-pinned with `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`' \
+  "${skill_flat}" "the maintenance skill does not bind the re-run to a head-pinned direct merge"
 
 # ── PR ownership: every PR in the portfolio, whoever authored it (maintainer direction 2026-08-08) ──
 # Rung 1 previously meant "own/trusted PRs in YOUR lane", with anyone else's draft stopping at hygiene.

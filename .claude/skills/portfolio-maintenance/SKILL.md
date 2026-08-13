@@ -437,17 +437,26 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
 2. **Drive actionable PRs to merge — the first-priority sweep, ahead of issues, every
    run.** Across all `devantler-tech` repos, drive every **actionable** PR, whoever authored it, to merge per
    the contract (clear the current-head pentad, then merge with the **command that matches the author**:
-   the **`--auto`-eligible authors are exactly four, and the fourth is conditional** —
-   `github-actions`, `ksail-bot`, `app/cursor`, and `app/botantler-1` **only on a PR the programmed-bot
-   classifier exits 0 on** — may arm
+   the **`--auto`-eligible authors are exactly three, and every one of them is eligible
+   unconditionally** — `github-actions`, `ksail-bot`, and `app/cursor` — may arm
    `--auto` once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
    with `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <the head you
    evaluated>` once CLEAN and self-promoted on genuine readiness; incl. majors;
-   definition PRs on that same path). **`--auto` is for those four authors only** — it merges at whatever
-   head passes checks later, so arming it on anyone else (`copilot-swe-agent[bot]`, an
-   `app/botantler-1` PR the classifier does **not** exit 0 on — including the exit-3 semantic-review
-   path — any external contributor) would merge a commit nobody evaluated.
-   Those merge directly, after the current-head checks below. External repos are outside scheduled scope;
+   definition PRs on that same path). **`--auto` is for those three authors only** — it merges at whatever
+   head passes checks later, so arming it on anyone else (`copilot-swe-agent[bot]`, any external
+   contributor, or **`app/botantler-1` on ANY classifier result, exit 0 included**) would merge a
+   commit nobody evaluated.
+   Those merge directly, after the current-head checks below.
+   🔴 **`app/botantler-1` is never `--auto`-eligible, not even on exit 0.** Exit 0 waives the
+   **review** requirement for the head it ran on; it never waives merging **directly at that same
+   head**, because the permission is scoped to one commit and `--auto` re-evaluates nothing — an
+   updater push during the wait would land a head the classifier never ran on, possibly an exit-1/3
+   head needing the very review exit 0 waived. **Re-run the classifier at the current head
+   immediately before the merge** (an earlier head's result describes a commit you are no longer
+   merging), then merge head-pinned with
+   `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`.
+
+   External repos are outside scheduled scope;
    an interactive task must first clear the professional-work boundary for the specifically named repo.
    Never *run* an **external-author** branch on this machine (trust gate) — CI is the sandbox for that,
    and extra scrutiny goes on workflow, permission, dependency and secret-touching changes. You still

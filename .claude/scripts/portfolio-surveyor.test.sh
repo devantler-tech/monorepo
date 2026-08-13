@@ -2211,15 +2211,23 @@ case "${constitution_flat}" in
   *) fail "the contract does not require carrying an unconfirmed arming forward past the open-PR enumeration" ;;
 esac
 
-# (10) `app/botantler-1` is `--auto`-eligible CONDITIONALLY — on what the classifier returned for a
-#      specific commit — and `--auto` carries no condition forward. It defers the merge and
-#      re-evaluates nothing, so an updater push during that window lands a head the classifier never
-#      ran on, possibly one that needs the very review the exit-0 path waives. The head pin does not
-#      help: it gates the arming, not the later merge, so the post-arm check only detects the breach
-#      after it reaches `main`. The other three eligible authors are eligible by AUTHOR, which a later
-#      head cannot change — which is exactly why this one must merge directly instead.
+# (10) `app/botantler-1` is NEVER `--auto`-eligible — not on any classifier result, exit 0 included.
+#      Its permission comes from what the classifier returned for a SPECIFIC COMMIT, and `--auto`
+#      carries no condition forward: it defers the merge and re-evaluates nothing, so an updater push
+#      during that window lands a head the classifier never ran on, possibly one that needs the very
+#      review the exit-0 path waives. The head pin does not help: it gates the arming, not the later
+#      merge, so the post-arm check only detects the breach after it reaches `main`. The three
+#      eligible authors are eligible by AUTHOR, which a later head cannot change — which is exactly
+#      why this one merges directly at the head it was evaluated on instead.
+#
+#      Assert the EXCLUSION, not a phrasing of the direct-merge outcome. The predecessor of this
+#      assertion pinned "merges DIRECTLY … never with `--auto`" while the contract's own author
+#      matrix, two sentences earlier, still listed the updater among four `--auto`-eligible authors —
+#      so the contract contradicted itself and this guard stayed green over it, and the deployed
+#      overlay went on authorising the arming. The exclusion is the property; the merge command is
+#      its consequence and is pinned separately below.
 case "${constitution_flat}" in
-  *'so it merges DIRECTLY, at the evaluated head, never with `--auto`'*) ;;
+  *'is NEVER `--auto`-eligible — not even on exit 0'*) ;;
   *) fail "a conditional classifier exemption may still be armed with --auto and inherited by an unevaluated head" ;;
 esac
 case "${constitution_flat}" in
