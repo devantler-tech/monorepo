@@ -218,12 +218,15 @@ PORTFOLIO_DIR_RE=$(
 
 # True when the session store root is itself under an allowlisted path — then the
 # store contains only in-scope work by construction and needs no dir filtering.
+# The loop is fed by a redirect, not a pipe. Piping it into `grep -q` made grep
+# exit at the first `match` and killed the writer with SIGPIPE; `pipefail` then
+# reported the writer's death, so a store that IS in scope answered "no".
 store_root_in_scope() {
   local p
-  printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
-  | while IFS= read -r p; do
-      case "$CLAUDE_PROJECTS" in "$p"|"$p"/*) echo match ;; esac
-    done | grep -q match
+  while IFS= read -r p; do
+    case "$CLAUDE_PROJECTS" in "$p" | "$p"/*) return 0 ;; esac
+  done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
+  return 1
 }
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "MISSING-DEP: $1" >&2; return 1; }; }
@@ -1585,35 +1588,36 @@ session_files() {
 #      and the scorecard reports one agent while claiming to cover two.
 #      Matched narrowly (basename must equal the portfolio root's) rather than
 #      allowlisting all of $CODEX_HOME/worktrees, which could hold other repos.
+# The loop is fed by a redirect, not a pipe — see store_root_in_scope: piping
+# into `grep -q` under `pipefail` reports the SIGPIPE'd writer, so an in-scope
+# cwd was classified out of scope and that instance silently dropped.
 in_scope_cwd() {
-  local cwd="$1" p
+  local cwd="$1" p url
   [ -n "$cwd" ] || return 1
-  {
-    printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
-    | while IFS= read -r p; do
-        # Form 1: literally under an allowlisted path, at a component boundary.
-        case "$cwd" in "$p"|"$p"/*) echo match ;; esac
-        # Form 2: the Codex instance's own worktree of a portfolio repo. Basename
-        # alone is NOT sufficient — a professional repo checked out as
-        # `$CODEX_HOME/worktrees/<id>/monorepo` would match by name while being
-        # categorically out of scope. Confirm identity by the worktree's actual
-        # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
-        # no remote, not a repo): an unverifiable worktree is excluded.
-        case "$cwd" in
-          "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
-            [ -d "$cwd" ] || continue
-            url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || continue
-            # Anchor the HOST, not a substring: `*github.com/org/*` also matches
-            # `https://notgithub.com/org/…` and internal mirrors that merely
-            # contain the string. Only these exact remote forms count.
-            case "$url" in
-              "git@github.com:$PORTFOLIO_ORG/"*|\
-              "https://github.com/$PORTFOLIO_ORG/"*|\
-              "ssh://git@github.com/$PORTFOLIO_ORG/"*) echo match ;;
-            esac ;;
-        esac
-      done
-  } | grep -q match
+  while IFS= read -r p; do
+    # Form 1: literally under an allowlisted path, at a component boundary.
+    case "$cwd" in "$p" | "$p"/*) return 0 ;; esac
+    # Form 2: the Codex instance's own worktree of a portfolio repo. Basename
+    # alone is NOT sufficient — a professional repo checked out as
+    # `$CODEX_HOME/worktrees/<id>/monorepo` would match by name while being
+    # categorically out of scope. Confirm identity by the worktree's actual
+    # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
+    # no remote, not a repo): an unverifiable worktree is excluded.
+    case "$cwd" in
+      "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
+        [ -d "$cwd" ] || continue
+        url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || continue
+        # Anchor the HOST, not a substring: `*github.com/org/*` also matches
+        # `https://notgithub.com/org/…` and internal mirrors that merely
+        # contain the string. Only these exact remote forms count.
+        case "$url" in
+          "git@github.com:$PORTFOLIO_ORG/"*|\
+          "https://github.com/$PORTFOLIO_ORG/"*|\
+          "ssh://git@github.com/$PORTFOLIO_ORG/"*) return 0 ;;
+        esac ;;
+    esac
+  done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
+  return 1
 }
 
 codex_session_files() {
@@ -3561,12 +3565,22 @@ if want safety; then
     # from a real finding — and a detector that always fires teaches you to ignore
     # it. Only sessions showing a checkout of a fork/PR-ref are considered, and the
     # output stays a CANDIDATE list requiring context, not an assertion of a breach.
+    # Extract ONCE and check that the extraction succeeded before applying either
+    # predicate. Reading it through `< <(commands_in …)` discarded that command's
+    # status, so a concurrently-appended or malformed session whose valid prefix
+    # happened to contain a checkout was accepted on partial output — and the
+    # second extraction then ran inside a pipeline under `pipefail`, where the
+    # same failure aborted the whole telemetry run instead of skipping one file.
+    #
+    # Both greps read the captured value from a here-string. A `… | grep -qE`
+    # here would be the exact writer-into-early-exiting-grep hazard this
+    # repository's own guard rejects.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
-          if commands_in "$f" 2>/dev/null \
-             | grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))'; then
-            commands_in "$f" 2>/dev/null \
-              | grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|make [a-z]+)'
+          cmds="$(commands_in "$f" 2>/dev/null)" || continue
+          [[ -n "$cmds" ]] || continue
+          if grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))' <<<"$cmds"; then
+            grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|make [a-z]+)' <<<"$cmds"
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
     echo "    (empty = no session both checked out a non-own ref and built)"
@@ -3832,12 +3846,20 @@ if want drift; then
     ' "$store" 2>/dev/null
   }
 
-  # ── dropped dispatches ──────────────────────────────────────────────────────
+  # ── dispatch refusals ───────────────────────────────────────────────────────
   # A cron expansion counts SCHEDULED SLOTS. The Claude runtime declines any
   # dispatch that would overlap the previous run of the same task and records the
-  # refusal as `per_task_limit`, so a slot is not a run. Measured on the live
-  # store: 58 of 168 slots dropped over 2026-08-02→08-09 (34.5%), corroborating
-  # 52/142 (36.6%) and 108/161 (32.9%) from two earlier windows.
+  # refusal as `per_task_limit`, so a slot is not a run.
+  #
+  # What this metric reports is REFUSALS, which are an UPPER BOUND on drops — not
+  # drops. A refusal says the runtime declined at the due minute; the run can still
+  # start moments later, and measured 2026-08-12, **37 of 66 refused hours
+  # dispatched anyway**. Reading this count as a drop count is what produced five
+  # mutually-inconsistent rates (32.9%, 36.6%, 44.0%, 50.0%, 58.3%) across both
+  # instances — including the 58/168 (34.5%) this comment used to state as fact.
+  # A drop rate is derivable only by comparing ACTUAL DISPATCHES to scheduled slots
+  # (the transcript-cross-validated reading is 31 of 164, 18.9%), which this
+  # surface cannot see, so it is deliberately not published here.
   #
   # The store writes one record per POLL TICK — roughly every 60s for as long as
   # the task stays blocked — so raw records overstate badly: 1067 records for 58
@@ -4128,7 +4150,7 @@ if want drift; then
     # An empty floor means no record exists to prove the surface is live, so the
     # whole figure is UNKNOWN rather than zero.
     if [ -z "$CLAUDE_DROPPED" ] || [ -z "$SKIP_FLOOR" ]; then
-      echo "    claude engineer dropped dispatches: UNKNOWN (no readable skip record — an absent surface is not a zero)"
+      echo "    claude engineer dispatch refusals: UNKNOWN (no readable skip record — an absent surface is not a zero)"
     else
       # A rate is stated only when the store's records demonstrably cover the whole
       # window. Records that begin INSIDE it leave the earlier slots unaccounted,
@@ -4162,23 +4184,28 @@ if want drift; then
          && [ "$CLAUDE_DROPPED" -le "$RATE_TOTAL" ]; then
         RATE=$(awk -v d="$CLAUDE_DROPPED" -v t="$RATE_TOTAL" \
           'BEGIN { if (t > 0) printf "%.1f%% of %d slot(s) at the current cadence", 100 * d / t, t; else print "UNKNOWN" }')
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: $RATE"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: $RATE"
       elif [ -n "$RATE_TOTAL" ] && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
            && [ "$CLAUDE_DROPPED" -gt "$RATE_TOTAL" ]; then
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (more drops than the window schedules — cadence changed within it)"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: UNKNOWN (more refusals than the window schedules — cadence changed within it)"
       elif [ "$ACTIVE_IN_WINDOW" -ne 1 ]; then
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (no dispatch or skip inside the window — scheduler not proven active)"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: UNKNOWN (no dispatch or skip inside the window — scheduler not proven active)"
       else
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (skip records do not span the window)"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: UNKNOWN (skip records do not span the window)"
       fi
+      # Every branch above prints a COUNT, so the qualifier belongs to all four rather than
+      # only the one that also states a rate — a reader who sees `3 slot(s)` beside
+      # `refusal rate: UNKNOWN` needs it just as much, and that is the shape the drift-section
+      # default actually emits.
+      echo "      ^ UPPER BOUND on dropped dispatches, not a drop count — a refused slot may still have dispatched (37 of 66 did, measured 2026-08-12). Derive drops by comparing actual dispatches to scheduled slots."
     fi
     # The Codex `automations` table records dispatches that HAPPENED; it carries no
     # skip surface, so a Codex drop is visible only as a gap. Reporting 0 here would
     # fabricate a clean lane out of a surface that cannot record the event.
-    echo "    codex engineer dropped dispatches: UNKNOWN (scheduler store records dispatches only, no skip surface)"
+    echo "    codex engineer dispatch refusals: UNKNOWN (scheduler store records dispatches only, no skip surface)"
   else
-    echo "    claude engineer dropped dispatches: UNKNOWN (claude engineer schedule unmeasured)"
-    echo "    codex engineer dropped dispatches: UNKNOWN (scheduler store records dispatches only, no skip surface)"
+    echo "    claude engineer dispatch refusals: UNKNOWN (claude engineer schedule unmeasured)"
+    echo "    codex engineer dispatch refusals: UNKNOWN (scheduler store records dispatches only, no skip surface)"
   fi
 
   echo

@@ -62,12 +62,15 @@ plugin carries them (or an explicit, tested subset):
    is the default state of every head: the status corroborates run-completion only when its
    `description` begins `Review completed`, and never satisfies the gate on its own. Without this a
    state-only check reports every never-reviewed PR as green.
-4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713) — a review object
-   counts only when its body begins `**Actionable comments posted:`; an empty object is a reply
+4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713 / #2819) — a review
+   object counts only when its body begins `**Actionable comments posted:` **after stripping any
+   leading HTML comments and the whitespace around them**; an empty object is a reply
    container, never a review, whatever its `commit_id`. Measured over the 60 most recently merged
    monorepo PRs: 16 of 19 objects at a merged head were empty, and two PRs merged with no substantive
    review at the merged commit. Without this a bare `commit_id == head` match reports a non-review as
-   a green.
+   a green. The strip is required rather than permissive: CodeRabbit fronts every real body with an
+   agent-hint block, so without it the identification matches no genuine review and reports
+   `green_review=none` over a real green — burning the metered lanes on an already-reviewed head.
 4e. **CodeRabbit verdict-bearing command reply** (monorepo#2758) — a command-invocation reply counts
    when it states `Reviewed pull request #<n> at <sha>` with `<sha>` prefix-matching `headRefOid`,
    **and** `I found no actionable issues`, **and** is updated after the latest authenticated

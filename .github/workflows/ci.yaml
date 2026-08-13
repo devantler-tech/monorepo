@@ -40,6 +40,7 @@ jobs:
       renovate-dashboard: ${{ steps.filter.outputs.renovate-dashboard }}
       comment-disclosure-drift: ${{ steps.filter.outputs.comment-disclosure-drift }}
       pr-ownership-disclosure: ${{ steps.filter.outputs.pr-ownership-disclosure }}
+      pipefail-grep-guard: ${{ steps.filter.outputs.pipefail-grep-guard }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,7 +48,7 @@ jobs:
           persist-credentials: false
       - name: Detect changes
         id: filter
-        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
             docs:
@@ -206,6 +207,11 @@ jobs:
               - '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/review-provider-loop-contract.test.sh'
+              # The captured review bodies the contract test asserts against. A
+              # fixture is an input to that test, so editing one can invalidate a
+              # regression case — without this the job is skipped and CI stays
+              # green while the case it pins no longer reproduces.
+              - '.claude/scripts/fixtures/**'
               - '.github/workflows/ci.yaml'
             agent-role-delivery-contract:
               - 'AGENTS.md'
@@ -266,6 +272,18 @@ jobs:
               - '.claude/scripts/pr-ownership-disclosure.sh'
               - '.claude/scripts/pr-ownership-disclosure-go/**'
               - '.github/workflows/ci.yaml'
+            pipefail-grep-guard:
+              # The guard scans EVERY tracked shell script, so any shell change
+              # can introduce the shape it rejects — an enumerated subset would
+              # let a new script land unchecked.
+              # ANY path. A shell script need not be named `*.sh` — the guard
+              # identifies one by shebang, anywhere in the tree — so any narrower
+              # filter contradicts its stated scope and lets an extensionless
+              # `tools/check` or a repository-root `check` land unscanned. An
+              # enumerated set of "script-ish" directories only moves the gap
+              # rather than closing it. The sweep is ~9s over the whole
+              # repository, so running it unconditionally is the cheaper error.
+              - '**'
             product-value:
               - 'AGENTS.md'
               - '**/[Aa][Dd][Rr]/**'
@@ -540,6 +558,50 @@ jobs:
       # guard resolves worktree paths with `pwd -P` (macOS /private/tmp symlinks).
       - name: Self-test the submodule-init isolation guard
         run: bash .claude/scripts/submodule-init.test.sh
+
+  test-pipefail-grep-guard:
+    name: Test pipefail grep guard
+    needs: changes
+    if: needs.changes.outputs.pipefail-grep-guard == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The self-test proves the class is real by executing it, then covers each
+      # spelling the guard must catch and each safe shape it must leave alone.
+      - name: Self-test the guard
+        run: bash .claude/scripts/pipefail-grep-guard.test.sh
+      # ENFORCEMENT IS LATENT, per feature-flag-first delivery. This guard
+      # approximates a shell parser in ~1100 lines of bash, so it can err in both
+      # directions: a silent miss on a hazardous line, or a false positive that
+      # blocks a valid script. Gating every PR in the repository on that judgement
+      # is the risk the flag holds back.
+      #
+      # The repository-wide sweep therefore runs only when the
+      # `ENFORCE_PIPEFAIL_GREP_GUARD` repository variable is `true`. Activation is a
+      # separate, reversible step, taken once the guard has run clean against real
+      # traffic. The self-test above is NOT gated — it is an ordinary unit test of a
+      # tracked script, and keeping it running is what makes the latent code
+      # trustworthy at the moment the flag is flipped.
+      #
+      # This is a RELEASE flag, so it is short-lived by contract: #2821 owns
+      # activation and removal, and expires 2026-09-30. From that date
+      # `pipefail-grep-guard.test.sh` fails, so the flag cannot become permanent
+      # debt without someone deciding to keep it.
+      - name: Reject writers piped into an early-exiting grep
+        if: vars.ENFORCE_PIPEFAIL_GREP_GUARD == 'true'
+        run: bash .claude/scripts/pipefail-grep-guard.sh
+      # The OFF state is a real state, so it reports rather than silently doing
+      # nothing: a run in which the sweep did not execute says so.
+      - name: Report that enforcement is latent
+        if: vars.ENFORCE_PIPEFAIL_GREP_GUARD != 'true'
+        run: |
+          echo "pipefail-grep-guard: enforcement is LATENT (ENFORCE_PIPEFAIL_GREP_GUARD is not 'true')."
+          echo "The self-test ran; the repository-wide sweep did not gate this PR."
 
   test-maintainer-preflight:
     name: Test maintainer preflight contract
@@ -828,6 +890,7 @@ jobs:
       - test-branch-cleanup
       - test-worktree-cleanup
       - test-submodule-init
+      - test-pipefail-grep-guard
       - test-maintainer-preflight
       - test-memory-hygiene
       - test-latency-discipline-contract
@@ -841,7 +904,7 @@ jobs:
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/actions/aggregate-job-checks@61d9c87b302523778789c7cf09655b87b6716e87 # v13.0.4
+        uses: devantler-tech/actions/aggregate-job-checks@cf66636f30170e30cc00b19ddc54b4101b4e8516 # v13.0.5
         with:
           job-results: >-
             ${{ needs.changes.result }}
@@ -859,6 +922,7 @@ jobs:
             ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-submodule-init.result }}
+            ${{ needs.test-pipefail-grep-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
             ${{ needs.test-latency-discipline-contract.result }}
