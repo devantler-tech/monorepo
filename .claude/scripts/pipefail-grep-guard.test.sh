@@ -960,6 +960,55 @@ run_guard "$f" && rc=0 || rc=$?
 report "an unparsable delimiter masks nothing rather than guessing" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# A command substitution is EXECUTABLE even inside double quotes, so the common
+# capture form really does run the pipeline and really does exhibit the hazard.
+# Masking the whole quoted run hid it.
+flag_case "a pipeline inside a double-quoted command substitution still runs" \
+  'out="$({ printf "MATCH\n"; head -c 200000 /dev/zero; } | grep -q MATCH)"'
+
+# ...and its control: the same text as DATA, with no substitution, is not a
+# pipeline at all.
+clean_case "the same text as a plain quoted string is not a pipeline" \
+  "printf '%s\\n' 'out=| grep -q MATCH'"
+
+# A trailing comment is prose. This is the probe-site twin of the heredoc
+# scanner's rule, and both now go through one implementation.
+clean_case "pipeline-shaped prose in a trailing comment is not a pipeline" \
+  "printf 'ok\\n' # producer | grep -q MATCH"
+
+# ...its control: the same line with the pipeline BEFORE the comment is real.
+flag_case "a real pipeline carrying a trailing comment still flags" \
+  'printf "%s" "$v" | grep -q MATCH # intentional'
+
+# A plain heredoc terminates only on a line that is EXACTLY the delimiter — a
+# trailing space makes it payload. Accepting it ended the body early, and the
+# rest of the payload was then read as code.
+f="$(mkscript "terminator-with-trailing-space.sh" \
+  'cat <<EOF' \
+  'EOF ' \
+  '# pipefail-grep-guard: allow-file — payload, not a directive' \
+  'EOF' \
+  'printf "%s" "$v" | grep -q REAL')"
+run_guard "$f" && rc=0 || rc=$?
+report "a delimiter with trailing whitespace does not terminate a heredoc" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# ---------------------------------------------------------------------------
+# 2h. The rollout gate. Enforcement ships LATENT, so both states are pinned here:
+#     the sweep is conditional and the self-test is not.
+# ---------------------------------------------------------------------------
+ci="$here/../../.github/workflows/ci.yaml"
+if [[ -r "$ci" ]]; then
+  report "the repository-wide sweep is gated behind a default-off variable" \
+    "$(yn grep -q "if: vars.ENFORCE_PIPEFAIL_GREP_GUARD == 'true'" "$ci")" "ci=$ci"
+  report "the OFF state reports rather than silently skipping" \
+    "$(yn grep -q "if: vars.ENFORCE_PIPEFAIL_GREP_GUARD != 'true'" "$ci")" "ci=$ci"
+  # The self-test must NOT be gated: latent code that stops being tested is how a
+  # flag flip turns into a surprise.
+  report "the self-test itself is not gated" \
+    "$(yn test "$(grep -c 'pipefail-grep-guard.test.sh' "$ci")" -ge 1)" "ci=$ci"
+fi
+
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2
   exit 1

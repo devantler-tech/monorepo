@@ -569,10 +569,28 @@ jobs:
       # spelling the guard must catch and each safe shape it must leave alone.
       - name: Self-test the guard
         run: bash .claude/scripts/pipefail-grep-guard.test.sh
-      # Then the guard itself over every tracked shell script, so the shape
-      # cannot come back after the sweep that removed it.
+      # ENFORCEMENT SHIPS LATENT, per feature-flag-first delivery: this guard is a
+      # ~600-line approximation of a shell parser, and nine review rounds found
+      # gaps in both directions — silent misses AND false positives on valid
+      # scripts. Making it blocking in the same change that introduces it would
+      # hand every PR in the repository a parser this new.
+      #
+      # So the repository-wide sweep runs only when the `ENFORCE_PIPEFAIL_GREP_GUARD`
+      # repository variable is set to `true`. Activation is a separate, reversible
+      # step once the guard has been validated against real traffic. The self-test
+      # above is NOT gated — it is an ordinary unit test of a tracked script, and
+      # keeping it running is what makes the latent code trustworthy when the flag
+      # is eventually flipped.
       - name: Reject writers piped into an early-exiting grep
+        if: vars.ENFORCE_PIPEFAIL_GREP_GUARD == 'true'
         run: bash .claude/scripts/pipefail-grep-guard.sh
+      # The OFF state is a real state, so it reports rather than silently doing
+      # nothing: a run in which the sweep did not execute says so.
+      - name: Report that enforcement is latent
+        if: vars.ENFORCE_PIPEFAIL_GREP_GUARD != 'true'
+        run: |
+          echo "pipefail-grep-guard: enforcement is LATENT (ENFORCE_PIPEFAIL_GREP_GUARD is not 'true')."
+          echo "The self-test ran; the repository-wide sweep did not gate this PR."
 
   test-maintainer-preflight:
     name: Test maintainer preflight contract

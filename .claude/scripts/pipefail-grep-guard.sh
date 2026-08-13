@@ -93,6 +93,16 @@
 #   it in this repository, so the pattern stays narrow rather than growing an
 #   xargs argument parser; extend it here if one ever appears.
 #
+#   ⚠️ KNOWN, MEASURED LIMIT of the same kind: `producer | env -S 'grep -q MATCH'`
+#   runs grep and exhibits the hazard, and is NOT detected — GNU env's
+#   `-S`/`--split-string` builds the command from inside a quoted VALUE, so the
+#   command name does not appear as a word where this grammar looks for it.
+#   Detecting it means parsing an option's value as a command line, which is the
+#   wrapper-level twin of the quoting problem that monorepo#2797 replaces this
+#   layer to solve. There is no instance in this repository. Recorded rather than
+#   patched, because adding one more spelling to the prefix grammar is what four
+#   earlier rounds already showed does not converge.
+#
 # ESCAPE HATCH
 #   A line carrying `pipefail-grep-guard: allow` AFTER A `#` is skipped, so a
 #   fixture that must contain the offending text stays possible without turning
@@ -196,9 +206,32 @@ max_count_is_finite() { case "$1" in -*) return 1 ;; *) return 0 ;; esac; }
 # to decide whether a `<<` is an operator; see monorepo#2797 for the tokenizer
 # that would let the argv walk share it.
 mask_quoted() {
-  local s="$1" out="" c q="" i esc=0
+  local s="$1" out="" c q="" i esc=0 depth=0
+  local -a saved_q=()
   for ((i = 0; i < ${#s}; i++)); do
     c="${s:i:1}"
+    # A COMMAND SUBSTITUTION IS EXECUTABLE EVEN INSIDE DOUBLE QUOTES. Masking the
+    # whole quoted run hid the pipeline in the common assertion form
+    # `out="$(producer | grep -q MATCH)"`, which really does run and really does
+    # exhibit this hazard. So `$(` suspends the quoted run and its body is emitted
+    # as code; the matching `)` resumes it. Depth is tracked because a
+    # substitution can contain another.
+    if [[ "$c" == '$' && "${s:i+1:1}" == '(' ]]; then
+      saved_q[depth]="$q"
+      depth=$((depth + 1))
+      q=""
+      esc=0
+      out+='$('
+      i=$((i + 1))
+      continue
+    fi
+    if [[ -z "$q" && "$c" == ')' ]] && ((depth > 0)); then
+      depth=$((depth - 1))
+      q="${saved_q[depth]}"
+      [[ "$q" == "'" ]] && esc=0
+      out+=')'
+      continue
+    fi
     # ANSI-C quoting: `$'…'` DOES honour backslash escapes, unlike a plain `'…'`.
     # Treating it as an ordinary single-quoted run ended it at the `\'` in
     # `A=$'x\' y'`, so the rest of the line read as quoted and a REAL pipeline
@@ -252,6 +285,39 @@ mask_quoted() {
     esac
   done
   _masked="$out"
+}
+
+# Cut a syntactic trailing comment off a line, given its masked copy ($1) and the
+# raw line ($2). Sets `_code_mask` and `_code_raw` to the executable part; returns
+# 1 when the whole line is comment.
+#
+# ONE IMPLEMENTATION, because this rule kept drifting. `#` introduces a comment at
+# line start, after whitespace, or STRAIGHT AFTER AN OPERATOR — `:;# <<EOF` and
+# `producer |# note` are comments with no whitespace anywhere. This file decides
+# "where does code end" in several places, and each site that grew its own version
+# of the rule became a defect: one missed operator-adjacent comments in the heredoc
+# scanner, another let pipeline-shaped prose in a trailing comment be matched as a
+# live pipeline.
+#
+# Reading the MASKED copy is what makes it safe: a `#` inside quotes is already an
+# `x`, and a `${v#…}` expansion is not an introducer either, since its `#` follows
+# a word character.
+strip_comment() {
+  local m="$1" raw="$2" i
+  _code_mask="$m"
+  _code_raw="$raw"
+  for ((i = 0; i < ${#m}; i++)); do
+    [[ "${m:i:1}" == '#' ]] || continue
+    ((i == 0)) && return 1
+    case "${m:i-1:1}" in
+      [[:space:]] | ';' | '&' | '|' | '(' | ')')
+        _code_mask="${m:0:i}"
+        _code_raw="${raw:0:i}"
+        return 0
+        ;;
+    esac
+  done
+  return 0
 }
 
 # --- heredoc detection -----------------------------------------------------
@@ -311,27 +377,9 @@ heredoc_delimiters() {
       ;;
     *) m="$raw" ;;
   esac
-  # An unquoted `#` opens a comment; nothing after it is an operator. It counts as
-  # an introducer at line start, after whitespace, or STRAIGHT AFTER AN OPERATOR —
-  # `:;# <<EOF` and `producer |# note` are both comments with no whitespace
-  # anywhere. Restricting it to whitespace left the comment text being scanned for
-  # operators, so a `<<EOF` merely mentioned in one masked the real code below it.
-  #
-  # Scanned on the MASKED copy, so a `#` inside quotes is already an `x` and a
-  # `${v#…}` expansion is not an introducer either — its `#` follows a letter.
-  for ((i = 0; i < ${#m}; i++)); do
-    [[ "${m:i:1}" == '#' ]] || continue
-    if ((i == 0)); then
-      return 1
-    fi
-    case "${m:i-1:1}" in
-      [[:space:]] | ';' | '&' | '|' | '(' | ')')
-        m="${m:0:i}"
-        raw="${raw:0:i}"
-        break
-        ;;
-    esac
-  done
+  strip_comment "$m" "$raw" || return 1
+  m="$_code_mask"
+  raw="$_code_raw"
   len=${#m}
   for ((i = 0; i + 1 < len; i++)); do
     [[ "${m:i:2}" == '<<' ]] || continue
@@ -452,10 +500,14 @@ is_heredoc_terminator() {
   # it is recompiled per call, and this runs against every line a lookahead walks.
   # Measured ~3× cheaper over the repository than going straight to the regex.
   [[ "$1" == *"$2"* ]] || return 1
+  # The delimiter must be ALONE on the line — no trailing whitespace either.
+  # Allowing `EOF ` to terminate ended a body at a payload line, and everything
+  # after it was then read as code, so a payload directive exempted the file.
+  # `<<-` strips leading TABS and nothing else.
   if (($3)); then
-    [[ "$1" =~ ^$'\t'*"$2"[[:space:]]*$ ]]
+    [[ "$1" =~ ^$'\t'*"$2"$ ]]
   else
-    [[ "$1" =~ ^"$2"[[:space:]]*$ ]]
+    [[ "$1" == "$2" ]]
   fi
 }
 
@@ -712,7 +764,7 @@ scan_file() {
   # Index-based, never `"${lines[@]}"`: bash 3.2 (the macOS system bash) treats
   # an empty array's `[@]` expansion as an unbound variable under `set -u`, so
   # the array form aborts the whole run on the first empty file.
-  local n=${#lines[@]} i probe probe_mask probe_test base j joins start
+  local n=${#lines[@]} i probe probe_mask probe_code probe_test base j joins start
   # The whole-file directive is honoured only from a SYNTACTIC comment. A heredoc
   # body is data, not code — a payload line reading
   # `# pipefail-grep-guard: allow-file — documentation only` looks identical to
@@ -905,6 +957,14 @@ scan_file() {
         ;;
       *) probe_mask="$probe" ;;
     esac
+    # A trailing comment is prose, not code: `printf 'ok\n' # producer | grep -q X`
+    # runs a plain printf. Matching the comment text reported an offender for a
+    # line that executes no pipeline at all. Same rule, same implementation as the
+    # heredoc scanner — this is the site where writing a second copy of it would
+    # drift again.
+    strip_comment "$probe_mask" "$probe" || continue
+    probe_mask="$_code_mask"
+    probe_code="$_code_raw"
     [[ "$probe_mask" =~ $PIPE_GREP_RE ]] || continue
 
     # Re-walk every pipe-into-grep on the probe, and REPORT every one of them:
@@ -921,7 +981,7 @@ scan_file() {
     # from the RAW copy at the same offset — masking preserves length, so one
     # index serves both. Reading arguments from the mask would hand the option
     # walk a row of `x`s instead of `-q`.
-    local tail_m="$probe_mask" tail_r="$probe" head_ pre rest flag k off
+    local tail_m="$probe_mask" tail_r="$probe_code" head_ pre rest flag k off
     local -a line_flags=()
     local lf=0
     while [[ "$tail_m" =~ $PIPE_GREP_RE ]]; do
