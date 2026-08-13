@@ -159,6 +159,130 @@ assert_prose "${constitution}" 'an empty object is a reply container, never a re
 assert_prose "${surveyor}" 'Actionable comments posted:' \
   "surveyor lost the positive identification of a CodeRabbit review object"
 
+# monorepo#2819: CodeRabbit now emits every real review body behind an agent-hint HTML comment, so a
+# body that BEGINS WITH the marker no longer describes any genuine review. Measured on four
+# substantive review objects (monorepo#2810 at 07:18:36Z and 10:56:58Z, monorepo#2723 on 2026-08-12
+# at 20:33:20Z and 21:59:21Z) — all four carry the prefix. The identification fails CLOSED, so a real
+# current-head review reads as "no review" and the run walks down into weekly-limited Codex and
+# monthly-limited Bugbot: the exact inversion the cheapest-lane-first order exists to prevent.
+#
+# The rule is prose an agent executes, so the drift risk is a later edit quietly restoring the bare
+# BEGINS-WITH test at one of the five sites. The fixture below is REAL captured output rather than a
+# hand-written sample, and the OLD rule is kept as a live ablation: it must FAIL on that fixture, or
+# the fixture no longer reproduces the defect this guard was filed against.
+cr_hint_fixture="${repo_root}/.claude/scripts/fixtures/coderabbit-review-body-hint-prefix-2819.txt"
+[ -r "${cr_hint_fixture}" ] ||
+  fail "the captured CodeRabbit hint-prefixed review body fixture is missing"
+
+# Remove leading HTML comment blocks (and the whitespace around them), then apply the unchanged
+# BEGINS-WITH test. An unterminated comment stops the strip rather than consuming the whole body.
+# The iteration bound makes the loop STRUCTURALLY terminating. Without it, the unterminated-comment
+# branch below is the only thing stopping an infinite repeat, so removing that branch would make this
+# contract test HANG rather than fail — an unbounded loop is a worse signal than a wrong answer, and
+# `timeout` is not installed on macOS, so the bound cannot be applied from outside.
+strip_leading_html_comments() {
+  local body="$1" rest guard=0
+  while [ "${guard}" -lt 64 ]; do
+    guard=$((guard + 1))
+    body="${body#"${body%%[![:space:]]*}"}"
+    case "${body}" in
+      '<!--'*)
+        rest="${body#*-->}"
+        # No closing delimiter: an unterminated comment must not consume the rest of the body.
+        if [ "${rest}" = "${body}" ]; then break; fi
+        body="${rest}"
+        ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "${body}"
+}
+
+# The fixed rule: prefix-tolerant, but still ANCHORED — never a substring search.
+cr_body_identifies_as_review() {
+  case "$(strip_leading_html_comments "$1")" in
+    '**Actionable comments posted:'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The rule as it stood before #2819, kept ONLY as the ablation below.
+cr_body_identifies_pre_2819() {
+  case "$1" in
+    '**Actionable comments posted:'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cr_hint_body="$(cat "${cr_hint_fixture}")"
+
+# ABLATION — the defect must still reproduce on real data, or this guard proves nothing.
+if cr_body_identifies_pre_2819 "${cr_hint_body}"; then
+  fail "the captured fixture no longer reproduces #2819 — the pre-fix rule matched it, so this guard is vacuous"
+fi
+cr_body_identifies_as_review "${cr_hint_body}" ||
+  fail "prefix-tolerant identification does not recognise a real hint-prefixed CodeRabbit review body"
+
+# NEGATIVE CONTROLS — the empty-container rejection (#2620/#2677) must survive the widening, and
+# stripping comments must not turn arbitrary prose into a review.
+if cr_body_identifies_as_review ""; then
+  fail "an empty CodeRabbit reply container is identified as a review"
+fi
+if cr_body_identifies_as_review "<!-- coderabbit-cli-agent-hint:v3
+-->"; then
+  fail "a body carrying only the hint comment is identified as a review"
+fi
+if cr_body_identifies_as_review "> [!TIP]
+> For best results, initiate chat on the files or code changes."; then
+  fail "a CodeRabbit chat acknowledgement is identified as a review"
+fi
+# The marker must still be at the START of the stripped body — a mention further in is not a review.
+if cr_body_identifies_as_review "Some prose that merely mentions **Actionable comments posted: 2**"; then
+  fail "identification degraded from an anchored match to a substring search"
+fi
+# MULTILINE anchoring. The single-line control above displaces the marker only horizontally, so a
+# LINE-anchored implementation (`grep '^\*\*Actionable'`, or a per-line loop) still passes it while
+# accepting this body — the marker starts a line, just not the body. Pin the anchor to the whole
+# stripped body, not to any line within it.
+if cr_body_identifies_as_review "Some prose about a review.
+**Actionable comments posted: 2**"; then
+  fail "identification anchors per-LINE, so prose followed by the marker is accepted as a review"
+fi
+# A malformed body — a leading `<!--` with no `-->` — must be REJECTED rather than have its opening
+# delimiter silently consume the rest. Verified 2026-08-13: deleting the early `break` leaves this
+# control passing, because the iteration bound stops the loop and the body is returned unchanged, so
+# it still fails the anchored match. That is stated rather than glossed — this control pins the
+# REJECTION, not the break, and the bound above is what actually removes the hang risk. The break is
+# an early exit, and its removal is observationally inert only while that bound stands.
+if cr_body_identifies_as_review "<!-- unterminated hint
+**Actionable comments posted: 2**"; then
+  fail "an unterminated leading comment is consumed, so a malformed body is identified as a review"
+fi
+
+# The five prose sites that state the rule, each pinned by its OWN surrounding text.
+# A bare file-wide presence check would be satisfied by any one occurrence, so the operational
+# instruction — the lane table, or the surveyor's primary directive — could regress to the unstripped
+# begins-with predicate while a later explanatory paragraph kept the phrase and the suite stayed
+# green. Those are the occurrences a run actually executes, so each is asserted separately.
+assert_prose "${constitution}" \
+  'begins `**Actionable comments posted:` — **after stripping any leading HTML comments and the whitespace around them**, since CodeRabbit prefixes real bodies' \
+  "constitution's green-review LANE TABLE lost the strip, so its operational row rejects every real review"
+assert_prose "${constitution}" \
+  'its body begins `**Actionable comments posted:` **after stripping any leading HTML comments and the whitespace around them**, because' \
+  "constitution's CodeRabbit-success paragraph lost the strip, so a real review reads as none"
+assert_prose "${surveyor}" \
+  '`**Actionable comments posted:`, after stripping any leading HTML comments and the whitespace around them** — a positive' \
+  "surveyor's primary cr@<sha> instruction lost the strip, so the digest reports green_review=none over a real green"
+assert_prose "${surveyor}" \
+  'begins `**Actionable comments posted: N**` **once its leading HTML comments and surrounding whitespace are stripped**' \
+  "surveyor's artifact-shape rationale lost the strip, so the two surveyor sites can drift apart"
+assert_prose "${parity_checklist}" \
+  'begins `**Actionable comments posted:` **after stripping any leading HTML comments and the whitespace around them**; an empty object is a reply' \
+  "surveyor parity checklist does not carry the prefix-tolerant identification"
+# The widening must not become a bare commit_id match — the empty-container measurement still stands.
+assert_prose "${constitution}" 'never weaken this to a bare' \
+  "constitution lost the prohibition on weakening identification to a bare commit_id match"
+
 # monorepo#2758, measured on platform#3051 head 992a93caecd1: the head's status read
 # `Review completed`, the newest review object was an empty container at an OLDER head, and the
 # summary comment named no sha at all — so the finding-free verdict existed ONLY in the
@@ -365,6 +489,11 @@ grep -Fq 'review-provider-loop-contract: ${{ steps.filter.outputs.review-provide
   fail "CI does not export the review-provider contract change filter"
 grep -Fq '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md' "${workflow}" ||
   fail "parity-checklist changes do not trigger the review-provider contract check"
+# The captured review bodies are inputs to this test, so a fixture-only edit can
+# invalidate a regression case. Without the fixture path in the filter that edit
+# skips this job and CI stays green over a case that no longer reproduces.
+grep -Fq '.claude/scripts/fixtures/**' "${workflow}" ||
+  fail "fixture changes do not trigger the review-provider contract check"
 grep -Fq 'test-review-provider-loop-contract:' "${workflow}" ||
   fail "CI does not define the review-provider contract test job"
 grep -Fq 'run: bash .claude/scripts/review-provider-loop-contract.test.sh' "${workflow}" ||

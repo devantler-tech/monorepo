@@ -206,6 +206,11 @@ jobs:
               - '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/review-provider-loop-contract.test.sh'
+              # The captured review bodies the contract test asserts against. A
+              # fixture is an input to that test, so editing one can invalidate a
+              # regression case — without this the job is skipped and CI stays
+              # green while the case it pins no longer reproduces.
+              - '.claude/scripts/fixtures/**'
               - '.github/workflows/ci.yaml'
             agent-role-delivery-contract:
               - 'AGENTS.md'
