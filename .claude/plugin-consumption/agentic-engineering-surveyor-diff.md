@@ -58,7 +58,7 @@ plugin carries them (or an explicit, tested subset):
    state-only check reports every never-reviewed PR as green.
 4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713 / #2819) — a review
    object counts only when its body begins `**Actionable comments posted:` **after stripping any
-   leading HTML comments**; an empty object is a reply
+   leading HTML comments and the whitespace around them**; an empty object is a reply
    container, never a review, whatever its `commit_id`. Measured over the 60 most recently merged
    monorepo PRs: 16 of 19 objects at a merged head were empty, and two PRs merged with no substantive
    review at the merged commit. Without this a bare `commit_id == head` match reports a non-review as

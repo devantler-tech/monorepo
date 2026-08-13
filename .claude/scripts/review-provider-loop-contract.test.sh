@@ -265,19 +265,19 @@ fi
 # begins-with predicate while a later explanatory paragraph kept the phrase and the suite stayed
 # green. Those are the occurrences a run actually executes, so each is asserted separately.
 assert_prose "${constitution}" \
-  'begins `**Actionable comments posted:` — **after stripping any leading HTML comments**, since CodeRabbit prefixes real bodies' \
+  'begins `**Actionable comments posted:` — **after stripping any leading HTML comments and the whitespace around them**, since CodeRabbit prefixes real bodies' \
   "constitution's green-review LANE TABLE lost the strip, so its operational row rejects every real review"
 assert_prose "${constitution}" \
-  'its body begins `**Actionable comments posted:` **after stripping any leading HTML comments**, because' \
+  'its body begins `**Actionable comments posted:` **after stripping any leading HTML comments and the whitespace around them**, because' \
   "constitution's CodeRabbit-success paragraph lost the strip, so a real review reads as none"
 assert_prose "${surveyor}" \
-  '`**Actionable comments posted:`, after stripping any leading HTML comments** — a positive' \
+  '`**Actionable comments posted:`, after stripping any leading HTML comments and the whitespace around them** — a positive' \
   "surveyor's primary cr@<sha> instruction lost the strip, so the digest reports green_review=none over a real green"
 assert_prose "${surveyor}" \
-  'begins `**Actionable comments posted: N**` **once its leading HTML comments are stripped**' \
+  'begins `**Actionable comments posted: N**` **once its leading HTML comments and surrounding whitespace are stripped**' \
   "surveyor's artifact-shape rationale lost the strip, so the two surveyor sites can drift apart"
 assert_prose "${parity_checklist}" \
-  'begins `**Actionable comments posted:` **after stripping any leading HTML comments**; an empty object is a reply' \
+  'begins `**Actionable comments posted:` **after stripping any leading HTML comments and the whitespace around them**; an empty object is a reply' \
   "surveyor parity checklist does not carry the prefix-tolerant identification"
 # The widening must not become a bare commit_id match — the empty-container measurement still stands.
 assert_prose "${constitution}" 'never weaken this to a bare' \
