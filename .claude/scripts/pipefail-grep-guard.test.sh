@@ -665,6 +665,36 @@ run_guard "$f" && rc=0 || rc=$?
 report "an unterminated <<word is not a heredoc, so the code after it is still scanned" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# Masking a body is the one thing this guard does that can HIDE code, so a `<<`
+# that is only TEXT must never start one. Each fixture below puts a real offender
+# where the false body would be, so it passes only if nothing was masked.
+f="$(mkscript "quoted-heredoc-operator.sh" \
+  'EOF() { :; }' \
+  "printf '%s\\n' '<<EOF'" \
+  'printf "%s" "$v" | grep -q NEEDLE' \
+  'EOF')"
+run_guard "$f" && rc=0 || rc=$?
+report "a quoted <<WORD is text, not a heredoc operator" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+f="$(mkscript "commented-heredoc-operator.sh" \
+  '# see <<EOF for details' \
+  'printf "%s" "$v" | grep -q NEEDLE' \
+  'EOF')"
+run_guard "$f" && rc=0 || rc=$?
+report "a <<WORD inside a comment is not a heredoc operator either" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# Its control: masking must still happen for a REAL operator, or the two
+# assertions above would pass simply because heredocs stopped working.
+f="$(mkscript "real-operator-still-masks.sh" \
+  "cat <<'EOF'" \
+  'x | grep -q MATCH' \
+  'EOF')"
+run_guard "$f" && rc=0 || rc=$?
+report "positive control: an unquoted operator still hides its body" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
 # One command line can open SEVERAL heredocs, read in order. Tracking only the
 # first left the second body unaccounted for in both directions at once.
 f="$(mkscript "two-heredocs-one-line.sh" \

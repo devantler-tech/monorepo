@@ -184,6 +184,45 @@ esac
 # runs. Only `--` ends option parsing.
 max_count_is_finite() { case "$1" in -*) return 1 ;; *) return 0 ;; esac; }
 
+# Replace the CONTENTS of quoted runs with `x`, so a character that is only
+# meaningful OUTSIDE quotes is not read as meaningful inside them. Sets `_masked`
+# to a string of exactly the same length as its input, so an index into one also
+# indexes the other.
+#
+# Deliberately NOT a general quoting model — it is a single-line, single-purpose
+# primitive for "is this character quoted": it does not track quotes across lines,
+# and `$'…'` is treated as a `'…'` run preceded by a `$`, which is right for
+# locating operators and wrong for reading the value. Its one caller uses it only
+# to decide whether a `<<` is an operator; see monorepo#2797 for the tokenizer
+# that would let the argv walk share it.
+mask_quoted() {
+  local s="$1" out="" c q="" i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    if [[ -n "$q" ]]; then
+      [[ "$c" == "$q" ]] && q=""
+      out+=x
+      continue
+    fi
+    case "$c" in
+      \" | \')
+        q="$c"
+        out+=x
+        ;;
+      \\)
+        # A backslash escapes the next character, so neither can be an operator.
+        out+=x
+        if ((i + 1 < ${#s})); then
+          out+=x
+          i=$((i + 1))
+        fi
+        ;;
+      *) out+="$c" ;;
+    esac
+  done
+  _masked="$out"
+}
+
 # --- heredoc detection -----------------------------------------------------
 # Sets HEREDOC_TERMS/HEREDOC_COUNT to EVERY static delimiter the line opens, in
 # the order bash reads their bodies, and returns 0 when there is at least one.
@@ -205,42 +244,80 @@ max_count_is_finite() { case "$1" in -*) return 1 ;; *) return 0 ;; esac; }
 # and the alternative — re-matching a growing anchored pattern per delimiter —
 # was the shape that kept producing parsing gaps here. Each iteration consumes at
 # least the `<<` it matched, so the walk always terminates.
+#
+# 🔴 THE `<<` MUST BE AN OPERATOR, NOT TEXT THAT LOOKS LIKE ONE. Masking a body is
+# the one thing this guard does that can HIDE code, so a `<<` inside a quoted word
+# or a comment must never start one. Both were live fail-opens:
+#
+#     printf '%s\n' '<<EOF'          # quoted: not a redirection
+#     # see <<EOF for details        # a comment: not code at all
+#     printf '%s' "$v" | grep -q X   <- masked, and silently unreported
+#     EOF
+#
+# Deciding it needs the quote state of the line, so the operator search runs over
+# a MASKED copy in which quoted content is replaced character-for-character. The
+# delimiter is then read from the ORIGINAL at the same offset, because a delimiter
+# may legitimately be quoted (`<<'---'`) and masking would erase its text.
 HEREDOC_TERMS=()
 HEREDOC_COUNT=0
 heredoc_delimiters() {
-  local s="$1" d
+  local raw="$1" s d m i len
   HEREDOC_TERMS=()
   HEREDOC_COUNT=0
-  while [[ "$s" == *'<<'* ]]; do
-    s="${s#*'<<'}"
-    # A third `<` makes it a here-string: consume it and keep looking.
-    if [[ "$s" == '<'* ]]; then
-      s="${s#<}"
+  # Cheap reject FIRST. Masking walks the line character by character, and this
+  # runs on every line of every scanned file — doing it unconditionally pushed a
+  # full sweep past five minutes, which is a real cost on a required check. The
+  # overwhelming majority of lines contain no `<<` at all.
+  [[ "$raw" == *'<<'* ]] || return 1
+  # Second cheap reject: with nothing quotable on the line, the line IS its own
+  # mask. `cat <<EOF` — the common form by far — takes neither walk.
+  case "$raw" in
+    *[\'\"\#\\]*)
+      mask_quoted "$raw"
+      m="$_masked"
+      ;;
+    *) m="$raw" ;;
+  esac
+  # An unquoted `#` opens a comment; nothing after it is an operator.
+  case "$m" in
+    '#'*) return 1 ;;
+    *[[:space:]]'#'*)
+      m="${m%%[[:space:]]#*}"
+      raw="${raw:0:${#m}}"
+      ;;
+  esac
+  len=${#m}
+  for ((i = 0; i + 1 < len; i++)); do
+    [[ "${m:i:2}" == '<<' ]] || continue
+    # A third `<` makes it a here-string, which opens no body. Step past ALL
+    # THREE: advancing by one would leave the overlapping `<<` at the next index
+    # to be read as an opener, and `<<<"EOF"` would then mask the file from a
+    # here-string's VALUE — which the suite caught as a regression here.
+    if [[ "${m:i+2:1}" == '<' ]]; then
+      i=$((i + 2))
       continue
     fi
+    # Read the delimiter from the UNMASKED line at this offset.
+    s="${raw:i+2}"
     s="${s#-}" # the <<- form, which strips leading tabs from the body
     while [[ "$s" == [[:space:]]* ]]; do s="${s#?}"; done
     case "$s" in
       "'"*)
         d="${s#\'}"
-        [[ "$d" == *"'"* ]] || return 1 # unbalanced quote: not a delimiter we can trust
-        s="${d#*\'}"
+        [[ "$d" == *"'"* ]] || continue # unbalanced quote: not a delimiter we can trust
         d="${d%%\'*}"
         ;;
       '"'*)
         d="${s#\"}"
-        [[ "$d" == *'"'* ]] || return 1
-        s="${d#*\"}"
+        [[ "$d" == *'"'* ]] || continue
         d="${d%%\"*}"
         ;;
       \\*)
         d="${s#\\}"
         d="${d%%[![:alnum:]_]*}"
-        s="${s#\\"$d"}"
         ;;
       [A-Za-z_]*)
         d="${s%%[![:alnum:]_]*}"
-        s="${s#"$d"}"
         ;;
       *) continue ;; # an expansion or operator, not a static delimiter
     esac
