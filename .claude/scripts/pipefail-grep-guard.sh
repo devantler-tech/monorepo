@@ -185,30 +185,72 @@ esac
 max_count_is_finite() { case "$1" in -*) return 1 ;; *) return 0 ;; esac; }
 
 # --- heredoc detection -----------------------------------------------------
-# Sets HEREDOC_TERM and returns 0 when the line opens a heredoc.
+# Sets HEREDOC_TERMS/HEREDOC_COUNT to EVERY static delimiter the line opens, in
+# the order bash reads their bodies, and returns 0 when there is at least one.
 #
-# A static delimiter is NOT restricted to identifiers: `cat <<'---'` is valid and
-# ends at a line reading `---`. An identifier-only pattern never entered heredoc
-# mode there, so the payload was scanned as code — which is a fail-OPEN in both
-# directions at once: a data line reading like the whole-file directive exempted
-# the real script, and a hazardous pipeline after the terminator went unreported.
-# So accept any quoted delimiter, and fall back to the unquoted identifier form.
+# One line can open more than one: `cat <<FIRST <<SECOND` reads FIRST's body, then
+# SECOND's. Handling only the first delimiter left the second body unaccounted
+# for in both directions at once — the scan read it as executable code (a false
+# positive on output text), and the allow-file prepass read a payload line in it
+# as a real whole-file directive, which exempted the script and hid a genuine
+# offender below.
 #
-# `<<<` is a HERE-STRING, not a heredoc, and opens no body — matching it would
-# swallow the rest of the file and hide every pipeline after it.
-HEREDOC_TERM=""
-heredoc_delimiter() {
-  local line="$1"
-  HEREDOC_TERM=""
-  [[ "$line" =~ \<\<\< ]] && return 1
-  if [[ "$line" =~ \<\<-?[[:space:]]*\'([^\']+)\' ]] ||
-    [[ "$line" =~ \<\<-?[[:space:]]*\"([^\"]+)\" ]] ||
-    [[ "$line" =~ \<\<-?[[:space:]]*([A-Za-z_][A-Za-z0-9_]*) ]]; then
-    HEREDOC_TERM="${BASH_REMATCH[1]}"
-    return 0
-  fi
-  return 1
+# A static delimiter is NOT restricted to identifiers either: `cat <<'---'` ends
+# at a line reading `---`, and an identifier-only pattern read it as no heredoc.
+#
+# `<<<` is a HERE-STRING and opens no body. It is skipped PER OPERATOR rather than
+# by rejecting the whole line, so a line carrying both still yields its heredoc.
+#
+# Scanning by hand rather than by regex: bash offers no repeated-match iteration,
+# and the alternative — re-matching a growing anchored pattern per delimiter —
+# was the shape that kept producing parsing gaps here. Each iteration consumes at
+# least the `<<` it matched, so the walk always terminates.
+HEREDOC_TERMS=()
+HEREDOC_COUNT=0
+heredoc_delimiters() {
+  local s="$1" d
+  HEREDOC_TERMS=()
+  HEREDOC_COUNT=0
+  while [[ "$s" == *'<<'* ]]; do
+    s="${s#*'<<'}"
+    # A third `<` makes it a here-string: consume it and keep looking.
+    if [[ "$s" == '<'* ]]; then
+      s="${s#<}"
+      continue
+    fi
+    s="${s#-}" # the <<- form, which strips leading tabs from the body
+    while [[ "$s" == [[:space:]]* ]]; do s="${s#?}"; done
+    case "$s" in
+      "'"*)
+        d="${s#\'}"
+        [[ "$d" == *"'"* ]] || return 1 # unbalanced quote: not a delimiter we can trust
+        s="${d#*\'}"
+        d="${d%%\'*}"
+        ;;
+      '"'*)
+        d="${s#\"}"
+        [[ "$d" == *'"'* ]] || return 1
+        s="${d#*\"}"
+        d="${d%%\"*}"
+        ;;
+      \\*)
+        d="${s#\\}"
+        d="${d%%[![:alnum:]_]*}"
+        s="${s#\\"$d"}"
+        ;;
+      [A-Za-z_]*)
+        d="${s%%[![:alnum:]_]*}"
+        s="${s#"$d"}"
+        ;;
+      *) continue ;; # an expansion or operator, not a static delimiter
+    esac
+    [[ -n "$d" ]] || continue
+    HEREDOC_TERMS[HEREDOC_COUNT]="$d"
+    HEREDOC_COUNT=$((HEREDOC_COUNT + 1))
+  done
+  ((HEREDOC_COUNT > 0))
 }
+
 
 # True when a line reading exactly $2 appears after index $1, i.e. the heredoc
 # opened there actually CLOSES. `lines` and `n` are the caller's, as elsewhere in
@@ -499,14 +541,23 @@ scan_file() {
   # data is a fail-open reachable by anyone who can add a heredoc. Track heredoc
   # bodies and skip them. Anything unrecognised stays scanned, so a parsing gap
   # here costs a missed exemption (safe) rather than a missed hazard.
-  local hd_term=""
+  # Pending terminators, consumed in the order bash reads their bodies. A QUEUE
+  # rather than a single value, because one opener line can start several.
+  local -a hd_pending=()
+  local hd_n=0 hd_at=0 q
   for ((i = 0; i < n; i++)); do
-    if [[ -n "$hd_term" ]]; then
-      is_heredoc_terminator "${lines[i]}" "$hd_term" && hd_term=""
+    if ((hd_at < hd_n)); then
+      is_heredoc_terminator "${lines[i]}" "${hd_pending[hd_at]}" && hd_at=$((hd_at + 1))
       continue
     fi
-    if heredoc_delimiter "${lines[i]}"; then
-      hd_term="$HEREDOC_TERM"
+    if heredoc_delimiters "${lines[i]}"; then
+      hd_pending=()
+      hd_n=0
+      hd_at=0
+      for ((q = 0; q < HEREDOC_COUNT; q++)); do
+        hd_pending[hd_n]="${HEREDOC_TERMS[q]}"
+        hd_n=$((hd_n + 1))
+      done
       continue
     fi
     [[ "${lines[i]}" =~ $ALLOW_FILE_RE ]] && return 0
@@ -542,11 +593,28 @@ scan_file() {
   # this also runs on), so pre-filling it was one whole extra pass over every
   # line of every scanned file for no change in behaviour.
   local -a hd_body=()
+  local hd_from hd_last hd_ok
   for ((i = 0; i < n; i++)); do
-    heredoc_delimiter "${lines[i]}" || continue
-    heredoc_terminates "$i" "$HEREDOC_TERM" || continue
-    for ((j = i + 1; j <= HEREDOC_END; j++)); do hd_body[j]=1; done
-    i=$HEREDOC_END
+    heredoc_delimiters "${lines[i]}" || continue
+    # Each delimiter's body starts where the previous one ended, so walk them in
+    # order. EVERY one must terminate before anything is marked: a partially
+    # resolved opener would leave the tail of the file masked on a guess.
+    hd_from=$i
+    hd_last=$i
+    hd_ok=1
+    for ((q = 0; q < HEREDOC_COUNT; q++)); do
+      if heredoc_terminates "$hd_from" "${HEREDOC_TERMS[q]}"; then
+        hd_last=$HEREDOC_END
+        hd_from=$HEREDOC_END
+      else
+        hd_ok=0
+        break
+      fi
+    done
+    ((hd_ok)) || continue
+    # Intermediate terminator lines are data too, so the whole span is marked.
+    for ((j = i + 1; j <= hd_last; j++)); do hd_body[j]=1; done
+    i=$hd_last
   done
 
   for ((i = 0; i < n; i++)); do

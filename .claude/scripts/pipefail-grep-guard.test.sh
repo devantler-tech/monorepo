@@ -665,6 +665,33 @@ run_guard "$f" && rc=0 || rc=$?
 report "an unterminated <<word is not a heredoc, so the code after it is still scanned" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# One command line can open SEVERAL heredocs, read in order. Tracking only the
+# first left the second body unaccounted for in both directions at once.
+f="$(mkscript "two-heredocs-one-line.sh" \
+  'cat <<FIRST <<SECOND' \
+  'first payload' \
+  'FIRST' \
+  'producer | grep -q MATCH' \
+  'SECOND' \
+  'echo done')"
+run_guard "$f" && rc=0 || rc=$?
+report "clean: the SECOND heredoc's payload is data too" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# The more serious half: a directive in that second payload must not exempt the
+# file. This fixture puts a REAL offender after both terminators, so a pass here
+# means the whole file stopped being scanned.
+f="$(mkscript "allow-file-in-second-heredoc.sh" \
+  'cat <<FIRST <<SECOND' \
+  'first payload' \
+  'FIRST' \
+  '# pipefail-grep-guard: allow-file — payload, not a directive' \
+  'SECOND' \
+  'printf "%s" "$v" | grep -q REAL')"
+run_guard "$f" && rc=0 || rc=$?
+report "an allow-file line in the second payload does not exempt the file" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
 # A heredoc whose opener sits on a line the CONTINUATION JOIN swallows is still a
 # heredoc. Detecting openers as the scan reached them missed exactly these, since
 # the join consumes lines without visiting them, and the payload was then scanned
