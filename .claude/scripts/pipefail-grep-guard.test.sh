@@ -685,6 +685,34 @@ run_guard "$f" && rc=0 || rc=$?
 report "a <<WORD inside a comment is not a heredoc operator either" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# Inside DOUBLE quotes a backslash escapes the next character, so the run does not
+# end at `\"` and the `<<EOF` after it is still text. Ending the run there masked
+# the pipeline below as heredoc data.
+f="$(mkscript "escaped-quote-in-double-quotes.sh" \
+  'printf "%s\n" "text\" <<EOF"' \
+  'printf "%s" "$v" | grep -q NEEDLE' \
+  'EOF')"
+run_guard "$f" && rc=0 || rc=$?
+report "an escaped quote does not end a double-quoted run" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# The ASYMMETRY control, and the reason the rule above is not simply "backslash
+# escapes": inside SINGLE quotes a backslash is LITERAL, so `'text\'` really does
+# end at the second quote and the `<<EOF` after it IS an operator.
+#
+# The pipeline sits INSIDE the body deliberately. Placing it after the terminator
+# instead makes this pass whether or not the asymmetry is honoured — verified: an
+# implementation escaping inside single quotes too keeps the run open, finds no
+# heredoc at all, and still reports an offender below. Here, that implementation
+# scans the body and reports it, while the correct one masks it.
+f="$(mkscript "literal-backslash-in-single-quotes.sh" \
+  "cat 'text\\' <<EOF" \
+  'x | grep -q MATCH' \
+  'EOF')"
+run_guard "$f" && rc=0 || rc=$?
+report "a backslash inside single quotes is literal, so the quote still closes" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
 # Its control: masking must still happen for a REAL operator, or the two
 # assertions above would pass simply because heredocs stopped working.
 f="$(mkscript "real-operator-still-masks.sh" \

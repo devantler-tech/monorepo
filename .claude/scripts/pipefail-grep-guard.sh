@@ -200,6 +200,18 @@ mask_quoted() {
   for ((i = 0; i < ${#s}; i++)); do
     c="${s:i:1}"
     if [[ -n "$q" ]]; then
+      # THE TWO QUOTE TYPES ESCAPE DIFFERENTLY, and treating them alike breaks
+      # one case or the other. Inside DOUBLE quotes a backslash escapes the next
+      # character, so `"text\" <<EOF"` is one word and its `<<EOF` is TEXT —
+      # closing the run at that escaped quote made it read as an operator and
+      # masked the code below. Inside SINGLE quotes a backslash is LITERAL, so
+      # `'text\'` really does end at the second quote and a following `<<EOF` IS
+      # an operator. Both were confirmed by running bash, not read from a manual.
+      if [[ "$q" == '"' && "$c" == '\' ]] && ((i + 1 < ${#s})); then
+        out+=xx
+        i=$((i + 1))
+        continue
+      fi
       [[ "$c" == "$q" ]] && q=""
       out+=x
       continue
