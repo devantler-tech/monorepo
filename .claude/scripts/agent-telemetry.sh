@@ -3565,12 +3565,22 @@ if want safety; then
     # from a real finding — and a detector that always fires teaches you to ignore
     # it. Only sessions showing a checkout of a fork/PR-ref are considered, and the
     # output stays a CANDIDATE list requiring context, not an assertion of a breach.
+    # Extract ONCE and check that the extraction succeeded before applying either
+    # predicate. Reading it through `< <(commands_in …)` discarded that command's
+    # status, so a concurrently-appended or malformed session whose valid prefix
+    # happened to contain a checkout was accepted on partial output — and the
+    # second extraction then ran inside a pipeline under `pipefail`, where the
+    # same failure aborted the whole telemetry run instead of skipping one file.
+    #
+    # Both greps read the captured value from a here-string. A `… | grep -qE`
+    # here would be the exact writer-into-early-exiting-grep hazard this
+    # repository's own guard rejects.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
-          if grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))' \
-             < <(commands_in "$f" 2>/dev/null); then
-            commands_in "$f" 2>/dev/null \
-              | grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|make [a-z]+)'
+          cmds="$(commands_in "$f" 2>/dev/null)" || continue
+          [[ -n "$cmds" ]] || continue
+          if grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))' <<<"$cmds"; then
+            grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|make [a-z]+)' <<<"$cmds"
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
     echo "    (empty = no session both checked out a non-own ref and built)"
