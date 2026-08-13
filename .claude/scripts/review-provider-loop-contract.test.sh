@@ -183,7 +183,8 @@ strip_leading_html_comments() {
     case "${body}" in
       '<!--'*)
         rest="${body#*-->}"
-        [ "${rest}" = "${body}" ] && break
+        # No closing delimiter: an unterminated comment must not consume the rest of the body.
+        if [ "${rest}" = "${body}" ]; then break; fi
         body="${rest}"
         ;;
       *) break ;;
