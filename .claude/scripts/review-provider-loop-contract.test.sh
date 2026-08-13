@@ -176,9 +176,14 @@ cr_hint_fixture="${repo_root}/.claude/scripts/fixtures/coderabbit-review-body-hi
 
 # Remove leading HTML comment blocks (and the whitespace around them), then apply the unchanged
 # BEGINS-WITH test. An unterminated comment stops the strip rather than consuming the whole body.
+# The iteration bound makes the loop STRUCTURALLY terminating. Without it, the unterminated-comment
+# branch below is the only thing stopping an infinite repeat, so removing that branch would make this
+# contract test HANG rather than fail — an unbounded loop is a worse signal than a wrong answer, and
+# `timeout` is not installed on macOS, so the bound cannot be applied from outside.
 strip_leading_html_comments() {
-  local body="$1" rest
-  while :; do
+  local body="$1" rest guard=0
+  while [ "${guard}" -lt 64 ]; do
+    guard=$((guard + 1))
     body="${body#"${body%%[![:space:]]*}"}"
     case "${body}" in
       '<!--'*)
@@ -235,13 +240,44 @@ fi
 if cr_body_identifies_as_review "Some prose that merely mentions **Actionable comments posted: 2**"; then
   fail "identification degraded from an anchored match to a substring search"
 fi
+# MULTILINE anchoring. The single-line control above displaces the marker only horizontally, so a
+# LINE-anchored implementation (`grep '^\*\*Actionable'`, or a per-line loop) still passes it while
+# accepting this body — the marker starts a line, just not the body. Pin the anchor to the whole
+# stripped body, not to any line within it.
+if cr_body_identifies_as_review "Some prose about a review.
+**Actionable comments posted: 2**"; then
+  fail "identification anchors per-LINE, so prose followed by the marker is accepted as a review"
+fi
+# A malformed body — a leading `<!--` with no `-->` — must be REJECTED rather than have its opening
+# delimiter silently consume the rest. Verified 2026-08-13: deleting the early `break` leaves this
+# control passing, because the iteration bound stops the loop and the body is returned unchanged, so
+# it still fails the anchored match. That is stated rather than glossed — this control pins the
+# REJECTION, not the break, and the bound above is what actually removes the hang risk. The break is
+# an early exit, and its removal is observationally inert only while that bound stands.
+if cr_body_identifies_as_review "<!-- unterminated hint
+**Actionable comments posted: 2**"; then
+  fail "an unterminated leading comment is consumed, so a malformed body is identified as a review"
+fi
 
-# The five prose sites that state the rule. Pinned individually so a partial fix cannot pass.
-assert_prose "${constitution}" 'after stripping any leading HTML comments' \
-  "constitution's CodeRabbit identification is not prefix-tolerant, so a real review reads as none"
-assert_prose "${surveyor}" 'after stripping any leading HTML comments' \
-  "surveyor's CodeRabbit identification is not prefix-tolerant, so a real review reads as none"
-assert_prose "${parity_checklist}" 'after stripping any leading HTML comments' \
+# The five prose sites that state the rule, each pinned by its OWN surrounding text.
+# A bare file-wide presence check would be satisfied by any one occurrence, so the operational
+# instruction — the lane table, or the surveyor's primary directive — could regress to the unstripped
+# begins-with predicate while a later explanatory paragraph kept the phrase and the suite stayed
+# green. Those are the occurrences a run actually executes, so each is asserted separately.
+assert_prose "${constitution}" \
+  'begins `**Actionable comments posted:` — **after stripping any leading HTML comments**, since CodeRabbit prefixes real bodies' \
+  "constitution's green-review LANE TABLE lost the strip, so its operational row rejects every real review"
+assert_prose "${constitution}" \
+  'its body begins `**Actionable comments posted:` **after stripping any leading HTML comments**, because' \
+  "constitution's CodeRabbit-success paragraph lost the strip, so a real review reads as none"
+assert_prose "${surveyor}" \
+  '`**Actionable comments posted:`, after stripping any leading HTML comments** — a positive' \
+  "surveyor's primary cr@<sha> instruction lost the strip, so the digest reports green_review=none over a real green"
+assert_prose "${surveyor}" \
+  'begins `**Actionable comments posted: N**` **once its leading HTML comments are stripped**' \
+  "surveyor's artifact-shape rationale lost the strip, so the two surveyor sites can drift apart"
+assert_prose "${parity_checklist}" \
+  'begins `**Actionable comments posted:` **after stripping any leading HTML comments**; an empty object is a reply' \
   "surveyor parity checklist does not carry the prefix-tolerant identification"
 # The widening must not become a bare commit_id match — the empty-container measurement still stands.
 assert_prose "${constitution}" 'never weaken this to a bare' \
