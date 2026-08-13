@@ -315,8 +315,13 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   `statusCheckRollup` cannot show them either — and the PR reads simply idle, which is precisely the
   state that invites the blind re-queue *Merge policy* records against platform#2337. So report the
   newest **completed** `merge_group` conclusion as a separate result/blocker field —
-  `merge_group_result=<conclusion>@<runId>` — emitted whether or not the PR is currently queued. A
-  failure there is a root-cause-before-requeue instruction, never an ownership claim.
+  `merge_group_result=<conclusion>@<runId>@<sourceHead>` — emitted whether or not the PR is currently
+  queued. A failure there is a root-cause-before-requeue instruction, never an ownership claim.
+  `<sourceHead>` is the head the run actually evaluated: merge-group runs correlate to a PR only by
+  `pr-<n>`, which survives every push, so without it a diagnosed-and-repaired eviction keeps reporting
+  as a live failure. When that head is no longer the PR's, the field reads `stale@<runId>` and claims
+  nothing about the current head — never re-queue and never re-diagnose on a stale result. An empty
+  listing is `none`.
 
 **Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the
 product's `weekly`/live cursor in memory — NOT every run), also spawn the read-only
@@ -480,7 +485,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    class forever (contract *You own EVERY pull request*). Anything with a reachable code path still
    owes the CI reading. The merge is **low-ceremony**:
    combine the already-collected current-head pentad with one fresh
-   `gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,headRefOid,mergeStateStatus,statusCheckRollup`
+   `gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup`
    showing the same
    `headRefOid`, `isDraft:false`, owner `devantler-tech`, and `CLEAN`; merge only when the pentad also has zero
    findings and a green review at that

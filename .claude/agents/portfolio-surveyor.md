@@ -277,8 +277,10 @@ public and private — no per-repo loop needed to enumerate):
      `merge-group:` says *someone owns this, leave it alone*, which is the exact opposite of what an
      **evicted** PR needs: nothing owns it, its run finished red, and repairing it is the orchestrator's
      job. Report the newest **completed** run from the same bounded listing as
-     `merge_group_result=<conclusion>@<runId>`, **emitted whether or not the PR is currently queued**,
-     and never as an `active=` alternative. Without it an eviction is invisible — the queue's checks run
+     `merge_group_result=<conclusion>@<runId>@<sourceHead>`, **emitted whether or not the PR is
+     currently queued**, and never as an `active=` alternative. (`<sourceHead>` is not decoration —
+     the next paragraph is why it is part of the field, and `stale@<runId>` is what replaces this
+     whole form when that head is no longer the PR's.) Without it an eviction is invisible — the queue's checks run
      on a synthetic ref, so the head's `statusCheckRollup` cannot show them either — and the PR reads
      simply idle, which is the state that invites the blind re-queue *Merge policy* records against
      platform#2337. Take the newest by explicit `createdAt` sort exactly as above; `conclusion` is

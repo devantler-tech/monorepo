@@ -2300,7 +2300,7 @@ echo "portfolio surveyor contract: post-arm confirmation assertions passed"
 # so the completed merge_group conclusion cannot ride on `active=`, which means "leave it alone".
 # The queue's checks run on a synthetic ref, so no head-level rollup can substitute.
 case "${surveyor_flat}" in
-  *'merge_group_result=<conclusion>@<runId>'*) ;;
+  *'merge_group_result=<conclusion>@<runId>@<sourceHead>'*) ;;
   *) fail "the surveyor emits no completed merge_group result, so an eviction is invisible to the consumer that requires it" ;;
 esac
 case "${surveyor_flat}" in
