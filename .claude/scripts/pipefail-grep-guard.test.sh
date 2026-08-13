@@ -1025,6 +1025,22 @@ fi
 flag_case "an EMPTY assignment prefix still reaches the grep" \
   'producer | LC_ALL= grep -q MATCH'
 
+# GNU accepts any UNAMBIGUOUS ABBREVIATION of a long option, so these are the
+# early-exit options under another spelling. Matched by prefix rather than by
+# enumeration — grep's option set is finite, unlike the shell syntax elsewhere.
+flag_case "an abbreviated --quiet is still --quiet" \
+  'producer | grep --quie MATCH'
+flag_case "an abbreviated --silent too" \
+  'producer | grep --sil MATCH'
+flag_case "an abbreviated --max-count with a finite value" \
+  'producer | grep --max-c=1 MATCH'
+# ...and the controls: a negative max count is still infinity, and a long option
+# that is NOT an abbreviation of an early-exit one stays harmless.
+clean_case "an abbreviated --max-count of -1 is still infinity" \
+  'producer | grep --max-c=-1 MATCH'
+clean_case "an unrelated long option is not an abbreviation of an early exit" \
+  'producer | grep --invert-match MATCH'
+
 # ---------------------------------------------------------------------------
 # 2i. KNOWN LIMITS, pinned as fact rather than left as surprises.
 #
@@ -1066,6 +1082,24 @@ f="$(mkscript "known-limit-quoted-command-word.sh" 'producer | "grep" -q MATCH')
 run_guard "$f" && rc=0 || rc=$?
 report "KNOWN LIMIT: a quoted command word is erased by masking" \
   "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# Legacy backtick substitution is executable inside double quotes, exactly as
+# `$()` is — the masker suspends only the latter.
+f="$(mkscript "known-limit-backtick-substitution.sh" 'out="`producer | grep -q MATCH`"')"
+run_guard "$f" && rc=0 || rc=$?
+report "KNOWN LIMIT: a backtick substitution inside double quotes is masked as data" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# Bash quote-removes `<<"E\"OF"` to the delimiter E"OF; the fragment parser stops
+# at the escaped quote, so the heredoc is not recognised and its payload is
+# scanned as code.
+f="$(mkscript "known-limit-escaped-delimiter.sh" \
+  'cat <<"E\"OF"' \
+  'producer | grep -q MATCH' \
+  'E"OF')"
+run_guard "$f" && rc=0 || rc=$?
+report "KNOWN LIMIT: an escaped quote inside a delimiter word is not dequoted" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2

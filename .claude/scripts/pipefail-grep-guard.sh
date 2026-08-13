@@ -516,7 +516,7 @@ is_heredoc_terminator() {
 }
 
 early_exit_flag() {
-  local rest="$1" tok skip_next=0 letters i ch mval want_mval=0 was_quoted
+  local rest="$1" tok skip_next=0 letters i ch mval want_mval=0 was_quoted lopt
   # The split below wants WORD SPLITTING but not PATHNAME EXPANSION. Unquoted
   # `$rest` gets both, so a pattern like `grep *.log -q` would expand against the
   # working directory: with matching files the flag survives at a different
@@ -625,7 +625,38 @@ early_exit_flag() {
         skip_next=1
         continue
         ;;
-      --*) continue ;;
+      --*)
+        # GNU accepts any UNAMBIGUOUS ABBREVIATION of a long option, so
+        # `grep --quie MATCH` is `--quiet` on the Linux runner this check gates.
+        # Treating every unrecognised long option as harmless missed that.
+        #
+        # A prefix test rather than more spellings: grep's long options are a
+        # finite, enumerable set, unlike the shell syntax the rest of this file
+        # approximates. Over-approximating is safe here — an AMBIGUOUS
+        # abbreviation makes grep itself exit with an error, so a pipeline this
+        # reports either stops early or does not run at all.
+        #
+        # ⚠️ The premise is GNU's documented getopt_long behaviour, not something
+        # this host can execute: it has BSD grep, and the runner has GNU.
+        for lopt in --quiet --silent --files-with-matches; do
+          if [[ "$lopt" == "$tok"* ]]; then
+            printf '%s' "$tok"
+            return 0
+          fi
+        done
+        # `--max-count` carries a value, so abbreviate the NAME and keep the rule
+        # that a negative count is infinity and therefore not an early exit.
+        mval="${tok%%=*}"
+        if [[ "--max-count" == "$mval"* ]]; then
+          if [[ "$tok" == *=* ]]; then
+            max_count_is_finite "${tok#*=}" || continue
+            printf '%s' "$tok"
+            return 0
+          fi
+          want_mval=1
+        fi
+        continue
+        ;;
       -*)
         # Walk the short cluster letter by letter rather than testing the whole
         # token. A value-taking letter swallows the REST of the cluster when
