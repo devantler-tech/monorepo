@@ -1008,14 +1008,16 @@ check "no false staleness warning on a branch origin does not have" 0 \
 fetchfail_origin="$tmp/fetchfail-origin.git"
 git init -q --bare "$fetchfail_origin"
 fetchfail_seed="$tmp/fetchfail-seed"
-git clone -q "$fetchfail_origin" "$fetchfail_seed" 2>/dev/null || git init -q "$fetchfail_seed"
+# Initialize directly rather than clone-or-init: the fallback made the seed's layout depend on which
+# arm ran, and both suppressions hid a real setup failure — a fixture that fails to build is
+# indistinguishable from one that built, so the checks below would pass for the wrong reason.
+git init -q -b main "$fetchfail_seed"
 git -C "$fetchfail_seed" config user.name "worktree-claim-test"
 git -C "$fetchfail_seed" config user.email "worktree-claim-test@example.com"
 git -C "$fetchfail_seed" commit --allow-empty -qm "init"
-git -C "$fetchfail_seed" branch -M main
 git -C "$fetchfail_seed" checkout -qb "claim-fetchfail"
 git -C "$fetchfail_seed" commit --allow-empty -qm "work that only exists on origin"
-git -C "$fetchfail_seed" remote add origin "$fetchfail_origin" 2>/dev/null || true
+git -C "$fetchfail_seed" remote add origin "$fetchfail_origin"
 git -C "$fetchfail_seed" push -q origin main claim-fetchfail
 
 # Clone WITHOUT the branch's tracking ref, but keep the normal wildcard refspec — a narrowed
@@ -1092,6 +1094,11 @@ check "an unrefreshable cached ref is announced as STALE" 0 "$stalecache_rc" \
 # which head they are on and which one they wanted.
 check "the stale-cache warning names the cached AND the origin sha" 0 "$stalecache_rc" \
   "$stalecache_out" "${stalecache_cached:0:10}"
+# BOTH halves, or the check does not test what its name claims: with only the cached prefix asserted,
+# dropping the origin prefix from the message leaves this green — and the origin sha is the half that
+# tells the operator which head they wanted.
+check "the stale-cache warning names the ORIGIN sha too" 0 "$stalecache_rc" \
+  "$stalecache_out" "${stalecache_tip:0:10}"
 
 # The complement, and the reason this cannot just always warn: when the fetch SUCCEEDS the cached
 # ref is current, so the warning must stay silent or it fires on every ordinary attach.
@@ -1100,6 +1107,10 @@ git clone -q "$stalecache_origin" "$freshcache_consumer"
 freshcache_rc=0
 freshcache_out="$("$script" add \
   "$freshcache_consumer" "$tmp/wt-freshcache" "claim-stalecache" "session-freshcache" 2>&1)" || freshcache_rc=$?
+# Assert the claim SUCCEEDED first. Absence-of-warning is satisfied by a fixture that never got far
+# enough to warn, so without this the check passes precisely when `add` is broken.
+check "the fresh-cache claim succeeds" 0 "$freshcache_rc" \
+  "$freshcache_out" "owner=session-freshcache"
 check "no false STALE warning when the refresh succeeds" 0 \
   "$(grep -qF 'is STALE' <<<"$freshcache_out" && echo 1 || echo 0)"
 
@@ -1146,9 +1157,12 @@ narrowfetch_consumer="$tmp/narrowfetch-consumer"
 git clone -q --single-branch --branch main "$narrowfetch_origin" "$narrowfetch_consumer"
 # Guards the arm below: without a narrowed refspec this fixture proves nothing, and a later "tidy-up"
 # of the clone flags would silently make every assertion here vacuous.
+# Here-string, not a pipe: `grep -q` exits at the first match, the writer dies with EPIPE, and under
+# `pipefail` the pipeline reports non-zero — so the guard would print 0 and the precondition would
+# pass even when the refspec DOES map the PR branch, i.e. vacuous in the one direction it must catch.
 check "precondition: the consumer's refspec does NOT map the PR branch" 0 \
-  "$(git -C "$narrowfetch_consumer" config remote.origin.fetch |
-     grep -qF 'refs/heads/*' && echo 1 || echo 0)"
+  "$(grep -qF 'refs/heads/*' \
+     <<<"$(git -C "$narrowfetch_consumer" config remote.origin.fetch)" && echo 1 || echo 0)"
 
 narrowfetch_rc=0
 narrowfetch_out="$("$script" add \
@@ -1206,6 +1220,52 @@ check "a behind=0 measured against an unrefreshed ref reports UNKNOWN, not silen
   "$([ -n "$behindfail_line" ] && echo 0 || echo 1)"
 check "the UNKNOWN names the failed refresh as the reason" 0 0 \
   "$behindfail_line" "refresh failed"
+
+# ── a local branch with NO tracking ref at all, when the refresh fails ─────────────────────────
+# The case above has a cached ref, so `behind` is measurable and the zero answer is what needed
+# reporting. Here there is no `refs/remotes/origin/<branch>` to measure against — the state a fresh
+# `--single-branch` checkout is in for exactly the branch an open PR lives on. A failed refresh then
+# leaves nothing to compare, and returning silently is indistinguishable from "verified current",
+# which is the very condition the cached-ref arm rejects. Same reasoning, the other branch of the
+# same function; it went untested, so the silent return survived a fix that named it.
+nocache_origin="$tmp/nocache-origin.git"
+git init -q --bare -b main "$nocache_origin"
+nocache_seed="$tmp/nocache-seed"
+git init -q -b main "$nocache_seed"
+git -C "$nocache_seed" config user.name "worktree-claim-test"
+git -C "$nocache_seed" config user.email "worktree-claim-test@example.com"
+git -C "$nocache_seed" commit --allow-empty -qm "init"
+git -C "$nocache_seed" remote add origin "$nocache_origin"
+git -C "$nocache_seed" push -q origin main
+git -C "$nocache_seed" checkout -qb "claim-nocache"
+git -C "$nocache_seed" commit --allow-empty -qm "pr work"
+git -C "$nocache_seed" push -q origin "claim-nocache"
+
+# --single-branch leaves no tracking ref for the PR branch; the wildcard refspec is restored so the
+# absent ref is what this measures rather than a narrowed fetch config.
+nocache_consumer="$tmp/nocache-consumer"
+git clone -q --single-branch --branch main "$nocache_origin" "$nocache_consumer"
+git -C "$nocache_consumer" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+# A LOCAL branch of that name, so the attach path runs the freshness check at all.
+git -C "$nocache_consumer" branch "claim-nocache" main
+check "precondition: a local branch exists with no tracking ref" 0 \
+  "$(git -C "$nocache_consumer" show-ref --verify --quiet refs/heads/claim-nocache &&
+     ! git -C "$nocache_consumer" show-ref --verify --quiet refs/remotes/origin/claim-nocache &&
+     echo 0 || echo 1)"
+
+nocache_rc=0
+nocache_out="$(PATH="$fetchfail_stub:$PATH" "$script" add \
+  "$nocache_consumer" "$tmp/wt-nocache" "claim-nocache" "session-nocache" 2>&1)" || nocache_rc=$?
+check "a missing tracking ref still claims (advisory, not fatal)" 0 "$nocache_rc" \
+  "$nocache_out" "owner=session-nocache"
+# Branch-specific line for the same reason the case above needs one: `warn_if_base_is_stale` emits
+# its own UNKNOWN for origin/HEAD under this stub, so a whole-transcript "UNKNOWN" match stays green
+# with the fix reverted.
+nocache_line="$(grep 'origin/claim-nocache' <<<"$nocache_out" || true)"
+check "an absent tracking ref after a failed refresh reports UNKNOWN, not silence" 0 \
+  "$([ -n "$nocache_line" ] && echo 0 || echo 1)"
+check "that UNKNOWN also names the failed refresh as the reason" 0 0 \
+  "$nocache_line" "refresh failed"
 
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -192,7 +192,16 @@ warn_if_local_branch_is_behind() {
   bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
     git -C "$repo" fetch --quiet origin \
     "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || fetch_rc=$?
-  git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch" || return 0
+  # Same reasoning as the zero-answer arm below, which is why it cannot be a bare `return 0`: with no
+  # tracking ref at all there is nothing to measure, and silence is the output that MEANS "current".
+  # A failed refresh is the case where that silence is a lie — and it is the common one here, since
+  # resuming an open PR on a fresh checkout is exactly "no cached ref".
+  if ! git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    if [ "$fetch_rc" -ne 0 ]; then
+      base_freshness_unknown "origin/$branch (refresh failed)"
+    fi
+    return 0
+  fi
 
   # Count only commits origin has that the local ref lacks. A branch that is merely AHEAD is ordinary
   # unpushed work and says nothing about staleness.
