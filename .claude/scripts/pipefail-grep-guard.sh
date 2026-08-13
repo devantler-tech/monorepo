@@ -242,6 +242,10 @@ heredoc_terminates() {
 # lookahead above. Splitting it let the reasoning above live at one site while
 # the other copies read as unexplained.
 is_heredoc_terminator() {
+  # Literal prefilter first: the regex below is built from a runtime delimiter, so
+  # it is recompiled per call, and this runs against every line a lookahead walks.
+  # Measured ~3× cheaper over the repository than going straight to the regex.
+  [[ "$1" == *"$2"* ]] || return 1
   [[ "$1" =~ ^[[:space:]]*"$2"[[:space:]]*$ ]]
 }
 
@@ -495,7 +499,7 @@ scan_file() {
   # data is a fail-open reachable by anyone who can add a heredoc. Track heredoc
   # bodies and skip them. Anything unrecognised stays scanned, so a parsing gap
   # here costs a missed exemption (safe) rather than a missed hazard.
-  local hd_term="" hd_end=-1
+  local hd_term=""
   for ((i = 0; i < n; i++)); do
     if [[ -n "$hd_term" ]]; then
       is_heredoc_terminator "${lines[i]}" "$hd_term" && hd_term=""
@@ -508,25 +512,45 @@ scan_file() {
     [[ "${lines[i]}" =~ $ALLOW_FILE_RE ]] && return 0
   done
 
+  # Mark every heredoc BODY line before scanning, rather than detecting openers
+  # as the scan reaches them. A heredoc body is DATA the shell only prints, never
+  # code it runs, so a script that emits documentation or a fixture containing
+  # `producer | grep -q MATCH` must not fail this required job over it.
+  #
+  # Precomputing is what makes that hold for EVERY opener. Detecting inline saw
+  # only openers the scan visits, and the continuation join consumes lines
+  # without visiting them — so an opener on a joined line was never detected and
+  # its payload was scanned as code:
+  #
+  #     producer |
+  #       cat <<'DOC'
+  #     x | grep -q MATCH      <- reported, though it is output
+  #     DOC
+  #
+  # Only a heredoc whose terminator actually EXISTS marks anything. `<<` is also a
+  # left shift, and `width=$(( total << bits ))` matches the opener pattern while
+  # naming no terminator — an unconditional skip ran to end of file and hid every
+  # pipeline below it, which is a fail-OPEN on a required check. The prepass above
+  # deliberately keeps the unconditional form: over-detecting there costs at most
+  # a MISSED EXEMPTION, which is safe, while under-detecting is what let a payload
+  # line pass as the whole-file directive.
+  #
+  # The opening line itself stays scanned: it holds real code before the `<<`, and
+  # a pipeline there is a genuine hazard.
+  # Deliberately NOT zero-filled: an unset element already evaluates to 0 inside
+  # `(( ))` without tripping `set -u` (checked on bash 3.2, the macOS system bash
+  # this also runs on), so pre-filling it was one whole extra pass over every
+  # line of every scanned file for no change in behaviour.
+  local -a hd_body=()
   for ((i = 0; i < n; i++)); do
-    # A heredoc body is DATA the shell only prints, never code it runs. The
-    # allow-file prepass already skipped it; this scan did not, so a script that
-    # emits documentation or a fixture containing `producer | grep -q MATCH`
-    # failed the required job over a line that cannot exhibit the hazard.
-    ((i <= hd_end)) && continue
-    # Note the opening line is still scanned below rather than skipped: it holds
-    # real code before the `<<`, and a pipeline there is a genuine hazard.
-    #
-    # Only a heredoc whose terminator actually EXISTS suppresses anything here.
-    # `<<` is also a left shift, and `width=$(( total << bits ))` matches the
-    # opener pattern while naming no terminator — so an unconditional skip ran to
-    # end of file and hid every pipeline below it, which is a fail-OPEN on a
-    # required check. The prepass above deliberately keeps the unconditional
-    # form: over-detecting there costs at most a MISSED EXEMPTION, which is safe,
-    # while under-detecting is what let a payload line pass as the directive.
-    if heredoc_delimiter "${lines[i]}" && heredoc_terminates "$i" "$HEREDOC_TERM"; then
-      hd_end=$HEREDOC_END
-    fi
+    heredoc_delimiter "${lines[i]}" || continue
+    heredoc_terminates "$i" "$HEREDOC_TERM" || continue
+    for ((j = i + 1; j <= HEREDOC_END; j++)); do hd_body[j]=1; done
+    i=$HEREDOC_END
+  done
+
+  for ((i = 0; i < n; i++)); do
+    ((hd_body[i])) && continue
 
     probe="${lines[i]}"
     start=$i
@@ -544,6 +568,9 @@ scan_file() {
     # worse — it reported 18 ordinary multi-line commands in this repository as
     # unscannable, which is a DevEx tax paid on every run for no security gain.
     while ((j + 1 < n)); do
+      # Never continue a command INTO a heredoc body: those lines are the
+      # heredoc's data, so appending them would scan output as code.
+      ((hd_body[j + 1])) && break
       # A trailing comment does not end a pipeline — `producer | # note` still
       # continues on the next line. Strip one for the CONTINUATION TEST only,
       # never from the probe itself, where quoting makes stripping unreliable.
@@ -627,9 +654,14 @@ scan_file() {
       fi
       tail_="$rest"
     done
+    # Trim once, outside the loop: every offender on this line prints the SAME
+    # source line, so doing it per offender re-forked `sed` on an identical
+    # string. Parameter expansion, so it does not fork at all.
+    local shown="${lines[start]}"
+    shown="${shown#"${shown%%[![:space:]]*}"}"
     for ((k = 0; k < lf; k++)); do
       flag="${line_flags[k]}"
-      printf '%s:%d: %s\n' "$file" "$((start + 1))" "$(sed 's/^[[:space:]]*//' <<<"${lines[start]}")"
+      printf '%s:%d: %s\n' "$file" "$((start + 1))" "$shown"
       if ((lf > 1)); then
         printf '    [%d of %d on this line] grep %s stops at the first match; the writer dies of SIGPIPE and pipefail reports THAT.\n' \
           "$((k + 1))" "$lf" "$flag"

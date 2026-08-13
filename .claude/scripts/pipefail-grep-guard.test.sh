@@ -665,6 +665,34 @@ run_guard "$f" && rc=0 || rc=$?
 report "an unterminated <<word is not a heredoc, so the code after it is still scanned" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# A heredoc whose opener sits on a line the CONTINUATION JOIN swallows is still a
+# heredoc. Detecting openers as the scan reached them missed exactly these, since
+# the join consumes lines without visiting them, and the payload was then scanned
+# as code.
+f="$(mkscript "heredoc-after-join.sh" \
+  'producer |' \
+  "  cat <<'DOC'" \
+  'x | grep -q MATCH' \
+  'DOC' \
+  'echo done')"
+run_guard "$f" && rc=0 || rc=$?
+report "clean: a heredoc opened on a joined continuation line still hides its body" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# The other half of the same rule: a heredoc opener can itself END in a pipe, so
+# the continuation join is offered the body as the next line. Skipping body lines
+# as probe STARTS does not cover this — the probe starts on the opener, which is
+# real code — so the join has to refuse them too, or payload text is appended to a
+# live probe and matched there.
+f="$(mkscript "heredoc-opener-ends-in-pipe.sh" \
+  "cat <<'DOC' |" \
+  'x | grep -q MATCH' \
+  'DOC' \
+  'echo done')"
+run_guard "$f" && rc=0 || rc=$?
+report "clean: the join does not pull a heredoc body into a live probe" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
 # ...and code after a heredoc that DOES terminate is scanned normally.
 f="$(mkscript "code-after-heredoc.sh" \
   'cat <<DOC' \
