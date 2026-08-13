@@ -140,7 +140,7 @@ grep -Fq 'Filter by `ref` in the REQUEST, not only in the `jq`' "${surveyor}" ||
   fail "surveyor does not require server-side ref filtering on the push lookup"
 # `none` is a merge blocker, so a diff with nothing to run must have its own state or the whole
 # external docs/typo class is reported permanently blocked.
-grep -Fq 'behaviour_observed=<check-name|static|none>' "${surveyor}" ||
+grep -Fq 'behaviour_observed=<check-name|static|none|unknown>' "${surveyor}" ||
   fail "surveyor digest cannot represent a static evaluation, so no-runtime-surface PRs read blocked"
 grep -Fq 'That observation has THREE outcomes, not two' "${surveyor}" ||
   fail "surveyor does not distinguish nothing-to-exercise from nothing-exercises-it"
@@ -2055,8 +2055,8 @@ case "${surveyor_flat}" in
   *) fail "the candidate-comment path does not read thread replies from the flat REST endpoint" ;;
 esac
 case "${surveyor_flat}" in
-  *'Both reads are required — a maintainer steer can live in either'*) ;;
-  *) fail "the candidate-comment path does not require BOTH the issue-comment and thread-reply surfaces" ;;
+  *'Both other reads remain required — a maintainer steer can live in any of the three'*) ;;
+  *) fail "the candidate-comment path does not require ALL THREE candidate-comment surfaces" ;;
 esac
 
 # (4) `nothing_on_fire: true` alongside undeepened PRs asserts health the survey never measured.
@@ -2339,7 +2339,7 @@ grep -Fq 'merge-group-result' "${maintenance_skill}" &&
 external_row="$(grep -F 'EXTERNAL/Copilot — NEVER-RUN-LOCALLY' "${surveyor}" || true)"
 [ -n "${external_row}" ] || fail "the external/Copilot digest row is missing entirely"
 case "${external_row}" in
-  *'merge_group_result=<<conclusion>@<runId>|none>'*) ;;
+  *'merge_group_result=<<conclusion>@<runId>@<sourceHead>|stale@<runId>|none>'*) ;;
   *) fail "the external/Copilot row omits merge_group_result, so an eviction there is invisible" ;;
 esac
 case "${external_row}" in
@@ -2360,3 +2360,34 @@ case "${surveyor_flat}" in
 esac
 
 echo "portfolio surveyor contract: round-8 field-consistency assertions passed"
+
+# A merge_group run is correlated by `pr-<n>`, which survives every push — so without the run's own
+# source head the newest completed run keeps reporting an eviction the PR has already answered, and
+# the consumer re-diagnoses or blocks a ready PR on every run.
+case "${surveyor_flat}" in
+  *'Bind the result to the head it RAN ON'*) ;;
+  *) fail "the merge_group result is not bound to the head it ran on, so a repaired eviction blocks forever" ;;
+esac
+
+# A top-level COMMENTED review body is neither an issue comment nor an inline comment, so the two
+# prescribed reads miss a maintainer `do not merge` entirely; it then carries only the expiring
+# activity signal and no rd=CHANGES_REQUESTED, and the PR merges over a live instruction.
+case "${surveyor_flat}" in
+  *'THREE surfaces, not two'*) ;;
+  *) fail "maintainer review BODIES are still unswept, so a persistent requirement there expires silently" ;;
+esac
+
+# behaviour_observed gates an external PR's merge, and the deepening read cannot tell whether a green
+# check exercised the change — so a guess is either an unobserved merge or a parked contribution.
+case "${surveyor_flat}" in
+  *'Name the EVIDENCE, or emit `unknown`'*) ;;
+  *) fail "behaviour_observed can still be guessed from data that cannot support the classification" ;;
+esac
+
+# A title edit changes no commit, so the head pin cannot catch it — and the squash subject is the title.
+case "${constitution_flat}" in
+  *'`title` is in that list because the head pin does NOT cover it'*) ;;
+  *) fail "the merge preflight does not re-validate the title, so a late edit can corrupt the changelog" ;;
+esac
+
+echo "portfolio surveyor contract: round-9 evidence-and-staleness assertions passed"

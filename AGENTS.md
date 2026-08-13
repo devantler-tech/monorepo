@@ -1874,8 +1874,15 @@ later breaks `main`, the `main` hotfix path applies without touching the depende
 
 For every other actionable PR — whoever authored it — the merge itself is
 **low-ceremony**: use the current survey pentad plus a **fresh**
-`gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,headRefOid,mergeStateStatus,statusCheckRollup`
-immediately before merging. ⚠️ **`--repo` is part of the prescription, not an optional convenience** —
+`gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup`
+immediately before merging.
+🔴 **`title` is in that list because the head pin does NOT cover it.** Editing a PR title changes no
+commit, so `--match-head-commit` still succeeds — and the squash subject comes from the title, which
+becomes the changelog and release input. An author who edits the title after the routine normalised it
+(most reachable on an external PR, where the editor is the party the preflight exists to check) lands a
+non-Conventional subject through a merge that passed every other gate. So **re-validate the title
+against Conventional Commits in this final read**, not only when you set it.
+⚠️ **`--repo` is part of the prescription, not an optional convenience** —
 none of those fields carries the *base* repository's identity (`headRepositoryOwner`, where it exists,
 names the contributor's **fork**), so without the flag the command resolves against whatever checkout
 the run happens to be standing in. Across a cross-repo sweep a colliding PR number then reads a
