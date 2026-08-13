@@ -771,7 +771,18 @@ _SQ=\'
 # monorepo#2797, which replaces the layer with a tokenizer. Extend that issue
 # rather than these character classes.
 _ASSIGN_VALUE='("([^"\\]|\\.)*"|\$'"$_SQ"'([^'"$_SQ"'\\]|\\.)*'"$_SQ"'|'"$_SQ"'[^'"$_SQ"']*'"$_SQ"'|\$\([^()]*\)|`[^`]*`|\$\{[^{}]*\}|([^[:space:]"'"$_SQ"'\\]|\\.)+)+'
-PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*('"$_ASSIGN_VALUE"')?|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
+# The assignment arm requires the `=`. A bare NAME would make this arm match any
+# word at all, so every wrapper that merely PRECEDES grep would be read as an
+# environment prefix — and the wrappers that matter are not transparent. `xargs`
+# is the demonstrated case: `producer | xargs grep -q MATCH` is SAFE, because
+# xargs consumes the producer's whole stream and grep reads the named files
+# rather than the pipe, so nothing is SIGPIPEd. Reported as an offender it blocks
+# a valid script, which is the failure direction that keeps enforcement latent.
+#
+# Transparent wrappers stay explicitly enumerated (`command`, `env`, and the
+# value-taking `env` options above). An unlisted wrapper reads as no-match, i.e.
+# the same silent pass the rest of this layer already has — see monorepo#2797.
+PIPE_GREP_RE='(^|[^|])\|&?[[:space:]]*((((-[uCS]|--unset|--chdir|--split-string)[[:space:]]+[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=('"$_ASSIGN_VALUE"')?|command|env|-[^[:space:]]*)[[:space:]]+)*)([^[:space:]]*/)?(grep|egrep|fgrep)([[:space:]]|$)'
 unset _SQ _ASSIGN_VALUE
 
 findings=0
@@ -1077,8 +1088,38 @@ main() {
       esac
       [[ -f "$f" && -r "$f" ]] || continue
       IFS= read -r first <"$f" 2>/dev/null || continue
+      # Resolve the INTERPRETER, rather than asking whether the line ends in `sh`.
+      # A suffix test misses every versioned shell — `#!/usr/bin/ksh93`,
+      # `#!/usr/bin/bash5` — so those scripts were skipped while the sweep still
+      # reported the repository clean. Omitting files silently is the one
+      # direction that fails open, which is why this parses instead of matching.
+      #
+      # `#!/usr/bin/env bash` puts the shell in the ARGUMENT, so both words are
+      # considered. Trailing digits and dots are stripped, so `ksh93` and `bash5`
+      # resolve to `ksh`/`bash`; the result must then be a shell name exactly,
+      # which keeps `shellcheck` (ends in `sh`, is not a shell) out.
       case "$first" in
-        '#!'*sh | '#!'*sh[[:space:]]*) targets+=("$f") ;;
+        '#!'*)
+          local shebang interp arg base
+          shebang="${first#\#!}"
+          # Collapse leading blanks, then split off the first two words.
+          shebang="${shebang#"${shebang%%[![:space:]]*}"}"
+          interp="${shebang%%[[:space:]]*}"
+          arg="${shebang#"$interp"}"
+          arg="${arg#"${arg%%[![:space:]]*}"}"
+          arg="${arg%%[[:space:]]*}"
+          base="${interp##*/}"
+          case "$base" in
+            env | env[0-9.]*) base="${arg##*/}" ;;
+          esac
+          # Strip a version suffix: ksh93 -> ksh, bash5 -> bash, sh5.2 -> sh.
+          while [[ "$base" == *[0-9.] ]]; do base="${base%[0-9.]}"; done
+          case "$base" in
+            sh | bash | dash | ksh | mksh | pdksh | ash | zsh | yash | busybox)
+              targets+=("$f")
+              ;;
+          esac
+          ;;
       esac
     done < <(git ls-files -z)
     ((${#targets[@]} > 0)) || die "no tracked shell scripts found"

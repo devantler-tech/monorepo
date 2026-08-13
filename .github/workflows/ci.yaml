@@ -569,18 +569,23 @@ jobs:
       # spelling the guard must catch and each safe shape it must leave alone.
       - name: Self-test the guard
         run: bash .claude/scripts/pipefail-grep-guard.test.sh
-      # ENFORCEMENT SHIPS LATENT, per feature-flag-first delivery: this guard is a
-      # ~600-line approximation of a shell parser, and nine review rounds found
-      # gaps in both directions — silent misses AND false positives on valid
-      # scripts. Making it blocking in the same change that introduces it would
-      # hand every PR in the repository a parser this new.
+      # ENFORCEMENT IS LATENT, per feature-flag-first delivery. This guard
+      # approximates a shell parser in ~1100 lines of bash, so it can err in both
+      # directions: a silent miss on a hazardous line, or a false positive that
+      # blocks a valid script. Gating every PR in the repository on that judgement
+      # is the risk the flag holds back.
       #
-      # So the repository-wide sweep runs only when the `ENFORCE_PIPEFAIL_GREP_GUARD`
-      # repository variable is set to `true`. Activation is a separate, reversible
-      # step once the guard has been validated against real traffic. The self-test
-      # above is NOT gated — it is an ordinary unit test of a tracked script, and
-      # keeping it running is what makes the latent code trustworthy when the flag
-      # is eventually flipped.
+      # The repository-wide sweep therefore runs only when the
+      # `ENFORCE_PIPEFAIL_GREP_GUARD` repository variable is `true`. Activation is a
+      # separate, reversible step, taken once the guard has run clean against real
+      # traffic. The self-test above is NOT gated — it is an ordinary unit test of a
+      # tracked script, and keeping it running is what makes the latent code
+      # trustworthy at the moment the flag is flipped.
+      #
+      # This is a RELEASE flag, so it is short-lived by contract: #2821 owns
+      # activation and removal, and expires 2026-09-30. From that date
+      # `pipefail-grep-guard.test.sh` fails, so the flag cannot become permanent
+      # debt without someone deciding to keep it.
       - name: Reject writers piped into an early-exiting grep
         if: vars.ENFORCE_PIPEFAIL_GREP_GUARD == 'true'
         run: bash .claude/scripts/pipefail-grep-guard.sh

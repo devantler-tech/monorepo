@@ -1100,6 +1100,75 @@ run_guard "$f" && rc=0 || rc=$?
 report "KNOWN LIMIT: an escaped quote inside a delimiter word is not dequoted" \
   "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
 
+# `xargs` consumes the producer's ENTIRE stream and hands grep filenames, so grep
+# never reads the pipe, nothing is SIGPIPEd, and the pipeline exits 0. While the
+# assignment arm accepted a bare NAME, every such wrapper read as an environment
+# prefix and this safe line was reported as an offender.
+clean_case "a stream-consuming wrapper is not an assignment prefix" \
+  'producer | xargs grep -q MATCH'
+# The control differs in the one character that decides it: with `=` this IS an
+# assignment prefix, so the grep behind it is still reached.
+flag_case "an assignment prefix proper still reaches the grep" \
+  'producer | WRAPPED=1 grep -q MATCH'
+
+# ---------------------------------------------------------------------------
+# 2i. Shebang classification, which only runs in the repository-wide sweep and
+#     therefore needs a throwaway git repository rather than a bare fixture file.
+# ---------------------------------------------------------------------------
+# The sweep identifies extensionless scripts by their INTERPRETER. A `*sh` suffix
+# test misses every versioned shell, so `#!/usr/bin/ksh93` was skipped while the
+# sweep still reported the repository clean — silent omission, the one direction
+# that fails open.
+mkrepo() {
+  local dir="$tmp/$1" shebang="$2"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" config user.email "guard-test@example.invalid"
+  git -C "$dir" config user.name "guard test"
+  printf '%s\nproducer | grep -q MATCH\n' "$shebang" >"$dir/tool"
+  # A benign `*.sh` so the target set is never empty. The guard fail-closes with
+  # exit 2 on a repository containing no shell scripts at all, which would other-
+  # wise be indistinguishable from "the interpreter was correctly not swept".
+  printf '#!/usr/bin/env bash\ntrue\n' >"$dir/noop.sh"
+  git -C "$dir" add tool noop.sh
+  git -C "$dir" -c commit.gpgsign=false commit -qm fixture
+  printf '%s' "$dir"
+}
+
+r="$(mkrepo "shebang-versioned" '#!/usr/bin/ksh93')"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "a version-suffixed shebang is swept, not silently skipped" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+r="$(mkrepo "shebang-via-env" '#!/usr/bin/env bash')"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "an env-dispatched shebang resolves to the shell in its argument" \
+  "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+
+# The control keeps the needle and changes only the interpreter: a non-shell
+# script is not this guard's subject, so the same line must stay clean.
+r="$(mkrepo "shebang-not-a-shell" '#!/usr/bin/perl')"
+out="$(cd "$r" && "$guard" 2>&1)" && rc=0 || rc=$?
+report "a non-shell interpreter is not swept" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
+# --- release-flag expiry ---------------------------------------------------
+# `ENFORCE_PIPEFAIL_GREP_GUARD` gates the repository-wide sweep in ci.yaml. It is
+# a RELEASE flag, so it is short-lived by contract and #2821 owns activating then
+# removing it. This assertion is the forcing function: from the expiry date it
+# fails, so the flag cannot quietly become permanent debt.
+#
+# Removing the flag means removing this case in the same change — a guard for a
+# flag that no longer exists would fail forever with nothing to fix.
+#
+# `date -u +%Y%m%d` is the one spelling BSD and GNU agree on; every relative-date
+# form differs between them, which is why the comparison is a plain integer.
+flag_expiry=20260930
+today="$(date -u +%Y%m%d)"
+report "the ENFORCE_PIPEFAIL_GREP_GUARD release flag has not passed its expiry" \
+  "$(yn test "$today" -lt "$flag_expiry")" \
+  "today=$today expiry=$flag_expiry — activate and remove the flag per #2821"
+
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2
   exit 1
