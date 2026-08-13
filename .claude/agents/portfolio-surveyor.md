@@ -1361,11 +1361,19 @@ Digest rules:
   approved** still has their `CHANGES_REQUESTED` sitting in it forever. Sweeping every historical row
   therefore reports a withdrawn block as live: with one human among them, the all-non-human
   precondition below can never be met again, and the PR parks permanently behind a request its author
-  already satisfied. So per author take only their **newest** review, **skipping `DISMISSED` and
-  `PENDING`**, and keep it only if that newest one is `CHANGES_REQUESTED`. This preserves the
+  already satisfied. So per author take only their newest **state-changing** review — the newest whose
+  state is `APPROVED` or `CHANGES_REQUESTED` — and keep it only if that one is `CHANGES_REQUESTED`.
+  🔴 **"Newest review" is the WRONG reduction, and the difference is a fail-open.** Only `APPROVED` and
+  `CHANGES_REQUESTED` change a reviewer's effective state; `COMMENTED`, `DISMISSED` and `PENDING` do
+  not. A reviewer who requests changes and later posts a `COMMENTED` review — the ordinary way to add
+  more inline feedback without approving — still blocks the PR, but a newest-*object* reduction selects
+  that `COMMENTED` and then discards it for not being `CHANGES_REQUESTED`, **losing a live human
+  blocker and reporting the PR as clear**. Skipping the three non-state-changing states is what makes
+  the reduction agree with GitHub. This preserves the
   protection the previous sentence names — an older human block by a *different* reviewer is still
-  that reviewer's latest, so it still counts — while dropping only blocks their own author has
-  superseded. `reviewDecision` aggregates latest-per-reviewer the same way, so this is also what makes
+  that reviewer's latest state-changing review, so it still counts — while dropping only blocks their
+  own author has superseded by approving.
+  `reviewDecision` aggregates latest-state-changing-per-reviewer the same way, so this is also what makes
   the sweep agree with the field it is expanding rather than contradict it. Report the newest as
   `rd=CHANGES_REQUESTED:<author>@<sha>` and name any additional CHANGES_REQUESTED authors. **The
   `agent(…)`/`human(…)` qualifier applies to `devantler` reviews ONLY**, where it is decided by the
