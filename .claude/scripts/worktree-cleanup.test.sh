@@ -642,6 +642,40 @@ t_keeps_parent_of_nested_worktree_even_when_ignored() {
   rm -rf "$root"
 }
 
+t_reaps_a_spent_nested_worktree() {
+  # A session worktree can itself hold worktrees at <session>/.claude/worktrees/<name> —
+  # the agent write-boundary hook requires that placement — and the candidate loop used to
+  # be a single-level glob over WT_ROOT, so those were evaluated by NO sweep at any age.
+  # They accumulated without bound AND pinned their parent through the
+  # "contains a registered worktree" gate, leaking the pair permanently.
+  local root; root=$(make_repo)
+  add_wt "$root" spent pushed            # control must still reap
+  add_wt "$root" parent3 pushed
+  local p="$root/repo/.claude/worktrees/parent3"
+  git -C "$root/repo" worktree add -q -b claude/nested3 \
+    "$p/.claude/worktrees/nested3" main || {
+      bad "reaps a spent NESTED worktree" "FIXTURE: nested worktree add failed"
+      rm -rf "$root"; return; }
+  git -C "$root/repo" push -q origin claude/nested3
+  touch -t 202001010000 "$p/.claude/worktrees/nested3" "$p"
+  local out; out=$(run "$root")
+  # The label is WT_ROOT-relative, so the nested path is what identifies it: two nested
+  # worktrees under different parents share a basename.
+  # The parent must be KEPT, but the REASON is deliberately not asserted: without a
+  # .gitignore the untracked `?? .claude/worktrees/` trips the uncommitted-changes gate
+  # first, and that gate runs before the registered-worktree gate. Which one fires is
+  # t_keeps_parent_of_a_nested_worktree's subject; this test is about the child being
+  # enumerated at all.
+  if grep -q '^REAP  *parent3/\.claude/worktrees/nested3 ' <<< "$out" \
+     && grep -q '^KEEP  *parent3 ' <<< "$out" \
+     && grep -q '^REAP  .*spent' <<< "$out"; then
+    ok "reaps a spent NESTED worktree while keeping its parent"
+  else
+    bad "reaps a spent NESTED worktree while keeping its parent" "$out"
+  fi
+  rm -rf "$root"
+}
+
 t_keeps_worktree_with_orphaned_reflog_commit() {
   # HEAD can be remotely reachable while the reflog still holds an earlier UNPUSHED
   # commit (commit, then reset back to the pushed one). The per-worktree reflog dies
@@ -768,6 +802,7 @@ t_keeps_files_hidden_by_index_flags
 t_index_flag_gate_survives_a_large_index
 t_keeps_untracked_when_showUntrackedFiles_is_no
 t_keeps_parent_of_nested_worktree_even_when_ignored
+t_reaps_a_spent_nested_worktree
 t_keeps_worktree_with_orphaned_reflog_commit
 t_keeps_worktree_with_operation_in_progress
 t_dry_run_writes_no_manifest_and_removes_nothing

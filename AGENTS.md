@@ -970,7 +970,7 @@ green reads as "no review". Rows are in lane-priority order:**
 
 | Lane | Clean/green artifact | Findings artifact | Key to match |
 |---|---|---|---|
-| **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head **on an object positively identified as a review** (body begins `**Actionable comments posted:`), or the auto-generated summary comment updated after the authenticated request, naming the head, or a **command-invocation reply carrying a verdict** (`Reviewed pull request #<n> at <sha>` with `<sha>` a prefix of `headRefOid`, plus `I found no actionable issues`) — each carrying no rate-limit/service marker; the head's `CodeRabbit` commit status corroborates that a review RAN only when its `description` begins `Review completed` |
+| **CodeRabbit** (`coderabbitai[bot]`) | current-head review completion with no actionable thread/body/ancillary finding; `APPROVED` is sufficient but not required | review object/body/comment with an actionable finding | REST `commit_id` == head **on an object positively identified as a review** (body begins `**Actionable comments posted:` — **after stripping any leading HTML comments and the whitespace around them**, since CodeRabbit prefixes real bodies with an agent-hint block), or the auto-generated summary comment updated after the authenticated request, naming the head, or a **command-invocation reply carrying a verdict** (`Reviewed pull request #<n> at <sha>` with `<sha>` a prefix of `headRefOid`, plus `I found no actionable issues`) — each carrying no rate-limit/service marker; the head's `CodeRabbit` commit status corroborates that a review RAN only when its `description` begins `Review completed` |
 | **Codex** (`chatgpt-codex-connector[bot]`) | **issue COMMENT** — `Codex Review: Didn't find any major issues` + `**Reviewed commit:** <sha>` (10-char, no `commit_id` field) | review object, `state: COMMENTED`, inline threads — **OR an issue COMMENT carrying a `## Review finding` section** (see below) | clean pass: comment body sha vs `headRefOid[0:10]`; comment-form finding: full 40-char sha in its blob permalinks |
 | **Cursor Bugbot** (`cursor[bot]`) | **CHECK-RUN named `Cursor Bugbot`** (app slug `cursor`), `conclusion: success` — *no review object, no comment* | same check-run with **`conclusion: neutral` AND `output.title: "Bugbot Review"`**, findings as INLINE review comments from `cursor[bot]` on `pulls/<n>/comments` | check-run at `commits/<headRefOid>/check-runs` |
 
@@ -988,7 +988,24 @@ sha in its blob permalinks** — the finding comment carries **no** `**Reviewed 
 is precisely why the marker-based sweep missed it. **`Didn't find any major issues` never clears a P2**:
 the green can be newer than the finding, so recency decides nothing here.
 
-**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head **and positively identified as a review** — its body begins `**Actionable comments posted:`, because **an empty object is a reply container, never a review**, whatever its `commit_id` — or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request and naming the head, or its **command-invocation reply comment carrying a verdict** — a body stating `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of `headRefOid`**, together with `I found no actionable issues`, updated after that request. **All three artifacts must have `user.login == "coderabbitai[bot]"`** — the reply is matched on plain prose rather than a structural marker, so without the author bind any account could post those two phrases with the head prefix and be read as a green. **Discriminate on SUBSTANCE, not on comment type:** a command reply carrying no verdict line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a review, and any artifact carrying a rate-limit, quota, or service marker saying the review did not run is rejected whatever its shape. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
+**CodeRabbit success is about its review result, not GitHub's approval event:** **a finding-free current-head CodeRabbit review completion is `cr@<sha>` even without `APPROVED`**. Accept either its current-head review object submitted after the latest authenticated request for that head **and positively identified as a review** — its body begins `**Actionable comments posted:` **after stripping any leading HTML comments and the whitespace around them**, because **an empty object is a reply container, never a review**, whatever its `commit_id` — or its substantive auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after that request and naming the head, or its **command-invocation reply comment carrying a verdict** — a body stating `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of `headRefOid`**, together with `I found no actionable issues`, updated after that request. **All three artifacts must have `user.login == "coderabbitai[bot]"`** — the reply is matched on plain prose rather than a structural marker, so without the author bind any account could post those two phrases with the head prefix and be read as a green. **Discriminate on SUBSTANCE, not on comment type:** a command reply carrying no verdict line — a bare `✅ Action performed` / `Review finished` shell — is an acknowledgement and never a review, and any artifact carrying a rate-limit, quota, or service marker saying the review did not run is rejected whatever its shape. Only then check all CodeRabbit threads, review-body finding sections, and explicit ancillary problems for that review; an authenticated fingerprint-matching `body_findings=0-resolved@<sha>` record counts as zero when the identical section repeats. Any unresolved/new finding or stale completion is not green.
+
+🔴 **The strip is REQUIRED, not a tolerance — a real review body no longer starts with the marker at
+all.** CodeRabbit prefixes every substantive review with an agent-hint HTML comment
+(`<!-- coderabbit-cli-agent-hint:v3 … -->`), so the marker sits after that block and a blank line.
+Measured 2026-08-13 on four substantive review objects — monorepo#2810 at 07:18:36Z (len 30713) and
+10:56:58Z (len 37894), monorepo#2723 on 2026-08-12 at 20:33:20Z (len 49012) and 21:59:21Z (len
+62825): **all four carry the prefix and none begins with the marker.** An unstripped test therefore
+matches **no** genuine current review.
+It fails **closed**, which is the safe direction and an expensive one: a real current-head review
+reads as `green_review=none`, so the run re-requests the **free** lane and then walks down into
+**weekly-limited** Codex and **monthly-limited** Bugbot on a head CodeRabbit has already reviewed —
+the same inversion of the cheapest-lane-first order the verdict-reply case records above, and a
+pentad-clear PR parks while it happens.
+⚠️ **Strip only LEADING comments, and keep the match ANCHORED.** The widening is "skip a prefix", not
+"search the body": a marker appearing further in is not a review, and an unterminated comment stops
+the strip rather than consuming the body. The empty container still fails, which is the point — the
+measurement below is unaffected by this change.
 
 🔴 **The empty-container half is not pedantry — it is the dominant shape, and it has reached `main`.**
 Measured over the 60 most recently merged monorepo PRs (2026-08-07): of the CodeRabbit review objects
@@ -3039,18 +3056,39 @@ case is safe by construction — same namespace, same deterministic branch name,
 is refused (see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim
 branch.
 
-🔴 **Scheduled is not delivered — on the Claude lane about a third of ticks never happen.** Measured
-across one identical window (2026-08-02T03:50Z → 2026-08-08T19:50Z, **161 scheduled slots per lane**):
-**Codex dispatched 161/161**, because that scheduler starts a run even when the previous one is still
-open — one run whose record stayed open for 240 minutes did not block any of the four ticks behind it.
-**Claude dispatched 108/161**: its scheduler refuses any dispatch that would overlap the previous run
-of the same task and records it as `per_task_limit`, so **53 ticks — 32.9% — were dropped**, silently,
-producing no artifact anywhere. That is the second consecutive measurement of the same behaviour
-(36.6% over 2026-08-01→08-07), so it is the lane's normal state, not an incident, and the effective
-Claude interval is **~1.5 hours**. The Agent Improver is unaffected: the Claude store records **zero**
-dropped improver dispatches, and the Codex scheduler refuses none.
+🔴 **Scheduled is not delivered — on the Claude lane about one tick in five never happens.** The two
+machine-local schedulers differ. Measured across 2026-08-02T03:50Z → 2026-08-08T19:50Z (**161 scheduled
+slots per lane**), **Codex dispatched 161/161**, because that scheduler starts a run even when the
+previous one is still open — one run whose record stayed open for 240 minutes did not block any of the
+four ticks behind it. Claude's refuses any dispatch that would overlap the previous run of the same
+task and records it as `per_task_limit`. The reading over that same window was
+**Claude dispatched 108/161** — 53 ticks, 32.9% — with 36.6% over 2026-08-01→08-07. Those measurements
+are preserved as what they were; **both overstate the loss, and the cause is the METHOD, not the lane.**
+
+🔴 **A `per_task_limit` record is a per-minute liveness sample of "a run is currently open" — NOT a
+per-slot drop record.** Measured 2026-08-12: **1871 of 1922 inter-record gaps are 59–60 seconds**, so
+the scheduler re-records a skip every minute a run stays open and one long run writes dozens of them.
+Counting those records — raw, or bucketed by hour — therefore counts a slot that merely started
+**delayed into the next hour** as one that never ran at all. Over 164 slots
+(2026-08-05T12Z → 2026-08-12T07Z), **37 of the 66 refused hours dispatched anyway**.
+
+Corrected, and cross-validated against the transcripts rather than the skip store: **133 of 164 slots
+dispatched; 31 did not (18.9%)** — 29 of those carrying a refusal (**17.7% genuinely dropped**) and
+**2 carrying no record at all**, so a second failure cause exists that the skip store cannot see (the
+Improver's own missing 2026-08-05 dispatch is one, and it has no `per_task_limit` record either). The
+effective Claude interval is therefore **~1.2 hours**, not 1.5.
+⚠️ **The Improver is NOT proven unaffected — and its zero skip count is exactly why not.** The Claude
+store records **zero** `per_task_limit` skips for it, but the second failure cause above is invisible
+to that store, and the Improver's own missing 2026-08-05 dispatch is one of the two no-record cases.
+So zero skips establishes nothing about its health; reading it as a clean bill is the same
+absence-as-evidence error this whole correction is about. Measure the Improver the same way —
+scheduled slots against actual dispatches — before relying on its four daily starts. The Codex
+scheduler refuses none, which bounds *that* lane's refusal cause and says nothing about this one.
+⚠️ **Re-derive this ONLY by comparing actual dispatches to scheduled slots** — never by counting skip
+records. Counting them is what produced five mutually-inconsistent readings (32.9%, 36.6%, 44.0%,
+50.0%, 58.3%) across both instances, each re-measured because the last one looked wrong.
 **So never time anything off "the next tick."** A carry-forward, a claim-expiry judgement, or a "the
-next run will collect this" decision is wrong about a third of the time on Claude, and always in the
+next run will collect this" decision is wrong roughly one time in five on Claude, and always in the
 direction of waiting **longer** than planned — so prefer finishing inside the current run over handing
 work to a tick that may not come. The Agent Improver's four daily starts are additional work, not
 replacement slots. The scheduled interval is the gap **between runs, not a per-run time budget**; it

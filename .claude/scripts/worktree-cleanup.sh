@@ -161,7 +161,12 @@ record() { # path branch sha evidence outcome
   return 0
 }
 
-keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(basename "$1")" "$2"; }
+# Label a candidate by its path RELATIVE to WT_ROOT, not its basename: nested worktrees
+# (<session>/.claude/worktrees/<name>) are swept too, and two of them under different parents
+# share a basename, so a basename-only label cannot say which one a line is about. Identical
+# to the basename for a direct child, which is every pre-existing case.
+wt_label() { local l=${1#"$WT_ROOT"/}; printf '%s' "${l:-$(basename "$1")}"; }
+keep() { kept=$((kept+1)); printf 'KEEP   %-52s %s\n' "$(wt_label "$1")" "$2"; }
 
 trap 'worktree_claim_lock_release >/dev/null 2>&1 || true' EXIT
 trap 'exit 2' HUP INT TERM
@@ -370,16 +375,53 @@ count_real_changes() {
   return 0
 }
 
-for wt in "$WT_ROOT"/*/; do
+# The candidate set is every directory directly under WT_ROOT, PLUS every registered worktree
+# nested deeper beneath it. A session worktree can itself hold worktrees at
+# <session>/.claude/worktrees/<name> — the agent write-boundary hook requires exactly that
+# placement — and a single-level glob never sees them. They were therefore evaluated by no
+# sweep at all, at any age, while ALSO pinning their parent through the "contains a registered
+# worktree" gate below, so the pair leaked together permanently. Measured on the reference host:
+# 6 of 7 live maint-* worktrees were nested and none appeared in a full dry-run.
+#
+# Only the NESTED half comes from the registered list. Direct children stay unresolved glob
+# output so an unresolvable one still reaches the `die` below rather than being dropped here,
+# and an unregistered stray directory still reaches the "not a registered worktree" KEEP.
+#
+# Deepest-first, so a nested child is considered before the parent containing it. `sort -s`
+# keeps the lexicographic order `sort -u` established within one depth, so the order is
+# deterministic.
+CANDIDATES=$(
+  {
+    for d in "$WT_ROOT"/*/; do [ -d "$d" ] && printf '%s\n' "${d%/}"; done
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      # Keep only paths at least TWO levels under WT_ROOT: a direct child is
+      # `$WT_ROOT/<name>` and the glob above already covers it.
+      #
+      # Deliberately NOT a `case` — the host's /bin/bash is 3.2, which mis-parses a case
+      # pattern's `)` inside `$( )` and dies with "syntax error near unexpected token `;;'".
+      # (`case "$p" in ("$WT_ROOT"/*/*)` also works, but this form needs no parser lore.)
+      rest=${p#"$WT_ROOT"/}
+      [ "$rest" != "$p" ] || continue          # not under WT_ROOT at all
+      [ "${rest#*/}" != "$rest" ] || continue  # direct child: no separator left
+      printf '%s\n' "$p"
+    done <<< "$REGISTERED"
+  } | sort -u | awk '{ d=gsub(/\//,"/"); print d "\t" $0 }' | sort -s -k1,1nr | cut -f2-
+)
+
+# Read candidates on FD 3. The loop body calls git and lsof, and a command that reads stdin
+# would otherwise consume the remaining candidate lines and silently shorten the sweep.
+while IFS= read -r wt <&3; do
+  [ -n "$wt" ] || continue
+  # A nested candidate whose parent was removed earlier in this same run is already gone.
   [ -d "$wt" ] || continue
-  wt=${wt%/}
   # A candidate that EXISTS (the glob matched a directory) but cannot be resolved is an
   # infrastructure failure — permissions, a broken mount — not a verdict about this
   # worktree. Reporting it as an ordinary KEEP let the run exit 0 while silently unable
   # to inspect part of the tree.
   wt_real=$(cd "$wt" 2>/dev/null && pwd -P) \
     || die "cannot resolve candidate worktree $wt — refusing to continue on an uninspectable tree"
-  name=$(basename "$wt")
+  name=$(wt_label "$wt")
 
   # KEEP: anything git does not know as a worktree. Never a deletion candidate.
   # here-string, NOT a pipe: grep -q exits at its first match, printf then takes SIGPIPE,
@@ -630,7 +672,7 @@ for wt in "$WT_ROOT"/*/; do
     || die "REMOVED $wt_real but could not append its 'reaped' row. The deletion DID happen: a 'pending' row whose path no longer exists means deleted, not aborted (restore ref: refs/reaped/$sha)"
   printf 'REAPED %-52s %s (%s MB%s)\n' "$name" "$branch" "$((sz_kb/1024))" "$ign_note"
   reaped=$((reaped+1)); freed_kb=$((freed_kb+sz_kb))
-done
+done 3<<< "$CANDIDATES"
 
 # Drop admin entries whose directory is already gone.
 if [ "$MODE" = "apply" ]; then
