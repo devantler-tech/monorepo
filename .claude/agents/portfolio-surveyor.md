@@ -48,8 +48,20 @@ public and private — no per-repo loop needed to enumerate):
    the budget rows exist to prevent, arriving through discovery instead of deepening. So compare the
    returned count against the cap: **if it comes back at exactly 300, discovery is truncated** —
    re-run partitioned (per repository, or by `--updated` windows) and merge, or emit
-   `DISCOVERY-TRUNCATED (300 cap)` and set `nothing_on_fire:false`, because a rung-1 PR may exist
-   that this survey cannot see. The same applies to the issue call below.
+   `DISCOVERY-TRUNCATED (prs, 300 cap)` and set `nothing_on_fire: unknown`, because a rung-1 PR may
+   exist that this survey cannot see.
+   🔴 **`unknown`, never `false` — the grammar already defines both and they are not interchangeable.**
+   `false` **claims an observed fire**, and a survey that never saw PR 301 observed nothing; this is the
+   same reasoning the digest already applies to `NOT-DEEPENED (budget)` rows, where truncation reaches
+   the consumer as `unknown` for exactly this reason. Emitting `false` also **jams the ladder**: rung 0
+   asserts live breakage, so the orchestrator would hunt a fire that does not exist and never descend,
+   on every survey, for as long as the portfolio stays above the cap. `unknown` carries the same
+   caution — *re-survey before concluding the portfolio is healthy* — without inventing the breakage.
+   🔴 **Truncated ISSUE discovery is reported SEPARATELY and never touches `nothing_on_fire` at all.**
+   Issues are rungs 2–4; a missing one delays lower-rung work and says nothing about a broken PR or a
+   red `main`, so folding it into a health field mislabels a backlog gap as breakage. Emit
+   `DISCOVERY-TRUNCATED (issues, 300 cap)` on its own line and leave `nothing_on_fire` decided by the
+   PR and `main` evidence alone.
 2. **Open issues (org-wide, one call) — include `assignees` (claim signal) and `author`
    (automation-owned filter):**
    `gh search issues --owner devantler-tech --archived=false --state open --limit 300 --json number,repository,title,author,labels,updatedAt,url,assignees`
@@ -171,12 +183,33 @@ public and private — no per-repo loop needed to enumerate):
      either never actionable or actionable with no evidence — and since the 2026-08-08 widening made
      every author drivable, it becomes the second. An external or Copilot-authored PR mid-merge would
      read as idle.
-     `active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>`
+     `active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>`
      — the newest push to the head, the newest **human** (non-bot, non-agent-disclosed) comment or
      review, a review request at the current head still inside its provider envelope, and an in-flight
      `merge_group` run. 🔴 **A COMPLETED bot review is NOT an active-work signal** — it is the cue to
      act, so never report it here; only a request still awaiting its answer belongs in
      `review-envelope`.
+     🔴 **`merge-group:` needs its OWN query — no field you already hold can answer it.** A queued PR's
+     checks run against the queue's **synthetic `gh-readonly-queue/…` ref**, not its head, so
+     `statusCheckRollup` shows the head's own checks and reports nothing about the merge in progress;
+     and `autoMergeRequest` stays **`null` while queued**, so it cannot stand in either. With no query
+     the alternative is unreportable, every queued PR reads `active=none`, and the survey invites a
+     takeover of a PR that is **already merging**. On a merge-queue repo, read the queue itself and
+     match this PR:
+     ```sh
+     gh api graphql -f owner=<owner> -f name=<name> -f query='
+       query($owner:String!,$name:String!){repository(owner:$owner,name:$name){
+         mergeQueue(branch:"main"){entries(first:50){nodes{position pullRequest{number}}}}}}'
+     ```
+     A matching entry ⇒ `merge-group:queued@<position>`. Where only the run is available, correlate a
+     bounded `--event merge_group` listing on its `headBranch` (`pr-<n>`); **sort explicitly by
+     `created_at` and take the newest** rather than trusting the endpoint's order, which is not
+     reliably newest-first and will hand back an arbitrary stale window that makes a live merge look
+     idle. Only a run still **in progress** is an ownership signal — a completed or evicted one is not,
+     and an eviction is work to root-cause rather than a reason to stand off.
+     ⚠️ **Emit `merge-group:` only on repos that actually gate `main` behind a queue** (recorded per
+     repo in its `AGENTS.md ## Maintenance`); elsewhere the alternative simply never occurs, and this
+     query is skipped rather than run per PR.
      🔴 **`pushed:` needs a real PUSH timestamp, and neither field you already have is one.**
      `headRefOid` carries no time at all; discovery's `updatedAt` also moves on comments and reviews,
      so it over-reports; and the head **commit's** date under-reports, because an old commit can be
@@ -234,8 +267,19 @@ public and private — no per-repo loop needed to enumerate):
      produced itself. The surveyor cannot resolve this alone (it holds no creation record), so it
      reports the **actor, the branch namespace, and the pushed identity** —
      `pushed:<age>@<lane>:<headRefName>@<headRefOid>`, where `<lane>` is the
-     `claude/`/`codex/`/`cursor/` prefix of `headRefName`, or `fork` for an external head — and the
+     `claude/`/`codex/`/`cursor/` prefix of `headRefName`, `fork` for an external head, or **`base`
+     for any other same-repository branch** — and the
      consumer discounts a signal **only when that exact branch and sha are ones THIS RUN pushed**.
+     🔴 **`base` is not a tidy-up — without it a whole PR class cannot be reported at all.** The three
+     agent namespaces plus `fork` leave a same-repository branch outside them — our own bots'
+     `deps/agent-skills-update`, a release branch, a `coderabbitai[bot]` generated-tests branch, a
+     branch the maintainer pushed straight to the repo — with **no legal `<lane>` value**, while those
+     same PRs are squarely inside the all-author takeover test and carry their own digest rows. An
+     implementation then has to invent a token, emit a malformed signal, or drop the push entirely; the
+     third is the likely one and the dangerous one, because it reads as `active=none` and authorises a
+     takeover **while the bot is mid-update**. `base` says only what the survey actually knows — a
+     same-repo branch in no agent namespace — and the consumer's branch+sha match decides the rest, so
+     no discount rides on the token.
      Reporting this costs nothing and is the only part the survey can know; the discount is the
      orchestrator's, because only it knows what it pushed.
      ⚠️ **Never discount a push because of its lane or a creation record — match branch and sha.**
@@ -1065,9 +1109,9 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - GITHUB-MANAGED (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out OR startup_failure) runs on main: ours to repair (build, scanning/dependency config, or move off default setup) — DOES count against nothing_on_fire. This escalation is what makes the property test safe: an actionable managed failure recurs, so it is delayed by one run, never hidden
 - GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # equivalent code-scanning specialisation of the line above
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
-- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
-- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
-- <repo> #<n> "<title>" — `devantler`, draft=<true|false> → <REVIEW-READY|MERGE-READY|NEEDS-FIX|ACTIVELY-OWNED>: branch=<headRefName>, disclosure=<routine|interactive|none>, active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (`disclosure` tells the orchestrator whose control channel a `devantler` comment on this PR is, NOT whether it may drive it; the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)
+- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
+- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
+- <repo> #<n> "<title>" — `devantler`, draft=<true|false> → <REVIEW-READY|MERGE-READY|NEEDS-FIX|ACTIVELY-OWNED>: branch=<headRefName>, disclosure=<routine|interactive|none>, active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>|none>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (`disclosure` tells the orchestrator whose control channel a `devantler` comment on this PR is, NOT whether it may drive it; the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — NEVER-RUN-LOCALLY (never run locally); reviewed statically, then driven to a terminal state like any other PR. Carries the same deepened pentad, `active=` and classification as every other row, plus behaviour_observed=<check-name|static|none> (which CI check actually exercises the change; `static` = no exercisable runtime surface, evaluated statically instead; `none` = a check could exercise it but none does, and is the named blocker on its merge, per *You own EVERY pull request in the portfolio*)
 - NOT-DEEPENED (budget) <repo> ×<n> [#a,#b,…]   # API pool exhausted before these PRs were deepened — they carry NO pentad and were NOT assessed; never report them as clean or actionable

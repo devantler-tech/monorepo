@@ -304,7 +304,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   queued"). 🔴 **Not just trusted/own** — an in-flight `merge_group` run is one of the four
   active-work signals, so restricting it to that subset reports `active=none` on an external or
   Copilot-authored PR that is *already merging*, and the orchestrator may then promote, close, or
-  fire a second merge against it.
+  fire a second merge against it. **That state comes from the surveyor's own merge-queue read** (its
+  `merge-group:` signal) — neither `statusCheckRollup` nor `autoMergeRequest` can supply it, since the
+  queue's checks run on a synthetic ref and `autoMergeRequest` stays `null` while queued.
 
 **Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the
 product's `weekly`/live cursor in memory — NOT every run), also spawn the read-only

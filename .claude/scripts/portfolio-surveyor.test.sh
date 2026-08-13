@@ -2065,6 +2065,56 @@ esac
 
 echo "portfolio surveyor contract: ownership-signal assertions passed"
 
+# ── Signals the grammar PROMISED that no implementation could actually emit ───────────────────────
+# Each of these is the same defect shape: a rule elsewhere requires a value, and the emitted grammar
+# has no alternative for it — so a conforming implementation must either break the grammar or drop
+# the signal. Dropping reads as `active=none`, which authorises exactly the takeover the signal
+# exists to prevent. Assert against the EMITTED templates, never the prose describing them: the
+# explanatory paragraphs contain these tokens too, so a flat-document match passes while every
+# template omits them (that is how the identity token stayed inert for weeks).
+
+# (6) `pushed:unknown@<updatedAt-age>` — required whenever fork activity is unreadable.
+active_templates=$(grep -c 'active=<' "${surveyor}" || true)
+active_with_unknown=$(grep 'active=<' "${surveyor}" | grep -cF 'pushed:unknown@<updatedAt-age>' || true)
+if [ "${active_templates}" -eq 0 ]; then
+  fail "no active= template found in the surveyor, so the pushed:unknown assertion would be vacuous"
+fi
+if [ "${active_templates}" -ne "${active_with_unknown}" ]; then
+  fail "an active= template omits pushed:unknown@<updatedAt-age> (${active_with_unknown}/${active_templates} carry it), so the surveyor must break its own grammar or collapse an unreadable push to none"
+fi
+
+# (7) A same-repository branch outside the three agent namespaces (`deps/agent-skills-update`, a
+#     release branch) had NO legal <lane> value, though those PRs are inside the takeover test.
+case "${surveyor_flat}" in
+  *'`base` for any other same-repository branch'*) ;;
+  *) fail "the surveyor defines no lane token for a same-repo branch outside the agent namespaces, so a trusted-bot push cannot be reported" ;;
+esac
+
+# (8) `merge-group:` was unreachable: the queue's checks run on a synthetic ref, so neither
+#     statusCheckRollup nor autoMergeRequest can supply it, and no query was prescribed.
+case "${surveyor_flat}" in
+  *'mergeQueue(branch:"main")'*) ;;
+  *) fail "the surveyor promises a merge-group signal but prescribes no query that can produce it" ;;
+esac
+case "${surveyor_flat}" in
+  *'`autoMergeRequest` stays **`null` while queued**'*) ;;
+  *) fail "the surveyor does not record why autoMergeRequest cannot stand in for the merge-queue read" ;;
+esac
+
+# (9) Truncated discovery must not claim a fire nobody observed. `false` asserts live breakage, which
+#     pins the ladder at rung 0 on every survey while the portfolio sits above the cap; and truncated
+#     ISSUE discovery is lower-rung work that must not touch the health field at all.
+case "${surveyor_flat}" in
+  *'`DISCOVERY-TRUNCATED (prs, 300 cap)` and set `nothing_on_fire: unknown`'*) ;;
+  *) fail "truncated PR discovery still claims an observed fire instead of an unassessed portfolio" ;;
+esac
+case "${surveyor_flat}" in
+  *'Truncated ISSUE discovery is reported SEPARATELY and never touches `nothing_on_fire` at all'*) ;;
+  *) fail "truncated issue discovery still feeds the health field, mislabelling a backlog gap as breakage" ;;
+esac
+
+echo "portfolio surveyor contract: promised-but-unemittable signal assertions passed"
+
 # ── Codex's round on the same signals: three ways a takeover decision can still be wrong ──────────
 # (5) The flat-endpoint read must KEEP THE BODY. Login+timestamp cannot separate the maintainer from
 #     an agent instance — they share the `devantler` login — and this signal is defined as the newest
@@ -2114,6 +2164,21 @@ esac
 case "${constitution_flat}" in
   *'Compare `headRefOid`, NOT `mergeCommit`'*) ;;
   *) fail "the contract does not warn that mergeCommit is not a source-head identity field" ;;
+esac
+
+# (9) …and it must WAIT for `state: MERGED`. Read straight after arming — the natural next step —
+#     the PR is still OPEN carrying the head just evaluated, so the SHAs match and the check reports
+#     success at the one moment it cannot have observed the merge. That is worse than no check: it
+#     manufactures a passing record for precisely the window the guard covers. The merge can also
+#     land after the run ends, and a merged PR leaves the open-PR enumeration, so an unconfirmed
+#     arming is never revisited unless it is carried forward explicitly.
+case "${constitution_flat}" in
+  *'The comparison counts ONLY once `state` reads `MERGED`'*) ;;
+  *) fail "the post-arm confirmation can be satisfied by a read taken while the PR is still OPEN" ;;
+esac
+case "${constitution_flat}" in
+  *'no longer contains it'*) ;;
+  *) fail "the contract does not require carrying an unconfirmed arming forward past the open-PR enumeration" ;;
 esac
 # The reason must be stated for ANY strategy, not just squash. An earlier version said "every merge
 # here is a squash", which contradicts the merge-queue section below it — that path deliberately drops

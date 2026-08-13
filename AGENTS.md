@@ -1665,6 +1665,21 @@ the head you evaluated. If they differ, the App pushed after you armed and a com
 reached `main`: say so in the report and treat it as breakage to repair, not as a merge that went
 through. This holds whichever way GitHub's post-arm semantics actually work, which is why it is stated
 as the requirement rather than a claim about them.
+🔴 **The comparison counts ONLY once `state` reads `MERGED` — read it immediately after arming and it
+confirms nothing.** `--auto` defers the merge until the checks settle, so the read a run naturally
+makes next returns `state: OPEN` carrying **the head you just evaluated**: the two SHAs match, and the
+check reports success at the one moment it cannot have observed anything. That is worse than no check,
+because it manufactures a passing record for the window the guard exists to cover. So gate it: while
+`state` is `OPEN` the confirmation is **outstanding, not satisfied**, and the arming is not yet
+complete.
+🔴 **Persist the armed PR, because nothing else will bring you back to it.** The merge can land long
+after the run ends, and once it does the PR is closed — so the next survey's **open-PR enumeration no
+longer contains it**, and an unconfirmed arming silently becomes an arming nobody ever checked. Record
+`<repo>#<n>` with the evaluated `headRefOid` as a run carry-forward and, while the run is still alive,
+watch it the way any other deferred remote result is watched (a background watcher, never a
+foreground poll — *Latency discipline*). A later run resolves an outstanding entry by reading `state`
+once: `MERGED` ⇒ compare the SHAs and close it out; still `OPEN` ⇒ carry it forward again; `CLOSED`
+without merging ⇒ the arming never fired, which is its own thing to look at.
 🔴 **Compare `headRefOid`, NOT `mergeCommit` — `mergeCommit` is not a source-head identity field under
 ANY merge strategy.** It names the commit created ON THE BASE, which is a different object from the
 head that was merged: a squash condenses the branch into a new commit, a merge commit is new by
