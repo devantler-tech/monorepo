@@ -911,6 +911,31 @@ if [[ -L "$tmp/hang.sh" ]]; then
     "$(yn test "$rc" -eq 2)" "rc=$rc out=$out"
 fi
 
+# A `#` also opens a comment straight after an OPERATOR, with no whitespace:
+# `:;# <<EOF` is a comment, so its `<<EOF` must not open a body over real code.
+# Same class as the `|#` continuation case above, at the heredoc scanner instead.
+for op in ';' '&' '|'; do
+  f="$(mkscript "comment-after-operator-$(printf '%s' "$op" | tr -c 'a-zA-Z0-9' '-').sh" \
+    ":${op}# <<EOF" \
+    'printf "%s" "$v" | grep -q NEEDLE' \
+    'EOF')"
+  run_guard "$f" && rc=0 || rc=$?
+  report "a comment opened straight after '$op' is not a heredoc operator" \
+    "$(yn test "$rc" -eq 1)" "rc=$rc out=$out"
+done
+
+# Its control: a `#` that follows a WORD character is not an introducer — a
+# `${v#pat}` expansion must not truncate the line, or a real heredoc after one
+# stops being recognised and its payload is scanned as code.
+f="$(mkscript "parameter-expansion-hash-not-a-comment.sh" \
+  'x=${v#pat}' \
+  'cat <<EOF' \
+  'y | grep -q Z' \
+  'EOF')"
+run_guard "$f" && rc=0 || rc=$?
+report "positive control: a \${v#pat} expansion still leaves the heredoc detectable" \
+  "$(yn test "$rc" -eq 0)" "rc=$rc out=$out"
+
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2
   exit 1

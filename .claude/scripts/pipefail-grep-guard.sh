@@ -311,14 +311,27 @@ heredoc_delimiters() {
       ;;
     *) m="$raw" ;;
   esac
-  # An unquoted `#` opens a comment; nothing after it is an operator.
-  case "$m" in
-    '#'*) return 1 ;;
-    *[[:space:]]'#'*)
-      m="${m%%[[:space:]]#*}"
-      raw="${raw:0:${#m}}"
-      ;;
-  esac
+  # An unquoted `#` opens a comment; nothing after it is an operator. It counts as
+  # an introducer at line start, after whitespace, or STRAIGHT AFTER AN OPERATOR —
+  # `:;# <<EOF` and `producer |# note` are both comments with no whitespace
+  # anywhere. Restricting it to whitespace left the comment text being scanned for
+  # operators, so a `<<EOF` merely mentioned in one masked the real code below it.
+  #
+  # Scanned on the MASKED copy, so a `#` inside quotes is already an `x` and a
+  # `${v#…}` expansion is not an introducer either — its `#` follows a letter.
+  for ((i = 0; i < ${#m}; i++)); do
+    [[ "${m:i:1}" == '#' ]] || continue
+    if ((i == 0)); then
+      return 1
+    fi
+    case "${m:i-1:1}" in
+      [[:space:]] | ';' | '&' | '|' | '(' | ')')
+        m="${m:0:i}"
+        raw="${raw:0:i}"
+        break
+        ;;
+    esac
+  done
   len=${#m}
   for ((i = 0; i + 1 < len; i++)); do
     [[ "${m:i:2}" == '<<' ]] || continue
