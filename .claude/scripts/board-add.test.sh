@@ -25,7 +25,7 @@ check() { # check <name> <expected-exit> <actual-exit> [haystack] [needle]
     printf 'FAIL %s: expected exit %s, got %s\n' "$name" "$want" "$got" >&2
     fail=$((fail + 1)); return
   fi
-  if [ -n "$needle" ] && ! grep -qF "$needle" <<<"$hay"; then
+  if [ -n "$needle" ] && ! grep -qF -- "$needle" <<<"$hay"; then
     printf 'FAIL %s: output missing %q\n  got: %s\n' "$name" "$needle" "$hay" >&2
     fail=$((fail + 1)); return
   fi

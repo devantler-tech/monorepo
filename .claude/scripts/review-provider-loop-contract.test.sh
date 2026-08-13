@@ -24,7 +24,7 @@ fail() {
 # the words, not the column at which someone happened to break the line.
 assert_prose() {
   local file="$1" phrase="$2" message="$3"
-  tr '\n' ' ' <"${file}" | tr -s '[:space:]' ' ' | grep -Fq -- "${phrase}" ||
+  grep -Fq -- "${phrase}" < <(tr '\n' ' ' <"${file}" | tr -s '[:space:]' ' ') ||
     fail "${message}"
 }
 
@@ -33,7 +33,7 @@ assert_prose() {
 # a bare `grep -q … && fail` returns 1 on the PASSING path, and `set -e` would abort the run there.
 assert_absent() {
   local file="$1" phrase="$2" message="$3"
-  if tr '\n' ' ' <"${file}" | tr -s '[:space:]' ' ' | grep -Fq -- "${phrase}"; then
+  if grep -Fq -- "${phrase}" < <(tr '\n' ' ' <"${file}" | tr -s '[:space:]' ' '); then
     fail "${message}"
   fi
 }
@@ -396,7 +396,7 @@ green_body="$(jq -r '.[]|select(.body|test("Didn.t find any major issues"))|.bod
 [ -n "${green_body}" ] || fail "fixture carries no Codex clean-pass comment"
 # The defect itself: the finding comment carries NO `**Reviewed commit:**` marker, which is why the
 # marker-based sweep could not see it. If that ever changes, this rule needs revisiting.
-if printf '%s' "${finding_body}" | grep -Fq '**Reviewed commit:**'; then
+if grep -Fq '**Reviewed commit:**' <<<"${finding_body}"; then
   fail "fixture finding comment now carries a Reviewed-commit marker; re-derive the attribution rule"
 fi
 expected_head='948bb06f73809c3aee43501ed81a0904d0fa218e'
@@ -406,7 +406,7 @@ attributed="$(printf '%s' "${finding_body}" |
 [ "${attributed}" = "${expected_head}" ] ||
   fail "documented blob-permalink attribution did not recover the reviewed head (got '${attributed}')"
 # The clean pass names the SAME head 41s later, so recency must never decide between them.
-printf '%s' "${green_body}" | grep -Fq "${expected_head:0:10}" ||
+grep -Fq "${expected_head:0:10}" <<<"${green_body}" ||
   fail "fixture clean-pass comment no longer names the same head; ordering trap not reproduced"
 
 # The contract must be a required PR check, including when its own workflow wiring changes.

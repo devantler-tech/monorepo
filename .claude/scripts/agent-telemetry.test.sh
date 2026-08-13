@@ -6044,6 +6044,33 @@ else
       "the fixed form matched the forbidden-shape detector"
 fi
 
+# A cwd matching MORE THAN ONE allowlist entry must still be in scope. This is
+# the ordinary case, not an exotic one: PORTFOLIO_PATHS is built as the monorepo
+# root followed by root/<submodule> for every submodule, so every path inside a
+# submodule matches two entries. Every other scope test in this file uses a
+# single-entry allowlist, where at most one entry can match — which is exactly
+# why the scope filter could drop the entire submodule corpus unobserved.
+mkdir -p "$FIX/nest/sub/deep" "$FIX/cxnest/sessions"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/nest/sub/deep\"}}" \
+  > "$FIX/cxnest/sessions/r.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 11\"}"}}' \
+  >> "$FIX/cxnest/sessions/r.jsonl"
+NEST_HITS=0
+for _ in 1 2 3 4 5; do
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxnest" MONOREPO_DIR="$FIX/nest" \
+        PORTFOLIO_PATHS="$FIX/nest:$FIX/nest/sub" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+  grep -qE 'sleep/poll calls \.\. 1' <<<"$OUT" && NEST_HITS=$((NEST_HITS + 1))
+done
+# Repeated because the failure it guards is a RACE: the writer is only killed
+# once grep has already matched, so a single green run proves nothing.
+if [ "$NEST_HITS" -eq 5 ]; then
+  ok "a cwd matching two allowlist entries stays in scope (5/5 runs)"
+else
+  bad "a cwd matching two allowlist entries stays in scope (5/5 runs)" \
+      "in scope on only $NEST_HITS of 5 runs — the scope filter is dropping submodule sessions"
+fi
+
 echo
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
