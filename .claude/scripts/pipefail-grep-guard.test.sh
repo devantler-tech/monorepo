@@ -1349,6 +1349,21 @@ report "a line starting with a backslash does not abort the walk" \
 # cannot tell "found it" from "died before finding it".
 report "and the offending pipeline is still reported" \
   "$(yn grep -qF -- 'grep -q NEEDLE' <<<"$out")" "rc=$rc out=$out"
+
+# The behavioural case above is platform-dependent, so on its own the invariant is
+# unguarded exactly where it is edited: a developer Mac. Measured 2026-08-13 by
+# reverting the fix and running both shells — bash 5 failed the behavioural case,
+# bash 3.2 failed NOTHING. A reintroduced post-increment would therefore pass the
+# whole suite locally and only surface in CI.
+#
+# So assert the invariant against the SOURCE as well, which every host can check.
+# Comment lines are excluded on purpose: the fix's own explanation names the
+# rejected form, and matching prose would make this assertion unfixable.
+post_increments="$(grep -cE '^[[:space:]]*[^#[:space:]].*\(\([A-Za-z_][A-Za-z0-9_]*\+\+\)\)' "$guard" || true)"
+report "the guard advances indices by pre-increment, never post-increment" \
+  "$(yn test "$post_increments" -eq 0)" \
+  "guard=$guard count=$post_increments — \`((n++))\` returns 1 at n=0 and errexit aborts the scan"
+
 if ((fail != 0)); then
   echo "pipefail-grep-guard self-test: FAILURES above" >&2
   exit 1
