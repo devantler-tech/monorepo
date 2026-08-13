@@ -1982,8 +1982,14 @@ esac
 #     token while this assertion still passed — coverage that reads real and proves nothing. Compare
 #     the count of lines emitting an `active=` template against those opening it with the complete
 #     identity: any template that drops the branch+sha makes the two differ.
+#     The needle is the identity ITSELF, not `active=<pushed:…` — the template opens with the
+#     `none|` alternative so that the joined-signal grammar is expressible (a flat `<a|b|…|none>`
+#     choice cannot say "emit every signal that holds"). Anchoring the needle to the old opening
+#     would count zero and report every template as identity-less, which is a false failure; anchoring
+#     it to the identity keeps the property this assertion actually guards — every emitted template
+#     spells the complete branch+sha, never a lane-only token.
 active_templates=$(grep -c 'active=<' "${surveyor}" || true)
-active_with_identity=$(grep -c 'active=<pushed:<age>@<lane>:<headRefName>@<headRefOid>|' "${surveyor}" || true)
+active_with_identity=$(grep -c 'pushed:<age>@<lane>:<headRefName>@<headRefOid>|' "${surveyor}" || true)
 if [ "${active_templates}" -eq 0 ]; then
   fail "no active= template found in the surveyor, so the push-identity assertion would be vacuous"
 fi

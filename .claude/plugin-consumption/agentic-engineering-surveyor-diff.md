@@ -37,8 +37,14 @@ plugin carries them (or an explicit, tested subset):
 
 1. **Automation-owned short-circuit** — exact `renovate[bot]` / `dependabot[bot]` → one
    `AUTOMATION-OWNED (NO-ACTION)` line; no pentad deepen.
-2. **`OWNERSHIP-UNVERIFIED` framing** for every `devantler`-authored PR (routine vs interactive
-   ambiguity; branch + disclosure hints only).
+2. **All-author active-work signals as the action gate, with disclosure reduced to attribution.**
+   Every PR carries `active=` — one or more `+`-joined signals, `none` only alone — and that is what
+   says whether someone else is mid-flight. `branch` and `disclosure` are reported for a
+   `devantler`-authored PR as **attribution hints only**: they tell the orchestrator whose control
+   channel a comment on that PR is, never whether it may be driven. The surveyor emits **no ownership
+   verdict**. A plugin that still gates driving on an ownership classification, or that omits `active=`
+   for any author, has not reached parity — the `OWNERSHIP-UNVERIFIED` framing this item used to
+   require was retired with the 2026-08-08 all-author ownership grant.
 3. **Full hygiene pentad** including threaded and non-thread findings; CodeRabbit's ancillary
    evaluator contributes only concrete problems it explicitly reports during its selected review,
    never a separate readiness state.

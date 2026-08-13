@@ -542,6 +542,15 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
      **not** fire a manual `gh pr merge` — a merged PR reports those as `UNKNOWN` for minutes while the
      merge completes, so polling them (or firing a now-moot manual merge) only burns the run. Credit
      the auto-merge workflow, not a `gh pr merge` call.
+     🔴 **That no-manual-merge rule is scoped to the PRs this workflow actually ARMS — trusted/own —
+     and an EXTERNAL-author PR is not one of them.** The App arms on promotion for trusted/own PRs
+     only, so applying the rule to every PR in these repos leaves an outside contribution with **no
+     merge path at all**: the workflow will not merge it, and the procedure would forbid the direct
+     merge that otherwise would. Since 2026-08-08 you own those PRs through to a terminal state, so
+     for an external author use the ordinary head-pinned direct merge from *Merge policy* —
+     `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>` — once its
+     gates are clear, including the recorded CI-based behaviour evaluation that PR class requires.
+     Wait for the workflow only where the workflow is the thing that merges.
 3. **Contributor-facing** — triage/label new issues+PRs; one insightful comment on the oldest
    un-commented open item.
 4. **Confident fixes** — a *trivial, obvious* fix (broken link, missing alt text, typo, manifest
