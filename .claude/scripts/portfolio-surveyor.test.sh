@@ -2300,7 +2300,7 @@ echo "portfolio surveyor contract: post-arm confirmation assertions passed"
 # so the completed merge_group conclusion cannot ride on `active=`, which means "leave it alone".
 # The queue's checks run on a synthetic ref, so no head-level rollup can substitute.
 case "${surveyor_flat}" in
-  *'merge_group_result=<conclusion>@<runId>@<sourceHead>'*) ;;
+  *'merge_group_result=<conclusion>@<runId>@<runCreatedAt>'*) ;;
   *) fail "the surveyor emits no completed merge_group result, so an eviction is invisible to the consumer that requires it" ;;
 esac
 case "${surveyor_flat}" in
@@ -2339,7 +2339,7 @@ grep -Fq 'merge-group-result' "${maintenance_skill}" &&
 external_row="$(grep -F 'EXTERNAL/Copilot — NEVER-RUN-LOCALLY' "${surveyor}" || true)"
 [ -n "${external_row}" ] || fail "the external/Copilot digest row is missing entirely"
 case "${external_row}" in
-  *'merge_group_result=<<conclusion>@<runId>@<sourceHead>|stale@<runId>|none>'*) ;;
+  *'merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>'*) ;;
   *) fail "the external/Copilot row omits merge_group_result, so an eviction there is invisible" ;;
 esac
 case "${external_row}" in
@@ -2361,12 +2361,22 @@ esac
 
 echo "portfolio surveyor contract: round-8 field-consistency assertions passed"
 
-# A merge_group run is correlated by `pr-<n>`, which survives every push — so without the run's own
-# source head the newest completed run keeps reporting an eviction the PR has already answered, and
-# the consumer re-diagnoses or blocks a ready PR on every run.
+# A merge_group run is correlated by `pr-<n>`, which survives every push — so without binding the
+# result to WHEN it ran, the newest completed run keeps reporting an eviction the PR has already
+# answered, and the consumer re-diagnoses or blocks a ready PR on every run.
 case "${surveyor_flat}" in
-  *'Bind the result to the head it RAN ON'*) ;;
-  *) fail "the merge_group result is not bound to the head it ran on, so a repaired eviction blocks forever" ;;
+  *'Bind the result to WHEN it ran'*) ;;
+  *) fail "the merge_group result is not bound in time, so a repaired eviction blocks forever" ;;
+esac
+
+# ...and the reason it is bound in TIME rather than by head: a merge_group run's `headSha` is the
+# synthetic queue commit, never the contributing PR's head (measured on platform#3035 — run
+# head_sha 977218004e, queue branch pr-3035-56536122b2, PR headRefOid c8d669236f: three distinct
+# objects). A `headSha == headRefOid` test therefore reports EVERY completed run as stale, hiding
+# the queue failures this field exists to surface and re-permitting the blind re-queue.
+case "${surveyor_flat}" in
+  *'is NOT the contributing PR'*'head'*) ;;
+  *) fail "the surveyor does not record that merge_group headSha is the synthetic queue commit, so the stale test can be rebuilt on it" ;;
 esac
 
 # A top-level COMMENTED review body is neither an issue comment nor an inline comment, so the two

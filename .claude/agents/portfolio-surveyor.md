@@ -277,25 +277,38 @@ public and private — no per-repo loop needed to enumerate):
      `merge-group:` says *someone owns this, leave it alone*, which is the exact opposite of what an
      **evicted** PR needs: nothing owns it, its run finished red, and repairing it is the orchestrator's
      job. Report the newest **completed** run from the same bounded listing as
-     `merge_group_result=<conclusion>@<runId>@<sourceHead>`, **emitted whether or not the PR is
-     currently queued**, and never as an `active=` alternative. (`<sourceHead>` is not decoration —
+     `merge_group_result=<conclusion>@<runId>@<runCreatedAt>`, **emitted whether or not the PR is
+     currently queued**, and never as an `active=` alternative. (`<runCreatedAt>` is not decoration —
      the next paragraph is why it is part of the field, and `stale@<runId>` is what replaces this
-     whole form when that head is no longer the PR's.) Without it an eviction is invisible — the queue's checks run
+     whole form once a later push has answered the eviction.) Without it an eviction is invisible — the queue's checks run
      on a synthetic ref, so the head's `statusCheckRollup` cannot show them either — and the PR reads
      simply idle, which is the state that invites the blind re-queue *Merge policy* records against
      platform#2337. Take the newest by explicit `createdAt` sort exactly as above; `conclusion` is
      whatever the run reports (`failure`, `success`, `cancelled`, …), and `none` when the listing is
      empty. The orchestrator reads a failure here as *root-cause before re-queuing*, never as an
      ownership claim.
-     🔴 **Bind the result to the head it RAN ON, or a repaired eviction blocks the PR forever.** The
+     🔴 **Bind the result to WHEN it ran, or a repaired eviction blocks the PR forever.** The
      listing correlates by `pr-<n>`, which is stable across pushes — so once head A is evicted, the
      newest completed run keeps reporting A's failure after the PR has moved to head B and been fixed.
      The consumer cannot tell an already-repaired eviction from a live one, and re-diagnoses or blocks a
-     ready PR on every run. Take the run's own source head from its `headSha`, and report
-     `merge_group_result=<conclusion>@<runId>@<sourceHead>`; when that source head is **not** the PR's
-     current `headRefOid`, report `merge_group_result=stale@<runId>` instead — the eviction happened, it
-     was answered by a later push, and nothing about the current head is claimed. A result that cannot
-     be attributed to a head is `none`, never a conclusion.
+     ready PR on every run.
+     🔴 **A `merge_group` run's `headSha` is NOT the contributing PR's head — it is the synthetic queue
+     commit, so comparing the two marks EVERY result stale.** Measured on `platform#3035`
+     (2026-08-13): the run carried `head_sha=977218004e…` on
+     `head_branch=gh-readonly-queue/main/pr-3035-56536122b2…`, while the PR's own `headRefOid` was
+     `c8d669236f…` — three different objects. The branch's trailing sha is the **base** at enqueue, and
+     `head_sha` is the queue's merge commit (here it became the PR's `mergeCommit`), so **neither is
+     recoverable as the PR head**. A `headSha == headRefOid` test therefore reports `stale` on every
+     completed run, hiding exactly the queue failures this field exists to surface and re-permitting
+     the blind re-queue.
+     **Key staleness on TIME instead, which is recoverable from both sides.** Report
+     `merge_group_result=<conclusion>@<runId>@<runCreatedAt>`; when the PR's head was pushed **after**
+     that run started — the `pushed:` timestamp this row already carries — report
+     `merge_group_result=stale@<runId>` instead: the eviction happened, a later push answered it, and
+     nothing about the current head is claimed. Where the push time is `unknown`, the result cannot be
+     attributed in time: report it with its `createdAt` and let the orchestrator diagnose, rather than
+     silently calling it current. A result that cannot be attributed at all is `none`, never a
+     conclusion.
      ⚠️ **Emit `merge-group:` and `merge_group_result=` only on repos that actually gate `main` behind a
      queue** (recorded per repo in its `AGENTS.md ## Maintenance`); elsewhere the alternative simply
      never occurs, and this query is skipped rather than run per PR.
@@ -830,7 +843,7 @@ public and private — no per-repo loop needed to enumerate):
      take the maximum completed lane for this head, so a delayed higher-priority response cannot move
      the cursor backward.
    - **Candidate maintainer comments on EVERY actionable open PR (incl. drafts, AND recently-MERGED
-     `devantler` ones) — disclosure- and ownership-gated.**
+     ones) — disclosure- and ownership-gated.**
      🔴 **The open-PR half is author-agnostic, and it must be.** The contract carries an actionable
      maintainer requirement as a **persistent named blocker** that never ages out, and the orchestrator
      now drives every PR in the portfolio to a terminal state — a bot's, a sibling lane's, an outside
@@ -842,11 +855,22 @@ public and private — no per-repo loop needed to enumerate):
      Automation-owned Renovate/Dependabot PRs stay excluded, as everywhere else.
      Under self-promotion-on-genuine-readiness the maintainer's
      post-merge PR comment is also a primary steering channel, and an open-PR-only sweep would never
-     surface it — so additionally sweep the `devantler` PRs **merged in the last
-     ~3 days** (that retrospective half stays author-scoped: it exists to catch steering on work this
-     deployment shipped, and a merged PR can no longer be held by a blocker) (bounded: `gh search prs --owner devantler-tech --author devantler --merged
-     --merged-at ">=<UTC date 3 days ago>" --limit 100 --json number,repository,url` — the
-     `--merged-at` **qualifier** is what keys the window on merge time, so the sweep never depends on
+     surface it — so additionally sweep the PRs **merged in the last ~3 days**.
+     🔴 **The retrospective half is author-agnostic too, for the same reason the open-PR half is.** Its
+     purpose is to catch steering on **work this deployment shipped**, and since the orchestrator drives
+     every PR in the portfolio to a terminal state, what it ships now includes a sibling lane's, a bot's
+     and an outside contributor's PRs — so scoping this search to `--author devantler` no longer matches
+     its own stated purpose. His *"this was the wrong call, revert it"* on an external PR **the routine
+     merged** would reach nobody. Filter authors only to drop the **automation-owned** Renovate/Dependabot
+     merges, exactly as everywhere else (bounded: `gh search prs --owner devantler-tech --merged
+     --merged-at ">=<UTC date 3 days ago>" --limit 100 --json number,repository,author,url`, then
+     discard the exact automation identities client-side — the search surface has no negated-author
+     qualifier). ⚠️ **This widens the candidate set materially**, and each candidate costs a comments
+     read, so it competes with the deepening budget above: when the pool runs short, emit the unswept
+     remainder explicitly like any other budget shortfall rather than silently truncating a steering
+     sweep. A merged PR can no longer be held by a blocker, so this half is about **direction for future
+     work**, never about gating that PR.
+     The `--merged-at` **qualifier** is what keys the window on merge time, so the sweep never depends on
      `updatedAt`, which post-merge edits can inflate. ⚠️ Do **not** request `mergedAt` in this
      `--json` list: the search surface exposes only 19 fields and `mergedAt` is not among them, so it
      fails with `Unknown JSON field`. Read the timestamp per-PR from `gh pr view --json mergedAt` if
@@ -1251,11 +1275,11 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - GITHUB-MANAGED (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out OR startup_failure) runs on main: ours to repair (build, scanning/dependency config, or move off default setup) — DOES count against nothing_on_fire. This escalation is what makes the property test safe: an actionable managed failure recurs, so it is delayed by one run, never hidden
 - GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # equivalent code-scanning specialisation of the line above
 - <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
-- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>@<sourceHead>|stale@<runId>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
-- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>@<sourceHead>|stale@<runId>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
-- <repo> #<n> "<title>" — `devantler`, draft=<true|false> → <REVIEW-READY|MERGE-READY|NEEDS-FIX|ACTIVELY-OWNED>: branch=<headRefName>, disclosure=<routine|interactive|none>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>@<sourceHead>|stale@<runId>|none>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (`disclosure` tells the orchestrator whose control channel a `devantler` comment on this PR is, NOT whether it may drive it; the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)
+- <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
+- <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
+- <repo> #<n> "<title>" — `devantler`, draft=<true|false> → <REVIEW-READY|MERGE-READY|NEEDS-FIX|ACTIVELY-OWNED>: branch=<headRefName>, disclosure=<routine|interactive|none>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (`disclosure` tells the orchestrator whose control channel a `devantler` comment on this PR is, NOT whether it may drive it; the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
-- <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — NEVER-RUN-LOCALLY (never run locally); reviewed statically, then driven to a terminal state like any other PR. Carries the same deepened pentad, `active=`, merge_group_result=<<conclusion>@<runId>@<sourceHead>|stale@<runId>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, and classification as every other row, plus behaviour_observed=<check-name|static|none|unknown> (which CI check actually exercises the change; `static` = no exercisable runtime surface, evaluated statically instead; `none` = a check could exercise it but none does, and is the named blocker on its merge, per *You own EVERY pull request in the portfolio*). **`rd=` and `merge_group_result=` are NOT optional on this row just because its author is external** — an eviction is invisible in the head pentad (the queue's checks run on a synthetic ref) and a human CHANGES_REQUESTED is not one of the candidate-maintainer-comment surfaces, so omitting either loses a persistent block once the generic ~2h human-activity signal expires and the PR reads ready. This row takes the plain `<author>` form for `rd=`, with no `agent(…)`/`human(…)` qualifier: that qualifier exists only to tell a sibling instance's `devantler` review from the maintainer's, and an external author is neither
+- <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — NEVER-RUN-LOCALLY (never run locally); reviewed statically, then driven to a terminal state like any other PR. Carries the same deepened pentad, `active=`, merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, and classification as every other row, plus behaviour_observed=<check-name|static|none|unknown> (which CI check actually exercises the change; `static` = no exercisable runtime surface, evaluated statically instead; `none` = a check could exercise it but none does, and is the named blocker on its merge, per *You own EVERY pull request in the portfolio*). **`rd=` and `merge_group_result=` are NOT optional on this row just because its author is external** — an eviction is invisible in the head pentad (the queue's checks run on a synthetic ref) and a human CHANGES_REQUESTED is not one of the candidate-maintainer-comment surfaces, so omitting either loses a persistent block once the generic ~2h human-activity signal expires and the PR reads ready. This row takes the plain `<author>` form for `rd=`, with no `agent(…)`/`human(…)` qualifier: that qualifier exists only to tell a sibling instance's `devantler` review from the maintainer's, and an external author is neither
 - NOT-DEEPENED (budget) <repo> ×<n> [#a,#b,…]   # API pool exhausted before these PRs were deepened — they carry NO pentad and were NOT assessed; never report them as clean or actionable
 
 ### Advance
@@ -1307,10 +1331,21 @@ Digest rules:
 - **Trust labels are advisory flags, not actions:** mark external/Copilot PRs so the orchestrator
   reviews them statically and never runs their branch; never imply their branch may be executed.
 - **`rd` is the PR's `reviewDecision`** (already fetched in the deepening `gh pr view`). When it is
-  `CHANGES_REQUESTED`, sweep **every** review with `state=="CHANGES_REQUESTED"` from the paginated
+  `CHANGES_REQUESTED`, sweep the `CHANGES_REQUESTED` reviews from the paginated
   `pulls/<n>/reviews` the body-findings step (b) already fetched (`reviewDecision` alone names no
-  author or SHA, and each CHANGES_REQUESTED review blocks merge independently — only-newest would
-  hide an older human block behind a newer CodeRabbit one). Report the newest as
+  author or SHA, and each *live* block counts independently — only-newest-overall would
+  hide an older human block behind a newer CodeRabbit one).
+  🔴 **Reduce to each author's LATEST EFFECTIVE review first — the raw history is not the live block
+  set.** `pulls/<n>/reviews` is an append-only log, so a reviewer who requested changes and **later
+  approved** still has their `CHANGES_REQUESTED` sitting in it forever. Sweeping every historical row
+  therefore reports a withdrawn block as live: with one human among them, the all-non-human
+  precondition below can never be met again, and the PR parks permanently behind a request its author
+  already satisfied. So per author take only their **newest** review, **skipping `DISMISSED` and
+  `PENDING`**, and keep it only if that newest one is `CHANGES_REQUESTED`. This preserves the
+  protection the previous sentence names — an older human block by a *different* reviewer is still
+  that reviewer's latest, so it still counts — while dropping only blocks their own author has
+  superseded. `reviewDecision` aggregates latest-per-reviewer the same way, so this is also what makes
+  the sweep agree with the field it is expanding rather than contradict it. Report the newest as
   `rd=CHANGES_REQUESTED:<author>@<sha>` and name any additional CHANGES_REQUESTED authors. **The
   `agent(…)`/`human(…)` qualifier applies to `devantler` reviews ONLY**, where it is decided by the
   disclosure test below and never by the login; a **bot** reviewer keeps the plain `<author>` form,
