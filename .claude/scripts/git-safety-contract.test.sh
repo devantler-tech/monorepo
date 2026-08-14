@@ -55,13 +55,13 @@ section="$(
 # scope hole described above while every assertion still passes.
 #
 # The bound separates two states that are far apart, and it is deliberately NOT set just above the
-# current size: the section measures a few hundred words (486 at the time of writing), while a
+# current size: the section measures several hundred words (748 at the time of writing), while a
 # runaway extraction (end anchor gone, awk running to EOF) measured 9,968 — both figures observed
 # rather than estimated, which is what justifies the gap. A snug bound would fail every
 # legitimate edit to this section while reporting a missing anchor — a false message that sends the
 # next reader hunting for a heading that is right there.
 section_words="$(printf '%s' "${section}" | wc -w | tr -d ' ')"
-[ "${section_words}" -lt 900 ] ||
+[ "${section_words}" -lt 1500 ] ||
   fail "Git safety section extracted as ${section_words} words, which is runaway-extraction size — the 'Worktree hygiene is SCHEDULED' end anchor was probably renamed or removed, so these assertions would no longer be scoped to this section"
 
 assert_section() {
@@ -79,8 +79,16 @@ assert_section 'Never `git reset --hard`' \
 # 2. THE ALTERNATIVE IS NAMED, with the flag that makes it safe. \`checkout\` alone is not the
 #    prescription: it is \`--detach\` onto an explicit commit that reproduces the banned form's
 #    outcome, and a bare branch checkout would not.
-assert_section 'git -C <wt> checkout --detach <sha>' \
-  "the Git safety section does not name \`git -C <wt> checkout --detach <sha>\` as the permitted way to put a worktree on a specific commit, so the ban again has no stated alternative and the instruction migrates to unreviewed memory"
+assert_section 'git -C <wt> checkout --no-overwrite-ignore --detach <sha>' \
+  "the Git safety section does not name \`git -C <wt> checkout --no-overwrite-ignore --detach <sha>\` as the permitted way to put a worktree on a specific commit, so the ban again has no stated alternative and the instruction migrates to unreviewed memory"
+
+# 2c. THE SUBMODULE STEP. \`--detach\` moves the superproject ONLY; a gitlink-changing PR therefore
+#     leaves submodules at their old commits, with nothing but a bare " M <sub>" to show for it.
+#     Fixture-verified. In a monorepo whose PRs are largely submodule bumps this is the common case,
+#     and the failure mode is evaluating different code from the headRefOid you believe you are on —
+#     so the follow-up step is part of the prescription, not an optional extra.
+assert_section 'submodule-init.sh' \
+  "the Git safety section no longer directs the run to update submodules after detaching — \`--detach\` moves only the superproject, so a gitlink-changing PR leaves the submodule stale and the run silently evaluates the wrong code"
 
 # 2b. THE PR-HEAD ASSOCIATION. \`<sha>\` is deliberately the general placeholder — it is this
 #     contract's convention (27 backticked commands use it, against 1 for \`<headRefOid>\`), and the

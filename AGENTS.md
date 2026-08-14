@@ -3057,8 +3057,10 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
-**The permitted way to put a worktree on a specific commit is `git -C <wt> checkout --detach <sha>`,
-issued as its OWN call after the `fetch`.** When that commit is a PR's head, `<sha>` is its
+**The permitted way to put a worktree on a specific commit is
+`git -C <wt> checkout --no-overwrite-ignore --detach <sha>`, issued as its OWN call after the
+`fetch`** (the flag is not optional decoration — see the ignored-paths hazard below).
+When that commit is a PR's head, `<sha>` is its
 **`headRefOid`** — the same value *Merge policy* pins the merge to, so the worktree you evaluate and
 the commit you merge are provably the same one. A ban that never names the alternative is exactly the
 DevEx tax *Security hardening without a DevEx tax* forbids, and the vacuum gets filled by something
@@ -3079,6 +3081,23 @@ edit along and succeeds** — leaving you on the target commit with someone else
 tree, and nothing in the output saying so. So require `git -C <wt> status --porcelain` to be **empty**
 before detaching. If it is not, that is a live claim by another writer: do GitHub-API-only work per
 *Execution model* and never detach over it.
+🔴 **`--detach` moves the SUPERPROJECT ONLY, and in this monorepo that is the dangerous default.** It
+does not recurse into submodules, so detaching onto a PR that changes a gitlink leaves every submodule
+at its **old** commit — fixture-verified: HEAD lands on the target while the submodule still holds the
+previous content, and `status` shows nothing but a bare ` M <sub>`. You would then be evaluating
+**different code from the `headRefOid` you believe you are on**, and since a large share of PRs here
+are submodule bumps that is the common case rather than an edge one. So after detaching, bring each
+affected submodule to its pinned commit with
+[`submodule-init.sh`](.claude/scripts/submodule-init.sh) (fail-closed, and it repairs worktree
+isolation in the same step), then require `status --porcelain` to be empty **again** — a surviving
+` M <sub>` means that submodule is still stale.
+⚠️ **The pre-check cannot see IGNORED paths, and checkout overwrites them by default — which is why
+`--no-overwrite-ignore` is in the command above.** `git checkout` documents `--overwrite-ignore` as
+the default and `status --porcelain` never lists ignored files, so when the target commit starts
+tracking a path that is ignored at your current HEAD, an empty pre-check is followed by a **silent
+overwrite** of whatever was there (fixture-verified, including that the flag aborts instead). The
+window is narrow, but it is exactly the case the pre-check is blind to, so the default is the unsafe
+one and the flag is what makes the prescribed form safe by default.
 ⚠️ **It remains a strictly safer swap, never a loosening — the guard is untouched and needs no
 widening.** On a clean worktree it lands on exactly that commit, the same outcome the banned form
 would have produced, and wherever it *does* refuse it preserves what `reset --hard` would have
