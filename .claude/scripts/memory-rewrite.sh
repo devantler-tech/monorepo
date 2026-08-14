@@ -78,6 +78,13 @@ done
 [[ -n "$file" ]] || fail_usage "--file is required"
 [[ -f "$file" ]] || fail_usage "target file not found: $file"
 
+# Snapshot the target's content BEFORE anything reads or derives from it. The
+# store is multi-writer, so a sibling can rewrite $file while this run is
+# assembling and validating its candidate — and replacing it afterwards would
+# silently discard that newer content, which is the loss this helper exists to
+# prevent. Re-checked immediately before the swap.
+original_digest="$(shasum "$file" | awk '{print $1}')"
+
 # Exactly one content source.
 source_count=0
 [[ -n "$from" ]] && source_count=$((source_count + 1))
@@ -94,8 +101,7 @@ if [[ "$max_shrink_pct" -lt 0 || "$max_shrink_pct" -gt 99 ]]; then
 fi
 
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/memory-rewrite.XXXXXX")"
-cleanup() { rm -rf "$workdir"; }
-trap cleanup EXIT
+trap 'rm -rf "$workdir"' EXIT
 
 new_path="$workdir/new"
 
@@ -163,6 +169,14 @@ if head -n 1 "$file" | grep -qx -- '---'; then
   if ! head -n 1 "$new_path" | grep -qx -- '---'; then
     fail_content "refused rebuild of $file: original had YAML frontmatter and the new content does not; target untouched"
   fi
+fi
+
+# Staleness gate: refuse if the target moved under us since the snapshot above.
+# Checked here — after every validation, before any artifact is written — so a
+# refusal leaves neither a backup nor a swap file behind.
+current_digest="$(shasum "$file" | awk '{print $1}')"
+if [[ "$current_digest" != "$original_digest" ]]; then
+  fail_content "refused stale rewrite of $file: another writer changed it while this rebuild was being assembled; target untouched — re-read it and rebuild"
 fi
 
 # Backup first, then atomic-ish replace via temp + mv in the same directory.

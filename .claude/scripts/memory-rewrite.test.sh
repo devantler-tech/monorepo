@@ -165,6 +165,75 @@ check "lost heading exits non-zero" "1" "$rc"
 check "lost heading leaves target untouched" "$before" "$(cat "$target")"
 
 # ---------------------------------------------------------------------------
+# Frontmatter guard: original opened with YAML frontmatter; a replacement that
+# keeps a heading but drops the frontmatter is refused.
+#
+# Distinct from the heading guard above — this replacement HAS a heading, so
+# only the frontmatter check can reject it.
+# ---------------------------------------------------------------------------
+target="$tmp/frontmatter.md"
+printf '%s\n' '---' 'name: notes' '---' '# Real heading' 'body body body body body body body' > "$target"
+before="$(cat "$target")"
+nofm="$tmp/nofm.md"
+printf '%s\n' '# Real heading' 'body body body body body body body body body body body' > "$nofm"
+rc=0
+out="$("$tool" --file "$target" --from "$nofm" 2>&1)" || rc=$?
+check "lost frontmatter exits non-zero" "1" "$rc"
+check "lost frontmatter leaves target untouched" "$before" "$(cat "$target")"
+
+# ---------------------------------------------------------------------------
+# Staleness guard: a sibling rewrites the shared file WHILE the candidate is
+# being assembled. The stale candidate must not silently replace that newer
+# content — the store is multi-writer and unversioned, so a clobber here is
+# exactly the loss this helper exists to prevent.
+#
+# Deterministic, not timing-hopeful: the candidate is fed through a FIFO, so
+# the tool provably blocks mid-run until the test decides to deliver it.
+# ---------------------------------------------------------------------------
+stale_dir="$tmp/stale"
+stale_tmp="$stale_dir/tmp"
+mkdir -p "$stale_dir" "$stale_tmp"
+stale_target="$stale_dir/portfolio-status.md"
+printf '%s\n' '# Status' 'original body line' 'padding so the shrink guard is not what rejects this' > "$stale_target"
+stale_cand="$stale_dir/candidate.md"
+printf '%s\n' '# Status' 'candidate body line' 'padding so the shrink guard is not what rejects this' > "$stale_cand"
+fifo="$stale_dir/stdin.fifo"
+mkfifo "$fifo"
+
+# Private TMPDIR so the readiness barrier below cannot match a concurrent run's workdir.
+# `set -e` would kill the subshell on the tool's expected non-zero exit before it
+# could record the code, so capture it explicitly.
+( srt=0
+  TMPDIR="$stale_tmp" "$tool" --file "$stale_target" --stdin < "$fifo" >/dev/null 2>&1 || srt=$?
+  echo "$srt" > "$stale_dir/rc" ) &
+stale_pid=$!
+exec 9> "$fifo"
+
+# Barrier: the tool creates its workdir after it has captured the original's
+# identity, so its appearance proves we are past that point and blocked on stdin.
+stale_ready=0
+for _ in $(seq 1 400); do
+  if compgen -G "$stale_tmp/memory-rewrite.*" > /dev/null 2>&1; then stale_ready=1; break; fi
+  sleep 0.05
+done
+
+# The sibling write, landing after the tool read the original.
+printf '%s\n' '# Status' 'SIBLING WROTE THIS LINE' 'padding so the shrink guard is not what rejects this' > "$stale_target"
+sibling_content="$(cat "$stale_target")"
+
+cat "$stale_cand" >&9
+exec 9>&-
+wait "$stale_pid" || true
+stale_rc="$(cat "$stale_dir/rc" 2>/dev/null || echo missing)"
+
+if [[ "$stale_ready" -ne 1 ]]; then
+  fail "staleness guard barrier (tool workdir never appeared — test could not synchronise)"
+else
+  check "stale rewrite exits non-zero" "1" "$stale_rc"
+  check "stale rewrite does NOT clobber the sibling's write" "$sibling_content" "$(cat "$stale_target")"
+fi
+
+# ---------------------------------------------------------------------------
 # Usage errors.
 # ---------------------------------------------------------------------------
 check "missing --file exits 2" "2" "$(run --from "$new")"
