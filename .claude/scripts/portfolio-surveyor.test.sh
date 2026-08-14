@@ -1242,6 +1242,19 @@ grep -Fq 'Do not gate this scan on assignees' "${surveyor}" ||
 grep -Fq 'none(cursor-lane)' "${surveyor}" ||
   fail "surveyor CLAIMED digest does not allow cursor-lane branch-only claims"
 
+# Candidate-scoped clearance must have a producer grammar, and bounded survey continuation must
+# advance past already classified or named-blocker rows without trusting stale head state.
+grep -Fq 'QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>' "${surveyor}" ||
+  fail "surveyor cannot emit a candidate-identifying failed-join row"
+grep -Fq 'SHARD-CURSOR next=' "${surveyor}" ||
+  fail "surveyor does not emit resumable shard state"
+grep -Fq 'filter the explicitly supplied classified set before selecting the next eight' "${surveyor}" ||
+  fail "surveyor can restart at the same first shard indefinitely"
+grep -Fq 'invalidate the supplied state and restart at the earliest changed candidate' "${surveyor}" ||
+  fail "surveyor can skip a candidate after its recorded head changes"
+grep -Fq 'verified closed or merged is pruned from the supplied set' "${surveyor}" ||
+  fail "surveyor treats a terminal candidate as cursor corruption and restarts completed shards"
+
 # monorepo#2482 — every agent instance reviews as `devantler`, so an `rd=` rule keyed on the login
 # alone reports a sibling instance's own superseded CHANGES_REQUESTED as a permanent human gate and
 # parks a finished PR. Measured live on monorepo#2432: a disclosed agent review blocked the PR for
@@ -2065,7 +2078,7 @@ case "${surveyor_flat}" in
   *) fail "the digest cannot express an unassessed portfolio" ;;
 esac
 case "${surveyor_flat}" in
-  *'EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)`, `NOT-DEEPENED (next-shard)`, OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS'*) ;;
+  *'EMIT `unknown` WHENEVER ANY `QUERY-UNKNOWN`, `NOT-DEEPENED (budget)`, `NOT-DEEPENED (next-shard)`, OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS'*) ;;
   *) fail "the digest may still claim nothing_on_fire while PRs went unassessed or undiscovered" ;;
 esac
 # A survey that tries to deepen the whole portfolio before returning can spend the complete dispatch

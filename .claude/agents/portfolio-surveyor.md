@@ -140,8 +140,18 @@ public and private — no per-repo loop needed to enumerate):
    undeepened remainder as `NOT-DEEPENED (budget)` rows naming the count and the repos, never a
    silent cheap row that reads like a completed assessment:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,isDraft,updatedAt,title,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,headRepositoryOwner,headRepository,author,body,files`
+   The orchestration prompt may supply the prior digest's `SHARD-CURSOR` plus an explicit classified
+   set from this run or the engineer's native-memory continuation record. Rebuild the cheap live queue
+   first, compare every supplied `repo#PR@head@updatedAt` tuple with live discovery, and **filter the explicitly supplied classified set before selecting the next eight** only while every tuple still
+   matches. A candidate that is absent from the open queue gets one bounded current-state read: a
+   **verified closed or merged is pruned from the supplied set**; an unreadable/missing result fails
+   closed and invalidates it. A changed-head or changed-`updatedAt` tuple is stale: **invalidate the supplied state and restart at the earliest changed candidate**, never skip it behind the cursor. With no
+   supplied state, begin at the first ordered candidate. State is a progress hint, not clearance:
+   only the candidate's freshly joined evidence can clear mutation.
+
    After eight candidate deepening attempts, whether each join succeeded or failed, stop deepening
-   and emit the ordered remainder as `NOT-DEEPENED (next-shard)` rows. A later failed or deferred join
+   and emit the ordered remainder as `NOT-DEEPENED (next-shard)` rows plus the resumable cursor shape
+   defined below. A later failed or deferred join
    makes global health unknown, but
    **deepened rows remain candidate-actionable** once their own exact head, pentad, control facts and
    repository default-head health are complete. It never turns the remainder into a global mutation
@@ -1286,7 +1296,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false|unknown>   # true only if NO CI red on main AND no actionable PR broken, whoever authored it; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does. 🔴 EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)`, `NOT-DEEPENED (next-shard)`, OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS (the issue-truncation row never affects this field): `true` asserts that no actionable PR is broken, which a survey that never assessed those PRs cannot know. `false` is equally wrong — it claims a fire nobody observed. `unknown` is the only honest value. It blocks declaring the portfolio healthy and blocks issue descent; it does not block acting on fully joined deepened rows.
+nothing_on_fire: <true|false|unknown>   # true only if NO CI red on main AND no actionable PR broken, whoever authored it; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does. 🔴 EMIT `unknown` WHENEVER ANY `QUERY-UNKNOWN`, `NOT-DEEPENED (budget)`, `NOT-DEEPENED (next-shard)`, OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS (the issue-truncation row never affects this field): `true` asserts that no actionable PR is broken, which a survey that never assessed those PRs cannot know. `false` is equally wrong — it claims a fire nobody observed. `unknown` is the only honest value. It blocks declaring the portfolio healthy and blocks issue descent; it does not block acting on fully joined deepened rows.
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
@@ -1310,8 +1320,10 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → <REVIEW-READY|MERGE-READY|NEEDS-FIX|ACTIVELY-OWNED>: branch=<headRefName>, disclosure=<routine|interactive|none>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (`disclosure` tells the orchestrator whose control channel a `devantler` comment on this PR is, NOT whether it may drive it; the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — NEVER-RUN-LOCALLY (never run locally); reviewed statically, then driven to a terminal state like any other PR. Carries the same deepened pentad, `active=`, merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, and classification as every other row, plus behaviour_observed=<check-name|static|none|unknown> (which CI check actually exercises the change; `static` = no exercisable runtime surface, evaluated statically instead; `none` = a check could exercise it but none does, and is the named blocker on its merge, per *You own EVERY pull request in the portfolio*). **`rd=` and `merge_group_result=` are NOT optional on this row just because its author is external** — an eviction is invisible in the head pentad (the queue's checks run on a synthetic ref) and a human CHANGES_REQUESTED is not one of the candidate-maintainer-comment surfaces, so omitting either loses a persistent block once the generic ~2h human-activity signal expires and the PR reads ready. This row takes the plain `<author>` form for `rd=`, with no `agent(…)`/`human(…)` qualifier: that qualifier exists only to tell a sibling instance's `devantler` review from the maintainer's, and an external author is neither
+- QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>   # candidate-identifying failed join; component is one of metadata|threads|reviews|comments|checks|candidate-main|control|claim and reason is a short inert error class. This candidate is blocked; other fully joined candidates remain actionable
 - NOT-DEEPENED (budget) <repo> ×<n> [#a,#b,…]   # API pool exhausted before these PRs were deepened — they carry NO pentad and were NOT assessed; never report them as clean or actionable
 - NOT-DEEPENED (next-shard) <repo> ×<n> [#a,#b,…]   # deliberate remainder after the eight-candidate shard — carries NO pentad and keeps broad health unknown, while deepened rows remain candidate-actionable
+- SHARD-CURSOR next=<repo>#<n>|none · classified=[<repo>#<n>@<head>@<updatedAt>,…] · remaining=<n>   # exact resumable continuation state for the orchestrator; includes joined terminal or named-blocker candidates and candidate-scoped failed joins attempted in this shard, never an unjoined remainder
 
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)

@@ -502,6 +502,10 @@ assert_maintenance_prose 'never block an independently fully joined candidate' \
   "portfolio maintenance still permits unrelated query failures to freeze cleared work"
 assert_maintenance_prose 'issue descent remains blocked until the actionable-PR queue is completely classified' \
   "portfolio maintenance can descend into issues while higher-priority PR state is unknown"
+assert_maintenance_prose 'pass the prior digest' \
+  "portfolio maintenance does not pass continuation state when requesting the next survey shard"
+assert_maintenance_prose 'cursor is invalidated when any recorded candidate head changes' \
+  "portfolio maintenance can reuse stale shard state after a candidate head changes"
 # A `per_task_limit` record is a per-MINUTE liveness sample of "a run is currently open",
 # not a per-slot drop record — so counting those records, raw or hour-bucketed, counts a
 # slot that merely started LATE as one that never ran. Measured 2026-08-12 over 164 slots:

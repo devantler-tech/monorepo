@@ -154,7 +154,13 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   an independently fully joined candidate**. A failed candidate join blocks that candidate only; move
   to the next item in the already-established queue and return every cleared row plus each scoped
   unknown. When the orchestrator exhausts the returned cleared rows, deepen the next bounded shard
-  rather than restarting the census. Because PRs outrank issues, **issue descent remains blocked until
+  rather than restarting the census: **pass the prior digest's `SHARD-CURSOR` and explicit
+  `repo#PR@head@updatedAt` classified set into the next surveyor prompt**. Persist only the cursor and
+  unchanged named-blocker tuples in native memory across scheduled sessions; candidate-scoped query
+  failures are retried next session. The surveyor always rebuilds cheap discovery, and the **cursor is
+  invalidated when any recorded candidate head changes** (or its discovery `updatedAt` changes), so
+  stale progress can delay neither a new commit nor new control/review activity. Clear the cursor on
+  wrap (`next=none`) and start a fresh ordered pass. Because PRs outrank issues, **issue descent remains blocked until
   the actionable-PR queue is completely classified** as cleared, terminal, automation-owned, or
   parked on a named candidate-scoped blocker;
 - checks the **candidate repository's current `main` health** together with each deepening shard, then

@@ -349,6 +349,12 @@ assert_prose 'never an execution of its branch' \
 # was assessed and found unremarkable, so the run reads a coverage gap as a clean bill of health.
 assert_prose 'NOT-DEEPENED (budget)' \
   "${surveyor_flat}" "the surveyor may drop PRs on budget exhaustion without declaring the gap"
+assert_prose 'SHARD-CURSOR next=' \
+  "${surveyor_flat}" "the surveyor does not return a continuation cursor for the next bounded shard"
+assert_prose 'filter the explicitly supplied classified set before selecting the next eight' \
+  "${surveyor_flat}" "the surveyor can repeatedly deepen the same parked PRs and starve later shards"
+assert_prose 'QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>' \
+  "${surveyor_flat}" "the surveyor digest cannot identify the candidate and failed join component"
 
 # The ownership gate keyed on the orchestrator's creation record — which the surveyor cannot read,
 # and which NO maintainer-authored PR can ever satisfy, so it structurally parked exactly the PRs the
