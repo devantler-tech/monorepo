@@ -55,7 +55,7 @@ section="$(
 # scope hole described above while every assertion still passes.
 #
 # The bound separates two states that are far apart, and it is deliberately NOT set just above the
-# current size: the section measures several hundred words (1,095 at the time of writing), while a
+# current size: the section measures several hundred words (1,132 at the time of writing), while a
 # runaway extraction (end anchor gone, awk running to EOF) measured 9,968 — both figures observed
 # rather than estimated, which is what justifies the gap. A snug bound would fail every
 # legitimate edit to this section while reporting a missing anchor — a false message that sends the
@@ -79,42 +79,32 @@ assert_section 'Never `git reset --hard`' \
 # 2. THE ALTERNATIVE IS NAMED, with the flag that makes it safe. \`checkout\` alone is not the
 #    prescription: it is \`--detach\` onto an explicit commit that reproduces the banned form's
 #    outcome, and a bare branch checkout would not.
-assert_section 'git -C <wt> checkout --no-overwrite-ignore --recurse-submodules --detach <sha>' \
-  "the Git safety section does not name \`git -C <wt> checkout --no-overwrite-ignore --recurse-submodules --detach <sha>\` as the permitted way to put a worktree on a specific commit, so the ban again has no stated alternative and the instruction migrates to unreviewed memory"
+assert_section 'git -C <wt> checkout --no-overwrite-ignore --detach <sha>' \
+  "the Git safety section does not name \`git -C <wt> checkout --no-overwrite-ignore --detach <sha>\` as the permitted way to put a worktree on a specific commit, so the ban again has no stated alternative and the instruction migrates to unreviewed memory"
 
 # 2c. THE INDEX-HIDDEN-EDIT CHECK. \`status --porcelain\` omits any tracked file carrying
 #     \`assume-unchanged\` or \`skip-worktree\`, so an empty status is NOT proof the tree is clean.
 #     Fixture-verified: empty status, then a successful checkout that carried a foreign edit onto the
 #     target. \`worktree-cleanup.sh\` already makes this check, so the contract asking for less than
 #     its own tooling does would be an inconsistency as well as a hole.
-assert_section 'ls-files -v' \
+assert_section 'git -C <wt> ls-files -v' \
   "the Git safety section no longer requires the \`ls-files -v\` index-flag check — a file marked assume-unchanged or skip-worktree is invisible to \`status --porcelain\`, so the cleanliness pre-check passes while another writer's edit rides onto the target commit"
 
-# 2d. THE PER-SUBMODULE PRE-CHECK. \`--recurse-submodules\` mutates each populated submodule's working
-#     tree, which neither top-level check inspects, and \`--no-overwrite-ignore\` is NOT propagated to
-#     the recursive checkout. Fixture-verified: both top-level checks clean, and the prescribed
-#     command still destroyed a foreign ignored file inside a submodule. This assertion exists because
-#     the hazard was INTRODUCED by adding the recursion — the wider the command's blast radius, the
-#     wider the pre-check must be, and it is easy to widen one without the other.
-assert_section 'submodule foreach' \
-  "the Git safety section no longer requires the cleanliness checks to be run inside each populated submodule — \`--recurse-submodules\` writes to submodule working trees that the top-level \`status\`/\`ls-files\` checks never inspect, so the run would authorise a checkout that destroys another writer's work there"
+# 2d. THE SUBMODULE DETECTION RULE. `--detach` moves the superproject only, so on a gitlink-changing
+#     PR the run is NOT on the reviewed code — fixture-verified, with nothing but a bare " M <sub>" to
+#     show for it. In a monorepo largely made of submodule bumps that is the common case, and the
+#     failure is silent, so the contract must at minimum require DETECTING it before evaluation.
+assert_section 'submodule status' \
+  "the Git safety section no longer requires checking \`git -C <wt> submodule status\` after detaching — \`--detach\` moves only the superproject, so on a gitlink-changing PR the run evaluates the previous submodule content while believing it is on the reviewed commit"
 
-# 2e. AND THE OPTION THAT MAKES 2d WORK. Pinning \`submodule foreach\` alone is not enough: deleting
-#     \`--ignored=matching\` leaves the foreach in place and this file green, while ordinary porcelain
-#     status stops reporting ignored paths — which is precisely the state that lets the recursive
-#     checkout destroy them, since \`--no-overwrite-ignore\` does not propagate into a submodule.
-#     Verified as a real gap before this assertion existed: stripping the option from the contract
-#     left the suite fully passing. This is the same both-halves reasoning as assertion 1 — pinning a
-#     mechanism without pinning what makes it effective is a guard that can be hollowed out in place.
-#
-#     MATCH IT IN COMMAND CONTEXT, not as a bare token. The section also NAMES the option in prose
-#     ("`--ignored=matching` is not optional here"), so a bare-token assertion is satisfied by that
-#     sentence alone and still passes when the option is deleted from the command itself — measured,
-#     not hypothesised: the first version of this assertion did exactly that and the strip ablation
-#     stayed green. Anchoring on `status --porcelain --ignored=matching` ties it to the invocation,
-#     and that string cannot collide with the top-level check, which deliberately omits the option.
-assert_section 'status --porcelain --ignored=matching' \
-  "the per-submodule pre-check no longer passes \`--ignored=matching\` — without it porcelain status omits ignored paths inside submodules, so the check reports clean and the recursive checkout silently destroys another writer's ignored work"
+# 2e. AND THE WARNING AGAINST THE OBVIOUS "FIX". `--recurse-submodules` is the natural thing to reach
+#     for once 2d is stated, and it is UNSAFE in this repo's mandated linked-worktree flow: measured,
+#     it can write a `mod/.git` pointing at a nonexistent gitdir and exit 128, cannot fetch a target
+#     gitlink absent locally, silently skips a submodule the target introduces, and does not propagate
+#     its ignored-file protection. Without this assertion a later editor closes 2d's gap by adding the
+#     flag — reintroducing every one of those, with a rule that looks more complete than before.
+assert_section '2833' \
+  "the Git safety section no longer points at the follow-up issue for safe submodule detaching — without it the stated hazard reads as unsolved-and-unowned, and the next editor is likely to 'fix' it with \`--recurse-submodules\`, which is measurably unsafe in this repo's linked-worktree flow"
 
 # 2b. THE PR-HEAD ASSOCIATION. \`<sha>\` is deliberately the general placeholder — it is this
 #     contract's convention (27 backticked commands use it, against 1 for \`<headRefOid>\`), and the
@@ -122,7 +112,7 @@ assert_section 'status --porcelain --ignored=matching' \
 #     value's identity must be stated or the prescription is unactionable exactly where it is most
 #     needed. Naming \`headRefOid\` also ties this to the commit *Merge policy* pins, which is what
 #     makes "the worktree you evaluated" and "the commit you merged" the same claim.
-assert_section 'headRefOid' \
+assert_section '**`headRefOid`**' \
   "the Git safety section no longer identifies a PR head's \`<sha>\` as its \`headRefOid\` — without it the prescription is unactionable in its motivating case, and the worktree you evaluate is no longer tied to the commit Merge policy pins"
 
 # 3. THE SEPARATE-CALLS REQUIREMENT. Chaining the fetch and the checkout is what turns a refusal into
@@ -138,7 +128,7 @@ assert_section 'SEPARATE calls' \
 #    along and SUCCEEDS, landing on the target with another writer's uncommitted work in the tree and
 #    nothing in the output saying so. An earlier draft of this contract claimed the abort was
 #    unconditional — that claim was false and is exactly what this assertion prevents recurring.
-assert_section 'status --porcelain' \
+assert_section 'git -C <wt> status --porcelain' \
   "the Git safety section no longer requires the worktree to be verified clean before detaching — the abort is only a partial backstop (it fires only when the dirty path differs between HEAD and target), so without this precondition a run can silently detach over another instance's uncommitted work"
 
 # 4b. AND THE REASON THE BACKSTOP IS PARTIAL. Assertion 4 pins the rule; this pins the justification.
