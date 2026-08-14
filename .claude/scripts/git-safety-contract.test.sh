@@ -99,6 +99,23 @@ assert_section 'ls-files -v' \
 assert_section 'submodule foreach' \
   "the Git safety section no longer requires the cleanliness checks to be run inside each populated submodule — \`--recurse-submodules\` writes to submodule working trees that the top-level \`status\`/\`ls-files\` checks never inspect, so the run would authorise a checkout that destroys another writer's work there"
 
+# 2e. AND THE OPTION THAT MAKES 2d WORK. Pinning \`submodule foreach\` alone is not enough: deleting
+#     \`--ignored=matching\` leaves the foreach in place and this file green, while ordinary porcelain
+#     status stops reporting ignored paths — which is precisely the state that lets the recursive
+#     checkout destroy them, since \`--no-overwrite-ignore\` does not propagate into a submodule.
+#     Verified as a real gap before this assertion existed: stripping the option from the contract
+#     left the suite fully passing. This is the same both-halves reasoning as assertion 1 — pinning a
+#     mechanism without pinning what makes it effective is a guard that can be hollowed out in place.
+#
+#     MATCH IT IN COMMAND CONTEXT, not as a bare token. The section also NAMES the option in prose
+#     ("`--ignored=matching` is not optional here"), so a bare-token assertion is satisfied by that
+#     sentence alone and still passes when the option is deleted from the command itself — measured,
+#     not hypothesised: the first version of this assertion did exactly that and the strip ablation
+#     stayed green. Anchoring on `status --porcelain --ignored=matching` ties it to the invocation,
+#     and that string cannot collide with the top-level check, which deliberately omits the option.
+assert_section 'status --porcelain --ignored=matching' \
+  "the per-submodule pre-check no longer passes \`--ignored=matching\` — without it porcelain status omits ignored paths inside submodules, so the check reports clean and the recursive checkout silently destroys another writer's ignored work"
+
 # 2b. THE PR-HEAD ASSOCIATION. \`<sha>\` is deliberately the general placeholder — it is this
 #     contract's convention (27 backticked commands use it, against 1 for \`<headRefOid>\`), and the
 #     rule covers any commit, not only a PR head. But the motivating case IS the PR head, so the
