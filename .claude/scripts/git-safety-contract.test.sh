@@ -55,7 +55,7 @@ section="$(
 # scope hole described above while every assertion still passes.
 #
 # The bound separates two states that are far apart, and it is deliberately NOT set just above the
-# current size: the section measures a few hundred words (369 when this bound was set), while a
+# current size: the section measures a few hundred words (486 at the time of writing), while a
 # runaway extraction (end anchor gone, awk running to EOF) measured 9,968 — both figures observed
 # rather than estimated, which is what justifies the gap. A snug bound would fail every
 # legitimate edit to this section while reporting a missing anchor — a false message that sends the
@@ -97,10 +97,20 @@ assert_section 'headRefOid' \
 assert_section 'SEPARATE calls' \
   "the Git safety section does not require the fetch and the checkout to be issued as separate calls — a denied compound call rolls back the fetch too, and the follow-up then fails on a missing FETCH_HEAD in a way that reads like a broken gitdir rather than a refusal"
 
-# 4. THE SWAP IS RECORDED AS SAFE, WITH ITS REASON. The dirty-worktree abort is the whole argument
-#    that this needs no permission change; stated without it, a later reader cannot tell this apart
-#    from a workaround and may "resolve" it by widening the guard.
-assert_section 'aborts and preserves' \
-  "the Git safety section does not record that \`checkout --detach\` aborts and preserves uncommitted work on a dirty worktree — that property is what makes this a strictly safer swap rather than a workaround, and without it the next reader may try to widen the guard instead"
+# 4. THE CLEANLINESS PRECONDITION. This is the operative safety rule and the one most likely to be
+#    "simplified" away, because the abort LOOKS like it already covers the case. It does not.
+#    Measured on a two-commit fixture: `checkout --detach` aborts only when the dirty path DIFFERS
+#    between HEAD and the target; when the path is identical in both commits git carries the edit
+#    along and SUCCEEDS, landing on the target with another writer's uncommitted work in the tree and
+#    nothing in the output saying so. An earlier draft of this contract claimed the abort was
+#    unconditional — that claim was false and is exactly what this assertion prevents recurring.
+assert_section 'status --porcelain' \
+  "the Git safety section no longer requires the worktree to be verified clean before detaching — the abort is only a partial backstop (it fires only when the dirty path differs between HEAD and target), so without this precondition a run can silently detach over another instance's uncommitted work"
+
+# 4b. AND THE REASON THE BACKSTOP IS PARTIAL. Assertion 4 pins the rule; this pins the justification.
+#     Without it a later editor sees a cleanliness check guarding a command they believe always
+#     aborts, reasonably concludes it is redundant, and removes it.
+assert_section 'partial backstop' \
+  "the Git safety section no longer explains that the abort is only a partial backstop — a reader who believes \`checkout --detach\` always refuses a dirty worktree will read the cleanliness precondition as redundant and drop it"
 
 echo "git safety contract: OK (${section_words} words scoped)"

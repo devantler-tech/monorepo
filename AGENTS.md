@@ -3071,12 +3071,19 @@ reaching for the same denied form; that is why this belongs in the shared contra
 whole chain**, so the `fetch` never runs either and the follow-up fails on a missing `FETCH_HEAD`.
 That reads like a broken gitdir rather than a refusal, which sends the run to diagnose the wrong
 thing — the denial costs a misdiagnosis on top of the wasted call.
-⚠️ **This is a strictly safer swap, never a loosening — the guard is untouched and needs no widening.**
-Verified on a real fixture, both arms: on a **clean** worktree `checkout --detach` lands on exactly
-that commit, the same outcome the banned form would have produced; on a **dirty** one it **aborts and
-preserves** the uncommitted content with HEAD unchanged, where `reset --hard` would have destroyed it.
-That refusal is precisely the property the ban exists to protect, so the replacement is *stricter* in
-the failure case rather than weaker.
+🔴 **CHECK THE WORKTREE IS CLEAN FIRST — `checkout --detach` does NOT reliably refuse a dirty one, and
+assuming it does is how you silently adopt another instance's uncommitted work.** Measured on a
+two-commit fixture, both arms: it **aborts and preserves** only when the modified path **differs**
+between HEAD and the target; when the dirty path is **identical** in both commits, git **carries the
+edit along and succeeds** — leaving you on the target commit with someone else's work still in the
+tree, and nothing in the output saying so. So require `git -C <wt> status --porcelain` to be **empty**
+before detaching. If it is not, that is a live claim by another writer: do GitHub-API-only work per
+*Execution model* and never detach over it.
+⚠️ **It remains a strictly safer swap, never a loosening — the guard is untouched and needs no
+widening.** On a clean worktree it lands on exactly that commit, the same outcome the banned form
+would have produced, and wherever it *does* refuse it preserves what `reset --hard` would have
+destroyed. It is never weaker than the banned form; the abort is simply a partial backstop rather than
+the check itself, which is why the cleanliness test above is the operative rule.
 
 **Worktree hygiene is SCHEDULED, not per-run — never rely on a session to remove its own worktree.**
 The harness creates a per-session worktree at `<repo>/.claude/worktrees/<slug>`, and the owning
