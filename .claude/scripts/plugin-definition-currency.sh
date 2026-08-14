@@ -51,8 +51,8 @@ QUIET=0
 RECOVERY="
   To resolve: populate the pinned plugin submodule with .claude/scripts/submodule-init.sh
   libraries/agent-plugins, or make gh available so the pinned tree can be read from the forge.
-  UNKNOWN means UNCHECKED, not stale: report it and carry on with the reviewed definition at the
-  pinned gitlink — it must never silently halt a run."
+  UNKNOWN means UNCHECKED: never read it as current, report it, and carry on against the reviewed
+  definition at the pinned gitlink — it must never halt a run."
 
 die() { printf 'plugin-definition-currency: %s\n' "$*" >&2; exit 2; }
 # `shift 2` on a lone trailing flag returns 1, and under `set -e` that exits the script with 1 — the
@@ -128,19 +128,26 @@ tree=""
 sub="$REPO_ROOT/$SUBMODULE_PATH"
 if [ -e "$sub" ] && git -C "$sub" cat-file -e "$GITLINK^{commit}" 2>/dev/null; then
   tree="$(git -C "$sub" ls-tree -r "$GITLINK" -- "$prefix" 2>/dev/null \
-            | awk -F'\t' '{split($1, m, " "); if (m[2]=="blob") print m[3] "\t" $2}')" \
+            | awk -F'\t' '{split($1, m, " "); if (m[2]=="blob") print m[3] "\t" m[1] "\t" $2}')" \
     || die "could not read the pinned tree $GITLINK from $sub${RECOVERY}"
 else
   command -v gh >/dev/null 2>&1 || die "commit $GITLINK is not in the local object database and gh is unavailable${RECOVERY}"
+  command -v jq >/dev/null 2>&1 || die "jq is required to read the pinned tree from the forge"
   # Derived, never hard-coded: --submodule-path is a flag, so a fixed slug here would silently query
   # a different repository than the one whose gitlink was just read.
   url="$(git -C "$REPO_ROOT" config -f .gitmodules --get "submodule.$SUBMODULE_PATH.url" 2>/dev/null)" \
     || die "no .gitmodules url for '$SUBMODULE_PATH' — cannot resolve $GITLINK from the forge${RECOVERY}"
   slug="${url##*:}"; slug="${slug##*/github.com/}"; slug="${slug%.git}"
   case "$slug" in */*) ;; *) die "could not derive an owner/repo slug from '$url'" ;; esac
-  tree="$(gh api "repos/$slug/git/trees/$GITLINK?recursive=1" \
-            --jq '.tree[] | select(.type=="blob") | [.sha,.path] | @tsv' 2>/dev/null)" \
+  raw="$(gh api "repos/$slug/git/trees/$GITLINK?recursive=1" 2>/dev/null)" \
     || die "could not read the pinned tree $GITLINK from $slug${RECOVERY}"
+  # A truncated response is a PARTIAL tree. Comparing it as if complete is a fail-open: a pinned file
+  # the API omitted is also absent from `reviewed`, so an install missing it reports CURRENT.
+  case "$(printf '%s' "$raw" | jq -r '.truncated // false')" in
+    true) die "the forge returned a TRUNCATED tree for $GITLINK — cannot verify completeness${RECOVERY}" ;;
+  esac
+  tree="$(printf '%s' "$raw" | jq -r '.tree[] | select(.type=="blob") | [.sha,.mode,.path] | @tsv')" \
+    || die "could not parse the pinned tree $GITLINK from $slug"
 fi
 [ -n "$tree" ] || die "pinned revision $GITLINK yielded no tree entries"
 
@@ -149,11 +156,11 @@ fi
 reviewed="$(printf '%s
 ' "$tree" \
   | awk -F'	' -v p="$prefix" '
-      index($2,p)==1 {
-        rel = substr($2, length(p) + 1)
-        if (rel ~ /^agents\// || rel ~ /^skills\//) print $1 "	" rel
+      index($3,p)==1 {
+        rel = substr($3, length(p) + 1)
+        if (rel ~ /^agents\// || rel ~ /^skills\//) print $1 "	" $2 "	" rel
       }' \
-  | sort -k2,2)"
+  | sort -k3,3)"
 [ -n "$reviewed" ] || die "pinned revision $GITLINK contains no definition files under $prefix"
 
 # ── compare ────────────────────────────────────────────────────────────────────
@@ -163,7 +170,7 @@ say "pinned revision : $GITLINK"
 say "installed copy  : $INSTALLED"
 say ""
 
-while IFS=$'\t' read -r rev_sha rel; do
+while IFS=$'\t' read -r rev_sha rev_mode rel; do
   [ -n "$rel" ] || continue
   checked=$((checked + 1))
   if [ ! -f "$INSTALLED/$rel" ]; then
@@ -176,8 +183,19 @@ while IFS=$'\t' read -r rev_sha rel; do
   # was measured.
   own_sha="$(git hash-object --no-filters "$INSTALLED/$rel" 2>/dev/null)" \
     || die "cannot hash the installed definition $INSTALLED/$rel"
-  if [ "$own_sha" = "$rev_sha" ]; then
+  # Mode matters as much as content: a skill helper that loses its executable bit still hashes
+  # identically, so a content-only comparison reports `match` while a SKILL.md invoking it fails.
+  case "$rev_mode" in
+    100644) want_exec=no ;;
+    100755) want_exec=yes ;;
+    *) die "pinned $rel has unsupported mode $rev_mode — cannot verify it" ;;
+  esac
+  if [ -x "$INSTALLED/$rel" ]; then have_exec=yes; else have_exec=no; fi
+  if [ "$own_sha" = "$rev_sha" ] && [ "$want_exec" = "$have_exec" ]; then
     say "match    $rel"
+  elif [ "$own_sha" = "$rev_sha" ]; then
+    say "DRIFT    $rel  content matches but mode differs (reviewed executable=$want_exec, installed executable=$have_exec)"
+    drift=$((drift + 1))
   else
     say "DRIFT    $rel  installed=${own_sha:0:12} reviewed=${rev_sha:0:12}"
     drift=$((drift + 1))
@@ -205,7 +223,7 @@ done
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   rel="${path#"$INSTALLED"/}"
-  if ! printf '%s\n' "$reviewed" | awk -F'\t' -v r="$rel" '$2==r{found=1} END{exit !found}'; then
+  if ! printf '%s\n' "$reviewed" | awk -F'\t' -v r="$rel" '$3==r{found=1} END{exit !found}'; then
     say "EXTRA    $rel  (installed but absent from the pinned revision)"
     drift=$((drift + 1))
   fi

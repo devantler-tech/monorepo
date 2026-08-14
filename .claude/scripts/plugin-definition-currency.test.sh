@@ -323,6 +323,67 @@ else
   fail "an install path containing spaces must exit 0, got $?: ${out}"
 fi
 
+# ── 7h. MODE is compared, not just content ───────────────────────────────────
+# A skill helper that loses its executable bit hashes identically, so a content-only comparison
+# reports `match` and the verdict is CURRENT — while a SKILL.md invoking that helper fails.
+mode_repo="${tmp}/mode/libraries/agent-plugins"
+mp="${mode_repo}/plugins/agentic-engineering"
+mkdir -p "${mp}/agents" "${mp}/skills/alpha"
+printf 'reviewed engineer definition\n' > "${mp}/agents/agentic-engineer.agent.md"
+printf 'reviewed alpha procedure\n'      > "${mp}/skills/alpha/SKILL.md"
+printf '#!/bin/sh\necho helper\n'        > "${mp}/skills/alpha/helper.sh"
+chmod +x "${mp}/skills/alpha/helper.sh"
+git -C "${mode_repo}" init -q
+git -C "${mode_repo}" config user.email t@example.invalid
+git -C "${mode_repo}" config user.name t
+git -C "${mode_repo}" add -A
+git -C "${mode_repo}" commit -qm pin
+mode_link="$(git -C "${mode_repo}" rev-parse HEAD)"
+mode_inst="${tmp}/install-mode"
+mkdir -p "${mode_inst}"
+cp -R "${mp}/agents" "${mp}/skills" "${mode_inst}/"
+# Identical, executable bit intact -> CURRENT. Without this the next assertion could pass trivially.
+if "${script}" --repo-root "${tmp}/mode" --gitlink "${mode_link}" --installed "${mode_inst}" >/dev/null 2>&1; then
+  ok "an executable helper with its mode intact reports CURRENT"
+else
+  fail "an identical install with an executable helper must exit 0"
+fi
+chmod -x "${mode_inst}/skills/alpha/helper.sh"
+set +e; out="$("${script}" --repo-root "${tmp}/mode" --gitlink "${mode_link}" --installed "${mode_inst}" 2>&1)"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a lost executable bit must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"mode differs"*) ok "a lost executable bit is caught even though the content hash matches" ;;
+  *) fail "exit 1 but the mode difference was not reported: ${out}" ;;
+esac
+
+# ── 7i. A TRUNCATED forge tree is UNKNOWN, never a comparison ─────────────────
+# GitHub marks an over-large recursive Trees response `truncated`. Comparing it as if complete is a
+# fail-open: a pinned file the API omitted is also absent from the reviewed set, so an install missing
+# that file reports CURRENT. Exercised with a gh shim so the case is hermetic.
+shim="${tmp}/shim"
+mkdir -p "${shim}"
+cat > "${shim}/gh" <<'SHIM'
+#!/bin/sh
+printf '{"truncated":true,"tree":[]}\n'
+SHIM
+chmod +x "${shim}/gh"
+mkdir -p "${tmp}/trunc"
+cat > "${tmp}/trunc/.gitmodules" <<'GM'
+[submodule "libraries/agent-plugins"]
+	path = libraries/agent-plugins
+	url = git@github.com:devantler-tech/agent-plugins.git
+GM
+# A gitlink absent from the local object database forces the forge branch.
+set +e
+out="$(PATH="${shim}:${PATH}" "${script}" --repo-root "${tmp}/trunc" --installed "${cur}" \
+        --gitlink 1111111111111111111111111111111111111111 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "a truncated forge tree must exit 2 (UNKNOWN), got ${rc}: ${out}"
+case "${out}" in
+  *TRUNCATED*) ok "a truncated forge tree exits 2 rather than comparing a partial tree" ;;
+  *) fail "exit 2 but not because of truncation: ${out}" ;;
+esac
+
 # ── 8. The remediation is NAMED in the failure output ─────────────────────────
 # The deployment's own "fail with the fix" rule: a guard that blocks without naming the resolving
 # action is a friction tax, and it trains the reader to route around it. It must also keep saying
