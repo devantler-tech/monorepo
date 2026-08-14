@@ -3058,8 +3058,9 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
 **The permitted way to put a worktree on a specific commit is
-`git -C <wt> checkout --no-overwrite-ignore --detach <sha>`, issued as its OWN call after the
-`fetch`** (the flag is not optional decoration — see the ignored-paths hazard below).
+`git -C <wt> checkout --no-overwrite-ignore --recurse-submodules --detach <sha>`, issued as its OWN
+call after the `fetch`.** Neither flag is decoration: without them the command silently overwrites
+ignored files and leaves submodules stale — both hazards are below, and both were fixture-verified.
 When that commit is a PR's head, `<sha>` is its
 **`headRefOid`** — the same value *Merge policy* pins the merge to, so the worktree you evaluate and
 the commit you merge are provably the same one. A ban that never names the alternative is exactly the
@@ -3081,16 +3082,27 @@ edit along and succeeds** — leaving you on the target commit with someone else
 tree, and nothing in the output saying so. So require `git -C <wt> status --porcelain` to be **empty**
 before detaching. If it is not, that is a live claim by another writer: do GitHub-API-only work per
 *Execution model* and never detach over it.
-🔴 **`--detach` moves the SUPERPROJECT ONLY, and in this monorepo that is the dangerous default.** It
-does not recurse into submodules, so detaching onto a PR that changes a gitlink leaves every submodule
-at its **old** commit — fixture-verified: HEAD lands on the target while the submodule still holds the
-previous content, and `status` shows nothing but a bare ` M <sub>`. You would then be evaluating
-**different code from the `headRefOid` you believe you are on**, and since a large share of PRs here
-are submodule bumps that is the common case rather than an edge one. So after detaching, bring each
-affected submodule to its pinned commit with
-[`submodule-init.sh`](.claude/scripts/submodule-init.sh) (fail-closed, and it repairs worktree
-isolation in the same step), then require `status --porcelain` to be empty **again** — a surviving
-` M <sub>` means that submodule is still stale.
+⚠️ **`status` alone is not sufficient, because the INDEX CAN HIDE a foreign edit.** A tracked file
+carrying `assume-unchanged` or `skip-worktree` is omitted from `status --porcelain` entirely —
+fixture-verified: an empty status, followed by a successful checkout that carried another writer's
+edit straight onto the target commit. So also require
+`git -C <wt> ls-files -v | awk '$1 ~ /^[a-z]$/ || $1 == "S"'` to print **nothing** (a lowercase flag
+or `S` marks exactly those bits). [`worktree-cleanup.sh`](.claude/scripts/worktree-cleanup.sh) already
+makes this check for the same reason — treat an empty `status` as authorization to detach only once
+this one is clear too.
+🔴 **`--detach` on its own moves the SUPERPROJECT ONLY, and in this monorepo that is the dangerous
+default — which is what `--recurse-submodules` above is for.** Without it, detaching onto a PR that
+changes a gitlink leaves every submodule at its **old** commit: fixture-verified, HEAD lands on the
+target while the submodule still holds the previous content and `status` shows nothing but a bare
+` M <sub>`. You would then be evaluating **different code from the `headRefOid` you believe you are
+on** — and since a large share of PRs here are submodule bumps, that is the common case rather than an
+edge one. With the flag, the submodule lands on the pinned commit and the tree comes back clean.
+⚠️ **`submodule-init.sh` does NOT do this job and must not be prescribed for it.** Handed an
+**already-populated** submodule it deliberately repairs isolation *only* and refuses
+`git submodule update`, precisely so it cannot discard a local branch or ahead-of-pin work — so it
+would report success while the submodule stayed stale. Its job is populating an **uninitialised**
+submodule and repairing worktree isolation; moving a populated one onto the pinned gitlink is
+`--recurse-submodules`'s job. Keep the two uses distinct.
 ⚠️ **The pre-check cannot see IGNORED paths, and checkout overwrites them by default — which is why
 `--no-overwrite-ignore` is in the command above.** `git checkout` documents `--overwrite-ignore` as
 the default and `status --porcelain` never lists ignored files, so when the target commit starts

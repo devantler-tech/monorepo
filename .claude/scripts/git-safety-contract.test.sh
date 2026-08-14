@@ -55,7 +55,7 @@ section="$(
 # scope hole described above while every assertion still passes.
 #
 # The bound separates two states that are far apart, and it is deliberately NOT set just above the
-# current size: the section measures several hundred words (748 at the time of writing), while a
+# current size: the section measures several hundred words (921 at the time of writing), while a
 # runaway extraction (end anchor gone, awk running to EOF) measured 9,968 — both figures observed
 # rather than estimated, which is what justifies the gap. A snug bound would fail every
 # legitimate edit to this section while reporting a missing anchor — a false message that sends the
@@ -79,16 +79,16 @@ assert_section 'Never `git reset --hard`' \
 # 2. THE ALTERNATIVE IS NAMED, with the flag that makes it safe. \`checkout\` alone is not the
 #    prescription: it is \`--detach\` onto an explicit commit that reproduces the banned form's
 #    outcome, and a bare branch checkout would not.
-assert_section 'git -C <wt> checkout --no-overwrite-ignore --detach <sha>' \
-  "the Git safety section does not name \`git -C <wt> checkout --no-overwrite-ignore --detach <sha>\` as the permitted way to put a worktree on a specific commit, so the ban again has no stated alternative and the instruction migrates to unreviewed memory"
+assert_section 'git -C <wt> checkout --no-overwrite-ignore --recurse-submodules --detach <sha>' \
+  "the Git safety section does not name \`git -C <wt> checkout --no-overwrite-ignore --recurse-submodules --detach <sha>\` as the permitted way to put a worktree on a specific commit, so the ban again has no stated alternative and the instruction migrates to unreviewed memory"
 
-# 2c. THE SUBMODULE STEP. \`--detach\` moves the superproject ONLY; a gitlink-changing PR therefore
-#     leaves submodules at their old commits, with nothing but a bare " M <sub>" to show for it.
-#     Fixture-verified. In a monorepo whose PRs are largely submodule bumps this is the common case,
-#     and the failure mode is evaluating different code from the headRefOid you believe you are on —
-#     so the follow-up step is part of the prescription, not an optional extra.
-assert_section 'submodule-init.sh' \
-  "the Git safety section no longer directs the run to update submodules after detaching — \`--detach\` moves only the superproject, so a gitlink-changing PR leaves the submodule stale and the run silently evaluates the wrong code"
+# 2c. THE INDEX-HIDDEN-EDIT CHECK. \`status --porcelain\` omits any tracked file carrying
+#     \`assume-unchanged\` or \`skip-worktree\`, so an empty status is NOT proof the tree is clean.
+#     Fixture-verified: empty status, then a successful checkout that carried a foreign edit onto the
+#     target. \`worktree-cleanup.sh\` already makes this check, so the contract asking for less than
+#     its own tooling does would be an inconsistency as well as a hole.
+assert_section 'ls-files -v' \
+  "the Git safety section no longer requires the \`ls-files -v\` index-flag check — a file marked assume-unchanged or skip-worktree is invisible to \`status --porcelain\`, so the cleanliness pre-check passes while another writer's edit rides onto the target commit"
 
 # 2b. THE PR-HEAD ASSOCIATION. \`<sha>\` is deliberately the general placeholder — it is this
 #     contract's convention (27 backticked commands use it, against 1 for \`<headRefOid>\`), and the
