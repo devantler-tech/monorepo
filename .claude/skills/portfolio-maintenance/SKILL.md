@@ -131,10 +131,11 @@ after a side-by-side run proves parity against the checklist in
 Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*Portfolio map*,
 *Trust gate*, *Cadence*, *Memory*, *Maintainer channels*). The surveyor:
 - enumerates org-wide in two calls (`gh search prs/issues --owner devantler-tech --state open …`)
-  instead of looping `gh pr/issue list` per repo; exact `renovate[bot]`/`dependabot[bot]` search authors
-  are **automation-owned dependency PRs** and get only a compact `AUTOMATION-OWNED (NO-ACTION)` line,
-  with no pentad deepening or agent action; then it **deepens every remaining open actionable PR —
-  drafts and promoted, whoever authored it —** with a targeted
+  instead of looping `gh pr/issue list` per repo. This **cheap exhaustive enumeration** establishes
+  the complete actionable-PR queue and its contract priority before expensive joins begin. Exact
+  `renovate[bot]`/`dependabot[bot]` search authors are **automation-owned dependency PRs** and get only
+  a compact `AUTOMATION-OWNED (NO-ACTION)` line, with no pentad deepening or agent action. It then
+  deepens that queue in deterministic priority order, one bounded shard at a time, with a targeted
   `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid`. **The only
   exclusion is the exact `renovate[bot]`/`dependabot[bot]` automation identity above**: since the
   orchestrator drives every other open PR to a terminal state, a selector limited to `devantler` and
@@ -146,8 +147,20 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   and `disclosure` and emits **no ownership verdict**: that field tells the orchestrator whose control
   channel a `devantler` comment on the PR is, and is never a gate on whether it may drive the PR —
   which the data-only active-work signals decide;
-- checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure
-  --limit 3` each;
+- applies this non-negotiable query boundary: **Clearance is per candidate, never per portfolio.** A
+  candidate is action-clear only when its own exact head, hygiene pentad, control/claim facts, and the
+  **candidate repository's default-head health** are complete. Any unrelated failed or capped joins
+  remain `QUERY-UNKNOWN` in the digest and keep broad portfolio health unknown, but they **never block
+  an independently fully joined candidate**. A failed candidate join blocks that candidate only; move
+  to the next item in the already-established queue and return every cleared row plus each scoped
+  unknown. When the orchestrator exhausts the returned cleared rows, deepen the next bounded shard
+  rather than restarting the census. Because PRs outrank issues, **issue descent remains blocked until
+  the actionable-PR queue is completely classified** as cleared, terminal, automation-owned, or
+  parked on a named candidate-scoped blocker;
+- checks the **candidate repository's current `main` health** together with each deepening shard, then
+  continues the remaining portfolio-wide default-head sweep as broad health evidence. A candidate
+  repository query failure blocks that candidate; a different repository's failure remains the
+  scoped `QUERY-UNKNOWN` described above and does not revoke already-complete candidate clearance;
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
   broad author-based search, because scheduled discovery must not expose professional-work repos;
 - flags untriaged issues/PRs, stale actionable PRs (>14d), `roadmap`-ready issues, and products with

@@ -2065,8 +2065,28 @@ case "${surveyor_flat}" in
   *) fail "the digest cannot express an unassessed portfolio" ;;
 esac
 case "${surveyor_flat}" in
-  *'EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)` OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS'*) ;;
+  *'EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)`, `NOT-DEEPENED (next-shard)`, OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS'*) ;;
   *) fail "the digest may still claim nothing_on_fire while PRs went unassessed or undiscovered" ;;
+esac
+# A survey that tries to deepen the whole portfolio before returning can spend the complete dispatch
+# on joins and deliver no candidate to the writer. Bound the expensive shard, preserve global UNKNOWN,
+# and make the already-deepened rows explicitly usable instead of treating the remainder as a global
+# mutation lock.
+case "${surveyor_flat}" in
+  *'at most eight actionable PRs per digest'*) ;;
+  *) fail "the surveyor still attempts an unbounded all-PR deepening pass before returning" ;;
+esac
+case "${surveyor_flat}" in
+  *'NOT-DEEPENED (next-shard)'*) ;;
+  *) fail "the digest cannot distinguish deliberate bounded deferral from API-budget exhaustion" ;;
+esac
+case "${surveyor_flat}" in
+  *'deepened rows remain candidate-actionable'*) ;;
+  *) fail "the surveyor still lets an incomplete later shard freeze fully joined candidates" ;;
+esac
+case "${surveyor_flat}" in
+  *'issue descent remains blocked'*) ;;
+  *) fail "the surveyor can descend into issues while the higher-priority PR queue is incomplete" ;;
 esac
 # Truncated discovery is unassessed coverage exactly as an undeepened PR is, so both must drive the
 # health field — but only the PR one. Pinning the issue row's EXCLUSION matters as much: issues are

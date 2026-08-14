@@ -33,6 +33,7 @@ fail() {
 flatten() { tr '\n' ' ' < "$1" | tr -s '[:space:]' ' '; }
 constitution_flat="$(flatten "${constitution}")"
 engineer_flat="$(flatten "${engineer_agent}")"
+maintenance_overlay_flat="$(flatten "${maintenance_overlay}")"
 
 assert_prose() {
   case "${constitution_flat}" in
@@ -42,6 +43,12 @@ assert_prose() {
 }
 assert_engineer_prose() {
   case "${engineer_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+assert_maintenance_prose() {
+  case "${maintenance_overlay_flat}" in
     *"$1"*) ;;
     *) fail "$2" ;;
   esac
@@ -477,6 +484,24 @@ assert_prose 'same-lane task presence or post-start activity alone is never a gl
   "cadence still permits a scheduled role to no-op merely because another same-lane task is active"
 assert_prose 'a live conflicting claim, exact shared-artifact contention, or an unsafe runtime-local mutation' \
   "cadence does not preserve the artifact-scoped conditions that still require stand-down"
+
+# A complete portfolio census is health evidence, not a global mutation lease. Measured survey runs
+# repeatedly stopped after one of 80+ unrelated PR joins failed or hit a cap, even though earlier
+# candidates already had complete head, control, claim, CI, conflict, and review evidence. Clearance
+# must therefore be candidate-scoped: preserve UNKNOWN for the failed join and for broad health/issue
+# descent, while continuing through the ordered PR queue with fully joined independent candidates.
+assert_maintenance_prose 'Clearance is per candidate, never per portfolio' \
+  "portfolio maintenance still couples all mutation to a complete portfolio-wide join"
+assert_maintenance_prose 'cheap exhaustive enumeration' \
+  "portfolio maintenance does not separate cheap ordering from candidate deepening"
+assert_maintenance_prose "candidate repository's default-head health" \
+  "candidate clearance does not preserve repository-local default-head safety evidence"
+assert_maintenance_prose 'unrelated failed or capped joins remain `QUERY-UNKNOWN`' \
+  "portfolio maintenance does not preserve uncertainty for incomplete unrelated joins"
+assert_maintenance_prose 'never block an independently fully joined candidate' \
+  "portfolio maintenance still permits unrelated query failures to freeze cleared work"
+assert_maintenance_prose 'issue descent remains blocked until the actionable-PR queue is completely classified' \
+  "portfolio maintenance can descend into issues while higher-priority PR state is unknown"
 # A `per_task_limit` record is a per-MINUTE liveness sample of "a run is currently open",
 # not a per-slot drop record — so counting those records, raw or hour-bucketed, counts a
 # slot that merely started LATE as one that never ran. Measured 2026-08-12 over 164 slots:

@@ -118,9 +118,10 @@ public and private — no per-repo loop needed to enumerate):
    boundary intentionally leaves any such branch with repository automation and the human who edited it.
    Other API surfaces may render the same actors as `app/renovate` or `app/dependabot`; do not
    use search's unreliable `is_bot` field, a title, or a branch pattern as the classifier.
-   For **every remaining open PR — drafts and non-drafts, whoever authored it** — plus the
-   candidate-only `botantler-1[bot]` updater rows defined below, pull the
-   heavy fields one PR at a time. The orchestrator drives every one of these to a terminal state
+   Enumerate **every remaining open PR — drafts and non-drafts, whoever authored it** — plus the
+   candidate-only `botantler-1[bot]` updater rows defined below, then pull the heavy fields one PR at
+   a time for **at most eight actionable PRs per digest**. The orchestrator drives every one of these
+   to a terminal state
    (*You own EVERY pull request in the portfolio*), and it cannot review, promote, merge, close or
    park a PR whose pentad it never received: a cheap static row for an external or `Copilot` PR is
    **unactionable data**, so the deepening set is now defined by *what the run may act on*, not by
@@ -129,7 +130,8 @@ public and private — no per-repo loop needed to enumerate):
    `github-actions[bot]`, `coderabbitai[bot]`, `cursor[bot]` — **exact match, never a substring**;
    `Copilot`/`copilot-swe-agent[bot]` are NOT trusted) survives only to mark which branches may be
    run locally, and is reported per row rather than used as a filter.
-   ⚠️ **Deepening is budgeted, so spend it in the order the orchestrator will work.** This set is
+   ⚠️ **Deepening is both shard-bounded and budgeted, so spend it in the order the orchestrator will
+   work.** This set is
    much larger than the `devantler`-only one it replaces, and the heavy fields plus the GraphQL
    thread query are what exhaust the API pool mid-survey — measured 2026-08-09, when the pool ran
    out and **40 `platform` PRs went undeepened with no pentad at all**. Deepen in **`updatedAt`
@@ -138,6 +140,12 @@ public and private — no per-repo loop needed to enumerate):
    undeepened remainder as `NOT-DEEPENED (budget)` rows naming the count and the repos, never a
    silent cheap row that reads like a completed assessment:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,isDraft,updatedAt,title,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,headRepositoryOwner,headRepository,author,body,files`
+   After eight successful candidate joins, stop deepening and emit the ordered remainder as
+   `NOT-DEEPENED (next-shard)` rows. A later failed or deferred join makes global health unknown, but
+   **deepened rows remain candidate-actionable** once their own exact head, pentad, control facts and
+   repository default-head health are complete. It never turns the remainder into a global mutation
+   lock. Because PRs outrank issues, **issue descent remains blocked** until every actionable PR is
+   classified as deepened, terminal, automation-owned, or parked on a named candidate-scoped blocker.
    🔴 **Every field this read returns SUPERSEDES the org-search value for the rest of the survey —
    including the three that are not about the head.** The search snapshot is minutes old by the time a
    PR is deepened, and a field can change without the head SHA changing, so "we refreshed the head"
@@ -1277,7 +1285,7 @@ Markdown; **omit products with no signal entirely** (don't echo empty lists):
 
 ```
 ## Survey digest — <UTC date>
-nothing_on_fire: <true|false|unknown>   # true only if NO CI red on main AND no actionable PR broken, whoever authored it; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does. 🔴 EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)` OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS (the issue-truncation row never affects this field): `true` asserts that no actionable PR is broken, which a survey that never assessed those PRs cannot know. `false` is equally wrong — it claims a fire nobody observed. `unknown` is the only honest value, and the orchestrator treats it as "re-survey the undeepened remainder before concluding the portfolio is healthy", never as a clean bill
+nothing_on_fire: <true|false|unknown>   # true only if NO CI red on main AND no actionable PR broken, whoever authored it; a GITHUB-MANAGED (NO-ACTION) line never makes this false — nor does its GITHUB-MANAGED-SCAN (NO-ACTION) specialisation — but a (REPEATED — ACTIONABLE) one does. 🔴 EMIT `unknown` WHENEVER ANY `NOT-DEEPENED (budget)`, `NOT-DEEPENED (next-shard)`, OR `DISCOVERY-TRUNCATED (prs, 300 cap)` ROW EXISTS (the issue-truncation row never affects this field): `true` asserts that no actionable PR is broken, which a survey that never assessed those PRs cannot know. `false` is equally wrong — it claims a fire nobody observed. `unknown` is the only honest value. It blocks declaring the portfolio healthy and blocks issue descent; it does not block acting on fully joined deepened rows.
 budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remaining>→<end_remaining>/<limit>[ · EXHAUSTED_AT_START]
 # or, when the probe fails: budget: unavailable:<reason>
 
@@ -1302,6 +1310,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - <repo>: untriaged → issues #a,#b · PRs #c   |   stale (>14d) → #d
 - <repo> #<n> "<title>" — <author>: EXTERNAL/Copilot — NEVER-RUN-LOCALLY (never run locally); reviewed statically, then driven to a terminal state like any other PR. Carries the same deepened pentad, `active=`, merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|none>, and classification as every other row, plus behaviour_observed=<check-name|static|none|unknown> (which CI check actually exercises the change; `static` = no exercisable runtime surface, evaluated statically instead; `none` = a check could exercise it but none does, and is the named blocker on its merge, per *You own EVERY pull request in the portfolio*). **`rd=` and `merge_group_result=` are NOT optional on this row just because its author is external** — an eviction is invisible in the head pentad (the queue's checks run on a synthetic ref) and a human CHANGES_REQUESTED is not one of the candidate-maintainer-comment surfaces, so omitting either loses a persistent block once the generic ~2h human-activity signal expires and the PR reads ready. This row takes the plain `<author>` form for `rd=`, with no `agent(…)`/`human(…)` qualifier: that qualifier exists only to tell a sibling instance's `devantler` review from the maintainer's, and an external author is neither
 - NOT-DEEPENED (budget) <repo> ×<n> [#a,#b,…]   # API pool exhausted before these PRs were deepened — they carry NO pentad and were NOT assessed; never report them as clean or actionable
+- NOT-DEEPENED (next-shard) <repo> ×<n> [#a,#b,…]   # deliberate remainder after the eight-candidate shard — carries NO pentad and keeps broad health unknown, while deepened rows remain candidate-actionable
 
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
