@@ -182,12 +182,15 @@ canonical_improver="${plugin_agents}/agent-improver.agent.md"
 consumer_entrypoint_sha="$(jq -r '.spec.source.entrypointSha256 // ""' "${desired_state}")"
 consumer_surveyor_sha="$(jq -r '.spec.roles["portfolio-surveyor"].definitionSha256 // ""' "${desired_state}")"
 consumer_improver_sha="$(jq -r '.spec.roles["agent-improver"].definitionSha256 // ""' "${desired_state}")"
+consumer_improver_skill_sha="$(jq -r '.spec.roles["agent-improver"].skillSha256 // ""' "${desired_state}")"
 [ "${consumer_entrypoint_sha}" = "$(sha256_file "${canonical_engineer}")" ] ||
   fail "consumer desired-state entrypointSha256 does not match the pinned agentic-engineer definition"
 [ "${consumer_surveyor_sha}" = "$(sha256_file "${canonical_surveyor}")" ] ||
   fail "consumer desired-state portfolio-surveyor definitionSha256 does not match the pinned definition"
 [ "${consumer_improver_sha}" = "$(sha256_file "${canonical_improver}")" ] ||
   fail "consumer desired-state agent-improver definitionSha256 does not match the pinned definition"
+[ "${consumer_improver_skill_sha}" = "$(sha256_file "${bundled_skill}")" ] ||
+  fail "consumer desired-state agent-improver skillSha256 does not match the pinned agent-improvement skill"
 
 canonical_engineer_flat="$(flatten "${canonical_engineer}")"
 assert_canonical_engineer_prose() {
