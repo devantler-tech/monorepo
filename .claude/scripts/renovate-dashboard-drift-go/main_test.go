@@ -1,0 +1,825 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// withDeclaredRoots swaps the declared set for a test and restores it after, so
+// each case can describe its own portfolio without the real one leaking in.
+func withDeclaredRoots(t *testing.T, roots ...string) {
+	t.Helper()
+
+	original := declaredConfigRoots
+	declaredConfigRoots = roots
+
+	t.Cleanup(func() { declaredConfigRoots = original })
+}
+
+// writeFile creates a file and every directory above it.
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// newRoot builds a throwaway monorepo root with a .gitmodules listing the given
+// submodule paths.
+func newRoot(t *testing.T, submodules ...string) string {
+	t.Helper()
+
+	root := t.TempDir()
+
+	var b strings.Builder
+	for _, p := range submodules {
+		b.WriteString("[submodule \"" + p + "\"]\n\tpath = " + p + "\n\turl = git@github.com:devantler-tech/x.git\n")
+	}
+
+	writeFile(t, filepath.Join(root, ".gitmodules"), b.String())
+
+	return root
+}
+
+// mustStrip strips a source that the caller asserts is well-formed, so the
+// comment/comma tests stay about what survives the strip rather than about
+// error plumbing.
+func mustStrip(t *testing.T, src string) []byte {
+	t.Helper()
+
+	out, err := stripJSON5([]byte(src))
+	if err != nil {
+		t.Fatalf("stripJSON5: %v", err)
+	}
+
+	return out
+}
+
+func runIn(t *testing.T, root string) (int, string) {
+	t.Helper()
+
+	var stdout, stderr bytes.Buffer
+	code := run(root, &stdout, &stderr)
+
+	return code, stdout.String() + stderr.String()
+}
+
+// --- the JSON5 trap -------------------------------------------------------
+
+// Every config in the portfolio carries a "$schema" URL containing "//". A
+// comment stripper that is not string-aware cuts that URL in half, so this is the
+// case that decides whether the whole approach is sound.
+func TestStripJSON5PreservesURLsInsideStrings(t *testing.T) {
+	src := `{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // a real comment, which must go
+  "extends": ["config:recommended", ":disableDependencyDashboard"]
+}`
+
+	var cfg struct {
+		Schema  string   `json:"$schema"`
+		Extends []string `json:"extends"`
+	}
+
+	stripped := mustStrip(t, src)
+	if err := json.Unmarshal(stripped, &cfg); err != nil {
+		t.Fatalf("stripped document did not parse: %v\n%s", err, stripped)
+	}
+
+	if cfg.Schema != "https://docs.renovatebot.com/renovate-schema.json" {
+		t.Errorf("schema URL was corrupted by comment stripping: %q", cfg.Schema)
+	}
+
+	if len(cfg.Extends) != 2 {
+		t.Errorf("extends = %v, want 2 entries", cfg.Extends)
+	}
+}
+
+func TestStripJSON5HandlesBlockCommentsAndTrailingCommas(t *testing.T) {
+	src := `{
+  /* block
+     comment */
+  "extends": [
+    "config:recommended",
+  ],
+  "dependencyDashboard": false,
+}`
+
+	var cfg renovateConfig
+	if err := json.Unmarshal(mustStrip(t, src), &cfg); err != nil {
+		t.Fatalf("did not parse: %v", err)
+	}
+
+	if cfg.DependencyDashboard == nil || *cfg.DependencyDashboard {
+		t.Errorf("dependencyDashboard = %v, want explicit false", cfg.DependencyDashboard)
+	}
+}
+
+// A comma inside a string value is data, not syntax.
+func TestRemoveTrailingCommasLeavesStringsAlone(t *testing.T) {
+	src := `{"description": "a, b, c", "extends": ["config:recommended",]}`
+
+	var cfg struct {
+		Description string   `json:"description"`
+		Extends     []string `json:"extends"`
+	}
+
+	if err := json.Unmarshal(mustStrip(t, src), &cfg); err != nil {
+		t.Fatalf("did not parse: %v", err)
+	}
+
+	if cfg.Description != "a, b, c" {
+		t.Errorf("description = %q, want %q", cfg.Description, "a, b, c")
+	}
+}
+
+// --- resolution -----------------------------------------------------------
+
+func TestResolveDashboard(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		want    dashboardState
+		wantErr bool
+	}{
+		{
+			name: "config:recommended alone inherits the dashboard",
+			body: `{"extends":["config:recommended"]}`,
+			want: dashboardEnabled,
+		},
+		{
+			name: "opt-out preset after recommended disables it",
+			body: `{"extends":["config:recommended",":disableDependencyDashboard"]}`,
+			want: dashboardDisabled,
+		},
+		{
+			name: "explicit false overrides an enabling preset",
+			body: `{"extends":["config:recommended"],"dependencyDashboard":false}`,
+			want: dashboardDisabled,
+		},
+		{
+			name: "explicit true overrides the opt-out preset",
+			body: `{"extends":["config:recommended",":disableDependencyDashboard"],"dependencyDashboard":true}`,
+			want: dashboardEnabled,
+		},
+		{
+			name: "no extends and no key is Renovate's disabled default",
+			body: `{"labels":["automated"]}`,
+			want: dashboardDisabled,
+		},
+		{
+			name: "later preset wins over an earlier one",
+			body: `{"extends":[":disableDependencyDashboard","config:recommended"]}`,
+			want: dashboardEnabled,
+		},
+		{
+			name: "parameterised preset resolves through its base name",
+			body: `{"extends":["config:recommended",":disableDependencyDashboard",":semanticCommitTypeAll(fix)"]}`,
+			want: dashboardDisabled,
+		},
+		{
+			name:    "an unknown preset is an error, never an assumed neutral",
+			body:    `{"extends":["config:recommended","github>devantler-tech/renovate-config"]}`,
+			wantErr: true,
+		},
+		{
+			name:    "JSON5 beyond comments and trailing commas is an error",
+			body:    `{extends: ['config:recommended']}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "renovate.json"), tc.body)
+
+			got, err := resolveDashboard(root, "renovate.json")
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("want an error, got state %v", got)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if got != tc.want {
+				t.Errorf("state = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The five configs actually in the portfolio, so a refactor that breaks real
+// input fails here rather than in CI against the submodules.
+func TestResolvesTheRealPortfolioConfigs(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "monorepo",
+			body: `{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":disableDependencyDashboard", ":semanticCommitTypeAll(fix)"],
+  "github-actions": {"enabled": false}
+}`,
+		},
+		{
+			name: "platform (explicit false beside config:recommended)",
+			body: `{"$schema":"https://docs.renovatebot.com/renovate-schema.json","extends":["config:recommended"],"dependencyDashboard":false}`,
+		},
+		{
+			name: "kyverno-policies (explicit false)",
+			body: `{"$schema":"https://docs.renovatebot.com/renovate-schema.json","extends":["config:recommended"],"dependencyDashboard":false}`,
+		},
+		{
+			name: "platform-template",
+			body: `{"$schema":"https://docs.renovatebot.com/renovate-schema.json","extends":["config:recommended",":disableDependencyDashboard",":semanticCommitTypeAll(fix)"]}`,
+		},
+		{
+			name: "provider-upjet-unifi (JSON5 with comments)",
+			body: `{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":disableDependencyDashboard"],
+  // The maximum number of PRs to be created in parallel
+  "prConcurrentLimit": 5,
+  // The branches renovate should target
+  "baseBranches": ["main"],
+  "semanticCommits": "disabled",
+  "labels": ["automated"]
+}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "renovate.json5"), tc.body)
+
+			got, err := resolveDashboard(root, "renovate.json5")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if got != dashboardDisabled {
+				t.Errorf("state = %v, want disabled — this config is live in the portfolio", got)
+			}
+		})
+	}
+}
+
+// --- end-to-end -----------------------------------------------------------
+
+func TestPassesWhenEveryDeclaredConfigOptsOut(t *testing.T) {
+	root := newRoot(t, "platform")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":["config:recommended",":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":["config:recommended"],"dependencyDashboard":false}`)
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "2 config(s) checked") {
+		t.Errorf("expected a count of what was checked, got:\n%s", out)
+	}
+}
+
+func TestFailsWhenAConfigEnablesTheDashboard(t *testing.T) {
+	root := newRoot(t, "platform")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":["config:recommended",":disableDependencyDashboard"]}`)
+	// Inherits the dashboard by not opting out — the exact drift this guards.
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":["config:recommended"]}`)
+
+	code, out := runIn(t, root)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "resolves to dependencyDashboard: true") {
+		t.Errorf("expected the drift to be named, got:\n%s", out)
+	}
+}
+
+// A declared root that is not checked out must NOT read as compliant.
+func TestFailsClosedWhenADeclaredRootIsNotCheckedOut(t *testing.T) {
+	root := newRoot(t, "platform")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// platform/ deliberately absent, exactly like an uninitialised submodule.
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 — an unverifiable root must never pass\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "could not verify") {
+		t.Errorf("expected the reason to be stated, got:\n%s", out)
+	}
+}
+
+// A repository that grows a config nobody declared must force a decision.
+func TestFailsWhenAnUndeclaredRepoHasAConfig(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// ksail is checked out and has gained a config, but is not declared.
+	writeFile(t, filepath.Join(root, "applications/ksail/renovate.json"), `{"extends":["config:recommended"]}`)
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "not declared") {
+		t.Errorf("expected the undeclared config to be named, got:\n%s", out)
+	}
+}
+
+// An undeclared repo with NO config is fine — most of the portfolio is in that
+// state, and a repo without a config cannot enable a dashboard.
+func TestIgnoresUndeclaredRepoWithoutAConfig(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/README.md"), "no renovate config here\n")
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
+
+	if code, out := runIn(t, root); code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s", code, out)
+	}
+}
+
+// Renovate itself errors on more than one config file; so does this.
+func TestFailsWhenARootHasTwoConfigFiles(t *testing.T) {
+	root := newRoot(t)
+	withDeclaredRoots(t, ".")
+
+	writeFile(t, filepath.Join(root, "renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "more than one") {
+		t.Errorf("expected the duplicate configs to be named, got:\n%s", out)
+	}
+}
+
+func TestErrorsWhenGitmodulesIsMissing(t *testing.T) {
+	root := t.TempDir()
+	withDeclaredRoots(t)
+
+	if code, out := runIn(t, root); code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s", code, out)
+	}
+}
+
+// --- the ways a config can outrun this check ------------------------------
+//
+// Each case below is a config Renovate reads differently from the reduced model
+// here. The check's stated contract is that anything it cannot resolve offline
+// is an error, so every one of them must fail closed rather than resolve to a
+// comfortable "disabled".
+
+// An unterminated /* swallows the rest of the document. Renovate cannot parse
+// such a file at all, so a green verdict here would be about a document that
+// does not exist.
+func TestUnterminatedBlockCommentIsAnError(t *testing.T) {
+	root := t.TempDir()
+	// Complete, opt-out JSON followed by a comment that never closes. Dropping
+	// the malformed suffix leaves a document that parses and reads as disabled.
+	writeFile(t, filepath.Join(root, "renovate.json"), `{"extends":[":disableDependencyDashboard"]} /* oops`)
+
+	if _, err := resolveDashboard(root, "renovate.json"); err == nil {
+		t.Fatal("want an error: an unterminated block comment makes the file unparseable to Renovate," +
+			" so silently discarding it certifies a document Renovate never sees")
+	}
+}
+
+// A terminated block comment at the very end of the file is valid JSON5 and must
+// keep working — the guard above must reject the malformed case without
+// rejecting this one.
+func TestTerminatedTrailingBlockCommentStillResolves(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "renovate.json"), `{"extends":[":disableDependencyDashboard"]} /* fine */`)
+
+	got, err := resolveDashboard(root, "renovate.json")
+	if err != nil {
+		t.Fatalf("unexpected error on a well-formed trailing comment: %v", err)
+	}
+
+	if got != dashboardDisabled {
+		t.Errorf("state = %v, want disabled", got)
+	}
+}
+
+// Renovate's ignorePresets removes a preset from resolution, including the
+// opt-out this check relies on. Silently discarding the key turns a config that
+// really does inherit the dashboard into a green result.
+func TestIgnorePresetsIsAnError(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "renovate.json"),
+		`{"extends":["config:recommended",":disableDependencyDashboard"],"ignorePresets":[":disableDependencyDashboard"]}`)
+
+	if _, err := resolveDashboard(root, "renovate.json"); err == nil {
+		t.Fatal("want an error: ignorePresets can cancel the very opt-out this check reads," +
+			" so a config carrying it cannot be resolved by this reduced model")
+	}
+}
+
+// ...but ignorePresets only matters when presets decide the verdict. An explicit
+// dependencyDashboard key overrides every preset, so refusing those configs
+// would reject input this check can resolve perfectly well — the over-tightening
+// control for the guard above.
+func TestIgnorePresetsIsIrrelevantBesideAnExplicitKey(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want dashboardState
+	}{
+		{
+			name: "explicit false wins, so ignorePresets cannot change it",
+			body: `{"extends":["config:recommended"],"ignorePresets":[":disableDependencyDashboard"],"dependencyDashboard":false}`,
+			want: dashboardDisabled,
+		},
+		{
+			name: "explicit true is still drift, not an unresolvable config",
+			body: `{"extends":[":disableDependencyDashboard"],"ignorePresets":[":disableDependencyDashboard"],"dependencyDashboard":true}`,
+			want: dashboardEnabled,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "renovate.json"), tc.body)
+
+			got, err := resolveDashboard(root, "renovate.json")
+			if err != nil {
+				t.Fatalf("unexpected error — the explicit key settles this without any preset: %v", err)
+			}
+
+			if got != tc.want {
+				t.Errorf("state = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Renovate reads a "renovate" key in package.json as a config location. The file
+// comment promises this check fails closed on it; without that, such a config is
+// invisible and the repository reads as config-less.
+func TestPackageJSONRenovateKeyIsAnError(t *testing.T) {
+	root := newRoot(t, "platform")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/package.json"),
+		`{"name":"platform","renovate":{"extends":["config:recommended"]}}`)
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 — a package.json Renovate config must not read as no config\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "package.json") {
+		t.Errorf("expected the package.json config to be named, got:\n%s", out)
+	}
+}
+
+// The same key in an UNDECLARED repository is the case that matters most: it is
+// exactly "a repository grew a config nobody looked at", and treating it as
+// config-less is how it would stay unmonitored.
+func TestPackageJSONRenovateKeyInAnUndeclaredRepoIsAnError(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/package.json"),
+		`{"name":"ksail","renovate":{"extends":["config:recommended"]}}`)
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "not declared") {
+		t.Errorf("expected the undeclared config to be named, got:\n%s", out)
+	}
+}
+
+// A package.json with no "renovate" key is not a config location, and must not
+// be mistaken for one — most repositories in the portfolio have one.
+func TestPackageJSONWithoutARenovateKeyIsNotAConfig(t *testing.T) {
+	root := newRoot(t, "applications/ksail")
+	withDeclaredRoots(t, ".")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/package.json"), `{"name":"ksail","devDependencies":{}}`)
+
+	if code, out := runIn(t, root); code != 0 {
+		t.Fatalf("exit = %d, want 0 — an ordinary package.json is not a Renovate config\n%s", code, out)
+	}
+}
+
+// A package.json that cannot be parsed cannot be ruled out as a config location
+// either, so it fails closed like every other unreadable input.
+func TestUnparseablePackageJSONIsAnError(t *testing.T) {
+	root := newRoot(t, "applications/ksail")
+	withDeclaredRoots(t, ".")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/package.json"), `{"name": broken`)
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "package.json") {
+		t.Errorf("expected the unreadable package.json to be named, got:\n%s", out)
+	}
+}
+
+// "Not checked out" is only one reason os.Stat can fail. A root that IS present
+// but cannot be read — a permission error, an I/O error, a path whose parent is
+// not a directory — was never inspected either, but it is not the ordinary
+// absent state and must not be filed under it: for an undeclared root that would
+// turn a real failure into a pass.
+//
+// ENOTDIR is used rather than a chmod because it is deterministic and does not
+// depend on the test user (a root-owned CI runner ignores mode 000).
+func TestAnUnreadableUndeclaredRootIsAnErrorNotMerelyUninspected(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// "applications" is a FILE, so stating applications/ksail fails with ENOTDIR
+	// rather than "does not exist".
+	writeFile(t, filepath.Join(root, "applications"), "not a directory\n")
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 — an unreadable root was not inspected and must not pass\n%s", code, out)
+	}
+
+	if strings.Contains(out, "NOT inspected") && !strings.Contains(out, "::error::") {
+		t.Errorf("an unreadable root was reported as merely uninspected:\n%s", out)
+	}
+}
+
+// ...and the control: a genuinely ABSENT undeclared root is still the ordinary
+// case, reported as uninspected rather than escalated to a failure. Most of the
+// portfolio is in this state on every run, so escalating it would make the check
+// permanently red.
+func TestAnAbsentUndeclaredRootIsStillJustUninspected(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// applications/ksail simply absent.
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 — an absent submodule is the normal state\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "applications/ksail") {
+		t.Errorf("expected the absent root to be named as uninspected, got:\n%s", out)
+	}
+}
+
+// An UNINITIALISED submodule is an empty directory, not a missing one: git
+// materialises every gitlink when it checks out the tree. So os.Stat succeeds,
+// no config is found, and the root reads as "checked out and genuinely
+// config-less" — the exact opposite of the truth, and it silently empties the
+// uninspected list precisely where it matters most (CI initialises only the
+// declared roots).
+func TestAnEmptyUninitialisedSubmoduleIsUninspectedNotClean(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// The gitlink directory exists but nothing was checked out into it.
+	if err := os.MkdirAll(filepath.Join(root, "applications/ksail"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "applications/ksail") {
+		t.Errorf("an uninitialised submodule was counted as inspected-and-clean; it must be listed as uninspected:\n%s", out)
+	}
+}
+
+// ...and the control: a root that really IS checked out and really has no
+// config must NOT be reported as uninspected, or the warning becomes noise that
+// names most of the portfolio forever.
+func TestACheckedOutRootWithoutAConfigIsNotUninspected(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// A real checkout: content plus the .git pointer git writes for a submodule.
+	writeFile(t, filepath.Join(root, "applications/ksail/README.md"), "no renovate config here\n")
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s", code, out)
+	}
+
+	if strings.Contains(out, "applications/ksail") {
+		t.Errorf("a genuinely checked-out, config-less root was reported as uninspected:\n%s", out)
+	}
+}
+
+// The same fail-closed rule one level down, on the config FILES rather than the
+// root directory. A checked-out root whose config location cannot be stat'd was
+// not inspected either: reading "no config found" off an unreadable path lets an
+// undeclared repository that may well carry a dashboard config pass as clean.
+//
+// ENOTDIR again, for the same determinism reason as the root case: ".github" is
+// a file, so stating ".github/renovate.json" fails with ENOTDIR rather than
+// "does not exist".
+func TestAnUnreadableConfigLocationIsAnErrorNotAConfiglessRoot(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// A real checkout — so the uninitialised-submodule path cannot be what
+	// catches this — whose ".github" config location is unreadable.
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
+	writeFile(t, filepath.Join(root, "applications/ksail/.github"), "not a directory\n")
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 — a config location that could not be read must not read as no config\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "applications/ksail") {
+		t.Errorf("expected the root with the unreadable config location to be named, got:\n%s", out)
+	}
+}
+
+// ...and the control that keeps the rule above from swallowing the ordinary
+// case: a checked-out root whose config locations are genuinely ABSENT — an
+// existing .github directory with nothing in it, and no standalone config — is
+// still accepted as config-less. Without this, every config-less repository in
+// the portfolio would start erroring.
+func TestAbsentConfigLocationsAreStillAcceptedAsConfigless(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
+	// .github exists and is a directory, but holds no Renovate config.
+	writeFile(t, filepath.Join(root, "applications/ksail/.github/workflows/ci.yaml"), "on: push\n")
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 — absent config locations are the ordinary case\n%s", code, out)
+	}
+
+	if strings.Contains(out, "::error::") {
+		t.Errorf("a genuinely config-less root was escalated to an error:\n%s", out)
+	}
+}
+
+// A DIRECTORY sitting where a config file belongs is the third stat outcome, and
+// it is neither "present" nor "absent": Renovate cannot read it, and neither can
+// this check. Silently skipping it would classify the root as config-less on the
+// strength of a path it demonstrably failed to resolve — the same fail-open the
+// root-level `!info.IsDir()` guard already refuses.
+func TestADirectoryAtAConfigLocationIsAnError(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
+	if err := os.MkdirAll(filepath.Join(root, "applications/ksail/renovate.json"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	code, out := runIn(t, root)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 — a directory at a config path is not an absent config\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "renovate.json") {
+		t.Errorf("expected the unresolvable config location to be named, got:\n%s", out)
+	}
+}
+
+// A standalone config whose top-level value is the JSON token `null` unmarshals
+// into the struct without error and leaves every field zero, so it resolves to
+// "disabled" while carrying no Renovate configuration at all.
+func TestANullTopLevelConfigIsAnError(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "renovate.json"), `null`)
+
+	if _, err := resolveDashboard(root, "renovate.json"); err == nil {
+		t.Fatal("want an error: `null` is valid JSON but not a Renovate config object," +
+			" and unmarshalling it succeeds with every field left at its zero value")
+	}
+}
+
+// A block comment is token-separating whitespace in JSON5. Deleting it without
+// leaving a separator welds the tokens either side together, so a document
+// Renovate rejects can be repaired into one that parses — and certified.
+func TestABlockCommentSeparatesTokens(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "renovate.json"), `{"dependencyDashboard": f/**/alse}`)
+
+	if _, err := resolveDashboard(root, "renovate.json"); err == nil {
+		t.Fatal("want an error: `f/**/alse` is not the keyword false to any JSON5 parser," +
+			" so resolving it means certifying a document Renovate cannot read")
+	}
+}
+
+// ...and the control: a block comment in a position where it legitimately
+// separates tokens must still be removed and the document still resolve.
+func TestABlockCommentBetweenTokensStillResolves(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "renovate.json"), `{"dependencyDashboard"/**/: /**/false}`)
+
+	got, err := resolveDashboard(root, "renovate.json")
+	if err != nil {
+		t.Fatalf("unexpected error on a well-placed block comment: %v", err)
+	}
+
+	if got != dashboardDisabled {
+		t.Errorf("state = %v, want disabled", got)
+	}
+}
+
+// --- saying what the green result actually covers --------------------------
+
+// Most mapped repositories are not checked out when this runs, and an
+// uninspected repository is not the same as one verified to have no config. A
+// pass must say which is which, or it reads as portfolio-wide coverage it does
+// not have.
+func TestSuccessOutputNamesTheRepositoriesItCouldNotInspect(t *testing.T) {
+	root := newRoot(t, "platform", "applications/ksail", "applications/wedding-app")
+	withDeclaredRoots(t, ".", "platform")
+
+	writeFile(t, filepath.Join(root, ".github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	writeFile(t, filepath.Join(root, "platform/.github/renovate.json"), `{"extends":[":disableDependencyDashboard"]}`)
+	// ksail is genuinely checked out and clean — content AND the .git pointer
+	// git writes into a real submodule checkout, without which it is
+	// indistinguishable from an uninitialised gitlink. wedding-app is absent,
+	// like a submodule CI cannot clone.
+	writeFile(t, filepath.Join(root, "applications/ksail/README.md"), "no renovate config here\n")
+	writeFile(t, filepath.Join(root, "applications/ksail/.git"), "gitdir: ../../.git/modules/applications/ksail\n")
+
+	code, out := runIn(t, root)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s", code, out)
+	}
+
+	if !strings.Contains(out, "applications/wedding-app") {
+		t.Errorf("expected the uninspected repository to be named, got:\n%s", out)
+	}
+
+	if strings.Contains(out, "applications/ksail") {
+		t.Errorf("applications/ksail WAS inspected and has no config; it must not be reported as uninspected:\n%s", out)
+	}
+}
