@@ -169,19 +169,25 @@ entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
   fail "desired state entrypoint '${entrypoint}' does not resolve to a bundled agent in ${plugin_agents}"
 canonical_engineer="${plugin_agents}/${entrypoint}.agent.md"
 canonical_surveyor="${plugin_agents}/portfolio-surveyor.agent.md"
+canonical_improver="${plugin_agents}/agent-improver.agent.md"
 [ -f "${canonical_surveyor}" ] ||
   fail "pinned plugin does not bundle portfolio-surveyor.agent.md"
+[ -f "${canonical_improver}" ] ||
+  fail "pinned plugin does not bundle agent-improver.agent.md"
 
-# The consumer copy used to omit both integrity fields while the pinned plugin resource already
-# carried them. That let the gitlink advance without proving that the machine-readable entrypoint
-# and delegated surveyor still named the reviewed bytes. Resolve both digests from the pinned files,
-# not from a floating default branch or a copied constant.
+# The consumer copy used to omit role integrity fields while the pinned plugin resource already
+# carried them. That let the gitlink advance without proving that the machine-readable entrypoint,
+# delegated surveyor, and Improver still named the reviewed bytes. Resolve all digests from the
+# pinned files, not from a floating default branch or a copied constant.
 consumer_entrypoint_sha="$(jq -r '.spec.source.entrypointSha256 // ""' "${desired_state}")"
 consumer_surveyor_sha="$(jq -r '.spec.roles["portfolio-surveyor"].definitionSha256 // ""' "${desired_state}")"
+consumer_improver_sha="$(jq -r '.spec.roles["agent-improver"].definitionSha256 // ""' "${desired_state}")"
 [ "${consumer_entrypoint_sha}" = "$(sha256_file "${canonical_engineer}")" ] ||
   fail "consumer desired-state entrypointSha256 does not match the pinned agentic-engineer definition"
 [ "${consumer_surveyor_sha}" = "$(sha256_file "${canonical_surveyor}")" ] ||
   fail "consumer desired-state portfolio-surveyor definitionSha256 does not match the pinned definition"
+[ "${consumer_improver_sha}" = "$(sha256_file "${canonical_improver}")" ] ||
+  fail "consumer desired-state agent-improver definitionSha256 does not match the pinned definition"
 
 canonical_engineer_flat="$(flatten "${canonical_engineer}")"
 assert_canonical_engineer_prose() {
