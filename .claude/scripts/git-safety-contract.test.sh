@@ -87,6 +87,9 @@ assert_section 'git -C <wt> checkout --no-overwrite-ignore --recurse-submodules 
 #     Fixture-verified: empty status, then a successful checkout that carried a foreign edit onto the
 #     target. \`worktree-cleanup.sh\` already makes this check, so the contract asking for less than
 #     its own tooling does would be an inconsistency as well as a hole.
+assert_section 'ls-files -v' \
+  "the Git safety section no longer requires the \`ls-files -v\` index-flag check — a file marked assume-unchanged or skip-worktree is invisible to \`status --porcelain\`, so the cleanliness pre-check passes while another writer's edit rides onto the target commit"
+
 # 2d. THE PER-SUBMODULE PRE-CHECK. \`--recurse-submodules\` mutates each populated submodule's working
 #     tree, which neither top-level check inspects, and \`--no-overwrite-ignore\` is NOT propagated to
 #     the recursive checkout. Fixture-verified: both top-level checks clean, and the prescribed
@@ -95,9 +98,6 @@ assert_section 'git -C <wt> checkout --no-overwrite-ignore --recurse-submodules 
 #     wider the pre-check must be, and it is easy to widen one without the other.
 assert_section 'submodule foreach' \
   "the Git safety section no longer requires the cleanliness checks to be run inside each populated submodule — \`--recurse-submodules\` writes to submodule working trees that the top-level \`status\`/\`ls-files\` checks never inspect, so the run would authorise a checkout that destroys another writer's work there"
-
-assert_section 'ls-files -v' \
-  "the Git safety section no longer requires the \`ls-files -v\` index-flag check — a file marked assume-unchanged or skip-worktree is invisible to \`status --porcelain\`, so the cleanliness pre-check passes while another writer's edit rides onto the target commit"
 
 # 2b. THE PR-HEAD ASSOCIATION. \`<sha>\` is deliberately the general placeholder — it is this
 #     contract's convention (27 backticked commands use it, against 1 for \`<headRefOid>\`), and the
