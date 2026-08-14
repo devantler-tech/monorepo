@@ -39,30 +39,24 @@ fail() {
 # Extract ONLY the Git safety section, then flatten it. Flattening matters because every sentence
 # below wraps across source lines, so a fragment spanning a line break would never match and the
 # test would be always-red regardless of the contract's content.
-section="$(
+if ! section="$(
   awk '
     /^### Git safety$/                              { ins = 1; next }
-    ins && /^\*\*Worktree hygiene is SCHEDULED/     { ins = 0 }
+    ins && /^\*\*Worktree hygiene is SCHEDULED/     { found_end = 1; exit }
     ins                                              { print }
+    END                                              { if (!found_end) exit 42 }
   ' "${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' '
-)"
+)"; then
+  fail "could not find the 'Worktree hygiene is SCHEDULED' end anchor after '### Git safety' — refusing an unscoped whole-file assertion"
+fi
 
 [ -n "${section}" ] ||
   fail "could not locate the '### Git safety' section — the extraction anchor moved, so every assertion below would be vacuous"
 
-# Guard the extraction itself. If the terminating anchor is renamed or removed, awk runs to
-# end-of-file and \`section\` becomes the whole rest of the contract — which silently restores the
-# scope hole described above while every assertion still passes.
-#
-# The bound separates two states that are far apart, and it is deliberately NOT set just above the
-# current size: the section measures several hundred words (1,132 at the time of writing), while a
-# runaway extraction (end anchor gone, awk running to EOF) measured 9,968 — both figures observed
-# rather than estimated, which is what justifies the gap. A snug bound would fail every
-# legitimate edit to this section while reporting a missing anchor — a false message that sends the
-# next reader hunting for a heading that is right there.
+# Report the scoped size for diagnostics only. End-anchor detection above, not a content-size proxy,
+# is the guard against runaway extraction; legitimate additions therefore cannot trip a false
+# "missing anchor" failure.
 section_words="$(printf '%s' "${section}" | wc -w | tr -d ' ')"
-[ "${section_words}" -lt 1500 ] ||
-  fail "Git safety section extracted as ${section_words} words, which is runaway-extraction size — the 'Worktree hygiene is SCHEDULED' end anchor was probably renamed or removed, so these assertions would no longer be scoped to this section"
 
 assert_section() {
   case "${section}" in
@@ -73,23 +67,21 @@ assert_section() {
 
 # 1. THE BAN SURVIVES. This is the half that keeps the file from becoming a loosening: without it,
 #    an edit that drops the prohibition and keeps only the alternative passes green.
-# shellcheck disable=SC2016 # Literal Markdown code span, not shell expansion.
-assert_section 'Never `git reset --hard`' \
+assert_section "Never \`git reset --hard\`" \
   "the Git safety section no longer bans \`git reset --hard\` — naming a safer alternative must never come at the cost of dropping the prohibition itself"
 
 # 2. THE ALTERNATIVE IS NAMED, with the flag that makes it safe. \`checkout\` alone is not the
 #    prescription: it is \`--detach\` onto an explicit commit that reproduces the banned form's
 #    outcome, and a bare branch checkout would not.
-assert_section 'git -C <wt> checkout --no-overwrite-ignore --detach <sha>' \
-  "the Git safety section does not name \`git -C <wt> checkout --no-overwrite-ignore --detach <sha>\` as the permitted way to put a worktree on a specific commit, so the ban again has no stated alternative and the instruction migrates to unreviewed memory"
+assert_section 'git --no-replace-objects -C <wt> checkout --no-overwrite-ignore --detach <sha>' \
+  "the Git safety section does not name \`git --no-replace-objects -C <wt> checkout --no-overwrite-ignore --detach <sha>\` as the permitted way to put a worktree on a specific commit, so replacement refs can substitute a different tree for the reviewed commit"
 
 # 2c. THE INDEX-HIDDEN-EDIT CHECK. \`status --porcelain\` omits any tracked file carrying
 #     \`assume-unchanged\` or \`skip-worktree\`, so an empty status is NOT proof the tree is clean.
 #     Fixture-verified: empty status, then a successful checkout that carried a foreign edit onto the
 #     target. \`worktree-cleanup.sh\` already makes this check, so the contract asking for less than
 #     its own tooling does would be an inconsistency as well as a hole.
-# shellcheck disable=SC2016 # Literal Markdown code span, not shell expansion.
-assert_section 'Run `git -C <wt> status --porcelain` as its own call; require exit 0 and empty output' \
+assert_section "Run \`git -C <wt> status --porcelain\` as its own call; require exit 0 and empty output" \
   "the Git safety section no longer requires a successful, empty \`status --porcelain\` probe — a failed status command must not be accepted as a clean worktree"
 assert_section "Run \`(set -o pipefail; git -C <wt> ls-files -v | awk '\$1 ~ /^[a-z]\$/ || \$1 == \"S\"')\`; require the whole command to exit 0 and print nothing" \
   "the Git safety section no longer binds the complete \`ls-files -v\` index-flag command to both a successful pipeline and empty output — a failed Git probe must not be accepted as a clean index"
@@ -98,8 +90,7 @@ assert_section "Run \`(set -o pipefail; git -C <wt> ls-files -v | awk '\$1 ~ /^[
 #     PR the run is NOT on the reviewed code — fixture-verified, with nothing but a bare " M <sub>" to
 #     show for it. In a monorepo largely made of submodule bumps that is the common case, and the
 #     failure is silent, so the contract must at minimum require DETECTING it before evaluation.
-# shellcheck disable=SC2016 # Literal Markdown code span, not shell expansion.
-assert_section 'Run `git -C <wt> submodule status --recursive` and require it to exit 0 and every output line to begin with a space' \
+assert_section "Run \`git -C <wt> submodule status --recursive\` and require it to exit 0 and every output line to begin with a space" \
   "the Git safety section no longer requires a successful recursive submodule-status probe whose every line carries Git's clean leading-space marker — a stale, absent, nested, or unmerged submodule could be evaluated as reviewed code"
 
 # 2e. AND THE WARNING AGAINST THE OBVIOUS "FIX". `--recurse-submodules` is the natural thing to reach
@@ -108,6 +99,8 @@ assert_section 'Run `git -C <wt> submodule status --recursive` and require it to
 #     gitlink absent locally, silently skips a submodule the target introduces, and does not propagate
 #     its ignored-file protection. Without this assertion a later editor closes 2d's gap by adding the
 #     flag — reintroducing every one of those, with a rule that looks more complete than before.
+assert_section "Do NOT reach for \`--recurse-submodules\`" \
+  "the Git safety section no longer prohibits recursive checkout — the obvious workaround can corrupt linked-worktree submodule gitdirs, partially switch the tree, and overwrite ignored submodule work"
 assert_section '[#2833](https://github.com/devantler-tech/monorepo/issues/2833)' \
   "the Git safety section no longer points at the follow-up issue for safe submodule detaching — without it the stated hazard reads as unsolved-and-unowned, and the next editor is likely to 'fix' it with \`--recurse-submodules\`, which is measurably unsafe in this repo's linked-worktree flow"
 
@@ -141,5 +134,14 @@ assert_section 'git -C <wt> status --porcelain' \
 #     aborts, reasonably concludes it is redundant, and removes it.
 assert_section 'partial backstop' \
   "the Git safety section no longer explains that the abort is only a partial backstop — a reader who believes \`checkout --detach\` always refuses a dirty worktree will read the cleanliness precondition as redundant and drop it"
+
+# 5. POST-SWITCH RESIDUE. A target that removes an initialized submodule can leave its directory
+#    behind while `submodule status --recursive` emits nothing. Re-run tracked cleanliness and use a
+#    read-only `clean -ndx` dry-run so stale untracked or ignored repositories cannot be evaluated as
+#    part of a commit that removed them.
+assert_section "After detaching, repeat \`git -C <wt> status --porcelain\`" \
+  "the Git safety section no longer repeats the tracked-worktree cleanliness check after detaching — checkout can leave residue that did not exist at the pre-check"
+assert_section "Run \`git -C <wt> clean -ndx\` as its own read-only call; require exit 0 and empty output" \
+  "the Git safety section no longer rejects stale untracked or ignored residue after detaching — a removed initialized submodule can survive outside the reviewed tree while submodule status passes vacuously"
 
 echo "git safety contract: OK (${section_words} words scoped)"

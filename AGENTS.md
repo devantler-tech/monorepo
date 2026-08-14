@@ -3058,10 +3058,12 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
 **The permitted way to put a worktree on a specific commit is
-`git -C <wt> checkout --no-overwrite-ignore --detach <sha>`, issued as its OWN call after the
-`fetch`.** The flag is not decoration — without it the command silently overwrites ignored files (see
-below, fixture-verified). This covers the **superproject**; submodules need more than a flag and are
-handled separately below.
+`git --no-replace-objects -C <wt> checkout --no-overwrite-ignore --detach <sha>`, issued as its OWN
+call after the `fetch`.** Both global protections are load-bearing: `--no-overwrite-ignore` stops the
+command from silently overwriting ignored files, while `--no-replace-objects` prevents a shared
+`refs/replace` entry from making the requested SHA materialize a different commit tree even though
+`HEAD` still prints the expected value (both fixture-verified). This covers the **superproject**;
+submodules need more than a flag and are handled separately below.
 When that commit is a PR's head, `<sha>` is its
 **`headRefOid`** — the same value *Merge policy* pins the merge to, so the worktree you evaluate and
 the commit you merge are provably the same one. A ban that never names the alternative is exactly the
@@ -3091,6 +3093,15 @@ edit straight onto the target commit. Run
 command to exit 0 and print nothing (a lowercase flag or `S` marks exactly those bits).
 [`worktree-cleanup.sh`](.claude/scripts/worktree-cleanup.sh) already makes this check for the same
 reason — treat an empty `status` as authorization to detach only once this one is clear too.
+🔴 **CHECK AGAIN AFTER DETACHING — the target can leave residue that did not exist in its tree.**
+After detaching, repeat `git -C <wt> status --porcelain`; require exit 0 and empty output. Run
+`git -C <wt> clean -ndx` as its own read-only call; require exit 0 and empty output. The latter is a
+dry run, never permission to clean: any line, including a skipped nested repository, means untracked
+or ignored material remains and evaluation stops. This specifically closes the removed-submodule
+case: non-recursive checkout can warn that it could not remove an initialized submodule directory,
+leave that old code behind, and then make `submodule status --recursive` pass vacuously because the
+target commit no longer declares the gitlink. Builds must not consume code absent from the reviewed
+tree.
 🔴 **`--detach` moves the SUPERPROJECT ONLY, so after detaching you are NOT necessarily on the PR's
 code — DETECT that before evaluating anything.** Fixture-verified: on a PR that changes a gitlink, HEAD
 lands on the target while the submodule still holds its **previous** content, and `status` shows
