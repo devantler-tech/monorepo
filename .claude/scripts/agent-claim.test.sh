@@ -239,6 +239,125 @@ rc_bad=0
 check "usage: non-integer issue exits 2" "2" "$rc_bad"
 
 # ---------------------------------------------------------------------------
+# Trap 5 — a delete must be a COMPARE-and-delete.
+#
+# Between observing a tip and deleting it, a rival can retire and reacquire the
+# claim. An unconditional delete erases that fresh holder, so both lanes come
+# away believing they hold it — the exact double-win the ref exists to prevent.
+# ---------------------------------------------------------------------------
+ISSUE5=5005
+claim5="refs/heads/agent-claim/${ISSUE5}"
+
+sha_a5="$("$tool" acquire "$ISSUE5" --repo-dir "$clone_a" --remote origin 2>/dev/null | tail -1)"
+check "trap5: first acquire wins" "$sha_a5" "$(git -C "$clone_a" ls-remote origin "$claim5" | awk '{print $1}')"
+
+# The rival retires and immediately reacquires — a legitimate, fresh claim.
+"$tool" retire "$ISSUE5" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
+sha_b5="$("$tool" acquire "$ISSUE5" --repo-dir "$clone_b" --remote origin 2>/dev/null | tail -1)"
+check "trap5: rival reacquires after retire" "$sha_b5" "$(git -C "$clone_b" ls-remote origin "$claim5" | awk '{print $1}')"
+
+# Now a takeover that observed the ORIGINAL tip tries to delete. Its expectation
+# is stale, so it must fail closed and leave the rival's claim standing.
+git -C "$clone_a" fetch --quiet origin 2>/dev/null || true
+rc_cas=0
+git -C "$clone_a" push --quiet --force-with-lease="agent-claim/${ISSUE5}:${sha_a5}" \
+  origin ":agent-claim/${ISSUE5}" >/dev/null 2>&1 || rc_cas=$?
+if (( rc_cas != 0 )); then
+  pass "trap5: compare-and-delete against a stale tip is refused"
+else
+  fail "trap5: compare-and-delete against a stale tip is refused (it succeeded)"
+fi
+check "trap5: rival's claim survives the stale delete" "$sha_b5" \
+  "$(git -C "$clone_b" ls-remote origin "$claim5" | awk '{print $1}')"
+
+# The holder's own retire observes the current tip, so it still succeeds.
+rc_r5=0
+"$tool" retire "$ISSUE5" --repo-dir "$clone_b" --remote origin >/dev/null 2>&1 || rc_r5=$?
+check "trap5: the real holder can still retire" "0" "$rc_r5"
+check "trap5: claim is gone after the holder's retire" "" \
+  "$(git -C "$clone_b" ls-remote origin "$claim5" | awk '{print $1}')"
+
+# ---------------------------------------------------------------------------
+# Trap 5b — the same guard, exercised THROUGH THE TOOL.
+#
+# Trap 5 above proves git's compare-and-delete primitive; it does not prove the
+# helper uses it. A `git` shim races a rival tip into place at the exact moment
+# the helper issues its delete, which is the interleaving the fix defends and
+# the one no fixture can produce by ordering alone.
+# ---------------------------------------------------------------------------
+ISSUE5B=5015
+claim5b="refs/heads/agent-claim/${ISSUE5B}"
+real_git="$(command -v git)"
+
+sha_a5b="$("$tool" acquire "$ISSUE5B" --repo-dir "$clone_a" --remote origin 2>/dev/null | tail -1)"
+rival5b="$(git -C "$clone_b" commit-tree "HEAD^{tree}" -p HEAD -m "chore: rival reacquire ${ISSUE5B}")"
+
+shim_dir="$tmp/shim"
+mkdir -p "$shim_dir"
+cat > "$shim_dir/git" <<SHIM
+#!/usr/bin/env bash
+# Delegates to real git, but the first time it sees the claim delete it lets a
+# rival replace the tip first — simulating a retire+reacquire landing inside the
+# helper's observe→delete window.
+raced=0
+for a in "\$@"; do
+  case "\$a" in ":agent-claim/${ISSUE5B}"|":${claim5b}") raced=1 ;; esac
+done
+if [[ "\$raced" -eq 1 && ! -f "$tmp/shim.fired" ]]; then
+  : > "$tmp/shim.fired"
+  "$real_git" -C "$clone_b" push --quiet --force origin "${rival5b}:${claim5b}" >/dev/null 2>&1
+fi
+exec "$real_git" "\$@"
+SHIM
+chmod +x "$shim_dir/git"
+
+rc_race=0
+PATH="$shim_dir:$PATH" "$tool" retire "$ISSUE5B" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || rc_race=$?
+if [[ -f "$tmp/shim.fired" ]]; then
+  pass "trap5b: fixture — the race actually fired inside the helper"
+else
+  fail "trap5b: fixture — the race never fired (shim did not intercept the delete)"
+fi
+if (( rc_race != 0 )); then
+  pass "trap5b: helper's delete fails closed when the tip moved under it"
+else
+  fail "trap5b: helper's delete fails closed when the tip moved under it (it succeeded)"
+fi
+check "trap5b: the rival's fresh claim survives" "$rival5b" \
+  "$(git -C "$clone_b" ls-remote origin "$claim5b" | awk '{print $1}')"
+git -C "$clone_b" push --quiet --delete origin "$claim5b" >/dev/null 2>&1 || true
+unset sha_a5b
+
+# ---------------------------------------------------------------------------
+# Trap 6 — the claim parent must be a LOCAL object.
+#
+# The remote default advances independently of this checkout (routine for a
+# pinned submodule). Naming a SHA this clone has never fetched makes
+# `commit-tree -p` exit 128 with `not a valid object`, so acquisition becomes
+# impossible exactly when the remote is busiest.
+# ---------------------------------------------------------------------------
+ISSUE6=6006
+# clone_b pushes a commit clone_a has never seen.
+echo "remote-only change" >> "$clone_b/README"
+git -C "$clone_b" add README
+git -C "$clone_b" commit --quiet -m "chore: remote-only advance"
+git -C "$clone_b" push --quiet origin HEAD:main
+
+remote_head="$(git -C "$clone_a" ls-remote origin HEAD | awk '{print $1; exit}')"
+if git -C "$clone_a" cat-file -e "${remote_head}^{commit}" 2>/dev/null; then
+  fail "trap6: fixture invalid — clone_a already has the remote-only commit"
+else
+  pass "trap6: fixture — remote tip is absent locally"
+fi
+
+rc_acq6=0
+sha_a6="$("$tool" acquire "$ISSUE6" --repo-dir "$clone_a" --remote origin 2>/dev/null | tail -1)" || rc_acq6=$?
+check "trap6: acquire succeeds against an unfetched remote tip" "0" "$rc_acq6"
+check "trap6: the claim tip is ours" "$sha_a6" \
+  "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE6}" | awk '{print $1}')"
+"$tool" retire "$ISSUE6" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
 if (( failures > 0 )); then
   printf '\n%d failure(s)\n' "$failures" >&2
   exit 1

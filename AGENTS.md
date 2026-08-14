@@ -427,6 +427,34 @@ in its shared provider lane, and it must treat work left by another role in that
 in-flight work rather than opening a duplicate. This explicit sharing is the consumer's resolution of
 the plugin's `branchNamespacePolicy`; enabling a role does not invent an unrecorded fourth lane.
 
+**`agent-claim/<issue>` is a COORDINATION ref, not a fourth writer lane — recorded here so the
+mandatory claim push is authorized rather than improvised.** *Claim protocol* requires every instance
+to acquire that shared ref **before** its lane work branch, and cross-lane arbitration only works
+because all three derive the *same* ref from the issue number. A writer lane, by contrast, exists to
+be owned by exactly one instance. Those are opposite properties, so the ref is recorded as its own
+kind rather than as a row in the table above:
+
+| Property | Writer lane (`claude/*`, `codex/*`, `cursor/*`) | Coordination ref (`agent-claim/*`) |
+|---|---|---|
+| Owner | exactly one provider instance | **none** — every instance writes it by design |
+| Carries | the work: commits, diffs, a PR head | **one empty nonced commit**; never code, never a PR |
+| Lifetime | until its PR is merged or closed | retired the moment the draft PR opens (*Claim protocol* rule 3) |
+| Reaped by | `branch-cleanup.sh`, per namespace | nothing — which is why retirement is mandatory, not hygiene |
+
+So writing `agent-claim/*` is **not** inventing an unrecorded lane and never widens what an instance
+may put on a work branch: the only permitted content is the helper's empty claim commit, and every
+mutation goes through [`agent-claim.sh`](.claude/scripts/agent-claim.sh) so acquire, verify, takeover
+and retire keep their compare-and-swap guards. Never push code to it, never open a PR from it, and
+never force-push a live tip.
+
+⚠️ **The Cursor cloud lane's ability to push this ref is UNVERIFIED.** `app/cursor`'s measured
+permissions are narrow (it gets 403 on comments, review requests and PR-state mutations), and nothing
+has established that it can create `agent-claim/*`. Until that is measured, the cloud lane's claim
+signal remains the three pre-existing ones — open PRs, remote `cursor/*` work branches, and issue
+assignees it cannot write — so a local run **still checks `cursor/*` branches by hand** when
+selecting. Treat a failed claim push from that lane as a capability gap to measure and record, never
+as a lost race.
+
 Agent Improver schedules for Cursor remain undeployed and read-only until this table,
 the reviewed Cursor loader, cadence, memory, and runtime permission boundary all record their writer
 mapping. A generic plugin schedule entry is not deployment authority by itself.
@@ -714,7 +742,8 @@ the four proven traps lives in `agent-claim.test.sh`).
    the oldest actionable issue behind an unrelated PR.
 2. **Claim before you build, not after — lane-neutral ref FIRST.** The moment you select an issue:
    (a) **acquire `agent-claim/<issue>`** with the helper
-   (`.claude/scripts/agent-claim.sh acquire <issue>`) — this is the cross-lane race; a LOST exit means
+   (`.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <product-path>`) — this is the
+   cross-lane race; a LOST exit means
    stand down under rule 5; (b) self-assign it when your identity can
    (**if `devantler` is already assigned, remove and re-add**, because the add is a no-op for an
    existing assignee and would leave your lease carrying the *old* timestamp); and (c) push the
@@ -726,6 +755,17 @@ the four proven traps lives in `agent-claim.test.sh`).
    branch and no PR is **not** a claim. Before a PR exists there is no body to grep, so a bare
    `<lane>/<area>-<desc>` leaves a rival only the normalised-stem match that #96 proved fragile; the
    number is the one token that cannot be spelled two ways.
+   🔴 **`--repo-dir` is REQUIRED whenever the issue belongs to a submodule, and issue numbers are
+   repository-scoped — so omitting it claims the WRONG issue rather than failing.** The run stands in
+   the monorepo checkout when it selects, so a bare invocation pushes `agent-claim/<issue>` to the
+   monorepo's `origin`, locking whatever monorepo issue happens to carry that number while the product
+   issue you actually selected stays unclaimed and open to a rival. Point every call in the sequence —
+   `acquire`, `verify`, `is-stale`, `retire` — at the **same** product path (`applications/ksail`,
+   `platform`, …), and **populate that submodule first** with
+   [`submodule-init.sh`](.claude/scripts/submodule-init.sh): an uninitialised path has no repository
+   to push to, and `git -C` against one silently resolves to the **parent**, which is the same wrong
+   claim by another route. Invoke the **root** helper with `--repo-dir` rather than changing into the
+   product, since the relative script path does not resolve from there.
 3. **Claims expire; retire on PR open; stale takeover is evidence-gated.** A claim carrying no open
    PR after **~2 hours** is stale and may be taken over, so a crashed or abandoned session never
    parks an issue permanently.

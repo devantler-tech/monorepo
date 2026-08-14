@@ -192,8 +192,12 @@ cmd_retire() {
     echo "agent-claim: nothing to retire — ${branch} absent"
     exit 0
   fi
-  # Delete the ref. If it is already gone, treat as success (idempotent).
-  if ! git_c push --quiet "$REMOTE" ":${branch}" 2>/tmp/agent-claim-retire-$$.err; then
+  # Compare-and-delete against the tip we just observed. A plain delete would
+  # also remove a tip that a rival retired and REACQUIRED in between, so both
+  # lanes would come away believing they hold the claim. Pinning the expected
+  # value makes the delete fail closed on any change.
+  if ! git_c push --quiet --force-with-lease="refs/heads/${branch}:${tip}" \
+       "$REMOTE" ":${branch}" 2>/tmp/agent-claim-retire-$$.err; then
     local err
     err="$(cat /tmp/agent-claim-retire-$$.err 2>/dev/null || true)"
     rm -f /tmp/agent-claim-retire-$$.err
@@ -224,9 +228,14 @@ cmd_acquire() {
       fi
       echo "agent-claim: taking over stale claim ${branch} (tip $existing)"
       # Delete the stale tip first so the subsequent non-force push can land.
-      # Never --force onto a live tip — only delete after is-stale.
-      git_c push --quiet "$REMOTE" ":${branch}" \
-        || fail "could not delete stale ${branch} before takeover"
+      # Never --force onto a live tip — only delete after is-stale. The delete
+      # is pinned to the tip the staleness check actually observed: a rival can
+      # retire and reacquire between that check and here, and an unconditional
+      # delete would erase that fresh holder, leaving both lanes believing they
+      # won. A changed tip fails closed and the takeover is abandoned.
+      git_c push --quiet --force-with-lease="refs/heads/${branch}:${existing}" \
+        "$REMOTE" ":${branch}" \
+        || fail "could not delete stale ${branch} before takeover (tip moved since the staleness check — another lane reacquired it; stand down)"
     else
       echo "agent-claim: LOST — ${branch} already held at $existing (pass --takeover after confirming no open PR + lease expiry)" >&2
       exit 1
@@ -238,8 +247,18 @@ cmd_acquire() {
   # Anchor on the remote default branch tip when available so two acquirers
   # share a parent (the condition that makes trap 3 reproducible). Fall back
   # to HEAD when offline / no remote default.
-  parent="$(git_c ls-remote "$REMOTE" HEAD 2>/dev/null | awk '{print $1; exit}')"
-  if [[ -z "$parent" ]]; then
+  #
+  # FETCH it rather than reading `ls-remote`: the remote default advances
+  # independently of this checkout — routinely so for a pinned submodule — and
+  # `commit-tree -p` needs the object locally. Naming a SHA this clone has never
+  # seen exits 128 (`not a valid object`), which would make claim acquisition
+  # impossible exactly when the remote is busiest. Fetching guarantees the object
+  # is present while keeping the shared-parent property.
+  parent=""
+  if git_c fetch --quiet "$REMOTE" HEAD 2>/dev/null; then
+    parent="$(git_c rev-parse FETCH_HEAD 2>/dev/null || true)"
+  fi
+  if [[ -z "$parent" ]] || ! git_c cat-file -e "${parent}^{commit}" 2>/dev/null; then
     parent="$(git_c rev-parse HEAD)"
   fi
 

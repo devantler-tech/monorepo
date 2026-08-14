@@ -633,14 +633,20 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    **human collaborator** (or `Copilot`) is someone else's work-in-progress — respect it and pick a
    different issue, never take it over on this window. **Claim
    before you build — lane-neutral tip FIRST:** acquire `agent-claim/<issue>` via
-   `.claude/scripts/agent-claim.sh acquire <issue>` (cross-lane race; LOST → stand down), then
+   `.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <product-path>` (cross-lane race;
+   LOST → stand down) — **`--repo-dir` is required for a submodule's issue**: numbers are
+   repository-scoped, so a bare call from the monorepo checkout locks the same-numbered *monorepo*
+   issue and leaves the one you selected unclaimed. Populate the submodule first
+   (`submodule-init.sh`), and call the **root** helper with `--repo-dir` rather than `cd`-ing into
+   the product (the relative script path does not resolve from there). Then
    self-assign when your identity can (and if `devantler` is ALREADY assigned, **remove then
    re-add**, since adding an existing assignee is a no-op that would leave your lease carrying the
    old timestamp), then push the lane work branch **with the issue number in its name**. **The
    shared tip decides the race:** the helper writes a nonced commit, pushes without force, and
    verifies `git ls-remote` shows YOUR sha — never judge by the push's exit status or through a
    pipe (`push | tail` reports `tail`'s 0 on a rejection). Retire the tip when the draft PR opens
-   (`agent-claim.sh retire <issue>`); a tip with no open PR past the ~2h lease may be taken over
+   (`agent-claim.sh retire <issue> --repo-dir <product-path>` — same repository as the acquire);
+   a tip with no open PR past the ~2h lease may be taken over
    with `--takeover` only after confirming no open `#<issue>` PR. Check open PRs, remote
    `agent-claim/<issue>` tips, lane work branches (`claude/*`/`codex/*`/`cursor/*`) AND assignees by
    **issue number, never literal branch name**. A live claim (shared tip in-window, or assigned +
