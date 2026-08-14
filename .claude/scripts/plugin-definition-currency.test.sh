@@ -179,12 +179,12 @@ for case_name in depth space; do
   printf 'reviewed engineer definition\n' > "${op}/agents/agentic-engineer.agent.md"
   printf 'reviewed alpha procedure\n'      > "${op}/skills/alpha/SKILL.md"
   if [ "${case_name}" = depth ]; then
-    mkdir -p "${op}/skills/group/nested"
-    printf 'a definition at an unexpected depth\n' > "${op}/skills/group/nested/SKILL.md"
+    odd_path="skills/group/nested/SKILL.md"
   else
-    mkdir -p "${op}/skills/my skill"
-    printf 'a definition whose path contains a space\n' > "${op}/skills/my skill/SKILL.md"
+    odd_path="skills/my skill/SKILL.md"
   fi
+  mkdir -p "${op}/$(dirname "${odd_path}")"
+  printf 'a definition the old shape filter would have dropped\n' > "${op}/${odd_path}"
   git -C "${odd_repo}" init -q
   git -C "${odd_repo}" config user.email t@example.invalid
   git -C "${odd_repo}" config user.name t
@@ -203,26 +203,15 @@ for case_name in depth space; do
   out="$("${script}" --repo-root "${tmp}/odd-${case_name}" --gitlink "${odd_link}" \
                      --installed "${odd_install}" 2>&1)"; rc=$?
   set -e
-  # The load-bearing property both cases share: NEVER exit 0. What each becomes afterwards differs,
-  # and the difference is the point — the two fixes are not the same fix.
+  # The load-bearing property: NEVER exit 0. Comparing every file under agents/ and skills/ means
+  # both shapes are now ordinary definitions, so each is reported MISSING rather than needing a
+  # special unclassified state — strictly stronger than the drop this case was written against.
   [ "${rc}" -ne 0 ] || fail "FAIL OPEN (${case_name}): a pinned path absent from the install reported success: ${out}"
-  if [ "${case_name}" = depth ]; then
-    # Still unrecognisable by shape, so the honest answer is UNKNOWN rather than a verdict.
-    [ "${rc}" -eq 2 ] || fail "an unclassifiable pinned path must exit 2 (UNKNOWN), got ${rc}: ${out}"
-    case "${out}" in
-      *UNCLASSIFIED*|*"could not be classified"*) ok "a pinned path at an unexpected depth exits 2, never CURRENT" ;;
-      *) fail "exit 2 but the unclassified path was not reported: ${out}" ;;
-    esac
-  else
-    # Tab-aware parsing PROMOTES this one: the path is no longer truncated, so it classifies as an
-    # ordinary skill definition and is correctly reported MISSING. Asserting UNKNOWN here would pin
-    # the bug rather than the fix.
-    [ "${rc}" -eq 1 ] || fail "a pinned path containing a space must classify and exit 1, got ${rc}: ${out}"
-    case "${out}" in
-      *"MISSING  skills/my skill/SKILL.md"*) ok "a pinned path containing a space is parsed, not dropped" ;;
-      *) fail "exit 1 but the spaced path was not named — is it still being truncated? ${out}" ;;
-    esac
-  fi
+  [ "${rc}" -eq 1 ] || fail "an odd-shaped pinned path must be compared and exit 1, got ${rc}: ${out}"
+  case "${out}" in
+    *"MISSING  ${odd_path}"*) ok "an odd-shaped pinned path (${case_name}) is compared, not dropped" ;;
+    *) fail "exit 1 but the odd-shaped path was not named (${case_name}): ${out}" ;;
+  esac
 done
 
 # ── 7c. A missing option VALUE is UNKNOWN, not DRIFT ──────────────────────────
@@ -267,23 +256,72 @@ set +e; out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 
 [ "${rc}" -eq 2 ] || fail "an absent registry must exit 2, got ${rc}: ${out}"
 ok "an absent registry exits 2"
 
-# ── 7e. The INSTALLED tree is classified by the SAME rule as the pinned tree ──
-# The mirror of 7b. If the reviewed side calls an odd path UNKNOWN while the installed side quietly
-# skips it, the fail-open is not closed — only moved. A filename-filtered scan of the install did
-# exactly that.
-for odd in "skills/alpha/nested/SKILL.md" "agents/sub/nested.agent.md"; do
+# ── 7e. The INSTALLED tree is compared by the SAME rule as the pinned tree ────
+# The mirror of 7b. A filename-filtered scan of the install skipped odd-shaped installed files, so
+# the fail-open was only moved, not closed. Comparing every file under agents/ and skills/ makes each
+# an ordinary EXTRA.
+for odd in "skills/alpha/references/notes.md" "agents/sub/nested.agent.md"; do
   inst="${tmp}/install-oddshape-$(printf '%s' "${odd}" | tr '/.' '__')"
   make_install "${inst}"
   mkdir -p "${inst}/$(dirname "${odd}")"
-  printf 'a role in a shape the check cannot compare\n' > "${inst}/${odd}"
+  printf 'a file the old shape filter would have skipped
+' > "${inst}/${odd}"
   set +e; out="$(run "${inst}")"; rc=$?; set -e
-  [ "${rc}" -ne 0 ] || fail "FAIL OPEN: an unclassifiable INSTALLED path (${odd}) reported success: ${out}"
-  [ "${rc}" -eq 2 ] || fail "an unclassifiable installed path must exit 2, got ${rc}: ${out}"
+  [ "${rc}" -ne 0 ] || fail "FAIL OPEN: an odd-shaped INSTALLED path (${odd}) reported success: ${out}"
   case "${out}" in
-    *"UNKNOWN  ${odd}"*) ok "an unclassifiable installed path (${odd}) exits 2, never CURRENT" ;;
-    *) fail "exit 2 but the installed path was not named (${odd}): ${out}" ;;
+    *"EXTRA    ${odd}"*) ok "an odd-shaped installed path (${odd}) is compared, not skipped" ;;
+    *) fail "the installed path was not reported (${odd}): ${out}" ;;
   esac
 done
+
+# ── 7f. A supporting file in a skill package is part of the surface ───────────
+# A SKILL.md can read or execute files beside it, so their drift is behaviourally relevant. Comparing
+# only depth-three SKILL.md would miss it AND would have pinned the check at permanent UNKNOWN the
+# first time upstream shipped a reference file.
+sup_repo="${tmp}/sup/libraries/agent-plugins"
+sp="${sup_repo}/plugins/agentic-engineering"
+mkdir -p "${sp}/agents" "${sp}/skills/alpha/references"
+printf 'reviewed engineer definition
+' > "${sp}/agents/agentic-engineer.agent.md"
+printf 'reviewed alpha procedure
+'      > "${sp}/skills/alpha/SKILL.md"
+printf 'reviewed reference material
+'   > "${sp}/skills/alpha/references/notes.md"
+git -C "${sup_repo}" init -q
+git -C "${sup_repo}" config user.email t@example.invalid
+git -C "${sup_repo}" config user.name t
+git -C "${sup_repo}" add -A
+git -C "${sup_repo}" commit -qm pin
+sup_link="$(git -C "${sup_repo}" rev-parse HEAD)"
+sup_inst="${tmp}/install-sup"
+mkdir -p "${sup_inst}"
+cp -R "${sp}/agents" "${sp}/skills" "${sup_inst}/"
+# Identical package must be CURRENT -- the permanent-UNKNOWN regression this guards against.
+if out="$("${script}" --repo-root "${tmp}/sup" --gitlink "${sup_link}" --installed "${sup_inst}" 2>&1)"; then
+  ok "a skill package with supporting files reports CURRENT when identical"
+else
+  fail "an identical multi-file skill package must exit 0, got $?: ${out}"
+fi
+# ...and a drifted supporting file must be caught.
+printf 'superseded reference material
+' > "${sup_inst}/skills/alpha/references/notes.md"
+set +e; out="$("${script}" --repo-root "${tmp}/sup" --gitlink "${sup_link}" --installed "${sup_inst}" 2>&1)"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a drifted supporting file must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT    skills/alpha/references/notes.md"*) ok "a drifted supporting file inside a skill is caught" ;;
+  *) fail "exit 1 but the supporting file was not named: ${out}" ;;
+esac
+
+# ── 7g. An install path containing WHITESPACE still resolves ──────────────────
+# Enumerating the two directories through a joined, deliberately word-split string turned a MATCHING
+# install under such a path into UNKNOWN.
+ws="${tmp}/my install dir"
+make_install "${ws}"
+if out="$(run "${ws}")"; then
+  ok "an install path containing spaces reports CURRENT, not UNKNOWN"
+else
+  fail "an install path containing spaces must exit 0, got $?: ${out}"
+fi
 
 # ── 8. The remediation is NAMED in the failure output ─────────────────────────
 # The deployment's own "fail with the fix" rule: a guard that blocks without naming the resolving
@@ -330,8 +368,14 @@ case "${section}" in
   *) fail "the plugin contract section does not name the UNKNOWN (exit 2) verdict" ;;
 esac
 case "${section}" in
-  *"never as current"*) ok "the contract says UNKNOWN is not current" ;;
+  *"never read it as current"*) ok "the contract says UNKNOWN is not current" ;;
   *) fail "the plugin contract section does not say an UNKNOWN result must not be read as current" ;;
+esac
+# UNKNOWN must also not become a stop condition — a diagnostic that halts every plugin-sourced role
+# is the passive self-blocking this contract forbids elsewhere.
+case "${section}" in
+  *"never let it halt a run"*) ok "the contract says UNKNOWN must not halt a run" ;;
+  *) fail "the plugin contract section does not say an UNKNOWN must not halt a run" ;;
 esac
 # The needle is the FLOW, not the bare "/plugin" token: that token also appears in
 # `.claude/plugin-consumption/...` and in this check's own path, so a bare match is satisfied by

@@ -45,6 +45,15 @@ PLUGIN_ID="agentic-engineering@devantler-plugins"
 PLUGIN_NAME="agentic-engineering"
 QUIET=0
 
+# Named beside every UNKNOWN that a fresh worktree can actually hit. A guard that blocks without
+# naming the resolving action is a friction tax the deployment's own hardening rule forbids — and it
+# was named on the DRIFT path but not here, which is the path an unattended run reaches first.
+RECOVERY="
+  To resolve: populate the pinned plugin submodule with .claude/scripts/submodule-init.sh
+  libraries/agent-plugins, or make gh available so the pinned tree can be read from the forge.
+  UNKNOWN means UNCHECKED, not stale: report it and carry on with the reviewed definition at the
+  pinned gitlink — it must never silently halt a run."
+
 die() { printf 'plugin-definition-currency: %s\n' "$*" >&2; exit 2; }
 # `shift 2` on a lone trailing flag returns 1, and under `set -e` that exits the script with 1 — the
 # code that means DRIFT. A typo would otherwise produce a silent, evidence-free stale verdict.
@@ -69,18 +78,6 @@ command -v git >/dev/null 2>&1 || die "git is required"
 
 say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 
-# The SHARED classifier. Both trees must be classified by the same rule: the reviewed side treating an
-# odd path as UNKNOWN while the installed side silently ignored it would leave the same fail-open this
-# check exists to close, just mirrored. Prints definition | unclassified | outside.
-classify() {
-  case "$1" in
-    agents/*) rest="${1#agents/}"
-      case "$rest" in */*) echo unclassified ;; *.agent.md) echo definition ;; *) echo unclassified ;; esac ;;
-    skills/*) rest="${1#skills/}"
-      case "$rest" in */*/*) echo unclassified ;; */SKILL.md) echo definition ;; *) echo unclassified ;; esac ;;
-    *) echo outside ;;
-  esac
-}
 
 # ── the PINNED revision ────────────────────────────────────────────────────────
 if [ -z "$REPO_ROOT" ]; then
@@ -132,40 +129,29 @@ sub="$REPO_ROOT/$SUBMODULE_PATH"
 if [ -e "$sub" ] && git -C "$sub" cat-file -e "$GITLINK^{commit}" 2>/dev/null; then
   tree="$(git -C "$sub" ls-tree -r "$GITLINK" -- "$prefix" 2>/dev/null \
             | awk -F'\t' '{split($1, m, " "); if (m[2]=="blob") print m[3] "\t" $2}')" \
-    || die "could not read the pinned tree $GITLINK from $sub"
+    || die "could not read the pinned tree $GITLINK from $sub${RECOVERY}"
 else
-  command -v gh >/dev/null 2>&1 || die "commit $GITLINK is not in the local object database and gh is unavailable"
+  command -v gh >/dev/null 2>&1 || die "commit $GITLINK is not in the local object database and gh is unavailable${RECOVERY}"
   # Derived, never hard-coded: --submodule-path is a flag, so a fixed slug here would silently query
   # a different repository than the one whose gitlink was just read.
   url="$(git -C "$REPO_ROOT" config -f .gitmodules --get "submodule.$SUBMODULE_PATH.url" 2>/dev/null)" \
-    || die "no .gitmodules url for '$SUBMODULE_PATH' — cannot resolve $GITLINK from the forge"
+    || die "no .gitmodules url for '$SUBMODULE_PATH' — cannot resolve $GITLINK from the forge${RECOVERY}"
   slug="${url##*:}"; slug="${slug##*/github.com/}"; slug="${slug%.git}"
   case "$slug" in */*) ;; *) die "could not derive an owner/repo slug from '$url'" ;; esac
   tree="$(gh api "repos/$slug/git/trees/$GITLINK?recursive=1" \
             --jq '.tree[] | select(.type=="blob") | [.sha,.path] | @tsv' 2>/dev/null)" \
-    || die "could not read the pinned tree $GITLINK from $slug"
+    || die "could not read the pinned tree $GITLINK from $slug${RECOVERY}"
 fi
 [ -n "$tree" ] || die "pinned revision $GITLINK yielded no tree entries"
 
-# A path INSIDE agents/ or skills/ that matches neither shape is emitted as UNCLASSIFIED rather than
-# dropped. Dropping it is a FAIL-OPEN: the reviewed loop would never check it and the EXTRA sweep
-# only fires when it is present, so "pinned but unrecognised AND absent from the install" would
-# report CURRENT while a whole role definition was missing from the runtime.
-#
-# The DEFINITION surface only: the agent entrypoints and skill procedures a role actually executes.
-# README and the plugin manifest are excluded on purpose — a version bump that moves no definition is
-# not a behavioural drift, and firing on it would train the reader to ignore this check.
-# Selected by splitting on "/" rather than by a regex: a bracket expression containing a slash is
-# not portable inside an awk /…/ literal — BSD awk aborts on it, which this script did until it was
-# run for real.
-reviewed="$(printf '%s\n' "$tree" \
-  | awk -F'\t' -v p="$prefix" '
+# README, the manifest and resources/ stay outside the surface: they sit outside these two
+# directories, so a version bump that moves no definition still does not fire.
+reviewed="$(printf '%s
+' "$tree" \
+  | awk -F'	' -v p="$prefix" '
       index($2,p)==1 {
         rel = substr($2, length(p) + 1)
-        n = split(rel, c, "/")
-        if (n == 2 && c[1] == "agents" && rel ~ /\.agent\.md$/) print $1 "\t" rel
-        else if (n == 3 && c[1] == "skills" && c[3] == "SKILL.md") print $1 "\t" rel
-        else if (c[1] == "agents" || c[1] == "skills") print "UNCLASSIFIED\t" rel
+        if (rel ~ /^agents\// || rel ~ /^skills\//) print $1 "	" rel
       }' \
   | sort -k2,2)"
 [ -n "$reviewed" ] || die "pinned revision $GITLINK contains no definition files under $prefix"
@@ -173,18 +159,12 @@ reviewed="$(printf '%s\n' "$tree" \
 # ── compare ────────────────────────────────────────────────────────────────────
 drift=0
 checked=0
-unclassified=0
 say "pinned revision : $GITLINK"
 say "installed copy  : $INSTALLED"
 say ""
 
 while IFS=$'\t' read -r rev_sha rel; do
   [ -n "$rel" ] || continue
-  if [ "$rev_sha" = "UNCLASSIFIED" ]; then
-    say "UNKNOWN  $rel  (inside the definition directories but not a shape this check can compare)"
-    unclassified=$((unclassified + 1))
-    continue
-  fi
   checked=$((checked + 1))
   if [ ! -f "$INSTALLED/$rel" ]; then
     say "MISSING  $rel  (reviewed $rev_sha — the installed copy does not have this definition at all)"
@@ -213,26 +193,18 @@ done <<< "$reviewed"
 # like an empty one, hiding an extra definition and allowing CURRENT.
 inst_list="$(mktemp)"
 trap 'rm -f "$inst_list"' EXIT
-inst_dirs=""
+: > "$inst_list"
 for d in agents skills; do
-  [ -d "$INSTALLED/$d" ] && inst_dirs="$inst_dirs $INSTALLED/$d"
+  [ -d "$INSTALLED/$d" ] || continue
+  # One quoted invocation per directory: joining them into a string and splitting it would break any
+  # installPath containing whitespace, turning a MATCHING install into UNKNOWN.
+  find "$INSTALLED/$d" -type f >> "$inst_list" \
+    || die "could not enumerate the installed definitions under $INSTALLED/$d${RECOVERY}"
 done
-if [ -n "$inst_dirs" ]; then
-  # shellcheck disable=SC2086  # deliberate word splitting: zero, one or two directories
-  find $inst_dirs -type f > "$inst_list" \
-    || die "could not enumerate the installed definitions under $INSTALLED"
-fi
 
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   rel="${path#"$INSTALLED"/}"
-  case "$(classify "$rel")" in
-    outside) continue ;;
-    unclassified)
-      say "UNKNOWN  $rel  (installed, inside the definition directories, but not a shape this check can compare)"
-      unclassified=$((unclassified + 1))
-      continue ;;
-  esac
   if ! printf '%s\n' "$reviewed" | awk -F'\t' -v r="$rel" '$2==r{found=1} END{exit !found}'; then
     say "EXTRA    $rel  (installed but absent from the pinned revision)"
     drift=$((drift + 1))
@@ -240,11 +212,6 @@ while IFS= read -r path; do
 done < <(sort "$inst_list")
 
 say ""
-if [ "$unclassified" -gt 0 ]; then
-  say "UNKNOWN — $unclassified path(s) in the definition directories could not be classified, so this"
-  say "check cannot vouch for the installed copy. Widen the selector, or verify those paths by hand."
-  exit 2
-fi
 if [ "$drift" -eq 0 ]; then
   say "CURRENT — $checked pinned definition(s) match the installed copy."
   exit 0
