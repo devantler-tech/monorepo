@@ -163,7 +163,7 @@ checkout stays on the **old** commit. Re-running `submodule-init.sh <path>` will
 (populated trees are repair-only). Plain `git submodule update -- <path>` *would* move it, but it
 is the same family of command that writes shared `core.worktree` — do not use it here.
 
-**Verified procedure** (hermetic fixture in `submodule-init.test.sh`, cases 6–8):
+**Verified procedure** (hermetic fixture in `submodule-init.test.sh`, cases 12–14 and 16):
 
 ```sh
 # From the superproject, after pulling the pin bump. Refuses dirty / ahead-of-pin checkouts.

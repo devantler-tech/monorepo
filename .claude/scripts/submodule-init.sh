@@ -321,6 +321,13 @@ advance() {
   is_populated "$path" ||
     die "'$path' is not checked out here — run submodule-init.sh $path to populate it first"
 
+  # Repair and prove isolation BEFORE any other `git -C "$path"` command touches this checkout.
+  # A stale shared `core.worktree` redirects that path at another session's worktree, so running
+  # `status`/`rev-parse`/`fetch`/`checkout --detach` first would read — and in the checkout's case
+  # WRITE — into that other tree before this function ever repaired the configuration.
+  repair "$path"
+  probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
+
   if [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]; then
     die "'$path' has a dirty working tree — commit, stash, or discard local changes before advancing"
   fi

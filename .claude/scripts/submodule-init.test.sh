@@ -393,8 +393,10 @@ old_sha="$(git -C "$c12/super/sub" rev-parse HEAD)"
 )
 report "advance fixture: working tree still on old pin before --advance" \
   "$([[ "$(git -C "$c12/super/sub" rev-parse HEAD)" == "$old_sha" ]] && echo yes || echo no)"
-# Make the new object reachable in the submodule (file:// remote).
-git -C "$c12/super/sub" fetch -q origin
+# Deliberately NOT fetched here: the script's own target-fetch path (cat-file miss -> fetch) is
+# part of what this case exercises. Pre-fetching made `cat-file -e` succeed and skipped it entirely.
+report "advance fixture: the target object is absent before --advance" \
+  "$(git -C "$c12/super/sub" cat-file -e "${new_sha}^{commit}" 2>/dev/null && echo no || echo yes)"
 out="$(cd "$c12/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 report "advance: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 report "advance: checkout moved to the recorded pin" \
@@ -502,6 +504,56 @@ report "outward-.git: never writes core.worktree into the SUPERPROJECT's per-wor
   "$([[ -z "$c15c_parent_key" ]] && echo yes || echo no)" "parent core.worktree=${c15c_parent_key:-<unset>}"
 report "outward-.git: the failure names the SUPERPROJECT gitdir" \
   "$(grep -q "SUPERPROJECT's gitdir" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# 16. --advance must repair isolation BEFORE it runs any other `git -C <path>` command. A stale
+#     shared `core.worktree` redirects that path at ANOTHER session's worktree, so every later
+#     `git -C` reads that directory instead of the submodule.
+#
+#     MEASURED pre-fix behaviour (this is what the two discriminating assertions below catch, and
+#     it is deliberately NOT the "writes into the other worktree" story): `status --porcelain` runs
+#     first, sees the redirected-and-empty decoy against a HEAD that has files, calls that a dirty
+#     working tree, and dies. So `--advance` fails with a misleading diagnosis on a checkout that
+#     is not dirty at all, and — because it died before reaching the repair — leaves the stale
+#     redirect in place for the next command to trip over. Repairing first makes the same run
+#     succeed and clears the redirect.
+c16="$tmp/c16"
+mk_super "$c16"
+(
+  cd "$c16/remote-sub"
+  echo next >file.txt
+  git add file.txt
+  git commit -q -m next
+)
+c16_new="$(git -C "$c16/remote-sub" rev-parse HEAD)"
+(
+  cd "$c16/super"
+  git update-index --cacheinfo "160000,$c16_new,sub"
+  git commit -q -m "bump sub"
+)
+# The victim: a directory standing in for another session's worktree.
+c16_decoy="$c16/other-session-worktree"
+mkdir -p "$c16_decoy"
+# The hazard: a stale SHARED core.worktree pointing the submodule's gitdir at that directory.
+git config -f "$c16/super/.git/modules/sub/config" core.worktree "$(abspath "$c16_decoy")"
+report "stale-redirect precondition: the shared core.worktree points at the other worktree" \
+  "$([[ "$(git config -f "$c16/super/.git/modules/sub/config" core.worktree)" == "$(abspath "$c16_decoy")" ]] && echo yes || echo no)"
+report "stale-redirect precondition: the other worktree is empty before --advance" \
+  "$([[ -z "$(ls -A "$c16_decoy" 2>/dev/null)" ]] && echo yes || echo no)"
+
+out="$(cd "$c16/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+
+# DISCRIMINATING (both go RED when the repair is moved back after the checkout):
+report "stale-redirect: the stale shared core.worktree is cleared" \
+  "$([[ -z "$(git config -f "$c16/super/.git/modules/sub/config" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)"
+report "stale-redirect: --advance succeeds instead of misreporting a dirty working tree" \
+  "$([[ "$(git -C "$c16/super/sub" rev-parse HEAD 2>/dev/null)" == "$c16_new" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# SAFETY INVARIANT, not a discriminator: it holds pre-fix too, because the pre-fix run dies at the
+# dirty-tree check before any checkout. Kept so a future reordering that DOES reach `checkout` with
+# the redirect live cannot land silently.
+report "stale-redirect: --advance never writes into the other session's worktree" \
+  "$([[ -z "$(ls -A "$c16_decoy" 2>/dev/null)" ]] && echo yes || echo no)" \
+  "decoy contains: $(ls -A "$c16_decoy" 2>/dev/null | tr '\n' ' ')"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
