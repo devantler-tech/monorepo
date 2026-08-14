@@ -69,6 +69,19 @@ command -v git >/dev/null 2>&1 || die "git is required"
 
 say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 
+# The SHARED classifier. Both trees must be classified by the same rule: the reviewed side treating an
+# odd path as UNKNOWN while the installed side silently ignored it would leave the same fail-open this
+# check exists to close, just mirrored. Prints definition | unclassified | outside.
+classify() {
+  case "$1" in
+    agents/*) rest="${1#agents/}"
+      case "$rest" in */*) echo unclassified ;; *.agent.md) echo definition ;; *) echo unclassified ;; esac ;;
+    skills/*) rest="${1#skills/}"
+      case "$rest" in */*/*) echo unclassified ;; */SKILL.md) echo definition ;; *) echo unclassified ;; esac ;;
+    *) echo outside ;;
+  esac
+}
+
 # ── the PINNED revision ────────────────────────────────────────────────────────
 if [ -z "$REPO_ROOT" ]; then
   REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
@@ -193,14 +206,38 @@ done <<< "$reviewed"
 
 # A definition present in the install but absent from the pin is drift too: it is a role the runtime
 # can still dispatch and the reviewed revision no longer describes.
+#
+# Enumerated WITHOUT a filename filter and classified by the shared rule above, so an installed path
+# in an unexpected shape is reported rather than skipped. The listing goes through a temp file because
+# a process substitution's exit status is not observable — an unreadable subtree would otherwise look
+# like an empty one, hiding an extra definition and allowing CURRENT.
+inst_list="$(mktemp)"
+trap 'rm -f "$inst_list"' EXIT
+inst_dirs=""
+for d in agents skills; do
+  [ -d "$INSTALLED/$d" ] && inst_dirs="$inst_dirs $INSTALLED/$d"
+done
+if [ -n "$inst_dirs" ]; then
+  # shellcheck disable=SC2086  # deliberate word splitting: zero, one or two directories
+  find $inst_dirs -type f > "$inst_list" \
+    || die "could not enumerate the installed definitions under $INSTALLED"
+fi
+
 while IFS= read -r path; do
+  [ -n "$path" ] || continue
   rel="${path#"$INSTALLED"/}"
+  case "$(classify "$rel")" in
+    outside) continue ;;
+    unclassified)
+      say "UNKNOWN  $rel  (installed, inside the definition directories, but not a shape this check can compare)"
+      unclassified=$((unclassified + 1))
+      continue ;;
+  esac
   if ! printf '%s\n' "$reviewed" | awk -F'\t' -v r="$rel" '$2==r{found=1} END{exit !found}'; then
     say "EXTRA    $rel  (installed but absent from the pinned revision)"
     drift=$((drift + 1))
   fi
-done < <(find "$INSTALLED/agents" "$INSTALLED/skills" \
-           \( -name '*.agent.md' -o -name 'SKILL.md' \) -type f 2>/dev/null | sort)
+done < <(sort "$inst_list")
 
 say ""
 if [ "$unclassified" -gt 0 ]; then

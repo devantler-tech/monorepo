@@ -267,6 +267,24 @@ set +e; out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 
 [ "${rc}" -eq 2 ] || fail "an absent registry must exit 2, got ${rc}: ${out}"
 ok "an absent registry exits 2"
 
+# ── 7e. The INSTALLED tree is classified by the SAME rule as the pinned tree ──
+# The mirror of 7b. If the reviewed side calls an odd path UNKNOWN while the installed side quietly
+# skips it, the fail-open is not closed — only moved. A filename-filtered scan of the install did
+# exactly that.
+for odd in "skills/alpha/nested/SKILL.md" "agents/sub/nested.agent.md"; do
+  inst="${tmp}/install-oddshape-$(printf '%s' "${odd}" | tr '/.' '__')"
+  make_install "${inst}"
+  mkdir -p "${inst}/$(dirname "${odd}")"
+  printf 'a role in a shape the check cannot compare\n' > "${inst}/${odd}"
+  set +e; out="$(run "${inst}")"; rc=$?; set -e
+  [ "${rc}" -ne 0 ] || fail "FAIL OPEN: an unclassifiable INSTALLED path (${odd}) reported success: ${out}"
+  [ "${rc}" -eq 2 ] || fail "an unclassifiable installed path must exit 2, got ${rc}: ${out}"
+  case "${out}" in
+    *"UNKNOWN  ${odd}"*) ok "an unclassifiable installed path (${odd}) exits 2, never CURRENT" ;;
+    *) fail "exit 2 but the installed path was not named (${odd}): ${out}" ;;
+  esac
+done
+
 # ── 8. The remediation is NAMED in the failure output ─────────────────────────
 # The deployment's own "fail with the fix" rule: a guard that blocks without naming the resolving
 # action is a friction tax, and it trains the reader to route around it. It must also keep saying
@@ -302,6 +320,33 @@ case "${section}" in
   *"read the reviewed definition at the pinned gitlink"*)
     ok "the contract names what to do on drift" ;;
   *) fail "the plugin contract section does not say to follow the reviewed definition on drift" ;;
+esac
+
+# Each remaining instruction is pinned on its own. Asserting only the check name and the fallback
+# would let a contract-only edit strip the exit semantics, the refresh path, or the cache prohibition
+# while this test stayed green — the same silent-loosening hole the both-halves rule exists to close.
+case "${section}" in
+  *UNKNOWN*) ok "the contract names the UNKNOWN verdict" ;;
+  *) fail "the plugin contract section does not name the UNKNOWN (exit 2) verdict" ;;
+esac
+case "${section}" in
+  *"never as current"*) ok "the contract says UNKNOWN is not current" ;;
+  *) fail "the plugin contract section does not say an UNKNOWN result must not be read as current" ;;
+esac
+# The needle is the FLOW, not the bare "/plugin" token: that token also appears in
+# `.claude/plugin-consumption/...` and in this check's own path, so a bare match is satisfied by
+# unrelated prose and the assertion never fires. Occurrence-counted before choosing.
+case "${section}" in
+  *"marketplace update flow"*) ok "the contract names the supported refresh flow" ;;
+  *) fail "the plugin contract section does not name the /plugin marketplace update refresh flow" ;;
+esac
+case "${section}" in
+  *"Never edit the plugin cache"*) ok "the contract forbids editing the plugin cache" ;;
+  *) fail "the plugin contract section does not forbid editing the plugin cache" ;;
+esac
+case "${section}" in
+  *"blob identity"*) ok "the contract pins comparison by blob identity, not a version string" ;;
+  *) fail "the plugin contract section does not require comparison by blob identity" ;;
 esac
 
 echo "plugin-definition-currency: ${pass_count} assertions passed"
