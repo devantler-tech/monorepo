@@ -3090,6 +3090,23 @@ edit straight onto the target commit. So also require
 or `S` marks exactly those bits). [`worktree-cleanup.sh`](.claude/scripts/worktree-cleanup.sh) already
 makes this check for the same reason — treat an empty `status` as authorization to detach only once
 this one is clear too.
+🔴 **Run BOTH of those checks inside every populated submodule too — the recursion mutates trees the
+top-level checks never inspect.** `--no-overwrite-ignore` is **not propagated** to the recursive
+submodule checkout, and neither `status --porcelain` nor `ls-files -v` at the top level looks inside a
+submodule's working tree. Fixture-verified: with both top-level checks reporting clean, the prescribed
+command **destroyed a foreign ignored file inside a populated submodule**. So also require
+
+```sh
+git -C <wt> submodule foreach --quiet --recursive \
+  'git status --porcelain --ignored=matching; git ls-files -v | awk "\$1 ~ /^[a-z]$/ || \$1 == \"S\""'
+```
+
+to print **nothing**. `--ignored=matching` is not optional here: the flag that protects ignored files
+at the top level cannot reach a submodule, so *detecting* them is the only defence left. Any output is
+another writer's work — do API-only work and never detach over it.
+🔑 **The general rule this instance teaches: a pre-check must cover every repository the command
+MUTATES.** Adding `--recurse-submodules` widened the mutation set; a check that stayed top-level then
+authorised writes it had never inspected.
 🔴 **`--detach` on its own moves the SUPERPROJECT ONLY, and in this monorepo that is the dangerous
 default — which is what `--recurse-submodules` above is for.** Without it, detaching onto a PR that
 changes a gitlink leaves every submodule at its **old** commit: fixture-verified, HEAD lands on the

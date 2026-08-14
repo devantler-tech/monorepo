@@ -55,7 +55,7 @@ section="$(
 # scope hole described above while every assertion still passes.
 #
 # The bound separates two states that are far apart, and it is deliberately NOT set just above the
-# current size: the section measures several hundred words (921 at the time of writing), while a
+# current size: the section measures several hundred words (1,095 at the time of writing), while a
 # runaway extraction (end anchor gone, awk running to EOF) measured 9,968 — both figures observed
 # rather than estimated, which is what justifies the gap. A snug bound would fail every
 # legitimate edit to this section while reporting a missing anchor — a false message that sends the
@@ -87,6 +87,15 @@ assert_section 'git -C <wt> checkout --no-overwrite-ignore --recurse-submodules 
 #     Fixture-verified: empty status, then a successful checkout that carried a foreign edit onto the
 #     target. \`worktree-cleanup.sh\` already makes this check, so the contract asking for less than
 #     its own tooling does would be an inconsistency as well as a hole.
+# 2d. THE PER-SUBMODULE PRE-CHECK. \`--recurse-submodules\` mutates each populated submodule's working
+#     tree, which neither top-level check inspects, and \`--no-overwrite-ignore\` is NOT propagated to
+#     the recursive checkout. Fixture-verified: both top-level checks clean, and the prescribed
+#     command still destroyed a foreign ignored file inside a submodule. This assertion exists because
+#     the hazard was INTRODUCED by adding the recursion — the wider the command's blast radius, the
+#     wider the pre-check must be, and it is easy to widen one without the other.
+assert_section 'submodule foreach' \
+  "the Git safety section no longer requires the cleanliness checks to be run inside each populated submodule — \`--recurse-submodules\` writes to submodule working trees that the top-level \`status\`/\`ls-files\` checks never inspect, so the run would authorise a checkout that destroys another writer's work there"
+
 assert_section 'ls-files -v' \
   "the Git safety section no longer requires the \`ls-files -v\` index-flag check — a file marked assume-unchanged or skip-worktree is invisible to \`status --porcelain\`, so the cleanliness pre-check passes while another writer's edit rides onto the target commit"
 
