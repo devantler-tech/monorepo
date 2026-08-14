@@ -1,0 +1,23 @@
+{
+  "install": "[ -d docs/node_modules ] || (cd docs && npm ci)",
+  "repositoryDependencies": [
+    "github.com/devantler-tech/monorepo",
+    "github.com/devantler-tech/ksail",
+    "github.com/devantler-tech/platform",
+    "github.com/devantler-tech/world-at-ruin",
+    "github.com/devantler-tech/actions",
+    "github.com/devantler-tech/homebrew-tap",
+    "github.com/devantler-tech/agent-skills",
+    "github.com/devantler-tech/agent-plugins",
+    "github.com/devantler-tech/kyverno-policies",
+    "github.com/devantler-tech/provider-upjet-unifi",
+    "github.com/devantler-tech/go-template",
+    "github.com/devantler-tech/dotnet-template",
+    "github.com/devantler-tech/platform-tenant-template",
+    "github.com/devantler-tech/platform-template",
+    "github.com/devantler-tech/unifi",
+    "github.com/devantler-tech/.github",
+    "github.com/devantler-tech/aws",
+    "github.com/devantler-tech/maintenance"
+  ]
+}
