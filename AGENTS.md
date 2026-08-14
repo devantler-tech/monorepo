@@ -3057,6 +3057,94 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
+**The permitted way to put a worktree on a specific commit is
+`git --no-replace-objects -C <wt> checkout --no-overwrite-ignore --detach <sha>`, issued as its OWN
+call after the `fetch`.** Both global protections are load-bearing: `--no-overwrite-ignore` stops the
+command from silently overwriting ignored files, while `--no-replace-objects` prevents a shared
+`refs/replace` entry from making the requested SHA materialize a different commit tree even though
+`HEAD` still prints the expected value (both fixture-verified). This covers the **superproject**;
+submodules need more than a flag and are handled separately below.
+When that commit is a PR's head, `<sha>` is its
+**`headRefOid`** — the same value *Merge policy* pins the merge to, so the worktree you evaluate and
+the commit you merge are provably the same one. A ban that never names the alternative is exactly the
+DevEx tax *Security hardening without a DevEx tax* forbids, and the vacuum gets filled by something
+worse: durable memory came to prescribe `fetch` + `reset --hard FETCH_HEAD` for putting a fresh maint
+worktree onto a PR head — a command the runtime denies outright — so every compliant run reached for
+something that could never run (measured across one day's session corpus: 3–4 denied calls over three
+separate ticks). Memory is also **per-lane**, so correcting one lane's notes leaves the siblings
+reaching for the same denied form; that is why this belongs in the shared contract.
+🔴 **Issue the `fetch` and the `checkout` as SEPARATE calls — a denied COMPOUND call rolls back the
+whole chain**, so the `fetch` never runs either and the follow-up fails on a missing `FETCH_HEAD`.
+That reads like a broken gitdir rather than a refusal, which sends the run to diagnose the wrong
+thing — the denial costs a misdiagnosis on top of the wasted call.
+🔴 **CHECK THE WORKTREE IS CLEAN FIRST — `checkout --detach` does NOT reliably refuse a dirty one, and
+assuming it does is how you silently adopt another instance's uncommitted work.** Measured on a
+two-commit fixture, both arms: it **aborts and preserves** only when the modified path **differs**
+between HEAD and the target; when the dirty path is **identical** in both commits, git **carries the
+edit along and succeeds** — leaving you on the target commit with someone else's work still in the
+tree, and nothing in the output saying so. Run `git -C <wt> status --porcelain` as its own call;
+require exit 0 and empty output before detaching. If it fails or prints anything, that is a live claim
+by another writer: do GitHub-API-only work per *Execution model* and never detach over it.
+⚠️ **`status` alone is not sufficient, because the INDEX CAN HIDE a foreign edit.** A tracked file
+carrying `assume-unchanged` or `skip-worktree` is omitted from `status --porcelain` entirely —
+fixture-verified: an empty status, followed by a successful checkout that carried another writer's
+edit straight onto the target commit. Run
+`(set -o pipefail; git -C <wt> ls-files -v | awk '$1 ~ /^[a-z]$/ || $1 == "S"')`; require the whole
+command to exit 0 and print nothing (a lowercase flag or `S` marks exactly those bits).
+[`worktree-cleanup.sh`](.claude/scripts/worktree-cleanup.sh) already makes this check for the same
+reason — treat an empty `status` as authorization to detach only once this one is clear too.
+🔴 **CHECK AGAIN AFTER DETACHING — the target can leave residue that did not exist in its tree.**
+After detaching, repeat `git -C <wt> status --porcelain`; require exit 0 and empty output. Run
+`git -C <wt> clean -ndx` as its own read-only call; require exit 0 and empty output. The latter is a
+dry run, never permission to clean: any line, including a skipped nested repository, means untracked
+or ignored material remains and evaluation stops. This specifically closes the removed-submodule
+case: non-recursive checkout can warn that it could not remove an initialized submodule directory,
+leave that old code behind, and then make `submodule status --recursive` pass vacuously because the
+target commit no longer declares the gitlink. Builds must not consume code absent from the reviewed
+tree.
+🔴 **`--detach` moves the SUPERPROJECT ONLY, so after detaching you are NOT necessarily on the PR's
+code — DETECT that before evaluating anything.** Fixture-verified: on a PR that changes a gitlink, HEAD
+lands on the target while the submodule still holds its **previous** content, and `status` shows
+nothing but a leading space followed by `M <sub>`. You would be reviewing **different code from the
+`headRefOid` you believe you are on**, and since a large share of PRs here are submodule bumps that is
+the common case rather than an edge one. Run `git -C <wt> submodule status --recursive` and require it
+to exit 0 and every output line to begin with a space. Reject a leading `+` (gitlink mismatch), `-`
+(not initialised), or `U` (unmerged) before evaluating the reviewed commit. This marker check proves
+only that each populated submodule is on its recorded gitlink; it does not prove that files inside an
+initialised submodule are clean.
+🔴 **Do NOT reach for `--recurse-submodules` to fix that — it is unsafe in this repo's mandated
+throwaway-worktree flow, measured.** Where a submodule is initialised in the main checkout but empty in
+the linked worktree, both pre-checks above pass and the recursive checkout then writes a `mod/.git`
+pointing at a nonexistent gitdir and **exits 128** (`could not reset submodule index`), leaving that
+submodule unusable. It also cannot **fetch** a target gitlink absent from the local object database —
+the ordinary dependency-bump case — so it exits non-zero having already moved the superproject, leaving
+the tree half-switched; it silently **skips** a submodule the target commit introduces, exiting 0 with
+a clean status over a directory containing no code; and its `--no-overwrite-ignore` protection **does
+not propagate**, so foreign ignored work inside a populated submodule is destroyed while both
+top-level checks read clean.
+⚠️ **`submodule-init.sh` is not the answer either, and must not be prescribed as one.** Handed an
+**already-populated** submodule it deliberately repairs isolation *only* and refuses
+`git submodule update`, precisely so it cannot discard a local branch or ahead-of-pin work — so it
+reports success while the submodule stays stale. Its job is populating an **uninitialised** submodule
+and repairing worktree isolation, which is a different job from moving a populated one onto a pin.
+📌 **Landing a worktree on a PR head *including* its submodules therefore needs a real procedure —
+fetch, initialise additions, repair isolation, then probe — not a flag. That is
+[#2833](https://github.com/devantler-tech/monorepo/issues/2833).** Until it exists, detect the
+condition and stop; never paper over it with a flag that fails closed at exit 128 or, worse, fails
+open with a clean-looking status.
+⚠️ **The pre-check cannot see IGNORED paths, and checkout overwrites them by default — which is why
+`--no-overwrite-ignore` is in the command above.** `git checkout` documents `--overwrite-ignore` as
+the default and `status --porcelain` never lists ignored files, so when the target commit starts
+tracking a path that is ignored at your current HEAD, an empty pre-check is followed by a **silent
+overwrite** of whatever was there (fixture-verified, including that the flag aborts instead). The
+window is narrow, but it is exactly the case the pre-check is blind to, so the default is the unsafe
+one and the flag is what makes the prescribed form safe by default.
+⚠️ **It remains a strictly safer swap, never a loosening — the guard is untouched and needs no
+widening.** On a clean worktree it lands on exactly that commit, the same outcome the banned form
+would have produced, and wherever it *does* refuse it preserves what `reset --hard` would have
+destroyed. It is never weaker than the banned form; the abort is simply a partial backstop rather than
+the check itself, which is why the cleanliness test above is the operative rule.
+
 **Worktree hygiene is SCHEDULED, not per-run — never rely on a session to remove its own worktree.**
 The harness creates a per-session worktree at `<repo>/.claude/worktrees/<slug>`, and the owning
 session **structurally cannot remove it**: that directory is the session's own working directory, and
