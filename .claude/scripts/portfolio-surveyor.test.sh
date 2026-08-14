@@ -2077,6 +2077,10 @@ case "${surveyor_flat}" in
   *) fail "the surveyor still attempts an unbounded all-PR deepening pass before returning" ;;
 esac
 case "${surveyor_flat}" in
+  *'After eight candidate deepening attempts, whether each join succeeded or failed'*) ;;
+  *) fail "failed joins can still evade the eight-candidate deepening bound" ;;
+esac
+case "${surveyor_flat}" in
   *'NOT-DEEPENED (next-shard)'*) ;;
   *) fail "the digest cannot distinguish deliberate bounded deferral from API-budget exhaustion" ;;
 esac

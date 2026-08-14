@@ -140,8 +140,9 @@ public and private — no per-repo loop needed to enumerate):
    undeepened remainder as `NOT-DEEPENED (budget)` rows naming the count and the repos, never a
    silent cheap row that reads like a completed assessment:
    `gh pr view <n> --repo devantler-tech/<repo> --json number,state,isDraft,updatedAt,title,mergeStateStatus,reviewDecision,statusCheckRollup,mergedAt,headRefName,headRefOid,headRepositoryOwner,headRepository,author,body,files`
-   After eight successful candidate joins, stop deepening and emit the ordered remainder as
-   `NOT-DEEPENED (next-shard)` rows. A later failed or deferred join makes global health unknown, but
+   After eight candidate deepening attempts, whether each join succeeded or failed, stop deepening
+   and emit the ordered remainder as `NOT-DEEPENED (next-shard)` rows. A later failed or deferred join
+   makes global health unknown, but
    **deepened rows remain candidate-actionable** once their own exact head, pentad, control facts and
    repository default-head health are complete. It never turns the remainder into a global mutation
    lock. Because PRs outrank issues, **issue descent remains blocked** until every actionable PR is
