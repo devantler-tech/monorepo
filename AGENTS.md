@@ -3057,6 +3057,25 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
+**The permitted way to put a worktree on a specific commit is `git -C <wt> checkout --detach <sha>`,
+issued as its OWN call after the `fetch`.** A ban that never names the alternative is exactly the
+DevEx tax *Security hardening without a DevEx tax* forbids, and the vacuum gets filled by something
+worse: durable memory came to prescribe `fetch` + `reset --hard FETCH_HEAD` for putting a fresh maint
+worktree onto a PR head — a command the runtime denies outright — so every compliant run reached for
+something that could never run (measured across one day's session corpus: 3–4 denied calls over three
+separate ticks). Memory is also **per-lane**, so correcting one lane's notes leaves the siblings
+reaching for the same denied form; that is why this belongs in the shared contract.
+🔴 **Issue the `fetch` and the `checkout` as SEPARATE calls — a denied COMPOUND call rolls back the
+whole chain**, so the `fetch` never runs either and the follow-up fails on a missing `FETCH_HEAD`.
+That reads like a broken gitdir rather than a refusal, which sends the run to diagnose the wrong
+thing — the denial costs a misdiagnosis on top of the wasted call.
+⚠️ **This is a strictly safer swap, never a loosening — the guard is untouched and needs no widening.**
+Verified on a real fixture, both arms: on a **clean** worktree `checkout --detach` lands on exactly
+that commit, the same outcome the banned form would have produced; on a **dirty** one it **aborts and
+preserves** the uncommitted content with HEAD unchanged, where `reset --hard` would have destroyed it.
+That refusal is precisely the property the ban exists to protect, so the replacement is *stricter* in
+the failure case rather than weaker.
+
 **Worktree hygiene is SCHEDULED, not per-run — never rely on a session to remove its own worktree.**
 The harness creates a per-session worktree at `<repo>/.claude/worktrees/<slug>`, and the owning
 session **structurally cannot remove it**: that directory is the session's own working directory, and
