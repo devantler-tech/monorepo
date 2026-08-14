@@ -44,6 +44,7 @@ SUBMODULE_PATH="libraries/agent-plugins"
 PLUGIN_ID="agentic-engineering@devantler-plugins"
 PLUGIN_NAME="agentic-engineering"
 QUIET=0
+nl="\n"
 
 # Named beside every UNKNOWN that a fresh worktree can actually hit. A guard that blocks without
 # naming the resolving action is a friction tax the deployment's own hardening rule forbids — and it
@@ -156,11 +157,15 @@ fi
 reviewed="$(printf '%s
 ' "$tree" \
   | awk -F'	' -v p="$prefix" '
+      substr($3,1,1)=="\"" { print "QUOTED" ORS; next }
       index($3,p)==1 {
         rel = substr($3, length(p) + 1)
         if (rel ~ /^agents\// || rel ~ /^skills\//) print $1 "	" $2 "	" rel
       }' \
   | sort -k3,3)"
+case "$reviewed" in
+  QUOTED*|*"${nl}QUOTED"*) die "the pinned tree contains a path git had to quote (tab, newline or backslash) — cannot verify it${RECOVERY}" ;;
+esac
 [ -n "$reviewed" ] || die "pinned revision $GITLINK contains no definition files under $prefix"
 
 # ── compare ────────────────────────────────────────────────────────────────────
@@ -173,6 +178,14 @@ say ""
 while IFS=$'\t' read -r rev_sha rev_mode rel; do
   [ -n "$rel" ] || continue
   checked=$((checked + 1))
+  if [ -L "$INSTALLED/$rel" ]; then
+    # -f, `git hash-object` and -x all FOLLOW a symlink, so a definition replaced by a link to an
+    # identical file passed every test. The pinned tree has no symlinks (an unsupported mode already
+    # fails closed), so a link here is drift by construction.
+    say "DRIFT    $rel  installed as a SYMLINK where the pinned revision has a regular file"
+    drift=$((drift + 1))
+    continue
+  fi
   if [ ! -f "$INSTALLED/$rel" ]; then
     say "MISSING  $rel  (reviewed $rev_sha — the installed copy does not have this definition at all)"
     drift=$((drift + 1))
@@ -209,7 +222,9 @@ done <<< "$reviewed"
 # in an unexpected shape is reported rather than skipped. The listing goes through a temp file because
 # a process substitution's exit status is not observable — an unreadable subtree would otherwise look
 # like an empty one, hiding an extra definition and allowing CURRENT.
-inst_list="$(mktemp)"
+# Guarded: an unwritable or exhausted TMPDIR makes mktemp exit 1 under `set -e`, and 1 is the DRIFT
+# verdict — an infrastructure failure would have been read as a finding about the install.
+inst_list="$(mktemp)" || die "could not create a temporary file (is TMPDIR writable?)"
 trap 'rm -f "$inst_list"' EXIT
 : > "$inst_list"
 for d in agents skills; do

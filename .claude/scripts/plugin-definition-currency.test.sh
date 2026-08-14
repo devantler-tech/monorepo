@@ -384,6 +384,30 @@ case "${out}" in
   *) fail "exit 2 but not because of truncation: ${out}" ;;
 esac
 
+# ── 7j. A SYMLINK is not a definition ────────────────────────────────────────
+# -f, `git hash-object` and -x all FOLLOW a symlink, so an installed definition replaced by a link to
+# an identical file passed every single test and reported CURRENT.
+sym="${tmp}/install-symlink"
+make_install "${sym}"
+printf 'reviewed improver definition\n' > "${tmp}/decoy.md"
+rm "${sym}/agents/agent-improver.agent.md"
+ln -s "${tmp}/decoy.md" "${sym}/agents/agent-improver.agent.md"
+set +e; out="$(run "${sym}")"; rc=$?; set -e
+[ "${rc}" -ne 0 ] || fail "FAIL OPEN: a definition replaced by a symlink to identical bytes reported success: ${out}"
+case "${out}" in
+  *"SYMLINK"*) ok "a definition installed as a symlink is drift, even with identical bytes" ;;
+  *) fail "exit ${rc} but the symlink was not reported: ${out}" ;;
+esac
+
+# ── 7k. DELIBERATELY NOT TESTED — the mktemp guard ───────────────────────────
+# `mktemp`'s failure path is guarded in the script (an unwritable TMPDIR would otherwise exit 1 under
+# `set -e`, and 1 is the DRIFT verdict, so an infrastructure failure would read as a finding about the
+# install). There is no assertion here because there is no portable way to force it: BSD/macOS mktemp
+# IGNORES an unusable TMPDIR and falls back to the system temp dir, so the obvious test passes on
+# every implementation regardless of the guard — verified by ablation, which did not fire.
+# A vacuous assertion is worse than none: it manufactures confidence in an untested path. Left absent
+# and explained rather than left green and meaningless.
+
 # ── 8. The remediation is NAMED in the failure output ─────────────────────────
 # The deployment's own "fail with the fix" rule: a guard that blocks without naming the resolving
 # action is a friction tax, and it trains the reader to route around it. It must also keep saying
