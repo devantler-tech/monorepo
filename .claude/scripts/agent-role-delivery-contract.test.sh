@@ -27,6 +27,16 @@ fail() {
   exit 1
 }
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    fail "sha256sum or shasum is required to verify pinned agent definition integrity"
+  fi
+}
+
 # Prose guards must survive re-wrapping: a boundary sentence that happens to break
 # across two lines is still present, so match against a whitespace-flattened copy
 # rather than letting a paragraph reflow read as a removed protection.
@@ -158,6 +168,21 @@ entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
 [ -f "${plugin_agents}/${entrypoint}.agent.md" ] ||
   fail "desired state entrypoint '${entrypoint}' does not resolve to a bundled agent in ${plugin_agents}"
 canonical_engineer="${plugin_agents}/${entrypoint}.agent.md"
+canonical_surveyor="${plugin_agents}/portfolio-surveyor.agent.md"
+[ -f "${canonical_surveyor}" ] ||
+  fail "pinned plugin does not bundle portfolio-surveyor.agent.md"
+
+# The consumer copy used to omit both integrity fields while the pinned plugin resource already
+# carried them. That let the gitlink advance without proving that the machine-readable entrypoint
+# and delegated surveyor still named the reviewed bytes. Resolve both digests from the pinned files,
+# not from a floating default branch or a copied constant.
+consumer_entrypoint_sha="$(jq -r '.spec.source.entrypointSha256 // ""' "${desired_state}")"
+consumer_surveyor_sha="$(jq -r '.spec.roles["portfolio-surveyor"].definitionSha256 // ""' "${desired_state}")"
+[ "${consumer_entrypoint_sha}" = "$(sha256_file "${canonical_engineer}")" ] ||
+  fail "consumer desired-state entrypointSha256 does not match the pinned agentic-engineer definition"
+[ "${consumer_surveyor_sha}" = "$(sha256_file "${canonical_surveyor}")" ] ||
+  fail "consumer desired-state portfolio-surveyor definitionSha256 does not match the pinned definition"
+
 canonical_engineer_flat="$(flatten "${canonical_engineer}")"
 assert_canonical_engineer_prose() {
   case "${canonical_engineer_flat}" in
