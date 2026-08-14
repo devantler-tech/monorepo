@@ -3497,7 +3497,10 @@ writes its own namespace, so both pushes succeed and both believe they won. Scan
 Claude runs exceeding 60 minutes, your own lane's next dispatch often starts before you finish. That
 case is safe by construction — same namespace, same deterministic branch name, and a non-forced push
 is refused (see *Claim protocol* rule 4) — so it needs no handling beyond never force-pushing a claim
-branch.
+branch. Therefore, same-lane task presence or post-start activity alone is never a global stand-down
+condition: continue telemetry, selection, and unrelated delivery. Stand down only for a live
+conflicting claim, exact shared-artifact contention, or an unsafe runtime-local mutation that could
+break a sibling mid-flight; keep the fence scoped to that artifact or surface and continue elsewhere.
 
 🔴 **Scheduled is not delivered — on the Claude lane about one tick in five never happens.** The two
 machine-local schedulers differ. Measured across 2026-08-02T03:50Z → 2026-08-08T19:50Z (**161 scheduled

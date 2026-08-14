@@ -33,6 +33,7 @@ fail() {
 flatten() { tr '\n' ' ' < "$1" | tr -s '[:space:]' ' '; }
 constitution_flat="$(flatten "${constitution}")"
 engineer_flat="$(flatten "${engineer_agent}")"
+maintenance_overlay_flat="$(flatten "${maintenance_overlay}")"
 
 assert_prose() {
   case "${constitution_flat}" in
@@ -42,6 +43,12 @@ assert_prose() {
 }
 assert_engineer_prose() {
   case "${engineer_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+assert_maintenance_prose() {
+  case "${maintenance_overlay_flat}" in
     *"$1"*) ;;
     *) fail "$2" ;;
   esac
@@ -468,6 +475,43 @@ assert_prose 'Codex dispatched 161/161' \
   "cadence does not state the Codex control that makes the shortfall a lane asymmetry"
 assert_prose 'never time anything off' \
   "cadence does not tell a run to stop planning against the next scheduled tick"
+
+# Same-lane schedules deliberately overlap and share one writer namespace. Mere task presence or
+# post-start activity is therefore not a global stop signal: the claim protocol must arbitrate the
+# exact artifact instead. Pin both arms so a future edit cannot restore starvation or erase the
+# scoped conflict fence while preserving progress.
+assert_prose 'same-lane task presence or post-start activity alone is never a global stand-down condition' \
+  "cadence still permits a scheduled role to no-op merely because another same-lane task is active"
+assert_prose 'a live conflicting claim, exact shared-artifact contention, or an unsafe runtime-local mutation' \
+  "cadence does not preserve the artifact-scoped conditions that still require stand-down"
+
+# A complete portfolio census is health evidence, not a global mutation lease. Measured survey runs
+# repeatedly stopped after one of 80+ unrelated PR joins failed or hit a cap, even though earlier
+# candidates already had complete head, control, claim, CI, conflict, and review evidence. Clearance
+# must therefore be candidate-scoped: preserve UNKNOWN for the failed join and for broad health/issue
+# descent, while continuing through the ordered PR queue with fully joined independent candidates.
+assert_maintenance_prose 'Clearance is per candidate, never per portfolio' \
+  "portfolio maintenance still couples all mutation to a complete portfolio-wide join"
+assert_maintenance_prose 'cheap exhaustive enumeration' \
+  "portfolio maintenance does not separate cheap ordering from candidate deepening"
+assert_maintenance_prose "candidate repository's default-head health" \
+  "candidate clearance does not preserve repository-local default-head safety evidence"
+assert_maintenance_prose 'unrelated failed or capped joins remain `QUERY-UNKNOWN`' \
+  "portfolio maintenance does not preserve uncertainty for incomplete unrelated joins"
+assert_maintenance_prose 'never block an independently fully joined candidate' \
+  "portfolio maintenance still permits unrelated query failures to freeze cleared work"
+assert_maintenance_prose 'A candidate repository query failure blocks that candidate' \
+  "portfolio maintenance can act after the candidate repository query fails"
+assert_maintenance_prose 'An attempted in-shard join failure emits `QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>`' \
+  "portfolio maintenance does not define the candidate-scoped producer row for failed joins"
+assert_maintenance_prose 'never-attempted candidates remain `NOT-DEEPENED`' \
+  "portfolio maintenance conflates failed attempted joins with candidates outside the shard"
+assert_maintenance_prose 'issue descent remains blocked until the actionable-PR queue is completely classified' \
+  "portfolio maintenance can descend into issues while higher-priority PR state is unknown"
+assert_maintenance_prose 'pass the prior digest' \
+  "portfolio maintenance does not pass continuation state when requesting the next survey shard"
+assert_maintenance_prose 'cursor is invalidated when any recorded candidate head changes' \
+  "portfolio maintenance can reuse stale shard state after a candidate head changes"
 # A `per_task_limit` record is a per-MINUTE liveness sample of "a run is currently open",
 # not a per-slot drop record — so counting those records, raw or hour-bucketed, counts a
 # slot that merely started LATE as one that never ran. Measured 2026-08-12 over 164 slots:

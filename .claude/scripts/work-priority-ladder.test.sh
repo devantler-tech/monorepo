@@ -328,11 +328,15 @@ assert_prose 'Author trust decides EXECUTION, never deepening' \
 # candidates and trusted bots, while its own pentad line two paragraphs later demanded that evidence
 # for every actionable PR whoever authored it. One file, two selectors, disagreeing — so a run
 # following the overlay literally reports a pentad it never fetched for exactly the PRs the
-# 2026-08-08 grant made it responsible for.
+# 2026-08-08 grant made it responsible for. Deepening is now sharded for bounded latency, so pin both
+# the inclusive queue and the deterministic shard instead of requiring one digest to join the whole
+# queue at once.
 assert_absent 'candidate/actionable trusted-bot PR' \
   "${skill_flat}" "the maintenance skill still deepens only devantler/trusted-bot PRs"
-assert_prose 'deepens every remaining open actionable PR' \
-  "${skill_flat}" "the maintenance skill no longer deepens every actionable PR regardless of author"
+assert_prose 'full hygiene pentad for EVERY open actionable PR whoever authored it' \
+  "${skill_flat}" "the maintenance skill no longer covers every actionable PR regardless of author"
+assert_prose 'deepens that queue in deterministic priority order, one bounded shard at a time' \
+  "${skill_flat}" "the maintenance skill no longer deepens the inclusive queue in bounded deterministic shards"
 # ...and here too the widening must RESCOPE execution trust, not delete it: deepening an external PR
 # reads the GitHub API, which is not running its branch. Without this the negative above could be
 # satisfied by dropping the distinction entirely.
@@ -345,6 +349,12 @@ assert_prose 'never an execution of its branch' \
 # was assessed and found unremarkable, so the run reads a coverage gap as a clean bill of health.
 assert_prose 'NOT-DEEPENED (budget)' \
   "${surveyor_flat}" "the surveyor may drop PRs on budget exhaustion without declaring the gap"
+assert_prose 'SHARD-CURSOR next=' \
+  "${surveyor_flat}" "the surveyor does not return a continuation cursor for the next bounded shard"
+assert_prose 'filter the explicitly supplied classified set before selecting the next eight' \
+  "${surveyor_flat}" "the surveyor can repeatedly deepen the same parked PRs and starve later shards"
+assert_prose 'QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>' \
+  "${surveyor_flat}" "the surveyor digest cannot identify the candidate and failed join component"
 
 # The ownership gate keyed on the orchestrator's creation record — which the surveyor cannot read,
 # and which NO maintainer-authored PR can ever satisfy, so it structurally parked exactly the PRs the
