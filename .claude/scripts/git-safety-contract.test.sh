@@ -54,9 +54,10 @@ section="$(
 # end-of-file and \`section\` becomes the whole rest of the contract — which silently restores the
 # scope hole described above while every assertion still passes.
 #
-# The bound separates two states that are orders of magnitude apart, and it is deliberately NOT set
-# just above the current size: the section is ~250 words, while a runaway extraction (end anchor
-# gone, awk running to EOF) measures in the tens of thousands. A snug bound would fail every
+# The bound separates two states that are far apart, and it is deliberately NOT set just above the
+# current size: the section measures a few hundred words (369 when this bound was set), while a
+# runaway extraction (end anchor gone, awk running to EOF) measured 9,968 — both figures observed
+# rather than estimated, which is what justifies the gap. A snug bound would fail every
 # legitimate edit to this section while reporting a missing anchor — a false message that sends the
 # next reader hunting for a heading that is right there.
 section_words="$(printf '%s' "${section}" | wc -w | tr -d ' ')"
@@ -80,6 +81,15 @@ assert_section 'Never `git reset --hard`' \
 #    outcome, and a bare branch checkout would not.
 assert_section 'git -C <wt> checkout --detach <sha>' \
   "the Git safety section does not name \`git -C <wt> checkout --detach <sha>\` as the permitted way to put a worktree on a specific commit, so the ban again has no stated alternative and the instruction migrates to unreviewed memory"
+
+# 2b. THE PR-HEAD ASSOCIATION. \`<sha>\` is deliberately the general placeholder — it is this
+#     contract's convention (27 backticked commands use it, against 1 for \`<headRefOid>\`), and the
+#     rule covers any commit, not only a PR head. But the motivating case IS the PR head, so the
+#     value's identity must be stated or the prescription is unactionable exactly where it is most
+#     needed. Naming \`headRefOid\` also ties this to the commit *Merge policy* pins, which is what
+#     makes "the worktree you evaluated" and "the commit you merged" the same claim.
+assert_section 'headRefOid' \
+  "the Git safety section no longer identifies a PR head's \`<sha>\` as its \`headRefOid\` — without it the prescription is unactionable in its motivating case, and the worktree you evaluate is no longer tied to the commit Merge policy pins"
 
 # 3. THE SEPARATE-CALLS REQUIREMENT. Chaining the fetch and the checkout is what turns a refusal into
 #    a misdiagnosis, so the prescription is incomplete without it — this is the measured second-order

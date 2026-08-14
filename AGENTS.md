@@ -3058,7 +3058,9 @@ Never `git reset --hard`, `git stash`, force-push, or discard changes you did no
 a task explicitly calls for it. Leave every checkout/worktree clean when done.
 
 **The permitted way to put a worktree on a specific commit is `git -C <wt> checkout --detach <sha>`,
-issued as its OWN call after the `fetch`.** A ban that never names the alternative is exactly the
+issued as its OWN call after the `fetch`.** When that commit is a PR's head, `<sha>` is its
+**`headRefOid`** — the same value *Merge policy* pins the merge to, so the worktree you evaluate and
+the commit you merge are provably the same one. A ban that never names the alternative is exactly the
 DevEx tax *Security hardening without a DevEx tax* forbids, and the vacuum gets filled by something
 worse: durable memory came to prescribe `fetch` + `reset --hard FETCH_HEAD` for putting a fresh maint
 worktree onto a PR head — a command the runtime denies outright — so every compliant run reached for
