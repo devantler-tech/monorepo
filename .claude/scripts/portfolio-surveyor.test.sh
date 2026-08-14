@@ -249,8 +249,39 @@ grep -Fq 'never emit a count from a single page' "${surveyor}" ||
   fail "surveyor may still emit a board-coverage count from a single-page read"
 grep -Fq 'board_coverage=unknown' "${surveyor}" ||
   fail "surveyor has no unknown token for a truncated or budget-limited board census"
+# shellcheck disable=SC2016
 grep -Fq 'prefer `unknown` over a partial number' "${surveyor}" ||
   fail "surveyor does not prefer unknown over a partial board-coverage number under budget pressure"
+# The phrase assertions above all pass while the digest row template is absent, so pin the concrete
+# BOARD-COVERAGE line and both sides of the ratio. Coverage is a fraction: a complete numerator over
+# a truncated denominator still reports a fake census, and it fails in the direction that HIDES gaps.
+grep -Fq 'BOARD-COVERAGE — `board_coverage=<measured: open_public=<n> on_board=<m> status_less=<k>' "${surveyor}" ||
+  fail "surveyor digest has no concrete BOARD-COVERAGE row template"
+# shellcheck disable=SC2016
+grep -Fq 'never a single-page `.length`' "${surveyor}" ||
+  fail "surveyor BOARD-COVERAGE row does not forbid a single-page length as the board census"
+# Numerator: the board side must name a complete-count mechanism, not just say "paginate".
+grep -Fq 'items(first:1){totalCount}' "${surveyor}" ||
+  fail "surveyor names no totalCount path for a complete board census"
+# Denominator: measured 2026-08-14, `gh search issues` returned 30 against a true 593 (default
+# --limit 30, and its --json emits item rows, never search metadata). Require the total_count
+# metadata path with an explicit public filter, and a fail-closed token when it cannot be obtained.
+# Keyed on `total_count`, not on `search/issues` — that path already appears in the issue-type
+# sweep above, so an assertion on it would pass with the whole denominator fix removed.
+grep -Fq 'total_count' "${surveyor}" ||
+  fail "surveyor does not take the open-public denominator from Search API metadata"
+grep -Fq 'incomplete_results' "${surveyor}" ||
+  fail "surveyor does not fail closed on an incomplete Search denominator response"
+grep -Fq 'is:public archived:false' "${surveyor}" ||
+  fail "surveyor open-public denominator lacks an explicit public/non-archived filter"
+grep -Fq 'board_coverage=unknown:incomplete-denominator' "${surveyor}" ||
+  fail "surveyor has no unknown token for a truncated or incomplete open-public denominator"
+# Negative: the default-limited row-listing command must not be PRESCRIBED as the denominator.
+# Keyed on the prescription shape (the flag run), so the prose that warns about `gh search issues`
+# is not itself a failure.
+if grep -Fq 'gh search issues --owner devantler-tech --state open --archived=false' "${surveyor}"; then
+  fail "surveyor still prescribes the default-limited gh search issues row set as the denominator"
+fi
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||

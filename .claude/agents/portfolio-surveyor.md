@@ -543,6 +543,7 @@ public and private — no per-repo loop needed to enumerate):
    - **Preferred (cheap):** REST Projects v2 with server-side filter and explicit pagination — the
      same path `flow-scorecard.sh` uses, so it stays on the uncontended core REST budget rather than
      the shared GraphQL 5,000/hr pool:
+
      ```sh
      fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" \
        --jq '.[]|select(.name=="Status")|.id')
@@ -553,11 +554,22 @@ public and private — no per-repo loop needed to enumerate):
          | {on_board: length,
             status_less: map(select(([.fields[]?|select(.name=="Status")|.value] | length)==0)) | length}'
      ```
-     Pair with an org-wide open-issue count limited to **active public** repos
-     (`gh search issues --owner devantler-tech --state open --archived=false …`, private repos
-     excluded — project 5 is public, so private items are a maintainer decision and never count
-     against coverage). Emit
-     `board_coverage=measured: open_public=<n> on_board=<m> status_less=<k>`.
+
+     Pair it with a **complete** open-issue denominator, taken from the Search API's `total_count`
+     **metadata** — never from a row listing. `gh search issues` returns items and defaults to **30
+     rows**, so it under-counts silently: measured 2026-08-14 it returned **30** against a true
+     **593**. That is the same truncation defect as the board side, on the other half of the ratio,
+     and it fails in the more dangerous direction — a too-small denominator makes coverage read as
+     *complete* while real gaps stay invisible. Filter public repos explicitly, since project 5 is
+     public and a private repo's items are a maintainer decision that never counts against coverage:
+
+     ```sh
+     gh api -X GET search/issues \
+       -f q='org:devantler-tech is:issue is:open is:public archived:false' \
+       --jq '"\(.total_count) incomplete=\(.incomplete_results)"'
+     ```
+
+     Emit `board_coverage=measured: open_public=<n> on_board=<m> status_less=<k>`.
    - **Alternate (one GraphQL call for the board side):** read `totalCount` from the connection —
      `organization(login:"devantler-tech"){projectV2(number:5){items(first:1){totalCount}}}` —
      which is the full census, **not** the page length. Still never substitute `.nodes|length`.
@@ -565,6 +577,9 @@ public and private — no per-repo loop needed to enumerate):
    **Fail closed to unknown — never invent a count:**
    - A single-page or unpaginated items read that does not use `totalCount` / `--paginate` →
      `board_coverage=unknown:single-page-read` — **never emit a count from a single page**.
+   - A denominator taken from a row listing rather than Search `total_count`, or a response whose
+     `incomplete_results` is `true` → `board_coverage=unknown:incomplete-denominator` — **never emit
+     a count from a default-limited row set**.
    - Rate-limit, auth error, incomplete pagination, or GraphQL budget pressure mid-walk →
      `board_coverage=unknown:<reason>` (e.g. `unknown:graphql-budget`). Under budget pressure,
      **prefer `unknown` over a partial number** — a stated unknown costs the run nothing; a wrong
