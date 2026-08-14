@@ -468,6 +468,15 @@ assert_prose 'Codex dispatched 161/161' \
   "cadence does not state the Codex control that makes the shortfall a lane asymmetry"
 assert_prose 'never time anything off' \
   "cadence does not tell a run to stop planning against the next scheduled tick"
+
+# Same-lane schedules deliberately overlap and share one writer namespace. Mere task presence or
+# post-start activity is therefore not a global stop signal: the claim protocol must arbitrate the
+# exact artifact instead. Pin both arms so a future edit cannot restore starvation or erase the
+# scoped conflict fence while preserving progress.
+assert_prose 'same-lane task presence or post-start activity alone is never a global stand-down condition' \
+  "cadence still permits a scheduled role to no-op merely because another same-lane task is active"
+assert_prose 'a live conflicting claim, exact shared-artifact contention, or an unsafe runtime-local mutation' \
+  "cadence does not preserve the artifact-scoped conditions that still require stand-down"
 # A `per_task_limit` record is a per-MINUTE liveness sample of "a run is currently open",
 # not a per-slot drop record — so counting those records, raw or hour-bucketed, counts a
 # slot that merely started LATE as one that never ran. Measured 2026-08-12 over 164 slots:
