@@ -73,6 +73,7 @@ assert_section() {
 
 # 1. THE BAN SURVIVES. This is the half that keeps the file from becoming a loosening: without it,
 #    an edit that drops the prohibition and keeps only the alternative passes green.
+# shellcheck disable=SC2016 # Literal Markdown code span, not shell expansion.
 assert_section 'Never `git reset --hard`' \
   "the Git safety section no longer bans \`git reset --hard\` — naming a safer alternative must never come at the cost of dropping the prohibition itself"
 
@@ -87,15 +88,19 @@ assert_section 'git -C <wt> checkout --no-overwrite-ignore --detach <sha>' \
 #     Fixture-verified: empty status, then a successful checkout that carried a foreign edit onto the
 #     target. \`worktree-cleanup.sh\` already makes this check, so the contract asking for less than
 #     its own tooling does would be an inconsistency as well as a hole.
-assert_section 'git -C <wt> ls-files -v' \
-  "the Git safety section no longer requires the \`ls-files -v\` index-flag check — a file marked assume-unchanged or skip-worktree is invisible to \`status --porcelain\`, so the cleanliness pre-check passes while another writer's edit rides onto the target commit"
+# shellcheck disable=SC2016 # Literal Markdown code span, not shell expansion.
+assert_section 'Run `git -C <wt> status --porcelain` as its own call; require exit 0 and empty output' \
+  "the Git safety section no longer requires a successful, empty \`status --porcelain\` probe — a failed status command must not be accepted as a clean worktree"
+assert_section "Run \`(set -o pipefail; git -C <wt> ls-files -v | awk '\$1 ~ /^[a-z]\$/ || \$1 == \"S\"')\`; require the whole command to exit 0 and print nothing" \
+  "the Git safety section no longer binds the complete \`ls-files -v\` index-flag command to both a successful pipeline and empty output — a failed Git probe must not be accepted as a clean index"
 
 # 2d. THE SUBMODULE DETECTION RULE. `--detach` moves the superproject only, so on a gitlink-changing
 #     PR the run is NOT on the reviewed code — fixture-verified, with nothing but a bare " M <sub>" to
 #     show for it. In a monorepo largely made of submodule bumps that is the common case, and the
 #     failure is silent, so the contract must at minimum require DETECTING it before evaluation.
-assert_section 'submodule status' \
-  "the Git safety section no longer requires checking \`git -C <wt> submodule status\` after detaching — \`--detach\` moves only the superproject, so on a gitlink-changing PR the run evaluates the previous submodule content while believing it is on the reviewed commit"
+# shellcheck disable=SC2016 # Literal Markdown code span, not shell expansion.
+assert_section 'Run `git -C <wt> submodule status --recursive` and require it to exit 0 and every output line to begin with a space' \
+  "the Git safety section no longer requires a successful recursive submodule-status probe whose every line carries Git's clean leading-space marker — a stale, absent, nested, or unmerged submodule could be evaluated as reviewed code"
 
 # 2e. AND THE WARNING AGAINST THE OBVIOUS "FIX". `--recurse-submodules` is the natural thing to reach
 #     for once 2d is stated, and it is UNSAFE in this repo's mandated linked-worktree flow: measured,
@@ -103,7 +108,7 @@ assert_section 'submodule status' \
 #     gitlink absent locally, silently skips a submodule the target introduces, and does not propagate
 #     its ignored-file protection. Without this assertion a later editor closes 2d's gap by adding the
 #     flag — reintroducing every one of those, with a rule that looks more complete than before.
-assert_section '2833' \
+assert_section '[#2833](https://github.com/devantler-tech/monorepo/issues/2833)' \
   "the Git safety section no longer points at the follow-up issue for safe submodule detaching — without it the stated hazard reads as unsolved-and-unowned, and the next editor is likely to 'fix' it with \`--recurse-submodules\`, which is measurably unsafe in this repo's linked-worktree flow"
 
 # 2b. THE PR-HEAD ASSOCIATION. \`<sha>\` is deliberately the general placeholder — it is this
@@ -112,7 +117,7 @@ assert_section '2833' \
 #     value's identity must be stated or the prescription is unactionable exactly where it is most
 #     needed. Naming \`headRefOid\` also ties this to the commit *Merge policy* pins, which is what
 #     makes "the worktree you evaluated" and "the commit you merged" the same claim.
-assert_section '**`headRefOid`**' \
+assert_section "When that commit is a PR's head, \`<sha>\` is its **\`headRefOid\`**" \
   "the Git safety section no longer identifies a PR head's \`<sha>\` as its \`headRefOid\` — without it the prescription is unactionable in its motivating case, and the worktree you evaluate is no longer tied to the commit Merge policy pins"
 
 # 3. THE SEPARATE-CALLS REQUIREMENT. Chaining the fetch and the checkout is what turns a refusal into

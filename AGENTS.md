@@ -3080,25 +3080,27 @@ assuming it does is how you silently adopt another instance's uncommitted work.*
 two-commit fixture, both arms: it **aborts and preserves** only when the modified path **differs**
 between HEAD and the target; when the dirty path is **identical** in both commits, git **carries the
 edit along and succeeds** — leaving you on the target commit with someone else's work still in the
-tree, and nothing in the output saying so. So require `git -C <wt> status --porcelain` to be **empty**
-before detaching. If it is not, that is a live claim by another writer: do GitHub-API-only work per
-*Execution model* and never detach over it.
+tree, and nothing in the output saying so. Run `git -C <wt> status --porcelain` as its own call;
+require exit 0 and empty output before detaching. If it fails or prints anything, that is a live claim
+by another writer: do GitHub-API-only work per *Execution model* and never detach over it.
 ⚠️ **`status` alone is not sufficient, because the INDEX CAN HIDE a foreign edit.** A tracked file
 carrying `assume-unchanged` or `skip-worktree` is omitted from `status --porcelain` entirely —
 fixture-verified: an empty status, followed by a successful checkout that carried another writer's
-edit straight onto the target commit. So also require
-`git -C <wt> ls-files -v | awk '$1 ~ /^[a-z]$/ || $1 == "S"'` to print **nothing** (a lowercase flag
-or `S` marks exactly those bits). [`worktree-cleanup.sh`](.claude/scripts/worktree-cleanup.sh) already
-makes this check for the same reason — treat an empty `status` as authorization to detach only once
-this one is clear too.
+edit straight onto the target commit. Run
+`(set -o pipefail; git -C <wt> ls-files -v | awk '$1 ~ /^[a-z]$/ || $1 == "S"')`; require the whole
+command to exit 0 and print nothing (a lowercase flag or `S` marks exactly those bits).
+[`worktree-cleanup.sh`](.claude/scripts/worktree-cleanup.sh) already makes this check for the same
+reason — treat an empty `status` as authorization to detach only once this one is clear too.
 🔴 **`--detach` moves the SUPERPROJECT ONLY, so after detaching you are NOT necessarily on the PR's
 code — DETECT that before evaluating anything.** Fixture-verified: on a PR that changes a gitlink, HEAD
 lands on the target while the submodule still holds its **previous** content, and `status` shows
-nothing but a bare ` M <sub>`. You would be reviewing **different code from the `headRefOid` you
-believe you are on**, and since a large share of PRs here are submodule bumps that is the common case
-rather than an edge one. So after detaching, treat a non-empty
-`git -C <wt> submodule status` marker — a leading `+` (gitlink mismatch) or `-` (not initialised) — as
-**you are not on the reviewed commit**, and do not evaluate it as though you were.
+nothing but a leading space followed by `M <sub>`. You would be reviewing **different code from the
+`headRefOid` you believe you are on**, and since a large share of PRs here are submodule bumps that is
+the common case rather than an edge one. Run `git -C <wt> submodule status --recursive` and require it
+to exit 0 and every output line to begin with a space. Reject a leading `+` (gitlink mismatch), `-`
+(not initialised), or `U` (unmerged) before evaluating the reviewed commit. This marker check proves
+only that each populated submodule is on its recorded gitlink; it does not prove that files inside an
+initialised submodule are clean.
 🔴 **Do NOT reach for `--recurse-submodules` to fix that — it is unsafe in this repo's mandated
 throwaway-worktree flow, measured.** Where a submodule is initialised in the main checkout but empty in
 the linked worktree, both pre-checks above pass and the recursive checkout then writes a `mod/.git`
