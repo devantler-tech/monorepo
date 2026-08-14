@@ -69,17 +69,39 @@ if ! [[ "$ts" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
   exit 2
 fi
 
-# Copy via a temp name in the destination dir, then rename — so a crash mid-copy
+# Copy via a temp name in the destination dir, then publish — so a crash mid-copy
 # never leaves a partial file that looks like a successful backup.
+#
+# Publishing uses `ln`, not a rename: the store is multi-writer, and any caller's
+# existence check is a separate syscall from the publish, so two instances that
+# select the same destination in the same second both clear that check long before
+# either finishes copying. A rename would let the slower one silently replace the
+# winner's backup while both report success; a hard link inside the destination
+# directory is a single exclusive create, so exactly one racer can win.
+#
+# Returns 3 when the destination already exists (lost the publish race), 1 on any
+# other copy failure.
 atomic_cp() {
   local src="$1" dest="$2"
-  local dest_dir tmp
+  local dest_dir tmp rc
   dest_dir="$(dirname "$dest")"
   mkdir -p "$dest_dir"
   tmp="$(mktemp "$dest_dir/.memory-backup.XXXXXX")"
   # mktemp creates an empty file; replace it with the source contents.
-  cp -p "$src" "$tmp"
-  mv -f "$tmp" "$dest"
+  if ! cp -p "$src" "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  rc=0
+  ln "$tmp" "$dest" 2>/dev/null || rc=$?
+  rm -f "$tmp"
+  if (( rc != 0 )); then
+    if [[ -e "$dest" ]]; then
+      return 3
+    fi
+    return 1
+  fi
+  return 0
 }
 
 if [[ "$mode" == "file" ]]; then
@@ -97,7 +119,17 @@ if [[ "$mode" == "file" ]]; then
     echo "memory-backup: refusing to overwrite existing backup: $dest" >&2
     exit 2
   fi
-  atomic_cp "$target" "$dest"
+  cp_rc=0
+  atomic_cp "$target" "$dest" || cp_rc=$?
+  if (( cp_rc == 3 )); then
+    # Another instance published this exact path while we were copying.
+    echo "memory-backup: refusing to overwrite existing backup: $dest" >&2
+    exit 2
+  fi
+  if (( cp_rc != 0 )); then
+    echo "memory-backup: failed to back up $target -> $dest" >&2
+    exit 2
+  fi
   printf 'Backed up %s -> %s\n' "$target" "$dest"
   printf 'Restore: cp %q %q\n' "$dest" "$target"
   exit 0
@@ -114,10 +146,6 @@ if [[ -z "$backup_dir" ]]; then
   backup_dir="$memory_dir/.memory-backups"
 fi
 store_dest="$backup_dir/store.${ts}"
-if [[ -e "$store_dest" ]]; then
-  echo "memory-backup: refusing to overwrite existing snapshot: $store_dest" >&2
-  exit 2
-fi
 
 if ! file_list="$(find "$memory_dir" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort)"; then
   echo "memory-backup: failed to enumerate memory files in $memory_dir" >&2
@@ -128,14 +156,33 @@ if [[ -z "$file_list" ]]; then
   exit 2
 fi
 
-mkdir -p "$store_dest"
+# `mkdir` without -p is the exclusive create that reserves this snapshot name.
+# An `-e` test followed by `mkdir -p` is two syscalls, so two instances landing on
+# the same timestamp could both pass and then interleave into one directory.
+mkdir -p "$backup_dir"
+if ! mkdir "$store_dest" 2>/dev/null; then
+  echo "memory-backup: refusing to overwrite existing snapshot: $store_dest" >&2
+  exit 2
+fi
+
+# Nothing after this point may leave a half-populated snapshot behind: a partial
+# store.<ts> is indistinguishable from a complete one, so a later restore would
+# silently recover a subset of the store — and the directory would also block a
+# retry at that timestamp.
+trap 'if [[ -d "$store_dest" ]]; then rm -rf "$store_dest"; fi' EXIT
+
 count=0
 while IFS= read -r file; do
   [[ -n "$file" ]] || continue
   base="$(basename "$file")"
-  atomic_cp "$file" "$store_dest/$base"
+  if ! atomic_cp "$file" "$store_dest/$base"; then
+    echo "memory-backup: failed to copy $file into $store_dest" >&2
+    exit 2
+  fi
   count=$(( count + 1 ))
 done <<< "$file_list"
+# Every file landed — disarm the cleanup so the finished snapshot survives.
+trap - EXIT
 
 printf 'Backed up %s file(s) from %s -> %s\n' "$count" "$memory_dir" "$store_dest"
 printf 'Restore one file: cp %q/<basename> %q/<basename>\n' "$store_dest" "$memory_dir"
