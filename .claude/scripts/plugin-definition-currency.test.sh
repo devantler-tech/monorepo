@@ -156,7 +156,116 @@ ok "an unresolvable install exits 2, not 0"
 set +e; out="$("${script}" --repo-root "${tmp}/consumer" --installed "${cur}" \
                            --gitlink 0000000000000000000000000000000000000000 2>&1)"; rc=$?; set -e
 [ "${rc}" -eq 2 ] || fail "an unreachable pinned revision must exit 2 (UNKNOWN), got ${rc}: ${out}"
-ok "an unreachable pinned revision exits 2, not 0"
+# The MESSAGE is asserted, not just the code. Exit 2 alone would still pass if the local-object
+# branch broke entirely and every case silently fell through to the forge — and it also pins that
+# this suite makes no network call: the fixture has no .gitmodules, so slug resolution dies first.
+case "${out}" in
+  *"no .gitmodules url"*) ok "an unreachable pinned revision exits 2 without reaching the network" ;;
+  *) fail "exit 2 but not by the expected network-free path — did it call out to the forge? ${out}" ;;
+esac
+
+# ── 7b. FAIL OPEN REGRESSION — an unrecognised pinned path is never silently dropped ──
+# The defect this guards: the selector recognises two shapes and had no else branch, so any other
+# path under agents/ or skills/ fell out of the reviewed list entirely. It was then invisible on BOTH
+# sides — the reviewed loop never checked it, and the EXTRA sweep only fires when it IS installed. So
+# "pinned but unrecognised AND absent from the install" reported CURRENT with a role definition
+# missing from the runtime. Two independent triggers, asserted separately because they have different
+# causes: an unexpected directory depth, and a space in the path (which awk's default field splitting
+# truncated out of existence).
+for case_name in depth space; do
+  odd_repo="${tmp}/odd-${case_name}/libraries/agent-plugins"
+  op="${odd_repo}/plugins/agentic-engineering"
+  mkdir -p "${op}/agents" "${op}/skills/alpha"
+  printf 'reviewed engineer definition\n' > "${op}/agents/agentic-engineer.agent.md"
+  printf 'reviewed alpha procedure\n'      > "${op}/skills/alpha/SKILL.md"
+  if [ "${case_name}" = depth ]; then
+    mkdir -p "${op}/skills/group/nested"
+    printf 'a definition at an unexpected depth\n' > "${op}/skills/group/nested/SKILL.md"
+  else
+    mkdir -p "${op}/skills/my skill"
+    printf 'a definition whose path contains a space\n' > "${op}/skills/my skill/SKILL.md"
+  fi
+  git -C "${odd_repo}" init -q
+  git -C "${odd_repo}" config user.email t@example.invalid
+  git -C "${odd_repo}" config user.name t
+  git -C "${odd_repo}" add -A
+  git -C "${odd_repo}" commit -qm pin
+  odd_link="$(git -C "${odd_repo}" rev-parse HEAD)"
+
+  # The install deliberately does NOT contain the odd path — that is the invisible-on-both-sides case.
+  odd_install="${tmp}/install-odd-${case_name}"
+  mkdir -p "${odd_install}"
+  cp -R "${op}/agents" "${odd_install}/"
+  mkdir -p "${odd_install}/skills/alpha"
+  cp "${op}/skills/alpha/SKILL.md" "${odd_install}/skills/alpha/SKILL.md"
+
+  set +e
+  out="$("${script}" --repo-root "${tmp}/odd-${case_name}" --gitlink "${odd_link}" \
+                     --installed "${odd_install}" 2>&1)"; rc=$?
+  set -e
+  # The load-bearing property both cases share: NEVER exit 0. What each becomes afterwards differs,
+  # and the difference is the point — the two fixes are not the same fix.
+  [ "${rc}" -ne 0 ] || fail "FAIL OPEN (${case_name}): a pinned path absent from the install reported success: ${out}"
+  if [ "${case_name}" = depth ]; then
+    # Still unrecognisable by shape, so the honest answer is UNKNOWN rather than a verdict.
+    [ "${rc}" -eq 2 ] || fail "an unclassifiable pinned path must exit 2 (UNKNOWN), got ${rc}: ${out}"
+    case "${out}" in
+      *UNCLASSIFIED*|*"could not be classified"*) ok "a pinned path at an unexpected depth exits 2, never CURRENT" ;;
+      *) fail "exit 2 but the unclassified path was not reported: ${out}" ;;
+    esac
+  else
+    # Tab-aware parsing PROMOTES this one: the path is no longer truncated, so it classifies as an
+    # ordinary skill definition and is correctly reported MISSING. Asserting UNKNOWN here would pin
+    # the bug rather than the fix.
+    [ "${rc}" -eq 1 ] || fail "a pinned path containing a space must classify and exit 1, got ${rc}: ${out}"
+    case "${out}" in
+      *"MISSING  skills/my skill/SKILL.md"*) ok "a pinned path containing a space is parsed, not dropped" ;;
+      *) fail "exit 1 but the spaced path was not named — is it still being truncated? ${out}" ;;
+    esac
+  fi
+done
+
+# ── 7c. A missing option VALUE is UNKNOWN, not DRIFT ──────────────────────────
+# `shift 2` on a lone trailing flag returns 1, and under `set -e` that exited the script with 1 — the
+# code that tells a caller the definition is stale. A typo would have produced a silent, output-free
+# drift verdict, which is the most misleading failure this script can have.
+for flag in --repo-root --gitlink --installed --plugins-root; do
+  set +e; out="$("${script}" "${flag}" 2>&1)"; rc=$?; set -e
+  [ "${rc}" -eq 2 ] || fail "a missing value for ${flag} must exit 2, got ${rc}: ${out}"
+done
+ok "a missing option value exits 2, never 1 (DRIFT)"
+
+# ── 7d. Registry resolution — the only path production actually uses ──────────
+# Every case above passes --installed, so without these the jq expression, the single-path check and
+# all three of their die paths ship untested.
+reg_root="${tmp}/plugins-root"
+mkdir -p "${reg_root}"
+printf '{"version":2,"plugins":{"agentic-engineering@devantler-plugins":[{"installPath":"%s"}]}}\n' \
+  "${cur}" > "${reg_root}/installed_plugins.json"
+if out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}")"; then
+  case "${out}" in
+    *"${cur}"*) ok "a single registry entry resolves to its installPath" ;;
+    *) fail "resolved from the registry but did not use its installPath: ${out}" ;;
+  esac
+else
+  fail "a well-formed registry with a matching install must exit 0, got $?: ${out}"
+fi
+
+printf '{"version":2,"plugins":{"agentic-engineering@devantler-plugins":[{"installPath":"%s"},{"installPath":"%s"}]}}\n' \
+  "${cur}" "${cur}" > "${reg_root}/installed_plugins.json"
+set +e; out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}" 2>&1)"; rc=$?; set -e
+[ "${rc}" -eq 2 ] || fail "an ambiguous registry (2 install paths) must exit 2, got ${rc}: ${out}"
+ok "an ambiguous registry exits 2 rather than picking one"
+
+printf 'not json at all\n' > "${reg_root}/installed_plugins.json"
+set +e; out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}" 2>&1)"; rc=$?; set -e
+[ "${rc}" -eq 2 ] || fail "a malformed registry must exit 2, got ${rc}: ${out}"
+ok "a malformed registry exits 2, not a raw jq status"
+
+rm -f "${reg_root}/installed_plugins.json"
+set +e; out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}" 2>&1)"; rc=$?; set -e
+[ "${rc}" -eq 2 ] || fail "an absent registry must exit 2, got ${rc}: ${out}"
+ok "an absent registry exits 2"
 
 # ── 8. The remediation is NAMED in the failure output ─────────────────────────
 # The deployment's own "fail with the fix" rule: a guard that blocks without naming the resolving
