@@ -153,7 +153,10 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   remain `QUERY-UNKNOWN` in the digest and keep broad portfolio health unknown, but they **never block
   an independently fully joined candidate**. A failed candidate join blocks that candidate only; move
   to the next item in the already-established queue and return every cleared row plus each scoped
-  unknown. When the orchestrator exhausts the returned cleared rows, deepen the next bounded shard
+  unknown. **An attempted in-shard join failure emits `QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>`;
+  never-attempted candidates remain `NOT-DEEPENED`** with the budget or next-shard reason. The scoped
+  row identifies the blocked candidate and failed component without converting repository-wide state
+  into a mutation verdict. When the orchestrator exhausts the returned cleared rows, deepen the next bounded shard
   rather than restarting the census: **pass the prior digest's `SHARD-CURSOR` and explicit
   `repo#PR@head@updatedAt` classified set into the next surveyor prompt**. Persist only the cursor and
   unchanged named-blocker tuples in native memory across scheduled sessions; candidate-scoped query

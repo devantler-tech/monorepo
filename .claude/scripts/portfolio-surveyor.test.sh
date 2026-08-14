@@ -1255,6 +1255,24 @@ grep -Fq 'invalidate the supplied state and restart at the earliest changed cand
 grep -Fq 'verified closed or merged is pruned from the supplied set' "${surveyor}" ||
   fail "surveyor treats a terminal candidate as cursor corruption and restarts completed shards"
 
+# Behavioural continuation fixture: an unchanged ten-candidate queue must select disjoint shards,
+# not merely carry words such as cursor or classified in the contract.
+stable_queue=(repo#1 repo#2 repo#3 repo#4 repo#5 repo#6 repo#7 repo#8 repo#9 repo#10)
+first_shard=("${stable_queue[@]:0:8}")
+classified=" ${first_shard[*]} "
+second_shard=()
+for candidate in "${stable_queue[@]}"; do
+  case "${classified}" in
+    *" ${candidate} "*) continue ;;
+  esac
+  second_shard+=("${candidate}")
+  [ "${#second_shard[@]}" -eq 8 ] && break
+done
+[ "${first_shard[*]}" = 'repo#1 repo#2 repo#3 repo#4 repo#5 repo#6 repo#7 repo#8' ] ||
+  fail "continuation fixture selected an unexpected first shard"
+[ "${second_shard[*]}" = 'repo#9 repo#10' ] ||
+  fail "continuation fixture repeated classified candidates instead of advancing"
+
 # monorepo#2482 — every agent instance reviews as `devantler`, so an `rd=` rule keyed on the login
 # alone reports a sibling instance's own superseded CHANGES_REQUESTED as a permanent human gate and
 # parks a finished PR. Measured live on monorepo#2432: a disclosed agent review blocked the PR for

@@ -500,6 +500,12 @@ assert_maintenance_prose 'unrelated failed or capped joins remain `QUERY-UNKNOWN
   "portfolio maintenance does not preserve uncertainty for incomplete unrelated joins"
 assert_maintenance_prose 'never block an independently fully joined candidate' \
   "portfolio maintenance still permits unrelated query failures to freeze cleared work"
+assert_maintenance_prose 'A candidate repository query failure blocks that candidate' \
+  "portfolio maintenance can act after the candidate repository query fails"
+assert_maintenance_prose 'An attempted in-shard join failure emits `QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>`' \
+  "portfolio maintenance does not define the candidate-scoped producer row for failed joins"
+assert_maintenance_prose 'never-attempted candidates remain `NOT-DEEPENED`' \
+  "portfolio maintenance conflates failed attempted joins with candidates outside the shard"
 assert_maintenance_prose 'issue descent remains blocked until the actionable-PR queue is completely classified' \
   "portfolio maintenance can descend into issues while higher-priority PR state is unknown"
 assert_maintenance_prose 'pass the prior digest' \
