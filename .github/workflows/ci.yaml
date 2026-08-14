@@ -21,12 +21,16 @@ jobs:
       active-projects: ${{ steps.filter.outputs.active-projects }}
       safe-clone: ${{ steps.filter.outputs.safe-clone }}
       branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
+      worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
       agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
+      latency-discipline-contract: ${{ steps.filter.outputs.latency-discipline-contract }}
+      git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
+      merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
@@ -34,6 +38,11 @@ jobs:
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
       agent-claim: ${{ steps.filter.outputs.agent-claim }}
+      worktree-claim: ${{ steps.filter.outputs.worktree-claim }}
+      renovate-dashboard: ${{ steps.filter.outputs.renovate-dashboard }}
+      comment-disclosure-drift: ${{ steps.filter.outputs.comment-disclosure-drift }}
+      pr-ownership-disclosure: ${{ steps.filter.outputs.pr-ownership-disclosure }}
+      pipefail-grep-guard: ${{ steps.filter.outputs.pipefail-grep-guard }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,7 +50,7 @@ jobs:
           persist-credentials: false
       - name: Detect changes
         id: filter
-        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
             docs:
@@ -74,6 +83,16 @@ jobs:
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
+            worktree-claim:
+              - '.claude/scripts/worktree-claim-lib.sh'
+              - '.claude/scripts/worktree-claim.sh'
+              - '.claude/scripts/worktree-claim.test.sh'
+              - '.claude/scripts/worktree-cleanup.sh'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - 'AGENTS.md'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             flow-scorecard:
               - '.claude/scripts/flow-scorecard.sh'
               - '.claude/scripts/flow-scorecard.test.sh'
@@ -86,6 +105,12 @@ jobs:
             branch-cleanup:
               - '.claude/scripts/branch-cleanup.sh'
               - '.claude/scripts/branch-cleanup.test.sh'
+            worktree-cleanup:
+              - '.claude/scripts/worktree-claim-lib.sh'
+              - '.claude/scripts/worktree-cleanup.sh'
+              - '.claude/scripts/worktree-cleanup-all.sh'
+              - '.claude/scripts/worktree-cleanup.test.sh'
+              - '.claude/scripts/worktree-cleanup-all.test.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -107,9 +132,79 @@ jobs:
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
+            comment-disclosure-drift:
+              # AGENTS.md carries the disclosure contract this guard enforces, so a
+              # PR that edits only those rules must still run the job — otherwise
+              # the changed contract ships without its check ever executing.
+              - 'AGENTS.md'
+              - '.claude/scripts/comment-disclosure-drift.sh'
+              - '.claude/scripts/comment-disclosure-drift.test.sh'
+              - '.claude/scripts/comment-disclosure-drift-go/**'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            pr-ownership-disclosure:
+              # AGENTS.md carries the ownership-marker rules this classifier
+              # implements, so a PR editing only those rules must still run the
+              # job — otherwise the changed contract ships unchecked.
+              - 'AGENTS.md'
+              - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/scripts/pr-ownership-disclosure.sh'
+              - '.claude/scripts/pr-ownership-disclosure-go/**'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            renovate-dashboard:
+              - '.claude/scripts/renovate-dashboard-drift.sh'
+              - '.claude/scripts/renovate-dashboard-drift-go/**'
+              # The declared roots are checked against .gitmodules, so a
+              # submodule added or removed changes what this must verify.
+              - '.gitmodules'
+              # The monorepo's own config is one of the configs under test — and
+              # every location the checker recognises has to be watched, not just
+              # the one in use today. A PR that ADDS a root renovate.json, or a
+              # root package.json carrying a "renovate" key, would otherwise
+              # change none of these paths, skip the job, and land the config
+              # the checker exists to adjudicate.
+              - '.github/renovate.json'
+              - '.github/renovate.json5'
+              - 'renovate.json'
+              - 'renovate.json5'
+              - '.renovaterc'
+              - '.renovaterc.json'
+              - '.renovaterc.json5'
+              - 'package.json'
+              # A submodule bump can carry a changed Renovate config in, so the
+              # gitlinks of the roots that carry one have to re-trigger this.
+              # Without these the check would only run when the monorepo itself
+              # changed, and a drift introduced upstream would land unexamined.
+              #
+              # Only these four are listed, and that bounds what this job can
+              # catch: a repository that has NO config today and gains one
+              # arrives as a gitlink outside this list, so the job is skipped.
+              # Listing every submodule would not fix it on its own — the
+              # checkout below clones only these roots, so an unlisted one is
+              # not on disk to inspect either. The check prints the mapped
+              # repositories it could not inspect rather than implying it
+              # covered them.
+              - 'platform'
+              - 'libraries/kyverno-policies'
+              - 'libraries/provider-upjet-unifi'
+              - 'templates/platform-template'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the check it gates.
+              - '.github/workflows/ci.yaml'
             maintainer-preflight:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/maintainer-preflight.test.sh'
+            latency-discipline-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/latency-discipline-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            git-safety-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/git-safety-contract.test.sh'
+              - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
               - '.coderabbit.yaml'
@@ -124,10 +219,16 @@ jobs:
               - '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/review-provider-loop-contract.test.sh'
+              # The captured review bodies the contract test asserts against. A
+              # fixture is an input to that test, so editing one can invalidate a
+              # regression case — without this the job is skipped and CI stays
+              # green while the case it pins no longer reproduces.
+              - '.claude/scripts/fixtures/**'
               - '.github/workflows/ci.yaml'
             agent-role-delivery-contract:
               - 'AGENTS.md'
               - '.claude/agents/daily-maintainer.md'
+              - '.claude/loaders/cursor-daily-ai-engineer.md'
               # The two retired agent forks stay listed deliberately: the test asserts they
               # do NOT exist, so re-adding either must trigger the job that rejects it.
               - '.claude/agents/agent-improver.md'
@@ -135,16 +236,32 @@ jobs:
               - '.claude/plugin-consumption/agentic-engineering.desired-state.json'
               - '.claude/settings.json'
               - '.claude/skills/agent-improvement/**'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/product-engineering/SKILL.md'
+              - '.claude/skills/self-improvement/SKILL.md'
               - '.claude/skills/finops/SKILL.md'
               - '.claude/finops/**'
               - '.claude/scripts/finops-snapshot.sh'
               - '.claude/scripts/agent-role-delivery-contract.test.sh'
+              # The test diffs AGENTS.md blocks against committed fixtures. Without this path a
+              # fixture-only commit skips the job entirely, so the mismatch assertion never runs on
+              # exactly the fixture-only tampering those whitelists exist to catch.
+              - '.claude/scripts/fixtures/**'
               - 'libraries/agent-plugins'
               - '.github/workflows/ci.yaml'
             work-priority-ladder:
               - 'AGENTS.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/agents/portfolio-surveyor.md'
               - '.claude/scripts/work-priority-ladder.test.sh'
+              - '.github/workflows/ci.yaml'
+            merge-confirmation-read:
+              - 'AGENTS.md'
+              # every Markdown definition surface, matching the test's own discovery — an enumerated
+              # subset would let a change to an unlisted surface skip the check that guards it
+              - '.claude/**/*.md'
+              - '.claude/**/*.json'
+              - '.claude/scripts/merge-confirmation-read.test.sh'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
@@ -152,6 +269,7 @@ jobs:
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/agents/platform-security-surveyor.md'
               - '.claude/loaders/cursor-daily-ai-engineer.md'
+              - '.cursor/environment.json'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/skills/products/agent-skills/SKILL.md'
@@ -160,7 +278,24 @@ jobs:
               - '.claude/skills/products/platform/SKILL.md'
               - '.claude/scripts/portfolio-surveyor.test.sh'
               - '.claude/scripts/programmed-bot-review-exemption.sh'
+              - '.claude/skill-ownership-allowlist.tsv'
+              # The contract test asserts the ownership classifier exists and
+              # pins the matcher rules, so a change to it must re-run the test.
+              - '.claude/scripts/pr-ownership-disclosure.sh'
+              - '.claude/scripts/pr-ownership-disclosure-go/**'
               - '.github/workflows/ci.yaml'
+            pipefail-grep-guard:
+              # The guard scans EVERY tracked shell script, so any shell change
+              # can introduce the shape it rejects — an enumerated subset would
+              # let a new script land unchecked.
+              # ANY path. A shell script need not be named `*.sh` — the guard
+              # identifies one by shebang, anywhere in the tree — so any narrower
+              # filter contradicts its stated scope and lets an extensionless
+              # `tools/check` or a repository-root `check` land unscanned. An
+              # enumerated set of "script-ish" directories only moves the gap
+              # rather than closing it. The sweep is ~9s over the whole
+              # repository, so running it unconditionally is the cheaper error.
+              - '**'
             product-value:
               - 'AGENTS.md'
               - '**/[Aa][Dd][Rr]/**'
@@ -302,6 +437,28 @@ jobs:
       - name: Self-test board-add
         run: bash .claude/scripts/board-add.test.sh
 
+  test-worktree-claim:
+    name: Test worktree claim
+    needs: changes
+    if: needs.changes.outputs.worktree-claim == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hermetic throwaway git repo + worktrees — no network. Both OSes because
+      # daily runs are on macOS while CI defaults to Linux, and date(1) parsing
+      # of the marker's ISO timestamp is the portability pin (#2284).
+      - name: Self-test worktree-claim
+        run: bash .claude/scripts/worktree-claim.test.sh
+
   test-flow-scorecard:
     name: Test flow scorecard
     needs: changes
@@ -366,6 +523,33 @@ jobs:
       - name: Self-test branch-cleanup namespaces
         run: bash .claude/scripts/branch-cleanup.test.sh
 
+  test-worktree-cleanup:
+    name: Test worktree cleanup
+    needs: changes
+    if: needs.changes.outputs.worktree-cleanup == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hermetic bare-origin fixture — no network, no token. Pins every fail-closed
+      # KEEP gate (live process CWD, lock, age, unreachable-from-remote commits,
+      # uncommitted work) against a reaped-baseline control, so a run that reaps
+      # nothing cannot pass the gate assertions vacuously.
+      # The macos leg is load-bearing: the host ships bash 3.2, which cannot parse
+      # `case` inside $( ), and the age/stat probes are BSD-flavoured there.
+      - name: Self-test worktree-cleanup safety gates
+        run: bash .claude/scripts/worktree-cleanup.test.sh
+      - name: Self-test the multi-repo orchestrator
+        run: bash .claude/scripts/worktree-cleanup-all.test.sh
+
   test-submodule-init:
     needs: changes
     if: needs.changes.outputs.submodule-init == 'true'
@@ -387,6 +571,50 @@ jobs:
       - name: Self-test the submodule-init isolation guard
         run: bash .claude/scripts/submodule-init.test.sh
 
+  test-pipefail-grep-guard:
+    name: Test pipefail grep guard
+    needs: changes
+    if: needs.changes.outputs.pipefail-grep-guard == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The self-test proves the class is real by executing it, then covers each
+      # spelling the guard must catch and each safe shape it must leave alone.
+      - name: Self-test the guard
+        run: bash .claude/scripts/pipefail-grep-guard.test.sh
+      # ENFORCEMENT IS LATENT, per feature-flag-first delivery. This guard
+      # approximates a shell parser in ~1100 lines of bash, so it can err in both
+      # directions: a silent miss on a hazardous line, or a false positive that
+      # blocks a valid script. Gating every PR in the repository on that judgement
+      # is the risk the flag holds back.
+      #
+      # The repository-wide sweep therefore runs only when the
+      # `ENFORCE_PIPEFAIL_GREP_GUARD` repository variable is `true`. Activation is a
+      # separate, reversible step, taken once the guard has run clean against real
+      # traffic. The self-test above is NOT gated — it is an ordinary unit test of a
+      # tracked script, and keeping it running is what makes the latent code
+      # trustworthy at the moment the flag is flipped.
+      #
+      # This is a RELEASE flag, so it is short-lived by contract: #2821 owns
+      # activation and removal, and expires 2026-09-30. From that date
+      # `pipefail-grep-guard.test.sh` fails, so the flag cannot become permanent
+      # debt without someone deciding to keep it.
+      - name: Reject writers piped into an early-exiting grep
+        if: vars.ENFORCE_PIPEFAIL_GREP_GUARD == 'true'
+        run: bash .claude/scripts/pipefail-grep-guard.sh
+      # The OFF state is a real state, so it reports rather than silently doing
+      # nothing: a run in which the sweep did not execute says so.
+      - name: Report that enforcement is latent
+        if: vars.ENFORCE_PIPEFAIL_GREP_GUARD != 'true'
+        run: |
+          echo "pipefail-grep-guard: enforcement is LATENT (ENFORCE_PIPEFAIL_GREP_GUARD is not 'true')."
+          echo "The self-test ran; the repository-wide sweep did not gate this PR."
+
   test-maintainer-preflight:
     name: Test maintainer preflight contract
     needs: changes
@@ -401,6 +629,101 @@ jobs:
           persist-credentials: false
       - name: Verify the maintainer preflight contract
         run: bash .claude/scripts/maintainer-preflight.test.sh
+
+  drift-check-renovate-dashboard:
+    name: Check Renovate Dependency Dashboard drift
+    needs: changes
+    if: needs.changes.outputs.renovate-dashboard == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/renovate-dashboard-drift-go/go.mod
+          cache: false
+      # Verify the guard itself first — hermetic fixtures, no submodule checkout
+      # needed — so a refactor that broke a check fails fast and unambiguously.
+      - name: Self-test the drift checker
+        run: go -C .claude/scripts/renovate-dashboard-drift-go test ./...
+      # The guard is network-free: it reads the checked-out working trees, so the
+      # repositories that carry a Renovate config have to be present. All four are
+      # public, and the .gitmodules URLs are SSH (git@github.com:) which the runner
+      # has no key for, so point them at public HTTPS to clone anonymously.
+      # A submodule missing here makes the guard exit 2 rather than pass, so this
+      # list going stale surfaces as a failure instead of a silent no-op.
+      - name: Check out the submodules that carry a Renovate config
+        run: |
+          set -euo pipefail
+          # path:repository, both sides hardcoded HERE and nowhere else.
+          #
+          # Deliberately NOT derived from .gitmodules: that file is part of the
+          # pull request, so reading a clone target out of it would let a PR
+          # choose what this job fetches — untrusted input selecting a tool's
+          # argument, which the repository's own boundary forbids. It is also
+          # deliberately not rebuilt as devantler-tech/<last path segment>: a
+          # repository whose GitHub name differs from its directory would get the
+          # wrong remote silently, and .gitmodules already contains such a case
+          # (github/personal/profile is devantler/devantler). An explicit mapping
+          # is the only form that is both trusted and exact.
+          for entry in platform:devantler-tech/platform \
+                       libraries/kyverno-policies:devantler-tech/kyverno-policies \
+                       libraries/provider-upjet-unifi:devantler-tech/provider-upjet-unifi \
+                       templates/platform-template:devantler-tech/platform-template; do
+            path="${entry%%:*}"
+            repo="${entry##*:}"
+            git submodule set-url "$path" "https://github.com/${repo}.git"
+            git submodule update --init --depth 1 "$path"
+          done
+      - name: Check Renovate configs for Dependency Dashboard drift
+        run: bash .claude/scripts/renovate-dashboard-drift.sh --root .
+
+  test-comment-disclosure-drift:
+    name: Test comment disclosure drift guard
+    needs: changes
+    if: needs.changes.outputs.comment-disclosure-drift == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/comment-disclosure-drift-go/go.mod
+          cache: false
+      # Hermetic: the guard is network-free and the wrapper's gh path is exercised
+      # through a PATH stub, so this job needs no token and makes no API call.
+      - name: Verify the comment disclosure drift guard
+        run: bash .claude/scripts/comment-disclosure-drift.test.sh
+
+  test-pr-ownership-disclosure:
+    name: Test PR ownership disclosure classifier
+    needs: changes
+    if: needs.changes.outputs.pr-ownership-disclosure == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/pr-ownership-disclosure-go/go.mod
+          cache: false
+      - name: Verify the PR ownership disclosure classifier
+        run: go -C .claude/scripts/pr-ownership-disclosure-go test ./...
 
   test-memory-hygiene:
     name: Test memory hygiene guard
@@ -458,6 +781,36 @@ jobs:
           persist-credentials: false
       - name: Verify the product value contract
         run: bash .claude/scripts/product-value-contract.test.sh
+
+  test-latency-discipline-contract:
+    name: Test latency discipline contract
+    needs: changes
+    if: needs.changes.outputs.latency-discipline-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the latency discipline contract
+        run: bash .claude/scripts/latency-discipline-contract.test.sh
+
+  test-git-safety-contract:
+    name: Test git safety contract
+    needs: changes
+    if: needs.changes.outputs.git-safety-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the git safety contract
+        run: bash .claude/scripts/git-safety-contract.test.sh
 
   test-self-review-contract:
     name: Test self-review contract
@@ -536,6 +889,21 @@ jobs:
       - name: Verify the work-priority ladder
         run: bash .claude/scripts/work-priority-ladder.test.sh
 
+  test-merge-confirmation-read:
+    name: Test merge-confirmation read contract
+    needs: changes
+    if: needs.changes.outputs.merge-confirmation-read == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the merge-confirmation read contract
+        run: bash .claude/scripts/merge-confirmation-read.test.sh
+
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
     needs: changes
@@ -560,43 +928,61 @@ jobs:
       - build-docs
       - audit-docs
       - drift-check-active-projects
+      - drift-check-renovate-dashboard
       - test-agent-telemetry
       - test-board-add
+      - test-comment-disclosure-drift
+      - test-pr-ownership-disclosure
+      - test-worktree-claim
       - test-flow-scorecard
       - test-safe-clone
       - test-branch-cleanup
+      - test-worktree-cleanup
       - test-submodule-init
+      - test-pipefail-grep-guard
       - test-maintainer-preflight
       - test-memory-hygiene
       - test-agent-claim
+      - test-latency-discipline-contract
+      - test-git-safety-contract
       - test-self-review-contract
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
       - test-work-priority-ladder
+      - test-merge-confirmation-read
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/actions/aggregate-job-checks@9705e47d7df0b556ec06786247297c0e5020e56d # v10.2.1
+        uses: devantler-tech/actions/aggregate-job-checks@a286df5616b1aa89a0136d0eed82b462dbac7585 # v13.0.7
         with:
           job-results: >-
             ${{ needs.changes.result }}
             ${{ needs.build-docs.result }}
             ${{ needs.audit-docs.result }}
             ${{ needs.drift-check-active-projects.result }}
+            ${{ needs.drift-check-renovate-dashboard.result }}
             ${{ needs.test-agent-telemetry.result }}
             ${{ needs.test-board-add.result }}
+            ${{ needs.test-comment-disclosure-drift.result }}
+            ${{ needs.test-pr-ownership-disclosure.result }}
+            ${{ needs.test-worktree-claim.result }}
             ${{ needs.test-flow-scorecard.result }}
             ${{ needs.test-safe-clone.result }}
             ${{ needs.test-branch-cleanup.result }}
+            ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-submodule-init.result }}
+            ${{ needs.test-pipefail-grep-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
             ${{ needs.test-agent-claim.result }}
+            ${{ needs.test-latency-discipline-contract.result }}
+            ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}
             ${{ needs.test-work-priority-ladder.result }}
+            ${{ needs.test-merge-confirmation-read.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}

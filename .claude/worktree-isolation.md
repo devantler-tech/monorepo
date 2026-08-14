@@ -38,7 +38,7 @@ A submodule's git directory lives at `<repo>/.git/modules/<name>/`. The breakage
 
 `BROKEN` = stray `core.worktree` in the shared `.git/modules/<name>/config`, inherited by every linked
 worktree. The 2026-06-25 sweep found **every active submodule broken** except the two already isolated
-(`templates/gitops-tenant-template`, fixed 2026-06-17, and `projects/ksail`) and **fixed +
+(`templates/platform-tenant-template`, fixed 2026-06-17, and `projects/ksail`) and **fixed +
 probe-verified all of them** — repairing live linked worktrees in place (see *Live linked worktrees*
 below). Current state:
 
@@ -56,7 +56,7 @@ below). Current state:
 | `templates/platform-template` | ~~set~~ → unset | true | ✅ fixed & verified 2026-06-25 |
 | `platform` | ~~set~~ → unset | true | ✅ fixed 2026-06-25 — **6 live worktrees repaired in place** |
 | `templates/go-template` | ~~set~~ → unset | true | ✅ fixed 2026-06-25 — **1 live worktree repaired in place** |
-| `templates/gitops-tenant-template` | ~~set~~ → unset | true | ⚠️ **REGRESSED 2026-07-14** — re-fixed & verified (see *Regression watch*) |
+| `templates/platform-tenant-template` | ~~set~~ → unset | true | ⚠️ **REGRESSED 2026-07-14** — re-fixed & verified (see *Regression watch*) |
 | `projects/ksail` | unset | true | ✅ already isolated — **active, do not delete** (see below) |
 
 > **`projects/ksail` is ACTIVE — never treat it as orphaned.** An earlier revision of this doc called it
@@ -88,7 +88,7 @@ done
 Apply per submodule, in this **additive-first order** so the main worktree is never momentarily without
 a resolvable `core.worktree` (safe even while parallel sessions hold the shared checkout). Let
 `M=.git/modules/<name>` and `ABS` = the absolute path to the submodule's **main** checkout
-(e.g. `~/git-personal/monorepo/templates/gitops-tenant-template`):
+(e.g. `~/git-personal/monorepo/templates/platform-tenant-template`):
 
 ```sh
 # 0. (optional) back up, so the change is trivially reversible
@@ -107,7 +107,7 @@ git config -f "$M/config" --unset core.worktree
 ### Verify (acceptance criterion — do this after each fix)
 
 ```sh
-P=<submodule-working-path>            # e.g. templates/gitops-tenant-template
+P=<submodule-working-path>            # e.g. templates/platform-tenant-template
 rtk proxy git -C "$P" worktree add --detach .probe-iso        # throwaway, no branch to clean up
 git -C "$P/.probe-iso" rev-parse --show-toplevel              # MUST print …/$P/.probe-iso, NOT …/.git/modules/…
 rtk proxy git -C "$P" worktree remove --force .probe-iso      # clean up
@@ -119,9 +119,9 @@ path under `.git/modules/<name>` or the shared main checkout itself (whatever th
 `core.worktree` points at). Test for exact equality with the worktree's own absolute path; do not
 match on a symptom string.
 
-**Verified 2026-06-17 on `templates/gitops-tenant-template`:** before the fix a probe worktree's
-`show-toplevel` resolved to `…/.git/modules/templates/gitops-tenant-template`; after the fix it resolves
-to `…/templates/gitops-tenant-template/.probe-iso` (its own tree), and the main checkout still resolves
+**Verified 2026-06-17 on `templates/platform-tenant-template`:** before the fix a probe worktree's
+`show-toplevel` resolved to `…/.git/modules/templates/platform-tenant-template`; after the fix it resolves
+to `…/templates/platform-tenant-template/.probe-iso` (its own tree), and the main checkout still resolves
 correctly. This submodule is left fixed.
 
 ## Regression watch — the fix is NOT permanent (PROBE EVERY TIME)
@@ -129,7 +129,7 @@ correctly. This submodule is left fixed.
 **The 2026-06-25 sweep does not stay fixed.** On **2026-07-14** `applications/ksail` was found **broken
 again**: the stray `core.worktree = ../../../../applications/ksail` was back in the shared
 `.git/modules/applications/ksail/config` (with `extensions.worktreeConfig` still `true` — so the flag
-survived, but the stray value returned and was being inherited again). `templates/gitops-tenant-template`
+survived, but the stray value returned and was being inherited again). `templates/platform-tenant-template`
 was found broken again the **same day**. A green row in the table above is therefore a record of *a* fix,
 **not** a guarantee of current state.
 
@@ -240,13 +240,13 @@ leftovers with **zero** live worktrees) were: `dotfiles`, `github/devantler-tech
 
 - ✅ **All active submodules fixed & probe-verified (2026-06-25)** — every initialized submodule on
   `~/git-personal/monorepo` now has `extensions.worktreeConfig=true` and **no** shared `core.worktree`,
-  so `git worktree add` resolves to an isolated tree. `templates/gitops-tenant-template` was done first
+  so `git worktree add` resolves to an isolated tree. `templates/platform-tenant-template` was done first
   (2026-06-17); the rest, including `platform` (6 live worktrees) and `templates/go-template` (1),
   followed on 2026-06-25 via the live-worktree repair above.
 - ⚠️ **The fix DOES NOT survive a submodule re-init — regresses silently (found 2026-07-09, run 656th).**
   A stray `core.worktree` had reappeared in the shared config on **9** submodules: `github/devantler-tech/
   github-actions/actions`, `platform` (15 live worktrees this time — repaired in place, zero disruption),
-  `templates/gitops-tenant-template`, `templates/go-template` (1 live worktree), `libraries/agent-skills`,
+  `templates/platform-tenant-template`, `templates/go-template` (1 live worktree), `libraries/agent-skills`,
   `libraries/provider-upjet-unifi` (1 live worktree), `applications/fleet-gitops`,
   `applications/wedding-app`, `github/devantler-tech/maintenance`. Root cause: `git submodule update
   --init` (or a deinit/reinit cycle) recreates the gitdir's `config` from git's default template, which
