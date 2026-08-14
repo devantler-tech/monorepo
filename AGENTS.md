@@ -278,6 +278,31 @@ that the generic plugin does not carry yet; remove it only after the side-by-sid
 [`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md)
 passes.
 
+🔴 **Verify that the definition the runtime LOADED is the one this consumer PINNED — the desired
+state's `refreshTiming: before-starting-each-run` is a declaration, not a mechanism.** Two controls
+already watch this chain and neither reaches its last link: [#2736](https://github.com/devantler-tech/monorepo/issues/2736)
+tracks the gitlink against upstream `main`, and `agent-role-delivery-contract.test.sh` hashes the
+desired state against the **repository submodule** at that gitlink. The copy the agent and skill
+entrypoints are actually served from is a runtime-managed install that **no writer advances**, so
+unlike the gitlink its staleness is unbounded rather than self-healing — and both controls read
+clean throughout. Measured on the Claude instance 2026-08-14: **7 of 9 definition files differed
+from the pin and had not moved in 20 days**, spanning all three roles, so every hourly dispatch and
+every delegated survey ran a superseded definition while reporting a clean run
+([#2847](https://github.com/devantler-tech/monorepo/issues/2847)).
+
+Run [`.claude/scripts/plugin-definition-currency.sh`](.claude/scripts/plugin-definition-currency.sh)
+before acting on a plugin-sourced role. It compares by **git blob identity, never a version string**
+— a version can be bumped without the definitions moving, and the definitions can be superseded
+while the installed version still looks plausible. It exits `0` current, `1` drift, and `2`
+**UNKNOWN**; treat `2` as unchecked, never as current.
+
+**On drift, do not proceed as if the loaded definition were current: read the reviewed definition at
+the pinned gitlink and follow that**, and report the drift. Refresh only through the runtime's own
+control plane — the `/plugin` marketplace update flow. **Never edit the plugin cache**; it is
+read-only evidence (see *Agent definition locations*). When the refresh needs an interactive session
+an unattended run cannot open, surface it on a declared *Maintainer channel* rather than leaving a
+silently superseded definition in place.
+
 ### Agent definition locations
 
 The Agent Improver may change only the surfaces named here. A path being readable does not make it a
