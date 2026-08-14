@@ -282,6 +282,15 @@ grep -Fq 'board_coverage=unknown:incomplete-denominator' "${surveyor}" ||
 if grep -Fq 'gh search issues --owner devantler-tech --state open --archived=false' "${surveyor}"; then
   fail "surveyor still prescribes the default-limited gh search issues row set as the denominator"
 fi
+# The assertions above only prove the valid forms are PRESENT. A document carrying the valid template
+# AND a bare numeric row would satisfy every one of them, so bound the output shape from both ends:
+# exactly one digest row, and no board_coverage form outside the measured|unknown grammar.
+board_coverage_rows="$(grep -c '^- BOARD-COVERAGE' "${surveyor}" || true)"
+[ "${board_coverage_rows}" = "1" ] ||
+  fail "surveyor must carry exactly one BOARD-COVERAGE digest row (found ${board_coverage_rows})"
+if grep -nE 'board_coverage=<?[0-9]|board_coverage=<n>' "${surveyor}"; then
+  fail "surveyor prescribes a bare numeric board_coverage row outside the measured|unknown grammar"
+fi
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||
