@@ -430,6 +430,79 @@ out="$(cd "$c14/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 report "advance ahead: exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
 report "advance ahead: names the ahead-of-pin refusal" \
   "$(grep -q 'ahead of the recorded pin' <<<"$out" && echo yes || echo no)" "$out"
+
+# 15. monorepo#2694 — a registered submodule that is NON-EMPTY but NOT INITIALISED (no `.git`) must
+#     never make `repair` write into the SUPERPROJECT's config. `is_populated` only asks "is the
+#     directory non-empty", so a leftover file is enough to route such a path into `repair`; there
+#     `git -C <path> rev-parse --git-common-dir` walks UP and returns the superproject's gitdir, and
+#     repair then pins `core.worktree` in the PARENT repo's per-worktree config — redirecting the
+#     parent's main checkout at the submodule directory.
+#
+#     Measured on the live host 2026-08-06: the monorepo main checkout resolved to
+#     `<monorepo>/.claude/worktrees/<slug>/platform`, `git status` reported 182 phantom deletions, and
+#     the contract-mandated end-of-tick `branch-cleanup.sh` fail-closed on EVERY tick as a result.
+#     The blast radius is the parent repository and every session sharing it, which is why this fails
+#     closed rather than best-effort repairing.
+c15="$tmp/c15"
+mk_super "$c15"
+git -C "$c15/super" submodule --quiet deinit -f sub >/dev/null
+# The state that bit: not empty, but carrying no `.git` — so `is_populated` says yes and git escapes up.
+echo leftover >"$c15/super/sub/leftover.txt"
+
+report "parent-escape precondition: the submodule dir is non-empty" \
+  "$([[ -n "$(ls -A "$c15/super/sub" 2>/dev/null)" ]] && echo yes || echo no)"
+report "parent-escape precondition: it has no .git of its own" \
+  "$([[ ! -e "$c15/super/sub/.git" ]] && echo yes || echo no)"
+# PRECONDITION that makes the whole case meaningful: git really does resolve this path to the PARENT.
+# If some future git stopped escaping upward, the assertions below would pass vacuously.
+c15_escaped="$(cd "$c15/super/sub" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+report "parent-escape precondition: git -C on it resolves to the SUPERPROJECT gitdir" \
+  "$([[ "$c15_escaped" -ef "$c15/super/.git" ]] && echo yes || echo no)" "got=$c15_escaped"
+
+out="$(cd "$c15/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+
+# THE discriminating assertion — this is the production harm, and it is what goes RED without the fix.
+c15_parent_key="$(git config -f "$c15/super/.git/config.worktree" core.worktree 2>/dev/null || true)"
+report "parent-escape: never writes core.worktree into the SUPERPROJECT's per-worktree config" \
+  "$([[ -z "$c15_parent_key" ]] && echo yes || echo no)" "parent core.worktree=${c15_parent_key:-<unset>}"
+
+# The same harm stated as the user-visible symptom (#2694 AC-1): the parent still resolves to itself.
+c15_top="$(git -C "$c15/super" rev-parse --show-toplevel 2>/dev/null || true)"
+report "parent-escape: the superproject still resolves to its OWN root" \
+  "$([[ -n "$c15_top" && "$c15_top" -ef "$c15/super" ]] && echo yes || echo no)" "toplevel=$c15_top"
+
+report "parent-escape: the run FAILS rather than reporting success" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "parent-escape: it never reports 'isolated ✓'" \
+  "$(grep -q 'isolated ✓' <<<"$out" && echo no || echo yes)" "$out"
+
+# NEGATIVE CONTROL — the fix must refuse only the escaping case, not every repair. A genuinely
+# initialised submodule must still be repaired and probed exactly as case 3 requires.
+c15b="$tmp/c15b"
+mk_super "$c15b"
+out="$(cd "$c15b/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+report "parent-escape negative control: a properly initialised submodule still repairs (exit 0)" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "parent-escape negative control: its core.worktree is still pinned to the submodule's own path" \
+  "$([[ "$(git config -f "$c15b/super/.git/modules/sub/config.worktree" core.worktree 2>/dev/null || true)" == "$(abspath "$c15b/super/sub")" ]] && echo yes || echo no)"
+
+
+# 15c. The second guard, and why it is not redundant with the `.git`-existence check: a `.git` that
+#      EXISTS but points at the superproject passes that check while still resolving outward. Same
+#      harm, different route — so it gets its own reproduction rather than riding on 12's.
+c15c="$tmp/c15c"
+mk_super "$c15c"
+git -C "$c15c/super" submodule --quiet deinit -f sub >/dev/null
+printf 'gitdir: %s\n' "$(abspath "$c15c/super")/.git" >"$c15c/super/sub/.git"
+report "outward-.git precondition: the .git entry exists (an existence check would NOT catch this)" \
+  "$([[ -e "$c15c/super/sub/.git" ]] && echo yes || echo no)"
+out="$(cd "$c15c/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+c15c_parent_key="$(git config -f "$c15c/super/.git/config.worktree" core.worktree 2>/dev/null || true)"
+report "outward-.git: never writes core.worktree into the SUPERPROJECT's per-worktree config" \
+  "$([[ -z "$c15c_parent_key" ]] && echo yes || echo no)" "parent core.worktree=${c15c_parent_key:-<unset>}"
+report "outward-.git: the failure names the SUPERPROJECT gitdir" \
+  "$(grep -q "SUPERPROJECT's gitdir" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1
