@@ -5,6 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 run_loop="${1:-${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md}"
 routine_prompt="${2:-}"
+cursor_loader="${3:-${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md}"
 
 fail() {
   echo "maintainer preflight contract: FAIL — $*" >&2
@@ -92,6 +93,19 @@ grep -Fq "and **only then** recommend \`gh auth login\`" "${run_loop}" ||
 
 grep -Fq 'record only these gate classifications in durable memory' "${run_loop}" ||
   fail "missing the credential-safe memory rule"
+
+grep -Fq 'gh api --include --hostname github.com user' "${cursor_loader}" ||
+  fail "Cursor boot gate does not expose the REST status and headers"
+
+grep -Fq "generic \`gh auth status\` invalid-token message is not conclusive" "${cursor_loader}" ||
+  fail "Cursor boot gate can still collapse a REST outage into an invalid-token verdict"
+
+grep -Fq "GraphQL API identity is \`cursor[bot]\`" "${cursor_loader}" ||
+  fail "Cursor boot gate does not pin the measured API identity"
+
+if grep -Fq "Confirm \`gh auth status\` authenticates **\`app/cursor\`**" "${cursor_loader}"; then
+  fail "Cursor loader still hard-stops before the observable API fallback"
+fi
 
 if [[ -n "${routine_prompt}" ]]; then
   grep -Fq 'agentic-engineering plugin' "${routine_prompt}" ||
