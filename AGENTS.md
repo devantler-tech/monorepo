@@ -834,12 +834,19 @@ touch of an unconfirmed repo:
    project-board Act step.
 
 **A live claim is a temporary skip — the one addition to the skip test.** *Drain oldest-first* lists
-when an older issue may be passed over; a **live claim** (assigned **and** branched, inside the ~2h
-window, no PR yet) now joins it as skip reason **(e)**, and it is the only one that expires on its
-own. Without that, an oldest issue carrying a fresh claim would be both un-takeable and un-skippable —
+when an older issue may be passed over; a **live claim** now joins it as skip reason **(e)**, and it
+is the only one that expires on its own. It takes **two forms, and the skip test must recognise
+both** — a board-only claim has neither an assignee nor a branch, so an assigned-and-branched-only
+predicate would let an instance pass this test and repeat the very board mutation rule 6 exists to
+serialise:
+- **assigned *and* branched**, inside the ~2h window, with no PR yet; or
+- an **unreplied `board-claim:<lane>` comment from a different lane**, younger than ~2h timed from
+  the comment's `created_at` (rule 6 above).
+
+Without that, an oldest issue carrying a fresh claim would be both un-takeable and un-skippable —
 which either stalls the queue or recreates the duplicate build the protocol exists to prevent. Note it
-in the report as claimed-elsewhere and move to the next actionable issue; if it is still branch-only
-after the window, it is fair game again. **Nothing else in that test changes** — in particular, an
+in the report as claimed-elsewhere and move to the next actionable issue; once the window lapses —
+still branch-only, or the board-claim comment still unreplied — it is fair game again. **Nothing else in that test changes** — in particular, an
 issue is never skipped merely because it *looks* contested, is large, or is hard.
 
 ### Professional-work repository boundary — hard exclusion
