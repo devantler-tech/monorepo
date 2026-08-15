@@ -1,19 +1,27 @@
 ---
 name: maintain-skills
-description: Maintenance + advance task menu for the shared AGENT-EXTENSION libraries — devantler-tech/agent-skills (generic Copilot/agent skills, gh-skill-installable) and devantler-tech/agent-plugins (tool-neutral marketplace). Generic, cross-tool, industry-standard building blocks reused across the suite; high-care and backward-compatible. Use when the daily maintainer selects skills/plugins or runs the holistic shared-library review.
+description: Maintenance + advance task menu for the shared AGENT-EXTENSION libraries — devantler-tech/agent-skills (generic, cross-tool agent skills) and devantler-tech/agent-plugins (a tool-neutral marketplace bundling those skills for VS Code / Copilot CLI / Claude Code). Generic, cross-tool, industry-standard building blocks reused across the suite; high-care and backward-compatible. Use when the Agentic Engineer selects skills/plugins or runs the holistic shared-library review.
 ---
 
 # Maintain: Skills + Plugins (shared agent extensions)
 
 The shared **agent-extension** libraries — the agentic counterpart to the CI building blocks in the
-[github-actions](../github-actions/SKILL.md) card:
-- `devantler-tech/agent-skills` — generic Copilot/agent skills, `gh skill`-installable. **Not a submodule** —
-  work via the GitHub API, or clone it standalone into a per-run worktree if you need to build/validate.
-  Read its `## Maintenance` in <https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md> (create
-  that section if missing — align it with the others).
-- `devantler-tech/agent-plugins` — tool-neutral marketplace at submodule path `libraries/agent-plugins`.
+[github-actions](../github-actions/SKILL.md) card. Both are checked-in submodules, so a per-run
+worktree can give you a working copy to build and validate in — but only once the submodule is
+populated. Populate it with `.claude/scripts/submodule-init.sh <path>`, never a bare
+`git submodule update --init`, which silently collapses every parallel session into one physical
+tree; if that script fails, stop rather than work against an unpopulated gitlink. Each repo's
+canonical task menu lives in its own `AGENTS.md` `## Maintenance`, and this card is a thin pointer
+to it:
+
+- `devantler-tech/agent-skills` — generic, cross-tool agent skills at submodule path
+  `libraries/agent-skills`.
+  Task menu: <https://github.com/devantler-tech/agent-skills/blob/main/AGENTS.md>.
+- `devantler-tech/agent-plugins` — the tool-neutral marketplace at submodule path
+  `libraries/agent-plugins`.
+  Task menu: <https://github.com/devantler-tech/agent-plugins/blob/main/AGENTS.md>.
   This monorepo consumes `agentic-engineering@devantler-plugins` via
-  [`.claude/settings.json`](../../../settings.json) (see monorepo#2363 / #2403). Keep plugins
+  [`.claude/settings.json`](../../../settings.json) (see monorepo#2363). Keep plugins
   additive & backward-compatible; generic role improvements land here so every consumer inherits them.
 
 **These are shared libraries — design for reuse, not for one product.** Keep them **generic and
@@ -26,13 +34,24 @@ put product-specific logic here.
 inherits it, then migrate consumers. Triage/label issues, drive actionable trusted-author PRs to merge,
 leave automation-owned dependency PRs alone, and keep dependency automation & docs current.
 Programmed `chore(deps): update agent skills` PRs are the no-review exception defined in the root
-contract only when `.claude/scripts/programmed-bot-review-exemption.sh` classification succeeds:
-let required CI and auto-merge decide accepted exemptions, and never spend a review lane on them.
-Route classifier failures, non-matching PRs, and lookalikes through the normal review process.
+contract only when `.claude/scripts/programmed-bot-review-exemption.sh` exits 0: let required CI and
+auto-merge decide accepted exemptions, and never spend a review lane on exit-0 exemptions. Installed
+skill roots hold copies from several upstreams, so exit 0 also requires every changed skill to be
+listed in the reviewed `.claude/skill-ownership-allowlist.tsv`; an unlisted or third-party skill
+returns 3. Never authorize that from the skill's own `metadata.github-repo` — its upstream writes that
+line, so it can grant itself the carve-out; passing it to the classifier only corroborates. A genuine
+`agent-plugins` marketplace update is trusted but review-bearing when the classifier exits 3; request
+semantic review because bundled skill prose is executable agent instruction. Route classifier exit 1
+and non-matching lookalikes through the external/static-only path; exit 2 is a fail-closed error.
 
-Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md). This card is a pointer
-by design.
+Shared cross-repo rules are in the monorepo [`AGENTS.md`](../../../../AGENTS.md).
 
 ## Roadmap & enhancement
-Roadmap lives in **GitHub Issues** on `devantler-tech/agent-skills` (`roadmap` label). The strategic frame:
-*what generic capability would most help the suite next?* — surface candidates from the holistic review.
+
+The two libraries keep separate issue queues — do not conflate them:
+
+- Skills: GitHub Issues on `devantler-tech/agent-skills` (`roadmap` label)
+- Plugins: GitHub Issues on `devantler-tech/agent-plugins` (`roadmap` label)
+
+Strategic frame for both: *what generic capability would most help the suite next?* — surface
+candidates from the holistic review.

@@ -1,0 +1,27 @@
+   🔴 **Each Agent Improver run reads the SIBLING instance's scorecard and hypothesis store too, before
+   it scores or opens any hypothesis — naming the two stores is not the same as wiring them together.**
+   Each run boots into its own store, so without this cross-read a hypothesis opened by one instance can
+   never be scored, closed, or respected by the other, and the ledger splits in half. Measured
+   2026-08-11 and stated as an **aggregate on purpose** — the inventories themselves are private runtime
+   state, so this paragraph must not quote them: of roughly fifteen open hypotheses across the two
+   instances, **exactly one was shared**; every other one was visible to only the instance that opened
+   it. That cost two things the same day. **A duplicated heavy measurement:** one instance's ledger
+   carried a provenance question as *"needs attribution next run"* that the other had **already
+   attributed hours earlier**. **And an unsatisfiable constraint:** the `agent-improvement` skill's
+   step 5 says to
+   continue only with work that cannot affect a pending hypothesis's tracked signature — yet one
+   instance held a pending gate over a signature the *other* instance was independently tracking, with
+   no path between them. An instance cannot honour a gate
+   it has no path to read, so that rule was unenforceable across instances **by construction**. So: a
+   **sibling's pending hypothesis binds your signature-overlap decisions** exactly as your own does, and
+   a signature the sibling has already **settled** is **not re-measured** — record its verdict and move
+   on — **whatever direction that verdict took and whichever window produced it**, until new evidence or
+   a changed signature invalidates it. Scoping this to "attributed in the current window" would have
+   left a sibling's *negative* verdict, and any still-valid verdict from an earlier window, free to be
+   measured again — which is the duplication this paragraph exists to stop.
+   ⚠️ **Settled is not the same as inconclusive.** A sibling `NO-VERDICT`, `NOT-YET-DUE`, or an
+   explicitly unmet measurement floor is **unsettled**, and those stay measurable — freezing them would
+   starve exactly the hypotheses still waiting for the data that would close them. ⚠️ Both stores stay **private runtime state**: cross-*reading* them is
+   mandatory, cross-*publishing* them is not permitted, and nothing read this way enters a repository
+   artifact or public comment. The sibling's file remains **its** single source of truth — read it, never
+   write it. The
