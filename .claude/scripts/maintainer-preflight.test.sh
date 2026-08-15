@@ -71,6 +71,12 @@ grep -Fq "A mismatch is \`wrong GitHub identity\`" "${run_loop}" ||
 grep -Fq 'A REST 5xx (or' "${run_loop}" ||
   fail "missing the REST-503-plus-GraphQL-success regression rule"
 
+grep -Fq "\`viewer.login\` proves the login valid." "${run_loop}" ||
+  fail "REST service failure plus expected GraphQL identity does not prove the login valid"
+
+grep -Fq 'Never report that saved login as invalid.' "${run_loop}" ||
+  fail "REST service failure plus expected GraphQL identity can still invalidate the saved login"
+
 # The handoff must be gated on confirmed rejection — not on every auth-status failure.
 grep -Fq "and **only then** recommend \`gh auth login\`" "${run_loop}" ||
   fail "missing the confirmed-rejection gate before recommending gh auth login"

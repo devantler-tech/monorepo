@@ -81,8 +81,8 @@ card.
    Compare `viewer.login` with this deployment's exact expected identity from earlier in this step:
    `devantler` for a machine-local lane, or `app/cursor` for the Cursor cloud lane.
    A mismatch is `wrong GitHub identity` and must not be described as an invalid credential.
-   A REST 5xx (or rate-limit) with a successful GraphQL `viewer.login` must never be reported as an
-   invalid saved login.
+   A REST 5xx (or rate-limit) followed by a successful, expected-identity GraphQL
+   `viewer.login` proves the login valid. Never report that saved login as invalid.
    If the host-level check cannot run or fails for a transport reason (and the GraphQL fallback is
    likewise unreachable), hard-block as `authentication verification unavailable` instead of
    instructing the maintainer to replace a credential that was never tested. Keep the injected-token
