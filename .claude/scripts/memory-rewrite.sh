@@ -164,10 +164,24 @@ if grep -qE '^#{1,6}[[:space:]]' "$file"; then
   fi
 fi
 
-# Frontmatter guard: if the original opened with YAML frontmatter, keep it.
-if head -n 1 "$file" | grep -qx -- '---'; then
-  if ! head -n 1 "$new_path" | grep -qx -- '---'; then
+# Frontmatter guard: if the original opened with YAML frontmatter, keep it — and
+# keep it CLOSED. An opening `---` with no closing delimiter is not frontmatter:
+# a markdown consumer reads the rest of the document as an unterminated block, so
+# a line-1-only check accepts a rebuild that has silently swallowed the body into
+# metadata. Both delimiters are required before the candidate is accepted.
+#
+# The closing scan uses awk rather than `tail -n +2 … | grep -q`: under the
+# `pipefail` set above, grep exits on the first match and the writer ahead of it
+# takes SIGPIPE, so the pipeline intermittently reports 141 on a file that IS
+# well-formed. awk reads the file directly and has no such race.
+old_first_line="$(head -n 1 "$file")"
+new_first_line="$(head -n 1 "$new_path")"
+if grep -qx -- '---' <<<"$old_first_line"; then
+  if ! grep -qx -- '---' <<<"$new_first_line"; then
     fail_content "refused rebuild of $file: original had YAML frontmatter and the new content does not; target untouched"
+  fi
+  if ! awk 'NR > 1 && $0 == "---" { found = 1 } END { exit !found }' "$new_path"; then
+    fail_content "refused rebuild of $file: new content opens YAML frontmatter but never closes it; target untouched"
   fi
 fi
 

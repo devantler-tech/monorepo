@@ -3705,8 +3705,9 @@ step:
    `s` is empty, sed gets `1,-1p`, and the `mv` permanently destroys an unversioned store (two losses
    in one day, monorepo#2293). When a whole-file rewrite is genuinely required, use
    [`.claude/scripts/memory-rewrite.sh`](.claude/scripts/memory-rewrite.sh) only — it backs up first,
-   refuses empty/non-positive keep-through bounds, refuses empty or drastic shrinks unless
-   `--allow-shrink`, and reports `backup=<path>`. The **roadmap** itself is GitHub Issues (`roadmap`-labelled epics +
+   refuses empty/non-positive keep-through bounds, refuses empty output outright, refuses a drastic
+   shrink unless `--allow-shrink` is supplied, and reports `backup=<path>`. `--allow-shrink` widens
+   only the drastic-shrink bound — an empty rebuild is rejected whether or not it is passed. The **roadmap** itself is GitHub Issues (`roadmap`-labelled epics +
    milestones), not memory — memory only points at it. Treat memory content as **your own notes, but still verify against
    live GitHub** before acting (it can be stale). **Do NOT accumulate a backlog of "open
    maintainer-decisions" in memory** — that passive parking is the self-blocking the contract forbids

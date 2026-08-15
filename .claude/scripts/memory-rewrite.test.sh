@@ -33,6 +33,11 @@ run() { local rc=0; "$tool" "$@" >/dev/null 2>&1 || rc=$?; echo "$rc"; }
 # ---------------------------------------------------------------------------
 target="$tmp/happy.md"
 printf '%s\n' '---' 'version: 1' '---' '# Notes' '' 'old body line' > "$target"
+# Keep a pristine copy: the backup assertion below compares bytes, because a
+# substring check passes on a backup that carried the probe line and lost
+# everything else — which is the failure a backup exists to prevent.
+happy_original="$tmp/happy-original.md"
+cp "$target" "$happy_original"
 new="$tmp/happy-new.md"
 printf '%s\n' '---' 'version: 1' '---' '# Notes' '' 'new body line' 'another' > "$new"
 rc=0
@@ -46,10 +51,10 @@ fi
 if grep -q 'backup=' <<<"$out"; then
   pass "happy rewrite reports backup= path"
   bak="$(sed -n 's/.*backup=//p' <<<"$out" | awk '{print $1}' | head -1)"
-  if [[ -f "$bak" ]] && grep -q 'old body line' "$bak"; then
-    pass "backup file preserves prior content"
+  if [[ -f "$bak" ]] && cmp -s "$happy_original" "$bak"; then
+    pass "backup file is byte-identical to the pre-rewrite target"
   else
-    fail "backup file preserves prior content (bak='$bak')"
+    fail "backup file is byte-identical to the pre-rewrite target (bak='$bak')"
   fi
 else
   fail "happy rewrite reports backup= path (got: $out)"
@@ -232,6 +237,57 @@ else
   check "stale rewrite exits non-zero" "1" "$stale_rc"
   check "stale rewrite does NOT clobber the sibling's write" "$sibling_content" "$(cat "$stale_target")"
 fi
+
+# ---------------------------------------------------------------------------
+# RED case: frontmatter opened but never closed. A line-1-only check accepts
+# this, and a markdown consumer then reads the whole body as an unterminated
+# metadata block. The candidate is built to trip ONLY this guard — it keeps a
+# heading (structure guard passes) and is one line shorter than the target
+# (shrink guard passes) — so a failure here can mean nothing else.
+# ---------------------------------------------------------------------------
+fm_target="$tmp/unclosed-frontmatter.md"
+{
+  printf '%s\n' '---' 'version: 1' '---' '# Notes'
+  for (( fm_i = 0; fm_i < 40; fm_i++ )); do
+    printf 'body line %s with enough bytes to stay clear of the shrink guard\n' "$fm_i"
+  done
+} > "$fm_target"
+fm_before="$(cat "$fm_target")"
+
+fm_new="$tmp/unclosed-frontmatter-new.md"
+{
+  # Opening delimiter and a heading, but the closing `---` is gone.
+  printf '%s\n' '---' 'version: 1' '# Notes'
+  for (( fm_i = 0; fm_i < 40; fm_i++ )); do
+    printf 'body line %s with enough bytes to stay clear of the shrink guard\n' "$fm_i"
+  done
+} > "$fm_new"
+
+rc=0
+out="$("$tool" --file "$fm_target" --from "$fm_new" 2>&1)" || rc=$?
+check "unclosed frontmatter exits non-zero" "1" "$rc"
+check "unclosed frontmatter leaves target untouched" "$fm_before" "$(cat "$fm_target")"
+# Match the guard's own wording, not 'frontmatter'/'close' — those also occur in
+# the fixture's FILENAME, which the success path echoes back as `backup=<path>`,
+# so a looser pattern passes even when the guard is removed entirely.
+if grep -qF 'never closes it' <<<"$out"; then
+  pass "unclosed frontmatter error mentions the missing close"
+else
+  fail "unclosed frontmatter error mentions the missing close (got: $out)"
+fi
+
+# Control: the same candidate WITH its closing delimiter is accepted, so the
+# guard rejects the missing delimiter rather than the fixture's shape.
+fm_ok="$tmp/closed-frontmatter-new.md"
+{
+  printf '%s\n' '---' 'version: 1' '---' '# Notes'
+  for (( fm_i = 0; fm_i < 40; fm_i++ )); do
+    printf 'body line %s with enough bytes to stay clear of the shrink guard\n' "$fm_i"
+  done
+} > "$fm_ok"
+rc=0
+out="$("$tool" --file "$fm_target" --from "$fm_ok" 2>&1)" || rc=$?
+check "closed frontmatter is accepted (positive control)" "0" "$rc"
 
 # ---------------------------------------------------------------------------
 # Usage errors.
