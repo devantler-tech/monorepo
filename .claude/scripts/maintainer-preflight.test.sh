@@ -73,8 +73,10 @@ grep -Fq 'record only these gate classifications in durable memory' "${run_loop}
   fail "missing the credential-safe memory rule"
 
 if [[ -n "${routine_prompt}" ]]; then
-  grep -Fq '.claude/agents/daily-maintainer.md' "${routine_prompt}" ||
-    fail "routine prompt does not hand off to the versioned definition"
+  grep -Fq 'agentic-engineering plugin' "${routine_prompt}" ||
+    fail "routine prompt does not hand off to the reviewed plugin"
+  grep -Fq 'agentic-engineer entrypoint' "${routine_prompt}" ||
+    fail "routine prompt does not name the canonical role entrypoint"
 
   if grep -Fq 'gh auth status' "${routine_prompt}"; then
     fail "routine prompt duplicates the versioned authentication preflight"
