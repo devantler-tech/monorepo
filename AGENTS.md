@@ -321,16 +321,24 @@ because it returns a plausible definition and the run believes it complied while
 unreviewed revision. Of the five sessions that saw `DRIFT` that day, **only two read any reviewed
 definition at all** ([#2854](https://github.com/devantler-tech/monorepo/issues/2854)).
 
-**Materialise it and then assert the revision, both from your own session worktree:**
+**Materialise it in a fresh session worktree — where that submodule is still empty — then assert the
+revision:**
 
 ```sh
-.claude/scripts/submodule-init.sh libraries/agent-plugins   # checks out THIS commit's gitlink
+.claude/scripts/submodule-init.sh libraries/agent-plugins   # populates an EMPTY submodule at this commit's gitlink
 git -C libraries/agent-plugins rev-parse HEAD               # read the revision back
 ```
 
-That read-back **must equal the pinned revision** the check printed. A mismatch means you are reading
-some other revision rather than the reviewed one — re-materialise instead of proceeding, and never
-read a definition out of an already-populated submodule without making this comparison.
+That read-back **must equal the pinned revision** the check printed.
+
+🔴 **A mismatch is a STOP, not a retry — re-running that command cannot fix it.** Handed an
+**already-populated** submodule, `submodule-init.sh` repairs isolation only and deliberately refuses
+`git submodule update`, so it exits `isolated ✓` with the stale revision still checked out — the
+warning *Git safety* already carries, and exactly the shape being guarded against here. Moving a
+populated submodule onto a pin has **no procedure yet**
+([#2833](https://github.com/devantler-tech/monorepo/issues/2833)), so on a mismatch materialise in a
+fresh isolated worktree and repeat the comparison. Never read a definition out of an
+already-populated submodule without making it.
 
 Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow. **Never edit the plugin cache**; it is
 read-only evidence (see *Agent definition locations*). When the refresh needs an interactive session

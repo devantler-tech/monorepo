@@ -502,16 +502,22 @@ esac
 # 43 deleted lines across all four definition files). The second is the fail-open: it returns a
 # plausible definition, so the run believes it complied while following an unreviewed revision.
 # Measured impact: of the 5 sessions that saw DRIFT that day, only 2 read any reviewed definition.
+# Matched as COMPLETE commands including their path argument. A bare "submodule-init.sh" would still
+# pass if an edit retargeted it at another submodule, and a bare "rev-parse HEAD" would pass if the
+# read-back were pointed somewhere other than the path just materialised — which is precisely the
+# wrong-revision read this section exists to stop.
 case "${section}" in
-  *"submodule-init.sh"*) ok "the contract names how to materialise the reviewed definition" ;;
-  *) fail "the plugin contract section does not name the command that materialises the reviewed definition" ;;
+  *".claude/scripts/submodule-init.sh libraries/agent-plugins"*)
+    ok "the contract names the exact materialisation command and its target" ;;
+  *) fail "the plugin contract section does not name the exact command that materialises the reviewed definition" ;;
 esac
 # The materialisation alone is still fail-open — it is the revision ASSERTION that converts a
 # wrong-revision read from a silent pass into a stop. Pinned separately so an edit cannot drop the
-# check while keeping the command.
+# check while keeping the command, and bound to the SAME path so the two cannot drift apart.
 case "${section}" in
-  *"rev-parse HEAD"*) ok "the contract requires reading back the materialised revision" ;;
-  *) fail "the plugin contract section does not require reading back the materialised revision" ;;
+  *"git -C libraries/agent-plugins rev-parse HEAD"*)
+    ok "the contract reads the revision back from the path it materialised" ;;
+  *) fail "the plugin contract section does not read the materialised revision back from that same path" ;;
 esac
 case "${section}" in
   *"must equal the pinned revision"*)
@@ -524,6 +530,21 @@ case "${section}" in
   *"shared checkout"*)
     ok "the contract warns that the populated shared checkout may be the wrong revision" ;;
   *) fail "the plugin contract section does not warn about the shared checkout's revision" ;;
+esac
+# Detecting the mismatch is only half of it: the run also has to be told what to DO. Re-running the
+# materialisation is the intuitive move and it cannot work — handed an already-populated submodule the
+# helper repairs isolation and refuses `git submodule update`, exiting `isolated ✓` on the stale
+# revision. Without this assertion the contract could name the comparison and leave the recovery to
+# guesswork, which lands straight back on the stale definition.
+case "${section}" in
+  *"a STOP, not a retry"*)
+    ok "the contract says a revision mismatch stops rather than retries" ;;
+  *) fail "the plugin contract section does not say a revision mismatch is a stop rather than a retry" ;;
+esac
+case "${section}" in
+  *"fresh isolated worktree"*)
+    ok "the contract names the recovery for a revision mismatch" ;;
+  *) fail "the plugin contract section does not name the recovery path after a revision mismatch" ;;
 esac
 
 echo "plugin-definition-currency: ${pass_count} assertions passed"
