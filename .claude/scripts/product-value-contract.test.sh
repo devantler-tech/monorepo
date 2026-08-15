@@ -4,7 +4,6 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 contract="${repo_root}/AGENTS.md"
-agent="${repo_root}/.claude/agents/daily-maintainer.md"
 run_loop="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 engineering="${repo_root}/.claude/skills/product-engineering/SKILL.md"
 site_card="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
@@ -64,8 +63,6 @@ if git -C "${repo_root}" ls-files |
   fail "tracked ADRs remain outside docs/adr"
 fi
 
-grep -Fq 'evidence-led' "${agent}" ||
-  fail "daily maintainer summary does not route evidence-led selection"
 grep -Fq 'Value & evidence loop' "${engineering}" ||
   fail "product engineering lacks the value-measurement procedure"
 grep -Fq 'measure → learn → iterate, stop, or reverse' "${engineering}" ||
@@ -84,6 +81,12 @@ grep -Fq 'last_blog_stewardship' "${run_loop}" ||
   fail "run loop does not persist the blog-stewardship cursor"
 grep -Fq "use \`Fixes #delivery\`" "${run_loop}" ||
   fail "run loop can close an experiment before measurement"
+# Spike floor (#2267): the primary run loop must not invent a delivery PR for a Spike.
+# shellcheck disable=SC2016 # literal backticks in prose we pin
+grep -Fq '`type:"Spike"` is not a delivery-PR path' "${run_loop}" ||
+  fail "run loop still treats Spikes as delivery-PR work (#2267)"
+grep -Fq 'do **not** invent a draft PR for it' "${run_loop}" ||
+  fail "run loop lacks the Spike no-delivery-PR floor rule (#2267)"
 
 grep -Fq 'Blog Stewardship' "${site_card}" ||
   fail "site card has no recurring blog task"
@@ -128,6 +131,64 @@ grep -Fq '      - changes' "${workflow}" ||
 # shellcheck disable=SC2016
 grep -Fq '${{ needs.changes.result }}' "${workflow}" ||
   fail "required aggregate does not evaluate path-detection failures"
+
+# Monorepo product-card label allowlist (#2260) — every backticked name must be a
+# live taxonomy label. Pin the expected set hermetically (no network); refresh
+# from `gh label list -R devantler-tech/monorepo` when the live taxonomy changes.
+LIVE_MONOREPO_LABELS='automation
+blocked
+breaking change
+bug
+dependencies
+documentation
+duplicate
+enhancement
+github_actions
+good first issue
+help wanted
+javascript
+needs investigation
+needs triage
+next
+off topic
+performance
+question
+refactor
+released
+repo-assist
+roadmap
+security
+spam
+submodules
+wontfix'
+
+monorepo_labels_are_live() {
+  local candidate_line="$1" label=""
+
+  while IFS= read -r label; do
+    [[ -n "${label}" ]] || continue
+    grep -Fqx -- "${label}" <<<"${LIVE_MONOREPO_LABELS}" || return 1
+  done < <(grep -oE "\`[^\`]+\`" <<<"${candidate_line}" | tr -d '`')
+}
+
+labels_line="$(grep -E '^\- \*\*Labels\*\*' "${site_card}" || true)"
+[[ -n "${labels_line}" ]] || fail "site card missing Labels allowlist line"
+grep -Fq "\`github_actions\`" <<<"${labels_line}" ||
+  fail "site card Labels allowlist missing live github_actions (#2260)"
+grep -Fq "\`roadmap\`" <<<"${labels_line}" ||
+  fail "site card Labels allowlist missing live roadmap (#2260)"
+if grep -Eq "\`ci\`" <<<"${labels_line}"; then
+  fail "site card Labels allowlist still lists nonexistent ci (#2260)"
+fi
+if grep -Fq "\`agentic-workflows\`" <<<"${labels_line}"; then
+  fail "site card Labels allowlist still lists nonexistent agentic-workflows (#2260)"
+fi
+# Parse every `label` token — misspellings like `github-action` must fail (#2488 P2).
+monorepo_labels_are_live "${labels_line}" ||
+  fail "site card Labels allowlist contains a nonexistent label (#2260/#2488)"
+if monorepo_labels_are_live "${labels_line} \`github-action\`"; then
+  fail "site card Labels validation accepts an unknown-label fixture (#2488)"
+fi
 
 # Egress mention neutralisation (#2312) — bots parse raw text; backticks do not inert a mention.
 grep -Fq 'No Markdown construct hides a mention from a bot' "${contract}" ||

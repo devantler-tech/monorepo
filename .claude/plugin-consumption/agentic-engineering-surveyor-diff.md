@@ -37,13 +37,53 @@ plugin carries them (or an explicit, tested subset):
 
 1. **Automation-owned short-circuit** — exact `renovate[bot]` / `dependabot[bot]` → one
    `AUTOMATION-OWNED (NO-ACTION)` line; no pentad deepen.
-2. **`OWNERSHIP-UNVERIFIED` framing** for every `devantler`-authored PR (routine vs interactive
-   ambiguity; branch + disclosure hints only).
+2. **All-author active-work signals as the action gate, with disclosure reduced to attribution.**
+   Every PR carries `active=` — one or more `+`-joined signals, `none` only alone — and that is what
+   says whether someone else is mid-flight. `branch` and `disclosure` are reported for a
+   `devantler`-authored PR as **attribution hints only**: they tell the orchestrator whose control
+   channel a comment on that PR is, never whether it may be driven. The surveyor emits **no ownership
+   verdict**. A plugin that still gates driving on an ownership classification, or that omits `active=`
+   for any author, has not reached parity — the `OWNERSHIP-UNVERIFIED` framing this item used to
+   require was retired with the 2026-08-08 all-author ownership grant.
 3. **Full hygiene pentad** including threaded and non-thread findings; CodeRabbit's ancillary
    evaluator contributes only concrete problems it explicitly reports during its selected review,
    never a separate readiness state.
 4. **Green-review surfaces for three lanes** — a finding-free CodeRabbit completion without requiring `APPROVED`, Codex comment-shaped green, and **Cursor Bugbot check-run** (`success` vs
    `neutral`+title disambiguation).
+4b. **Codex comment-shaped FINDINGS** (monorepo#2577) — a `chatgpt-codex-connector[bot]` issue
+   comment carrying a `## Review finding` section counts in the non-thread finding gate, is
+   attributed to a head by the full 40-char sha in its blob permalinks (it has no
+   `**Reviewed commit:**` marker), fails closed when unattributable, and is **not** cleared by a
+   newer `Didn't find any major issues` comment. Without this the pentad reads fully clear over an
+   open P2 — measured on monorepo#2559.
+4c. **CodeRabbit commit-status description discriminator** (monorepo#2676) — the `CodeRabbit` status
+   is `state: success` for a completed review, for `Review skipped: automatic reviews are disabled`,
+   and for a rate-limit refusal alike. Auto-review is disabled deployment-wide, so the skipped form
+   is the default state of every head: the status corroborates run-completion only when its
+   `description` begins `Review completed`, and never satisfies the gate on its own. Without this a
+   state-only check reports every never-reviewed PR as green.
+4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713 / #2819) — a review
+   object counts only when its body begins `**Actionable comments posted:` **after stripping any
+   leading HTML comments and the whitespace around them**; an empty object is a reply
+   container, never a review, whatever its `commit_id`. Measured over the 60 most recently merged
+   monorepo PRs: 16 of 19 objects at a merged head were empty, and two PRs merged with no substantive
+   review at the merged commit. Without this a bare `commit_id == head` match reports a non-review as
+   a green. The strip is required rather than permissive: CodeRabbit fronts every real body with an
+   agent-hint block, so without it the identification matches no genuine review and reports
+   `green_review=none` over a real green — burning the metered lanes on an already-reviewed head.
+4e. **CodeRabbit verdict-bearing command reply** (monorepo#2758) — a command-invocation reply counts
+   when it states `Reviewed pull request #<n> at <sha>` with `<sha>` prefix-matching `headRefOid`,
+   **and** `I found no actionable issues`, **and** is updated after the latest authenticated
+   CodeRabbit request marker for that head — the same freshness condition the review object and the
+   summary carry, without which a pre-request reply at the same head satisfies a later round. **All
+   three artifacts must have `user.login == "coderabbitai[bot]"`** — the reply is matched on plain
+   prose, so without the author bind any account could post those phrases and be read as a green. A bare
+   `✅ Action performed` shell stays an acknowledgement, and a reply carrying a rate-limit, quota, or
+   service marker saying the review did not run is rejected like any other artifact. Measured on platform#3051: the head's only satisfier was that reply, because the
+   newest review object was an empty container at an older head and the summary named no sha — so a
+   two-artifact sweep reported `none` and would spend weekly-limited Codex and monthly-limited
+   Bugbot on an already-green head. Both conjuncts are required: comment `5236900950` on that PR
+   carries the verdict with no sha and reviews an earlier head.
 5. **Sequential review coordination state** — authenticated single-phase request marker posted with
    the trigger (the two-phase reservation was retired on measurement 2026-07-25), pending request,
    monotonic artifact-backed or evidenced-expiry no-gate progression,
