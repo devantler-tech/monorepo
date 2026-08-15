@@ -104,6 +104,6 @@ if ! command -v perl >/dev/null 2>&1; then
 fi
 raw_count="$(perl -ne '$n++ if /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/; END{print $n+0}' "${constitution}")"
 [ "${raw_count}" = "0" ] ||
-  fail "AGENTS.md contains ${raw_count} line(s) with a raw control byte — invisible in review, and any Bash command quoting them is rejected outright; write the byte as an escape (\$'\\x1f', or the jq \\u001f form)"
+  fail "AGENTS.md contains ${raw_count} line(s) with a raw control byte — invisible in review, and the non-whitespace C0 bytes among them are rejected outright by the Bash guard; write the byte as an escape (\$'\\x1f', or the jq \\u001f form)"
 
 echo "control-character command contract: OK — 7 assertions passed"
