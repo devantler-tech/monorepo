@@ -406,6 +406,7 @@ and treat a failed lookup as `BYTES-UNKNOWN` rather than as a match. `--no-repla
 the check silently spans two object namespaces. And keep `printf '%s\n'` — command substitution strips
 the trailing newline, and a bare `printf '%s'` makes `read` return false on the final entry, dropping
 the last file from the sweep unchecked.
+
 This is also why **the forge read above is preferred and not merely more convenient**: it names the
 revision in the request, so it is immune to replace refs, filters, and index bits alike — the local
 fallback needs all four assertions to reach the same confidence the forge read has by construction.
