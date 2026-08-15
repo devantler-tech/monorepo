@@ -231,7 +231,7 @@ for d in agents skills; do
   [ -d "$INSTALLED/$d" ] || continue
   # One quoted invocation per directory: joining them into a string and splitting it would break any
   # installPath containing whitespace, turning a MATCHING install into UNKNOWN.
-  find "$INSTALLED/$d" -type f >> "$inst_list" \
+  find "$INSTALLED/$d" \( -type f -o -type l \) >> "$inst_list" \
     || die "could not enumerate the installed definitions under $INSTALLED/$d${RECOVERY}"
 done
 

@@ -399,7 +399,22 @@ case "${out}" in
   *) fail "exit ${rc} but the symlink was not reported: ${out}" ;;
 esac
 
-# ── 7k. DELIBERATELY NOT TESTED — the mktemp guard ───────────────────────────
+# ── 7k. An EXTRA SYMLINK is still an unreviewed definition ───────────────────
+# The pinned-path loop above catches a symlink only when it replaces a reviewed path. The installed
+# tree sweep must independently enumerate links, or a new link under agents/ or skills/ disappears
+# from both comparisons and the runtime can expose an unpinned definition while this reports CURRENT.
+extra_sym="${tmp}/install-extra-symlink"
+make_install "${extra_sym}"
+mkdir -p "${extra_sym}/skills/ghost"
+ln -s "${tmp}/decoy.md" "${extra_sym}/skills/ghost/SKILL.md"
+set +e; out="$(run "${extra_sym}")"; rc=$?; set -e
+[ "${rc}" -ne 0 ] || fail "FAIL OPEN: an extra definition symlink reported success: ${out}"
+case "${out}" in
+  *"EXTRA    skills/ghost/SKILL.md"*) ok "an extra definition symlink is caught by the installed-tree sweep" ;;
+  *) fail "exit ${rc} but the extra symlink was not reported: ${out}" ;;
+esac
+
+# ── 7l. DELIBERATELY NOT TESTED — the mktemp guard ───────────────────────────
 # `mktemp`'s failure path is guarded in the script (an unwritable TMPDIR would otherwise exit 1 under
 # `set -e`, and 1 is the DRIFT verdict, so an infrastructure failure would read as a finding about the
 # install). There is no assertion here because there is no portable way to force it: BSD/macOS mktemp
