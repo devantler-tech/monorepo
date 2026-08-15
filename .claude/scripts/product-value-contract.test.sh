@@ -135,34 +135,60 @@ grep -Fq '${{ needs.changes.result }}' "${workflow}" ||
 # Monorepo product-card label allowlist (#2260) — every backticked name must be a
 # live taxonomy label. Pin the expected set hermetically (no network); refresh
 # from `gh label list -R devantler-tech/monorepo` when the live taxonomy changes.
-# shellcheck disable=SC2034 # referenced by name in the associative-array check below
-declare -A LIVE_MONOREPO_LABELS=(
-  [automation]=1 [blocked]=1 ["breaking change"]=1 [bug]=1 [dependencies]=1
-  [documentation]=1 [duplicate]=1 [enhancement]=1 [github_actions]=1
-  ["good first issue"]=1 ["help wanted"]=1 [javascript]=1
-  ["needs investigation"]=1 ["needs triage"]=1 [next]=1 ["off topic"]=1
-  [performance]=1 [question]=1 [refactor]=1 [released]=1 [repo-assist]=1
-  [roadmap]=1 [security]=1 [spam]=1 [submodules]=1 [wontfix]=1
-)
+LIVE_MONOREPO_LABELS='automation
+blocked
+breaking change
+bug
+dependencies
+documentation
+duplicate
+enhancement
+github_actions
+good first issue
+help wanted
+javascript
+needs investigation
+needs triage
+next
+off topic
+performance
+question
+refactor
+released
+repo-assist
+roadmap
+security
+spam
+submodules
+wontfix'
+
+monorepo_labels_are_live() {
+  local candidate_line="$1" label=""
+
+  while IFS= read -r label; do
+    [[ -n "${label}" ]] || continue
+    grep -Fqx -- "${label}" <<<"${LIVE_MONOREPO_LABELS}" || return 1
+  done < <(grep -oE "\`[^\`]+\`" <<<"${candidate_line}" | tr -d '`')
+}
+
 labels_line="$(grep -E '^\- \*\*Labels\*\*' "${site_card}" || true)"
 [[ -n "${labels_line}" ]] || fail "site card missing Labels allowlist line"
-grep -Fq '`github_actions`' <<<"${labels_line}" ||
+grep -Fq "\`github_actions\`" <<<"${labels_line}" ||
   fail "site card Labels allowlist missing live github_actions (#2260)"
-grep -Fq '`roadmap`' <<<"${labels_line}" ||
+grep -Fq "\`roadmap\`" <<<"${labels_line}" ||
   fail "site card Labels allowlist missing live roadmap (#2260)"
-if grep -Eq '`ci`' <<<"${labels_line}"; then
+if grep -Eq "\`ci\`" <<<"${labels_line}"; then
   fail "site card Labels allowlist still lists nonexistent ci (#2260)"
 fi
-if grep -Fq '`agentic-workflows`' <<<"${labels_line}"; then
+if grep -Fq "\`agentic-workflows\`" <<<"${labels_line}"; then
   fail "site card Labels allowlist still lists nonexistent agentic-workflows (#2260)"
 fi
 # Parse every `label` token — misspellings like `github-action` must fail (#2488 P2).
-while IFS= read -r label; do
-  [[ -n "${label}" ]] || continue
-  if [[ -z "${LIVE_MONOREPO_LABELS[${label}]+x}" ]]; then
-    fail "site card Labels allowlist lists nonexistent '${label}' (#2260/#2488)"
-  fi
-done < <(grep -oE '`[^`]+`' <<<"${labels_line}" | tr -d '`')
+monorepo_labels_are_live "${labels_line}" ||
+  fail "site card Labels allowlist contains a nonexistent label (#2260/#2488)"
+if monorepo_labels_are_live "${labels_line} \`github-action\`"; then
+  fail "site card Labels validation accepts an unknown-label fixture (#2488)"
+fi
 
 # Egress mention neutralisation (#2312) — bots parse raw text; backticks do not inert a mention.
 grep -Fq 'No Markdown construct hides a mention from a bot' "${contract}" ||
