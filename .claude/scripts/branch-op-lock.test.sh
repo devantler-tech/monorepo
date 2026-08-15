@@ -154,6 +154,72 @@ printf '%s\n' "$$" >"$lockdir/pid"
 check "CLI release with token exits 0" "0" \
   "$(bash "$lock_tool" release "$repo" --token "$cli_token" >/dev/null 2>&1; echo $?)"
 
+
+# ---------------------------------------------------------------------------
+# Codex P1/P2 findings (t1139): staleness must not reap a LIVE or a HALF-WRITTEN
+# lock, a detached CLI lock must survive its own exit, and `run` must not hide a
+# failed release. Each case drives `_branch_op_lock_is_stale` directly so it
+# tests the predicate rather than a wrapper's incidental behaviour.
+# ---------------------------------------------------------------------------
+stale_repo="$tmp/stale-repo"
+mkdir -p "$stale_repo"
+git -C "$stale_repo" init -q -b main
+git -C "$stale_repo" config user.email "test@example.com"
+git -C "$stale_repo" config user.name "Test"
+git -C "$stale_repo" commit -q --allow-empty -m init
+stale_lockdir=$(branch_op_lock_dir "$stale_repo")
+
+# (1) A LIVE same-host supervised holder is never stale, even far past the TTL.
+rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
+printf '%s\n' "$$" >"$stale_lockdir/pid"
+printf '%s\n' "$(uname -n)" >"$stale_lockdir/host"
+printf '%s\n' "supervised" >"$stale_lockdir/pid_mode"
+printf '%s\n' "$(( $(date -u +%s) - 99999 ))" >"$stale_lockdir/acquired_epoch"
+check "live same-host supervised holder is NOT stale past TTL" "1" \
+  "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+
+# (2) A DEAD same-host supervised holder still IS stale — the recovery path must survive fix (1).
+rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
+dead_pid=$(bash -c 'echo $$')          # exited before we read it
+printf '%s\n' "$dead_pid" >"$stale_lockdir/pid"
+printf '%s\n' "$(uname -n)" >"$stale_lockdir/host"
+printf '%s\n' "supervised" >"$stale_lockdir/pid_mode"
+printf '%s\n' "$(date -u +%s)" >"$stale_lockdir/acquired_epoch"
+check "dead same-host supervised holder IS stale" "0" \
+  "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+
+# (3) A DETACHED lock is not reaped for a dead pid — the CLI `acquire` process exits by design.
+rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
+printf '%s\n' "$dead_pid" >"$stale_lockdir/pid"
+printf '%s\n' "$(uname -n)" >"$stale_lockdir/host"
+printf '%s\n' "detached" >"$stale_lockdir/pid_mode"
+printf '%s\n' "$(date -u +%s)" >"$stale_lockdir/acquired_epoch"
+check "detached lock with dead pid is NOT stale inside TTL" "1" \
+  "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+
+# (4) …but a detached lock past its TTL still IS recoverable.
+printf '%s\n' "$(( $(date -u +%s) - 99999 ))" >"$stale_lockdir/acquired_epoch"
+check "detached lock past TTL IS stale" "0" \
+  "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+
+# (5) A freshly-mkdir'd lock with NO metadata yet is the mkdir/write window — not stale.
+rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
+check "half-written lock (no metadata) is NOT stale inside TTL" "1" \
+  "$(_branch_op_lock_is_stale "$stale_lockdir" 600; echo $?)"
+
+# (6) …but an abandoned half-write is still recovered once it ages out (TTL 0 ⇒ any age qualifies).
+check "half-written lock IS stale once past TTL" "0" \
+  "$(_branch_op_lock_is_stale "$stale_lockdir" 0; echo $?)"
+
+# (7) `run` surfaces a failed release instead of reporting success over a leaked lock.
+rm -rf "$stale_lockdir"
+run_rc=0
+# The wrapped command SUCCEEDS but leaves a stray file, so `rmdir` fails and release returns 3.
+# Passing the absolute lockdir as $0 keeps this about the release path rather than about how the
+# inner shell resolves a relative git-common-dir.
+branch_op_lock_run "$stale_repo" -- bash -c ': >"$0/stray-file"' "$stale_lockdir" >/dev/null 2>&1 || run_rc=$?
+check "run propagates a failed release (leaked lock)" "3" "$run_rc"
+rm -rf "$stale_lockdir"
 # ---------------------------------------------------------------------------
 if [[ "$failures" -gt 0 ]]; then
   printf '\n%d failure(s)\n' "$failures" >&2

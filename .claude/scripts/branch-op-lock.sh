@@ -73,7 +73,7 @@ _branch_op_lock_new_token() {
 
 _branch_op_lock_clear_dir() {
   local lockdir="$1"
-  rm -f "$lockdir/pid" "$lockdir/token" "$lockdir/host" \
+  rm -f "$lockdir/pid" "$lockdir/token" "$lockdir/host" "$lockdir/pid_mode" \
     "$lockdir/acquired_at" "$lockdir/acquired_epoch" 2>/dev/null || true
   rmdir "$lockdir" 2>/dev/null || true
 }
@@ -81,7 +81,7 @@ _branch_op_lock_clear_dir() {
 _branch_op_lock_is_stale() {
   local lockdir="$1" stale_ttl="$2"
   local pid_file="$lockdir/pid" host_file="$lockdir/host" at_file="$lockdir/acquired_at"
-  local holder host_now host_then age now
+  local holder host_now host_then age now pid_mode
 
   if [[ ! -d "$lockdir" ]]; then
     return 1
@@ -93,10 +93,24 @@ _branch_op_lock_is_stale() {
   host_then=""
   [[ -f "$host_file" ]] && host_then=$(tr -d '[:space:]' <"$host_file" 2>/dev/null || true)
 
-  if [[ -n "$holder" && "$host_then" == "$host_now" ]]; then
-    if ! kill -0 "$holder" 2>/dev/null; then
-      return 0
+  # `pid_mode` decides whether PID liveness may be read at all. A lock taken by the in-process
+  # `run`/library path is `supervised`: its recorded PID lives for exactly as long as the critical
+  # section, so both liveness directions are meaningful. A lock taken by the standalone `acquire`
+  # subcommand is `detached`: that process exits immediately by design and the caller does its work
+  # afterwards, so its PID is dead while the lock is legitimately held — reading death as staleness
+  # would let any competing acquirer reap a live claim on sight. Only the TTL governs a detached lock.
+  pid_mode="supervised"
+  [[ -f "$lockdir/pid_mode" ]] && pid_mode=$(tr -d '[:space:]' <"$lockdir/pid_mode" 2>/dev/null || true)
+
+  if [[ -n "$holder" && "$host_then" == "$host_now" && "$pid_mode" == "supervised" ]]; then
+    if kill -0 "$holder" 2>/dev/null; then
+      # A LIVE same-host holder is never stale, whatever its age. The critical section legitimately
+      # spans network calls (GitHub queries, per-branch pushes), so an age-only test would declare an
+      # actively-running holder stale and let the next acquirer delete its directory mid-operation —
+      # defeating the mutual exclusion the lock exists to provide.
+      return 1
     fi
+    return 0
   fi
 
   if [[ -f "$lockdir/acquired_epoch" ]]; then
@@ -117,8 +131,18 @@ _branch_op_lock_is_stale() {
     return 1
   fi
 
-  # No metadata at all — treat as stale so a crashed half-write cannot wedge forever.
-  return 0
+  # No metadata YET. `mkdir` publishes the directory before the acquirer can write into it, so a
+  # waiter that loses the race observes exactly this state for a few milliseconds. Treating it as
+  # immediately stale let that waiter delete the winner's directory while the winner was still
+  # writing its own metadata — two holders, no error. Age it from the directory's own mtime, which
+  # `mkdir` sets atomically, so a genuinely crashed half-write is still recovered once it exceeds
+  # the TTL.
+  now=$(date -u +%s)
+  age=$(( now - $(date -u -r "$lockdir" +%s 2>/dev/null || stat -c %Y "$lockdir" 2>/dev/null || echo 0) ))
+  if (( age >= stale_ttl )); then
+    return 0
+  fi
+  return 1
 }
 
 _branch_op_lock_try_remove_stale() {
@@ -145,6 +169,7 @@ branch_op_lock_acquire() {
       printf '%s\n' "$$" >"$lockdir/pid"
       printf '%s\n' "$token" >"$lockdir/token"
       printf '%s\n' "$(uname -n 2>/dev/null || hostname 2>/dev/null || echo unknown)" >"$lockdir/host"
+      printf '%s\n' "${BRANCH_OP_LOCK_PID_MODE:-supervised}" >"$lockdir/pid_mode"
       printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$lockdir/acquired_at"
       printf '%s\n' "$(date -u +%s)" >"$lockdir/acquired_epoch"
       BRANCH_OP_LOCK_TOKEN="$token"
@@ -232,7 +257,14 @@ branch_op_lock_run() {
   "$@" || rc=$?
   trap - EXIT
   BRANCH_OP_LOCK_TOKEN="$token"
-  branch_op_lock_release "$repo" "$token" || true
+  # A failed release means the lock directory is still there — every later worktree or branch
+  # operation will block on it until the TTL expires. Discarding that status reported a clean
+  # cleanup over a leaked lock, so it is propagated when the wrapped command itself succeeded.
+  local release_rc=0
+  branch_op_lock_release "$repo" "$token" || release_rc=$?
+  if (( rc == 0 && release_rc != 0 )); then
+    return "$release_rc"
+  fi
   return "$rc"
 }
 
@@ -256,7 +288,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
           *) echo "branch-op-lock: unknown arg '$1'" >&2; exit 2 ;;
         esac
       done
-      branch_op_lock_acquire "$repo" "$timeout" "$stale_ttl"
+      BRANCH_OP_LOCK_PID_MODE=detached branch_op_lock_acquire "$repo" "$timeout" "$stale_ttl"
       ;;
     release)
       repo="${1-}"; shift || true
