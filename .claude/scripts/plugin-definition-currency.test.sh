@@ -547,4 +547,52 @@ case "${section}" in
   *) fail "the plugin contract section does not name the recovery path after a revision mismatch" ;;
 esac
 
+# ── 11. The fallback must survive the cases that BREAK a working tree ─────────
+# Codex review of monorepo#2855 (3×P1, all verified against the scripts): the section 10 procedure
+# assumed a usable working tree, and each of its three assumptions fails in a case the fallback is
+# actually reached in.
+#
+# (a) The pin was sourced from "the pinned revision the check printed" — but every `die` in
+# plugin-definition-currency.sh exits BEFORE its reporting block (the pin prints at the `say` well
+# after the last `die`), so an UNKNOWN prints no pin at all. UNKNOWN is exactly when this fallback is
+# reached, so the instruction was unfollowable in its own trigger case. Matched as the complete
+# `HEAD:<path>` form: a bare "rev-parse" already appears above for the read-back.
+case "${section}" in
+  *"git rev-parse HEAD:libraries/agent-plugins"*)
+    ok "the contract resolves the pin independently of the check's output" ;;
+  *) fail "the plugin contract section does not name a pin source independent of the check" ;;
+esac
+# (b) A working-tree-free path must exist, because BOTH tree-based paths can fail: the submodule is
+# empty in a fresh worktree and `submodule-init.sh` can die STILL EMPTY there (its own comment
+# records `git submodule update --init` exiting 0 having populated nothing, observed from a linked
+# superproject). Without this, the prescribed recovery dead-ends and the run stops rather than
+# reading the reviewed definition. Matched on the repo-qualified contents path so the assertion
+# cannot be satisfied by an unrelated `gh api` elsewhere in the section.
+case "${section}" in
+  *"repos/devantler-tech/agent-plugins/contents"*)
+    ok "the contract names a read that needs no working tree" ;;
+  *) fail "the plugin contract section does not name a working-tree-free read of the reviewed definition" ;;
+esac
+case "${section}" in
+  *"STILL EMPTY"*)
+    ok "the contract says a STILL EMPTY materialisation is not the end of the run" ;;
+  *) fail "the plugin contract section does not tell a run what to do when materialisation populates nothing" ;;
+esac
+# (c) HEAD == pin does not establish CONTENT. Handed an already-populated submodule the helper
+# repairs isolation in place and refuses `git submodule update`, so a modified tracked definition
+# survives with HEAD still at the pin — the revision assertion passes over unreviewed instructions.
+# Bound to the same path as the revision read so the two cannot drift apart.
+case "${section}" in
+  *"git -C libraries/agent-plugins status --porcelain"*)
+    ok "the contract asserts the materialised tree is clean, not just its revision" ;;
+  *) fail "the plugin contract section does not require the materialised submodule tree to be clean" ;;
+esac
+# status alone is blind to assume-unchanged/skip-worktree, which is how a foreign edit hides from it
+# — the same hidden-index hole the Git-safety contract already closes for checkout.
+case "${section}" in
+  *"ls-files -v"*)
+    ok "the contract closes the hidden-index hole in that cleanliness check" ;;
+  *) fail "the plugin contract section does not close the hidden-index hole in its cleanliness check" ;;
+esac
+
 echo "plugin-definition-currency: ${pass_count} assertions passed"

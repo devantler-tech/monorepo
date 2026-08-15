@@ -321,24 +321,56 @@ because it returns a plausible definition and the run believes it complied while
 unreviewed revision. Of the five sessions that saw `DRIFT` that day, **only two read any reviewed
 definition at all** ([#2854](https://github.com/devantler-tech/monorepo/issues/2854)).
 
-**Materialise it in a fresh session worktree — where that submodule is still empty — then assert the
-revision:**
+🔴 **Resolve the pin yourself — do NOT depend on the check having printed it.** Every `die` in
+`plugin-definition-currency.sh` exits **before** its reporting block, so an **UNKNOWN prints no
+pinned revision at all** — and UNKNOWN is precisely when this fallback is reached. Read the gitlink
+straight out of this commit, which cannot fail for the reasons the check does:
+
+```sh
+git rev-parse HEAD:libraries/agent-plugins   # the pinned revision, independent of the check
+```
+
+**Prefer the forge read: it needs no working tree, so none of the traps below can reach it.** The
+revision is named in the request, so what comes back is the reviewed content by construction — this
+is the one path that works in a fresh worktree, a populated one, and a broken one alike:
+
+```sh
+gh api "repos/devantler-tech/agent-plugins/contents/<file>?ref=<pin>" \
+  -H "Accept: application/vnd.github.raw"
+```
+
+**Materialising it locally is the fallback, and it carries two assertions rather than one** — in a
+fresh session worktree, where that submodule is still empty:
 
 ```sh
 .claude/scripts/submodule-init.sh libraries/agent-plugins   # populates an EMPTY submodule at this commit's gitlink
 git -C libraries/agent-plugins rev-parse HEAD               # read the revision back
+git -C libraries/agent-plugins status --porcelain           # and prove the tree is CLEAN
 ```
 
-That read-back **must equal the pinned revision** the check printed.
+That read-back **must equal the pinned revision**, and the status must print nothing.
 
-🔴 **A mismatch is a STOP, not a retry — re-running that command cannot fix it.** Handed an
-**already-populated** submodule, `submodule-init.sh` repairs isolation only and deliberately refuses
-`git submodule update`, so it exits `isolated ✓` with the stale revision still checked out — the
-warning *Git safety* already carries, and exactly the shape being guarded against here. Moving a
-populated submodule onto a pin has **no procedure yet**
-([#2833](https://github.com/devantler-tech/monorepo/issues/2833)), so on a mismatch materialise in a
-fresh isolated worktree and repeat the comparison. Never read a definition out of an
-already-populated submodule until its `HEAD` equals the pinned revision.
+🔴 **The revision alone does NOT establish the content — assert the tree is clean too.** Handed an
+already-populated submodule, `submodule-init.sh` repairs isolation and deliberately refuses
+`git submodule update`, so a **modified tracked definition survives with `HEAD` still equal to the
+pin**: the revision assertion passes and the run follows unreviewed instructions anyway. Require an
+empty `status --porcelain`, and with it the hidden-index check *Git safety* prescribes
+(`git -C libraries/agent-plugins ls-files -v` showing no lowercase flag and no `S`), because
+`assume-unchanged` and `skip-worktree` hide a modification from `status` entirely.
+
+🔴 **A mismatch is a STOP, not a retry — re-running that command cannot fix it.** The same in-place
+repair means it exits `isolated ✓` with the stale revision still checked out — the warning *Git
+safety* already carries. Moving a populated submodule onto a pin has **no procedure yet**
+([#2833](https://github.com/devantler-tech/monorepo/issues/2833)), so on a mismatch use the forge
+read above, or materialise in a fresh isolated worktree and repeat the comparison. Never read a
+definition out of an already-populated submodule until its `HEAD` equals the pinned revision **and
+its tree is clean**.
+
+🔴 **`submodule-init.sh` can also stop having materialised NOTHING — which is not a dead end.** Run
+from a linked worktree, `git submodule update --init` can exit 0 while populating nothing, after
+which the helper deliberately dies `STILL EMPTY` rather than report a vacuous `isolated ✓`. That is
+the prescribed recovery worktree failing in exactly the case it was reached for, so do not let it end
+the run: fall back to the forge read, which needs no working tree.
 
 Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow. **Never edit the plugin cache**; it is
 read-only evidence (see *Agent definition locations*). When the refresh needs an interactive session
