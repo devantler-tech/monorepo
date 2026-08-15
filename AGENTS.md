@@ -338,7 +338,7 @@ warning *Git safety* already carries, and exactly the shape being guarded agains
 populated submodule onto a pin has **no procedure yet**
 ([#2833](https://github.com/devantler-tech/monorepo/issues/2833)), so on a mismatch materialise in a
 fresh isolated worktree and repeat the comparison. Never read a definition out of an
-already-populated submodule without making it.
+already-populated submodule until its `HEAD` equals the pinned revision.
 
 Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow. **Never edit the plugin cache**; it is
 read-only evidence (see *Agent definition locations*). When the refresh needs an interactive session
