@@ -26,6 +26,18 @@ check() {
   fi
 }
 
+# Byte-exact "the tool left this file alone" assertion. A `"$(cat …)"` capture
+# strips trailing newlines on BOTH sides, so a refused rewrite that changed only
+# trailing newline bytes would satisfy a string comparison — precisely the
+# clobber these guards exist to catch. Compare the file against a pristine copy
+# instead, the same way the backup assertion above does.
+check_unchanged() {
+  local desc="$1" reference="$2" target="$3"
+  if cmp -s "$reference" "$target"; then pass "$desc"; else
+    fail "$desc (target no longer byte-identical to its pre-run copy)"
+  fi
+}
+
 run() { local rc=0; "$tool" "$@" >/dev/null 2>&1 || rc=$?; echo "$rc"; }
 
 # ---------------------------------------------------------------------------
@@ -66,14 +78,15 @@ fi
 # ---------------------------------------------------------------------------
 target="$tmp/bound.md"
 printf '%s\n' '# Heading' 'line2' 'line3' 'line4' 'line5' > "$target"
-before="$(cat "$target")"
+bound_original="$tmp/bound-original.md"
+cp "$target" "$bound_original"
 suffix="$tmp/suffix.md"
 printf '%s\n' 'replacement section' > "$suffix"
 
 rc=0
 out="$("$tool" --file "$target" --keep-through '' --suffix "$suffix" 2>&1)" || rc=$?
 check "empty keep-through exits non-zero" "2" "$rc"
-check "empty keep-through leaves target untouched" "$before" "$(cat "$target")"
+check_unchanged "empty keep-through leaves target untouched" "$bound_original" "$target"
 if grep -qi 'keep-through' <<<"$out"; then
   pass "empty keep-through names the bound in the error"
 else
@@ -83,12 +96,12 @@ fi
 rc=0
 out="$("$tool" --file "$target" --keep-through 0 --suffix "$suffix" 2>&1)" || rc=$?
 check "zero keep-through exits non-zero" "2" "$rc"
-check "zero keep-through leaves target untouched" "$before" "$(cat "$target")"
+check_unchanged "zero keep-through leaves target untouched" "$bound_original" "$target"
 
 rc=0
 out="$("$tool" --file "$target" --keep-through -3 --suffix "$suffix" 2>&1)" || rc=$?
 check "negative keep-through exits non-zero" "2" "$rc"
-check "negative keep-through leaves target untouched" "$before" "$(cat "$target")"
+check_unchanged "negative keep-through leaves target untouched" "$bound_original" "$target"
 
 # ---------------------------------------------------------------------------
 # RED case 2: empty / near-empty rebuild must refuse (the sed-error → empty
@@ -102,14 +115,15 @@ target="$tmp/empty-rebuild.md"
     printf 'tick note line %s with enough bytes to matter for shrink detection\n' "$local_i"
   done
 } > "$target"
-before="$(cat "$target")"
+rebuild_original="$tmp/empty-rebuild-original.md"
+cp "$target" "$rebuild_original"
 empty_new="$tmp/empty-new.md"
 : > "$empty_new"
 
 rc=0
 out="$("$tool" --file "$target" --from "$empty_new" 2>&1)" || rc=$?
 check "empty rebuild exits non-zero" "1" "$rc"
-check "empty rebuild leaves target untouched" "$before" "$(cat "$target")"
+check_unchanged "empty rebuild leaves target untouched" "$rebuild_original" "$target"
 if grep -qiE 'empty|refuse|rejected' <<<"$out"; then
   pass "empty rebuild error mentions refusal"
 else
@@ -122,7 +136,7 @@ printf '%s\n' '---' 'version: 1' '---' '# Portfolio status' 'x' > "$tiny_new"
 rc=0
 out="$("$tool" --file "$target" --from "$tiny_new" 2>&1)" || rc=$?
 check "drastic shrink exits non-zero by default" "1" "$rc"
-check "drastic shrink leaves target untouched" "$before" "$(cat "$target")"
+check_unchanged "drastic shrink leaves target untouched" "$rebuild_original" "$target"
 if grep -qiE 'shrink|smaller|allow-shrink' <<<"$out"; then
   pass "drastic shrink error mentions shrink / allow-shrink"
 else
@@ -161,13 +175,14 @@ fi
 # ---------------------------------------------------------------------------
 target="$tmp/heading.md"
 printf '%s\n' '# Real heading' 'body body body body body body body body' > "$target"
-before="$(cat "$target")"
+heading_original="$tmp/heading-original.md"
+cp "$target" "$heading_original"
 nohead="$tmp/nohead.md"
 printf '%s\n' 'just prose with no heading at all, padded enough not to trip shrink alone.......' > "$nohead"
 rc=0
 out="$("$tool" --file "$target" --from "$nohead" 2>&1)" || rc=$?
 check "lost heading exits non-zero" "1" "$rc"
-check "lost heading leaves target untouched" "$before" "$(cat "$target")"
+check_unchanged "lost heading leaves target untouched" "$heading_original" "$target"
 
 # ---------------------------------------------------------------------------
 # Frontmatter guard: original opened with YAML frontmatter; a replacement that
@@ -178,13 +193,14 @@ check "lost heading leaves target untouched" "$before" "$(cat "$target")"
 # ---------------------------------------------------------------------------
 target="$tmp/frontmatter.md"
 printf '%s\n' '---' 'name: notes' '---' '# Real heading' 'body body body body body body body' > "$target"
-before="$(cat "$target")"
+fm_guard_original="$tmp/frontmatter-original.md"
+cp "$target" "$fm_guard_original"
 nofm="$tmp/nofm.md"
 printf '%s\n' '# Real heading' 'body body body body body body body body body body body' > "$nofm"
 rc=0
 out="$("$tool" --file "$target" --from "$nofm" 2>&1)" || rc=$?
 check "lost frontmatter exits non-zero" "1" "$rc"
-check "lost frontmatter leaves target untouched" "$before" "$(cat "$target")"
+check_unchanged "lost frontmatter leaves target untouched" "$fm_guard_original" "$target"
 
 # ---------------------------------------------------------------------------
 # Staleness guard: a sibling rewrites the shared file WHILE the candidate is
@@ -224,7 +240,8 @@ done
 
 # The sibling write, landing after the tool read the original.
 printf '%s\n' '# Status' 'SIBLING WROTE THIS LINE' 'padding so the shrink guard is not what rejects this' > "$stale_target"
-sibling_content="$(cat "$stale_target")"
+sibling_original="$stale_dir/sibling-original.md"
+cp "$stale_target" "$sibling_original"
 
 cat "$stale_cand" >&9
 exec 9>&-
@@ -235,7 +252,7 @@ if [[ "$stale_ready" -ne 1 ]]; then
   fail "staleness guard barrier (tool workdir never appeared — test could not synchronise)"
 else
   check "stale rewrite exits non-zero" "1" "$stale_rc"
-  check "stale rewrite does NOT clobber the sibling's write" "$sibling_content" "$(cat "$stale_target")"
+  check_unchanged "stale rewrite does NOT clobber the sibling's write" "$sibling_original" "$stale_target"
 fi
 
 # ---------------------------------------------------------------------------
@@ -252,7 +269,8 @@ fm_target="$tmp/unclosed-frontmatter.md"
     printf 'body line %s with enough bytes to stay clear of the shrink guard\n' "$fm_i"
   done
 } > "$fm_target"
-fm_before="$(cat "$fm_target")"
+fm_original="$tmp/unclosed-frontmatter-original.md"
+cp "$fm_target" "$fm_original"
 
 fm_new="$tmp/unclosed-frontmatter-new.md"
 {
@@ -266,7 +284,7 @@ fm_new="$tmp/unclosed-frontmatter-new.md"
 rc=0
 out="$("$tool" --file "$fm_target" --from "$fm_new" 2>&1)" || rc=$?
 check "unclosed frontmatter exits non-zero" "1" "$rc"
-check "unclosed frontmatter leaves target untouched" "$fm_before" "$(cat "$fm_target")"
+check_unchanged "unclosed frontmatter leaves target untouched" "$fm_original" "$fm_target"
 # Match the guard's own wording, not 'frontmatter'/'close' — those also occur in
 # the fixture's FILENAME, which the success path echoes back as `backup=<path>`,
 # so a looser pattern passes even when the guard is removed entirely.
