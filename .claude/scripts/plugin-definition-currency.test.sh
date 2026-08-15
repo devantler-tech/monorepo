@@ -493,4 +493,37 @@ case "${section}" in
   *) fail "the plugin contract section does not require comparison by blob identity" ;;
 esac
 
+# ── 10. The fallback must be EXECUTABLE, not just named ───────────────────────
+# monorepo#2854: naming the reviewed definition as the fallback is not enough, because neither way a
+# run can reach it works unaided. The submodule holding it is empty in a fresh per-run worktree
+# (measured 2026-08-15: most live worktrees carried zero entries there), and where it IS populated —
+# the shared checkout — it sits at whatever revision it was last left on rather than this commit's
+# gitlink (measured the same day: bfde8656 against a pinned 564a6a0f, differing by 311 inserted and
+# 43 deleted lines across all four definition files). The second is the fail-open: it returns a
+# plausible definition, so the run believes it complied while following an unreviewed revision.
+# Measured impact: of the 5 sessions that saw DRIFT that day, only 2 read any reviewed definition.
+case "${section}" in
+  *"submodule-init.sh"*) ok "the contract names how to materialise the reviewed definition" ;;
+  *) fail "the plugin contract section does not name the command that materialises the reviewed definition" ;;
+esac
+# The materialisation alone is still fail-open — it is the revision ASSERTION that converts a
+# wrong-revision read from a silent pass into a stop. Pinned separately so an edit cannot drop the
+# check while keeping the command.
+case "${section}" in
+  *"rev-parse HEAD"*) ok "the contract requires reading back the materialised revision" ;;
+  *) fail "the plugin contract section does not require reading back the materialised revision" ;;
+esac
+case "${section}" in
+  *"must equal the pinned revision"*)
+    ok "the contract requires the materialised revision to equal the pin" ;;
+  *) fail "the plugin contract section does not require the materialised revision to equal the pin" ;;
+esac
+# The shared checkout is the specific trap, so it is named rather than left to inference: a run that
+# has not been told the populated copy can be the WRONG copy has no reason to suspect it.
+case "${section}" in
+  *"shared checkout"*)
+    ok "the contract warns that the populated shared checkout may be the wrong revision" ;;
+  *) fail "the plugin contract section does not warn about the shared checkout's revision" ;;
+esac
+
 echo "plugin-definition-currency: ${pass_count} assertions passed"

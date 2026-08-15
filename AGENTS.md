@@ -308,8 +308,31 @@ is covered yet — see [#2850](https://github.com/devantler-tech/monorepo/issues
 `CURRENT` from this check as a statement about a sibling instance.
 
 **On drift, do not proceed as if the loaded definition were current: read the reviewed definition at
-the pinned gitlink and follow that**, and report the drift. Refresh only through the runtime's own
-control plane — the `/plugin` marketplace update flow. **Never edit the plugin cache**; it is
+the pinned gitlink and follow that**, and report the drift.
+
+🔴 **"At the pinned gitlink" is a REVISION, not a directory — and both ways of reaching it fail
+unaided.** The reviewed copy lives in the `libraries/agent-plugins` submodule, which is **empty in a
+fresh per-run worktree**, so there is nothing to read; and where it is already populated — the
+**shared checkout** — it sits at whatever revision it was last left on, **not this commit's
+gitlink**. Measured 2026-08-15: the shared checkout stood at `bfde8656` against a pinned `564a6a0f`,
+a difference of **311 inserted and 43 deleted lines across all four definition files**, including the
+entire observation-plane and research-fallback material. The second case is the dangerous one,
+because it returns a plausible definition and the run believes it complied while following an
+unreviewed revision. Of the five sessions that saw `DRIFT` that day, **only two read any reviewed
+definition at all** ([#2854](https://github.com/devantler-tech/monorepo/issues/2854)).
+
+**Materialise it and then assert the revision, both from your own session worktree:**
+
+```sh
+.claude/scripts/submodule-init.sh libraries/agent-plugins   # checks out THIS commit's gitlink
+git -C libraries/agent-plugins rev-parse HEAD               # read the revision back
+```
+
+That read-back **must equal the pinned revision** the check printed. A mismatch means you are reading
+some other revision rather than the reviewed one — re-materialise instead of proceeding, and never
+read a definition out of an already-populated submodule without making this comparison.
+
+Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow. **Never edit the plugin cache**; it is
 read-only evidence (see *Agent definition locations*). When the refresh needs an interactive session
 an unattended run cannot open, surface it on a declared *Maintainer channel* rather than leaving a
 silently superseded definition in place.
