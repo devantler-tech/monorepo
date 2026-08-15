@@ -327,15 +327,17 @@ pinned revision at all** — and UNKNOWN is precisely when this fallback is reac
 straight out of this commit, which cannot fail for the reasons the check does:
 
 ```sh
-git rev-parse HEAD:libraries/agent-plugins   # the pinned revision, independent of the check
+pin=$(git rev-parse HEAD:libraries/agent-plugins)   # the pinned revision, independent of the check
 ```
 
 **Prefer the forge read: it needs no working tree, so none of the traps below can reach it.** The
 revision is named in the request, so what comes back is the reviewed content by construction — this
-is the one path that works in a fresh worktree, a populated one, and a broken one alike:
+is the one path that works in a fresh worktree, a populated one, and a broken one alike. Pass the
+`$pin` you just resolved, never a revision retyped from somewhere else — binding the two is what
+makes this executable rather than merely described:
 
 ```sh
-gh api "repos/devantler-tech/agent-plugins/contents/<file>?ref=<pin>" \
+gh api "repos/devantler-tech/agent-plugins/contents/<file>?ref=${pin}" \
   -H "Accept: application/vnd.github.raw"
 ```
 

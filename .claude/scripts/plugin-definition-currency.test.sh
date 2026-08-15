@@ -595,4 +595,42 @@ case "${section}" in
   *) fail "the plugin contract section does not close the hidden-index hole in its cleanliness check" ;;
 esac
 
+# ── 12. The prose must pin the OUTCOME, not merely name the tool ──────────────
+# CodeRabbit on monorepo#2855: naming `STILL EMPTY`, `status --porcelain` and `ls-files -v` proves
+# only that the document mentions them — not that STILL EMPTY routes to the forge read, nor that the
+# status output is required to be EMPTY. A contract that names a command without its required outcome
+# is the same "named but not executable" gap section 10 exists to close, one level down.
+#
+# Patterns below are SINGLE-quoted: they contain `$(` and `${`, which inside a double-quoted case
+# pattern would be command-substituted / expanded, silently changing what is matched.
+case "${section}" in
+  *'pin=$(git rev-parse HEAD:libraries/agent-plugins)'*)
+    ok "the contract BINDS the resolved pin to a variable" ;;
+  *) fail "the plugin contract section does not bind the resolved pin to a variable" ;;
+esac
+# The bind is only worth anything if the forge request consumes it — a resolved-then-retyped revision
+# is exactly the wrong-revision read this section exists to stop.
+case "${section}" in
+  *'?ref=${pin}'*)
+    ok "the forge read consumes the pin that was just resolved" ;;
+  *) fail "the plugin contract section does not pass the resolved pin to the forge read" ;;
+esac
+# Ordering matters: the pin must be resolved BEFORE it is consumed, or the documented sequence cannot
+# be executed top-to-bottom as written.
+case "${section}" in
+  *'pin=$(git rev-parse HEAD:libraries/agent-plugins)'*'?ref=${pin}'*)
+    ok "the pin is resolved before the forge read consumes it" ;;
+  *) fail "the plugin contract section resolves the pin after the forge read that consumes it" ;;
+esac
+case "${section}" in
+  *"fall back to the forge read"*)
+    ok "STILL EMPTY routes to the forge read rather than ending the run" ;;
+  *) fail "the plugin contract section does not route a STILL EMPTY materialisation to the forge read" ;;
+esac
+case "${section}" in
+  *"must print nothing"*)
+    ok "the cleanliness check pins its required outcome, not just its command" ;;
+  *) fail "the plugin contract section does not require the cleanliness check to print nothing" ;;
+esac
+
 echo "plugin-definition-currency: ${pass_count} assertions passed"
