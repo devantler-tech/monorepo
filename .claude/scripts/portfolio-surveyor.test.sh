@@ -73,6 +73,12 @@ grep -Fq '.claude/scripts/classify-main-ci-runs.sh' "${surveyor}" ||
   fail "surveyor does not delegate main-CI classification to classify-main-ci-runs.sh"
 grep -Fq 'head_sha=<full-sha>&branch=main' "${surveyor}" ||
   fail "surveyor does not key main CI to the current head_sha + branch=main"
+# Delegation must be mandatory, not one of two options: an inline re-implementation of the
+# classification rules is exactly the drift the shared classifier exists to prevent, and it would
+# satisfy the delegation assertion above merely by naming the script.
+if grep -Fq 'or apply the same rules inline' "${surveyor}"; then
+  fail "surveyor permits bypassing classify-main-ci-runs.sh with an inline re-implementation"
+fi
 grep -Fq 'classify-main-ci-runs.sh' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not point at classify-main-ci-runs.sh for main CI"
 if grep -Fq 'gh run list --branch main --status failure' "${maintenance_skill}"; then

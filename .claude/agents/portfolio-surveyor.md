@@ -385,7 +385,7 @@ public and private — no per-repo loop needed to enumerate):
       `--jq` reduction) and `branch=main`, because another branch can point at the same commit and
       its runs share the `head_sha`.
    3. Pipe the aggregated runs into [`.claude/scripts/classify-main-ci-runs.sh`](../scripts/classify-main-ci-runs.sh)
-      (or apply the same rules inline): keep only runs whose `event` is a **main-branch event**
+      (do not reimplement these rules inline): keep only runs whose `event` is a **main-branch event**
       (`push`, `schedule`, `merge_group`, `workflow_dispatch`, `dynamic`), take the **latest run per
       `workflow_id`** (greatest `created_at`; the id, never the display `name`, which two workflow
       files can legally share — collapsing them hides one workflow's failure behind the other
