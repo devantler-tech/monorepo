@@ -1273,7 +1273,12 @@ claim_resolved="$(printf '%s\n' \
   'bbbbbbb refs/heads/claude/war-foliage-spatial-hash-109-2' \
   'ccccccc refs/heads/claude/war-armour-guard' \
   'ddddddd refs/heads/codex/war-foliage-spatial-hash-109' \
-  'eeeeeee refs/heads/claude/war-thing-1109' |
+  'eeeeeee refs/heads/claude/war-thing-1109' \
+  'f0000000 refs/heads/claude/war-suffix-probe-109-0' \
+  'f1111111 refs/heads/claude/war-suffix-probe-109-1' \
+  'f0000001 refs/heads/claude/war-suffix-probe-109-00' \
+  'f0000011 refs/heads/claude/war-suffix-probe-109-01' \
+  'f1010101 refs/heads/claude/war-suffix-probe-109-10' |
   awk -v lane="claude" -v n="109" "${claim_resolver}")"
 
 printf '%s\n' "${claim_resolved}" | grep -Fq 'refs/heads/claude/war-foliage-spatial-hash-109' ||
@@ -1284,6 +1289,21 @@ printf '%s\n' "${claim_resolved}" | grep -Fq 'refs/heads/claude/war-foliage-spat
   fail "claim-ref resolver leaks a sibling lane's branch (#2250)"
 ! printf '%s\n' "${claim_resolved}" | grep -Fq 'war-thing-1109' ||
   fail "claim-ref resolver matches a longer number merely ending in the issue number (#2250)"
+
+# Rule 3 names `-2` as the FIRST takeover and the base claim carries no suffix, so `-0`, `-1` and
+# leading-zero forms are names this convention never produces. A bare `(-[0-9]+)?$` admits all four,
+# putting refs nobody created into the candidate rows rule 4 then has to disambiguate.
+# These matches MUST be end-anchored: a plain substring test for `-109-1` also matches the `-109-10`
+# positive control below, so an unanchored negative fires on the very ref it is meant to allow.
+for invalid_suffix in 0 1 00 01; do
+  ! printf '%s\n' "${claim_resolved}" | grep -Eq -- "war-suffix-probe-109-${invalid_suffix}$" ||
+    fail "claim-ref resolver admits the invalid takeover suffix -${invalid_suffix}, which rule 3 never produces (#2250)"
+done
+
+# Positive control for the SAME tightening: constraining the suffix must not cost multi-digit
+# takeovers. Without this, narrowing the arm to a single [2-9] would pass every negative above.
+printf '%s\n' "${claim_resolved}" | grep -Eq -- 'war-suffix-probe-109-10$' ||
+  fail "claim-ref resolver no longer matches a multi-digit -10 takeover — the suffix arm is over-tightened (#2250)"
 
 # The legacy pre-numbering shape is STRUCTURALLY invisible to number resolution. That is why rule 1's
 # normalised-stem pass stays required, and why the resolver must never be reused as a rival scan —

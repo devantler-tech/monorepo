@@ -802,11 +802,16 @@ touch of an unconfirmed repo:
      **Resolve the claim ref from the issue number**, not an assumed exact stem — a takeover suffix
      means the name you pushed is not the one you would have guessed:
      ```sh
-     # This lane's claim ref(s) for issue N (base or -<n>-k takeover):
+     # This lane's claim ref(s) for issue N (base, or a -<issue>-k takeover with k >= 2):
      git ls-remote --heads origin \
        | awk -v lane="<lane>" -v n="<issue>" \
-           '$2 ~ "^refs/heads/" lane "/.+" && $2 ~ "-" n "(-[0-9]+)?$" {print $1, $2}'
+           '$2 ~ "^refs/heads/" lane "/.+" && $2 ~ "-" n "(-([2-9]|[1-9][0-9]+))?$" {print $1, $2}'
      ```
+     ⚠️ **The suffix arm admits `k >= 2` only, because rule 3 names `-2` as the FIRST takeover** — the
+     base claim carries no suffix at all. A bare `(-[0-9]+)?$` also accepts `-0`, `-1`, and
+     leading-zero forms like `-01`, none of which this convention ever produces; admitting them would
+     let a ref nobody created enter the candidate rows that rule 4 then has to disambiguate.
+     Multi-digit takeovers (`-10`, `-12`) stay in scope — verify that when you touch this pattern.
      🔴 **That resolver matches NUMBERED and TAKEOVER refs ONLY — a legacy pre-numbering ref ending
      in its description is structurally invisible to it, and that is correct here but fatal if you
      reuse it for rule 1.** Both shapes exist in the portfolio: rule 2 has required the issue number
