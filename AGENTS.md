@@ -3491,6 +3491,36 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   IFS-split; only parameter expansion is exempt), so an unexpected result there is ordinary
   whitespace splitting, not this bug. Keep the two diagnoses apart — the parameter-expansion family
   is `set -- $var` and `cmd $args`.
+- **A raw control byte anywhere in a `Bash` command loses the WHOLE call — write the delimiter as an
+  escape instead.** The runtime refuses the call outright with
+  `InputValidationError: command contains control characters that would be hidden in the approval
+  dialog`, which is a **correct guard** — you cannot approve what you cannot see — so never touch it
+  or any permission surface to work around this; fix the command. Measured over the 7 days to
+  2026-08-15: **18 occurrences across 14 distinct sessions**, spread over 10+ branches in both the
+  routine and the maintainer-interactive lanes, making it the largest diagnosed avoidable reliability
+  cost. Nothing is partially applied — the call never runs, and the message names neither the
+  offending byte nor its position, which is why lanes rediscover it by improvising a second spelling
+  of the same command.
+  🔴 **It is NOT "newlines and tabs" — that natural reading is measured-false and sends you to a fix
+  that changes nothing.** A raw newline and a raw **tab** are both **accepted** (verified directly;
+  every multi-line command in this contract relies on it), so "put the multi-line program in a file"
+  addresses nothing. The bytes that actually fire it are the **non-whitespace C0 delimiters**, chosen
+  deliberately as collision-proof field/record separators for TSV-ish pipelines and then typed as raw
+  bytes: measured census **NUL ×5, SOH ×5, US ×4, SOH+STX ×2** — i.e. the habit is sound engineering
+  (a body containing tabs and newlines needs a separator that cannot collide) and only its *spelling*
+  is wrong.
+  **Write the separator so the source stays printable — verified to emit the identical byte:**
+  ```sh
+  printf 'a%sb' $'\x1f'                      # ANSI-C quoting -> the 0x1F byte
+  while IFS=$'\x1f' read -r a b; do …; done  # same split, printable source
+  printf 'p\0q\0' | xargs -0 -n1 …           # NUL: the \0 escape, never a raw byte
+  ```
+  For a `jq` program, the six printable characters `\u001f` are a jq string escape and emit the byte
+  at runtime, so the program text itself stays clean. The rule is only ever about **how the byte is
+  spelled in the command you send**, never about which byte the pipeline uses.
+  ⚠️ **The guard scans the ENTIRE command string, comments included** — reproduced live while writing
+  this rule: a trailing `# …` explaining the delimiter carried a raw byte and cost the call, with the
+  code itself already correct. So a command that looks fixed can still fail on its own annotation.
 
 This changes only *ordering and overlap* — never the quality bar. Validation, RED/GREEN proof,
 root-cause fixing, and every guardrail are unaffected; the point is to stop paying for them serially.
