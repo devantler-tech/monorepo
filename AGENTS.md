@@ -817,7 +817,17 @@ touch of an unconfirmed repo:
      stem, which is precisely the #96 collision the number was introduced to prevent. Rule 1's
      **normalised-stem** match is what covers that shape, and it stays required — the two passes are
      complementary, not alternatives.
-     Your just-pushed tip must appear there as **your** sha. **Compare the tip —
+     🔴 **That listing DISCOVERS refs; it does not DECIDE the race — compare the row whose ref is
+     exactly the branch you pushed, never "my sha appears somewhere in the output".** During a
+     takeover the abandoned base ref is still present, so the resolver legitimately returns **two**
+     rows and an any-row match cannot tell them apart: it accepts a **rejected** retry whenever your
+     sha also sits on the other matching ref, and reads a **won** race as lost when you happen to
+     inspect the abandoned row. Select the one ref you actually pushed and compare that:
+     ```sh
+     # <pushed-ref> is the takeover name you created, e.g. claude/<area>-<desc>-<issue>-2
+     git ls-remote --heads origin "refs/heads/<pushed-ref>" | awk '{print $1}'
+     ```
+     That single sha must equal your just-pushed sha. **Compare the tip —
      never judge the race by the push's exit status**, and never through a pipe: `git push … | tail`
      reports `tail`'s status, so a *rejected* push reads as exit 0 (reproduced 2026-07-20). If the tip
      is someone else's, **you lost the race** — stand down under rule 5 rather than force-pushing over

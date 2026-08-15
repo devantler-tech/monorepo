@@ -1295,6 +1295,15 @@ grep -Fq 'a legacy pre-numbering ref ending' "${constitution}" ||
 grep -Fq 'Number resolution does NOT subsume the legacy stem' "${surveyor}" ||
   fail "surveyor does not require the legacy stem pass alongside number resolution (#2250)"
 
+# A takeover leaves the abandoned base ref in place, so the resolver returns BOTH rows. That is why
+# rule 4 must compare the row for the exact ref pushed: an "my sha appears somewhere" test cannot
+# distinguish a rejected retry from a won race once two rows match.
+takeover_rows="$(printf '%s\n' "${claim_resolved}" | grep -c 'war-foliage-spatial-hash-109')"
+[ "${takeover_rows}" -eq 2 ] ||
+  fail "takeover fixture no longer yields both the base and takeover ref, so the ambiguity rule 4 resolves is untested (#2250)"
+grep -Fq 'compare the row whose ref is' "${constitution}" ||
+  fail "constitution lets the race be judged by an any-row sha match during a takeover (#2250)"
+
 # Candidate-scoped clearance must have a producer grammar, and bounded survey continuation must
 # advance past already classified or named-blocker rows without trusting stale head state.
 grep -Fq 'QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>' "${surveyor}" ||
