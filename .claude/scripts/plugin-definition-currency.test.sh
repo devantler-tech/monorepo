@@ -557,8 +557,15 @@ esac
 # after the last `die`), so an UNKNOWN prints no pin at all. UNKNOWN is exactly when this fallback is
 # reached, so the instruction was unfollowable in its own trigger case. Matched as the complete
 # `HEAD:<path>` form: a bare "rev-parse" already appears above for the read-back.
+#
+# The match starts at `rev-parse`, NOT at `git`, because git-level flags sit between the two — the
+# section's pin line carries `--no-replace-objects` there, and a literal starting at `git` asserts
+# command SPELLING where the intent is that the pin comes from the gitlink rather than the check's
+# stdout. Hardening that command would then falsify this assertion, which is what it must not do.
+# `HEAD:<path>` is still what discriminates: the read-back above is `rev-parse HEAD` with no
+# colon-path, and the byte-comparison loop reads `rev-parse "HEAD:$f"`, so neither satisfies this.
 case "${section}" in
-  *"git rev-parse HEAD:libraries/agent-plugins"*)
+  *"rev-parse HEAD:libraries/agent-plugins"*)
     ok "the contract resolves the pin independently of the check's output" ;;
   *) fail "the plugin contract section does not name a pin source independent of the check" ;;
 esac
@@ -603,8 +610,12 @@ esac
 #
 # Patterns below are SINGLE-quoted: they contain `$(` and `${`, which inside a double-quoted case
 # pattern would be command-substituted / expanded, silently changing what is matched.
+#
+# Split around the git-level flag slot for the reason given at the pin-source assertion above: the
+# section's pin line carries `--no-replace-objects` between `git` and `rev-parse`, and each of the
+# two segments occurs exactly once in the section, so the split cannot be satisfied vacuously.
 case "${section}" in
-  *'pin=$(git rev-parse HEAD:libraries/agent-plugins)'*)
+  *'pin=$(git '*'rev-parse HEAD:libraries/agent-plugins)'*)
     ok "the contract BINDS the resolved pin to a variable" ;;
   *) fail "the plugin contract section does not bind the resolved pin to a variable" ;;
 esac
@@ -618,7 +629,7 @@ esac
 # Ordering matters: the pin must be resolved BEFORE it is consumed, or the documented sequence cannot
 # be executed top-to-bottom as written.
 case "${section}" in
-  *'pin=$(git rev-parse HEAD:libraries/agent-plugins)'*'?ref=${pin}'*)
+  *'pin=$(git '*'rev-parse HEAD:libraries/agent-plugins)'*'?ref=${pin}'*)
     ok "the pin is resolved before the forge read consumes it" ;;
   *) fail "the plugin contract section resolves the pin after the forge read that consumes it" ;;
 esac
