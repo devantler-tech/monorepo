@@ -63,23 +63,29 @@ card.
    approved host-level execution path.
    Clearing the injected tokens does not make a sandboxed macOS Keychain readable.
    **Distinguish authentication rejection from GitHub service degradation** (monorepo#2206).
+   Before assigning any credential verdict, obtain an observable REST status line and headers with
+   `gh api --include --hostname github.com user`, using the same credential context as the original
+   probe. The generic `gh auth status` invalid-token message is not conclusive: the CLI can collapse
+   a REST 5xx into that wording while exposing no HTTP status. Never recommend replacing a credential
+   from that message alone.
    Reject explicit authentication failures before inspecting the response body or format.
    Only an explicit credential rejection proves the login invalid: HTTP **401**, a confirmed **non-rate-limit**
-   403 that clearly reports a credential or permission rejection, or `gh` reporting the token rejected
-   or not logged in. This remains an authentication failure even when its body is HTML or non-JSON,
+   403 that the observable REST probe clearly identifies as a credential or permission rejection.
+   This remains an authentication failure even when its body is HTML or non-JSON,
    and **only then** recommend `gh auth login`.
-   For every other result, a REST `/user` (or `gh auth status`) probe that returns HTTP 5xx, HTML,
-   other non-JSON service noise, **or a rate-limited 403/429** (GitHub may return either status when
-   the limit is exceeded — check `x-ratelimit-*` headers or a rate-limit message body) is **not** proof
-   the credential is bad. Classify that outcome as `GitHub service degraded` and run a bounded
+   For every other result, an observable REST probe that returns HTTP 5xx, HTML, other non-JSON
+   service noise, **or a rate-limited 403/429** (GitHub may return either status
+   when the limit is exceeded — check `x-ratelimit-*` headers or a rate-limit message body) is **not**
+   proof the credential is bad. Classify that outcome as `GitHub service degraded` and run a bounded
    authenticated GraphQL fallback against the **same host and credential context** as the failing probe:
    `gh api graphql --hostname github.com -f query='{viewer{login}}'`. Prefix with
    `env -u GH_TOKEN -u GITHUB_TOKEN` **only when the failing probe itself was the cleared-env
    saved-login check**; otherwise keep the injected `GH_TOKEN`/`GITHUB_TOKEN` so a transient REST
    failure cannot be misread as a bad keychain login. Always pass `--hostname github.com` so
    `GH_HOST` cannot redirect the fallback to an unrelated enterprise host.
-   Compare `viewer.login` with this deployment's exact expected identity from earlier in this step:
-   `devantler` for a machine-local lane, or `app/cursor` for the Cursor cloud lane.
+   Compare `viewer.login` with this deployment's exact expected identity on the API surface:
+   `devantler` for a machine-local lane. For the Cursor cloud lane, the GraphQL API identity is `cursor[bot]`.
+   Its `gh auth status`, PR-author, and search identity remains `app/cursor`.
    A mismatch is `wrong GitHub identity` and must not be described as an invalid credential.
    A REST 5xx (or rate-limit) followed by a successful, expected-identity GraphQL
    `viewer.login` proves the login valid. Never report that saved login as invalid.

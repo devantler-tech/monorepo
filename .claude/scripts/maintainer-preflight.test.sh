@@ -59,11 +59,20 @@ grep -Fq 'HTTP **401**' "${run_loop}" ||
 grep -Fq 'non-rate-limit' "${run_loop}" ||
   fail "missing the non-rate-limit 403 credential-rejection criterion"
 
+grep -Fq 'gh api --include --hostname github.com user' "${run_loop}" ||
+  fail "missing the observable REST status-and-header probe"
+
+grep -Fq "The generic \`gh auth status\` invalid-token message is not conclusive" "${run_loop}" ||
+  fail "gh auth status can still turn a REST outage into an invalid-credential verdict"
+
 grep -Fq 'Reject explicit authentication failures before inspecting the response body or format.' "${run_loop}" ||
   fail "explicit authentication rejection does not precede response-shape classification"
 
 grep -Fq "Compare \`viewer.login\` with this deployment's exact expected identity" "${run_loop}" ||
   fail "GraphQL fallback does not use the deployment-scoped expected identity"
+
+grep -Fq "GraphQL API identity is \`cursor[bot]\`" "${run_loop}" ||
+  fail "GraphQL fallback uses Cursor's PR-author identity instead of its API identity"
 
 grep -Fq "A mismatch is \`wrong GitHub identity\`" "${run_loop}" ||
   fail "GraphQL fallback does not classify the wrong-identity case"
