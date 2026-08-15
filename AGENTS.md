@@ -3491,8 +3491,8 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   IFS-split; only parameter expansion is exempt), so an unexpected result there is ordinary
   whitespace splitting, not this bug. Keep the two diagnoses apart — the parameter-expansion family
   is `set -- $var` and `cmd $args`.
-- **A raw control byte anywhere in a `Bash` command loses the WHOLE call — write the delimiter as an
-  escape instead.** The runtime refuses the call outright with
+- **A raw non-whitespace C0 control byte anywhere in a `Bash` command loses the WHOLE call — write the
+  delimiter as an escape instead.** The runtime refuses the call outright with
   `InputValidationError: command contains control characters that would be hidden in the approval
   dialog`, which is a **correct guard** — you cannot approve what you cannot see — so never touch it
   or any permission surface to work around this; fix the command. Measured over the 7 days to

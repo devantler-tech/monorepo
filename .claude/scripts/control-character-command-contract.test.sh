@@ -15,12 +15,12 @@
 # a fix written to that hypothesis ("put the program in a file") addresses nothing, because a raw
 # newline and a raw tab are both ACCEPTED. The bytes that actually fire the guard are the
 # non-whitespace C0 delimiters chosen as collision-proof separators — measured census NUL x5,
-# SOH x5, US x4, SOH+STX x2. So assertion 2 pins the correction itself: while the contract can be
+# SOH x5, US x4, SOH+STX x2. So assertion 3 pins the correction itself: while the contract can be
 # read as blaming newlines/tabs, the reader is sent to a fix that cannot work.
 #
 # Assertions are scoped to the bullet, not the whole file — asserting against the whole constitution
 # is a scope hole, since an unrelated section containing the phrase would satisfy the check while the
-# real sentence stayed wrong. Assertion 7 is deliberately the exception and is whole-file by design.
+# real sentence stayed wrong. Assertion 8 is deliberately the exception and is whole-file by design.
 
 set -euo pipefail
 
@@ -38,9 +38,9 @@ fail() {
 # spanning a line break would never match and the test would be always-red regardless of content.
 bullet="$(
   awk '
-    /A raw control byte anywhere in a `Bash` command/ { inb = 1 }
-    inb && /^This changes only/                       { inb = 0 }
-    inb                                               { print }
+    /^- \*\*A raw / { inb = 1 }
+    inb && /^This changes only/ { inb = 0 }
+    inb                         { print }
   ' "${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' '
 )"
 
@@ -67,43 +67,50 @@ assert_bullet() {
 assert_bullet 'loses the WHOLE call' \
   "the bullet does not state that the entire Bash call is lost, so the failure reads as partial or retryable"
 
-# 2. THE CORRECTION. Without this the natural (and measured-false) 'newlines and tabs' reading
+# 2. The rejected class is named precisely in the HEADLINE claim. Without this the headline can say
+#    "raw control byte" while the paragraph below says newline and tab are accepted — and a newline
+#    and a tab ARE control bytes, so the bullet contradicts itself and reads as a ban on multi-line
+#    commands. The two halves must agree, so the classification is pinned where the rule is stated.
+assert_bullet 'raw non-whitespace C0 control byte' \
+  "the bullet does not identify raw non-whitespace C0 control bytes as the rejected class, so its headline contradicts its own newline/tab carve-out"
+
+# 3. THE CORRECTION. Without this the natural (and measured-false) 'newlines and tabs' reading
 #    survives, and the reader is sent to a fix that changes nothing.
 assert_bullet 'NOT "newlines and tabs"' \
   "the bullet does not correct the measured-false 'newlines and tabs' diagnosis, so the reader is sent to a fix that cannot work"
 
-# 3. The accepted bytes are named explicitly. Assertion 2 says what the cause is not; this says what
+# 4. The accepted bytes are named explicitly. Assertion 3 says what the cause is not; this says what
 #    is safe, which is what stops the over-correction of banning multi-line commands outright.
 assert_bullet 'are both **accepted**' \
   "the bullet does not state that a raw newline and a raw tab are accepted, inviting an over-correction that bans multi-line commands"
 
-# 4. The named alternative. A prohibition that does not say what to write instead is the DevEx tax
+# 5. The named alternative. A prohibition that does not say what to write instead is the DevEx tax
 #    this repo's own hardening rule forbids, and it is what relocates the real instruction into
 #    somewhere unreviewed.
 assert_bullet "\$'\\x1f'" \
   "the bullet forbids the raw byte without naming the ANSI-C quoting alternative that emits the same byte"
 
-# 5. The jq form, which is a different spelling from the shell one and is the case that actually
+# 6. The jq form, which is a different spelling from the shell one and is the case that actually
 #    recurs in this deployment's TSV-shaped mining pipelines.
 assert_bullet 'jq string escape' \
   "the bullet does not give the jq escape form, so a jq program is left with no stated alternative"
 
-# 6. The comment trap. The code can be correct while the annotation explaining it costs the call —
+# 7. The comment trap. The code can be correct while the annotation explaining it costs the call —
 #    reproduced live while this bullet was being written.
 assert_bullet 'comments included' \
   "the bullet does not warn that the guard scans comments too, so a command whose code is fixed can still fail on its own annotation"
 
-# 7. WHOLE-FILE, and deliberately so. The contract must not itself contain a raw control byte: it is
+# 8. WHOLE-FILE, and deliberately so. The contract must not itself contain a raw control byte: it is
 #    quoted, copied and grepped constantly, and a non-printing byte is invisible in review. This is
 #    not hypothetical — the first draft of this very bullet embedded a raw 0x1F inside the backticks
 #    meant to display the jq escape, so the rule forbidding raw control bytes was itself written with
 #    one. `perl` rather than `grep -P`: on this host `grep` is a ugrep wrapper function whose -P
 #    support is not reliably present, so a grep-based check can fail open.
 if ! command -v perl >/dev/null 2>&1; then
-  fail "perl is required for the raw-control-byte scan; without it assertion 7 would silently pass"
+  fail "perl is required for the raw-control-byte scan; without it assertion 8 would silently pass"
 fi
 raw_count="$(perl -ne '$n++ if /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/; END{print $n+0}' "${constitution}")"
 [ "${raw_count}" = "0" ] ||
   fail "AGENTS.md contains ${raw_count} line(s) with a raw control byte — invisible in review, and the non-whitespace C0 bytes among them are rejected outright by the Bash guard; write the byte as an escape (\$'\\x1f', or the jq \\u001f form)"
 
-echo "control-character command contract: OK — 7 assertions passed"
+echo "control-character command contract: OK — 8 assertions passed"
