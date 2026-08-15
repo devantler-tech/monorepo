@@ -644,4 +644,48 @@ case "${section}" in
   *) fail "the plugin contract section does not require the cleanliness check to print nothing" ;;
 esac
 
+# ── 13. The byte check must FAIL CLOSED, not merely exist ────────────────────
+# CodeRabbit on monorepo#2855 (🟠 Major, verified on fixtures): the byte-comparison loop is the one
+# assertion that survives a clean/smudge filter, so a hole in IT has no backstop. Three failure paths
+# made the naive form report success on a check that never ran, and the emptiest evidence produced
+# the strongest-looking result:
+#   (a) piping `ls-tree` into the loop takes the WHILE's status, so an enumeration failure runs the
+#       body zero times and prints nothing — identical output to a verified tree;
+#   (b) in an UNINITIALISED submodule every git call fails, so `want` and `got` are BOTH empty and
+#       `[ "$want" = "$got" ]` compares EQUAL — and an empty submodule is precisely the state this
+#       fallback is reached in;
+#   (c) `ls-tree` without `--no-replace-objects` enumerates a replaced tree while the lookups beside
+#       it do not, spanning two object namespaces inside one comparison.
+# Each assertion below pins the OUTCOME (a marker is emitted / a value is rejected), per section 12.
+case "${section}" in
+  *'--no-replace-objects ls-tree -r --name-only HEAD'*)
+    ok "the byte check enumerates in the same object namespace it compares in" ;;
+  *) fail "the byte check's ls-tree does not carry --no-replace-objects (two object namespaces)" ;;
+esac
+# Matched contiguously ON PURPOSE: the flag appears three times in this section, so a split pattern
+# would be satisfied by the pin line's occurrence even if ls-tree lost the flag entirely.
+case "${section}" in
+  *'BYTES-UNKNOWN <enumeration failed>'*)
+    ok "an enumeration failure is reported rather than read as no-differences" ;;
+  *) fail "the byte check does not report an enumeration failure (silent pass on a check that never ran)" ;;
+esac
+case "${section}" in
+  *'[ -n "$want" ] && [ -n "$got" ]'*)
+    ok "the byte check rejects empty hashes instead of comparing them equal" ;;
+  *) fail "the byte check does not reject empty hashes (two failed lookups would compare EQUAL)" ;;
+esac
+# The markers are worthless if the prose still says only a DIFFER means trouble.
+case "${section}" in
+  *"unproven is not proven"*)
+    ok "the contract counts BYTES-UNKNOWN as a failure, not as a pass" ;;
+  *) fail "the contract does not say an unverifiable byte check fails closed" ;;
+esac
+# Command substitution strips the trailing newline, so a bare `printf '%s'` makes `read` return false
+# on the final entry and drops the LAST file from the sweep unchecked — a silent partial verification.
+case "${section}" in
+  *"printf '%s\\n' \"\$files\""*)
+    ok "the byte check sweeps every file, including the last" ;;
+  *) fail "the byte check drops its last entry (printf without a trailing newline)" ;;
+esac
+
 echo "plugin-definition-currency: ${pass_count} assertions passed"

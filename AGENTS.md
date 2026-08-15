@@ -379,15 +379,33 @@ Assert byte identity against the pinned blobs directly, which no filter can laun
 `--no-filters` bypasses the clean stage:
 
 ```sh
-git -C libraries/agent-plugins ls-tree -r --name-only HEAD -- plugins/agentic-engineering |
+files=$(git -C libraries/agent-plugins --no-replace-objects ls-tree -r --name-only HEAD -- plugins/agentic-engineering) || echo "BYTES-UNKNOWN <enumeration failed>"
+printf '%s\n' "$files" |
   while IFS= read -r f; do
-    want=$(git -C libraries/agent-plugins --no-replace-objects rev-parse "HEAD:$f")
-    got=$(git -C libraries/agent-plugins hash-object --no-filters -- "$f")
+    [ -n "$f" ] || continue
+    want=$(git -C libraries/agent-plugins --no-replace-objects rev-parse "HEAD:$f") \
+      || { echo "BYTES-UNKNOWN $f"; continue; }
+    got=$(git -C libraries/agent-plugins hash-object --no-filters -- "$f") \
+      || { echo "BYTES-UNKNOWN $f"; continue; }
+    { [ -n "$want" ] && [ -n "$got" ]; } || { echo "BYTES-UNKNOWN $f"; continue; }
     [ "$want" = "$got" ] || echo "BYTES-DIFFER $f"
   done
 ```
 
-Any output means the working tree is **not** the reviewed definition, whatever the other three said.
+Any output means the working tree is **not** the reviewed definition, whatever the other three said —
+and that includes `BYTES-UNKNOWN`, because unproven is not proven.
+
+🔴 **Every one of those guards closes a path where the naive form reports success on a check that
+never ran.** Piping `ls-tree` straight into the loop takes the **while's** exit status, so an
+enumeration failure runs the body zero times and prints nothing — indistinguishable from a verified
+tree. Worse, an **uninitialised submodule** makes *every* command fail: `rev-parse` and `hash-object`
+both return empty, and `[ "$want" = "$got" ]` then compares **equal**, so the emptiest possible
+evidence reads as the strongest. Capture the enumeration and check its status, reject an empty hash,
+and treat a failed lookup as `BYTES-UNKNOWN` rather than as a match. `--no-replace-objects` belongs on
+`ls-tree` too: without it the enumeration walks a replaced tree while the lookups beside it do not, so
+the check silently spans two object namespaces. And keep `printf '%s\n'` — command substitution strips
+the trailing newline, and a bare `printf '%s'` makes `read` return false on the final entry, dropping
+the last file from the sweep unchecked.
 This is also why **the forge read above is preferred and not merely more convenient**: it names the
 revision in the request, so it is immune to replace refs, filters, and index bits alike — the local
 fallback needs all four assertions to reach the same confidence the forge read has by construction.
