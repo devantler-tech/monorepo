@@ -59,14 +59,20 @@ grep -Fq 'HTTP **401**' "${run_loop}" ||
 grep -Fq 'non-rate-limit' "${run_loop}" ||
   fail "missing the non-rate-limit 403 credential-rejection criterion"
 
+grep -Fq 'Reject explicit authentication failures before inspecting the response body or format.' "${run_loop}" ||
+  fail "explicit authentication rejection does not precede response-shape classification"
+
+grep -Fq "Compare \`viewer.login\` with this deployment's exact expected identity" "${run_loop}" ||
+  fail "GraphQL fallback does not use the deployment-scoped expected identity"
+
+grep -Fq "A mismatch is \`wrong GitHub identity\`" "${run_loop}" ||
+  fail "GraphQL fallback does not classify the wrong-identity case"
+
 grep -Fq 'A REST 5xx (or' "${run_loop}" ||
   fail "missing the REST-503-plus-GraphQL-success regression rule"
 
-grep -Fq 'recommend' "${run_loop}" && grep -Fq 'gh auth login' "${run_loop}" ||
-  fail "missing the gh-auth-login-only-on-confirmed-rejection handoff rule"
-
 # The handoff must be gated on confirmed rejection — not on every auth-status failure.
-grep -Fq 'and **only then** recommend' "${run_loop}" ||
+grep -Fq "and **only then** recommend \`gh auth login\`" "${run_loop}" ||
   fail "missing the confirmed-rejection gate before recommending gh auth login"
 
 grep -Fq 'record only these gate classifications in durable memory' "${run_loop}" ||
