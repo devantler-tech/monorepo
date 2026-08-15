@@ -132,11 +132,31 @@ check_existing_worktrees() {
 # Move the stray shared core.worktree into each worktree's own per-worktree config. Idempotent.
 repair() {
   local path=$1
-  local mdir tree
+  local mdir tree super_mdir
+
   mdir=$(module_dir "$path")
   tree=$(module_tree "$path")
   { [ -n "$mdir" ] && [ -d "$mdir" ] && [ -n "$tree" ]; } ||
     die "git does not report a gitdir for '$path' (not an initialised submodule?)"
+
+  # `git -C <dir>` walks UP when <dir> is not itself a repository, so a REGISTERED submodule path that
+  # is non-empty but NOT initialised resolves to the SUPERPROJECT's gitdir — and repair would then pin
+  # `core.worktree` in the PARENT repository's per-worktree config, redirecting the parent's own main
+  # checkout at this directory. `is_populated` cannot catch it: it only asks whether the directory has
+  # entries, and one leftover file is enough. A `.git` that exists but points outward reaches the same
+  # place by a different route, so test the RESOLVED gitdir rather than the presence of a `.git` entry
+  # (an existence check is subsumed by this one and provably never fires on its own). Fail closed: the
+  # blast radius is the parent repo and every session sharing it (monorepo#2694).
+  # No `|| true` and no silent fallback: `same_dir` fails closed on an empty path, which here would
+  # SKIP the guard rather than trip it, so a failed probe must stop the run instead of quietly
+  # disabling the check. `errexit` covers a non-zero rev-parse; the emptiness test covers a
+  # zero-exit-no-output result.
+  super_mdir=$(git rev-parse --path-format=absolute --git-common-dir)
+  [ -n "$super_mdir" ] ||
+    die "cannot resolve the superproject's gitdir — refusing to repair '$path' rather than skip the parent-escape check"
+  if same_dir "$mdir" "$super_mdir"; then
+    die "'$path' resolves to the SUPERPROJECT's gitdir ('$mdir'), not its own — refusing to repair, because that would redirect the parent repository's checkout at '$path'. The directory has content but no usable '.git', so nothing here is a real submodule checkout: remove its stray contents, then re-run 'submodule-init.sh $path' to populate it at the pinned commit"
+  fi
 
   git config -f "$mdir/config" extensions.worktreeConfig true
   # Pin the tree this gitdir is actually checked out in — not a path we guessed.
@@ -269,6 +289,17 @@ init_repair_probe() {
     # Fresh (empty) submodule: populate it at its pinned commit, then relocate the `core.worktree`
     # that `git submodule update` writes into the shared config.
     git submodule update --init "$path"
+    # It can exit 0 having populated NOTHING — observed 2026-07-26 running from a linked superproject
+    # worktree while a sibling worktree already held that submodule: git printed `checked out '<sha>'`,
+    # exited 0, and left the directory empty. `probe` below verifies ISOLATION, not content, so it
+    # passes vacuously on an empty directory and the script reports `isolated ✓` for a submodule that
+    # was never checked out. That is fail-open on this script's PRIMARY job, and it is worse than a
+    # loud failure: globs into an empty submodule match nothing, so content checks — including the
+    # bundled-skill ownership audit AGENTS.md mandates before editing a synced file — pass vacuously
+    # instead of erroring. Assert the post-condition: init mode was ASKED to populate, so an empty
+    # tree is a FAILURE here, never the legitimate skip `--check` makes of an uninitialised submodule.
+    is_populated "$path" ||
+      die "'$path' is STILL EMPTY after 'git submodule update --init' (which exited 0) — do not read or edit it"
     repair "$path"
   fi
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
