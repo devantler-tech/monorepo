@@ -327,8 +327,15 @@ pinned revision at all** — and UNKNOWN is precisely when this fallback is reac
 straight out of this commit, which cannot fail for the reasons the check does:
 
 ```sh
-pin=$(git rev-parse HEAD:libraries/agent-plugins)   # the pinned revision, independent of the check
+pin=$(git --no-replace-objects rev-parse HEAD:libraries/agent-plugins)   # the pinned revision
 ```
+
+⚠️ **`--no-replace-objects` is load-bearing here, exactly as it is in *Git safety*.** A `refs/replace`
+entry for `HEAD` makes `HEAD:libraries/agent-plugins` resolve **through the replacement commit** while
+`git rev-parse HEAD` still prints the expected commit — so the pin silently names an unreviewed
+revision, and the forge read below then fetches the wrong definitions **faithfully**, reporting them
+as reviewed. That is a fail-open on the one value everything downstream trusts, and the replace ref
+lives in the shared repository, so a single stale entry reaches every worktree.
 
 **Prefer the forge read: it needs no working tree, so none of the traps below can reach it.** The
 revision is named in the request, so what comes back is the reviewed content by construction — this
@@ -359,6 +366,31 @@ pin**: the revision assertion passes and the run follows unreviewed instructions
 empty `status --porcelain`, and with it the hidden-index check *Git safety* prescribes
 (`git -C libraries/agent-plugins ls-files -v` showing no lowercase flag and no `S`), because
 `assume-unchanged` and `skip-worktree` hide a modification from `status` entirely.
+
+🔴 **Even those three together do NOT prove the BYTES — a clean/smudge filter defeats all of them.**
+When `.gitattributes` (repository, global, or `$GIT_DIR/info/attributes`) assigns a filter to these
+paths, git compares the *cleaned* form: the file on disk can carry different instructions while
+`status --porcelain` prints nothing and `ls-files -v` reports an ordinary entry. Every assertion above
+passes and the run follows altered definitions. The three checks answer "is the tree unmodified
+**as git sees it**", which is a weaker claim than "are these the reviewed bytes" — and it is the
+weaker claim that is easy to mistake for proof.
+
+Assert byte identity against the pinned blobs directly, which no filter can launder because
+`--no-filters` bypasses the clean stage:
+
+```sh
+git -C libraries/agent-plugins ls-tree -r --name-only HEAD -- plugins/agentic-engineering |
+  while IFS= read -r f; do
+    want=$(git -C libraries/agent-plugins --no-replace-objects rev-parse "HEAD:$f")
+    got=$(git -C libraries/agent-plugins hash-object --no-filters -- "$f")
+    [ "$want" = "$got" ] || echo "BYTES-DIFFER $f"
+  done
+```
+
+Any output means the working tree is **not** the reviewed definition, whatever the other three said.
+This is also why **the forge read above is preferred and not merely more convenient**: it names the
+revision in the request, so it is immune to replace refs, filters, and index bits alike — the local
+fallback needs all four assertions to reach the same confidence the forge read has by construction.
 
 🔴 **A mismatch is a STOP, not a retry — re-running that command cannot fix it.** The same in-place
 repair means it exits `isolated ✓` with the stale revision still checked out — the warning *Git
