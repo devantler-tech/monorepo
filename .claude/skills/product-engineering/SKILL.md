@@ -5,6 +5,11 @@ description: The ADVANCE playbook for the Agentic Engineer (the products' primar
 
 # Product engineering — moving products forward
 
+> **Deployment compatibility overlay — not a generic authoring source.** Portable procedure changes
+> belong in the bundled `product-engineering` skill's provenance-recorded upstream and reach this
+> repository through the reviewed `agentic-engineering` plugin. Keep only devantler-tech deployment
+> deltas here; never add a second copy of generic behaviour.
+
 This is the *advance* half of the role. The **operate** half (keep everything healthy) and the run
 loop live in [`portfolio-maintenance`](../portfolio-maintenance/SKILL.md); the binding rules live in
 the monorepo [`AGENTS.md`](../../../AGENTS.md) (*Mandate*, *Product strategy & roadmaps*, *Enhancement
@@ -126,7 +131,14 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    under-specified to begin, (d) a delivered experiment is waiting for its named future measurement
    date — once that date arrives, measuring it is actionable — or (e) another instance holds a **live
    claim** (assigned **and** branched, within ~2h, no PR yet; contract *Claim protocol*), the only
-   skip reason that expires on its own. **Size, difficulty, a `roadmap`/`enhancement`/
+   skip reason that expires on its own, or (f) it is **authored by an exact dependency-automation
+   identity** (`renovate[bot]` / `dependabot[bot]`, `app/renovate` / `app/dependabot`) — unlike the
+   others that is not a deferral: such an issue is **never actionable at all**, never becomes so, and
+   is never selected, worked, or closed (Renovate's Dependency Dashboard is the standing example).
+   ⚠️ (f) matches the **author**, never the `automation` **label** — see the next sentence.
+   **`type:"Spike"` is not a skip and not a delivery-PR:** when it is the oldest actionable issue,
+   record the decision on the Spike and file its follow-up issues — that pair is the floor artifact;
+   do not open a delivery PR (#2267; contract *Issue hierarchy → Spike*). **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
    when the oldest issue is large, **decompose it into a small first child and ship that increment**
    (`Fixes #child`; add `Part of #experiment` when the parent stays open) so the big thing advances
@@ -152,12 +164,23 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    execute the probe against a **trusted/routine-owned** winner's branch, but for an
    **external-contributor** winner it is **static review only** (the trust gate is not relaxed by a
    lost race). If an
-   **actionable trusted-author** PR already
-   exists, drive *that* one instead of duplicating — a non-draft to merge, a **routine-owned draft**
-   to genuine readiness → self-promotion → merge (contract *Autonomy*); leave
-   automation-owned dependency PRs to repository automation, other authors' drafts to their owners,
-   and external PRs per the trust gate. For
-   a big design, write/extend an ADR or system-design note first and link it.
+   **actionable** PR already
+   exists — **whoever authored it** — drive *that* one instead of duplicating. You own every PR in the
+   portfolio (contract *You own EVERY pull request in the portfolio*), so a sibling lane's draft, the
+   maintainer's interactive one, or an outside contribution is rung-1 work to carry to a terminal
+   state — merged, closed with the reason recorded, or parked on a **named, live-verified** blocker —
+   never work to hand back to its author. A non-draft goes to merge; a draft goes to genuine
+   readiness → promotion → merge (contract *Autonomy*), once the data-only active-work test shows
+   nobody else is mid-flight. Three boundaries survive that widening.
+   The **automation-owned dependency PRs** (exact `renovate[bot]`/`dependabot[bot]`)
+   stay with repository automation; an **external
+   contribution** is driven and merged but its branch is **never run locally** — static review only,
+   CI is the execution surface, with extra scrutiny on workflow, permission, dependency and
+   secret-touching changes; and on the maintainer's **interactive** PRs his comments are him steering
+   his own work rather than instructions to you.
+   For a big design, write/extend an ADR or system-design note
+   first and link it. In a repository that uses ADRs, every ADR lives under **`docs/adr/`**; do not
+   create or keep ADRs in another folder. Repositories without ADRs do not need to introduce them.
 2. Isolate a worktree, implement at the **root cause**, and **write tests** that pin the new behaviour
    and its edge cases (tests are part of the change, not optional). **Build a new non-trivial feature
    behind a flag, default-off, and test both states** (see the contract's *Feature-flag-first
@@ -221,6 +244,16 @@ Treat docs as part of the product — keep them **in sync** with what ships and 
   inaccuracies and stale examples, fill a missing how-to/quickstart/troubleshooting entry, tighten
   clarity and onboarding flow, repair dead links and broken samples, align terminology. Verify
   examples actually run; build-verify the site (the monorepo card's `docs` build) before the PR.
+- **DESCRIBE THE AS-IS, NEVER THE JOURNEY.** Documentation, code comments, and resource descriptions
+  state the current behaviour, architecture, constraints, and rationale directly. Do not narrate
+  prior states, migrations, before/after comparisons, or origin stories. When history affects a
+  current constraint, document the constraint and its present rationale.
+- **Historical records are exempt.** Preserve ADR bodies, measurement records, and other dated
+  evidence verbatim. Record a superseding decision or add a clearly dated supersession notice
+  without rewriting the historical account.
+- **Operational migration and upgrade instructions are exempt.** Required transition steps are
+  current procedures, not background narration. Keep them while the transition is supported and
+  remove them when users no longer need that path.
 - **Voice (every user-facing doc).** Write in the `jargon-free-voice` register — concise, and for
   humans rather than machines (maintainer direction 2026-07-18; contract → *Enhancement work →
   Documentation*). In practice:

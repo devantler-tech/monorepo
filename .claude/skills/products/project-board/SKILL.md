@@ -23,10 +23,105 @@ product it is working on. This card is the place where the board itself gets *im
 
 Run these as a survey pass; each has a known-good answer.
 
-⚠️ **Paginate, or every check lies.** `gh project item-list` **defaults to `--limit 30`** and the board
-carries **thousands** of items, so an unbounded pass samples the first page and cheerfully reports
-100% clean while drift sits at item 31. Always pass an explicit high limit (or page the GraphQL
-`items(first:100, after:…)` connection to exhaustion) before trusting any number below.
+🔴 **Do NOT check the board by enumerating it — an explicit high limit does NOT make enumeration
+safe.** `gh project item-list` defaults to `--limit 30`, but raising the limit only moves the cut:
+measured 2026-08-06, `--limit 3000` returned **exactly 3000** items against a true
+`projectV2{items{totalCount}}` of **4988**, with **no truncation signal** — no warning, no error,
+exit 0. ~40% of the board was silently absent, so every check below would have reported clean while
+the drift sat past the cut. Returning exactly the limit is the *only* tell, and it is one the caller
+has to look for.
+
+⚠️ **Enumeration also costs the whole hourly GraphQL budget, which every lane shares.** That same
+pass left `graphql: {limit:5000, remaining:73}`. The budget is attached to the **user**, so
+`claude/*`, `codex/*` and `cursor/*` all draw on it — and the surveyor's paginated `reviewThreads`
+queries are what the hygiene pentad's unresolved-thread count depends on. A starved pentad reads as
+*clean*, which is a **fail-open on the promotion gate**. Never spend the shared budget on a board
+sweep to answer a question a per-issue query answers for ~1 point.
+
+**So: ask per issue, not per board.** For coverage and membership, query the issue's own side. That
+read is cheap and it distinguishes "on no project" from "on the board" (negative control:
+`platform#1` → `[]`, verified non-vacuous) — but it carries the *same* three fail-open traps the
+enumeration does, so it gets the same discipline:
+
+- **Identify the board by its `id`, never by `number` alone.** A number is unique only within one
+  owner, so a repository-level project or another owner's project numbered 5 satisfies a
+  number-only match and reports an unboarded issue as covered.
+- **Paginate.** `projectItems(first: N)` truncates exactly like `item-list --limit N`, and here the
+  truncated read produces the *worse* answer: "not on the board" for an issue that is.
+- **Fail closed on the read itself.** An empty `projectItems` and a failed query look identical
+  downstream. Only a successful query may be read as "not on a project"; anything else is
+  **unverified**, which is a different outcome from either answer.
+
+`includeArchived: false` is explicit because an archived item is not on the board for triage — it is
+covered by the archive, not by the sweep, and the default would quietly count it as coverage.
+
+```sh
+# Resolved once per run; a number alone is not an identity.
+BOARD_ID=$(gh api graphql -f query='{organization(login:"devantler-tech"){projectV2(number:5){id}}}' \
+  --jq '.data.organization.projectV2.id') \
+  || { echo "board id lookup failed; refusing" >&2; exit 1; }
+
+# 0 = on the board, 1 = verified absent, 2 = UNVERIFIED (never conflate 1 and 2).
+on_board() { # on_board <owner> <repo> <issue-number>
+  _ob_after=null   # prefixed: the function assigns in the caller's scope
+  while :; do
+    _ob_page=$(gh api graphql -F owner="$1" -F name="$2" -F number="$3" -F after="$_ob_after" -f query='
+      query($owner:String!,$name:String!,$number:Int!,$after:String){
+        repository(owner:$owner,name:$name){ issue(number:$number){
+          projectItems(first:100, after:$after, includeArchived:false){
+            nodes{ project{ id } } pageInfo{ hasNextPage endCursor } } } } }') || return 2
+    printf '%s' "$_ob_page" | jq -e '.data.repository.issue.projectItems' >/dev/null || return 2
+    if printf '%s' "$_ob_page" | jq -e --arg id "$BOARD_ID" \
+         '[.data.repository.issue.projectItems.nodes[].project.id] | index($id)' >/dev/null; then
+      return 0
+    fi
+    printf '%s' "$_ob_page" | jq -e '.data.repository.issue.projectItems.pageInfo.hasNextPage' >/dev/null \
+      || return 1
+    _ob_after=$(printf '%s' "$_ob_page" | jq -r '.data.repository.issue.projectItems.pageInfo.endCursor')
+  done
+}
+```
+
+(`-F` is what makes the first page's `null` a JSON null rather than the string `"null"`; a later
+cursor that happened to look like a number or boolean would be coerced too, and GraphQL would reject
+it — an error, so `2`, never a wrong answer. `index($id)` returning **0** for the first item is
+truthy to `jq -e`, which fails only on `false` and `null`; do not "fix" that into a length test.)
+
+**If a check genuinely needs the whole board**, pair the enumeration with a mandatory truncation
+guard and treat a trip as a hard failure, never a result:
+
+```sh
+total=$(gh api graphql -f query='{organization(login:"devantler-tech"){projectV2(number:5){items{totalCount}}}}' \
+  --jq '.data.organization.projectV2.items.totalCount') \
+  || { echo "totalCount query failed; refusing" >&2; exit 1; }
+items=$(gh project item-list 5 --owner devantler-tech --format json --limit "$LIMIT") \
+  || { echo "item-list failed; refusing" >&2; exit 1; }
+n=$(printf '%s' "$items" | jq '.items | length')
+for v in "$n" "$total"; do
+  case "$v" in ''|*[!0-9]*) echo "non-numeric count [$v]; refusing" >&2; exit 1 ;; esac
+done
+if [ "$n" -eq "$LIMIT" ]; then echo "TRUNCATED at limit ($n); refusing" >&2; exit 1; fi
+if [ "$n" -lt "$total" ];  then echo "INCOMPLETE: $n of $total; refusing" >&2; exit 1; fi
+```
+
+(Written as `if`, not `cond && { …; exit 1; }`. Measured: the `&&` form is safe mid-script — `set -e`
+exempts a non-final component of an AND-OR list — but on the **healthy** path it evaluates to **1**,
+so as the last command of a script or function it returns a spurious failure and takes a `set -e`
+caller down with it. `if` has no such edge. Set `LIMIT` above `totalCount`; the equality arm is what
+catches the silent cut.)
+
+🔴 **Each `gh` call is checked on its own line, and both counts are asserted numeric, because
+otherwise this guard fails OPEN — the exact direction it exists to prevent.** Measured: with `gh`
+returning non-zero, the old one-line pipeline left `n` empty; `[ "" -eq "$LIMIT" ]` and
+`[ "" -lt "$total" ]` then both exit **2** with `integer expression expected`, and a `[` failure
+*inside an `if` condition* is exempt from `set -e` — so both arms evaluated false, the script reached
+its success path, and it **exited 0 having counted nothing**. A rate limit therefore read as a clean
+board. `set -o pipefail` alone would not have saved it either: the pipeline masks `gh`'s status behind
+`jq`'s. Verified in all three states — `gh` failing ⇒ exit 1, a genuine truncation (`n == LIMIT`) ⇒
+exit 1, and a healthy full read ⇒ exit 0, so the guard is not vacuous.
+
+Never suppress stderr on these calls: a rate-limited `gh` prints `API rate limit exceeded` and exits
+non-zero, and a `2>/dev/null` turns that into an empty result indistinguishable from a clean board.
 
 | Check | Query | Healthy |
 |---|---|---|

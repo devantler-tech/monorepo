@@ -43,7 +43,7 @@ fail_match() { # name root expected-substring
   local out
   if out="$(GITHUB_WORKSPACE="$2" bash "$guard" 2>&1)"; then
     printf '  ❌ %s — expected FAIL but the guard PASSED\n' "$1"; fail=1
-  elif printf '%s\n' "$out" | grep -qF -- "$3"; then
+  elif grep -qF -- "$3" <<<"$out"; then
     printf '  ✅ %s — failed on the expected branch\n' "$1"
   else
     printf '  ❌ %s — FAILED but not on the expected branch (wanted: %s)\n' "$1" "$3"; fail=1
