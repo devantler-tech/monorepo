@@ -1265,6 +1265,17 @@ grep -Fq 'foreign `owner/repo#<issue>`' "${surveyor}" ||
   fail "surveyor missing same-repo PR-body claim filter (#2250)"
 grep -Fq 'foreign `owner/repo#<issue>`' "${monorepo_skill}" ||
   fail "monorepo card missing same-repo body-ref echo (#2250)"
+# The exclusion alone is only HALF the rule, and pinning only that half lets an edit drop the
+# positive clause while this block stays green — leaving a filter that rejects valid local claims,
+# which stalls the queue in the same way the foreign hit does. The constitution is where the full
+# rule is stated, so both halves are pinned there: the accepted forms, and the "not SOLELY foreign"
+# qualifier that keeps a body naming both repos a valid local claim.
+# shellcheck disable=SC2016 # literal Markdown code spans; expansion is intentionally disabled
+grep -Fq '`Fixes`/`Closes`/`Resolves #<issue>`' "${constitution}" ||
+  fail "constitution does not enumerate the accepted same-repo reference forms (#2250)"
+# shellcheck disable=SC2016
+grep -Fq 'solely a foreign `owner/repo#<issue>`' "${constitution}" ||
+  fail "constitution drops the not-SOLELY-foreign qualifier, so a body naming both repos is rejected (#2250)"
 
 # Lane-branch discovery still runs alongside number resolution. The cross-lane race is decided on the
 # shared `agent-claim/<issue>` tip, but lane branches remain one of the four pre-selection signals —
