@@ -648,8 +648,15 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
 7. **Resolve the next issue by the ladder** *(the default advance action)* — take the highest rung
    with actionable work: open `type:"Security"` issues first, then `type:"Bug"`, then the **oldest**
    startable issue (contract *The work-selection ladder*). Within a rung, oldest first.
-   Skip one only if it's blocked, too under-specified to begin, or
-   it already has an open PR. A **bare `devantler` assignee does *not* reserve** an issue
+   Skip one only if it already has an open PR, is too under-specified to begin, is blocked on a
+   named external dependency that satisfies the consumer contract, or is a delivered experiment
+   awaiting its **named, future measurement date** recorded on the issue and not yet elapsed (contract
+   skip clause (d) — once that date arrives, measuring and recording the decision *is* the actionable
+   work). A `blocked` label or blocker prose
+   is never sufficient: apply the contract's *External-blocker verification* rule before every
+   external-blocker skip, including its structured record and fresh per-run non-repository check. A
+   missing, malformed, or inherited blocker record is not a skip. A **bare `devantler` assignee does
+   *not* reserve** an issue
    **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
    (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
    (timed from the issue's newest `devantler` `assigned` timeline event, never a branch commit date).

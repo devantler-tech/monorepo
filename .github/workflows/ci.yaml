@@ -256,6 +256,7 @@ jobs:
             work-priority-ladder:
               - 'AGENTS.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/scripts/work-priority-ladder.test.sh'
               - '.github/workflows/ci.yaml'
