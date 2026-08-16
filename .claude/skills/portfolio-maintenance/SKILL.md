@@ -127,6 +127,10 @@ card.
    through the runtime's supported path when needed and **restart the run** because this session did
    not start with the projection the guard checked;
    other exit-2 causes may rerun the guard in this session after resolution.
+   **Before any destructive rewrite of an author-managed (legacy) file**, take a timestamped copy:
+   `.claude/scripts/memory-backup.sh <file>` (or `--all <memory-dir>` for a whole-store snapshot).
+   Restore with `cp '<backup>' '<file>'`. The store is un-versioned; a trim without a backup is
+   unrecoverable (monorepo#2304). Prefer append; rewrite only after that backup.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
    rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's

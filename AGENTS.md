@@ -3912,7 +3912,12 @@ step:
    diagnostic-only (`--all` shows the exemption). Legacy/Claude stores retain the original root-file
    checks. An exit 1 makes repairing the over-threshold boot-loaded file that tick's mandated hygiene
    item: consolidate an author-managed file safely, or refresh an oversized Codex projection through
-   the runtime. An exit 2 indicates a usage, malformed-layout, missing, or unreadable-store error;
+   the runtime. **Before any destructive consolidate/rewrite of an author-managed file**, run
+   [`.claude/scripts/memory-backup.sh`](.claude/scripts/memory-backup.sh)
+   `<file>` (or `--all <memory-dir>` for a whole-store snapshot under `.memory-backups/`); restore with
+   `cp '<backup>' '<file>'` — the store is un-versioned and outside git, so a trim without a backup is a
+   one-way delete (monorepo#2304). Prefer append; rewrite only when consolidating **after** that backup.
+   An exit 2 indicates a usage, malformed-layout, missing, or unreadable-store error;
    resolve it before proceeding. If a Codex exit 2 names a missing, unreadable, malformed, or
    post-injection-changed `memory_summary.md`, repair it through the runtime's supported path when
    needed and **restart the run**: this session did not start with the projection the guard checked.
