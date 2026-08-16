@@ -35,6 +35,11 @@
 #                                     [--plugin-id ID] [--submodule-path PATH]
 #                                     [--cli PATH] [--verify-cmd PATH] [--dry-run] [--quiet]
 #
+# --verify-cmd names the post-apply check (default: .claude/scripts/plugin-definition-currency.sh).
+# It is invoked with --repo-root, --plugins-root, --plugin-id, --plugin-name, --gitlink and
+# --submodule-path, all bound to the values this run gated on, and its exit status IS the verdict:
+# 0 verified, 2 UNKNOWN (preserved, never folded into 1), anything else NOT-ON-PIN.
+#
 # Exit 0  the runtime install is now pinned, and that was VERIFIED by an independent blob-identity
 #         check after the apply — never by `plugin update`'s own exit status, which can report
 #         success having repaired nothing. NOTE: `plugin update` requires a restart, so exit 0 still
@@ -186,11 +191,16 @@ if [ "$DRY_RUN" -eq 0 ]; then
   if [ -d "$lockdir" ]; then
     owner="$(cat "$lockdir/pid" 2>/dev/null || true)"
     if [ -n "$owner" ]; then
-      # Ownership published: liveness decides.
+      # Ownership published: liveness decides. CLAIM the stale lock before removing it — a blind
+      # `rmdir` lets two runs both observe the dead owner, both remove, and the slower one delete the
+      # FASTER one's freshly created lock, so both proceed. `mv` onto a unique name is a rename(2):
+      # exactly one racer can succeed, and only that one is entitled to reap.
       if ! kill -0 "$owner" 2>/dev/null; then
-        say "reaped a lock ........... owner $owner is not running"
-        rm -f "$lockdir/pid"
-        rmdir "$lockdir" 2>/dev/null || true
+        stale="$lockdir.stale.$$"
+        if mv "$lockdir" "$stale" 2>/dev/null; then
+          say "reaped a lock ........... owner $owner is not running"
+          rm -rf "$stale"
+        fi
       fi
     else
       # No pid yet. `mkdir` is atomic but publishing the pid is a separate step, so a rival that
@@ -199,8 +209,11 @@ if [ "$DRY_RUN" -eq 0 ]; then
       # so an ownerless lock is acquisition-in-progress until a short grace has passed; only after
       # that is it debris from a run that died between the two steps.
       if [ -n "$(find "$lockdir" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-        say "reaped a lock ........... no owner published after the grace period"
-        rmdir "$lockdir" 2>/dev/null || true
+        stale="$lockdir.stale.$$"
+        if mv "$lockdir" "$stale" 2>/dev/null; then
+          say "reaped a lock ........... no owner published after the grace period"
+          rm -rf "$stale"
+        fi
       fi
     fi
   fi
@@ -293,7 +306,10 @@ while IFS= read -r -d '' entry; do
     # hashes the target FILE's contents — so the two never match and a clean marketplace containing
     # any symlink would refuse. Hash the link text instead, which keeps symlinks covered rather than
     # exempting them.
-    got="$(printf '%s' "$(readlink "$MARKETPLACE_DIR/$f" 2>/dev/null)" | git -C "$MARKETPLACE_DIR" hash-object --stdin 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
+    # `perl`'s readlink returns the target EXACTLY. The shell form `printf '%s' "$(readlink …)"`
+    # cannot: command substitution strips every trailing newline, so a target ending in one would
+    # hash differently from its blob and refuse a clean marketplace.
+    got="$(perl -e 'my $t = readlink($ARGV[0]); exit 1 unless defined $t; print $t' "$MARKETPLACE_DIR/$f" 2>/dev/null | git -C "$MARKETPLACE_DIR" hash-object --stdin 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
   else
     got="$(git -C "$MARKETPLACE_DIR" hash-object --no-filters -- "$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
   fi

@@ -41,19 +41,27 @@ make_fixture() {
   MK="$PLUGINS/marketplaces/devantler-plugins"
   mkdir -p "$MK" "$CONSUMER" "$BIN" "$PLUGINS" "$INSTALLED"
 
-  git -C "$MK" init -q -b main
-  git -C "$MK" config user.email t@t; git -C "$MK" config user.name t
-  echo old > "$MK/f"; git -C "$MK" add f; git -C "$MK" commit -qm one
-  MK_OLD="$(git -C "$MK" rev-parse HEAD)"
-  echo new > "$MK/f"; git -C "$MK" add f; git -C "$MK" commit -qm two
-  MK_NEW="$(git -C "$MK" rev-parse HEAD)"
-  git -C "$MK" checkout -q "$MK_OLD"        # clone starts STALE, as the real one was
+  # Every setup command is checked. An unguarded fixture does not fail the suite — it leaves the
+  # assertions running against a tree that was never built, which is how three cases in this file
+  # came to pass while testing nothing.
+  g() { "$@" || { printf 'FIXTURE FAILURE: %s\n' "$*" >&2; exit 9; }; }
+
+  g git -C "$MK" init -q -b main
+  g git -C "$MK" config user.email t@t; g git -C "$MK" config user.name t
+  echo old > "$MK/f" || { printf 'FIXTURE FAILURE: write f\n' >&2; exit 9; }
+  g git -C "$MK" add f; g git -C "$MK" commit -qm one
+  MK_OLD="$(git -C "$MK" rev-parse HEAD)" || { printf 'FIXTURE FAILURE: rev-parse OLD\n' >&2; exit 9; }
+  echo new > "$MK/f" || { printf 'FIXTURE FAILURE: rewrite f\n' >&2; exit 9; }
+  g git -C "$MK" add f; g git -C "$MK" commit -qm two
+  MK_NEW="$(git -C "$MK" rev-parse HEAD)" || { printf 'FIXTURE FAILURE: rev-parse NEW\n' >&2; exit 9; }
+  g git -C "$MK" checkout -q "$MK_OLD"      # clone starts STALE, as the real one was
 
   # consumer repo carrying a gitlink to the marketplace at a chosen revision
-  git -C "$CONSUMER" init -q -b main
-  git -C "$CONSUMER" config user.email t@t; git -C "$CONSUMER" config user.name t
+  g git -C "$CONSUMER" init -q -b main
+  g git -C "$CONSUMER" config user.email t@t; g git -C "$CONSUMER" config user.name t
   git -C "$CONSUMER" config protocol.file.allow always 2>/dev/null || true
-  echo x > "$CONSUMER/x"; git -C "$CONSUMER" add x; git -C "$CONSUMER" commit -qm base
+  echo x > "$CONSUMER/x" || { printf 'FIXTURE FAILURE: write x\n' >&2; exit 9; }
+  g git -C "$CONSUMER" add x; g git -C "$CONSUMER" commit -qm base
 
   # runtime registry pointing at an install dir
   cat > "$PLUGINS/installed_plugins.json" <<JSON
@@ -75,6 +83,8 @@ JSON
 printf '%s\n' "\$*" >> "$CLI_LOG"
 if [ "\${1:-}" = plugin ] && [ "\${2:-}" = marketplace ] && [ "\${3:-}" = update ]; then
   git -C "$MK" checkout -q "\${STUB_MARKETPLACE_TARGET:-$MK_OLD}"
+  # Optional window so a test can signal the script while it holds the lock.
+  [ -n "\${STUB_REFRESH_SLEEP:-}" ] && sleep "\$STUB_REFRESH_SLEEP"
 fi
 if [ "\${1:-}" = plugin ] && [ "\${2:-}" = update ]; then
   touch "$ROOT/APPLIED"
@@ -149,11 +159,26 @@ cleanup
 # ── A5 — an unresolvable CLI is UNKNOWN (exit 2), never a verdict ──────────────────────────────
 make_fixture
 set_gitlink "$MK_NEW"
-CLAUDE_CLI="$ROOT/nope" "$SCRIPT" --repo-root "$CONSUMER" --plugins-root "$PLUGINS" \
-  >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 2 ]; then ok "A5 exits 2 (UNKNOWN) when the CLI cannot be resolved"
-else bad "A5 exits 2 (UNKNOWN) when the CLI cannot be resolved" "exit was $rc — 0/1 would be a fabricated verdict"; fi
+out="$(CLAUDE_CLI="$ROOT/nope" "$SCRIPT" --repo-root "$CONSUMER" --plugins-root "$PLUGINS" 2>&1)"; rc=$?
+# The reason, not just the code: exit 2 covers eight conditions here, so a regression that exits 2
+# earlier for an unrelated reason would keep this green while the CLI resolution never ran.
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'cannot resolve an executable claude CLI'; then
+  ok "A5 exits 2 (UNKNOWN, named reason) when the CLI cannot be resolved"
+else bad "A5 exits 2 (UNKNOWN, named reason) when the CLI cannot be resolved" \
+  "exit was $rc — 0/1 would be a fabricated verdict; out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
+
+# ── A22 — --help prints the WHOLE header, including the exit-code contract ─────────────────────
+# It was truncating at a hardcoded line count as the header grew, dropping the exit-2 explanation —
+# the part the contract most turns on. Behavioural, not a grep of the source.
+help_out="$("$SCRIPT" --help 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] \
+  && printf '%s' "$help_out" | grep -q 'Exit 2 is deliberately not exit 1' \
+  && printf '%s' "$help_out" | grep -q 'Usage: plugin-definition-refresh.sh' \
+  && ! printf '%s' "$help_out" | grep -q '^set -euo pipefail'; then
+  ok "A22 --help prints the full header including the exit-code contract, and stops before the code"
+else bad "A22 --help prints the full header including the exit-code contract, and stops before the code" \
+  "exit was $rc; lines=$(printf '%s' "$help_out" | wc -l | tr -d ' ')"; fi
 
 # ── A12 — the gate binds the clone it READS to the plugin the CLI UPDATES ──────────────────────
 # `--marketplace staging` would refresh and gate on the staging clone while the default plugin id
@@ -250,9 +275,11 @@ cleanup
 make_fixture
 set_gitlink "$MK_NEW"
 mkdir -p "$PLUGINS/.plugin-definition-refresh.lock"
-# A pid that is certainly not running: claim one, then let it exit.
-dead_pid="$( (exec sh -c 'echo $$') )"
-while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid + 1)); done
+# A pid that WAS OURS and has since exited. Scanning for a pid that `kill -0` rejects does not
+# prove absence: that also fails with EPERM for a LIVE process owned by another user.
+sh -c 'exit 0' &
+dead_pid=$!
+wait "$dead_pid" 2>/dev/null
 printf '%s\n' "$dead_pid" > "$PLUGINS/.plugin-definition-refresh.lock/pid"
 STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ]; then
@@ -275,6 +302,32 @@ cleanup
 # A bash handler that returns normally resumes at the point of interruption, so a combined
 # `trap release_lock EXIT INT TERM` would surrender the lock and then carry on into 'plugin update'
 # — an unserialized apply, which is the very thing the lock exists to prevent.
+# ── A17b — BEHAVIOURAL: a TERM while holding the lock must terminate, not resume ───────────────
+# A17 below asserts the trap lines; this asserts what they are for. The script is signalled while it
+# holds the lock inside the refresh, and must (a) not go on to apply, and (b) leave no lock behind.
+# A handler that merely released and returned would resume into 'plugin update' — an unserialized
+# apply with the lock already surrendered.
+make_fixture
+set_gitlink "$MK_NEW"
+STUB_MARKETPLACE_TARGET="$MK_NEW" STUB_REFRESH_SLEEP=5 CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
+  --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --verify-cmd "$VERIFY" >/dev/null 2>&1 &
+sig_pid=$!
+lockdir="$PLUGINS/.plugin-definition-refresh.lock"
+for _ in $(seq 1 40); do [ -s "$lockdir/pid" ] && break; sleep 0.25; done
+if [ ! -s "$lockdir/pid" ]; then
+  bad "A17b fixture precondition: the script must be holding the lock before it is signalled" \
+    "no lock published within 10s"
+  kill "$sig_pid" 2>/dev/null || true; wait "$sig_pid" 2>/dev/null
+else
+  kill -TERM "$sig_pid" 2>/dev/null
+  wait "$sig_pid" 2>/dev/null; trc=$?
+  if [ "$trc" -ne 0 ] && [ ! -e "$ROOT/APPLIED" ] && [ ! -d "$lockdir" ]; then
+    ok "A17b a TERM while holding the lock terminates without applying and releases the lock"
+  else bad "A17b a TERM while holding the lock terminates without applying and releases the lock" \
+    "exit was $trc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), lock_left=$([ -d "$lockdir" ] && echo yes || echo no)"; fi
+fi
+cleanup
+
 if grep -Eq '^trap release_lock EXIT$' "$SCRIPT" \
   && grep -Eq "^trap 'exit 130' INT$" "$SCRIPT" \
   && grep -Eq "^trap 'exit 143' TERM$" "$SCRIPT" \

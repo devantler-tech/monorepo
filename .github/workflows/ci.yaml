@@ -222,6 +222,9 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/plugin-definition-refresh.sh'
               - '.claude/scripts/plugin-definition-refresh.test.sh'
+              # The refresh script's DEFAULT post-apply verifier. Its exit codes are the verdict, so
+              # a change there changes this script's behaviour without touching either file above.
+              - '.claude/scripts/plugin-definition-currency.sh'
               - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
