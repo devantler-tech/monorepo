@@ -344,7 +344,7 @@ advance() {
     die "'$path' has assume-unchanged/skip-worktree files — clear those index flags before advancing"
   fi
 
-  local target head ahead nested_status post_status residue
+  local target head ahead nested_status post_status residue ordinary_residue
   # Superproject HEAD's gitlink for this path — the pin a pin-bump PR just moved.
   target=$(git --no-replace-objects rev-parse "HEAD:$path" 2>/dev/null) ||
     die "no gitlink recorded for '$path' at HEAD"
@@ -384,9 +384,18 @@ advance() {
   if grep -q '^[^ ]' <<< "$nested_status"; then
     die "nested submodule checkout does not match '$path' at $target — advance it separately before use"
   fi
-  # No checkout happened, so ignored artifacts are not residue from a pin transition. Preserve the
-  # historical idempotent behavior after still validating nested checkout integrity above.
+  # No checkout happened, so ordinary ignored artifacts are not residue from a pin transition.
+  # Still detect an embedded repository that the target no longer declares: one force protects it
+  # even during a dry run, while two forces reveal it. Comparing the probes distinguishes that
+  # hazardous residue from normal caches without deleting either kind.
   if [ "$head" = "$target" ]; then
+    ordinary_residue=$(git --no-replace-objects -C "$path" clean -nfdx 2>/dev/null) ||
+      die "could not inspect ignored residue in '$path' — refusing to report success"
+    residue=$(git --no-replace-objects -C "$path" clean -nffdx 2>/dev/null) ||
+      die "could not inspect embedded repository residue in '$path' — refusing to report success"
+    if [ "$residue" != "$ordinary_residue" ]; then
+      die "residual files after advancing '$path' to $target — preserve and handle them before use"
+    fi
     return 0
   fi
   post_status=$(git --no-replace-objects -C "$path" status --porcelain \
@@ -395,7 +404,7 @@ advance() {
   if [ -n "$post_status" ]; then
     die "residual files after advancing '$path' to $target — preserve and handle them before use"
   fi
-  residue=$(git --no-replace-objects -C "$path" clean -ndx 2>/dev/null) ||
+  residue=$(git --no-replace-objects -C "$path" clean -nffdx 2>/dev/null) ||
     die "could not inspect ignored residue in '$path' — refusing to report success"
   if [ -n "$residue" ]; then
     die "residual files after advancing '$path' to $target — preserve and handle them before use"

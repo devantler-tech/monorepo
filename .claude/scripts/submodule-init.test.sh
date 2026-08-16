@@ -798,13 +798,15 @@ report "advance already-at-pin: still names the nested mismatch" \
   "$(grep -q 'nested submodule checkout does not match' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 # 22. Removing an initialized nested submodule makes recursive status vacuous because the target no
-#     longer declares that gitlink. The old nested repository remains as untracked residue, which
-#     the post-detach status check must detect rather than reporting a clean advance.
+#     longer declares that gitlink. The old nested repository remains as residue, and a target-side
+#     ignore rule hides it from both status and a single-force clean dry run. The stronger embedded-
+#     repository probe must detect it on the transition and on an already-at-pin retry.
 git -C "$c21/super/sub/nested" checkout -q --detach "$c21_nested_new"
 (
   cd "$c21/remote-sub"
   git rm -qf nested
-  git add .gitmodules
+  printf 'nested/\n' >.gitignore
+  git add .gitignore .gitmodules
   git commit -q -m "remove nested submodule"
 )
 c22_outer_removed="$(git -C "$c21/remote-sub" rev-parse HEAD)"
@@ -824,6 +826,13 @@ report "advance removed-nested: moves the named checkout to the recorded pin" \
   "$([[ "$(git -C "$c21/super/sub" rev-parse HEAD)" == "$c22_outer_removed" ]] && echo yes || echo no)"
 report "advance removed-nested: preserves the old nested repository for explicit handling" \
   "$([[ -e "$c21/super/sub/nested/.git" ]] && echo yes || echo no)"
+report "advance removed-nested retry precondition: ignored residue is hidden from status" \
+  "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all --ignore-submodules=none)" ]] && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance removed-nested retry: still fails closed at the recorded pin" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance removed-nested retry: still names the residual checkout" \
+  "$(grep -q 'residual files after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
