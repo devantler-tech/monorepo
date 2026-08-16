@@ -29,6 +29,7 @@ jobs:
       agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
       latency-discipline-contract: ${{ steps.filter.outputs.latency-discipline-contract }}
+      control-character-command-contract: ${{ steps.filter.outputs.control-character-command-contract }}
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
@@ -194,6 +195,10 @@ jobs:
             latency-discipline-contract:
               - 'AGENTS.md'
               - '.claude/scripts/latency-discipline-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            control-character-command-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/control-character-command-contract.test.sh'
               - '.github/workflows/ci.yaml'
             git-safety-contract:
               - 'AGENTS.md'
@@ -774,6 +779,21 @@ jobs:
       - name: Verify the latency discipline contract
         run: bash .claude/scripts/latency-discipline-contract.test.sh
 
+  test-control-character-command-contract:
+    name: Test control character command contract
+    needs: changes
+    if: needs.changes.outputs.control-character-command-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the control character command contract
+        run: bash .claude/scripts/control-character-command-contract.test.sh
+
   test-git-safety-contract:
     name: Test git safety contract
     needs: changes
@@ -935,6 +955,7 @@ jobs:
       - test-maintainer-preflight
       - test-memory-hygiene
       - test-latency-discipline-contract
+      - test-control-character-command-contract
       - test-git-safety-contract
       - test-plugin-definition-currency
       - test-self-review-contract
@@ -969,6 +990,7 @@ jobs:
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
             ${{ needs.test-latency-discipline-contract.result }}
+            ${{ needs.test-control-character-command-contract.result }}
             ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-self-review-contract.result }}
