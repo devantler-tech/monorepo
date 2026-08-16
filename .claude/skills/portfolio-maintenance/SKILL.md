@@ -62,14 +62,38 @@ card.
    If only the host-level saved-login check succeeds, run every subsequent `gh` command through that
    approved host-level execution path.
    Clearing the injected tokens does not make a sandboxed macOS Keychain readable.
-   Only an explicit credential rejection from that host-level check proves the saved login invalid.
-   If the host-level check instead authenticates a different account, hard-block as `wrong GitHub identity`
-   without describing the credential as invalid.
-   If the host-level check cannot run or fails
-   for a transport reason, hard-block as `authentication verification unavailable` instead of instructing
-   the maintainer to replace a credential that was never tested. Keep the injected-token result, saved-login
-   result, and `git fetch` result as separate gates, because repository reachability cannot prove GitHub API
-   identity (and vice versa); record only these gate classifications in durable memory, never credential output.
+   **Distinguish authentication rejection from GitHub service degradation** (monorepo#2206).
+   Before assigning any credential verdict, obtain an observable REST status line and headers with
+   `gh api --include --hostname github.com user`, using the same credential context as the original
+   probe. The generic `gh auth status` invalid-token message is not conclusive: the CLI can collapse
+   a REST 5xx into that wording while exposing no HTTP status. Never recommend replacing a credential
+   from that message alone.
+   Reject explicit authentication failures before inspecting the response body or format.
+   Only an explicit credential rejection proves the login invalid: HTTP **401**, a confirmed **non-rate-limit**
+   403 that the observable REST probe clearly identifies as a credential or permission rejection.
+   This remains an authentication failure even when its body is HTML or non-JSON,
+   and **only then** recommend `gh auth login`.
+   For every other result, an observable REST probe that returns HTTP 5xx, HTML, other non-JSON
+   service noise, **or a rate-limited 403/429** (GitHub may return either status
+   when the limit is exceeded — check `x-ratelimit-*` headers or a rate-limit message body) is **not**
+   proof the credential is bad. Classify that outcome as `GitHub service degraded` and run a bounded
+   authenticated GraphQL fallback against the **same host and credential context** as the failing probe:
+   `gh api graphql --hostname github.com -f query='{viewer{login}}'`. Prefix with
+   `env -u GH_TOKEN -u GITHUB_TOKEN` **only when the failing probe itself was the cleared-env
+   saved-login check**; otherwise keep the injected `GH_TOKEN`/`GITHUB_TOKEN` so a transient REST
+   failure cannot be misread as a bad keychain login. Always pass `--hostname github.com` so
+   `GH_HOST` cannot redirect the fallback to an unrelated enterprise host.
+   Compare `viewer.login` with this deployment's exact expected identity on the API surface:
+   `devantler` for a machine-local lane. For the Cursor cloud lane, the GraphQL API identity is `cursor[bot]`.
+   Its `gh auth status`, PR-author, and search identity remains `app/cursor`.
+   A mismatch is `wrong GitHub identity` and must not be described as an invalid credential.
+   A REST 5xx (or rate-limit) followed by a successful, expected-identity GraphQL
+   `viewer.login` proves the login valid. Never report that saved login as invalid.
+   If the host-level check cannot run or fails for a transport reason (and the GraphQL fallback is
+   likewise unreachable), hard-block as `authentication verification unavailable` instead of
+   instructing the maintainer to replace a credential that was never tested. Keep the injected-token
+   result, saved-login result, and `git fetch` result as separate gates, because repository
+   reachability cannot prove GitHub API identity (and vice versa); record only these gate classifications in durable memory, never credential output.
 3. **Check the boot memory surface fits in one read — BEFORE you read it.** A boot-loaded file past the Read cap is
    **truncated silently**: the run continues on a partial cursor with no signal that carry-forwards,
    stand-down notes, or `HANDS-OFF` records beyond the cut are missing (the 2026-06-05 blinding;
@@ -103,6 +127,10 @@ card.
    through the runtime's supported path when needed and **restart the run** because this session did
    not start with the projection the guard checked;
    other exit-2 causes may rerun the guard in this session after resolution.
+   **Before any destructive rewrite of an author-managed (legacy) file**, take a timestamped copy:
+   `.claude/scripts/memory-backup.sh <file>` (or `--all <memory-dir>` for a whole-store snapshot).
+   Restore with `cp '<backup>' '<file>'`. The store is un-versioned; a trim without a backup is
+   unrecoverable (monorepo#2304). Prefer append; rewrite only after that backup.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
    rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
@@ -624,8 +652,15 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
 7. **Resolve the next issue by the ladder** *(the default advance action)* — take the highest rung
    with actionable work: open `type:"Security"` issues first, then `type:"Bug"`, then the **oldest**
    startable issue (contract *The work-selection ladder*). Within a rung, oldest first.
-   Skip one only if it's blocked, too under-specified to begin, or
-   it already has an open PR. A **bare `devantler` assignee does *not* reserve** an issue
+   Skip one only if it already has an open PR, is too under-specified to begin, is blocked on a
+   named external dependency that satisfies the consumer contract, or is a delivered experiment
+   awaiting its **named, future measurement date** recorded on the issue and not yet elapsed (contract
+   skip clause (d) — once that date arrives, measuring and recording the decision *is* the actionable
+   work). A `blocked` label or blocker prose
+   is never sufficient: apply the contract's *External-blocker verification* rule before every
+   external-blocker skip, including its structured record and fresh per-run non-repository check. A
+   missing, malformed, or inherited blocker record is not a skip. A **bare `devantler` assignee does
+   *not* reserve** an issue
    **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
    (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
    (timed from the issue's newest `devantler` `assigned` timeline event, never a branch commit date).

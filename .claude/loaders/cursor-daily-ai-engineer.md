@@ -43,10 +43,20 @@ machine-local engineer.
 > this deployment's facts come from `AGENTS.md`; this prompt supplies only Cursor-specific wiring.
 >
 > 1. **Boot:** `date -u` FIRST (record and compare every timestamp in UTC). Confirm the checkout:
->    `test -f AGENTS.md && test -d .claude`. Confirm `gh auth status` authenticates **`app/cursor`** —
->    that is *your* expected identity, not `devantler`, and the run-loop's token-clearing retry ladder
->    is machine-local only: never unset `GH_TOKEN`/`GITHUB_TOKEN`, since your App token is your
->    credential. Any other account is a hard stop.
+>    `test -f AGENTS.md && test -d .claude`. Run `gh auth status --active --hostname github.com` as
+>    a diagnostic, then obtain an observable status line and headers from the same App credential with
+>    `gh api --include --hostname github.com user` before assigning any credential verdict. The
+>    generic `gh auth status` invalid-token message is not conclusive because a REST 5xx can collapse
+>    into that wording. An explicit HTTP 401 or confirmed non-rate-limit 403 is a hard stop. For a
+>    REST 5xx, rate limit, HTML/non-JSON service response, or other non-credential failure, run the
+>    bounded same-credential fallback
+>    `gh api graphql --hostname github.com -f query='{viewer{login}}'`.
+>    The GraphQL API identity is `cursor[bot]`; the CLI/PR/search identity remains `app/cursor`.
+>    Continue only when the observable
+>    REST result or GraphQL fallback proves that exact deployment identity. A different identity, or
+>    transport failure on both probes, is a hard stop. Never unset `GH_TOKEN`/`GITHUB_TOKEN`: the App
+>    token is this cloud lane's credential, and the run-loop's token-clearing retry ladder is
+>    machine-local only.
 > 2. **Bootstrap guard:** if `AGENTS.md` is missing, **STOP and report** "consumer contract not on
 >    main; no action taken." If the `libraries/agent-plugins` submodule is uninitialised, initialise
 >    it with `.claude/scripts/submodule-init.sh libraries/agent-plugins`. Then refresh the declared
