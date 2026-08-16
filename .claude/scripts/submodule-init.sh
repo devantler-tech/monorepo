@@ -12,8 +12,9 @@
 #
 # Usage:
 #   .claude/scripts/submodule-init.sh <submodule-path> [<submodule-path>...]
-#   .claude/scripts/submodule-init.sh --all      # init + repair + probe every submodule (first clone)
-#   .claude/scripts/submodule-init.sh --check    # non-destructive probe of every initialised submodule
+#   .claude/scripts/submodule-init.sh --all           # init + repair + probe every submodule (first clone)
+#   .claude/scripts/submodule-init.sh --check         # non-destructive probe of every initialised submodule
+#   .claude/scripts/submodule-init.sh --advance <path>  # move a populated checkout to HEAD's recorded pin
 #
 # `--check` never modifies submodule content, tracked files, or other sessions' worktrees, but it is
 # NOT strictly read-only: to prove isolation empirically it adds and then removes a throwaway,
@@ -21,6 +22,12 @@
 # `git worktree prune`, which would delete a sibling session's entry whenever that session's tree is
 # momentarily unreadable). That empirical add/remove is the whole point — it catches a dangling
 # `core.worktree` a config read alone would miss.
+#
+# `--advance` is the isolation-safe way to follow a pin bump after `git pull` on the superproject.
+# Plain `git submodule update` (with or without `--init`) rewrites shared `core.worktree`; this mode
+# checks out the recorded gitlink directly, then repair + probe. It refuses a dirty tree or a
+# checkout that is ahead of the pin, so it cannot discard uncommitted or unpushed work. It does not
+# move nested submodules; it validates every initialized nested checkout's pin, dirt, and isolation.
 set -euo pipefail
 
 die() {
@@ -252,6 +259,33 @@ probe() {
   return "$rc"
 }
 
+# Probe every initialized nested checkout beneath $1. Pin markers alone are insufficient: a nested
+# repository can retain the expected HEAD while a stale shared core.worktree redirects commands into
+# another session. `submodule foreach` visits initialized checkouts only; uninitialized/mismatched
+# entries are rejected separately by the recursive status gate in `advance`.
+probe_nested_checkouts() {
+  local path=$1 nested_paths nested idx_flags rc=0
+  nested_paths=$(git --no-replace-objects -C "$path" submodule foreach --quiet --recursive 'pwd -P') || {
+    warn "$path — could not enumerate initialized nested submodules"
+    return 1
+  }
+  while IFS= read -r nested; do
+    [ -n "$nested" ] || continue
+    idx_flags=$(git --no-replace-objects -C "$nested" ls-files -v 2>/dev/null) || {
+      warn "$nested — could not read nested submodule index flags"
+      rc=1
+      continue
+    }
+    if grep -q '^[a-zS]' <<< "$idx_flags"; then
+      warn "$nested — nested submodule has assume-unchanged/skip-worktree files"
+      rc=1
+      continue
+    fi
+    probe "$nested" || rc=1
+  done <<< "$nested_paths"
+  return "$rc"
+}
+
 all_paths() { git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}'; }
 # "Initialised" means git actually treats it as its own repository here — again, asked, not assumed.
 # Select every submodule that is CHECKED OUT here. Deliberately NOT "every submodule git resolves
@@ -305,6 +339,105 @@ init_repair_probe() {
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
 }
 
+# Move an already-populated submodule checkout to the gitlink recorded at the superproject's HEAD.
+# Never uses `git submodule update` — that command writes shared `core.worktree` (see header).
+advance() {
+  local path=${1%/}
+  is_registered_submodule "$path" ||
+    die "'$path' is not a registered submodule (see .gitmodules) — refusing to advance"
+
+  is_populated "$path" ||
+    die "'$path' is not checked out here — run submodule-init.sh $path to populate it first"
+
+  # Repair and prove isolation BEFORE any other `git -C "$path"` command touches this checkout.
+  # A stale shared `core.worktree` redirects that path at another session's worktree, so running
+  # `status`/`rev-parse`/`fetch`/`checkout --detach` first would read — and in the checkout's case
+  # WRITE — into that other tree before this function ever repaired the configuration.
+  repair "$path"
+  probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
+
+  local status
+  status=$(git --no-replace-objects -C "$path" status --porcelain --untracked-files=all 2>/dev/null) ||
+    die "could not read status for '$path' — refusing to advance"
+  if [ -n "$status" ]; then
+    die "'$path' has a dirty working tree — commit, stash, or discard local changes before advancing"
+  fi
+
+  # `status` cannot see tracked edits hidden by assume-unchanged or skip-worktree. Their presence
+  # alone makes detaching unsafe: checkout can carry the invisible bytes onto the target pin.
+  local idx_flags
+  idx_flags=$(git --no-replace-objects -C "$path" ls-files -v 2>/dev/null) ||
+    die "could not read index flags for '$path' — refusing to advance"
+  if grep -q '^[a-zS]' <<< "$idx_flags"; then
+    die "'$path' has assume-unchanged/skip-worktree files — clear those index flags before advancing"
+  fi
+
+  local target head ahead nested_status post_status residue ordinary_residue
+  # Superproject HEAD's gitlink for this path — the pin a pin-bump PR just moved.
+  target=$(git --no-replace-objects rev-parse "HEAD:$path" 2>/dev/null) ||
+    die "no gitlink recorded for '$path' at HEAD"
+  head=$(git --no-replace-objects -C "$path" rev-parse HEAD) ||
+    die "could not read HEAD of '$path'"
+
+  if [ "$head" = "$target" ]; then
+    warn "$path — already at recorded pin $target; validating checkout state"
+  else
+    # Ensure the pin object exists locally (a fresh pin bump may not have been fetched into the
+    # submodule yet). Prefer fetching the exact SHA; fall back to a plain fetch.
+    if ! git --no-replace-objects -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null; then
+      git --no-replace-objects -C "$path" fetch --quiet origin "$target" 2>/dev/null ||
+        git --no-replace-objects -C "$path" fetch --quiet origin 2>/dev/null ||
+        true
+      git --no-replace-objects -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null ||
+        die "recorded pin $target for '$path' is not available locally — fetch the submodule remote first"
+    fi
+
+    # Refuse when the checkout has commits that are not reachable from the new pin: advancing would
+    # detach past them and look like a silent discard. Dirty trees are already refused above.
+    ahead=$(git --no-replace-objects -C "$path" rev-list --count "${target}..HEAD" 2>/dev/null) ||
+      die "could not compare '$path' HEAD to recorded pin $target"
+    if [ "$ahead" -gt 0 ]; then
+      die "'$path' is $ahead commit(s) ahead of the recorded pin — push or otherwise preserve that work before advancing"
+    fi
+
+    # Detach onto the recorded pin without `git submodule update` (which rewrites shared core.worktree).
+    git --no-replace-objects -C "$path" checkout --quiet --no-overwrite-ignore \
+      --no-recurse-submodules --detach "$target" ||
+      die "failed to check out recorded pin $target in '$path'"
+    repair "$path"
+    probe "$path" || die "advance left '$path' unisolated — do not edit it"
+  fi
+  nested_status=$(git --no-replace-objects -C "$path" submodule status --recursive 2>/dev/null) ||
+    die "could not verify nested submodules in '$path' — refusing to report a successful advance"
+  if grep -q '^[^ ]' <<< "$nested_status"; then
+    die "nested submodule checkout does not match '$path' at $target — advance it separately before use"
+  fi
+  probe_nested_checkouts "$path" ||
+    die "nested submodule isolation is broken for '$path' — repair it from its parent before use"
+  post_status=$(git --no-replace-objects -C "$path" status --porcelain \
+    --untracked-files=all --ignore-submodules=none 2>/dev/null) ||
+    die "could not verify post-advance status for '$path' — refusing to report success"
+  if [ -n "$post_status" ]; then
+    die "residual files after advancing '$path' to $target — preserve and handle them before use"
+  fi
+  # Ordinary ignored artifacts are not residue from the pin transition and `--no-overwrite-ignore`
+  # already protects any path the target starts tracking. Still detect an embedded repository that
+  # the target no longer declares: one force protects it even during a dry run, while two forces
+  # reveal it. Comparing the probes distinguishes that hazardous residue from normal caches without
+  # deleting either kind, both after a transition and on an already-at-pin retry.
+  ordinary_residue=$(git --no-replace-objects -C "$path" clean -nfdx 2>/dev/null) ||
+    die "could not inspect ignored residue in '$path' — refusing to report success"
+  residue=$(git --no-replace-objects -C "$path" clean -nffdx 2>/dev/null) ||
+    die "could not inspect embedded repository residue in '$path' — refusing to report success"
+  if [ "$residue" != "$ordinary_residue" ]; then
+    die "embedded repository residue after advancing '$path' to $target — preserve and handle it before use"
+  fi
+  if [ "$head" = "$target" ]; then
+    return 0
+  fi
+  printf 'submodule-init: %s — advanced to %s\n' "$path" "$target"
+}
+
 # Stop here when SOURCED, so the self-test can exercise the path-comparison helpers directly. The
 # case-only false positive `same_dir` fixes needs a case-insensitive volume, so an end-to-end
 # reproduction cannot run on the filesystem CI uses — unit-testing the comparison itself is what
@@ -326,7 +459,7 @@ init_repair_probe() {
 super_root=$(git rev-parse --show-toplevel) || die 'not inside a git repository'
 cd "$super_root"
 
-[ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check'
+[ $# -gt 0 ] || die 'usage: submodule-init.sh <submodule-path>... | --all | --check | --advance <path>'
 
 case "$1" in
   # NON-DESTRUCTIVE probe (see the header note): never touches content or other sessions' trees, but
@@ -340,6 +473,10 @@ case "$1" in
     ;;
   --all)
     while read -r path; do init_repair_probe "$path"; done < <(all_paths)
+    ;;
+  --advance)
+    [ $# -eq 2 ] || die 'usage: submodule-init.sh --advance <submodule-path>'
+    advance "$2"
     ;;
   *)
     for path in "$@"; do init_repair_probe "$path"; done

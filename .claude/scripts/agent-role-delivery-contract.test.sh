@@ -27,7 +27,7 @@ fail() {
   exit 1
 }
 
-sha256_file() {
+sha256_bytes() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
@@ -36,6 +36,8 @@ sha256_file() {
     fail "sha256sum or shasum is required to verify pinned agent definition integrity"
   fi
 }
+
+sha256_file() { sha256_bytes "$1"; }
 
 # Prose guards must survive re-wrapping: a boundary sentence that happens to break
 # across two lines is still present, so match against a whitespace-flattened copy
@@ -160,6 +162,7 @@ skill_upstream="$(yq --front-matter=extract '.metadata.github-repo // ""' "${bun
 # directory was absent, which made it a no-op in CI (actions/checkout does not initialise
 # submodules), so the guard against entrypoint drift would never have run where it matters.
 plugin_agents="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/agents"
+plugin_scripts="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/scripts"
 entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
 [ -d "${plugin_agents}" ] ||
   fail "cannot resolve the entrypoint: ${plugin_agents} is missing. Initialise it with
@@ -169,19 +172,58 @@ entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
   fail "desired state entrypoint '${entrypoint}' does not resolve to a bundled agent in ${plugin_agents}"
 canonical_engineer="${plugin_agents}/${entrypoint}.agent.md"
 canonical_surveyor="${plugin_agents}/portfolio-surveyor.agent.md"
+canonical_improver="${plugin_agents}/agent-improver.agent.md"
+canonical_ci_classifier="${plugin_scripts}/classify-default-branch-ci-runs.sh"
 [ -f "${canonical_surveyor}" ] ||
   fail "pinned plugin does not bundle portfolio-surveyor.agent.md"
+[ -f "${canonical_improver}" ] ||
+  fail "pinned plugin does not bundle agent-improver.agent.md"
+if [ ! -f "${canonical_ci_classifier}" ] \
+  || [ ! -x "${canonical_ci_classifier}" ] \
+  || [ -L "${canonical_ci_classifier}" ]; then
+  fail "pinned plugin does not bundle the regular executable default-branch classifier"
+fi
+grep -Fq '../scripts/classify-default-branch-ci-runs.sh' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not delegate default-branch CI to the bundled classifier"
+grep -Fq 'refuses partial or capped' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not fail closed on incomplete default-branch CI evidence"
+grep -Fq 'manual dispatch, and GitHub-managed dynamic runs' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not treat managed dynamic runs as default-branch events"
+if ! declared_ci_classifier_sha="$(jq -er '
+    .spec.source.requiredRuntimeAssets
+    | select(type == "array" and length == 1)
+    | .[0]
+    | select(
+        type == "object"
+        and keys == ["executable", "path", "sha256"]
+        and .path == "scripts/classify-default-branch-ci-runs.sh"
+        and .executable == true
+      )
+    | .sha256
+  ' "${desired_state}" 2>/dev/null)"; then
+  fail "consumer desired state does not carry exactly one executable path-and-digest classifier runtime asset"
+fi
+[ "${declared_ci_classifier_sha}" = "$(sha256_bytes "${canonical_ci_classifier}")" ] ||
+  fail "consumer desired-state classifier sha256 does not match the pinned executable bytes"
+[ ! -e "${repo_root}/.claude/scripts/classify-main-ci-runs.sh" ] ||
+  fail "consumer still carries a local copy of the generic default-branch classifier"
 
-# The consumer copy used to omit both integrity fields while the pinned plugin resource already
-# carried them. That let the gitlink advance without proving that the machine-readable entrypoint
-# and delegated surveyor still named the reviewed bytes. Resolve both digests from the pinned files,
-# not from a floating default branch or a copied constant.
+# The consumer copy used to omit role integrity fields while the pinned plugin resource already
+# carried them. That let the gitlink advance without proving that the machine-readable entrypoint,
+# delegated surveyor, and Improver still named the reviewed bytes. Resolve all digests from the
+# pinned files, not from a floating default branch or a copied constant.
 consumer_entrypoint_sha="$(jq -r '.spec.source.entrypointSha256 // ""' "${desired_state}")"
 consumer_surveyor_sha="$(jq -r '.spec.roles["portfolio-surveyor"].definitionSha256 // ""' "${desired_state}")"
+consumer_improver_sha="$(jq -r '.spec.roles["agent-improver"].definitionSha256 // ""' "${desired_state}")"
+consumer_improver_skill_sha="$(jq -r '.spec.roles["agent-improver"].skillSha256 // ""' "${desired_state}")"
 [ "${consumer_entrypoint_sha}" = "$(sha256_file "${canonical_engineer}")" ] ||
   fail "consumer desired-state entrypointSha256 does not match the pinned agentic-engineer definition"
 [ "${consumer_surveyor_sha}" = "$(sha256_file "${canonical_surveyor}")" ] ||
   fail "consumer desired-state portfolio-surveyor definitionSha256 does not match the pinned definition"
+[ "${consumer_improver_sha}" = "$(sha256_file "${canonical_improver}")" ] ||
+  fail "consumer desired-state agent-improver definitionSha256 does not match the pinned definition"
+[ "${consumer_improver_skill_sha}" = "$(sha256_file "${bundled_skill}")" ] ||
+  fail "consumer desired-state agent-improver skillSha256 does not match the pinned agent-improvement skill"
 
 canonical_engineer_flat="$(flatten "${canonical_engineer}")"
 assert_canonical_engineer_prose() {
