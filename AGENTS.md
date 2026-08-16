@@ -3132,7 +3132,14 @@ never moves that checkout. `submodule-init.sh --advance <path>` is the permitted
 path: it refuses dirty, hidden-index, ahead-of-pin, replacement-object and ignored-overwrite hazards,
 moves only the named checkout, and fails closed when an initialised nested submodule no longer matches
 the new pin, contains tracked dirt, or resolves outside its own physical worktree. It never recursively
-initialises additions or advances nested submodules for you.
+initialises additions or advances nested submodules for you. It also refuses when untracked material
+remains after checkout or when an ignored embedded repository remains — including a removed nested
+submodule the non-recursive checkout could not delete. Ordinary ignored artifacts that do not overlap
+target paths are preserved.
+🔴 **A post-checkout refusal does NOT roll back.** The nested, isolation, and residue gates run after
+the detach, so a non-zero exit can leave the named checkout already on the new pin. Treat the refusal
+as "do not use this tree yet", not "nothing changed": handle the reported condition, re-run
+`--advance`, and require exit 0 before evaluating anything.
 📌 **Landing a worktree on a PR head *including newly introduced or mismatched nested submodules*
 therefore still needs a complete procedure — fetch, initialise additions, repair isolation, advance
 each populated checkout, then probe — not a recursive checkout flag. That is

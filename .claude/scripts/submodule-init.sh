@@ -410,24 +410,20 @@ advance() {
   if [ -n "$post_status" ]; then
     die "residual files after advancing '$path' to $target — preserve and handle them before use"
   fi
-  # No checkout happened, so ordinary ignored artifacts are not residue from a pin transition.
-  # Still detect an embedded repository that the target no longer declares: one force protects it
-  # even during a dry run, while two forces reveal it. Comparing the probes distinguishes that
-  # hazardous residue from normal caches without deleting either kind.
-  if [ "$head" = "$target" ]; then
-    ordinary_residue=$(git --no-replace-objects -C "$path" clean -nfdx 2>/dev/null) ||
-      die "could not inspect ignored residue in '$path' — refusing to report success"
-    residue=$(git --no-replace-objects -C "$path" clean -nffdx 2>/dev/null) ||
-      die "could not inspect embedded repository residue in '$path' — refusing to report success"
-    if [ "$residue" != "$ordinary_residue" ]; then
-      die "residual files after advancing '$path' to $target — preserve and handle them before use"
-    fi
-    return 0
-  fi
-  residue=$(git --no-replace-objects -C "$path" clean -nffdx 2>/dev/null) ||
+  # Ordinary ignored artifacts are not residue from the pin transition and `--no-overwrite-ignore`
+  # already protects any path the target starts tracking. Still detect an embedded repository that
+  # the target no longer declares: one force protects it even during a dry run, while two forces
+  # reveal it. Comparing the probes distinguishes that hazardous residue from normal caches without
+  # deleting either kind, both after a transition and on an already-at-pin retry.
+  ordinary_residue=$(git --no-replace-objects -C "$path" clean -nfdx 2>/dev/null) ||
     die "could not inspect ignored residue in '$path' — refusing to report success"
-  if [ -n "$residue" ]; then
-    die "residual files after advancing '$path' to $target — preserve and handle them before use"
+  residue=$(git --no-replace-objects -C "$path" clean -nffdx 2>/dev/null) ||
+    die "could not inspect embedded repository residue in '$path' — refusing to report success"
+  if [ "$residue" != "$ordinary_residue" ]; then
+    die "embedded repository residue after advancing '$path' to $target — preserve and handle it before use"
+  fi
+  if [ "$head" = "$target" ]; then
+    return 0
   fi
   printf 'submodule-init: %s — advanced to %s\n' "$path" "$target"
 }

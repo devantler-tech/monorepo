@@ -397,18 +397,22 @@ report "advance fixture: working tree still on old pin before --advance" \
 # part of what this case exercises. Pre-fetching made `cat-file -e` succeed and skipped it entirely.
 report "advance fixture: the target object is absent before --advance" \
   "$(git -C "$c12/super/sub" cat-file -e "${new_sha}^{commit}" 2>/dev/null && echo no || echo yes)"
-out="$(cd "$c12/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
-report "advance: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
-report "advance: checkout moved to the recorded pin" \
-  "$([[ "$(git -C "$c12/super/sub" rev-parse HEAD)" == "$new_sha" ]] && echo yes || echo no)"
-report "advance: does not leave a shared core.worktree" \
-  "$([[ -z "$(git config -f "$c12/super/.git/modules/sub/config" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)"
-out="$(cd "$c12/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
-report "advance: --check passes afterwards" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 c12_excludes="$c12/excludes"
 printf 'ignored.log\n' >"$c12_excludes"
 git -C "$c12/super/sub" config core.excludesFile "$c12_excludes"
 echo reusable-cache >"$c12/super/sub/ignored.log"
+report "advance ignored-artifact precondition: status stays clean before the transition" \
+  "$([[ -z "$(git -C "$c12/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+out="$(cd "$c12/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+report "advance: checkout moved to the recorded pin" \
+  "$([[ "$(git -C "$c12/super/sub" rev-parse HEAD)" == "$new_sha" ]] && echo yes || echo no)"
+report "advance ignored-artifact: preserves the artifact across the transition" \
+  "$([[ "$(cat "$c12/super/sub/ignored.log")" == "reusable-cache" ]] && echo yes || echo no)"
+report "advance: does not leave a shared core.worktree" \
+  "$([[ -z "$(git config -f "$c12/super/.git/modules/sub/config" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)"
+out="$(cd "$c12/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "advance: --check passes afterwards" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
 report "advance already-at-pin ignored precondition: status stays clean" \
   "$([[ -z "$(git -C "$c12/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
 out="$(cd "$c12/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
@@ -836,6 +840,7 @@ git config -f "$c21_nested_gitdir/config" --unset-all core.worktree
 #     ignore rule hides it from both status and a single-force clean dry run. The stronger embedded-
 #     repository probe must detect it on the transition and on an already-at-pin retry.
 git -C "$c21/super/sub/nested" checkout -q --detach "$c21_nested_new"
+git -C "$c21/super/sub" config --unset submodule.nested.ignore
 (
   cd "$c21/remote-sub"
   git rm -qf nested
@@ -855,7 +860,7 @@ out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 report "advance removed-nested: fails closed on residual files" \
   "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
 report "advance removed-nested: names the residual checkout" \
-  "$(grep -q 'residual files after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+  "$(grep -q 'embedded repository residue after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 report "advance removed-nested: moves the named checkout to the recorded pin" \
   "$([[ "$(git -C "$c21/super/sub" rev-parse HEAD)" == "$c22_outer_removed" ]] && echo yes || echo no)"
 report "advance removed-nested: preserves the old nested repository for explicit handling" \
@@ -866,7 +871,7 @@ out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 report "advance removed-nested retry: still fails closed at the recorded pin" \
   "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
 report "advance removed-nested retry: still names the residual checkout" \
-  "$(grep -q 'residual files after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+  "$(grep -q 'embedded repository residue after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
