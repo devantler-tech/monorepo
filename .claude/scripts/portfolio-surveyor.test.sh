@@ -273,6 +273,17 @@ grep -Fq 'must never fill' "${surveyor}" ||
 if grep -Fq 'pick ONE; both are complete' "${surveyor}"; then
   fail "surveyor still offers totalCount and the REST read as interchangeable on_board sources"
 fi
+# Forbidding totalCount in the prescription is not enough while another sentence still ACCEPTS it.
+# Two places named totalCount as a legitimating mechanism for the numerator: the fail-closed bullet
+# ("a read that does not use totalCount/--paginate is unknown" => one that DOES is measured) and the
+# digest row template ("measured: only after a paginated/totalCount census"). The row template is
+# the normative output grammar, so that one alone would re-admit the 8.6x overstatement.
+if grep -Fq 'does not use `totalCount` / `--paginate`' "${surveyor}"; then
+  fail "surveyor fail-closed bullet still treats a totalCount read as escaping unknown:single-page-read"
+fi
+if grep -Fq 'paginated/`totalCount` census' "${surveyor}"; then
+  fail "surveyor BOARD-COVERAGE row still admits a totalCount census as measured:"
+fi
 # Denominator: measured 2026-08-14, `gh search issues` returned 30 against a true 593 (default
 # --limit 30, and its --json emits item rows, never search metadata). Require the total_count
 # metadata path with an explicit public filter, and a fail-closed token when it cannot be obtained.
