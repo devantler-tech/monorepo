@@ -3613,17 +3613,24 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
 - **Put ONE verb in a `Bash` call — the classifier's denials concentrate on calls that prefix the real
   command with `cd` or a variable assignment.** Measured over the 7 days to 2026-08-16: **58 auto-mode
   classifier denials across 15 distinct sessions**, of which the **27 multi-statement** ones span **12
-  sessions** and **25 of those 27 open with `cd `(18) or an assignment (7)** before the verb that
+  sessions** and **25 of those 27 open with `cd ` (18) or an assignment (7)** before the verb that
   matters. Each denial loses the **whole call** — nothing is partially applied — so the setup work in
   front of the verb is discarded with it, which is the same total-loss shape *Git safety* already
   records for a compound `fetch`+`checkout`. This bullet is that rule's general case; the git pair is
   simply where it was first measured.
-  🔴 **The prefix is almost always UNNECESSARY, which is what makes this cheap to fix.** The `Bash`
-  tool's **working directory persists between calls**, so a `cd` in front of every command buys
-  nothing after the first one — and most commands here never needed it: `git -C <path>`,
-  `gh --repo <owner>/<repo>`, and an absolute script path all carry their own location. Set the
-  directory once, or pass the location to the command, and the denial class disappears without any
-  loss of capability.
+  🔴 **The prefix is almost always UNNECESSARY, which is what makes this cheap to fix.** Pass the
+  location to the command instead of walking to it: `git -C <path>`, `gh --repo <owner>/<repo>` and an
+  absolute script path each carry their own location, so the `cd` was never load-bearing and the
+  denial class disappears without any loss of capability.
+  🔴 **Do NOT "fix" it by setting the directory once and using relative paths afterwards — the cwd
+  survives only INSIDE the workspace.** Verified 2026-08-16 by direct probe: a `cd` to a path within
+  the session worktree persists to the next call, while a `cd` **outside** it — `~/.claude/projects`,
+  which is the corpus every telemetry pass reads — is **silently reset** to the session worktree before
+  the next call runs. A later command's relative paths then resolve in the worktree, so it reads or
+  writes a different file than intended **and still reports success**. That is not hypothetical: it is
+  the measured cause of a mining pass that reported zero tool errors out of an empty file it had itself
+  just written somewhere else, while 44 of 63 transcripts held errors. **Absolute paths are the only
+  form that is correct on both sides of that boundary.**
   ⚠️ **It is PROBABILISTIC on this shape, and that is precisely why it persists.** The same
   `cd … ; <verb>` spelling usually succeeds, so a lane reads the occasional refusal as noise and keeps
   the habit — one measured session led **every** Bash call with `cd <worktree>` and paid for it

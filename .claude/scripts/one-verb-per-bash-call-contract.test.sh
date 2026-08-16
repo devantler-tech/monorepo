@@ -65,11 +65,14 @@ assert_bullet() {
 assert_bullet 'loses the **whole call**' \
   "the bullet does not state that the entire Bash call is lost, so the failure reads as partial or retryable"
 
-# 2. THE ACTIONABLE CORRECTION. Without this the bullet is a prohibition with no alternative — the
-#    DevEx tax this repo's own hardening rule forbids — and the reader has no way to comply while
-#    still reaching the directory the command needs.
-assert_bullet 'working directory persists between calls' \
-  "the bullet does not state that the working directory persists, so the reader has no reason to believe the cd prefix is droppable"
+# 2. THE BOUNDARY, and it is the assertion most likely to be "simplified" away by someone who checks
+#    the runtime docs and reads "working directory persists between calls" as unconditional. It is
+#    not: probed directly on 2026-08-16, a cd INSIDE the session worktree persists to the next call,
+#    while a cd outside it is silently reset. Without this warning the obvious compliance route —
+#    set the directory once, then use relative paths — resolves those paths in the wrong tree and
+#    still reports success, which is the failure this deployment has already paid for once.
+assert_bullet 'silently reset' \
+  "the bullet does not warn that a cd outside the workspace is silently reset, so the reader complies by setting the directory once and has relative paths resolve in the wrong tree"
 
 # 3. The location-carrying alternatives are named concretely. Assertion 2 says the prefix is
 #    unnecessary; this says what to write instead in the cases that actually recur here.
@@ -92,4 +95,10 @@ assert_bullet 'never re-issue a variant spelling' \
 assert_bullet 'Never touch the permission surface' \
   "the bullet does not forbid working around the denial via the permission surface, inviting a guard change instead of a command change"
 
-echo "one-verb-per-bash-call contract: OK — 6 assertions passed"
+# 7. The form that is correct regardless of which side of the boundary the path is on. Assertion 2
+#    says the shortcut is unsafe; this names the one spelling that always works, so the warning does
+#    not leave the reader stuck.
+assert_bullet 'Absolute paths are the only form' \
+  "the bullet warns about the cwd boundary without naming absolute paths as the form that is correct on both sides of it"
+
+echo "one-verb-per-bash-call contract: OK — 7 assertions passed"
