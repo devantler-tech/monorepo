@@ -220,6 +220,125 @@ run_rc=0
 branch_op_lock_run "$stale_repo" -- bash -c ': >"$0/stray-file"' "$stale_lockdir" >/dev/null 2>&1 || run_rc=$?
 check "run propagates a failed release (leaked lock)" "3" "$run_rc"
 rm -rf "$stale_lockdir"
+
+# ---------------------------------------------------------------------------
+# `run` must PRESERVE a caller's pre-existing EXIT trap.
+#
+# This helper is sourceable and `worktree-claim.sh` releases its ownership mutex from an EXIT
+# handler. A bare `trap - EXIT` after the wrapped command deleted that handler for the rest of the
+# process, so a later exit left the CAS claim ref behind. Run it in a subshell so the assertion is
+# about what the caller's own EXIT handler does at exit, not about this test's shell.
+# ---------------------------------------------------------------------------
+caller_trap_marker="$tmp/caller-exit-ran"
+rm -f "$caller_trap_marker"
+(
+  # shellcheck source=branch-op-lock.sh
+  source "$lock_tool"
+  trap 'printf ran >"'"$caller_trap_marker"'"' EXIT
+  branch_op_lock_run "$stale_repo" -- true >/dev/null 2>&1
+) || true
+check "run preserves the caller's pre-existing EXIT trap" "ran" \
+  "$(cat "$caller_trap_marker" 2>/dev/null || echo MISSING)"
+
+# …and with no caller trap installed, `run` must still leave EXIT clear rather than restoring junk.
+(
+  # shellcheck source=branch-op-lock.sh
+  source "$lock_tool"
+  branch_op_lock_run "$stale_repo" -- true >/dev/null 2>&1
+  [[ -z "$(trap -p EXIT)" ]]
+)
+check "run leaves EXIT clear when the caller had no trap" "0" "$?"
+rm -rf "$stale_lockdir"
+
+# ---------------------------------------------------------------------------
+# A lock whose metadata cannot be written must NOT be reported as acquired.
+#
+# An unchecked write failure left the holder with no `pid`/`host`, so staleness fell through to the
+# age path and a waiter reaped the ACTIVE holder once the TTL elapsed. Simulate the failure by making
+# the lock directory read-only after `mkdir` wins, which is what a full disk looks like to `printf`.
+# ---------------------------------------------------------------------------
+rm -rf "$stale_lockdir"
+acquire_rc=0
+(
+  # shellcheck source=branch-op-lock.sh
+  source "$lock_tool"
+  # Fail every `printf` after the first, which is the one `branch_op_lock_dir` needs to report the
+  # path. That lands the failure squarely on the metadata block — the same shape a full disk or
+  # exhausted inodes produces — without depending on filesystem permissions.
+  _pf_calls=0
+  printf() {
+    _pf_calls=$(( _pf_calls + 1 ))
+    (( _pf_calls >= 2 )) && return 1
+    builtin printf "$@"
+  }
+  branch_op_lock_acquire "$stale_repo" 5 600 >/dev/null 2>&1
+) || acquire_rc=$?
+check "acquire FAILS when its metadata cannot be written" "1" "$acquire_rc"
+check "a metadata-write failure leaves NO lock dir behind" "0" \
+  "$([[ -d "$stale_lockdir" ]] && echo 1 || echo 0)"
+
+# ---------------------------------------------------------------------------
+# Reclaiming a stale lock must act on the instance it JUDGED, not whatever occupies the path now.
+#
+# Without an identity check a waiter could decide "stale", have the directory replaced by a fresh
+# holder in the meantime, and then delete that new holder's directory — two holders, one critical
+# section. `_branch_op_lock_try_remove_stale` brackets its verdict with the directory's inode+token.
+# ---------------------------------------------------------------------------
+rm -rf "$stale_lockdir"
+mkdir -p "$stale_lockdir"                       # half-written ⇒ stale at TTL 0
+ident_orig=$(_branch_op_lock_identity "$stale_lockdir")
+check "identity is readable for an existing lock dir" "1" \
+  "$([[ -n "$ident_orig" ]] && echo 1 || echo 0)"
+
+# Replace the directory (new inode) and confirm the identity actually changes — otherwise the guard
+# below would pass vacuously.
+rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
+ident_new=$(_branch_op_lock_identity "$stale_lockdir")
+check "a replaced lock dir has a DIFFERENT identity" "1" \
+  "$([[ "$ident_orig" != "$ident_new" ]] && echo 1 || echo 0)"
+
+# Positive control: an unreplaced stale dir IS reclaimed.
+rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
+check "unreplaced stale lock IS reclaimed" "0" \
+  "$(_branch_op_lock_try_remove_stale "$stale_lockdir" 0; echo $?)"
+check "reclaimed lock dir is gone" "0" \
+  "$([[ -d "$stale_lockdir" ]] && echo 1 || echo 0)"
+
+# NEGATIVE control — the race itself, made deterministic. Shadow the staleness test so it replaces
+# the directory as a side effect, exactly as a competing waiter would between the verdict and the
+# clear. The reclaim must decline, and the new holder's directory must survive untouched.
+rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
+race_rc=0
+race_out=$(
+  # shellcheck source=branch-op-lock.sh
+  source "$lock_tool"
+  _branch_op_lock_is_stale() {
+    rm -rf "$1"; mkdir -p "$1"          # a rival reclaimed and re-acquired under us
+    printf 'newholder\n' >"$1/token"
+    return 0                             # …and we still say "stale", as the old code would
+  }
+  _branch_op_lock_try_remove_stale "$stale_lockdir" 0 || echo DECLINED
+) || race_rc=$?
+check "reclaim DECLINES when the dir was replaced mid-verdict" "DECLINED" "$race_out"
+check "the replacement holder's dir SURVIVES the declined reclaim" "1" \
+  "$([[ -d "$stale_lockdir" ]] && echo 1 || echo 0)"
+check "the replacement holder's token is intact" "newholder" \
+  "$(cat "$stale_lockdir/token" 2>/dev/null || echo MISSING)"
+rm -rf "$stale_lockdir"
+
+# ---------------------------------------------------------------------------
+# Directory mtime must resolve on this host — the `echo 0` fallback made a NEW lock look ancient.
+# ---------------------------------------------------------------------------
+mtime_probe_dir="$tmp/mtime-probe"
+mkdir -p "$mtime_probe_dir"
+probe_mtime=$(_branch_op_lock_dir_mtime "$mtime_probe_dir" || echo FAILED)
+check "dir mtime probe resolves on this host" "1" \
+  "$([[ "$probe_mtime" =~ ^[0-9]+$ ]] && echo 1 || echo 0)"
+# A just-created directory must read as ~0s old, never as 1970 (which is >= any TTL ⇒ instant reap).
+probe_age=$(( $(date -u +%s) - probe_mtime ))
+check "a brand-new dir is NOT already past a 600s TTL" "1" \
+  "$([[ "$probe_age" -lt 600 ]] && echo 1 || echo 0)"
+rm -rf "$mtime_probe_dir"
 # ---------------------------------------------------------------------------
 if [[ "$failures" -gt 0 ]]; then
   printf '\n%d failure(s)\n' "$failures" >&2

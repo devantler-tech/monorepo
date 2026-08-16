@@ -71,6 +71,30 @@ _branch_op_lock_new_token() {
   fi
 }
 
+# Directory mtime, in epoch seconds, across GNU and BSD userlands. `date -r <file>` handles both
+# (BSD date documents `-r filename` alongside `-r seconds`), `stat -c %Y` is the GNU spelling and
+# `stat -f %m` the BSD one. Prints nothing when every probe fails, so callers decide the fallback
+# rather than inheriting a silent `0` that reads as 1970.
+_branch_op_lock_dir_mtime() {
+  local path="$1"
+  date -u -r "$path" +%s 2>/dev/null && return 0
+  stat -c %Y "$path" 2>/dev/null && return 0
+  stat -f %m "$path" 2>/dev/null && return 0
+  return 1
+}
+
+# Identity of the lock directory *instance*, so a reclaim decision can be checked against the same
+# directory it was made about. The inode changes when a directory is removed and recreated, and the
+# token distinguishes two holders that happen to reuse an inode number.
+_branch_op_lock_identity() {
+  local lockdir="$1" inode token
+  inode=$(stat -c %i "$lockdir" 2>/dev/null || stat -f %i "$lockdir" 2>/dev/null) || return 1
+  [[ -n "$inode" ]] || return 1
+  token=""
+  [[ -f "$lockdir/token" ]] && token=$(tr -d '[:space:]' <"$lockdir/token" 2>/dev/null || true)
+  printf '%s:%s\n' "$inode" "$token"
+}
+
 _branch_op_lock_clear_dir() {
   local lockdir="$1"
   rm -f "$lockdir/pid" "$lockdir/token" "$lockdir/host" "$lockdir/pid_mode" \
@@ -124,7 +148,7 @@ _branch_op_lock_is_stale() {
 
   if [[ -f "$at_file" ]]; then
     now=$(date -u +%s)
-    age=$(( now - $(date -u -r "$lockdir" +%s 2>/dev/null || stat -c %Y "$lockdir" 2>/dev/null || echo "$now") ))
+    age=$(( now - $(_branch_op_lock_dir_mtime "$lockdir" || echo "$now") ))
     if (( age >= stale_ttl )); then
       return 0
     fi
@@ -137,8 +161,13 @@ _branch_op_lock_is_stale() {
   # writing its own metadata — two holders, no error. Age it from the directory's own mtime, which
   # `mkdir` sets atomically, so a genuinely crashed half-write is still recovered once it exceeds
   # the TTL.
+  #
+  # When no mtime probe works the fallback is `now`, i.e. "treat it as brand new". That direction is
+  # deliberate: an unreadable mtime must never manufacture an ancient age and reap a live holder, and
+  # the script's own timeout message already promises to FAIL CLOSED. The `acquired_at` branch above
+  # uses the same fallback, so both age paths agree.
   now=$(date -u +%s)
-  age=$(( now - $(date -u -r "$lockdir" +%s 2>/dev/null || stat -c %Y "$lockdir" 2>/dev/null || echo 0) ))
+  age=$(( now - $(_branch_op_lock_dir_mtime "$lockdir" || echo "$now") ))
   if (( age >= stale_ttl )); then
     return 0
   fi
@@ -147,11 +176,21 @@ _branch_op_lock_is_stale() {
 
 _branch_op_lock_try_remove_stale() {
   local lockdir="$1" stale_ttl="$2"
-  if _branch_op_lock_is_stale "$lockdir" "$stale_ttl"; then
-    _branch_op_lock_clear_dir "$lockdir"
-    return 0
-  fi
-  return 1
+  local ident_before ident_after
+
+  # The staleness verdict is about ONE directory instance, and evaluating it takes real time (file
+  # reads, `kill -0`, `date`). Without an identity check a waiter can decide "stale", have another
+  # waiter reclaim and a third acquire in the meantime, and then delete the NEW holder's directory —
+  # leaving two holders inside one critical section. Bracketing the verdict with the directory's
+  # inode+token confines the clear to the instance actually judged stale; a replacement is left alone
+  # and simply re-judged on the next pass.
+  ident_before=$(_branch_op_lock_identity "$lockdir") || return 1
+  _branch_op_lock_is_stale "$lockdir" "$stale_ttl" || return 1
+  ident_after=$(_branch_op_lock_identity "$lockdir") || return 1
+  [[ "$ident_before" == "$ident_after" ]] || return 1
+
+  _branch_op_lock_clear_dir "$lockdir"
+  return 0
 }
 
 branch_op_lock_acquire() {
@@ -166,12 +205,20 @@ branch_op_lock_acquire() {
   while true; do
     if mkdir "$lockdir" 2>/dev/null; then
       token=$(_branch_op_lock_new_token)
-      printf '%s\n' "$$" >"$lockdir/pid"
-      printf '%s\n' "$token" >"$lockdir/token"
-      printf '%s\n' "$(uname -n 2>/dev/null || hostname 2>/dev/null || echo unknown)" >"$lockdir/host"
-      printf '%s\n' "${BRANCH_OP_LOCK_PID_MODE:-supervised}" >"$lockdir/pid_mode"
-      printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$lockdir/acquired_at"
-      printf '%s\n' "$(date -u +%s)" >"$lockdir/acquired_epoch"
+      # Every metadata write is checked. An unchecked failure (a full disk, exhausted inodes) left the
+      # acquirer holding a lock whose `pid`/`host` never landed, so `_branch_op_lock_is_stale` fell
+      # through to the age path and a waiter reaped the ACTIVE holder once the TTL elapsed. A lock we
+      # cannot describe is one we must not hold: tear it down and fail closed instead.
+      if ! { printf '%s\n' "$$" >"$lockdir/pid" &&
+             printf '%s\n' "$token" >"$lockdir/token" &&
+             printf '%s\n' "$(uname -n 2>/dev/null || hostname 2>/dev/null || echo unknown)" >"$lockdir/host" &&
+             printf '%s\n' "${BRANCH_OP_LOCK_PID_MODE:-supervised}" >"$lockdir/pid_mode" &&
+             printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$lockdir/acquired_at" &&
+             printf '%s\n' "$(date -u +%s)" >"$lockdir/acquired_epoch"; }; then
+        _branch_op_lock_clear_dir "$lockdir"
+        echo "branch-op-lock: FAIL CLOSED — acquired '$lockdir' but could not write its metadata; lock released." >&2
+        return 1
+      fi
       BRANCH_OP_LOCK_TOKEN="$token"
       # CLI callers capture stdout; sourced callers use BRANCH_OP_LOCK_TOKEN.
       printf '%s\n' "$token"
@@ -251,11 +298,21 @@ branch_op_lock_run() {
   # Discard the token line from stdout so wrapped commands keep a clean pipe.
   branch_op_lock_acquire "$repo" "$timeout" "$stale_ttl" >/dev/null || return $?
   local token="$BRANCH_OP_LOCK_TOKEN"
+  # This helper is sourceable, so the caller may already own an EXIT handler — `worktree-claim.sh`
+  # releases its ownership mutex there. Installing ours and then clearing it with a bare `trap - EXIT`
+  # deleted theirs permanently, so a later exit left the CAS claim ref behind. Capture whatever was
+  # installed and put it back verbatim instead.
+  local prev_exit_trap
+  prev_exit_trap=$(trap -p EXIT)
   # shellcheck disable=SC2064
   trap "BRANCH_OP_LOCK_TOKEN='$token'; branch_op_lock_release '$repo' '$token' || true" EXIT
   local rc=0
   "$@" || rc=$?
-  trap - EXIT
+  if [[ -n "$prev_exit_trap" ]]; then
+    eval "$prev_exit_trap"
+  else
+    trap - EXIT
+  fi
   BRANCH_OP_LOCK_TOKEN="$token"
   # A failed release means the lock directory is still there — every later worktree or branch
   # operation will block on it until the TTL expires. Discarding that status reported a clean
