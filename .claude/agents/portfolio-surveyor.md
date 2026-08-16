@@ -545,8 +545,15 @@ public and private — no per-repo loop needed to enumerate):
      the shared GraphQL 5,000/hr pool:
 
      ```sh
+     set -o pipefail   # REQUIRED — see below; without it a half-walked census reports `measured:`
      fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" \
-       --jq '.[]|select(.name=="Status")|.id')
+       --jq '.[]|select(.name=="Status")|.id') \
+       || { echo "board_coverage=unknown:field-lookup-failed"; exit 0; }
+     # An empty id is NOT a failure exit: `--jq` selecting nothing still exits 0, and the item read
+     # would then run with `fields=`, returning no field data — so every item looks status-less and
+     # `status_less` reports the whole board.
+     [ -n "$fid_status" ] \
+       || { echo "board_coverage=unknown:status-field-not-found"; exit 0; }
      # open Issue items only; --paginate walks every page to exhaustion
      gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid_status" \
        --paginate --jq '.[]' | jq -s '
@@ -554,8 +561,21 @@ public and private — no per-repo loop needed to enumerate):
                     and .content.repository.private == false
                     and .content.repository.archived == false))
          | {on_board: length,
-            status_less: map(select(([.fields[]?|select(.name=="Status")|.value] | length)==0)) | length}'
+            status_less: map(select(([.fields[]?|select(.name=="Status")|.value] | length)==0)) | length}' \
+       || { echo "board_coverage=unknown:items-census-failed"; exit 0; }
      ```
+
+     🔴 **`set -o pipefail` and both guards are load-bearing — without them a FAILED census emits a
+     `measured:` row.** `gh api --paginate` that dies partway through still delivers the pages it
+     already fetched, and `jq -s` consumes them and exits 0, so the pipeline's status is `jq`'s and
+     the run reports a confident, smaller `on_board`. That is the truncation defect this whole
+     section exists to prevent, reintroduced by the shell rather than by the query — and it fails in
+     the gap-hiding direction, because a short numerator reads as *missing coverage* and sends the
+     orchestrator into a backfill against a board that is already complete.
+     **This is not hypothetical:** on 2026-08-16 the denominator call below returned **HTTP 403
+     rate-limited** partway through a verification run, in the same minutes as the census. The
+     `unknown:<reason>` tokens already existed for exactly this case; nothing in the prescribed
+     command reached them.
 
      🔴 **The two repository predicates are not optional — without them the ratio compares two
      different populations and overstates coverage.** The denominator below is explicitly

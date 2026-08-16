@@ -323,6 +323,17 @@ grep -Fq '.content.repository.private == false' "${surveyor}" ||
   fail "surveyor on_board census does not exclude private-repo items the denominator cannot contain"
 grep -Fq '.content.repository.archived == false' "${surveyor}" ||
   fail "surveyor on_board census does not exclude archived-repo items the denominator cannot contain"
+# Error propagation: `gh api --paginate | jq -s` hands jq whatever pages it fetched before dying, and
+# jq exits 0 on them — so without pipefail a half-walked census emits a confident smaller on_board as
+# `measured:`. Same truncation defect as a single-page read, reintroduced by the shell. And an empty
+# Status field id does not fail: `--jq` selecting nothing exits 0, the items read then runs with
+# `fields=`, and every item looks status-less.
+grep -Fq 'set -o pipefail' "${surveyor}" ||
+  fail "surveyor board-coverage census does not run under pipefail, so a partial paginated read can report measured:"
+grep -Fq 'board_coverage=unknown:items-census-failed' "${surveyor}" ||
+  fail "surveyor has no unknown token for a failed or partially-walked items census"
+grep -Fq 'board_coverage=unknown:status-field-not-found' "${surveyor}" ||
+  fail "surveyor does not reject an empty Status field id before computing status_less"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||
