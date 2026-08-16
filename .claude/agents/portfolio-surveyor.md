@@ -94,22 +94,28 @@ public and private — no per-repo loop needed to enumerate):
    them** — closing a Dependency Dashboard changes Renovate's behaviour. Without this filter the
    dashboard heads a repo's oldest-first queue forever and every run re-derives that it is not real
    work.
-2b. **Claim branches (one call per repo that has PR-less open issues):**
-   `gh api repos/<o>/<r>/branches --paginate --jq '.[].name' | grep -E '^(claude|cursor|codex)/'` —
-   report any `claude/*`, `cursor/*`, or `codex/*` branch that ends in `-<issue>`, ends in a
+2b. **Shared claim tips and lane branches (one branch-list call per repo that has PR-less open issues):**
+   `gh api repos/<o>/<r>/branches --paginate --jq '.[] | [.name,.commit.sha] | @tsv' | grep -E '^(agent-claim/[1-9][0-9]*|(claude|cursor|codex)/)'`.
+   An exact `agent-claim/<issue>` name maps directly to its open issue. Read that tip's lease clock
+   with `gh api repos/<o>/<r>/commits/<sha> --jq '.commit.committer.date'`; when it is inside the ~2h
+   lease and there is no open PR, report `CLAIMED` immediately — the **shared tip alone is enough**,
+   before an assignee or lane branch exists. If the clock join fails, emit `QUERY-UNKNOWN ...
+   failed=claim:<reason>` for that issue. If the tip is stale, leave the issue actionable and include
+   `stale-claim=agent-claim/<issue>@<sha>@<age>` so the orchestrator can use the evidence-gated
+   takeover path rather than treating it as live.
+   As rollout fallback, also report any `claude/*`, `cursor/*`, or `codex/*` branch that ends in
+   `-<issue>`, ends in a
    **takeover suffix** (`-<issue>-2`, `-3`, …), OR whose normalised stem matches an open issue's
    title (strip `war-`/area prefixes and hyphens, and normalise `our`→`or` spelling) — legacy claims
    predate the issue-number template and would otherwise be invisible during rollout — for an open
-   issue with **no** open PR, as
-   `CLAIMED <repo>#<issue> (branch, no PR)`. All three Daily AI Engineer lanes claim under their own
+   issue with **no** open PR, as a lane-branch claim. All three Daily AI Engineer lanes claim under their own
    prefix (`claude/` local Claude Code, `cursor/` Cursor cloud, `codex/` ChatGPT/Codex sibling); a
    survey that only greps `^claude/` is blind to the other two and recreates the duplicate-build race
    the claim protocol exists to prevent. **Do not gate this scan on assignees:** `app/cursor` cannot
    assign (403), so a Cursor-lane claim is branch-only until its draft PR opens — an
    assigned-but-PR-less gate would skip every `cursor/*` claim. Keep it bounded — skip the call for
-   repos with no open PR-less issues at all. This is the only pre-PR claim signal that exists: before
-   a PR there is no body to grep, so the issue number in the branch name is what makes the claim
-   discoverable.
+   repos with no open PR-less issues at all, and deepen only shared tips whose issue is in that set.
+   Before a PR there is no body to grep, so these refs are the pre-PR coordination signals.
 3. **Short-circuit dependency automation, then deepen only actionable candidates.** An org-search PR
    whose author is the exact `renovate[bot]` or `dependabot[bot]` identity is an automation-owned
    dependency PR. Emit only `AUTOMATION-OWNED (NO-ACTION)` from the cheap search row; do **not** call
@@ -1305,7 +1311,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 ### Advance
 - <repo>: roadmap-ready → #<n> "<title>" (<label>)
 - <repo>: NO roadmap yet → strategy-review candidate
-- <repo> #<n> "<title>" — CLAIMED: assignee=devantler|none(cursor-lane), claim-branch=<name>, no open PR
+- <repo> #<n> "<title>" — CLAIMED: assignee=devantler|none(cursor-lane)|none(shared-tip), claim=agent-claim/<issue>@<sha>@<age>|branch:<name>, no open PR
 ```
 
 Digest rules:
@@ -1316,16 +1322,21 @@ Digest rules:
 - **Classify, don't decide.** Surface signals; the **orchestrator** selects the work and overlays its
   own native-memory cadence cursors (`last_worked`, `weekly`, docs/roadmap) — **you do not read
   memory**, only live GitHub.
-- **Emit a `CLAIMED` row when a matching claim branch exists and there is no open PR**, under one of
-  two shapes. Match `(claude|cursor|codex)/*-<issue>`, a takeover branch
+- **Emit a `CLAIMED` row when a live shared tip or matching lane branch exists and there is no open
+  PR**, under one of three shapes. **(1) `agent-claim/<issue>`:** the shared tip alone is enough;
+  read `.commit.committer.date` for its SHA and emit
+  `CLAIMED … assignee=none(shared-tip), claim=agent-claim/<issue>@<sha>@<age>` only inside the ~2h
+  lease. A failed tip/date join is `QUERY-UNKNOWN ... failed=claim:<reason>`, never a clean or stale
+  claim; an expired tip is not `CLAIMED` and is annotated as `stale-claim` on the ordinary issue row.
+  For lane fallbacks, match `(claude|cursor|codex)/*-<issue>`, a takeover branch
   (`(claude|cursor|codex)/*-<issue>-2`, `-3`, …), or a legacy normalised stem under any of those three
-  prefixes. **(1) `claude/*` / `codex/*`:** require BOTH a `devantler` assignment and the matching
+  prefixes. **(2) `claude/*` / `codex/*`:** require BOTH a `devantler` assignment and the matching
   branch — an assignment to **anyone but `devantler`** is not a claim, and a `devantler` assignment
   with **no** branch is not a live claim under the contract's *Claim protocol*, so reporting either
-  as one would let a bare assignee park an issue. **(2) `cursor/*`:** the matching branch alone is
+  as one would let a bare assignee park an issue. **(3) `cursor/*`:** the matching branch alone is
   enough — `app/cursor` cannot assign (403), so a Cursor-lane claim is branch-only until the draft
   PR opens; requiring an assignee would make every cloud-lane claim invisible (monorepo#2300). Report
-  that shape as `CLAIMED … assignee=none(cursor-lane), claim-branch=<name>`. A bare `devantler`
+  that shape as `CLAIMED … assignee=none(cursor-lane), claim=branch:<name>`. A bare `devantler`
   assignee with no branch is still an ordinary open issue (mention `assignees=<n>` if useful), never
   skip reason (e). The orchestrator times the ~2h lease from the issue's newest `assigned` timeline
   event when one exists; for a cursor-lane branch-only claim, time from the branch tip's push

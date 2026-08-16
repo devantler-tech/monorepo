@@ -1,0 +1,513 @@
+#!/usr/bin/env bash
+#
+# agent-claim.sh — lane-neutral claim arbitration for multi-instance races
+# (monorepo#2302).
+#
+# Every agent instance writes its own work-branch namespace (`claude/*`,
+# `codex/*`, `cursor/*`), so a race settled on the work-branch name is never
+# arbitrated across lanes. This helper pushes a SINGLE shared ref
+# `agent-claim/<issue>` that every instance derives from the issue number
+# alone, BEFORE creating its lane-specific work branch. The push decides the
+# race; the tip comparison (never the push's exit status) decides the winner.
+#
+# Fifteen traps, proven by the delivery and its review rounds — do not regress them:
+#   1. Second non-force push is refused; ls-remote returns the winner's sha.
+#   2. `git push … | tail` exits 0 on a REJECTED push — only the tip compare
+#      is safe (never judge by exit status, never through a pipe).
+#   3. Identical claim commits collide: every instance may commit as the same
+#      login with the same message on the same parent in the same second,
+#      yielding a byte-identical sha so BOTH pushes succeed. A portable nonce
+#      in the message makes the commits distinct; fail closed when no entropy
+#      source is available.
+#   4. An unretired claim ref is a permanent lock (nothing sweeps
+#      `agent-claim/*`). Retire on PR open; stale takeover needs BOTH evidence
+#      gates (no open PR for the issue AND tip older than the lease).
+#   5. Retirement must bind to the acquired SHA and compare-and-delete it; a
+#      stale holder or observe/delete race must not erase a successor.
+#   6. The remote default parent may not exist locally; fetch it before
+#      constructing the empty claim commit.
+#   7. A rejected create with no competing tip is a capability/service failure,
+#      not a lost race.
+#   8. Acquire stdout is the SHA only, including takeover; callers retain that
+#      exact value as the ownership token used by retire.
+#   9. Inherited Git dates must not backdate a new claim and expire its lease.
+#  10. --repo-dir must resolve to that exact repository root; an uninitialized
+#      submodule directory must never walk upward into the parent repository.
+#  11. A failed delete followed by a failed tip query is unknown, not proof
+#      that retirement succeeded.
+#  12. Publication renews ownership with a fresh CAS-protected lease.
+#  13. Replacement refs cannot change the tree pushed by a claim commit.
+#  14. Production takeover never accepts a lease below two hours.
+#  15. A failed post-push tip query reports UNKNOWN and returns the candidate
+#      ownership token for recovery.
+#
+# Usage:
+#   agent-claim.sh acquire <issue> [--remote NAME] [--repo-dir DIR]
+#                                [--lease-hours N] [--takeover]
+#   agent-claim.sh renew   <issue> <acquired-sha> [--remote NAME] [--repo-dir DIR]
+#   agent-claim.sh verify  <issue> <expected-sha> [--remote NAME] [--repo-dir DIR]
+#   agent-claim.sh tip     <issue> [--remote NAME] [--repo-dir DIR]
+#   agent-claim.sh retire  <issue> <acquired-sha> [--remote NAME] [--repo-dir DIR]
+#   agent-claim.sh is-stale <issue> [--remote NAME] [--repo-dir DIR]
+#                                 [--lease-hours N]
+#
+# Exit codes:
+#   0  success (acquired / renewed / tip matches / retired / is stale)
+#   1  lost the race / tip mismatch / not stale
+#   2  usage error / missing entropy / unsafe arguments
+set -Eeuo pipefail
+
+DEFAULT_REMOTE="origin"
+DEFAULT_LEASE_HOURS=2
+REF_PREFIX="refs/heads/agent-claim"
+
+fail() { echo "agent-claim: $*" >&2; exit 2; }
+
+usage() {
+  sed -n '/^# Usage:/,/^# Exit codes:/p' "$0" | sed 's/^# \{0,1\}//' | head -n -1
+}
+
+# Portable entropy — fail closed when none is available (trap 3). Prefer
+# /dev/urandom (Linux + macOS); never soft-fail back to a fixed message.
+claim_nonce() {
+  [[ -r /dev/urandom ]] ||
+    fail "no portable entropy source (/dev/urandom unreadable); refusing to claim with a fixed message (trap 3)"
+  # 16 bytes hex, no whitespace. `od` is POSIX; tr strips the spaces od
+  # inserts between bytes on some platforms. A pipeline failure or malformed
+  # result is unavailable entropy, never an empty/fixed nonce.
+  local nonce
+  nonce="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')" ||
+    fail "portable entropy read failed; refusing to claim with a fixed message (trap 3)"
+  [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] ||
+    fail "portable entropy read returned malformed data; refusing to claim with a fixed message (trap 3)"
+  printf '%s\n' "$nonce"
+}
+
+# Resolve the claim ref name for an issue number. Caller must already have
+# validated the issue via require_issue — this only formats.
+claim_ref() {
+  printf '%s/%s' "$REF_PREFIX" "$1"
+}
+
+# Short name used by git push (heads/… without refs/).
+claim_branch() {
+  printf 'agent-claim/%s' "$1"
+}
+
+# Validate issue BEFORE any command substitution — `exit` inside $(…) only
+# kills the subshell, so a bad issue would otherwise soft-fail into exit 1.
+require_issue() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]] || fail "issue must be a positive integer (got '$1')"
+}
+
+# `git -C <ordinary-directory>` searches parent directories for a repository.
+# That convenience is unsafe here: an uninitialized submodule is an ordinary
+# directory inside the monorepo, so a missed initialization would otherwise
+# claim the same-numbered issue against the parent remote. Require --repo-dir
+# to name the exact physical repository root before any remote operation.
+validate_repo_dir() {
+  [[ -n "$REPO_DIR" ]] || return 0
+  [[ -d "$REPO_DIR" ]] || fail "--repo-dir is not a directory: '$REPO_DIR'"
+
+  local requested_root resolved_root
+  requested_root="$(cd -P -- "$REPO_DIR" 2>/dev/null && pwd)" ||
+    fail "could not resolve --repo-dir: '$REPO_DIR'"
+  resolved_root="$(git -C "$REPO_DIR" rev-parse --show-toplevel 2>/dev/null)" ||
+    fail "--repo-dir is not an initialized git repository: '$REPO_DIR'"
+  resolved_root="$(cd -P -- "$resolved_root" 2>/dev/null && pwd)" ||
+    fail "could not resolve repository root for --repo-dir: '$REPO_DIR'"
+
+  [[ "$resolved_root" == "$requested_root" ]] ||
+    fail "--repo-dir must name the repository root exactly (requested '$requested_root', resolved '$resolved_root'); initialize the submodule first"
+  REPO_DIR="$requested_root"
+}
+
+# git wrapper scoped to --repo-dir when set.
+git_c() {
+  if [[ -n "${REPO_DIR}" ]]; then
+    git -C "$REPO_DIR" "$@"
+  else
+    git "$@"
+  fi
+}
+
+# Object reads and writes must ignore shared refs/replace entries. A replacement
+# can otherwise make `<parent>^{tree}` resolve to unrelated local bytes while
+# the commit still records the original parent SHA, uploading those bytes when
+# the coordination ref is pushed (trap 13).
+git_c_no_replace() {
+  if [[ -n "${REPO_DIR}" ]]; then
+    git --no-replace-objects -C "$REPO_DIR" "$@"
+  else
+    git --no-replace-objects "$@"
+  fi
+}
+
+# Read the remote tip of the claim ref. Empty string when the ref is absent.
+remote_tip() {
+  local issue="$1"
+  local ref
+  ref="$(claim_ref "$issue")"
+  # Match exact ref; awk prints the sha only. No pipe after push elsewhere.
+  git_c ls-remote "$REMOTE" "$ref" | awk '{print $1; exit}'
+}
+
+# Committer unix time of a remote tip, via a local fetch of that single ref.
+# Used only for the stale-takeover evidence gate (trap 4).
+tip_committer_unix() {
+  local issue="$1"
+  local tip="$2"
+  local tmp_ref="refs/agent-claim-probe/${issue}-$$"
+  # Fetch the tip into a throwaway local ref so we can read its committer date
+  # without checking it out. Clean up either way.
+  if ! git_c fetch --quiet "$REMOTE" "+${tip}:${tmp_ref}" 2>/dev/null; then
+    git_c update-ref -d "$tmp_ref" 2>/dev/null || true
+    return 1
+  fi
+  local ts
+  ts="$(git_c_no_replace log -1 --format=%ct "$tmp_ref" 2>/dev/null || true)"
+  git_c update-ref -d "$tmp_ref" 2>/dev/null || true
+  [[ -n "$ts" ]] || return 1
+  printf '%s' "$ts"
+}
+
+cmd_tip() {
+  local issue="$1"
+  require_issue "$issue"
+  local tip
+  if ! tip="$(remote_tip "$issue")"; then
+    fail "UNKNOWN — could not query $(claim_branch "$issue")"
+  fi
+  if [[ -z "$tip" ]]; then
+    echo "agent-claim: no tip for $(claim_branch "$issue")" >&2
+    exit 1
+  fi
+  printf '%s\n' "$tip"
+}
+
+cmd_verify() {
+  local issue="$1"
+  local expected="$2"
+  require_issue "$issue"
+  [[ "$expected" =~ ^[0-9a-f]{7,40}$ ]] || fail "expected-sha looks invalid: '$expected'"
+  local tip
+  if ! tip="$(remote_tip "$issue")"; then
+    fail "UNKNOWN — could not verify $(claim_branch "$issue"); retain $expected and retry"
+  fi
+  if [[ -z "$tip" ]]; then
+    echo "agent-claim: LOST — $(claim_branch "$issue") is absent (expected $expected)" >&2
+    exit 1
+  fi
+  # Accept exact match or unambiguous prefix (abbreviated expected vs full tip).
+  if [[ "$tip" == "$expected" || "$tip" == "$expected"* ]]; then
+    printf '%s\n' "$tip"
+    exit 0
+  fi
+  echo "agent-claim: LOST — tip $tip is not yours (expected $expected)" >&2
+  exit 1
+}
+
+# Returns 0 when the tip is past the lease, 1 when live/absent. Does not exit
+# the process — callers that need a CLI exit use cmd_is_stale.
+claim_is_stale() {
+  local issue="$1"
+  local tip
+  tip="$(remote_tip "$issue")" || return 2
+  [[ -n "$tip" ]] || return 1
+  local ts now age_hours
+  ts="$(tip_committer_unix "$issue" "$tip")" || return 2
+  now="$(date -u +%s)"
+  age_hours=$(( (now - ts) / 3600 ))
+  (( age_hours >= LEASE_HOURS ))
+}
+
+cmd_is_stale() {
+  local issue="$1"
+  require_issue "$issue"
+  local tip
+  if ! tip="$(remote_tip "$issue")"; then
+    fail "UNKNOWN — could not query $(claim_branch "$issue") for staleness"
+  fi
+  if [[ -z "$tip" ]]; then
+    echo "agent-claim: no claim tip — nothing to judge stale" >&2
+    exit 1
+  fi
+  local ts now age_hours
+  ts="$(tip_committer_unix "$issue" "$tip")" || fail "could not read committer date for tip $tip"
+  now="$(date -u +%s)"
+  age_hours=$(( (now - ts) / 3600 ))
+  if (( age_hours >= LEASE_HOURS )); then
+    echo "agent-claim: STALE — tip $tip age=${age_hours}h lease=${LEASE_HOURS}h"
+    exit 0
+  fi
+  echo "agent-claim: LIVE — tip $tip age=${age_hours}h lease=${LEASE_HOURS}h" >&2
+  exit 1
+}
+
+cmd_retire() {
+  local issue="$1"
+  local expected="$2"
+  require_issue "$issue"
+  [[ "$expected" =~ ^[0-9a-f]{40}$ ]] || fail "acquired-sha must be the full SHA returned by acquire/renew (got '$expected')"
+  local branch
+  branch="$(claim_branch "$issue")"
+  local tip
+  if ! tip="$(remote_tip "$issue")"; then
+    fail "UNKNOWN — could not query ${branch} before retire; retain $expected and retry"
+  fi
+  if [[ -z "$tip" ]]; then
+    echo "agent-claim: nothing to retire — ${branch} absent"
+    exit 0
+  fi
+  # Ownership comes from the SHA returned by acquire, never from whichever tip
+  # happens to be present when retire runs. A stale holder may wake after a
+  # takeover; observing the successor's tip does not authorize deleting it.
+  if [[ "$tip" != "$expected" ]]; then
+    echo "agent-claim: LOST — cannot retire ${branch}; tip $tip is not the acquired tip $expected" >&2
+    exit 1
+  fi
+  # Compare-and-delete against the acquired tip. This also closes the later
+  # observe→delete race: a rival retirement/reacquire makes the lease fail.
+  local err_file
+  err_file="$(mktemp "${TMPDIR:-/tmp}/agent-claim-retire.XXXXXX")" ||
+    fail "could not create private stderr capture for retire"
+  if ! git_c push --quiet --force-with-lease="refs/heads/${branch}:${expected}" \
+       "$REMOTE" ":${branch}" 2>"$err_file"; then
+    local err remaining
+    err="$(<"$err_file")"
+    rm -f "$err_file"
+    if ! remaining="$(remote_tip "$issue")"; then
+      fail "retire of ${branch} failed and the remote tip could not be confirmed: ${err:-unknown error}"
+    fi
+    if [[ -z "$remaining" ]]; then
+      echo "agent-claim: retired ${branch} (already absent)"
+      exit 0
+    fi
+    fail "retire of ${branch} failed: ${err:-unknown error}"
+  fi
+  rm -f "$err_file"
+  echo "agent-claim: retired ${branch} (was $tip)"
+}
+
+# Create a fresh empty claim commit on a caller-selected parent. Ignore both
+# inherited Git dates (trap 9) and local replacement refs (trap 13).
+new_claim_commit() {
+  local issue="$1"
+  local parent="$2"
+  local nonce claim_time
+  if ! nonce="$(claim_nonce)"; then
+    fail "portable entropy is unavailable; refusing to create a fixed claim commit"
+  fi
+  claim_time="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  GIT_AUTHOR_DATE="$claim_time" GIT_COMMITTER_DATE="$claim_time" \
+    git_c_no_replace commit-tree "${parent}^{tree}" -p "$parent" \
+      -m "chore: agent-claim #${issue} nonce=${nonce}"
+}
+
+# Atomically refresh the lease at the publication boundary. The acquired SHA
+# is both the ownership token and the compare-and-swap expectation; stdout is
+# the replacement token that every later verify/renew/retire must use.
+cmd_renew() {
+  local issue="$1"
+  local expected="$2"
+  require_issue "$issue"
+  [[ "$expected" =~ ^[0-9a-f]{40}$ ]] ||
+    fail "acquired-sha must be the full SHA returned by acquire/renew (got '$expected')"
+
+  local branch tip
+  branch="$(claim_branch "$issue")"
+  if ! tip="$(remote_tip "$issue")"; then
+    fail "UNKNOWN — could not query ${branch} before renew; retain $expected and retry"
+  fi
+  if [[ "$tip" != "$expected" ]]; then
+    echo "agent-claim: LOST — cannot renew ${branch}; tip ${tip:-absent} is not the acquired tip $expected" >&2
+    exit 1
+  fi
+
+  local tmp_ref="refs/agent-claim-renew/${issue}-$$"
+  if ! git_c fetch --quiet "$REMOTE" "+refs/heads/${branch}:${tmp_ref}" 2>/dev/null; then
+    git_c update-ref -d "$tmp_ref" 2>/dev/null || true
+    fail "UNKNOWN — could not fetch ${branch} before renew; retain $expected and retry"
+  fi
+  local fetched
+  fetched="$(git_c_no_replace rev-parse "$tmp_ref" 2>/dev/null || true)"
+  git_c update-ref -d "$tmp_ref" 2>/dev/null || true
+  if [[ "$fetched" != "$expected" ]]; then
+    echo "agent-claim: LOST — ${branch} moved to ${fetched:-unknown} before renew (expected $expected)" >&2
+    exit 1
+  fi
+
+  local sha push_rc=0
+  if ! sha="$(new_claim_commit "$issue" "$expected")"; then
+    fail "could not create the renewed claim commit"
+  fi
+  git_c_no_replace push --quiet --force-with-lease="refs/heads/${branch}:${expected}" \
+    "$REMOTE" "${sha}:refs/heads/${branch}" || push_rc=$?
+
+  if ! tip="$(remote_tip "$issue")"; then
+    echo "agent-claim: UNKNOWN — renew may have updated ${branch}; candidate-sha=${sha}. Retain this token and retry tip/verify/retire after connectivity recovers" >&2
+    printf '%s\n' "$sha"
+    exit 2
+  fi
+  if [[ "$tip" == "$sha" ]]; then
+    echo "agent-claim: RENEWED ${branch} tip=${sha}" >&2
+    printf '%s\n' "$sha"
+    exit 0
+  fi
+  if [[ "$tip" == "$expected" ]]; then
+    fail "renew push did not update ${branch} (push_rc=${push_rc}); retain $expected and retry"
+  fi
+  echo "agent-claim: LOST — ${branch} moved to ${tip:-absent} during renew (ours=$sha)" >&2
+  exit 1
+}
+
+cmd_acquire() {
+  local issue="$1"
+  require_issue "$issue"
+  local branch tip existing
+  branch="$(claim_branch "$issue")"
+
+  if ! existing="$(remote_tip "$issue")"; then
+    fail "UNKNOWN — could not query ${branch} before acquire"
+  fi
+  if [[ -n "$existing" ]]; then
+    if [[ "$TAKEOVER" -eq 1 ]]; then
+      # Evidence gate 1 of 2 (caller must have confirmed no open PR). Gate 2:
+      # tip past the lease. Refuse takeover of a live claim.
+      local stale_rc=0
+      claim_is_stale "$issue" || stale_rc=$?
+      if (( stale_rc == 2 )); then
+        fail "UNKNOWN — could not verify the lease for ${branch}; refusing takeover"
+      fi
+      if (( stale_rc != 0 )); then
+        echo "agent-claim: REFUSED takeover — claim is still within the ${LEASE_HOURS}h lease (tip $existing)" >&2
+        exit 1
+      fi
+      echo "agent-claim: taking over stale claim ${branch} (tip $existing)" >&2
+      # Delete the stale tip first so the subsequent non-force push can land.
+      # Never --force onto a live tip — only delete after is-stale. The delete
+      # is pinned to the tip the staleness check actually observed: a rival can
+      # retire and reacquire between that check and here, and an unconditional
+      # delete would erase that fresh holder, leaving both lanes believing they
+      # won. A changed tip fails closed and the takeover is abandoned.
+      git_c push --quiet --force-with-lease="refs/heads/${branch}:${existing}" \
+        "$REMOTE" ":${branch}" \
+        || fail "could not delete stale ${branch} before takeover (tip moved since the staleness check — another lane reacquired it; stand down)"
+    else
+      echo "agent-claim: LOST — ${branch} already held at $existing (pass --takeover after confirming no open PR + lease expiry)" >&2
+      exit 1
+    fi
+  fi
+
+  local parent sha
+  # Anchor on the remote default branch tip so two acquirers share a parent
+  # (the condition that makes trap 3 reproducible). Never fall back to local
+  # HEAD: it may carry unrelated committed bytes that a later push uploads.
+  #
+  # FETCH it rather than reading `ls-remote`: the remote default advances
+  # independently of this checkout — routinely so for a pinned submodule — and
+  # `commit-tree -p` needs the object locally. Naming a SHA this clone has never
+  # seen exits 128 (`not a valid object`), which would make claim acquisition
+  # impossible exactly when the remote is busiest. Fetching guarantees the object
+  # is present while keeping the shared-parent property.
+  if ! git_c fetch --quiet "$REMOTE" HEAD 2>/dev/null; then
+    fail "FAILED — could not fetch the remote default parent; refusing to build a claim from unrelated local bytes"
+  fi
+  parent="$(git_c_no_replace rev-parse FETCH_HEAD 2>/dev/null || true)"
+  if [[ -z "$parent" ]] || ! git_c_no_replace cat-file -e "${parent}^{commit}" 2>/dev/null; then
+    fail "FAILED — fetched remote default parent is not a commit"
+  fi
+
+  # Empty commit with a UNIQUE message (nonce). Identical messages on the same
+  # parent in the same second produce byte-identical commits (trap 3) — the
+  # nonce is the whole defence.
+  # The commit is the lease clock. Ignore inherited Git dates: a scheduled
+  # process or test harness can export an old GIT_COMMITTER_DATE, which would
+  # make this just-acquired claim immediately stale and stealable.
+  if ! sha="$(new_claim_commit "$issue" "$parent")"; then
+    fail "could not create the claim commit"
+  fi
+
+  # Push WITHOUT force. Capture status ourselves — never through a pipe
+  # (trap 2: `push | tail` reports tail's status, so a rejection reads as 0).
+  local push_rc=0
+  git_c_no_replace push --quiet "$REMOTE" "${sha}:refs/heads/${branch}" || push_rc=$?
+
+  if ! tip="$(remote_tip "$issue")"; then
+    echo "agent-claim: UNKNOWN — claim push may have updated ${branch}; candidate-sha=${sha}. Retain this token and retry tip/verify/retire after connectivity recovers" >&2
+    printf '%s\n' "$sha"
+    exit 2
+  fi
+  if [[ -z "$tip" ]]; then
+    fail "FAILED — claim push produced no competing tip for ${branch} (push_rc=${push_rc}); check credentials, branch policy, and namespace capability"
+  fi
+  if [[ "$tip" != "$sha" ]]; then
+    echo "agent-claim: LOST — tip ${tip} is not ours (ours=${sha}, push_rc=${push_rc})" >&2
+    exit 1
+  fi
+  # Tip matches ours — we won, regardless of push_rc (defensive: a weird
+  # transport that exits non-zero after a successful update still counts).
+  echo "agent-claim: WON ${branch} tip=${sha}" >&2
+  printf '%s\n' "$sha"
+}
+
+# ---------------------------------------------------------------------------
+# argv
+# ---------------------------------------------------------------------------
+REMOTE="$DEFAULT_REMOTE"
+REPO_DIR=""
+LEASE_HOURS="$DEFAULT_LEASE_HOURS"
+TAKEOVER=0
+COMMAND=""
+ISSUE=""
+EXPECTED_SHA=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    acquire|renew|verify|tip|retire|is-stale)
+      [[ -z "$COMMAND" ]] || fail "command already set to '$COMMAND'"
+      COMMAND="$1"; shift
+      ;;
+    --remote) REMOTE="${2-}"; shift 2 || fail "--remote needs a value" ;;
+    --repo-dir) REPO_DIR="${2-}"; shift 2 || fail "--repo-dir needs a value" ;;
+    --lease-hours) LEASE_HOURS="${2-}"; shift 2 || fail "--lease-hours needs a value" ;;
+    --takeover) TAKEOVER=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    -*) fail "unknown flag '$1'" ;;
+    *)
+      if [[ -z "$ISSUE" ]]; then
+        ISSUE="$1"; shift
+      elif [[ ( "$COMMAND" == "renew" || "$COMMAND" == "verify" || "$COMMAND" == "retire" ) && -z "$EXPECTED_SHA" ]]; then
+        EXPECTED_SHA="$1"; shift
+      else
+        fail "unexpected argument '$1'"
+      fi
+      ;;
+  esac
+done
+
+[[ -n "$COMMAND" ]] || { usage >&2; exit 2; }
+[[ -n "$ISSUE" ]] || fail "issue number required"
+[[ "$LEASE_HOURS" =~ ^[0-9]+$ ]] || fail "--lease-hours must be an integer"
+(( LEASE_HOURS >= DEFAULT_LEASE_HOURS )) ||
+  fail "--lease-hours must be at least ${DEFAULT_LEASE_HOURS}; production takeover cannot shorten the safety lease"
+validate_repo_dir
+
+case "$COMMAND" in
+  acquire) cmd_acquire "$ISSUE" ;;
+  renew)
+    [[ -n "$EXPECTED_SHA" ]] || fail "renew requires <acquired-sha>"
+    cmd_renew "$ISSUE" "$EXPECTED_SHA"
+    ;;
+  verify)
+    [[ -n "$EXPECTED_SHA" ]] || fail "verify requires <expected-sha>"
+    cmd_verify "$ISSUE" "$EXPECTED_SHA"
+    ;;
+  tip) cmd_tip "$ISSUE" ;;
+  retire)
+    [[ -n "$EXPECTED_SHA" ]] || fail "retire requires <acquired-sha>"
+    cmd_retire "$ISSUE" "$EXPECTED_SHA"
+    ;;
+  is-stale) cmd_is_stale "$ISSUE" ;;
+  *) fail "unknown command '$COMMAND'" ;;
+esac

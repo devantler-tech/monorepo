@@ -237,8 +237,8 @@ source of truth is version-controlled at
 [`.claude/loaders/cursor-daily-ai-engineer.md`](.claude/loaders/cursor-daily-ai-engineer.md) and
 re-pasted into the Automations UI on change. **Each instance owns its own branch namespace** —
 `claude/*`, `codex/*`, `cursor/*` — which is what keeps draft ownership and the per-tick branch sweep
-from crossing lanes. It is also why claim arbitration does **not** work across lanes today: see the
-cross-lane limit in *Claim protocol* rule 4.
+from crossing lanes. Cross-lane claim races are arbitrated on the shared `agent-claim/<issue>` tip
+(see *Claim protocol*), acquired before the lane work branch.
 
 ### Agentic engineering plugin contract
 This deployment **consumes** the `agentic-engineering` plugin from
@@ -579,6 +579,34 @@ in its shared provider lane, and it must treat work left by another role in that
 in-flight work rather than opening a duplicate. This explicit sharing is the consumer's resolution of
 the plugin's `branchNamespacePolicy`; enabling a role does not invent an unrecorded fourth lane.
 
+**`agent-claim/<issue>` is a COORDINATION ref, not a fourth writer lane — recorded here so the
+mandatory claim push is authorized rather than improvised.** *Claim protocol* requires every instance
+to acquire that shared ref **before** its lane work branch, and cross-lane arbitration only works
+because all three derive the *same* ref from the issue number. A writer lane, by contrast, exists to
+be owned by exactly one instance. Those are opposite properties, so the ref is recorded as its own
+kind rather than as a row in the table above:
+
+| Property | Writer lane (`claude/*`, `codex/*`, `cursor/*`) | Coordination ref (`agent-claim/*`) |
+|---|---|---|
+| Owner | exactly one provider instance | **none** — every instance writes it by design |
+| Carries | the work: commits, diffs, a PR head | **one empty nonced commit**; never code, never a PR |
+| Lifetime | until its PR is merged or closed | retired the moment the draft PR opens (*Claim protocol* rule 3) |
+| Reaped by | `branch-cleanup.sh`, per namespace | nothing — which is why retirement is mandatory, not hygiene |
+
+So writing `agent-claim/*` is **not** inventing an unrecorded lane and never widens what an instance
+may put on a work branch: the only permitted content is the helper's empty claim commit, and every
+mutation goes through [`agent-claim.sh`](.claude/scripts/agent-claim.sh) so acquire, verify, takeover
+and retire keep their compare-and-swap guards. Never push code to it, never open a PR from it, and
+never force-push a live tip.
+
+⚠️ **The Cursor cloud lane's ability to push this ref is UNVERIFIED.** `app/cursor`'s measured
+permissions are narrow (it gets 403 on comments, review requests and PR-state mutations), and nothing
+has established that it can create `agent-claim/*`. Until that is measured, the cloud lane's claim
+signal remains the three pre-existing ones — open PRs, remote `cursor/*` work branches, and issue
+assignees it cannot write — so a local run **still checks `cursor/*` branches by hand** when
+selecting. Treat a failed claim push from that lane as a capability gap to measure and record, never
+as a lost race.
+
 Agent Improver schedules for Cursor remain undeployed and read-only until this table,
 the reviewed Cursor loader, cadence, memory, and runtime permission boundary all record their writer
 mapping. A generic plugin schedule entry is not deployment authority by itself.
@@ -706,15 +734,20 @@ governs the issue work that follows.) Two rules enforce that:
    keeps an experiment issue open, also use `Part of #experiment`. **Exception — `type:"Spike"`:** do
    **not** ship a delivery PR; close the Spike by recording the decision on the issue and filing the
    follow-up issues its DoD requires — that output satisfies both this drain rule and the run floor
-   (#2267). Among open issues prefer the oldest.
+   (#2267). Because no draft PR performs the ordinary cleanup,
+   **atomically renew the retained SHA** immediately before publishing the decision or follow-up
+   issues (`claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir
+   <product-path>)"`), then **retire the acquired SHA after the decision and follow-up issue artifacts are recorded** and
+   before closing the Spike. Among open issues prefer the oldest.
    **"Actionable" is deliberately narrow — skip an older issue ONLY when one of these is true and you can
    *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
    external dependency (a specific upstream PR/release you can cite) — see *External-blocker
    verification* below; or (c) it is too under-specified to even begin; or (d) a delivered experiment is
    awaiting its **named, future measurement date**, which is recorded on the issue and has not elapsed.
    Once that date arrives, measuring and recording the decision is actionable work; or (e) another
-   instance holds a **live claim** on it — assigned **and** branched, within the ~2h window, no PR yet
-   (see *Claim protocol*). (e) is the only skip reason that expires on its own: once the window lapses
+   instance holds a **live claim** on it — an `agent-claim/<issue>` tip within the ~2h lease, or an
+   assignment **and** lane branch within that window, with no PR yet (see *Claim protocol*). (e) is
+   the only skip reason that expires on its own: once the window lapses
    with no PR, the issue is fair game again; or (f) it is
    **authored by an exact dependency-automation identity** (`renovate[bot]` / `dependabot[bot]`, or
    `app/renovate` / `app/dependabot`) — see the automation-owned carve-out under *Merge policy*.
@@ -787,10 +820,11 @@ governs the issue work that follows.) Two rules enforce that:
    KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
    interactive-PR HANDS-OFF rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
    about an *issue's* label or its bot author. **A bare
-   assignee does *not* reserve an issue INDEFINITELY:** a **`devantler`** assignment paired with a
-   **pushed claim branch** is a *live claim* for ~2 hours (see *Claim protocol* below); with no branch,
-   or once that window has elapsed with no open PR, you may pick the issue up — a stale assignment is
-   never work-in-progress. **Only the agent account's own assignment is a claim.** An issue assigned to
+   assignee does *not* reserve an issue INDEFINITELY:** an `agent-claim/<issue>` tip inside its lease,
+   or a **`devantler`** assignment paired with a **pushed lane branch**, is a *live claim* for ~2 hours
+   (see *Claim protocol* below); with no live tip/branch, or once that window has elapsed with no open
+   PR, you may pick the issue up — a stale assignment is never work-in-progress. **Only the agent
+   account's own assignment is a claim.** An issue assigned to
    a **human collaborator** (or `Copilot`) is not an agent lease and must never be taken over on this
    window: respect it as someone else's work-in-progress per the standing "do not do work others are
    assigned to" rule, and pick a different issue. If an issue **already
@@ -856,24 +890,37 @@ severity narrows the target pool from "the oldest of ~368 open issues" to "one o
 `type:"Security"` issues" (counts measured 2026-07-25), so every instance aims at the same handful
 instead of spreading across the age curve. Rung 1 pulls the other way — an own draft is owned by
 exactly one lane, so PR work barely collides — but the moment a run descends to rung 2 the collision
-odds jump, and cross-lane arbitration is still the **known-broken hole** in rule 4
-([monorepo#2302](https://github.com/devantler-tech/monorepo/issues/2302)). So on rungs 2–3: claim
-before you build, without exception, and scan **all three** namespaces first. And because an open PR
-only exists at the **end** of a build, the one recognised claim signal arrives exactly when it is too
-late to prevent the collision. Measured on `world-at-ruin` (2026-07-18): **six end-to-end builds
+odds jump. Before the lane-neutral ref delivered by
+[monorepo#2302](https://github.com/devantler-tech/monorepo/issues/2302), rule 4 had no cross-lane
+arbitration: each lane could push its own branch successfully, and an open PR appeared only at the
+**end** of a build. **The shared ref closes that historical hole before a build starts** — on rungs
+2–3, acquire it without exception and scan it plus **all three** lane namespaces. The evidence for
+why that protection is mandatory remains: measured on `world-at-ruin` (2026-07-18), **six
+end-to-end builds
 discarded in ~24 hours** — #66 built to completion twice over, #81 lost after a full build with a
 committed golden and five negative controls, #86 lost 12 minutes after filing, #88 lost by **52
 seconds**, #96 lost by **135 seconds**. Every one was correct, validated work; only the coordination
-failed. So, on every **in-scope `devantler-tech`** repo — claiming is a *write* action (an assignment
-and a pushed branch), so the *Professional-work repository boundary* below still wins outright: never
+failed. So, on every **in-scope `devantler-tech`** repo — claiming is a *write* action (a shared ref,
+then an assignment where supported and a pushed lane branch), so the *Professional-work repository
+boundary* below still wins outright: never
 claim, probe, or push anywhere that boundary has not been cleared, and nothing here licenses a first
 touch of an unconfirmed repo:
 
-1. **Check three signals before selecting, not one:** open PRs, remote `claude/*` branches, and issue
-   assignees. An assignee here means "an instance has claimed this", **not** "the human maintainer
-   took it" — every instance commits and assigns as `devantler` (see *Trust gate*), so the login
-   cannot distinguish one instance from another or from him. Read it as a claim, never as a
-   hands-off signal, and never let it park an issue past the expiry below.
+**Cross-lane arbitration uses a lane-neutral ref.** Each instance still writes its own work-branch
+namespace (`claude/*`, `codex/*`, `cursor/*`), so a race settled only on the work-branch name is never
+arbitrated across lanes. The durable claim is therefore `agent-claim/<issue>` — a single shared ref
+every instance derives from the issue number alone — acquired **before** the lane-specific work
+branch via [`.claude/scripts/agent-claim.sh`](.claude/scripts/agent-claim.sh) (RED/GREEN coverage of
+the fifteen proven traps live in `agent-claim.test.sh`).
+
+1. **Check four signals before selecting, not one:** open PRs, remote `agent-claim/<issue>` tips,
+   remote lane work branches (`claude/*` / `codex/*` / `cursor/*`), and issue assignees. An assignee
+   here means "an instance has claimed this", **not** "the human maintainer took it" — every instance
+   that can assign does so as `devantler` (see *Trust gate*), so the login cannot distinguish one
+   instance from another or from him. Read it as a claim, never as a hands-off signal, and never let
+   it park an issue past the expiry below. The `agent-claim/<issue>` tip is the **cross-lane** signal;
+   lane work branches remain useful for within-lane discovery and for instances that cannot assign
+   (the Cursor cloud lane — see its loader).
    **Match on the issue NUMBER or a normalised stem — never the literal branch name.** On
    #96 two sessions collided on `claude/war-armour-…` versus `claude/war-armor-…`: the repo's code is
    American, the issue's title British, so each session derived a different stem from a different part
@@ -882,83 +929,110 @@ touch of an unconfirmed repo:
    `gh pr list -R <o>/<r> --state open --search '"#<issue>" in:body'`. A bare number matches any body
    that merely contains it (a benchmark count, a date, another repo's issue number), which would hide
    the oldest actionable issue behind an unrelated PR.
-2. **Claim before you build, not after.** The moment you select an issue, (a) self-assign it —
-   **if `devantler` is already assigned (a stale bare assignment from an abandoned run), remove and
-   re-add**, because the add is a no-op for an existing assignee and would leave your lease carrying
-   the *old* timestamp, so your fresh claim reads as expired the moment another run checks it — and
-   (b) push the branch — both cheap, visible and reversible — and only **then** harden (tests,
-   ablations, docs, comments). Opening the **draft PR after the first real commit** is stronger still
-   and is the recommended default. A pre-flight scan with no branch and no PR is **not** a claim.
-   **Put the issue number IN the claim branch name** — `claude/<area>-<desc>-<issue>` (e.g.
-   `claude/war-foliage-spatial-hash-109`). Before a PR exists there is no body to grep, so a bare
-   `claude/<area>-<desc>` leaves a rival only the normalised-stem match that #96 proved fragile; the
+2. **Claim before you build, not after — lane-neutral ref FIRST.** The moment you select an issue:
+   (a) **acquire `agent-claim/<issue>`** with the helper and retain the full SHA it prints
+   (`claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <product-path>)"`)
+   — this is the cross-lane race; a LOST (exit 1) means stand down under rule 5, while exit 2 with no
+   competing tip is a capability/service failure to record rather than an invented winner; (b)
+   **immediately recheck for an open PR whose body references `#<issue>`**. The previous holder may
+   have opened its draft and retired the shared tip while this acquire was fetching; if a matching PR
+   now exists, retire only your acquired tip (`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir
+   <product-path>`) and stand down. Then (c)
+   self-assign it when your identity can
+   (**if `devantler` is already assigned, remove and re-add**, because the add is a no-op for an
+   existing assignee and would leave your lease carrying the *old* timestamp); and (d)
+   **immediately before pushing the lane branch or opening its draft PR** — and **again after any
+   resumed pause** — **atomically renew the retained SHA** and replace the ownership token with
+   `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir
+   <product-path>)"`. The compare-and-swap both proves ownership and refreshes the two-hour lease; a
+   failed renew means a takeover won or ownership is unknown, so abandon under rule 5 without pushing
+   or opening a competing PR. Then
+   (e) push the
+   lane-specific work branch **with the issue number in its name** —
+   `<lane>/<area>-<desc>-<issue>` (e.g. `claude/war-foliage-spatial-hash-109`,
+   `cursor/agent-claim-ref-2302`). Only **then** harden (tests, ablations, docs, comments). Opening
+   the **draft PR after the first real commit** is stronger still and is the recommended default —
+   and **retires the `agent-claim/<issue>` tip** (rule 3). A pre-flight scan with no claim tip, no
+   branch and no PR is **not** a claim. Before a PR exists there is no body to grep, so a bare
+   `<lane>/<area>-<desc>` leaves a rival only the normalised-stem match that #96 proved fragile; the
    number is the one token that cannot be spelled two ways.
-3. **Claims expire, timed from the ASSIGNMENT.** A claim carrying no open PR after **~2 hours** is
-   stale and may be taken over, so a crashed or abandoned session never parks an issue permanently.
-   Measure that window from the issue's **NEWEST `assigned` timeline event**, or a long-lived issue
-   hands you a year-old assignment from page 1. Emit every match as its own line and take the max in
-   the shell — under `--paginate` each page is a **separate JSON array**, so an aggregate like
-   `'[…]|last'` runs *per page* and silently returns the last match of the final page, not the newest
-   overall (and `--slurp`, which would wrap the pages, is rejected alongside `--jq`):
-   ```sh
-   gh api repos/<o>/<r>/issues/<n>/timeline --paginate \
-     --jq '.[]|select(.event=="assigned" and .assignee.login=="devantler")|.created_at' | sort | tail -1
-   ```
-   Filter to **`devantler`**: an issue can carry several assignees, and a later assignment of someone
-   else would otherwise set your lease clock — restarting a window you never renewed.
-   **Never measure from the branch's commit date** — a claim branch usually points at the base commit,
-   whose date is far older, so every fresh claim would read as long expired. If an issue is assigned
-   with no branch, or branched with no assignment, treat it as no claim at all.
-   **Taking over a stale claim: unassign, then re-assign.** Every instance uses the same `devantler`
-   login, and GitHub's add-assignees endpoint is a no-op for an already-assigned user — so a plain
-   re-assign creates **no new `assigned` event**, the lease keeps the dead claim's timestamp, and the
-   next run reads your fresh claim as already expired and races you. Clear it first — and **always
-   pass `-R <owner>/<repo>`**, because a run works from the monorepo checkout or a submodule worktree
-   and an unqualified `gh issue edit` resolves against *that* repo, silently editing whatever issue
-   happens to carry the same number:
-   ```sh
-   gh issue edit <n> -R <owner>/<repo> --remove-assignee devantler
-   gh issue edit <n> -R <owner>/<repo> --add-assignee devantler
-   ```
-   so the takeover starts a genuinely new lease. **If the dead claim left a remote branch carrying
-   commits**, do not reuse that name: the deterministic name collides, and pushing onto it either gets
-   rejected or silently builds on abandoned work. Start a fresh branch
-   (`claude/<area>-<desc>-<issue>-2`) and leave theirs alone — it is another instance's work, and the
-   branch-cleanup sweep reaps it once it is provably stale. Never force-push over it. This time-boxing is what keeps the rule compatible with
-   *"a bare assignee does not reserve an issue"* above: a claim is a short lease, not a lock.
-4. **Re-verify immediately before the first push, and make that push DECIDE the race.** The residual
-   window is seconds wide but real (that is exactly how #88 and #96 were lost). Two instances picking
-   the same issue **within one lane** derive the *same* deterministic branch name, so a bare re-check
-   is not enough — both would see "no branch" and both would then believe they claimed it. Settle it
-   on the push (but see the cross-lane limit below, which this does **not** cover):
-   - Put a **real commit** on the claim branch (the first substantive change, or an empty
-     `git commit --allow-empty -m "chore: claim #<issue>"`), never a bare pointer at the base commit —
-     otherwise both pushes are trivially fast-forwards and neither is refused.
-   - Push **without force**, then **verify the remote tip is yours**:
-     `git ls-remote origin <lane>/<area>-<desc>-<issue>` must return **your** sha. **Compare the tip —
-     never judge the race by the push's exit status**, and never through a pipe: `git push … | tail`
-     reports `tail`'s status, so a *rejected* push reads as exit 0 (reproduced 2026-07-20). If the tip
-     is someone else's, **you lost the race** — stand down under rule 5 rather than force-pushing over
-     them. Never `--force`/`--force-with-lease` a claim branch: that is how a "won" race silently
-     destroys the winner's work.
-   - ⚠️ **KNOWN HOLE — this arbitration only works WITHIN one lane, not across lanes.** It depends on
-     both instances deriving the *same* ref so one push is refused, but each instance writes its own
-     namespace (`claude/*`, `codex/*`, `cursor/*`), so two *different* instances racing one issue both
-     push successfully and both believe they won. This is **pre-existing, not new** — `codex/*` has
-     been in live use alongside `claude/*` for some time (measured 2026-07-20: 17 such PRs on ksail,
-     3 on world-at-ruin), so cross-lane races have never actually been arbitrated. A lane-neutral
-     claim ref fixes it, and the design plus its proofs are worked out in
-     [monorepo#2302](https://github.com/devantler-tech/monorepo/issues/2302); until that lands, rely
-     on the signals in rules 1–3 (open PRs, remote branches, assignees) and accept that a cross-lane
-     selection can still duplicate. **Worse for the cloud lane:** the surveyor's pre-PR branch scan
-     greps `claude/*` only *and* is gated on repos having an **assigned** PR-less issue — and
-     `app/cursor` cannot assign — so that instance's only pre-PR claim signal is currently invisible
-     to local runs, well beyond a simultaneous window. Check `cursor/*` branches by hand when
-     selecting until [monorepo#2300](https://github.com/devantler-tech/monorepo/issues/2300) lands.
-5. **On a lost race, ABANDON.** Never duplicate the work, never force-push onto a sibling's branch,
-   never open a competing PR. Then **use the loss**: two independent implementations of one spec are
-   a free **differential-testing oracle**. Diff yours against the winner's and post **only findings
-   you have verified** — on w-a-r#88 that surfaced a real integer-overflow gap the merged twin shared.
+   🔴 **`--repo-dir` is REQUIRED whenever the issue belongs to a submodule, and issue numbers are
+   repository-scoped — so omitting it claims the WRONG issue rather than failing.** The run stands in
+   the monorepo checkout when it selects, so a bare invocation pushes `agent-claim/<issue>` to the
+   monorepo's `origin`, locking whatever monorepo issue happens to carry that number while the product
+   issue you actually selected stays unclaimed and open to a rival. Point every call in the sequence —
+   `acquire`, `verify`, `is-stale`, `retire` — at the **same** product path (`applications/ksail`,
+   `platform`, …), and **populate that submodule first** with
+   [`submodule-init.sh`](.claude/scripts/submodule-init.sh): an uninitialised path has no repository
+   to push to, and `git -C` against one silently resolves to the **parent**, which is the same wrong
+   claim by another route. Invoke the **root** helper with `--repo-dir` rather than changing into the
+   product, since the relative script path does not resolve from there.
+3. **Claims expire; retire on PR open; stale takeover is evidence-gated.** A claim carrying no open
+   PR after **~2 hours** is stale and may be taken over, so a crashed or abandoned session never
+   parks an issue permanently.
+   - **Retire on PR open:** the moment the draft PR that references `#<issue>` exists, run
+     `.claude/scripts/agent-claim.sh retire <issue> <acquired-sha> --repo-dir <product-path>` so the shared tip cannot lock the issue after
+     coordination has succeeded. The acquired SHA is mandatory: a stale holder must never observe and
+     delete a takeover winner's replacement tip. An unretired `agent-claim/*` tip is a **permanent
+     lock** (nothing else sweeps that namespace) — trap 4 of #2302; retirement is mandatory, not
+     optional hygiene.
+   - **Project Board API-only work:** the board has no product checkout, but its roadmap issue lives
+     in `devantler-tech/monorepo`. Acquire against the monorepo root, retain the SHA, and retire that
+     exact SHA after the board/API mutation is read back and verified. **Atomically renew the retained
+     SHA immediately before the board mutation** and replace `claim_sha` with the SHA returned by
+     `.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir <monorepo-root>`; if renewal
+     fails, stand down without mutating. A controlled failure before mutation also retires; only a
+     crashed process leaves a tip for the ordinary lease/takeover path.
+   - **Lease clock for the shared tip** is the tip's **committer date** (the helper writes a fresh
+     commit at acquire time, so this is wall-clock accurate). Check with
+     `.claude/scripts/agent-claim.sh is-stale <issue> --repo-dir <product-path>`.
+   - **Lease clock for the assignee** (when your identity can assign) remains the issue's **NEWEST
+     `assigned` timeline event** for `devantler` — never a work-branch commit date (those usually
+     point at the base commit and would make every fresh claim look long expired):
+     ```sh
+     gh api repos/<o>/<r>/issues/<n>/timeline --paginate \
+       --jq '.[]|select(.event=="assigned" and .assignee.login=="devantler")|.created_at' | sort | tail -1
+     ```
+     Filter to **`devantler`**: an issue can carry several assignees, and a later assignment of
+     someone else would otherwise set your lease clock. Under `--paginate` each page is a **separate
+     JSON array**, so an aggregate like `'[…]|last'` runs *per page* — emit every match as its own
+     line and take the max in the shell.
+   - **Taking over a stale claim** needs BOTH evidence gates: (1) no open PR whose body references
+     `#<issue>`, and (2) the `agent-claim/<issue>` tip past the lease (`is-stale` exits 0). Then
+     `.claude/scripts/agent-claim.sh acquire <issue> --takeover --repo-dir <product-path>`. Also unassign-then-re-assign when your identity can
+     assign (GitHub's add-assignees endpoint is a no-op for an already-assigned user — a plain
+     re-assign creates **no** new `assigned` event). **Always pass `-R <owner>/<repo>`**:
+     ```sh
+     gh issue edit <n> -R <owner>/<repo> --remove-assignee devantler
+     gh issue edit <n> -R <owner>/<repo> --add-assignee devantler
+     ```
+     **If the dead claim left a remote *work* branch carrying commits**, do not reuse that name:
+     start a fresh branch (`<lane>/<area>-<desc>-<issue>-2`) and leave theirs alone — never
+     force-push over it. This time-boxing keeps the rule compatible with *"a bare assignee does not
+     reserve an issue"*: a claim is a short lease, not a lock.
+4. **Make the `agent-claim/<issue>` push DECIDE the race — compare the tip, never the exit status.**
+   The residual window is seconds wide but real (that is exactly how #88 and #96 were lost). Every
+   instance derives the *same* ref from the issue number, so a bare re-check is not enough — both
+   would see "no tip" and both would then believe they claimed it. Settle it on the helper's push:
+   - The helper writes a **fresh commit with a portable nonce** (`/dev/urandom` hex; **fail closed**
+     when no entropy source is available). A fixed message on a shared parent in the same second
+     yields a **byte-identical** commit — reproduced exactly on 2026-07-20 — so both pushes succeed
+     and both read the tip as theirs (trap 3). The nonce is the whole defence.
+   - Push **without force**, then **verify the remote tip is yours**
+     (`.claude/scripts/agent-claim.sh verify <issue> <sha> --repo-dir <product-path>`, or
+     `git -C <product-path> ls-remote origin refs/heads/agent-claim/<issue>`). **Compare the tip — never
+     judge the race by the push's exit status**, and never through a pipe: `git push … | tail`
+     reports `tail`'s status, so a *rejected* push reads as exit 0 (reproduced 2026-07-20, trap 2).
+     If the tip is someone else's, **you lost the race** — stand down under rule 5 rather than
+     force-pushing over them. Never `--force`/`--force-with-lease` a live claim tip.
+   - After you hold the tip, push the lane work branch the same way (real commit, no force, tip
+     compare). The shared tip is what closes the cross-lane hole; the lane branch remains the
+     per-instance working ref.
+5. **On a lost race, ABANDON.** Never duplicate the work, never force-push onto a sibling's branch
+   or claim tip, never open a competing PR. Then **use the loss**: two independent implementations of
+   one spec are a free **differential-testing oracle**. Diff yours against the winner's and post
+   **only findings you have verified** — on w-a-r#88 that surfaced a real integer-overflow gap the
+   merged twin shared.
    **How you verify depends on who won, and the trust gate is not relaxed here:** against a
    **trusted/routine-owned** winner, execute the probe on their branch; against an
    **external-contributor** winner, it is **static review ONLY** — never check out, build, run or
@@ -968,13 +1042,15 @@ touch of an unconfirmed repo:
    the merged armour guard's membership-vs-mapping gap was found).
 
 **A live claim is a temporary skip — the one addition to the skip test.** *Drain oldest-first* lists
-when an older issue may be passed over; a **live claim** (assigned **and** branched, inside the ~2h
-window, no PR yet) now joins it as skip reason **(e)**, and it is the only one that expires on its
-own. Without that, an oldest issue carrying a fresh claim would be both un-takeable and un-skippable —
-which either stalls the queue or recreates the duplicate build the protocol exists to prevent. Note it
-in the report as claimed-elsewhere and move to the next actionable issue; if it is still branch-only
-after the window, it is fair game again. **Nothing else in that test changes** — in particular, an
-issue is never skipped merely because it *looks* contested, is large, or is hard.
+when an older issue may be passed over; a **live claim** — an `agent-claim/<issue>` tip inside the
+~2h lease **or** (assigned **and** branched, inside the ~2h window), with no PR yet — now joins it as
+skip reason **(e)**, and it is the only one that expires on its own. Without that, an oldest issue
+carrying a fresh claim would be both un-takeable and un-skippable — which either stalls the queue or
+recreates the duplicate build the protocol exists to prevent. Note it in the report as
+claimed-elsewhere and move to the next actionable issue; if it is still tip/branch-only after the
+window, it is fair game again (evidence-gated takeover per rule 3). **Nothing else in that test
+changes** — in particular, an issue is never skipped merely because it *looks* contested, is large,
+or is hard.
 
 ### Professional-work repository boundary — hard exclusion
 Repositories connected to the maintainer's employment or professional obligations are

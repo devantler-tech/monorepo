@@ -30,6 +30,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 product_skill="${repo_root}/.claude/skills/product-engineering/SKILL.md"
+cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
+project_board_card="${repo_root}/.claude/skills/products/project-board/SKILL.md"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 workflow="${repo_root}/.github/workflows/ci.yaml"
 
@@ -44,6 +46,8 @@ fail() {
 constitution_flat="$(tr '\n' ' ' < "${constitution}" | tr -s '[:space:]' ' ')"
 skill_flat="$(tr '\n' ' ' < "${maintenance_skill}" | tr -s '[:space:]' ' ')"
 product_skill_flat="$(tr '\n' ' ' < "${product_skill}" | tr -s '[:space:]' ' ')"
+cursor_loader_flat="$(tr '\n' ' ' < "${cursor_loader}" | tr -s '[:space:]' ' ')"
+project_board_card_flat="$(tr '\n' ' ' < "${project_board_card}" | tr -s '[:space:]' ' ')"
 surveyor_flat="$(tr '\n' ' ' < "${surveyor}" | tr -s '[:space:]' ' ')"
 work_priority_filter="$(sed -n '/^            work-priority-ladder:/,/^            merge-confirmation-read:/p' "${workflow}")"
 
@@ -67,6 +71,48 @@ assert_absent() {
     *) ;;
   esac
 }
+
+# Cross-lane claiming must be described as the current shared-ref protocol everywhere. A retired
+# warning that still calls arbitration broken can send a run back to lane-only claiming.
+assert_absent 'cross-lane arbitration is still the **known-broken hole**' \
+  "${constitution_flat}" "canonical claim prose still says cross-lane arbitration is broken"
+assert_absent 'the one recognised claim signal arrives exactly when it is too late' \
+  "${constitution_flat}" "canonical claim prose still says no pre-PR signal exists"
+assert_prose 'The shared ref closes that historical hole before a build starts' \
+  "${constitution_flat}" "canonical claim prose does not mark the collision evidence as historical"
+
+# Project Board API-only work has no product checkout, but its roadmap issue belongs to monorepo.
+# It therefore needs an explicit repository target and a successful-work retirement trigger.
+assert_absent 'comment the claim on the issue' \
+  "${skill_flat}" "board-only work still uses non-atomic comment claim arbitration"
+assert_prose 'claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <monorepo-root>)"' \
+  "${skill_flat}" "board-only work does not claim against its issue-owning monorepo repository"
+assert_prose 'retire the acquired SHA after the board/API mutation is verified' \
+  "${skill_flat}" "board-only work leaves its shared claim tip live after successful mutation"
+
+# A claim can be taken over after its lease expires while the original holder
+# is paused. Every live delivery procedure must re-verify the retained SHA at
+# the publication boundary; otherwise the stale holder can still open a draft.
+for claim_contract in \
+  "${constitution_flat}" \
+  "${skill_flat}" \
+  "${product_skill_flat}" \
+  "${cursor_loader_flat}"; do
+  assert_prose 'before pushing the lane branch or opening its draft PR' \
+    "${claim_contract}" "a live claim procedure can publish after losing ownership"
+  assert_prose 'again after any resumed pause' \
+    "${claim_contract}" "a resumed claim procedure does not re-verify ownership"
+  assert_prose 'atomically renew the retained SHA' \
+    "${claim_contract}" "a publication boundary does not refresh an expired claim lease"
+  assert_prose 'agent-claim.sh renew <issue> "$claim_sha"' \
+    "${claim_contract}" "a publication boundary does not retain the renewed ownership token"
+done
+assert_prose 'the retained SHA immediately before the board mutation' \
+  "${skill_flat}" "board-only work can mutate after losing its shared claim"
+assert_prose 'the retained SHA immediately before the board mutation' \
+  "${project_board_card_flat}" "project-board card can mutate after losing its shared claim"
+assert_prose 'atomically renew the retained SHA' \
+  "${project_board_card_flat}" "project-board card does not refresh an expired claim lease"
 
 # ── 1. the ladder exists and is ordered ──────────────────────────────────────
 grep -Fq '### The work-selection ladder — one ordering, checked top-down every run' "${constitution}" ||

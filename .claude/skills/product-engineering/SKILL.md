@@ -130,15 +130,20 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    blocked on a **named, live-verified** external dependency you can cite, (c) it is too
    under-specified to begin, (d) a delivered experiment is waiting for its named future measurement
    date — once that date arrives, measuring it is actionable — or (e) another instance holds a **live
-   claim** (assigned **and** branched, within ~2h, no PR yet; contract *Claim protocol*), the only
-   skip reason that expires on its own, or (f) it is **authored by an exact dependency-automation
+   claim** (an `agent-claim/<issue>` tip inside its ~2h lease, or assigned **and** lane-branched within
+   that window, with no PR yet; contract *Claim protocol*), the only skip reason that expires on its
+   own, or (f) it is **authored by an exact dependency-automation
    identity** (`renovate[bot]` / `dependabot[bot]`, `app/renovate` / `app/dependabot`) — unlike the
    others that is not a deferral: such an issue is **never actionable at all**, never becomes so, and
    is never selected, worked, or closed (Renovate's Dependency Dashboard is the standing example).
    ⚠️ (f) matches the **author**, never the `automation` **label** — see the next sentence.
    **`type:"Spike"` is not a skip and not a delivery-PR:** when it is the oldest actionable issue,
    record the decision on the Spike and file its follow-up issues — that pair is the floor artifact;
-   do not open a delivery PR (#2267; contract *Issue hierarchy → Spike*). **Size, difficulty, a `roadmap`/`enhancement`/
+   do not open a delivery PR (#2267; contract *Issue hierarchy → Spike*). Since no PR opens to
+   perform normal cleanup, **atomically renew the retained SHA** immediately before publishing the
+   decision or follow-up issues with `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue>
+   "$claim_sha" --repo-dir <product-path>)"`, then **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
+   and before closing the Spike. **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
    when the oldest issue is large, **decompose it into a small first child and ship that increment**
    (`Fixes #child`; add `Part of #experiment` when the parent stays open) so the big thing advances
@@ -159,13 +164,22 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    the end-of-run report (he rarely reads it), never an **`@devantler` mention** (no notification). Re-verify
    any "gated" against live state before trusting it (memory goes stale) and name the
    blocker in the report. A **bare `devantler` assignee does *not* reserve** it **indefinitely** — a
-   `devantler` assignment plus a **pushed branch** is a live claim for ~2h (contract *Claim protocol*);
-   with no branch, or once that lapses with no PR, you may take it (timed from the issue's newest
-   `devantler` `assigned` timeline event, never a branch commit date). **Only the agent account's
+   live `agent-claim/<issue>` tip, or a `devantler` assignment plus a **pushed lane branch**, is a live
+   claim for ~2h (contract *Claim protocol*); with neither signal, or once that lapses with no PR, you
+   may take it (the assignee lease is timed from the issue's newest `devantler` `assigned` timeline
+   event, never a branch commit date). **Only the agent account's
    assignment is a claim, and only it expires:** an issue assigned to a **human collaborator** (or
-   `Copilot`) is someone else's work-in-progress — respect it and pick a different issue. **Claim the lane before you build** (self-assign + push
-   the branch **with the issue number in its name**, then harden), check open PRs / remote `claude/*`
-   branches / assignees by **issue number rather than literal branch name**, and on a lost race
+   `Copilot`) is someone else's work-in-progress — respect it and pick a different issue. **Claim
+   before you build:** acquire the shared `agent-claim/<issue>` tip in the selected repository and
+   retain its SHA, immediately recheck for an open `#<issue>` PR (retire only that SHA and stand down
+   if one appeared), then self-assign. **Immediately before pushing the lane branch or opening its
+   draft PR**, and **again after any resumed pause**, **atomically renew the retained SHA** with
+   `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir <product-path>)"`;
+   if it fails, a takeover won or ownership is unknown, so abandon without pushing or opening a
+   competing PR. Then push the lane
+   branch **with the issue number in its name**.
+   Check open PRs / shared claim tips / remote lane branches / assignees by **issue number rather than
+   literal branch name**, and on a lost race
    **abandon** — then diff your build against the winner's and post only findings you have verified:
    execute the probe against a **trusted/routine-owned** winner's branch, but for an
    **external-contributor** winner it is **static review only** (the trust gate is not relaxed by a
