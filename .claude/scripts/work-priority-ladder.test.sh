@@ -102,11 +102,17 @@ for claim_contract in \
     "${claim_contract}" "a live claim procedure can publish after losing ownership"
   assert_prose 'again after any resumed pause' \
     "${claim_contract}" "a resumed claim procedure does not re-verify ownership"
+  assert_prose 'atomically renew the retained SHA' \
+    "${claim_contract}" "a publication boundary does not refresh an expired claim lease"
+  assert_prose 'agent-claim.sh renew <issue> "$claim_sha"' \
+    "${claim_contract}" "a publication boundary does not retain the renewed ownership token"
 done
-assert_prose 'the acquired SHA immediately before the board mutation' \
+assert_prose 'the retained SHA immediately before the board mutation' \
   "${skill_flat}" "board-only work can mutate after losing its shared claim"
-assert_prose 'the acquired SHA immediately before the board mutation' \
+assert_prose 'the retained SHA immediately before the board mutation' \
   "${project_board_card_flat}" "project-board card can mutate after losing its shared claim"
+assert_prose 'atomically renew the retained SHA' \
+  "${project_board_card_flat}" "project-board card does not refresh an expired claim lease"
 
 # ── 1. the ladder exists and is ordered ──────────────────────────────────────
 grep -Fq '### The work-selection ladder — one ordering, checked top-down every run' "${constitution}" ||

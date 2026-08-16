@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test for agent-claim.sh — RED/GREEN coverage of the eleven traps proven
+# Self-test for agent-claim.sh — RED/GREEN coverage of the fifteen traps proven
 # by monorepo#2302 and its review rounds. Fixtures use a local bare remote + two clones; nothing
 # touches a real network remote.
 #
@@ -17,6 +17,11 @@
 #           parent repository and claim the same-numbered issue there.
 # Trap 11 — a failed retire must not report success when its follow-up remote
 #           tip query also fails.
+# Trap 12 — publication renews ownership with a fresh CAS-protected lease.
+# Trap 13 — replacement refs cannot change the tree pushed by a claim commit.
+# Trap 14 — production takeover never accepts a lease below two hours.
+# Trap 15 — a failed post-push tip query reports UNKNOWN and returns the
+#           candidate ownership token for recovery.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -259,11 +264,32 @@ check "trap4: B takeover within lease exits 1" "1" "$rc_b4"
 check "trap4: tip still A's after refused takeover" "$sha_a4" \
   "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE4}" | awk '{print $1}')"
 
-# B takes over with lease-hours 0 (tip age 0h >= 0 → stale). Stands in for
-# "no open PR + tip past lease" after the caller checked the PR side.
+# Production must not expose the zero-hour shortcut the old fixture used.
+rc_lease0=0
+"$tool" acquire "$ISSUE4" --repo-dir "$clone_b" --remote origin --takeover --lease-hours 0 \
+  >"$tmp/out-lease0" 2>"$tmp/err-lease0" || rc_lease0=$?
+check "trap14: zero-hour production takeover exits 2" "2" "$rc_lease0"
+check "trap14: rejected lease override leaves the live holder intact" "$sha_a4" \
+  "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE4}" | awk '{print $1}')"
+
+# Reset the fixture and install a genuinely old claim commit. This tests the
+# production two-hour path without an unsafe test-only CLI bypass.
+git -C "$clone_a" push --quiet --delete origin "agent-claim/${ISSUE4}" >/dev/null 2>&1 || true
+if old_claim_time="$(date -u -v-3H '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)"; then
+  :
+else
+  old_claim_time="$(date -u -d '3 hours ago' '+%Y-%m-%dT%H:%M:%SZ')"
+fi
+parent4="$(git -C "$clone_a" rev-parse HEAD)"
+sha_a4="$(GIT_AUTHOR_DATE="$old_claim_time" GIT_COMMITTER_DATE="$old_claim_time" \
+  git -C "$clone_a" commit-tree "${parent4}^{tree}" -p "$parent4" \
+    -m "chore: stale agent-claim #${ISSUE4}")"
+git -C "$clone_a" push --quiet origin "${sha_a4}:refs/heads/agent-claim/${ISSUE4}"
+
+# B takes over the genuinely expired tip with the fixed production lease.
 rc_b4b=0
 out_b4b="$tmp/out-b4b"
-"$tool" acquire "$ISSUE4" --repo-dir "$clone_b" --remote origin --takeover --lease-hours 0 \
+"$tool" acquire "$ISSUE4" --repo-dir "$clone_b" --remote origin --takeover --lease-hours 2 \
   >"$out_b4b" 2>"$tmp/err-b4b" || rc_b4b=$?
 sha_b4="$(tail -n1 "$out_b4b")"
 check "trap4: B stale takeover exits 0" "0" "$rc_b4b"
@@ -531,6 +557,120 @@ check "trap11: failed delete plus failed tip query exits 2" "2" "$rc_11"
 check "trap11: unknown retirement leaves the claim intact" "$sha_11" \
   "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE11}" | awk '{print $1}')"
 "$tool" retire "$ISSUE11" "$sha_11" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
+
+# ---------------------------------------------------------------------------
+# Trap 12 — renew atomically refreshes an expired ownership token.
+# ---------------------------------------------------------------------------
+ISSUE12=1212
+parent12="$(git -C "$clone_a" rev-parse HEAD)"
+sha_old12="$(GIT_AUTHOR_DATE="$old_claim_time" GIT_COMMITTER_DATE="$old_claim_time" \
+  git -C "$clone_a" commit-tree "${parent12}^{tree}" -p "$parent12" \
+    -m "chore: stale agent-claim #${ISSUE12}")"
+git -C "$clone_a" push --quiet origin "${sha_old12}:refs/heads/agent-claim/${ISSUE12}"
+rc_renew12=0
+out_renew12="$tmp/out-renew12"
+"$tool" renew "$ISSUE12" "$sha_old12" --repo-dir "$clone_a" --remote origin \
+  >"$out_renew12" 2>"$tmp/err-renew12" || rc_renew12=$?
+sha_new12="$(tail -n1 "$out_renew12")"
+check "trap12: expired holder renew exits 0" "0" "$rc_renew12"
+if [[ "$sha_new12" =~ ^[0-9a-f]{40}$ && "$sha_new12" != "$sha_old12" ]]; then
+  pass "trap12: renew returns a fresh full ownership sha"
+else
+  fail "trap12: renew returns a fresh full ownership sha"
+fi
+check "trap12: renewed sha is the remote tip" "$sha_new12" \
+  "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE12}" | awk '{print $1}')"
+rc_stale12=0
+"$tool" is-stale "$ISSUE12" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || rc_stale12=$?
+check "trap12: renewed lease is live" "1" "$rc_stale12"
+rc_old12=0
+"$tool" retire "$ISSUE12" "$sha_old12" --repo-dir "$clone_a" --remote origin \
+  >/dev/null 2>&1 || rc_old12=$?
+check "trap12: pre-renew token cannot retire the renewed claim" "1" "$rc_old12"
+if [[ "$sha_new12" =~ ^[0-9a-f]{40}$ ]]; then
+  "$tool" retire "$ISSUE12" "$sha_new12" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || true
+else
+  git -C "$clone_a" push --quiet --delete origin "agent-claim/${ISSUE12}" >/dev/null 2>&1 || true
+fi
+
+# ---------------------------------------------------------------------------
+# Trap 13 — local replacement refs cannot alter coordination commit bytes.
+# ---------------------------------------------------------------------------
+ISSUE13=1313
+git -C "$clone_a" fetch --quiet origin HEAD
+parent13="$(git -C "$clone_a" --no-replace-objects rev-parse FETCH_HEAD)"
+parent_tree13="$(git -C "$clone_a" --no-replace-objects rev-parse "${parent13}^{tree}")"
+secret_blob13="$(printf 'must-not-be-pushed\n' | git -C "$clone_a" hash-object -w --stdin)"
+secret_tree13="$(printf '100644 blob %s\tSECRET\n' "$secret_blob13" | git -C "$clone_a" mktree)"
+replacement13="$(git -C "$clone_a" commit-tree "$secret_tree13" -p "$parent13" \
+  -m 'chore: local replacement trap')"
+git -C "$clone_a" replace "$parent13" "$replacement13"
+sha_13="$("$tool" acquire "$ISSUE13" --repo-dir "$clone_a" --remote origin 2>/dev/null)"
+claim_tree13="$(git -C "$clone_a" --no-replace-objects rev-parse "${sha_13}^{tree}")"
+check "trap13: claim tree ignores the local replacement" "$parent_tree13" "$claim_tree13"
+check "trap13: replacement-only secret is absent from claim tree" "" \
+  "$(git -C "$clone_a" --no-replace-objects ls-tree -r --name-only "$sha_13" | grep -Fx 'SECRET' || true)"
+if git --git-dir="$bare" cat-file -e "$secret_blob13" 2>/dev/null; then
+  fail "trap13: replacement-only secret object was uploaded to the remote"
+else
+  pass "trap13: replacement-only secret object was not uploaded to the remote"
+fi
+"$tool" retire "$ISSUE13" "$sha_13" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
+git -C "$clone_a" replace -d "$parent13" >/dev/null
+
+# ---------------------------------------------------------------------------
+# Trap 15 — a post-push query outage preserves the candidate token.
+# ---------------------------------------------------------------------------
+ISSUE15=1515
+shim_dir_15="$tmp/shim-15"
+mkdir -p "$shim_dir_15"
+real_git_15="$(command -v git)"
+cat > "$shim_dir_15/git" <<SHIM
+#!/usr/bin/env bash
+is_claim_create=0
+for arg in "\$@"; do
+  if [[ "\$arg" =~ ^[0-9a-f]{40}:refs/heads/agent-claim/${ISSUE15}$ ]]; then
+    is_claim_create=1
+  fi
+done
+if [[ "\$is_claim_create" -eq 1 ]]; then
+  "$real_git_15" "\$@"
+  rc=\$?
+  if [[ "\$rc" -eq 0 ]]; then : > "$tmp/trap15-pushed"; fi
+  exit "\$rc"
+fi
+if [[ -f "$tmp/trap15-pushed" ]]; then
+  for arg in "\$@"; do
+    if [[ "\$arg" == "ls-remote" ]]; then
+      echo "simulated post-push tip query failure" >&2
+      exit 1
+    fi
+  done
+fi
+exec "$real_git_15" "\$@"
+SHIM
+chmod +x "$shim_dir_15/git"
+
+rc_15=0
+PATH="$shim_dir_15:$PATH" "$tool" acquire "$ISSUE15" --repo-dir "$clone_a" --remote origin \
+  >"$tmp/out-15" 2>"$tmp/err-15" || rc_15=$?
+candidate_15="$(tail -n1 "$tmp/out-15")"
+check "trap15: post-push tip query failure exits 2" "2" "$rc_15"
+if [[ "$candidate_15" =~ ^[0-9a-f]{40}$ ]]; then
+  pass "trap15: UNKNOWN returns the candidate ownership token"
+else
+  fail "trap15: UNKNOWN returns the candidate ownership token"
+fi
+actual_15="$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE15}" | awk '{print $1}')"
+check "trap15: candidate token can recover the live remote claim" "$actual_15" "$candidate_15"
+if grep -q 'UNKNOWN' "$tmp/err-15"; then
+  pass "trap15: post-push outage has an explicit UNKNOWN diagnostic"
+else
+  fail "trap15: post-push outage has an explicit UNKNOWN diagnostic"
+fi
+if [[ "$actual_15" =~ ^[0-9a-f]{40}$ ]]; then
+  "$tool" retire "$ISSUE15" "$actual_15" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
+fi
 
 # ---------------------------------------------------------------------------
 if (( failures > 0 )); then

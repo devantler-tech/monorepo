@@ -93,8 +93,8 @@ machine-local engineer.
 > - **Claim before you build** (contract → *Claim protocol*): acquire `agent-claim/<issue>` against
 >   the exact selected repository checkout and retain the returned SHA, immediately recheck open PRs,
 >   then **immediately before pushing the lane branch or opening its draft PR**, and
->   **again after any resumed pause**, verify that exact SHA in the selected repository; abandon without publishing if
->   a takeover won. Then push `cursor/<area>-<desc>-<issue>` with a real commit and open the draft PR after the first
+>   **again after any resumed pause**, **atomically renew the retained SHA** with `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir <selected-repo-path>)"`;
+>   abandon without publishing if renewal fails. Then push `cursor/<area>-<desc>-<issue>` with a real commit and open the draft PR after the first
 >   substantive commit. You are the third writer on one queue — check open PRs, shared claim tips,
 >   remote lane branches and assignees before selecting, and stand down on a lost race rather than
 >   duplicating.
@@ -127,8 +127,8 @@ machine-local engineer.
 >   for an open PR whose body references `#<issue>`; if one appeared, retire only your tip with
 >   `.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <selected-repo-path>` and stand down. Then
 >   **immediately before pushing the lane branch or opening its draft PR**, and
->   **again after any resumed pause**, run `.claude/scripts/agent-claim.sh verify <issue> "$claim_sha" --repo-dir
->   <selected-repo-path>`; if it fails, abandon without publishing because a takeover won. Then push
+>   **again after any resumed pause**, **atomically renew the retained SHA** with `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir <selected-repo-path>)"`;
+>   if it fails, abandon without publishing because a takeover won or ownership is unknown. Then push
 >   `cursor/<area>-<desc>-<issue>` with a real commit and open the draft PR promptly so you can
 >   retire that same acquired SHA. The PR body's `#<issue>` reference remains the durable post-PR
 >   signal. Exit 2 with no competing tip is a capability gap to record, not a lost race.
