@@ -58,8 +58,9 @@ JSON
 
   # Stub post-apply verifier. The real one is plugin-definition-currency.sh; the point of the seam
   # is that the verdict comes from an INDEPENDENT check rather than from `plugin update`'s status.
+  VERIFY_LOG="$ROOT/verify.log"; : > "$VERIFY_LOG"
   VERIFY="$BIN/verify-ok"
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$VERIFY"; chmod +x "$VERIFY"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$VERIFY_LOG" > "$VERIFY"; chmod +x "$VERIFY"
   VERIFY_BAD="$BIN/verify-drift"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$VERIFY_BAD"; chmod +x "$VERIFY_BAD"
 
@@ -156,21 +157,23 @@ cleanup
 # (2) and must never reach 'plugin update'.
 make_fixture
 set_gitlink "$MK_NEW"
-STUB_MARKETPLACE_TARGET="$MK_NEW" run --marketplace staging >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
-  ok "A12 refuses (exit 2) when --marketplace and --plugin-id name different marketplaces"
-else bad "A12 refuses (exit 2) when --marketplace and --plugin-id name different marketplaces" \
-  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --marketplace staging 2>&1)"; rc=$?
+# Assert the REASON, not merely the code: exit 2 covers eight distinct conditions, so a regression
+# that exits 2 earlier for an unrelated reason would keep this green while the guard never ran.
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'refusing to gate on one marketplace and install from another'; then
+  ok "A12 refuses (exit 2, named reason) when --marketplace and --plugin-id name different marketplaces"
+else bad "A12 refuses (exit 2, named reason) when --marketplace and --plugin-id name different marketplaces" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
 # ── A13 — an unqualified plugin id is UNKNOWN, never a silent default ──────────────────────────
 make_fixture
 set_gitlink "$MK_NEW"
-STUB_MARKETPLACE_TARGET="$MK_NEW" run --plugin-id agentic-engineering >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
-  ok "A13 refuses (exit 2) when the plugin id is not marketplace-qualified"
-else bad "A13 refuses (exit 2) when the plugin id is not marketplace-qualified" \
-  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --plugin-id agentic-engineering 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'is not marketplace-qualified'; then
+  ok "A13 refuses (exit 2, named reason) when the plugin id is not marketplace-qualified"
+else bad "A13 refuses (exit 2, named reason) when the plugin id is not marketplace-qualified" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
 # ── A14 — a malformed registry must not turn a SUCCESSFUL apply into a failure ─────────────────
@@ -237,21 +240,80 @@ else bad "A18 refuses (exit 2) when the marketplace worktree is dirty at the pin
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
 cleanup
 
-# ── A18b — the byte-identity comparison exists and fails CLOSED ────────────────────────────────
-# HONEST LIMITATION, stated rather than papered over: this assertion is STRUCTURAL, not behavioural.
-# The dirty-status and hidden-index guards above subsume every fixture that could reach the byte
-# loop at runtime — verified by ablation, which is how the gap was found: neutralising the byte
-# comparison left A18 green. The loop is kept as defense-in-depth because it mirrors the
-# four-assertion pattern AGENTS.md already prescribes for reading the pinned submodule, and because
-# `--no-filters` is the only one of the three that a clean/smudge filter cannot launder. What is
-# pinned here is its presence and its fail-closed direction: an unverifiable file must refuse, since
-# unproven is not proven.
-if grep -q 'hash-object --no-filters' "$SCRIPT" \
-  && grep -q 'bytes_unknown" -eq 0 \] || die' "$SCRIPT" \
-  && grep -q 'bytes_differ" -eq 0 \] || die' "$SCRIPT"; then
-  ok "A18b byte-identity check is present and fails closed on an unverifiable file"
-else bad "A18b byte-identity check is present and fails closed on an unverifiable file" \
-  "$(grep -n 'bytes_unknown\|bytes_differ\|no-filters' "$SCRIPT" | tr '\n' '|')"; fi
+# ── A18b — a clean FILTER defeats status and the index; only the byte check catches it ─────────
+# The equal-length detail is what makes this reachable, and it took a measurement to find: with
+# differing lengths `status` still reports the file modified on its stat check, so the dirty-status
+# guard fires first and the byte loop is never reached. With the filtered and raw forms the SAME
+# length, status is clean, no index flags are set, and `hash-object --no-filters` is the only thing
+# that can tell the worktree bytes from the pinned blob. This is the case the byte check exists for.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+git -C "$MK" config filter.fake.clean 'tr A-Z a-z'
+printf 'f filter=fake\n' > "$MK/.git/info/attributes"
+printf 'NEW\n' > "$MK/f"                       # cleans to "new\n" (the pinned blob); same length
+git -C "$MK" diff >/dev/null 2>&1              # settle the stat cache so status is genuinely clean
+if [ -n "$(git -C "$MK" status --porcelain)" ]; then
+  bad "A18b fixture precondition: status must be clean for this case to reach the byte check" \
+    "status=[$(git -C "$MK" status --porcelain)]"
+else
+  out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+  if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'differ from the pinned blobs'; then
+    ok "A18b refuses (exit 2) when a clean filter hides differing bytes from status and the index"
+  else bad "A18b refuses (exit 2) when a clean filter hides differing bytes from status and the index" \
+    "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+fi
+cleanup
+
+# ── A18c — a gitlink must NOT make a clean pinned marketplace refuse ───────────────────────────
+# `ls-tree --name-only` also C-quotes non-ASCII names, and a gitlink is a directory that cannot be
+# byte-hashed: either would turn a perfectly clean marketplace into exit 2. Both are availability
+# bugs in the guard itself, which is worse than the drift it protects against.
+make_fixture
+SUB="$ROOT/sub"; mkdir -p "$SUB"
+git -C "$SUB" init -q -b main; git -C "$SUB" config user.email t@t; git -C "$SUB" config user.name t
+echo s > "$SUB/s"; git -C "$SUB" add s; git -C "$SUB" commit -qm sub
+SUB_SHA="$(git -C "$SUB" rev-parse HEAD)"
+git -C "$MK" checkout -q "$MK_NEW"
+printf 'na\xc3\xafve\n' > "$MK/na\xc3\xafve"
+git -C "$MK" add "$MK/na\xc3\xafve" >/dev/null 2>&1
+# NOT `git add -A`: that stages the DELETION of the gitlink (its directory is absent at this point),
+# which silently produced a tree with zero gitlinks — a fixture that tested nothing. Caught by
+# ablating the gitlink skip and watching this assertion stay green.
+git -C "$MK" update-index --add --cacheinfo 160000,"$SUB_SHA",vendored
+git -C "$MK" commit -qm "gitlink + non-ascii" >/dev/null 2>&1
+MK_SUB="$(git -C "$MK" rev-parse HEAD)"
+# Materialise the submodule so the worktree is genuinely CLEAN; otherwise the dirty-status guard
+# fires first and this case never reaches the byte loop it is meant to exercise.
+git -c protocol.file.allow=always -C "$MK" clone -q "$SUB" vendored 2>/dev/null
+git -C "$MK/vendored" checkout -q "$SUB_SHA" 2>/dev/null
+set_gitlink "$MK_SUB"
+if [ "$(git -C "$MK" ls-tree -r HEAD | awk '$1=="160000"' | wc -l | tr -d ' ')" != "1" ] \
+  || [ -n "$(git -C "$MK" status --porcelain)" ]; then
+  bad "A18c fixture precondition: exactly one gitlink and a clean worktree" \
+    "gitlinks=$(git -C "$MK" ls-tree -r HEAD | awk '$1=="160000"' | wc -l | tr -d ' ') status=[$(git -C "$MK" status --porcelain)]"
+else
+  out="$(STUB_MARKETPLACE_TARGET="$MK_SUB" run 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ]; then
+    ok "A18c a gitlink and a non-ASCII name do not make a clean marketplace refuse"
+  else bad "A18c a gitlink and a non-ASCII name do not make a clean marketplace refuse" \
+    "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+fi
+cleanup
+
+# ── A18d — the post-apply verifier is told WHICH target to check ───────────────────────────────
+# Without the explicit arguments the verifier resolves its own defaults, so under any override it
+# would check a different repo/plugins-root/plugin than the one this run just updated.
+make_fixture
+set_gitlink "$MK_NEW"
+STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1
+if grep -q -- "--repo-root $CONSUMER" "$VERIFY_LOG" \
+  && grep -q -- "--plugins-root $PLUGINS" "$VERIFY_LOG" \
+  && grep -q -- "--plugin-id agentic-engineering@devantler-plugins" "$VERIFY_LOG"; then
+  ok "A18d passes the gated repo, plugins root and plugin id to the verifier"
+else bad "A18d passes the gated repo, plugins root and plugin id to the verifier" \
+  "verifier args were: [$(tr '\n' '|' < "$VERIFY_LOG")]"; fi
+cleanup
 
 # ── A19 — --dry-run asserts nothing about the install, so it is never a 0 verdict ──────────────
 # --dry-run deliberately skips the marketplace refresh, so the clone must ALREADY carry the pin to
@@ -286,9 +348,12 @@ set_gitlink "$MK_NEW"
 STUB_MARKETPLACE_TARGET="$MK_NEW" CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
   --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --marketplace-dir "$MK" \
   --verify-cmd "$ROOT/no-such-verifier" >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 2 ]; then
-  ok "A21 exits 2 (UNKNOWN) when the post-apply verifier is unavailable"
-else bad "A21 exits 2 (UNKNOWN) when the post-apply verifier is unavailable" "exit was $rc"; fi
+# The contract for this path is "the apply HAPPENED, only the verdict is unknown" — so asserting the
+# code alone would also pass if the script refused before ever applying, a different outcome.
+if [ "$rc" -eq 2 ] && [ -e "$ROOT/APPLIED" ]; then
+  ok "A21 exits 2 (UNKNOWN) after applying when the post-apply verifier is unavailable"
+else bad "A21 exits 2 (UNKNOWN) after applying when the post-apply verifier is unavailable" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
 cleanup
 
 # ── A6 — no hardcoded claude-code version directory ────────────────────────────────────────────

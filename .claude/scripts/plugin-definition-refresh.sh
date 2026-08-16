@@ -226,17 +226,27 @@ hidden="$(git -C "$MARKETPLACE_DIR" ls-files -v 2>/dev/null | awk '$1 ~ /^[a-z]$
 
 # `--no-filters` bypasses the clean stage, so a smudge/clean filter cannot launder the comparison.
 bytes_unknown=0; bytes_differ=0
-files="$(git -C "$MARKETPLACE_DIR" --no-replace-objects ls-tree -r --name-only HEAD 2>/dev/null)" \
-  || die "cannot enumerate the marketplace tree at $candidate"
-while IFS= read -r f; do
+# `-z` (NUL-delimited, with the mode) rather than `--name-only`: the latter C-quotes any name that is
+# not plain ASCII, so `hash-object` cannot resolve it and a perfectly clean marketplace would refuse.
+# The output must NOT go through command substitution, which strips NUL bytes — stream it via a file.
+tree_list="$(mktemp)" || die "cannot create a temporary file for the marketplace tree listing"
+git -C "$MARKETPLACE_DIR" --no-replace-objects ls-tree -r -z HEAD > "$tree_list" \
+  || { rm -f "$tree_list"; die "cannot enumerate the marketplace tree at $candidate"; }
+while IFS= read -r -d '' entry; do
+  [ -n "$entry" ] || continue
+  # entry is "<mode> <type> <object>\t<path>"
+  mode="${entry%% *}"
+  # A gitlink is a directory, not a blob: it cannot be byte-hashed, and hashing it would make a clean
+  # pinned marketplace refuse. Submodule content is covered by the clean-worktree check above.
+  [ "$mode" = "160000" ] && continue
+  f="${entry#*$'\t'}"
   [ -n "$f" ] || continue
   want="$(git -C "$MARKETPLACE_DIR" --no-replace-objects rev-parse "HEAD:$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
   got="$(git -C "$MARKETPLACE_DIR" hash-object --no-filters -- "$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
   { [ -n "$want" ] && [ -n "$got" ]; } || { bytes_unknown=$((bytes_unknown + 1)); continue; }
   [ "$want" = "$got" ] || bytes_differ=$((bytes_differ + 1))
-done <<EOF
-$(printf '%s\n' "$files")
-EOF
+done < "$tree_list"
+rm -f "$tree_list"
 [ "$bytes_differ" -eq 0 ] || die "$bytes_differ marketplace file(s) differ from the pinned blobs despite HEAD matching — refusing to install"
 [ "$bytes_unknown" -eq 0 ] || die "$bytes_unknown marketplace file(s) could not be byte-verified — unproven is not proven, refusing to install"
 say "marketplace bytes ....... verified against $candidate"
@@ -275,7 +285,10 @@ if [ ! -x "$VERIFY_CMD" ]; then
   say "  install now matches $GITLINK. The apply happened; the verdict is UNKNOWN, never 0."
   exit 2
 fi
-if ! "$VERIFY_CMD" >/dev/null 2>&1; then
+# Pass the gated target explicitly. The verifier resolves its own defaults otherwise, so under any
+# override it would happily check a different repository, plugins root, or plugin than the one this
+# run just updated — the same bind-the-target defect the marketplace/plugin-id check closes above.
+if ! "$VERIFY_CMD" --repo-root "$REPO_ROOT" --plugins-root "$PLUGINS_ROOT" --plugin-id "$PLUGIN_ID" >/dev/null 2>&1; then
   say ""
   say "APPLIED, BUT STILL NOT ON THE PIN — the post-apply currency check does not report CURRENT."
   say "  'plugin update' exited 0 without bringing the install to $GITLINK, so the drift persists."
