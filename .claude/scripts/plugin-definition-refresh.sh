@@ -33,13 +33,19 @@
 # Usage: plugin-definition-refresh.sh [--repo-root DIR] [--plugins-root DIR] [--gitlink SHA]
 #                                     [--marketplace-dir DIR] [--marketplace NAME]
 #                                     [--plugin-id ID] [--submodule-path PATH]
-#                                     [--cli PATH] [--dry-run] [--quiet]
+#                                     [--cli PATH] [--verify-cmd PATH] [--dry-run] [--quiet]
 #
-# Exit 0  the runtime install is now pinned — this run either applied the pin or found it already
-#         applied. NOTE: `plugin update` requires a restart, so exit 0 never means THIS run used it.
-#      1  the install is NOT on the pin and this run could not safely put it there. The reason is
-#         named. Nothing was changed.
-#      2  UNKNOWN — could not determine (usage error, no CLI, unreadable pin or marketplace).
+# Exit 0  the runtime install is now pinned, and that was VERIFIED by an independent blob-identity
+#         check after the apply — never by `plugin update`'s own exit status, which can report
+#         success having repaired nothing. NOTE: `plugin update` requires a restart, so exit 0 still
+#         never means THIS run used the new definition.
+#      1  the install is NOT on the pin. Either the marketplace could not supply the pinned revision
+#         (nothing was changed), or the apply ran and the post-apply check still does not report
+#         CURRENT. The reason is named.
+#      2  UNKNOWN — no verdict was produced: usage error, no CLI, unreadable pin or marketplace, a
+#         marketplace/plugin-id marketplace mismatch, a concurrent run holding the lock, a
+#         marketplace worktree whose BYTES do not provably match the pinned commit, an apply whose
+#         verification command is unavailable, or --dry-run (a simulation asserts nothing).
 #
 # Exit 2 is deliberately not exit 1 and never exit 0: "I could not check" is a third answer, and
 # collapsing it into either of the verdicts is how a currency control becomes decoration.
@@ -53,6 +59,7 @@ MARKETPLACE="devantler-plugins"
 PLUGIN_ID="agentic-engineering@devantler-plugins"
 SUBMODULE_PATH="libraries/agent-plugins"
 CLI="${CLAUDE_CLI:-}"
+VERIFY_CMD="${PLUGIN_REFRESH_VERIFY:-}"
 DRY_RUN=0
 QUIET=0
 
@@ -72,6 +79,7 @@ while [ $# -gt 0 ]; do
     --plugin-id) need $# "$1"; PLUGIN_ID="$2"; shift 2 ;;
     --submodule-path) need $# "$1"; SUBMODULE_PATH="$2"; shift 2 ;;
     --cli) need $# "$1"; CLI="$2"; shift 2 ;;
+    --verify-cmd) need $# "$1"; VERIFY_CMD="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --quiet) QUIET=1; shift ;;
     -h|--help) sed -n '1,44p' "$0"; exit 0 ;;
@@ -146,7 +154,13 @@ say "pinned revision ......... $GITLINK"
 # primitive here; a lock file written with `>` is not.
 LOCK=""
 release_lock() { [ -n "$LOCK" ] && rmdir "$LOCK" 2>/dev/null; LOCK=""; }
-trap release_lock EXIT INT TERM
+# INT/TERM must TERMINATE, not just clean up. A handler that returns normally resumes the script at
+# the point of interruption — so releasing the lock here and falling through would carry on into the
+# candidate check and `plugin update` with the lock already surrendered, which is precisely the
+# unserialized apply the lock exists to prevent. Exit instead and let the EXIT trap do the cleanup.
+trap release_lock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [ "$DRY_RUN" -eq 0 ]; then
   lockdir="$PLUGINS_ROOT/.plugin-definition-refresh.lock"
@@ -195,11 +209,46 @@ if [ "$candidate" != "$GITLINK" ]; then
   exit 1
 fi
 
+# ── the revision matched; now prove the BYTES match too ────────────────────────
+# `rev-parse HEAD` answers "which commit is checked out", which is a weaker claim than "these are
+# the reviewed bytes" — the same gap AGENTS.md documents for reading the pinned submodule. A
+# non-conflicting tracked modification, an assume-unchanged/skip-worktree entry, or a clean/smudge
+# filter all leave HEAD equal to the pin while the files `plugin update` actually copies differ. The
+# gate would then install unreviewed definitions and report success, which is the exact fail-open
+# this script exists to close, one level down.
+dirty="$(git -C "$MARKETPLACE_DIR" status --porcelain 2>/dev/null)" \
+  || die "cannot read the marketplace worktree status: $MARKETPLACE_DIR"
+[ -z "$dirty" ] || die "marketplace worktree is not clean at $candidate — refusing to install bytes that differ from the reviewed commit"
+
+hidden="$(git -C "$MARKETPLACE_DIR" ls-files -v 2>/dev/null | awk '$1 ~ /^[a-z]$/ || $1 == "S"')" \
+  || die "cannot read the marketplace index flags: $MARKETPLACE_DIR"
+[ -z "$hidden" ] || die "marketplace index hides a modification (assume-unchanged/skip-worktree) — status cannot be trusted here"
+
+# `--no-filters` bypasses the clean stage, so a smudge/clean filter cannot launder the comparison.
+bytes_unknown=0; bytes_differ=0
+files="$(git -C "$MARKETPLACE_DIR" --no-replace-objects ls-tree -r --name-only HEAD 2>/dev/null)" \
+  || die "cannot enumerate the marketplace tree at $candidate"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  want="$(git -C "$MARKETPLACE_DIR" --no-replace-objects rev-parse "HEAD:$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
+  got="$(git -C "$MARKETPLACE_DIR" hash-object --no-filters -- "$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
+  { [ -n "$want" ] && [ -n "$got" ]; } || { bytes_unknown=$((bytes_unknown + 1)); continue; }
+  [ "$want" = "$got" ] || bytes_differ=$((bytes_differ + 1))
+done <<EOF
+$(printf '%s\n' "$files")
+EOF
+[ "$bytes_differ" -eq 0 ] || die "$bytes_differ marketplace file(s) differ from the pinned blobs despite HEAD matching — refusing to install"
+[ "$bytes_unknown" -eq 0 ] || die "$bytes_unknown marketplace file(s) could not be byte-verified — unproven is not proven, refusing to install"
+say "marketplace bytes ....... verified against $candidate"
+
 # ── apply ──────────────────────────────────────────────────────────────────────
 registry="$PLUGINS_ROOT/installed_plugins.json"
 if [ "$DRY_RUN" -eq 1 ]; then
+  # A simulation determines nothing about the install, and exit 0 is defined as "the runtime install
+  # IS on the pin". Returning 0 here would let a pre-flight caller read a dry run as a cleared drift.
   say "dry-run ................. marketplace carries the pin; would apply 'plugin update $PLUGIN_ID'"
-  exit 0
+  say "dry-run ................. exiting 2 (no verdict) — a simulation never asserts the install state"
+  exit 2
 fi
 
 # A runtime-local mutation is backed up BEFORE it happens, to a timestamped copy naming the reason.
@@ -213,8 +262,30 @@ fi
 "$CLI" plugin update "$PLUGIN_ID" >/dev/null 2>&1 \
   || die "'plugin update $PLUGIN_ID' failed after the gate passed — install state is unchanged or partial; re-run and check plugin-definition-currency.sh"
 
+# ── the CLI's exit 0 is NOT proof the install now matches the pin ──────────────
+# `plugin update` can report success having repaired nothing — most reachably when the registry
+# already advertises the pinned version while the installed definition bytes were modified or
+# deleted, which is byte-level drift the version string cannot see. Treating the CLI's status as the
+# verdict would let exactly that drift persist indefinitely while this script reported it fixed.
+# So the verdict comes from an independent blob-identity check, not from the tool we just ran.
+[ -n "$VERIFY_CMD" ] || VERIFY_CMD="$REPO_ROOT/.claude/scripts/plugin-definition-currency.sh"
+if [ ! -x "$VERIFY_CMD" ]; then
+  say ""
+  say "APPLIED, BUT UNVERIFIED — '$VERIFY_CMD' is not executable, so this run cannot assert that the"
+  say "  install now matches $GITLINK. The apply happened; the verdict is UNKNOWN, never 0."
+  exit 2
+fi
+if ! "$VERIFY_CMD" >/dev/null 2>&1; then
+  say ""
+  say "APPLIED, BUT STILL NOT ON THE PIN — the post-apply currency check does not report CURRENT."
+  say "  'plugin update' exited 0 without bringing the install to $GITLINK, so the drift persists."
+  say "  Re-run plugin-definition-currency.sh for the per-file detail and report it."
+  exit 1
+fi
+
 say ""
 say "APPLIED — the runtime install now points at the pinned revision $GITLINK."
+say "  verified by ............. $VERIFY_CMD"
 if command -v jq >/dev/null 2>&1 && [ -r "$registry" ]; then
   # This is a REPORTING nicety and must never change the verdict. A malformed registry makes `jq`
   # exit non-zero; under `set -e` + `pipefail` that aborted the script AFTER a successful apply and

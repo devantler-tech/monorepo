@@ -430,11 +430,16 @@ interactively, or, in an unattended run, that same control plane driven by
 [`.claude/scripts/plugin-definition-refresh.sh`](.claude/scripts/plugin-definition-refresh.sh)
 through the resolved Claude CLI (`--cli`, `$CLAUDE_CLI`, `PATH`, then the app bundle). **Never edit
 the plugin cache**; it is read-only evidence (see
-*Agent definition locations*). The script exits `0` once the install is on the pin, `1` when it is
-not and could not safely be put there, and `2` UNKNOWN — which now also covers a plugin id naming a
-different marketplace than the clone being gated, and a concurrent run holding the lock. Run it on a
-`DRIFT`; a `1` or `2` is reported, never a run-stopper, and you continue against the reviewed
-definition at the pinned gitlink exactly as above.
+*Agent definition locations*). It exits `0` only once the install is on the pin **and an independent
+blob-identity check confirms it** — never on `plugin update`'s own exit status, which can report
+success having repaired nothing. `1` means the install is not on the pin (the marketplace could not
+supply that revision, or the apply ran and the post-apply check still does not report `CURRENT`).
+`2` is UNKNOWN — no verdict produced: no CLI, an unreadable pin or marketplace, a plugin id naming a
+different marketplace than the clone being gated, a concurrent run holding the lock, a marketplace
+worktree whose bytes do not provably match the pinned commit, an unavailable verifier, or
+`--dry-run`, since a simulation asserts nothing about the install. Run it on a `DRIFT`; a `1` or `2`
+is reported, never a run-stopper, and you continue against the reviewed definition at the pinned
+gitlink exactly as above.
 
 🔴 **`plugin update` installs the MARKETPLACE LATEST — it is NOT a way to install the pin, and
 wiring the bare commands into pre-flight would be a fail-open worse than the drift.** Its own

@@ -56,6 +56,13 @@ make_fixture() {
   {"scope":"user","installPath":"$INSTALLED","version":"0.0.0","gitCommitSha":"$MK_OLD"}]}}
 JSON
 
+  # Stub post-apply verifier. The real one is plugin-definition-currency.sh; the point of the seam
+  # is that the verdict comes from an INDEPENDENT check rather than from `plugin update`'s status.
+  VERIFY="$BIN/verify-ok"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$VERIFY"; chmod +x "$VERIFY"
+  VERIFY_BAD="$BIN/verify-drift"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$VERIFY_BAD"; chmod +x "$VERIFY_BAD"
+
   CLI_LOG="$ROOT/cli.log"; : > "$CLI_LOG"
   cat > "$BIN/claude" <<STUB
 #!/usr/bin/env bash
@@ -87,7 +94,7 @@ set_gitlink() {
 run() {
   CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
     --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --marketplace-dir "$MK" \
-    "$@" 2>&1
+    --verify-cmd "$VERIFY" "$@" 2>&1
 }
 
 cleanup() { [ -n "${ROOT:-}" ] && rm -rf "$ROOT"; }
@@ -202,6 +209,86 @@ if [ "$rc" -eq 0 ] && [ ! -d "$PLUGINS/.plugin-definition-refresh.lock" ]; then
   ok "A16 releases the lock after a successful apply"
 else bad "A16 releases the lock after a successful apply" \
   "exit was $rc, lock still present=$([ -d "$PLUGINS/.plugin-definition-refresh.lock" ] && echo yes || echo no)"; fi
+cleanup
+
+# ── A17 — INT/TERM must TERMINATE the run, not merely clean up and resume ──────────────────────
+# A bash handler that returns normally resumes at the point of interruption, so a combined
+# `trap release_lock EXIT INT TERM` would surrender the lock and then carry on into 'plugin update'
+# — an unserialized apply, which is the very thing the lock exists to prevent.
+if grep -Eq '^trap release_lock EXIT$' "$SCRIPT" \
+  && grep -Eq "^trap 'exit 130' INT$" "$SCRIPT" \
+  && grep -Eq "^trap 'exit 143' TERM$" "$SCRIPT" \
+  && ! grep -Eq '^trap release_lock EXIT INT TERM$' "$SCRIPT"; then
+  ok "A17 INT/TERM exit instead of resuming after releasing the lock"
+else bad "A17 INT/TERM exit instead of resuming after releasing the lock" \
+  "$(grep -n '^trap ' "$SCRIPT" | tr '\n' '|')"; fi
+
+# ── A18 — HEAD == pin does NOT establish the BYTES; a dirty marketplace must not be installed ──
+# A non-conflicting tracked modification leaves `rev-parse HEAD` equal to the pin while the files
+# 'plugin update' copies differ from the reviewed commit.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"                                 # clone already carries the pin
+echo tampered > "$MK/f"                                            # HEAD still == pin, bytes differ
+STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
+  ok "A18 refuses (exit 2) when the marketplace worktree is dirty at the pinned commit"
+else bad "A18 refuses (exit 2) when the marketplace worktree is dirty at the pinned commit" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+cleanup
+
+# ── A18b — the byte-identity comparison exists and fails CLOSED ────────────────────────────────
+# HONEST LIMITATION, stated rather than papered over: this assertion is STRUCTURAL, not behavioural.
+# The dirty-status and hidden-index guards above subsume every fixture that could reach the byte
+# loop at runtime — verified by ablation, which is how the gap was found: neutralising the byte
+# comparison left A18 green. The loop is kept as defense-in-depth because it mirrors the
+# four-assertion pattern AGENTS.md already prescribes for reading the pinned submodule, and because
+# `--no-filters` is the only one of the three that a clean/smudge filter cannot launder. What is
+# pinned here is its presence and its fail-closed direction: an unverifiable file must refuse, since
+# unproven is not proven.
+if grep -q 'hash-object --no-filters' "$SCRIPT" \
+  && grep -q 'bytes_unknown" -eq 0 \] || die' "$SCRIPT" \
+  && grep -q 'bytes_differ" -eq 0 \] || die' "$SCRIPT"; then
+  ok "A18b byte-identity check is present and fails closed on an unverifiable file"
+else bad "A18b byte-identity check is present and fails closed on an unverifiable file" \
+  "$(grep -n 'bytes_unknown\|bytes_differ\|no-filters' "$SCRIPT" | tr '\n' '|')"; fi
+
+# ── A19 — --dry-run asserts nothing about the install, so it is never a 0 verdict ──────────────
+# --dry-run deliberately skips the marketplace refresh, so the clone must ALREADY carry the pin to
+# reach the would-apply branch at all; otherwise the gate correctly refuses first with exit 1.
+make_fixture
+set_gitlink "$MK_NEW"
+git -C "$MK" checkout -q "$MK_NEW"
+STUB_MARKETPLACE_TARGET="$MK_NEW" run --dry-run >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
+  ok "A19 --dry-run exits 2 (no verdict) and never applies"
+else bad "A19 --dry-run exits 2 (no verdict) and never applies" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+cleanup
+
+# ── A20 — the CLI's exit 0 is not the verdict; an independent check decides ────────────────────
+# 'plugin update' can exit 0 having repaired nothing (byte-level drift under an already-current
+# version string). The post-apply check, not the tool's status, decides.
+make_fixture
+set_gitlink "$MK_NEW"
+STUB_MARKETPLACE_TARGET="$MK_NEW" CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
+  --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --marketplace-dir "$MK" \
+  --verify-cmd "$VERIFY_BAD" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 1 ] && [ -e "$ROOT/APPLIED" ]; then
+  ok "A20 exits 1 when the post-apply check still does not report CURRENT"
+else bad "A20 exits 1 when the post-apply check still does not report CURRENT" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+cleanup
+
+# ── A21 — an unavailable verifier is UNKNOWN, never a success verdict ──────────────────────────
+make_fixture
+set_gitlink "$MK_NEW"
+STUB_MARKETPLACE_TARGET="$MK_NEW" CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
+  --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --marketplace-dir "$MK" \
+  --verify-cmd "$ROOT/no-such-verifier" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 2 ]; then
+  ok "A21 exits 2 (UNKNOWN) when the post-apply verifier is unavailable"
+else bad "A21 exits 2 (UNKNOWN) when the post-apply verifier is unavailable" "exit was $rc"; fi
 cleanup
 
 # ── A6 — no hardcoded claude-code version directory ────────────────────────────────────────────
