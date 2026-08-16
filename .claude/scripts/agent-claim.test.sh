@@ -103,21 +103,29 @@ nonce_b="trap2-fixed-nonce-should-lose"
 parent="$(git -C "$clone_b" ls-remote origin HEAD | awk '{print $1}')"
 sha_b="$(git -C "$clone_b" commit-tree "${parent}^{tree}" -p "$parent" \
   -m "chore: agent-claim #${ISSUE} nonce=${nonce_b}")"
-# Push through a pipe ending in `true` — exit status of the pipeline is 0
-# regardless of whether the push updated the tip (trap 2 reproduction).
-set +e
+# Push through a pipe ending in `true`. Temporarily disable only pipefail so
+# errexit remains active while the final `true` makes the pipeline itself 0.
+set +o pipefail
 git -C "$clone_b" push origin "${sha_b}:refs/heads/agent-claim/${ISSUE}" 2>/dev/null | true
-pipe_rc=${PIPESTATUS[0]} # push's own status (may be non-zero)
-set -e
-# The PIPELINE as a whole with `| true` would be 0; we assert the tip check
-# is what matters, not either status.
+pipe_status=("${PIPESTATUS[@]}")
+set -o pipefail
+push_rc="${pipe_status[0]}"
+sink_rc="${pipe_status[1]}"
+if (( push_rc != 0 )); then
+  pass "trap2: rejected push status is nonzero"
+else
+  fail "trap2: rejected push status is nonzero"
+fi
+check "trap2: final pipeline command succeeds" "0" "$sink_rc"
+# The pipeline as a whole looked successful; assert the tip check is what
+# matters, not either status.
 rc_trap2=0
 "$tool" verify "$ISSUE" "$sha_b" --repo-dir "$clone_b" --remote origin >/dev/null 2>&1 || rc_trap2=$?
 check "trap2: verify rejects B's sha even after a pipe-masked push" "1" "$rc_trap2"
 tip_after="$(git -C "$clone_b" ls-remote origin "refs/heads/agent-claim/${ISSUE}" | awk '{print $1}')"
 check "trap2: tip still A's (pipe push did not steal the claim)" "$sha_a" "$tip_after"
 # Sanity: document that a bare push status alone is not the verdict we use.
-pass "trap2: push_rc_observed=${pipe_rc} (ignored by protocol; tip compare is authoritative)"
+pass "trap2: push_rc_observed=${push_rc} (ignored by protocol; tip compare is authoritative)"
 
 # ---------------------------------------------------------------------------
 # Trap 3 — without a nonce, identical commits collide. Prove the collision
@@ -146,8 +154,10 @@ check "trap3 RED: both writers see the tip as 'theirs'" "$sha_left" "$tip3"
 # Clean up the RED fixture before the GREEN run.
 git -C "$clone_a" push --quiet origin ":agent-claim/${ISSUE3}"
 
-# GREEN: helper acquire twice → distinct shas; second loses.
-unset GIT_AUTHOR_DATE GIT_COMMITTER_DATE
+# GREEN: helper acquire twice with the same issue, parent, author and timestamp
+# still produces distinct SHAs because the helper supplies fresh entropy.
+export GIT_AUTHOR_DATE="2026-07-20T12:00:00Z"
+export GIT_COMMITTER_DATE="2026-07-20T12:00:00Z"
 ISSUE3G=9304
 rc_a3=0
 out_a3="$tmp/out-a3"
@@ -157,24 +167,36 @@ check "trap3 GREEN: first acquire exits 0" "0" "$rc_a3"
 rc_b3=0
 "$tool" acquire "$ISSUE3G" --repo-dir "$clone_b" --remote origin >"$tmp/out-b3" 2>"$tmp/err-b3" || rc_b3=$?
 check "trap3 GREEN: second acquire exits 1" "1" "$rc_b3"
-# Extract any sha the loser may have printed (should not match winner).
-# More importantly: crafting two helper commits back-to-back must differ.
-nonce_x="$("$tool" acquire 999001 --repo-dir "$clone_a" --remote origin 2>/dev/null | tail -n1 || true)"
-# Retire the throwaway so it does not leak into later assertions.
-"$tool" retire 999001 "$nonce_x" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || true
-# Two sequential commit-tree calls WITH distinct nonces must differ — mirror
-# what the helper does internally.
-n1="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
-n2="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
-s1="$(git -C "$clone_a" commit-tree "${parent3}^{tree}" -p "$parent3" -m "chore: agent-claim #x nonce=${n1}")"
-s2="$(git -C "$clone_a" commit-tree "${parent3}^{tree}" -p "$parent3" -m "chore: agent-claim #x nonce=${n2}")"
-if [[ "$s1" != "$s2" ]]; then
-  pass "trap3 GREEN: distinct nonces produce distinct shas"
-else
-  fail "trap3 GREEN: distinct nonces still collided ($s1)"
-fi
 check "trap3 GREEN: winner tip stable at first sha" "$sha_a3" \
   "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE3G}" | awk '{print $1}')"
+"$tool" retire "$ISSUE3G" "$sha_a3" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
+rc_a3_again=0
+sha_a3_again="$("$tool" acquire "$ISSUE3G" --repo-dir "$clone_a" --remote origin 2>/dev/null)" || rc_a3_again=$?
+check "trap3 GREEN: same helper claim reacquires successfully" "0" "$rc_a3_again"
+if [[ "$sha_a3_again" != "$sha_a3" ]]; then
+  pass "trap3 GREEN: helper entropy changes the claim sha under fixed metadata"
+else
+  fail "trap3 GREEN: helper reused a claim sha under fixed metadata"
+fi
+"$tool" retire "$ISSUE3G" "$sha_a3_again" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
+unset GIT_AUTHOR_DATE GIT_COMMITTER_DATE
+
+# A controlled entropy-tool failure reaches nonce generation and must fail
+# closed with the helper's usage/safety exit, leaving no claim ref behind.
+entropy_shim="$tmp/entropy-shim"
+mkdir -p "$entropy_shim"
+cat > "$entropy_shim/od" <<'SHIM'
+#!/usr/bin/env bash
+exit 1
+SHIM
+chmod +x "$entropy_shim/od"
+ISSUE3E=9305
+rc_entropy=0
+PATH="$entropy_shim:$PATH" "$tool" acquire "$ISSUE3E" --repo-dir "$clone_a" --remote origin \
+  >"$tmp/out-entropy" 2>"$tmp/err-entropy" || rc_entropy=$?
+check "trap3 GREEN: unavailable entropy exits 2" "2" "$rc_entropy"
+check "trap3 GREEN: unavailable entropy leaves no claim" "" \
+  "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE3E}" | awk '{print $1}')"
 
 # ---------------------------------------------------------------------------
 # Trap 4 — unretired claim locks forever; stale takeover recovers; third loses.
@@ -254,6 +276,14 @@ check "trap4: retire is idempotent" "0" "$rc_r2"
 rc_bad=0
 "$tool" acquire not-a-number --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || rc_bad=$?
 check "usage: non-integer issue exits 2" "2" "$rc_bad"
+rc_zero=0
+out_zero="$tmp/out-zero"
+"$tool" acquire 0 --repo-dir "$clone_a" --remote origin >"$out_zero" 2>"$tmp/err-zero" || rc_zero=$?
+check "usage: zero issue exits 2" "2" "$rc_zero"
+zero_sha="$(tail -n1 "$out_zero")"
+if [[ "$zero_sha" =~ ^[0-9a-f]{40}$ ]]; then
+  "$tool" retire 0 "$zero_sha" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || true
+fi
 
 # ---------------------------------------------------------------------------
 # Trap 5 — a delete must be a COMPARE-and-delete.
@@ -311,6 +341,8 @@ rival5b="$(git -C "$clone_b" commit-tree "HEAD^{tree}" -p HEAD -m "chore: rival 
 
 shim_dir="$tmp/shim"
 mkdir -p "$shim_dir"
+retire_tmp="$tmp/retire-tmp"
+mkdir -p "$retire_tmp"
 cat > "$shim_dir/git" <<SHIM
 #!/usr/bin/env bash
 # Delegates to real git, but the first time it sees the claim delete it lets a
@@ -321,6 +353,9 @@ for a in "\$@"; do
   case "\$a" in ":agent-claim/${ISSUE5B}"|":${claim5b}") raced=1 ;; esac
 done
 if [[ "\$raced" -eq 1 && ! -f "$tmp/shim.fired" ]]; then
+  if compgen -G "$retire_tmp/agent-claim-retire.*" >/dev/null; then
+    : > "$tmp/retire-tmp-seen"
+  fi
   : > "$tmp/shim.fired"
   "$real_git" -C "$clone_b" push --quiet --force origin "${rival5b}:${claim5b}" >/dev/null 2>&1
 fi
@@ -329,7 +364,7 @@ SHIM
 chmod +x "$shim_dir/git"
 
 rc_race=0
-PATH="$shim_dir:$PATH" "$tool" retire "$ISSUE5B" "$sha_a5b" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || rc_race=$?
+TMPDIR="$retire_tmp" PATH="$shim_dir:$PATH" "$tool" retire "$ISSUE5B" "$sha_a5b" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || rc_race=$?
 if [[ -f "$tmp/shim.fired" ]]; then
   pass "trap5b: fixture — the race actually fired inside the helper"
 else
@@ -342,6 +377,13 @@ else
 fi
 check "trap5b: the rival's fresh claim survives" "$rival5b" \
   "$(git -C "$clone_b" ls-remote origin "$claim5b" | awk '{print $1}')"
+if [[ -f "$tmp/retire-tmp-seen" ]]; then
+  pass "trap5b: retire stderr uses a private mktemp file"
+else
+  fail "trap5b: retire stderr uses a private mktemp file"
+fi
+check "trap5b: retire temp file is removed after failure" "" \
+  "$(find "$retire_tmp" -type f -name 'agent-claim-retire.*' -print -quit)"
 git -C "$clone_b" push --quiet --delete origin "$claim5b" >/dev/null 2>&1 || true
 unset sha_a5b
 

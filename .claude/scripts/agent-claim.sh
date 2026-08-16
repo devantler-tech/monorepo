@@ -57,13 +57,17 @@ usage() {
 # Portable entropy — fail closed when none is available (trap 3). Prefer
 # /dev/urandom (Linux + macOS); never soft-fail back to a fixed message.
 claim_nonce() {
-  if [[ -r /dev/urandom ]]; then
-    # 16 bytes hex, no whitespace. `od` is POSIX; tr strips the spaces od
-    # inserts between bytes on some platforms.
-    od -An -N16 -tx1 /dev/urandom | tr -d ' \n'
-    return 0
-  fi
-  fail "no portable entropy source (/dev/urandom unreadable); refusing to claim with a fixed message (trap 3)"
+  [[ -r /dev/urandom ]] ||
+    fail "no portable entropy source (/dev/urandom unreadable); refusing to claim with a fixed message (trap 3)"
+  # 16 bytes hex, no whitespace. `od` is POSIX; tr strips the spaces od
+  # inserts between bytes on some platforms. A pipeline failure or malformed
+  # result is unavailable entropy, never an empty/fixed nonce.
+  local nonce
+  nonce="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')" ||
+    fail "portable entropy read failed; refusing to claim with a fixed message (trap 3)"
+  [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] ||
+    fail "portable entropy read returned malformed data; refusing to claim with a fixed message (trap 3)"
+  printf '%s\n' "$nonce"
 }
 
 # Resolve the claim ref name for an issue number. Caller must already have
@@ -80,7 +84,7 @@ claim_branch() {
 # Validate issue BEFORE any command substitution — `exit` inside $(…) only
 # kills the subshell, so a bad issue would otherwise soft-fail into exit 1.
 require_issue() {
-  [[ "$1" =~ ^[0-9]+$ ]] || fail "issue must be a positive integer (got '$1')"
+  [[ "$1" =~ ^[1-9][0-9]*$ ]] || fail "issue must be a positive integer (got '$1')"
 }
 
 # git wrapper scoped to --repo-dir when set.
@@ -209,18 +213,21 @@ cmd_retire() {
   fi
   # Compare-and-delete against the acquired tip. This also closes the later
   # observe→delete race: a rival retirement/reacquire makes the lease fail.
+  local err_file
+  err_file="$(mktemp "${TMPDIR:-/tmp}/agent-claim-retire.XXXXXX")" ||
+    fail "could not create private stderr capture for retire"
   if ! git_c push --quiet --force-with-lease="refs/heads/${branch}:${expected}" \
-       "$REMOTE" ":${branch}" 2>/tmp/agent-claim-retire-$$.err; then
+       "$REMOTE" ":${branch}" 2>"$err_file"; then
     local err
-    err="$(cat /tmp/agent-claim-retire-$$.err 2>/dev/null || true)"
-    rm -f /tmp/agent-claim-retire-$$.err
+    err="$(<"$err_file")"
+    rm -f "$err_file"
     if [[ -z "$(remote_tip "$issue")" ]]; then
       echo "agent-claim: retired ${branch} (already absent)"
       exit 0
     fi
     fail "retire of ${branch} failed: ${err:-unknown error}"
   fi
-  rm -f /tmp/agent-claim-retire-$$.err
+  rm -f "$err_file"
   echo "agent-claim: retired ${branch} (was $tip)"
 }
 
