@@ -73,16 +73,21 @@ STUB
 
 # Point the consumer's gitlink at $1 by writing the tree entry directly — no network, no submodule
 # machinery, and it is exactly the "160000 commit <sha>" shape the script must read.
+# A silently-failed fixture is worse than a failed test: the assertions still run, but against the
+# PREVIOUS consumer tree rather than the pin they asked for, so they pass without testing anything.
+# Both commands are checked explicitly and stderr is preserved.
 set_gitlink() {
   local sha="$1"
-  git -C "$CONSUMER" update-index --add --cacheinfo 160000,"$sha",libraries/agent-plugins
-  git -C "$CONSUMER" commit -qm "pin $sha" >/dev/null 2>&1 || true
+  git -C "$CONSUMER" update-index --add --cacheinfo 160000,"$sha",libraries/agent-plugins \
+    || { printf 'FIXTURE FAILURE: update-index for %s failed\n' "$sha" >&2; exit 9; }
+  git -C "$CONSUMER" commit -qm "pin $sha" >/dev/null \
+    || { printf 'FIXTURE FAILURE: commit for %s failed\n' "$sha" >&2; exit 9; }
 }
 
 run() {
   CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
     --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --marketplace-dir "$MK" \
-    --installed "$INSTALLED" "$@" 2>&1
+    "$@" 2>&1
 }
 
 cleanup() { [ -n "${ROOT:-}" ] && rm -rf "$ROOT"; }
@@ -104,16 +109,16 @@ cleanup
 make_fixture
 set_gitlink "$MK_NEW"
 STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1; rc=$?
-if [ -e "$ROOT/APPLIED" ]; then ok "A2 invokes 'plugin update' when the marketplace carries exactly the pin"
-else bad "A2 invokes 'plugin update' when the marketplace carries exactly the pin" "exit was $rc, never applied"; fi
+if [ -e "$ROOT/APPLIED" ] && [ "$rc" -eq 0 ]; then ok "A2 invokes 'plugin update' when the marketplace carries exactly the pin"
+else bad "A2 invokes 'plugin update' when the marketplace carries exactly the pin" "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
 cleanup
 
 # ── A3 — a runtime-local mutation is backed up BEFORE it happens ───────────────────────────────
 make_fixture
 set_gitlink "$MK_NEW"
-STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1
-if ls "$PLUGINS"/installed_plugins.json.bak-* >/dev/null 2>&1; then ok "A3 backs up installed_plugins.json before applying"
-else bad "A3 backs up installed_plugins.json before applying" "no timestamped backup was written"; fi
+STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1; rc=$?
+if ls "$PLUGINS"/installed_plugins.json.bak-* >/dev/null 2>&1 && [ "$rc" -eq 0 ]; then ok "A3 backs up installed_plugins.json before applying"
+else bad "A3 backs up installed_plugins.json before applying" "exit was $rc; no timestamped backup was written"; fi
 cleanup
 
 # ── A4 — refresh is attempted BEFORE the gate is evaluated ─────────────────────────────────────
@@ -122,19 +127,81 @@ cleanup
 # pins the ORDER, which is the half #2856 got right and is easy to drop when adding the gate.
 make_fixture
 set_gitlink "$MK_NEW"
-STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1
-if grep -q 'plugin marketplace update' "$CLI_LOG" && [ -e "$ROOT/APPLIED" ]; then
+STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1; rc=$?
+if grep -q 'plugin marketplace update' "$CLI_LOG" && [ -e "$ROOT/APPLIED" ] && [ "$rc" -eq 0 ]; then
   ok "A4 refreshes the marketplace before evaluating the gate"
-else bad "A4 refreshes the marketplace before evaluating the gate" "$(tr '\n' '|' < "$CLI_LOG")"; fi
+else bad "A4 refreshes the marketplace before evaluating the gate" "exit was $rc; $(tr '\n' '|' < "$CLI_LOG")"; fi
 cleanup
 
 # ── A5 — an unresolvable CLI is UNKNOWN (exit 2), never a verdict ──────────────────────────────
 make_fixture
 set_gitlink "$MK_NEW"
 CLAUDE_CLI="$ROOT/nope" "$SCRIPT" --repo-root "$CONSUMER" --plugins-root "$PLUGINS" \
-  --marketplace-dir "$MK" --installed "$INSTALLED" >/dev/null 2>&1; rc=$?
+  --marketplace-dir "$MK" >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 2 ]; then ok "A5 exits 2 (UNKNOWN) when the CLI cannot be resolved"
 else bad "A5 exits 2 (UNKNOWN) when the CLI cannot be resolved" "exit was $rc — 0/1 would be a fabricated verdict"; fi
+cleanup
+
+# ── A12 — the gate binds the clone it READS to the plugin the CLI UPDATES ──────────────────────
+# `--marketplace staging` would refresh and gate on the staging clone while the default plugin id
+# still installed `…@devantler-plugins`: the gate passes against one marketplace, the install comes
+# from another. That is the fail-open this whole script exists to prevent, so a mismatch is UNKNOWN
+# (2) and must never reach 'plugin update'.
+make_fixture
+set_gitlink "$MK_NEW"
+STUB_MARKETPLACE_TARGET="$MK_NEW" run --marketplace staging >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
+  ok "A12 refuses (exit 2) when --marketplace and --plugin-id name different marketplaces"
+else bad "A12 refuses (exit 2) when --marketplace and --plugin-id name different marketplaces" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+cleanup
+
+# ── A13 — an unqualified plugin id is UNKNOWN, never a silent default ──────────────────────────
+make_fixture
+set_gitlink "$MK_NEW"
+STUB_MARKETPLACE_TARGET="$MK_NEW" run --plugin-id agentic-engineering >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
+  ok "A13 refuses (exit 2) when the plugin id is not marketplace-qualified"
+else bad "A13 refuses (exit 2) when the plugin id is not marketplace-qualified" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+cleanup
+
+# ── A14 — a malformed registry must not turn a SUCCESSFUL apply into a failure ─────────────────
+# The post-apply registry read is a reporting nicety. Under `set -e` + `pipefail` a malformed
+# registry aborted the script after 'plugin update' had already run and before the declared
+# `exit 0`, reporting a completed apply as a failure.
+make_fixture
+set_gitlink "$MK_NEW"
+printf '%s\n' 'this is not json {{{' > "$PLUGINS/installed_plugins.json"
+STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1; rc=$?
+if [ -e "$ROOT/APPLIED" ] && [ "$rc" -eq 0 ]; then
+  ok "A14 still exits 0 after applying when the registry is malformed"
+else bad "A14 still exits 0 after applying when the registry is malformed" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+cleanup
+
+# ── A15 — refresh → read → apply is serialized against an overlapping run ──────────────────────
+# Both machine-local lanes dispatch hourly and 46% of runs exceed the hour, so a sibling refreshing
+# the same clone between this run's read and its install would have it apply an ungated revision.
+make_fixture
+set_gitlink "$MK_NEW"
+mkdir -p "$PLUGINS/.plugin-definition-refresh.lock"          # a live sibling holds it
+STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
+  ok "A15 exits 2 (UNKNOWN) rather than applying while another run holds the lock"
+else bad "A15 exits 2 (UNKNOWN) rather than applying while another run holds the lock" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+rmdir "$PLUGINS/.plugin-definition-refresh.lock" 2>/dev/null || true
+cleanup
+
+# ── A16 — the lock is RELEASED on a normal apply, so the next run is not parked ────────────────
+make_fixture
+set_gitlink "$MK_NEW"
+STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -d "$PLUGINS/.plugin-definition-refresh.lock" ]; then
+  ok "A16 releases the lock after a successful apply"
+else bad "A16 releases the lock after a successful apply" \
+  "exit was $rc, lock still present=$([ -d "$PLUGINS/.plugin-definition-refresh.lock" ] && echo yes || echo no)"; fi
 cleanup
 
 # ── A6 — no hardcoded claude-code version directory ────────────────────────────────────────────

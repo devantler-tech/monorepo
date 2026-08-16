@@ -428,11 +428,13 @@ the run: fall back to the forge read, which needs no working tree.
 Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow
 interactively, or, in an unattended run, that same control plane driven by
 [`.claude/scripts/plugin-definition-refresh.sh`](.claude/scripts/plugin-definition-refresh.sh)
-through the app-bundled binary. **Never edit the plugin cache**; it is read-only evidence (see
+through the resolved Claude CLI (`--cli`, `$CLAUDE_CLI`, `PATH`, then the app bundle). **Never edit
+the plugin cache**; it is read-only evidence (see
 *Agent definition locations*). The script exits `0` once the install is on the pin, `1` when it is
-not and could not safely be put there, and `2` UNKNOWN. Run it on a `DRIFT`; a `1` or `2` is
-reported, never a run-stopper, and you continue against the reviewed definition at the pinned
-gitlink exactly as above.
+not and could not safely be put there, and `2` UNKNOWN — which now also covers a plugin id naming a
+different marketplace than the clone being gated, and a concurrent run holding the lock. Run it on a
+`DRIFT`; a `1` or `2` is reported, never a run-stopper, and you continue against the reviewed
+definition at the pinned gitlink exactly as above.
 
 🔴 **`plugin update` installs the MARKETPLACE LATEST — it is NOT a way to install the pin, and
 wiring the bare commands into pre-flight would be a fail-open worse than the drift.** Its own

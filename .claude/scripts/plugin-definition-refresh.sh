@@ -33,7 +33,7 @@
 # Usage: plugin-definition-refresh.sh [--repo-root DIR] [--plugins-root DIR] [--gitlink SHA]
 #                                     [--marketplace-dir DIR] [--marketplace NAME]
 #                                     [--plugin-id ID] [--submodule-path PATH]
-#                                     [--installed DIR] [--cli PATH] [--dry-run] [--quiet]
+#                                     [--cli PATH] [--dry-run] [--quiet]
 #
 # Exit 0  the runtime install is now pinned — this run either applied the pin or found it already
 #         applied. NOTE: `plugin update` requires a restart, so exit 0 never means THIS run used it.
@@ -52,7 +52,6 @@ MARKETPLACE_DIR=""
 MARKETPLACE="devantler-plugins"
 PLUGIN_ID="agentic-engineering@devantler-plugins"
 SUBMODULE_PATH="libraries/agent-plugins"
-INSTALLED=""
 CLI="${CLAUDE_CLI:-}"
 DRY_RUN=0
 QUIET=0
@@ -72,7 +71,6 @@ while [ $# -gt 0 ]; do
     --marketplace) need $# "$1"; MARKETPLACE="$2"; shift 2 ;;
     --plugin-id) need $# "$1"; PLUGIN_ID="$2"; shift 2 ;;
     --submodule-path) need $# "$1"; SUBMODULE_PATH="$2"; shift 2 ;;
-    --installed) need $# "$1"; INSTALLED="$2"; shift 2 ;;
     --cli) need $# "$1"; CLI="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --quiet) QUIET=1; shift ;;
@@ -82,6 +80,17 @@ while [ $# -gt 0 ]; do
 done
 
 command -v git >/dev/null 2>&1 || die "git is required"
+
+# ── the gate must bind the clone we READ to the plugin the CLI UPDATES ─────────
+# `--marketplace` selects the clone whose HEAD becomes `candidate`, while `--plugin-id` names what
+# `plugin update` installs. Left independent, `--marketplace staging` would refresh and gate on the
+# staging clone while the default id still installed `…@devantler-plugins` — the gate would pass
+# against one marketplace and the install would come from another, which is precisely the fail-open
+# this script exists to prevent. The qualified id therefore MUST name the same marketplace.
+case "$PLUGIN_ID" in
+  *@*) [ "${PLUGIN_ID##*@}" = "$MARKETPLACE" ] || die "plugin id '$PLUGIN_ID' names marketplace '${PLUGIN_ID##*@}' but --marketplace is '$MARKETPLACE' — refusing to gate on one marketplace and install from another" ;;
+  *) die "plugin id '$PLUGIN_ID' is not marketplace-qualified (expected '<plugin>@$MARKETPLACE')" ;;
+esac
 
 # ── the CLI ────────────────────────────────────────────────────────────────────
 # Resolved dynamically, never from a baked-in path. The by-hand invocation that worked on
@@ -128,6 +137,34 @@ fi
 [ -d "$MARKETPLACE_DIR" ] || die "marketplace clone not found: $MARKETPLACE_DIR"
 
 say "pinned revision ......... $GITLINK"
+
+# ── serialize refresh → read → apply against overlapping runs ──────────────────
+# The gate is a time-of-check/time-of-use pair: this run reads `candidate` from the shared clone,
+# then installs from it. Both machine-local lanes dispatch hourly and 46% of runs exceed the hour,
+# so a sibling refreshing the SAME clone between those two steps would have this run install a
+# revision it never gated on — the exact fail-open the gate exists to close. `mkdir` is the atomic
+# primitive here; a lock file written with `>` is not.
+LOCK=""
+release_lock() { [ -n "$LOCK" ] && rmdir "$LOCK" 2>/dev/null; LOCK=""; }
+trap release_lock EXIT INT TERM
+
+if [ "$DRY_RUN" -eq 0 ]; then
+  lockdir="$PLUGINS_ROOT/.plugin-definition-refresh.lock"
+  # A crashed run must not park the lock forever (the stale-marker lesson from the worktree claim):
+  # reap one older than 10 minutes, then contend normally.
+  if [ -d "$lockdir" ] && [ -n "$(find "$lockdir" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+    say "reaped a stale lock ..... $lockdir"
+    rmdir "$lockdir" 2>/dev/null || true
+  fi
+  lock_wait="${PLUGIN_REFRESH_LOCK_WAIT:-30}"
+  tries=0
+  until mkdir "$lockdir" 2>/dev/null; do
+    tries=$((tries + 1))
+    [ "$tries" -ge "$lock_wait" ] && die "another plugin-definition-refresh holds $lockdir after ${lock_wait}s — UNKNOWN, not a verdict"
+    sleep 1
+  done
+  LOCK="$lockdir"
+fi
 
 # ── refresh the marketplace clone, THEN read what an update would install ──────
 # Order matters and is asserted by the suite. The clone is its own staleness surface: on 2026-08-15
@@ -179,8 +216,12 @@ fi
 say ""
 say "APPLIED — the runtime install now points at the pinned revision $GITLINK."
 if command -v jq >/dev/null 2>&1 && [ -r "$registry" ]; then
-  now="$(jq -r --arg id "$PLUGIN_ID" '.plugins[$id][]?.gitCommitSha // empty' "$registry" 2>/dev/null | head -1)"
-  [ -n "$now" ] && say "  registry now records ... $now"
+  # This is a REPORTING nicety and must never change the verdict. A malformed registry makes `jq`
+  # exit non-zero; under `set -e` + `pipefail` that aborted the script AFTER a successful apply and
+  # BEFORE the declared `exit 0`, reporting a completed apply as a failure. Select inside `jq`
+  # (no `head` stage, so no SIGPIPE either) and swallow the status explicitly.
+  now="$(jq -r --arg id "$PLUGIN_ID" 'first(.plugins[$id][]?.gitCommitSha // empty) // empty' "$registry" 2>/dev/null || true)"
+  if [ -n "$now" ]; then say "  registry now records ... $now"; fi
 fi
 say "  ⚠️  'plugin update' requires a RESTART to take effect. THIS run keeps executing the"
 say "      definition it booted with; the pinned copy is served from the next dispatch onward."
