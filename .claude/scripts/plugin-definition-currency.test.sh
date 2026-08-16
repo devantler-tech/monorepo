@@ -41,26 +41,60 @@ trap 'rm -rf "${tmp}"' EXIT
 
 # ── the fixture "pinned revision" ─────────────────────────────────────────────
 # A real git repository, so the script exercises its local-object-database path exactly as it does
-# against the live submodule. Two agents and two skills, plus a README and a manifest that the
-# selector must ignore.
+# against the live submodule. Two agents, two skills, and the provider-neutral required runtime
+# asset, plus a README and a manifest that the selector must ignore.
 pin_repo="${tmp}/consumer/libraries/agent-plugins"
 mkdir -p "${pin_repo}/plugins/agentic-engineering/agents" \
          "${pin_repo}/plugins/agentic-engineering/skills/alpha" \
          "${pin_repo}/plugins/agentic-engineering/skills/beta" \
-         "${pin_repo}/plugins/agentic-engineering/.claude-plugin"
+         "${pin_repo}/plugins/agentic-engineering/.claude-plugin" \
+         "${pin_repo}/plugins/agentic-engineering/scripts" \
+         "${tmp}/consumer/.claude/plugin-consumption"
 p="${pin_repo}/plugins/agentic-engineering"
 printf 'reviewed engineer definition\n' > "${p}/agents/agentic-engineer.agent.md"
 printf 'reviewed improver definition\n'  > "${p}/agents/agent-improver.agent.md"
 printf 'reviewed alpha procedure\n'      > "${p}/skills/alpha/SKILL.md"
 printf 'reviewed beta procedure\n'       > "${p}/skills/beta/SKILL.md"
+printf '#!/bin/sh\necho classified\n'    > "${p}/scripts/classify-default-branch-ci-runs.sh"
+chmod +x "${p}/scripts/classify-default-branch-ci-runs.sh"
+fixture_runtime_sha="$(shasum -a 256 "${p}/scripts/classify-default-branch-ci-runs.sh" | awk '{print $1}')"
 printf 'readme prose\n'                  > "${p}/README.md"
 printf '{"version":"9.9.9"}\n'           > "${p}/.claude-plugin/plugin.json"
+cat > "${tmp}/consumer/.claude/plugin-consumption/agentic-engineering.desired-state.json" <<JSON
+{
+  "spec": {
+    "source": {
+      "requiredRuntimeAssets": [
+        {
+          "path": "scripts/classify-default-branch-ci-runs.sh",
+          "sha256": "${fixture_runtime_sha}",
+          "executable": true
+        }
+      ]
+    }
+  }
+}
+JSON
+fixture_desired_state="${tmp}/consumer/.claude/plugin-consumption/agentic-engineering.desired-state.json"
+write_desired_state_fixture() {
+  local consumer_root="$1"
+  mkdir -p "${consumer_root}/.claude/plugin-consumption"
+  cp "${fixture_desired_state}" \
+    "${consumer_root}/.claude/plugin-consumption/agentic-engineering.desired-state.json"
+}
+add_runtime_asset_fixture() {
+  local plugin_root="$1"
+  mkdir -p "${plugin_root}/scripts"
+  cp "${p}/scripts/classify-default-branch-ci-runs.sh" \
+    "${plugin_root}/scripts/classify-default-branch-ci-runs.sh"
+  chmod +x "${plugin_root}/scripts/classify-default-branch-ci-runs.sh"
+}
 
 git -C "${pin_repo}" init -q
 git -C "${pin_repo}" config user.email t@example.invalid
 git -C "${pin_repo}" config user.name t
 git -C "${pin_repo}" add -A
-git -C "${pin_repo}" commit -qm pin
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm pin
 gitlink="$(git -C "${pin_repo}" rev-parse HEAD)"
 
 run() { "${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --installed "$1" 2>&1; }
@@ -70,7 +104,7 @@ run() { "${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --insta
 make_install() {
   local dest="$1"
   mkdir -p "${dest}"
-  cp -R "${p}/agents" "${p}/skills" "${p}/README.md" "${dest}/"
+  cp -R "${p}/agents" "${p}/skills" "${p}/scripts" "${p}/README.md" "${dest}/"
 }
 
 # ── 1. NEGATIVE CONTROL — an identical install must NOT fire ──────────────────
@@ -114,6 +148,60 @@ set +e; out="$(run "${mis}")"; rc=$?; set -e
 case "${out}" in
   *"MISSING  skills/beta/SKILL.md"*) ok "a definition absent from the install exits 1 as MISSING" ;;
   *) fail "exit 1 but the missing file was not named: ${out}" ;;
+esac
+
+# ── 3b. Required runtime assets are part of the LOADED surface ────────────────
+# The surveyor executes this provider-neutral classifier. Checking only agents/ and skills/ reports
+# CURRENT while the runtime actually runs stale bytes, has no classifier at all, or cannot execute
+# it. Each state gets its own fixture so a single broad failure cannot satisfy all three claims.
+runtime_rel="scripts/classify-default-branch-ci-runs.sh"
+
+runtime_changed="${tmp}/install-runtime-changed"
+make_install "${runtime_changed}"
+printf '#!/bin/sh\necho stale\n' > "${runtime_changed}/${runtime_rel}"
+set +e; out="$(run "${runtime_changed}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a changed required runtime asset must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT    ${runtime_rel}"*) ok "a changed required runtime asset exits 1 and names the file" ;;
+  *) fail "exit 1 but the changed runtime asset was not named: ${out}" ;;
+esac
+
+runtime_missing="${tmp}/install-runtime-missing"
+make_install "${runtime_missing}"
+rm "${runtime_missing}/${runtime_rel}"
+set +e; out="$(run "${runtime_missing}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a missing required runtime asset must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"MISSING  ${runtime_rel}"*) ok "a missing required runtime asset exits 1 and names the file" ;;
+  *) fail "exit 1 but the missing runtime asset was not named: ${out}" ;;
+esac
+
+runtime_mode="${tmp}/install-runtime-mode"
+make_install "${runtime_mode}"
+chmod -x "${runtime_mode}/${runtime_rel}"
+set +e; out="$(run "${runtime_mode}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a non-executable required runtime asset must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"mode differs"*) ok "a required runtime asset's lost executable bit is caught" ;;
+  *) fail "exit 1 but the runtime asset mode difference was not reported: ${out}" ;;
+esac
+
+# A leaf-only symlink check still follows a symlinked parent directory. Redirect scripts/ to a
+# directory with identical classifier bytes and require the component walk to reject the path.
+runtime_parent_symlink="${tmp}/install-runtime-parent-symlink"
+make_install "${runtime_parent_symlink}"
+runtime_symlink_target="${tmp}/runtime-symlink-target"
+mkdir -p "${runtime_symlink_target}"
+cp "${runtime_parent_symlink}/${runtime_rel}" \
+  "${runtime_symlink_target}/classify-default-branch-ci-runs.sh"
+rm "${runtime_parent_symlink}/${runtime_rel}"
+rmdir "${runtime_parent_symlink}/scripts"
+ln -s "${runtime_symlink_target}" "${runtime_parent_symlink}/scripts"
+set +e; out="$(run "${runtime_parent_symlink}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a symlinked runtime asset parent must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT    ${runtime_rel}"*SYMLINK*) ok "a symlinked runtime asset parent is caught with identical leaf bytes" ;;
+  *) fail "exit 1 but the symlinked runtime asset parent was not reported: ${out}" ;;
 esac
 
 # ── 4. An EXTRA definition fires ──────────────────────────────────────────────
@@ -178,6 +266,8 @@ for case_name in depth space; do
   mkdir -p "${op}/agents" "${op}/skills/alpha"
   printf 'reviewed engineer definition\n' > "${op}/agents/agentic-engineer.agent.md"
   printf 'reviewed alpha procedure\n'      > "${op}/skills/alpha/SKILL.md"
+  add_runtime_asset_fixture "${op}"
+  write_desired_state_fixture "${tmp}/odd-${case_name}"
   if [ "${case_name}" = depth ]; then
     odd_path="skills/group/nested/SKILL.md"
   else
@@ -189,13 +279,14 @@ for case_name in depth space; do
   git -C "${odd_repo}" config user.email t@example.invalid
   git -C "${odd_repo}" config user.name t
   git -C "${odd_repo}" add -A
-  git -C "${odd_repo}" commit -qm pin
+  git -C "${odd_repo}" -c commit.gpgsign=false commit -qm pin
   odd_link="$(git -C "${odd_repo}" rev-parse HEAD)"
 
   # The install deliberately does NOT contain the odd path — that is the invisible-on-both-sides case.
   odd_install="${tmp}/install-odd-${case_name}"
   mkdir -p "${odd_install}"
   cp -R "${op}/agents" "${odd_install}/"
+  cp -R "${op}/scripts" "${odd_install}/"
   mkdir -p "${odd_install}/skills/alpha"
   cp "${op}/skills/alpha/SKILL.md" "${odd_install}/skills/alpha/SKILL.md"
 
@@ -287,15 +378,17 @@ printf 'reviewed alpha procedure
 '      > "${sp}/skills/alpha/SKILL.md"
 printf 'reviewed reference material
 '   > "${sp}/skills/alpha/references/notes.md"
+add_runtime_asset_fixture "${sp}"
+write_desired_state_fixture "${tmp}/sup"
 git -C "${sup_repo}" init -q
 git -C "${sup_repo}" config user.email t@example.invalid
 git -C "${sup_repo}" config user.name t
 git -C "${sup_repo}" add -A
-git -C "${sup_repo}" commit -qm pin
+git -C "${sup_repo}" -c commit.gpgsign=false commit -qm pin
 sup_link="$(git -C "${sup_repo}" rev-parse HEAD)"
 sup_inst="${tmp}/install-sup"
 mkdir -p "${sup_inst}"
-cp -R "${sp}/agents" "${sp}/skills" "${sup_inst}/"
+cp -R "${sp}/agents" "${sp}/skills" "${sp}/scripts" "${sup_inst}/"
 # Identical package must be CURRENT -- the permanent-UNKNOWN regression this guards against.
 if out="$("${script}" --repo-root "${tmp}/sup" --gitlink "${sup_link}" --installed "${sup_inst}" 2>&1)"; then
   ok "a skill package with supporting files reports CURRENT when identical"
@@ -333,15 +426,17 @@ printf 'reviewed engineer definition\n' > "${mp}/agents/agentic-engineer.agent.m
 printf 'reviewed alpha procedure\n'      > "${mp}/skills/alpha/SKILL.md"
 printf '#!/bin/sh\necho helper\n'        > "${mp}/skills/alpha/helper.sh"
 chmod +x "${mp}/skills/alpha/helper.sh"
+add_runtime_asset_fixture "${mp}"
+write_desired_state_fixture "${tmp}/mode"
 git -C "${mode_repo}" init -q
 git -C "${mode_repo}" config user.email t@example.invalid
 git -C "${mode_repo}" config user.name t
 git -C "${mode_repo}" add -A
-git -C "${mode_repo}" commit -qm pin
+git -C "${mode_repo}" -c commit.gpgsign=false commit -qm pin
 mode_link="$(git -C "${mode_repo}" rev-parse HEAD)"
 mode_inst="${tmp}/install-mode"
 mkdir -p "${mode_inst}"
-cp -R "${mp}/agents" "${mp}/skills" "${mode_inst}/"
+cp -R "${mp}/agents" "${mp}/skills" "${mp}/scripts" "${mode_inst}/"
 # Identical, executable bit intact -> CURRENT. Without this the next assertion could pass trivially.
 if "${script}" --repo-root "${tmp}/mode" --gitlink "${mode_link}" --installed "${mode_inst}" >/dev/null 2>&1; then
   ok "an executable helper with its mode intact reports CURRENT"
@@ -368,6 +463,7 @@ printf '{"truncated":true,"tree":[]}\n'
 SHIM
 chmod +x "${shim}/gh"
 mkdir -p "${tmp}/trunc"
+write_desired_state_fixture "${tmp}/trunc"
 cat > "${tmp}/trunc/.gitmodules" <<'GM'
 [submodule "libraries/agent-plugins"]
 	path = libraries/agent-plugins
@@ -491,6 +587,201 @@ esac
 case "${section}" in
   *"blob identity"*) ok "the contract pins comparison by blob identity, not a version string" ;;
   *) fail "the plugin contract section does not require comparison by blob identity" ;;
+esac
+
+# ── 10. The fallback must be EXECUTABLE, not just named ───────────────────────
+# monorepo#2854: naming the reviewed definition as the fallback is not enough, because neither way a
+# run can reach it works unaided. The submodule holding it is empty in a fresh per-run worktree
+# (measured 2026-08-15: most live worktrees carried zero entries there), and where it IS populated —
+# the shared checkout — it sits at whatever revision it was last left on rather than this commit's
+# gitlink (measured the same day: bfde8656 against a pinned 564a6a0f, differing by 311 inserted and
+# 43 deleted lines across all four definition files). The second is the fail-open: it returns a
+# plausible definition, so the run believes it complied while following an unreviewed revision.
+# Measured impact: of the 5 sessions that saw DRIFT that day, only 2 read any reviewed definition.
+# Matched as COMPLETE commands including their path argument. A bare "submodule-init.sh" would still
+# pass if an edit retargeted it at another submodule, and a bare "rev-parse HEAD" would pass if the
+# read-back were pointed somewhere other than the path just materialised — which is precisely the
+# wrong-revision read this section exists to stop.
+case "${section}" in
+  *".claude/scripts/submodule-init.sh libraries/agent-plugins"*)
+    ok "the contract names the exact materialisation command and its target" ;;
+  *) fail "the plugin contract section does not name the exact command that materialises the reviewed definition" ;;
+esac
+# The materialisation alone is still fail-open — it is the revision ASSERTION that converts a
+# wrong-revision read from a silent pass into a stop. Pinned separately so an edit cannot drop the
+# check while keeping the command, and bound to the SAME path so the two cannot drift apart.
+case "${section}" in
+  *"git -C libraries/agent-plugins rev-parse HEAD"*)
+    ok "the contract reads the revision back from the path it materialised" ;;
+  *) fail "the plugin contract section does not read the materialised revision back from that same path" ;;
+esac
+case "${section}" in
+  *"must equal the pinned revision"*)
+    ok "the contract requires the materialised revision to equal the pin" ;;
+  *) fail "the plugin contract section does not require the materialised revision to equal the pin" ;;
+esac
+# The shared checkout is the specific trap, so it is named rather than left to inference: a run that
+# has not been told the populated copy can be the WRONG copy has no reason to suspect it.
+case "${section}" in
+  *"shared checkout"*)
+    ok "the contract warns that the populated shared checkout may be the wrong revision" ;;
+  *) fail "the plugin contract section does not warn about the shared checkout's revision" ;;
+esac
+# Detecting the mismatch is only half of it: the run also has to be told what to DO. Re-running the
+# materialisation is the intuitive move and it cannot work — handed an already-populated submodule the
+# helper repairs isolation and refuses `git submodule update`, exiting `isolated ✓` on the stale
+# revision. Without this assertion the contract could name the comparison and leave the recovery to
+# guesswork, which lands straight back on the stale definition.
+case "${section}" in
+  *"a STOP, not a retry"*)
+    ok "the contract says a revision mismatch stops rather than retries" ;;
+  *) fail "the plugin contract section does not say a revision mismatch is a stop rather than a retry" ;;
+esac
+case "${section}" in
+  *"fresh isolated worktree"*)
+    ok "the contract names the recovery for a revision mismatch" ;;
+  *) fail "the plugin contract section does not name the recovery path after a revision mismatch" ;;
+esac
+
+# ── 11. The fallback must survive the cases that BREAK a working tree ─────────
+# Codex review of monorepo#2855 (3×P1, all verified against the scripts): the section 10 procedure
+# assumed a usable working tree, and each of its three assumptions fails in a case the fallback is
+# actually reached in.
+#
+# (a) The pin was sourced from "the pinned revision the check printed" — but every `die` in
+# plugin-definition-currency.sh exits BEFORE its reporting block (the pin prints at the `say` well
+# after the last `die`), so an UNKNOWN prints no pin at all. UNKNOWN is exactly when this fallback is
+# reached, so the instruction was unfollowable in its own trigger case. Matched as the complete
+# `HEAD:<path>` form: a bare "rev-parse" already appears above for the read-back.
+#
+# The match starts at `rev-parse`, NOT at `git`, because git-level flags sit between the two — the
+# section's pin line carries `--no-replace-objects` there, and a literal starting at `git` asserts
+# command SPELLING where the intent is that the pin comes from the gitlink rather than the check's
+# stdout. Hardening that command would then falsify this assertion, which is what it must not do.
+# `HEAD:<path>` is still what discriminates: the read-back above is `rev-parse HEAD` with no
+# colon-path, and the byte-comparison loop reads `rev-parse "HEAD:$f"`, so neither satisfies this.
+case "${section}" in
+  *"rev-parse HEAD:libraries/agent-plugins"*)
+    ok "the contract resolves the pin independently of the check's output" ;;
+  *) fail "the plugin contract section does not name a pin source independent of the check" ;;
+esac
+# (b) A working-tree-free path must exist, because BOTH tree-based paths can fail: the submodule is
+# empty in a fresh worktree and `submodule-init.sh` can die STILL EMPTY there (its own comment
+# records `git submodule update --init` exiting 0 having populated nothing, observed from a linked
+# superproject). Without this, the prescribed recovery dead-ends and the run stops rather than
+# reading the reviewed definition. Matched on the repo-qualified contents path so the assertion
+# cannot be satisfied by an unrelated `gh api` elsewhere in the section.
+case "${section}" in
+  *"repos/devantler-tech/agent-plugins/contents"*)
+    ok "the contract names a read that needs no working tree" ;;
+  *) fail "the plugin contract section does not name a working-tree-free read of the reviewed definition" ;;
+esac
+case "${section}" in
+  *"STILL EMPTY"*)
+    ok "the contract says a STILL EMPTY materialisation is not the end of the run" ;;
+  *) fail "the plugin contract section does not tell a run what to do when materialisation populates nothing" ;;
+esac
+# (c) HEAD == pin does not establish CONTENT. Handed an already-populated submodule the helper
+# repairs isolation in place and refuses `git submodule update`, so a modified tracked definition
+# survives with HEAD still at the pin — the revision assertion passes over unreviewed instructions.
+# Bound to the same path as the revision read so the two cannot drift apart.
+case "${section}" in
+  *"git -C libraries/agent-plugins status --porcelain"*)
+    ok "the contract asserts the materialised tree is clean, not just its revision" ;;
+  *) fail "the plugin contract section does not require the materialised submodule tree to be clean" ;;
+esac
+# status alone is blind to assume-unchanged/skip-worktree, which is how a foreign edit hides from it
+# — the same hidden-index hole the Git-safety contract already closes for checkout.
+case "${section}" in
+  *"ls-files -v"*)
+    ok "the contract closes the hidden-index hole in that cleanliness check" ;;
+  *) fail "the plugin contract section does not close the hidden-index hole in its cleanliness check" ;;
+esac
+
+# ── 12. The prose must pin the OUTCOME, not merely name the tool ──────────────
+# CodeRabbit on monorepo#2855: naming `STILL EMPTY`, `status --porcelain` and `ls-files -v` proves
+# only that the document mentions them — not that STILL EMPTY routes to the forge read, nor that the
+# status output is required to be EMPTY. A contract that names a command without its required outcome
+# is the same "named but not executable" gap section 10 exists to close, one level down.
+#
+# Patterns below are SINGLE-quoted: they contain `$(` and `${`, which inside a double-quoted case
+# pattern would be command-substituted / expanded, silently changing what is matched.
+#
+# Split around the git-level flag slot for the reason given at the pin-source assertion above: the
+# section's pin line carries `--no-replace-objects` between `git` and `rev-parse`, and each of the
+# two segments occurs exactly once in the section, so the split cannot be satisfied vacuously.
+case "${section}" in
+  *'pin=$(git '*'rev-parse HEAD:libraries/agent-plugins)'*)
+    ok "the contract BINDS the resolved pin to a variable" ;;
+  *) fail "the plugin contract section does not bind the resolved pin to a variable" ;;
+esac
+# The bind is only worth anything if the forge request consumes it — a resolved-then-retyped revision
+# is exactly the wrong-revision read this section exists to stop.
+case "${section}" in
+  *'?ref=${pin}'*)
+    ok "the forge read consumes the pin that was just resolved" ;;
+  *) fail "the plugin contract section does not pass the resolved pin to the forge read" ;;
+esac
+# Ordering matters: the pin must be resolved BEFORE it is consumed, or the documented sequence cannot
+# be executed top-to-bottom as written.
+case "${section}" in
+  *'pin=$(git '*'rev-parse HEAD:libraries/agent-plugins)'*'?ref=${pin}'*)
+    ok "the pin is resolved before the forge read consumes it" ;;
+  *) fail "the plugin contract section resolves the pin after the forge read that consumes it" ;;
+esac
+case "${section}" in
+  *"fall back to the forge read"*)
+    ok "STILL EMPTY routes to the forge read rather than ending the run" ;;
+  *) fail "the plugin contract section does not route a STILL EMPTY materialisation to the forge read" ;;
+esac
+case "${section}" in
+  *"must print nothing"*)
+    ok "the cleanliness check pins its required outcome, not just its command" ;;
+  *) fail "the plugin contract section does not require the cleanliness check to print nothing" ;;
+esac
+
+# ── 13. The byte check must FAIL CLOSED, not merely exist ────────────────────
+# CodeRabbit on monorepo#2855 (🟠 Major, verified on fixtures): the byte-comparison loop is the one
+# assertion that survives a clean/smudge filter, so a hole in IT has no backstop. Three failure paths
+# made the naive form report success on a check that never ran, and the emptiest evidence produced
+# the strongest-looking result:
+#   (a) piping `ls-tree` into the loop takes the WHILE's status, so an enumeration failure runs the
+#       body zero times and prints nothing — identical output to a verified tree;
+#   (b) in an UNINITIALISED submodule every git call fails, so `want` and `got` are BOTH empty and
+#       `[ "$want" = "$got" ]` compares EQUAL — and an empty submodule is precisely the state this
+#       fallback is reached in;
+#   (c) `ls-tree` without `--no-replace-objects` enumerates a replaced tree while the lookups beside
+#       it do not, spanning two object namespaces inside one comparison.
+# Each assertion below pins the OUTCOME (a marker is emitted / a value is rejected), per section 12.
+case "${section}" in
+  *'--no-replace-objects ls-tree -r --name-only HEAD'*)
+    ok "the byte check enumerates in the same object namespace it compares in" ;;
+  *) fail "the byte check's ls-tree does not carry --no-replace-objects (two object namespaces)" ;;
+esac
+# Matched contiguously ON PURPOSE: the flag appears three times in this section, so a split pattern
+# would be satisfied by the pin line's occurrence even if ls-tree lost the flag entirely.
+case "${section}" in
+  *'BYTES-UNKNOWN <enumeration failed>'*)
+    ok "an enumeration failure is reported rather than read as no-differences" ;;
+  *) fail "the byte check does not report an enumeration failure (silent pass on a check that never ran)" ;;
+esac
+case "${section}" in
+  *'[ -n "$want" ] && [ -n "$got" ]'*)
+    ok "the byte check rejects empty hashes instead of comparing them equal" ;;
+  *) fail "the byte check does not reject empty hashes (two failed lookups would compare EQUAL)" ;;
+esac
+# The markers are worthless if the prose still says only a DIFFER means trouble.
+case "${section}" in
+  *"unproven is not proven"*)
+    ok "the contract counts BYTES-UNKNOWN as a failure, not as a pass" ;;
+  *) fail "the contract does not say an unverifiable byte check fails closed" ;;
+esac
+# Command substitution strips the trailing newline, so a bare `printf '%s'` makes `read` return false
+# on the final entry and drops the LAST file from the sweep unchecked — a silent partial verification.
+case "${section}" in
+  *"printf '%s\\n' \"\$files\""*)
+    ok "the byte check sweeps every file, including the last" ;;
+  *) fail "the byte check drops its last entry (printf without a trailing newline)" ;;
 esac
 
 echo "plugin-definition-currency: ${pass_count} assertions passed"

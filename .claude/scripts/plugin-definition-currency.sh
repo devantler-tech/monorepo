@@ -13,13 +13,14 @@
 # is a runtime control-plane action (the `/plugin` marketplace update), never a cache edit.
 #
 # Comparison is by GIT BLOB IDENTITY, not by version string: a version can be bumped without the
-# definitions moving, and — the case that actually bit — the definitions can be superseded while the
-# installed version string still looks plausible.
+# loaded files moving, and — the case that actually bit — the definitions can be superseded while the
+# installed version string still looks plausible. The loaded surface is every agent and skill file
+# plus every provider-neutral requiredRuntimeAsset declared by this consumer.
 #
 # Usage: plugin-definition-currency.sh [--repo-root DIR] [--plugins-root DIR] [--gitlink SHA]
 #                                      [--installed DIR] [--submodule-path PATH] [--quiet]
 #
-# Exit 0  every pinned definition file was CLASSIFIED and MATCHED
+# Exit 0  every pinned loaded file was CLASSIFIED and MATCHED
 #      1  DRIFT — at least one differs, is missing, or is unexpected
 #      2  UNKNOWN — could not determine (usage error, unresolvable install, unreachable revision,
 #         or a path inside the definition directories this script cannot classify)
@@ -116,6 +117,29 @@ if [ -z "$INSTALLED" ]; then
 fi
 [ -d "$INSTALLED" ] || die "installed plugin path does not exist: $INSTALLED"
 
+# Agents and skills are implicit runtime entrypoints. Other executable dependencies are explicit in
+# the provider-neutral desired state; omitting them is how a stale classifier continued to report
+# CURRENT even though the surveyor actually executed it. Read the consumer declaration that the
+# delivery-contract test separately proves byte-identical to the pinned plugin resource.
+command -v jq >/dev/null 2>&1 || die "jq is required to read the provider-neutral runtime assets"
+desired_state="$REPO_ROOT/.claude/plugin-consumption/agentic-engineering.desired-state.json"
+[ -r "$desired_state" ] || die "cannot read the provider-neutral desired state: $desired_state"
+runtime_assets="$(jq -er '
+    .spec.source.requiredRuntimeAssets
+    | select(type == "array" and length > 0)
+    | select(all(.[];
+        type == "object"
+        and (.path | type == "string" and test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"))
+        and (.sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+        and .executable == true
+      ))
+    | select((map(.path) | unique | length) == length)
+    | .[].path
+  ' "$desired_state" 2>/dev/null)" \
+  || die "provider-neutral requiredRuntimeAssets are missing or malformed in $desired_state"
+[ -n "$runtime_assets" ] \
+  || die "provider-neutral requiredRuntimeAssets are empty in $desired_state"
+
 # ── the pinned revision's definition tree ──────────────────────────────────────
 # Prefer the local submodule object database (offline, no API budget). Fall back to the forge only
 # when the pinned commit is not present locally, which is the normal state of a fresh worktree.
@@ -152,21 +176,38 @@ else
 fi
 [ -n "$tree" ] || die "pinned revision $GITLINK yielded no tree entries"
 
-# README, the manifest and resources/ stay outside the surface: they sit outside these two
-# directories, so a version bump that moves no definition still does not fire.
+# README, the manifest and resources/ stay outside the surface: a version bump that moves no loaded
+# behaviour still does not fire. Runtime assets are an explicit allow-list, never all of scripts/.
 reviewed="$(printf '%s
 ' "$tree" \
-  | awk -F'	' -v p="$prefix" '
+  | awk -F'	' -v p="$prefix" -v runtime="$runtime_assets" '
+      BEGIN {
+        count = split(runtime, paths, "\n")
+        for (i = 1; i <= count; i++) required[paths[i]] = 1
+      }
       substr($3,1,1)=="\"" { print "QUOTED" ORS; next }
       index($3,p)==1 {
         rel = substr($3, length(p) + 1)
-        if (rel ~ /^agents\// || rel ~ /^skills\//) print $1 "	" $2 "	" rel
+        if (rel ~ /^agents\// || rel ~ /^skills\// || required[rel]) print $1 "	" $2 "	" rel
       }' \
   | sort -k3,3)"
 case "$reviewed" in
   QUOTED*|*"${nl}QUOTED"*) die "the pinned tree contains a path git had to quote (tab, newline or backslash) — cannot verify it${RECOVERY}" ;;
 esac
 [ -n "$reviewed" ] || die "pinned revision $GITLINK contains no definition files under $prefix"
+
+# A declaration absent from the pinned tree must be UNKNOWN, not silently omitted from both sides.
+# Executability is part of the provider-neutral contract, so a non-executable pin is invalid even if
+# the install happens to carry the same non-executable mode.
+while IFS= read -r runtime_asset; do
+  [ -n "$runtime_asset" ] || continue
+  runtime_record="$(printf '%s\n' "$reviewed" | awk -F'	' -v r="$runtime_asset" '$3==r{print $2 "\t" $3}')"
+  [ -n "$runtime_record" ] \
+    || die "required runtime asset '$runtime_asset' is absent from pinned revision $GITLINK"
+  runtime_mode="${runtime_record%%$'\t'*}"
+  [ "$runtime_mode" = 100755 ] \
+    || die "required runtime asset '$runtime_asset' is not executable at pinned revision $GITLINK"
+done <<< "$runtime_assets"
 
 # ── compare ────────────────────────────────────────────────────────────────────
 drift=0
@@ -175,14 +216,27 @@ say "pinned revision : $GITLINK"
 say "installed copy  : $INSTALLED"
 say ""
 
+installed_path_has_symlink() {
+  local rel_path="$1" probe="$INSTALLED" segment
+  while [ -n "$rel_path" ]; do
+    case "$rel_path" in
+      */*) segment="${rel_path%%/*}"; rel_path="${rel_path#*/}" ;;
+      *) segment="$rel_path"; rel_path="" ;;
+    esac
+    probe="$probe/$segment"
+    [ ! -L "$probe" ] || return 0
+  done
+  return 1
+}
+
 while IFS=$'\t' read -r rev_sha rev_mode rel; do
   [ -n "$rel" ] || continue
   checked=$((checked + 1))
-  if [ -L "$INSTALLED/$rel" ]; then
+  if installed_path_has_symlink "$rel"; then
     # -f, `git hash-object` and -x all FOLLOW a symlink, so a definition replaced by a link to an
-    # identical file passed every test. The pinned tree has no symlinks (an unsupported mode already
-    # fails closed), so a link here is drift by construction.
-    say "DRIFT    $rel  installed as a SYMLINK where the pinned revision has a regular file"
+    # identical file passed every test. Check every component as well as the leaf: a scripts/
+    # symlink can redirect a required asset while the final file itself is regular.
+    say "DRIFT    $rel  installed through a SYMLINK where the pinned revision has a regular path"
     drift=$((drift + 1))
     continue
   fi
@@ -246,13 +300,13 @@ done < <(sort "$inst_list")
 
 say ""
 if [ "$drift" -eq 0 ]; then
-  say "CURRENT — $checked pinned definition(s) match the installed copy."
+  say "CURRENT — $checked pinned loaded file(s) match the installed copy."
   exit 0
 fi
 
 # `drift` counts EXTRA files too, which are not among the `checked` pinned definitions — so phrasing
 # this as "N of M differ" can print a count larger than its own denominator.
-say "DRIFT — $drift finding(s) across $checked pinned definition(s)."
+say "DRIFT — $drift finding(s) across $checked pinned loaded file(s)."
 say ""
 say "What to do, in this order:"
 say "  1. Do NOT proceed as if the loaded definition were current. Read the reviewed definition at"

@@ -127,6 +127,10 @@ card.
    through the runtime's supported path when needed and **restart the run** because this session did
    not start with the projection the guard checked;
    other exit-2 causes may rerun the guard in this session after resolution.
+   **Before any destructive rewrite of an author-managed (legacy) file**, take a timestamped copy:
+   `.claude/scripts/memory-backup.sh <file>` (or `--all <memory-dir>` for a whole-store snapshot).
+   Restore with `cp '<backup>' '<file>'`. The store is un-versioned; a trim without a backup is
+   unrecoverable (monorepo#2304). Prefer append; rewrite only after that backup.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
    rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
@@ -194,6 +198,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   continues the remaining portfolio-wide default-head sweep as broad health evidence. A candidate
   repository query failure blocks that candidate; a different repository's failure remains the
   scoped `QUERY-UNKNOWN` described above and does not revoke already-complete candidate clearance;
+- uses the reviewed plugin surveyor's required default-branch classifier for current-head `main`
+  health and keeps only the deployment-specific GitHub-managed routing policy in the local overlay;
+  a local copy or inline reimplementation is definition drift (monorepo#2173, agent-plugins#137);
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
   broad author-based search, because scheduled discovery must not expose professional-work repos;
 - flags untriaged issues/PRs, stale actionable PRs (>14d), `roadmap`-ready issues, and products with
@@ -451,19 +458,22 @@ submodule. Split its work in two, because only one half is path-less:
 - **Board/API mutations** (types, statuses, hierarchy links, item backfills, a browser pass for a
   *view* edit) touch no files, so **skip worktree/submodule-init/validate** — there is nothing to
   check out and no build to validate. Don't let the repo-shaped Act step below cause the board to be
-  skipped for want of a `<path>`. ⚠️ **But you still need a CLAIM**: with no branch to push, a bare
-  assignment is not a claim, so two instances can pick the same board issue and mutate the board
-  concurrently. Before mutating, **comment the claim on the issue** (disclosure line + what you are
-  about to change) and **re-read the issue immediately before acting** — if a sibling's disclosed
-  claim is already there, that lane is owned; pick something else. **The claim MUST expire and MUST be
-  closed out**, or a crashed run blocks the issue forever: treat a disclosed claim as **live for ~2
-  hours** (matching the branch-claim lease) and **stale after that — take it over and say so in a
-  reply**. On finishing, **reply to your own claim** stating what changed; an un-replied claim older
-  than the lease is abandoned, not owned.
+  skipped for want of a `<path>`. ⚠️ **But you still need the shared claim.** Board roadmap issues
+  live in `devantler-tech/monorepo`, so the issue-owning repository is the monorepo even though the
+  mutation itself is path-less. Acquire it explicitly and retain the ownership token:
+  `claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <monorepo-root>)"`.
+  Immediately recheck for an open `#<issue>` PR and stand down (retiring only that SHA) if one
+  appeared. **Atomically renew the retained SHA immediately before the board mutation** with
+  `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir <monorepo-root>)"`
+  and stand down without mutating if renewal fails. After the mutation, read the board state back; **retire the acquired SHA after the
+  board/API mutation is verified** and before closing the issue or recording completion. On a
+  controlled failure before mutation, retire before surfacing the failure. Only a crashed process
+  leaves a tip, and the ordinary ~2h lease plus evidence-gated takeover recovers it.
 - **Any accompanying file change** (an `add-to-project` workflow, an agent-definition or card update)
   is **ordinary monorepo work and keeps the FULL discipline** — per-run worktree, validate, draft PR.
   **Never skip isolation for it:** several instances run concurrently, and editing the shared checkout
-  is exactly the collision this loop's worktree rule exists to prevent.
+  is exactly the collision this loop's worktree rule exists to prevent. Retire the board issue's
+  acquired SHA when that draft PR opens, using the same monorepo root.
 
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
@@ -648,26 +658,51 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
 7. **Resolve the next issue by the ladder** *(the default advance action)* — take the highest rung
    with actionable work: open `type:"Security"` issues first, then `type:"Bug"`, then the **oldest**
    startable issue (contract *The work-selection ladder*). Within a rung, oldest first.
-   Skip one only if it's blocked, too under-specified to begin, or
-   it already has an open PR. A **bare `devantler` assignee does *not* reserve** an issue
-   **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
-   (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
-   (timed from the issue's newest `devantler` `assigned` timeline event, never a branch commit date).
+   Skip one only if it already has an open PR, is too under-specified to begin, is blocked on a
+   named external dependency that satisfies the consumer contract, or is a delivered experiment
+   awaiting its **named, future measurement date** recorded on the issue and not yet elapsed (contract
+   skip clause (d) — once that date arrives, measuring and recording the decision *is* the actionable
+   work). A `blocked` label or blocker prose
+   is never sufficient: apply the contract's *External-blocker verification* rule before every
+   external-blocker skip, including its structured record and fresh per-run non-repository check. A
+   missing, malformed, or inherited blocker record is not a skip. A **bare `devantler` assignee does
+   *not* reserve** an issue
+   **indefinitely** — an `agent-claim/<issue>` tip inside its lease, or a `devantler` assignment plus
+   a **pushed lane branch**, is a live claim for ~2h (contract *Claim protocol*), and with neither
+   signal, or once that lapses with no PR, you may pick it up (the assignee lease is timed from the
+   issue's newest `devantler` `assigned` timeline event, never a branch commit date).
    **Only the agent account's assignment is a claim, and only it expires:** an issue assigned to a
    **human collaborator** (or `Copilot`) is someone else's work-in-progress — respect it and pick a
    different issue, never take it over on this window. **Claim
-   before you build:** self-assign + push the branch **with the issue number in its name** the moment
-   you select — and if `devantler` is ALREADY assigned (a stale bare assignment from an abandoned run),
-   **remove then re-add**, since adding an existing assignee is a no-op that would leave your lease
-   carrying the old timestamp. **The push decides the race:** put a real commit on the claim branch
-   (never a bare base pointer), push without force, then confirm `git ls-remote` shows YOUR sha on
-   **the branch you actually pushed** — resolve that ref from the **issue number** (base
-   `…-<issue>` or a `…-<issue>-k` takeover), never an assumed exact stem (contract *Claim protocol*
-   rule 4). Two instances derive the same branch name, so a rejected push or someone else's tip means
-   you lost; stand down rather than force over them. Check open PRs (same-repo body refs only — drop
-   hits whose only `#<issue>` is a foreign `owner/repo#<issue>`), remote
-   `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
-   (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
+   before you build — lane-neutral tip FIRST:** acquire `agent-claim/<issue>` and retain its SHA via
+   `claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <product-path>)"`
+   (cross-lane race; LOST/exit 1 → stand down; exit 2 with no competing tip → record a
+   capability/service gap) — **`--repo-dir` is required for a submodule's issue**: numbers are
+   repository-scoped, so a bare call from the monorepo checkout locks the same-numbered *monorepo*
+   issue and leaves the one you selected unclaimed. Populate the submodule first
+   (`submodule-init.sh`), and call the **root** helper with `--repo-dir` rather than `cd`-ing into
+   the product (the relative script path does not resolve from there). **Immediately after winning,
+   recheck for an open PR whose body references `#<issue>`**; if one appeared during the
+   claim-to-draft handoff, retire only `"$claim_sha"` in that same repository and stand down. Then
+   self-assign when your identity can (and if `devantler` is ALREADY assigned, **remove then
+   re-add**, since adding an existing assignee is a no-op that would leave your lease carrying the
+   old timestamp). **Immediately before pushing the lane branch or opening its draft PR**, and
+   **again after any resumed pause**, **atomically renew the retained SHA** with
+   `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir <product-path>)"`;
+   a failed renew means a takeover won or ownership is unknown, so abandon without pushing or opening
+   a competing PR. Then push the
+   lane work branch **with the issue number in its name**. **The
+   shared tip decides the race:** the helper writes a nonced commit, pushes without force, and
+   verifies `git ls-remote` shows YOUR sha — never judge by the push's exit status or through a
+   pipe (`push | tail` reports `tail`'s 0 on a rejection). Retire the tip when the draft PR opens
+   (`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <product-path>` — same repository and
+   exact acquired SHA as the acquire);
+   a tip with no open PR past the ~2h lease may be taken over
+   with `--takeover` only after confirming no open `#<issue>` PR. Check open PRs (same-repo body refs
+   only — drop hits whose only `#<issue>` is a foreign `owner/repo#<issue>`), remote
+   `agent-claim/<issue>` tips, lane work branches (`claude/*`/`codex/*`/`cursor/*`) AND assignees by
+   **issue number, never literal branch name**. A live claim (shared tip in-window, or assigned +
+   branched in-window, no PR) is skip reason **(e)** — the only one that expires by
    itself. An issue **authored by an exact dependency-automation identity** (`renovate[bot]` /
    `dependabot[bot]`, `app/renovate` / `app/dependabot`) is skip reason **(f)**: it is
    automation-owned, **never actionable at all**, and is never selected, worked, or closed — match the
@@ -678,7 +713,11 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    contributor's branch locally (trust gate — execution only; driving and merging it is yours). **`type:"Spike"` is not a delivery-PR path**
    (#2267): when the selected issue is a Spike, record the decision on the Spike and file its
    follow-up issues — that pair is the floor artifact; do **not** invent a draft PR for it (same
-   rule as [`product-engineering`](../product-engineering/SKILL.md) §3). Otherwise ship it: tests +
+   rule as [`product-engineering`](../product-engineering/SKILL.md) §3). Since no PR opens to perform
+   normal cleanup, **atomically renew the retained SHA** immediately before publishing the decision
+   or follow-up issues with `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha"
+   --repo-dir <product-path>)"`, then **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
+   and before closing the Spike. Otherwise ship it: tests +
    validate + **draft PR**; use `Fixes #delivery` and, when later measurement keeps the experiment
    open, `Part of #experiment`.
 8. **Capture new finds as issues** — a coverage hole, perf hotspot, refactor target, docs gap, security

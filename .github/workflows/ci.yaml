@@ -29,6 +29,7 @@ jobs:
       agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
       latency-discipline-contract: ${{ steps.filter.outputs.latency-discipline-contract }}
+      control-character-command-contract: ${{ steps.filter.outputs.control-character-command-contract }}
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
@@ -38,6 +39,8 @@ jobs:
       board-add: ${{ steps.filter.outputs.board-add }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
+      agent-claim: ${{ steps.filter.outputs.agent-claim }}
+      memory-backup: ${{ steps.filter.outputs.memory-backup }}
       worktree-claim: ${{ steps.filter.outputs.worktree-claim }}
       renovate-dashboard: ${{ steps.filter.outputs.renovate-dashboard }}
       comment-disclosure-drift: ${{ steps.filter.outputs.comment-disclosure-drift }}
@@ -126,6 +129,19 @@ jobs:
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
+            agent-claim:
+              - '.claude/scripts/agent-claim.sh'
+              - '.claude/scripts/agent-claim.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            memory-backup:
+              - '.claude/scripts/memory-backup.sh'
+              - '.claude/scripts/memory-backup.test.sh'
+              - '.claude/scripts/memory-backup-go/**'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             comment-disclosure-drift:
               # AGENTS.md carries the disclosure contract this guard enforces, so a
               # PR that edits only those rules must still run the job — otherwise
@@ -195,6 +211,10 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/latency-discipline-contract.test.sh'
               - '.github/workflows/ci.yaml'
+            control-character-command-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/control-character-command-contract.test.sh'
+              - '.github/workflows/ci.yaml'
             git-safety-contract:
               - 'AGENTS.md'
               - '.claude/scripts/git-safety-contract.test.sh'
@@ -251,6 +271,7 @@ jobs:
             work-priority-ladder:
               - 'AGENTS.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/scripts/work-priority-ladder.test.sh'
               - '.github/workflows/ci.yaml'
@@ -744,6 +765,55 @@ jobs:
       - name: Verify the memory hygiene guard
         run: bash .claude/scripts/memory-hygiene.test.sh
 
+  test-agent-claim:
+    name: Test agent-claim arbitration
+    needs: changes
+    if: needs.changes.outputs.agent-claim == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hermetic bare-origin fixture — no network, no token. Pins seven
+      # cross-lane claim traps (monorepo#2302): arbitration, tip-based verdicts,
+      # nonce uniqueness, takeover/retire ownership, remote-parent fetch, and
+      # capability-failure classification.
+      - name: Self-test agent-claim traps
+        run: bash .claude/scripts/agent-claim.test.sh
+
+  test-memory-backup:
+    name: Test memory backup helper (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.memory-backup == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/memory-backup-go/go.mod
+          cache: false
+      - name: Verify the memory backup helper
+        run: |
+          go -C .claude/scripts/memory-backup-go test ./...
+          bash .claude/scripts/memory-backup.test.sh
+
   test-product-value-contract:
     name: Test product value contract
     needs: changes
@@ -773,6 +843,21 @@ jobs:
           persist-credentials: false
       - name: Verify the latency discipline contract
         run: bash .claude/scripts/latency-discipline-contract.test.sh
+
+  test-control-character-command-contract:
+    name: Test control character command contract
+    needs: changes
+    if: needs.changes.outputs.control-character-command-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the control character command contract
+        run: bash .claude/scripts/control-character-command-contract.test.sh
 
   test-git-safety-contract:
     name: Test git safety contract
@@ -934,7 +1019,10 @@ jobs:
       - test-pipefail-grep-guard
       - test-maintainer-preflight
       - test-memory-hygiene
+      - test-agent-claim
+      - test-memory-backup
       - test-latency-discipline-contract
+      - test-control-character-command-contract
       - test-git-safety-contract
       - test-plugin-definition-currency
       - test-self-review-contract
@@ -968,7 +1056,10 @@ jobs:
             ${{ needs.test-pipefail-grep-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
+            ${{ needs.test-agent-claim.result }}
+            ${{ needs.test-memory-backup.result }}
             ${{ needs.test-latency-discipline-contract.result }}
+            ${{ needs.test-control-character-command-contract.result }}
             ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-self-review-contract.result }}

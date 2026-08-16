@@ -1233,96 +1233,45 @@ expect_classifier_error \
 # cursor/* and codex/*; a surveyor that only greps ^claude/ cannot see those pre-PR claims.
 # The scan must also NOT be gated on assignees — app/cursor cannot assign, so a Cursor claim
 # is branch-only until its draft PR opens.
-grep -Fq "grep -E '^(claude|cursor|codex)/'" "${surveyor}" ||
-  fail "surveyor claim-branch scan does not cover claude/, cursor/, and codex/ prefixes"
+grep -Fq "grep -E '^(agent-claim/[1-9][0-9]*|(claude|cursor|codex)/)'" "${surveyor}" ||
+  fail "surveyor claim scan does not cover the shared tip and all three lane prefixes"
 grep -Fq '(claude|cursor|codex)/*-<issue>' "${surveyor}" ||
   fail "surveyor CLAIMED matching does not name all three lane prefixes"
 grep -Fq 'Do not gate this scan on assignees' "${surveyor}" ||
   fail "surveyor claim-branch scan is still gated on assignees (hides cursor/* claims)"
 grep -Fq 'none(cursor-lane)' "${surveyor}" ||
   fail "surveyor CLAIMED digest does not allow cursor-lane branch-only claims"
+grep -Fq 'commit.committer.date' "${surveyor}" ||
+  fail "surveyor does not read the shared tip lease clock"
+grep -Fq 'claim=agent-claim/<issue>@<sha>@<age>' "${surveyor}" ||
+  fail "surveyor CLAIMED grammar cannot emit a live shared tip"
+grep -Fq 'shared tip alone is enough' "${surveyor}" ||
+  fail "surveyor still requires a lane branch before recognizing a shared claim"
+# shellcheck disable=SC2016 # literal ownership-token command in the loader contract
+grep -Fq '`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <selected-repo-path>`' "${cursor_loader}" ||
+  fail "Cursor loader retirement does not invoke the repository-qualified helper"
 
-# Claim-protocol P2s (#2250) — contract + echo sites must stay in sync.
-grep -Fq 'Resolve the claim ref from the issue number' "${constitution}" ||
-  fail "constitution missing issue-number claim-ref resolution (#2250)"
-grep -Fq 'branch you actually pushed' "${constitution}" ||
-  fail "constitution missing takeover tip verification (#2250)"
+# Same-repo PR-body claim filter (#2250) — echoed at every site that tells a run how to decide
+# "no open PR". `-R` scopes the PR *list* to this repo, but a body can still name a foreign
+# `owner/repo#<issue>`, which is not a claim on this repo's issue; counting it hides the oldest
+# actionable issue behind an unrelated PR.
 grep -Fq 'foreign `owner/repo#<issue>`' "${constitution}" ||
   fail "constitution missing same-repo PR-body claim filter (#2250)"
-grep -Fq 'branch you actually pushed' "${maintenance_skill}" ||
-  fail "portfolio-maintenance missing takeover tip echo (#2250)"
+grep -Fq 'foreign `owner/repo#<issue>`' "${maintenance_skill}" ||
+  fail "portfolio-maintenance missing same-repo PR-body claim filter (#2250)"
 grep -Fq 'foreign `owner/repo#N`' "${product_engineering_skill}" ||
   fail "product-engineering missing same-repo body-ref echo (#2250)"
 grep -Fq 'foreign `owner/repo#<issue>`' "${surveyor}" ||
   fail "surveyor missing same-repo PR-body claim filter (#2250)"
-grep -Fq '…-<issue>-2' "${monorepo_skill}" ||
-  fail "monorepo card missing takeover branch echo (#2250)"
+grep -Fq 'foreign `owner/repo#<issue>`' "${monorepo_skill}" ||
+  fail "monorepo card missing same-repo body-ref echo (#2250)"
 
-# Behavioural fixture (#2250): EXERCISE the shipped claim-ref resolver rather than asserting that
-# words describing it are present. The prose and the pattern can drift apart in either direction —
-# prose promising legacy coverage the anchor cannot deliver, or an anchor widened past what the
-# prose scopes — and only running it catches that.
-claim_resolver="$(awk -F"'" '/\{print \$1, \$2\}/ && /refs\/heads\// {print $2; exit}' "${constitution}")"
-case "${claim_resolver}" in
-  '$2 ~ "^refs/heads/"'*) : ;;
-  *) fail "could not extract the claim-ref resolver from the constitution (#2250)" ;;
-esac
-
-claim_resolved="$(printf '%s\n' \
-  'aaaaaaa refs/heads/claude/war-foliage-spatial-hash-109' \
-  'bbbbbbb refs/heads/claude/war-foliage-spatial-hash-109-2' \
-  'ccccccc refs/heads/claude/war-armour-guard' \
-  'ddddddd refs/heads/codex/war-foliage-spatial-hash-109' \
-  'eeeeeee refs/heads/claude/war-thing-1109' \
-  'f0000000 refs/heads/claude/war-suffix-probe-109-0' \
-  'f1111111 refs/heads/claude/war-suffix-probe-109-1' \
-  'f0000001 refs/heads/claude/war-suffix-probe-109-00' \
-  'f0000011 refs/heads/claude/war-suffix-probe-109-01' \
-  'f1010101 refs/heads/claude/war-suffix-probe-109-10' |
-  awk -v lane="claude" -v n="109" "${claim_resolver}")"
-
-printf '%s\n' "${claim_resolved}" | grep -Fq 'refs/heads/claude/war-foliage-spatial-hash-109' ||
-  fail "claim-ref resolver misses this lane's own numbered claim branch (#2250)"
-printf '%s\n' "${claim_resolved}" | grep -Fq 'refs/heads/claude/war-foliage-spatial-hash-109-2' ||
-  fail "claim-ref resolver misses a -2 takeover branch, the shape rule 3 tells you to push (#2250)"
-! printf '%s\n' "${claim_resolved}" | grep -Fq 'refs/heads/codex/' ||
-  fail "claim-ref resolver leaks a sibling lane's branch (#2250)"
-! printf '%s\n' "${claim_resolved}" | grep -Fq 'war-thing-1109' ||
-  fail "claim-ref resolver matches a longer number merely ending in the issue number (#2250)"
-
-# Rule 3 names `-2` as the FIRST takeover and the base claim carries no suffix, so `-0`, `-1` and
-# leading-zero forms are names this convention never produces. A bare `(-[0-9]+)?$` admits all four,
-# putting refs nobody created into the candidate rows rule 4 then has to disambiguate.
-# These matches MUST be end-anchored: a plain substring test for `-109-1` also matches the `-109-10`
-# positive control below, so an unanchored negative fires on the very ref it is meant to allow.
-for invalid_suffix in 0 1 00 01; do
-  ! printf '%s\n' "${claim_resolved}" | grep -Eq -- "war-suffix-probe-109-${invalid_suffix}$" ||
-    fail "claim-ref resolver admits the invalid takeover suffix -${invalid_suffix}, which rule 3 never produces (#2250)"
-done
-
-# Positive control for the SAME tightening: constraining the suffix must not cost multi-digit
-# takeovers. Without this, narrowing the arm to a single [2-9] would pass every negative above.
-printf '%s\n' "${claim_resolved}" | grep -Eq -- 'war-suffix-probe-109-10$' ||
-  fail "claim-ref resolver no longer matches a multi-digit -10 takeover — the suffix arm is over-tightened (#2250)"
-
-# The legacy pre-numbering shape is STRUCTURALLY invisible to number resolution. That is why rule 1's
-# normalised-stem pass stays required, and why the resolver must never be reused as a rival scan —
-# it would report "no claim" over a live legacy claim branch, the #96 collision all over again.
-! printf '%s\n' "${claim_resolved}" | grep -Fq 'war-armour-guard' ||
-  fail "claim-ref resolver now matches a legacy pre-numbering branch — rescope the contract (#2250)"
-grep -Fq 'a legacy pre-numbering ref ending' "${constitution}" ||
-  fail "constitution does not scope number resolution away from legacy claim refs (#2250)"
+# Lane-branch discovery still runs alongside number resolution. The cross-lane race is decided on the
+# shared `agent-claim/<issue>` tip, but lane branches remain one of the four pre-selection signals —
+# and a branch predating the numbering rule ends in its description, matching no `-<issue>` anchor.
+# A number-only scan therefore reports "no claim" over a live legacy claim branch: the #96 collision.
 grep -Fq 'Number resolution does NOT subsume the legacy stem' "${surveyor}" ||
   fail "surveyor does not require the legacy stem pass alongside number resolution (#2250)"
-
-# A takeover leaves the abandoned base ref in place, so the resolver returns BOTH rows. That is why
-# rule 4 must compare the row for the exact ref pushed: an "my sha appears somewhere" test cannot
-# distinguish a rejected retry from a won race once two rows match.
-takeover_rows="$(printf '%s\n' "${claim_resolved}" | grep -c 'war-foliage-spatial-hash-109')"
-[ "${takeover_rows}" -eq 2 ] ||
-  fail "takeover fixture no longer yields both the base and takeover ref, so the ambiguity rule 4 resolves is untested (#2250)"
-grep -Fq 'compare the row whose ref is' "${constitution}" ||
-  fail "constitution lets the race be judged by an any-row sha match during a takeover (#2250)"
 
 # Candidate-scoped clearance must have a producer grammar, and bounded survey continuation must
 # advance past already classified or named-blocker rows without trusting stale head state.
@@ -1725,10 +1674,6 @@ grep -Fq 'it is not a bare event match' "${surveyor}" ||
 
 grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor}" ||
   fail "surveyor must require BOTH the dynamic event and a dynamic/ path for the managed carve-out (#2536, #2704)"
-
-grep -Fq '`workflow_dispatch`, `dynamic`' "${surveyor}" ||
-  fail "surveyor must keep 'dynamic' in the main-branch event list — the exemption is by path (#2536)"
-
 
 # --- Ownership disclosure is a THREE-valued literal test, not a prefix boolean (#2762) ----------
 # Measured 2026-08-11 (snapshot n=75; the corpus is live and drifts, so this documents the ORIGINAL

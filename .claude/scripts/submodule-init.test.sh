@@ -371,9 +371,84 @@ report "empty-init: the failure NAMES the empty submodule (fails at init, not la
 out="$(cd "$c11/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "empty-init: --check still SKIPS a legitimately deinitialised submodule" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+# 12. --advance: move a populated checkout to a newer recorded pin WITHOUT
+#    `git submodule update` (which rewrites shared core.worktree). Hermetic
+#    fixture: bump the gitlink in the index while leaving the working tree on
+#    the old SHA, then advance and assert HEAD + isolation.
+c12="$tmp/c12"
+mk_super "$c12"
+(
+  cd "$c12/remote-sub"
+  echo next >file.txt
+  git add file.txt
+  git commit -q -m next
+)
+new_sha="$(git -C "$c12/remote-sub" rev-parse HEAD)"
+old_sha="$(git -C "$c12/super/sub" rev-parse HEAD)"
+(
+  cd "$c12/super"
+  # Record the new pin in the superproject without moving the working tree.
+  git update-index --cacheinfo "160000,$new_sha,sub"
+  git commit -q -m "bump sub"
+)
+report "advance fixture: working tree still on old pin before --advance" \
+  "$([[ "$(git -C "$c12/super/sub" rev-parse HEAD)" == "$old_sha" ]] && echo yes || echo no)"
+# Deliberately NOT fetched here: the script's own target-fetch path (cat-file miss -> fetch) is
+# part of what this case exercises. Pre-fetching made `cat-file -e` succeed and skipped it entirely.
+report "advance fixture: the target object is absent before --advance" \
+  "$(git -C "$c12/super/sub" cat-file -e "${new_sha}^{commit}" 2>/dev/null && echo no || echo yes)"
+c12_excludes="$c12/excludes"
+printf 'ignored.log\n' >"$c12_excludes"
+git -C "$c12/super/sub" config core.excludesFile "$c12_excludes"
+echo reusable-cache >"$c12/super/sub/ignored.log"
+report "advance ignored-artifact precondition: status stays clean before the transition" \
+  "$([[ -z "$(git -C "$c12/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+out="$(cd "$c12/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+report "advance: checkout moved to the recorded pin" \
+  "$([[ "$(git -C "$c12/super/sub" rev-parse HEAD)" == "$new_sha" ]] && echo yes || echo no)"
+report "advance ignored-artifact: preserves the artifact across the transition" \
+  "$([[ "$(cat "$c12/super/sub/ignored.log")" == "reusable-cache" ]] && echo yes || echo no)"
+report "advance: does not leave a shared core.worktree" \
+  "$([[ -z "$(git config -f "$c12/super/.git/modules/sub/config" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)"
+out="$(cd "$c12/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
+report "advance: --check passes afterwards" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+report "advance already-at-pin ignored precondition: status stays clean" \
+  "$([[ -z "$(git -C "$c12/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+out="$(cd "$c12/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance already-at-pin ignored: exits 0 without a checkout" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance already-at-pin ignored: preserves the ignored artifact" \
+  "$([[ "$(cat "$c12/super/sub/ignored.log")" == "reusable-cache" ]] && echo yes || echo no)"
 
+# 13. --advance refuses a dirty working tree.
+c13="$tmp/c13"
+mk_super "$c13"
+echo dirty >>"$c13/super/sub/file.txt"
+out="$(cd "$c13/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance dirty: exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+report "advance dirty: names the dirty-tree refusal" \
+  "$(grep -q 'dirty working tree' <<<"$out" && echo yes || echo no)" "$out"
 
-# 12. monorepo#2694 — a registered submodule that is NON-EMPTY but NOT INITIALISED (no `.git`) must
+# 14. --advance refuses a checkout that is ahead of the recorded pin.
+c14="$tmp/c14"
+mk_super "$c14"
+pin="$(git -C "$c14/super/sub" rev-parse HEAD)"
+(
+  cd "$c14/super/sub"
+  echo local >extra.txt
+  git add extra.txt
+  git commit -q -m local-ahead
+)
+# Superproject gitlink still points at the old pin; checkout is one commit ahead.
+report "advance ahead fixture: gitlink still at old pin" \
+  "$([[ "$(git -C "$c14/super" rev-parse HEAD:sub)" == "$pin" ]] && echo yes || echo no)"
+out="$(cd "$c14/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance ahead: exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "$out"
+report "advance ahead: names the ahead-of-pin refusal" \
+  "$(grep -q 'ahead of the recorded pin' <<<"$out" && echo yes || echo no)" "$out"
+
+# 15. monorepo#2694 — a registered submodule that is NON-EMPTY but NOT INITIALISED (no `.git`) must
 #     never make `repair` write into the SUPERPROJECT's config. `is_populated` only asks "is the
 #     directory non-empty", so a leftover file is enough to route such a path into `repair`; there
 #     `git -C <path> rev-parse --git-common-dir` walks UP and returns the superproject's gitdir, and
@@ -385,33 +460,33 @@ report "empty-init: --check still SKIPS a legitimately deinitialised submodule" 
 #     the contract-mandated end-of-tick `branch-cleanup.sh` fail-closed on EVERY tick as a result.
 #     The blast radius is the parent repository and every session sharing it, which is why this fails
 #     closed rather than best-effort repairing.
-c12="$tmp/c12"
-mk_super "$c12"
-git -C "$c12/super" submodule --quiet deinit -f sub >/dev/null
+c15="$tmp/c15"
+mk_super "$c15"
+git -C "$c15/super" submodule --quiet deinit -f sub >/dev/null
 # The state that bit: not empty, but carrying no `.git` — so `is_populated` says yes and git escapes up.
-echo leftover >"$c12/super/sub/leftover.txt"
+echo leftover >"$c15/super/sub/leftover.txt"
 
 report "parent-escape precondition: the submodule dir is non-empty" \
-  "$([[ -n "$(ls -A "$c12/super/sub" 2>/dev/null)" ]] && echo yes || echo no)"
+  "$([[ -n "$(ls -A "$c15/super/sub" 2>/dev/null)" ]] && echo yes || echo no)"
 report "parent-escape precondition: it has no .git of its own" \
-  "$([[ ! -e "$c12/super/sub/.git" ]] && echo yes || echo no)"
+  "$([[ ! -e "$c15/super/sub/.git" ]] && echo yes || echo no)"
 # PRECONDITION that makes the whole case meaningful: git really does resolve this path to the PARENT.
 # If some future git stopped escaping upward, the assertions below would pass vacuously.
-c12_escaped="$(cd "$c12/super/sub" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+c15_escaped="$(cd "$c15/super/sub" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
 report "parent-escape precondition: git -C on it resolves to the SUPERPROJECT gitdir" \
-  "$([[ "$c12_escaped" -ef "$c12/super/.git" ]] && echo yes || echo no)" "got=$c12_escaped"
+  "$([[ "$c15_escaped" -ef "$c15/super/.git" ]] && echo yes || echo no)" "got=$c15_escaped"
 
-out="$(cd "$c12/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+out="$(cd "$c15/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
 
 # THE discriminating assertion — this is the production harm, and it is what goes RED without the fix.
-c12_parent_key="$(git config -f "$c12/super/.git/config.worktree" core.worktree 2>/dev/null || true)"
+c15_parent_key="$(git config -f "$c15/super/.git/config.worktree" core.worktree 2>/dev/null || true)"
 report "parent-escape: never writes core.worktree into the SUPERPROJECT's per-worktree config" \
-  "$([[ -z "$c12_parent_key" ]] && echo yes || echo no)" "parent core.worktree=${c12_parent_key:-<unset>}"
+  "$([[ -z "$c15_parent_key" ]] && echo yes || echo no)" "parent core.worktree=${c15_parent_key:-<unset>}"
 
 # The same harm stated as the user-visible symptom (#2694 AC-1): the parent still resolves to itself.
-c12_top="$(git -C "$c12/super" rev-parse --show-toplevel 2>/dev/null || true)"
+c15_top="$(git -C "$c15/super" rev-parse --show-toplevel 2>/dev/null || true)"
 report "parent-escape: the superproject still resolves to its OWN root" \
-  "$([[ -n "$c12_top" && "$c12_top" -ef "$c12/super" ]] && echo yes || echo no)" "toplevel=$c12_top"
+  "$([[ -n "$c15_top" && "$c15_top" -ef "$c15/super" ]] && echo yes || echo no)" "toplevel=$c15_top"
 
 report "parent-escape: the run FAILS rather than reporting success" \
   "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
@@ -420,30 +495,403 @@ report "parent-escape: it never reports 'isolated ✓'" \
 
 # NEGATIVE CONTROL — the fix must refuse only the escaping case, not every repair. A genuinely
 # initialised submodule must still be repaired and probed exactly as case 3 requires.
-c12b="$tmp/c12b"
-mk_super "$c12b"
-out="$(cd "$c12b/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+c15b="$tmp/c15b"
+mk_super "$c15b"
+out="$(cd "$c15b/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
 report "parent-escape negative control: a properly initialised submodule still repairs (exit 0)" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
 report "parent-escape negative control: its core.worktree is still pinned to the submodule's own path" \
-  "$([[ "$(git config -f "$c12b/super/.git/modules/sub/config.worktree" core.worktree 2>/dev/null || true)" == "$(abspath "$c12b/super/sub")" ]] && echo yes || echo no)"
+  "$([[ "$(git config -f "$c15b/super/.git/modules/sub/config.worktree" core.worktree 2>/dev/null || true)" == "$(abspath "$c15b/super/sub")" ]] && echo yes || echo no)"
 
 
-# 12c. The second guard, and why it is not redundant with the `.git`-existence check: a `.git` that
+# 15c. The second guard, and why it is not redundant with the `.git`-existence check: a `.git` that
 #      EXISTS but points at the superproject passes that check while still resolving outward. Same
 #      harm, different route — so it gets its own reproduction rather than riding on 12's.
-c12c="$tmp/c12c"
-mk_super "$c12c"
-git -C "$c12c/super" submodule --quiet deinit -f sub >/dev/null
-printf 'gitdir: %s\n' "$(abspath "$c12c/super")/.git" >"$c12c/super/sub/.git"
+c15c="$tmp/c15c"
+mk_super "$c15c"
+git -C "$c15c/super" submodule --quiet deinit -f sub >/dev/null
+printf 'gitdir: %s\n' "$(abspath "$c15c/super")/.git" >"$c15c/super/sub/.git"
 report "outward-.git precondition: the .git entry exists (an existence check would NOT catch this)" \
-  "$([[ -e "$c12c/super/sub/.git" ]] && echo yes || echo no)"
-out="$(cd "$c12c/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
-c12c_parent_key="$(git config -f "$c12c/super/.git/config.worktree" core.worktree 2>/dev/null || true)"
+  "$([[ -e "$c15c/super/sub/.git" ]] && echo yes || echo no)"
+out="$(cd "$c15c/super" && "$helper" sub 2>&1)" && rc=0 || rc=$?
+c15c_parent_key="$(git config -f "$c15c/super/.git/config.worktree" core.worktree 2>/dev/null || true)"
 report "outward-.git: never writes core.worktree into the SUPERPROJECT's per-worktree config" \
-  "$([[ -z "$c12c_parent_key" ]] && echo yes || echo no)" "parent core.worktree=${c12c_parent_key:-<unset>}"
+  "$([[ -z "$c15c_parent_key" ]] && echo yes || echo no)" "parent core.worktree=${c15c_parent_key:-<unset>}"
 report "outward-.git: the failure names the SUPERPROJECT gitdir" \
   "$(grep -q "SUPERPROJECT's gitdir" <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# 16. --advance must repair isolation BEFORE it runs any other `git -C <path>` command. A stale
+#     shared `core.worktree` redirects that path at ANOTHER session's worktree, so every later
+#     `git -C` reads that directory instead of the submodule.
+#
+#     MEASURED pre-fix behaviour (this is what the two discriminating assertions below catch, and
+#     it is deliberately NOT the "writes into the other worktree" story): `status --porcelain` runs
+#     first, sees the redirected-and-empty decoy against a HEAD that has files, calls that a dirty
+#     working tree, and dies. So `--advance` fails with a misleading diagnosis on a checkout that
+#     is not dirty at all, and — because it died before reaching the repair — leaves the stale
+#     redirect in place for the next command to trip over. Repairing first makes the same run
+#     succeed and clears the redirect.
+c16="$tmp/c16"
+mk_super "$c16"
+(
+  cd "$c16/remote-sub"
+  echo next >file.txt
+  git add file.txt
+  git commit -q -m next
+)
+c16_new="$(git -C "$c16/remote-sub" rev-parse HEAD)"
+(
+  cd "$c16/super"
+  git update-index --cacheinfo "160000,$c16_new,sub"
+  git commit -q -m "bump sub"
+)
+# The victim: a directory standing in for another session's worktree.
+c16_decoy="$c16/other-session-worktree"
+mkdir -p "$c16_decoy"
+# The hazard: a stale SHARED core.worktree pointing the submodule's gitdir at that directory.
+git config -f "$c16/super/.git/modules/sub/config" core.worktree "$(abspath "$c16_decoy")"
+report "stale-redirect precondition: the shared core.worktree points at the other worktree" \
+  "$([[ "$(git config -f "$c16/super/.git/modules/sub/config" core.worktree)" == "$(abspath "$c16_decoy")" ]] && echo yes || echo no)"
+report "stale-redirect precondition: the other worktree is empty before --advance" \
+  "$([[ -z "$(ls -A "$c16_decoy" 2>/dev/null)" ]] && echo yes || echo no)"
+
+out="$(cd "$c16/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+
+# DISCRIMINATING (both go RED when the repair is moved back after the checkout):
+report "stale-redirect: the stale shared core.worktree is cleared" \
+  "$([[ -z "$(git config -f "$c16/super/.git/modules/sub/config" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)"
+report "stale-redirect: --advance exits successfully" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "stale-redirect: --advance checks out the recorded pin" \
+  "$([[ "$(git -C "$c16/super/sub" rev-parse HEAD 2>/dev/null)" == "$c16_new" ]] && echo yes || echo no)" "rc=$rc $out"
+
+# SAFETY INVARIANT, not a discriminator: it holds pre-fix too, because the pre-fix run dies at the
+# dirty-tree check before any checkout. Kept so a future reordering that DOES reach `checkout` with
+# the redirect live cannot land silently.
+report "stale-redirect: --advance never writes into the other session's worktree" \
+  "$([[ -z "$(ls -A "$c16_decoy" 2>/dev/null)" ]] && echo yes || echo no)" \
+  "decoy contains: $(ls -A "$c16_decoy" 2>/dev/null | tr '\n' ' ')"
+
+# 17. Hidden index flags make `status --porcelain` lie about cleanliness. Both forms must stop an
+#     advance before checkout, even when the flagged file is unchanged between the two pins (the
+#     exact case where checkout otherwise carries the hidden edit forward and exits successfully).
+for flag in assume-unchanged skip-worktree; do
+  c17="$tmp/c17-$flag"
+  mk_super "$c17"
+  c17_old="$(git -C "$c17/super/sub" rev-parse HEAD)"
+  (
+    cd "$c17/remote-sub"
+    echo target >added.txt
+    git add added.txt
+    git commit -q -m "target pin"
+  )
+  c17_target="$(git -C "$c17/remote-sub" rev-parse HEAD)"
+  (
+    cd "$c17/super"
+    git update-index --cacheinfo "160000,$c17_target,sub"
+    git commit -q -m "bump sub"
+  )
+  git -C "$c17/super/sub" update-index "--$flag" file.txt
+  echo "hidden edit" >>"$c17/super/sub/file.txt"
+  report "advance hidden-$flag precondition: status is empty despite the edit" \
+    "$([[ -z "$(git -C "$c17/super/sub" status --porcelain)" ]] && echo yes || echo no)"
+  out="$(cd "$c17/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+  report "advance hidden-$flag: exits non-zero" \
+    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+  report "advance hidden-$flag: leaves the checkout at the old pin" \
+    "$([[ "$(git -C "$c17/super/sub" rev-parse HEAD)" == "$c17_old" ]] && echo yes || echo no)"
+  report "advance hidden-$flag: preserves the hidden edit" \
+    "$(grep -q 'hidden edit' "$c17/super/sub/file.txt" && echo yes || echo no)"
+done
+
+# 18. A superproject replace ref must not substitute a different gitlink for the one recorded by
+#     the actual HEAD commit. The helper must resolve HEAD:<path> with replacement objects disabled.
+c18="$tmp/c18"
+mk_super "$c18"
+c18_parent="$(git -C "$c18/remote-sub" rev-parse HEAD)"
+(
+  cd "$c18/remote-sub"
+  echo legitimate >legitimate.txt
+  git add legitimate.txt
+  git commit -q -m legitimate
+)
+c18_legitimate="$(git -C "$c18/remote-sub" rev-parse HEAD)"
+(
+  cd "$c18/remote-sub"
+  git checkout -q --detach "$c18_parent"
+  echo substituted >substituted.txt
+  git add substituted.txt
+  git commit -q -m substituted
+  git checkout -q main
+)
+c18_substituted="$(git -C "$c18/remote-sub" rev-parse --verify "HEAD@{1}")"
+(
+  cd "$c18/super"
+  git update-index --cacheinfo "160000,$c18_legitimate,sub"
+  git commit -q -m "record legitimate pin"
+  c18_actual_head="$(git rev-parse HEAD)"
+  git update-index --cacheinfo "160000,$c18_substituted,sub"
+  c18_replacement_tree="$(git write-tree)"
+  c18_replacement_head="$(printf 'replacement head\n' | git commit-tree "$c18_replacement_tree" -p "$(git rev-parse "${c18_actual_head}^")")"
+  git read-tree "$c18_actual_head"
+  git replace "$c18_actual_head" "$c18_replacement_head"
+)
+report "advance super-replace precondition: ordinary HEAD:sub is substituted" \
+  "$([[ "$(git -C "$c18/super" rev-parse HEAD:sub)" == "$c18_substituted" ]] && echo yes || echo no)"
+report "advance super-replace precondition: no-replace HEAD:sub is legitimate" \
+  "$([[ "$(git --no-replace-objects -C "$c18/super" rev-parse HEAD:sub)" == "$c18_legitimate" ]] && echo yes || echo no)"
+out="$(cd "$c18/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance super-replace: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance super-replace: checks out the actual HEAD gitlink" \
+  "$([[ "$(git -C "$c18/super/sub" rev-parse HEAD)" == "$c18_legitimate" ]] && echo yes || echo no)" \
+  "actual=$(git -C "$c18/super/sub" rev-parse HEAD) expected=$c18_legitimate"
+
+# 19. Replacement refs in the submodule must not change the tree materialised for the recorded SHA.
+#     Git otherwise leaves HEAD naming the requested target while checking out substituted contents.
+c19="$tmp/c19"
+mk_super "$c19"
+c19_parent="$(git -C "$c19/remote-sub" rev-parse HEAD)"
+(
+  cd "$c19/remote-sub"
+  echo legitimate >file.txt
+  git add file.txt
+  git commit -q -m legitimate
+)
+c19_target="$(git -C "$c19/remote-sub" rev-parse HEAD)"
+(
+  cd "$c19/remote-sub"
+  git checkout -q --detach "$c19_parent"
+  echo substituted >file.txt
+  git add file.txt
+  git commit -q -m substituted
+)
+c19_substituted="$(git -C "$c19/remote-sub" rev-parse HEAD)"
+git -C "$c19/super/sub" fetch -q origin "$c19_target"
+git -C "$c19/super/sub" fetch -q origin "$c19_substituted"
+git -C "$c19/super/sub" replace "$c19_target" "$c19_substituted"
+(
+  cd "$c19/super"
+  git update-index --cacheinfo "160000,$c19_target,sub"
+  git commit -q -m "record target pin"
+)
+report "advance submodule-replace precondition: ordinary target tree is substituted" \
+  "$([[ "$(git -C "$c19/super/sub" show "$c19_target:file.txt")" == "substituted" ]] && echo yes || echo no)"
+report "advance submodule-replace precondition: no-replace target tree is legitimate" \
+  "$([[ "$(git --no-replace-objects -C "$c19/super/sub" show "$c19_target:file.txt")" == "legitimate" ]] && echo yes || echo no)"
+out="$(cd "$c19/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance submodule-replace: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance submodule-replace: materialises the recorded commit's real tree" \
+  "$([[ "$(cat "$c19/super/sub/file.txt")" == "legitimate" ]] && echo yes || echo no)" \
+  "contents=$(cat "$c19/super/sub/file.txt")"
+
+# 20. The old pin may ignore a path that the new pin starts tracking. Ordinary checkout overwrites
+#     that local ignored file; --no-overwrite-ignore must instead abort and preserve it.
+c20="$tmp/c20"
+mk_super "$c20"
+(
+  cd "$c20/remote-sub"
+  echo future.txt >.gitignore
+  git add .gitignore
+  git commit -q -m "ignore future path"
+)
+c20_old="$(git -C "$c20/remote-sub" rev-parse HEAD)"
+git -C "$c20/super/sub" fetch -q origin "$c20_old"
+git -C "$c20/super/sub" checkout -q --detach "$c20_old"
+(
+  cd "$c20/super"
+  git update-index --cacheinfo "160000,$c20_old,sub"
+  git commit -q -m "record ignore pin"
+)
+(
+  cd "$c20/remote-sub"
+  git rm -q .gitignore
+  echo tracked-by-target >future.txt
+  git add future.txt
+  git commit -q -m "track future path"
+)
+c20_target="$(git -C "$c20/remote-sub" rev-parse HEAD)"
+(
+  cd "$c20/super"
+  git update-index --cacheinfo "160000,$c20_target,sub"
+  git commit -q -m "bump to tracked path"
+)
+echo precious-local-work >"$c20/super/sub/future.txt"
+report "advance ignored-file precondition: status is empty" \
+  "$([[ -z "$(git -C "$c20/super/sub" status --porcelain)" ]] && echo yes || echo no)"
+out="$(cd "$c20/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance ignored-file: exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance ignored-file: preserves ignored local work" \
+  "$([[ "$(cat "$c20/super/sub/future.txt")" == "precious-local-work" ]] && echo yes || echo no)" \
+  "contents=$(cat "$c20/super/sub/future.txt")"
+
+# 21. A caller may have submodule.recurse=true in the populated submodule. The outer detach must
+#     override that setting: --advance owns only the named checkout and must not mutate nested
+#     submodules implicitly while moving it to the recorded pin.
+c21="$tmp/c21"
+mkdir -p "$c21"
+git init -q "$c21/remote-nested"
+(
+  cd "$c21/remote-nested"
+  echo old >nested.txt
+  git add nested.txt
+  git commit -q -m old
+)
+c21_nested_old="$(git -C "$c21/remote-nested" rev-parse HEAD)"
+(
+  cd "$c21/remote-nested"
+  echo new >nested.txt
+  git add nested.txt
+  git commit -q -m new
+)
+c21_nested_new="$(git -C "$c21/remote-nested" rev-parse HEAD)"
+git init -q "$c21/remote-sub"
+(
+  cd "$c21/remote-sub"
+  echo outer >outer.txt
+  git add outer.txt
+  git commit -q -m init
+  git submodule add -q ../remote-nested nested
+  git -C nested checkout -q --detach "$c21_nested_old"
+  git add .gitmodules nested
+  git commit -q -m "record old nested pin"
+)
+c21_outer_old="$(git -C "$c21/remote-sub" rev-parse HEAD)"
+(
+  cd "$c21/remote-sub"
+  git -C nested checkout -q --detach "$c21_nested_new"
+  git add nested
+  git commit -q -m "record new nested pin"
+)
+c21_outer_new="$(git -C "$c21/remote-sub" rev-parse HEAD)"
+git init -q "$c21/super"
+(
+  cd "$c21/super"
+  echo root >root.txt
+  git add root.txt
+  git commit -q -m init
+  git submodule add -q ../remote-sub sub
+  git -C sub checkout -q --detach "$c21_outer_old"
+  git -C sub submodule update -q --init nested
+  git add sub
+  git commit -q -m "record old outer pin"
+  git update-index --cacheinfo "160000,$c21_outer_new,sub"
+  git commit -q -m "bump outer pin"
+)
+git -C "$c21/super/sub" config submodule.recurse true
+report "advance no-recurse precondition: nested checkout is at the old pin" \
+  "$([[ "$(git -C "$c21/super/sub/nested" rev-parse HEAD)" == "$c21_nested_old" ]] && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance no-recurse: fails closed on the stale nested checkout" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance no-recurse: names the nested mismatch" \
+  "$(grep -q 'nested submodule checkout does not match' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+report "advance no-recurse: moves the named checkout to the recorded pin" \
+  "$([[ "$(git -C "$c21/super/sub" rev-parse HEAD)" == "$c21_outer_new" ]] && echo yes || echo no)"
+report "advance no-recurse: leaves the nested checkout untouched" \
+  "$([[ "$(git -C "$c21/super/sub/nested" rev-parse HEAD)" == "$c21_nested_old" ]] && echo yes || echo no)" \
+  "actual=$(git -C "$c21/super/sub/nested" rev-parse HEAD) expected=$c21_nested_old"
+# A local ignore rule can hide that mismatch from the top-level status pre-check. Repeating
+# --advance at the now-current outer pin must still run the explicit recursive validation.
+git -C "$c21/super/sub" config submodule.nested.ignore all
+report "advance already-at-pin precondition: status hides the stale nested checkout" \
+  "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance already-at-pin: still fails closed on the stale nested checkout" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance already-at-pin: still names the nested mismatch" \
+  "$(grep -q 'nested submodule checkout does not match' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+
+# Matching the nested gitlink is not enough: ignore=all can hide tracked dirt from the outer status,
+# and recursive submodule status reports only the matching commit marker.
+git -C "$c21/super/sub/nested" checkout -q --detach "$c21_nested_new"
+echo locally-modified >>"$c21/super/sub/nested/nested.txt"
+report "advance nested-dirty precondition: parent status hides the tracked edit" \
+  "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+report "advance nested-dirty precondition: recursive status still reports a matching pin" \
+  "$(git -C "$c21/super/sub" submodule status --recursive | grep -q '^ ' && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance nested-dirty: fails closed at the recorded outer pin" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance nested-dirty: names the residual checkout" \
+  "$(grep -q 'residual files after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+git -C "$c21/super/sub/nested" restore nested.txt
+
+# Hidden index flags suppress the same tracked edit even from the nested repository's own status.
+# Validate both forms at every initialized level, not only in the named outer checkout.
+for flag in assume-unchanged skip-worktree; do
+  git -C "$c21/super/sub/nested" update-index "--$flag" nested.txt
+  echo "hidden-$flag" >>"$c21/super/sub/nested/nested.txt"
+  report "advance nested-hidden-$flag precondition: parent status is empty" \
+    "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all --ignore-submodules=none)" ]] && echo yes || echo no)"
+  out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+  report "advance nested-hidden-$flag: fails closed at the recorded outer pin" \
+    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+  report "advance nested-hidden-$flag: names the hidden nested index flags" \
+    "$(grep -q 'nested submodule has assume-unchanged/skip-worktree files' <<<"$out" && echo yes || echo no)" \
+    "rc=$rc $out"
+  report "advance nested-hidden-$flag: preserves the hidden edit" \
+    "$(grep -q "hidden-$flag" "$c21/super/sub/nested/nested.txt" && echo yes || echo no)"
+  git -C "$c21/super/sub/nested" update-index --no-assume-unchanged nested.txt
+  git -C "$c21/super/sub/nested" update-index --no-skip-worktree nested.txt
+  git -C "$c21/super/sub/nested" restore nested.txt
+done
+
+# A stale shared core.worktree can redirect the nested repository at another session while its HEAD
+# still matches the gitlink. Parent status and recursive pin markers both remain clean under ignore=all.
+c21_nested_gitdir="$(git -C "$c21/super/sub/nested" rev-parse --path-format=absolute --git-common-dir)"
+c21_nested_decoy="$c21/nested-other-session"
+mkdir -p "$c21_nested_decoy"
+git config -f "$c21_nested_gitdir/config" core.worktree "$c21_nested_decoy"
+c21_nested_top="$(git -C "$c21/super/sub/nested" rev-parse --show-toplevel)"
+report "advance nested-isolation precondition: nested checkout resolves to the decoy" \
+  "$([[ "$c21_nested_top" -ef "$c21_nested_decoy" ]] && echo yes || echo no)" \
+  "got=$c21_nested_top configured=$(git config -f "$c21_nested_gitdir/config" core.worktree 2>/dev/null || true)"
+report "advance nested-isolation precondition: parent status stays empty" \
+  "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance nested-isolation: fails closed at the recorded outer pin" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance nested-isolation: names the nested isolation failure" \
+  "$(grep -q 'nested submodule isolation' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+git config -f "$c21_nested_gitdir/config" --unset-all core.worktree
+
+# 22. Removing an initialized nested submodule makes recursive status vacuous because the target no
+#     longer declares that gitlink. The old nested repository remains as residue, and a target-side
+#     ignore rule hides it from both status and a single-force clean dry run. The stronger embedded-
+#     repository probe must detect it on the transition and on an already-at-pin retry.
+git -C "$c21/super/sub/nested" checkout -q --detach "$c21_nested_new"
+git -C "$c21/super/sub" config --unset submodule.nested.ignore
+(
+  cd "$c21/remote-sub"
+  git rm -qf nested
+  printf 'nested/\n' >.gitignore
+  git add .gitignore .gitmodules
+  git commit -q -m "remove nested submodule"
+)
+c22_outer_removed="$(git -C "$c21/remote-sub" rev-parse HEAD)"
+(
+  cd "$c21/super"
+  git update-index --cacheinfo "160000,$c22_outer_removed,sub"
+  git commit -q -m "record outer pin without nested"
+)
+report "advance removed-nested precondition: named checkout is clean" \
+  "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance removed-nested: fails closed on residual files" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance removed-nested: names the residual checkout" \
+  "$(grep -q 'embedded repository residue after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+report "advance removed-nested: moves the named checkout to the recorded pin" \
+  "$([[ "$(git -C "$c21/super/sub" rev-parse HEAD)" == "$c22_outer_removed" ]] && echo yes || echo no)"
+report "advance removed-nested: preserves the old nested repository for explicit handling" \
+  "$([[ -e "$c21/super/sub/nested/.git" ]] && echo yes || echo no)"
+report "advance removed-nested retry precondition: ignored residue is hidden from status" \
+  "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all --ignore-submodules=none)" ]] && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance removed-nested retry: still fails closed at the recorded pin" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance removed-nested retry: still names the residual checkout" \
+  "$(grep -q 'embedded repository residue after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
