@@ -539,8 +539,8 @@ public and private — no per-repo loop needed to enumerate):
    count and a true count are the same shape, so a one-page census looks complete and can send the
    orchestrator into a ~285-issue backfill against an already-covered board.
 
-   **How to measure (pick ONE; both are complete):**
-   - **Preferred (cheap):** REST Projects v2 with server-side filter and explicit pagination — the
+   **How to measure — there is ONE path for `on_board`, not a choice:**
+   - **Use this:** REST Projects v2 with server-side filter and explicit pagination — the
      same path `flow-scorecard.sh` uses, so it stays on the uncontended core REST budget rather than
      the shared GraphQL 5,000/hr pool:
 
@@ -570,9 +570,17 @@ public and private — no per-repo loop needed to enumerate):
      ```
 
      Emit `board_coverage=measured: open_public=<n> on_board=<m> status_less=<k>`.
-   - **Alternate (one GraphQL call for the board side):** read `totalCount` from the connection —
-     `organization(login:"devantler-tech"){projectV2(number:5){items(first:1){totalCount}}}` —
-     which is the full census, **not** the page length. Still never substitute `.nodes|length`.
+   🔴 **`items(first:1){totalCount}` is NOT a substitute for that read, and must never fill
+   `on_board`.** It is a complete census of a **different population**: every item ever added to the
+   board, including closed issues, pull requests and drafts. Measured 2026-08-16 in the same minute,
+   `totalCount` returned **5282** while the read above returned **618**, against an `open_public`
+   denominator of **616** — so using it emits `on_board=5282` and a coverage of ~857%. That is an
+   8.6× overstatement, and it fails in the direction this section already names as the more dangerous
+   one: coverage reads as *more* than complete, hiding every real gap. It also carries no field data,
+   so `status_less` is simply unobtainable from it.
+
+   `totalCount` is useful only as a **total-item sanity check** (it is the full census, not a page
+   length — never substitute `.nodes|length` for it there either). It never enters the digest row.
 
    **Fail closed to unknown — never invent a count:**
    - A single-page or unpaginated items read that does not use `totalCount` / `--paginate` →

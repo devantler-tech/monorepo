@@ -260,9 +260,19 @@ grep -Fq 'BOARD-COVERAGE — `board_coverage=<measured: open_public=<n> on_board
 # shellcheck disable=SC2016
 grep -Fq 'never a single-page `.length`' "${surveyor}" ||
   fail "surveyor BOARD-COVERAGE row does not forbid a single-page length as the board census"
-# Numerator: the board side must name a complete-count mechanism, not just say "paginate".
+# Numerator: `on_board` has exactly ONE source. Measured 2026-08-16 in the same minute, the REST
+# read returned 618 while `items(first:1){totalCount}` returned 5282 against an open_public of 616 —
+# because totalCount counts every item ever added (closed issues, PRs, drafts), a different
+# population. Offering the two as interchangeable emits ~857% coverage, which hides gaps rather than
+# revealing them, and totalCount carries no field data so status_less is unobtainable from it.
 grep -Fq 'items(first:1){totalCount}' "${surveyor}" ||
-  fail "surveyor names no totalCount path for a complete board census"
+  fail "surveyor does not name the totalCount shape it must warn about"
+grep -Fq 'must never fill' "${surveyor}" ||
+  fail "surveyor does not forbid totalCount as the on_board source"
+# The prescription must not offer them as substitutes. Keyed on the retired "pick ONE" framing.
+if grep -Fq 'pick ONE; both are complete' "${surveyor}"; then
+  fail "surveyor still offers totalCount and the REST read as interchangeable on_board sources"
+fi
 # Denominator: measured 2026-08-14, `gh search issues` returned 30 against a true 593 (default
 # --limit 30, and its --json emits item rows, never search metadata). Require the total_count
 # metadata path with an explicit public filter, and a fail-closed token when it cannot be obtained.
