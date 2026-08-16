@@ -264,13 +264,23 @@ probe() {
 # another session. `submodule foreach` visits initialized checkouts only; uninitialized/mismatched
 # entries are rejected separately by the recursive status gate in `advance`.
 probe_nested_checkouts() {
-  local path=$1 nested_paths nested rc=0
+  local path=$1 nested_paths nested idx_flags rc=0
   nested_paths=$(git --no-replace-objects -C "$path" submodule foreach --quiet --recursive 'pwd -P') || {
     warn "$path — could not enumerate initialized nested submodules"
     return 1
   }
   while IFS= read -r nested; do
     [ -n "$nested" ] || continue
+    idx_flags=$(git --no-replace-objects -C "$nested" ls-files -v 2>/dev/null) || {
+      warn "$nested — could not read nested submodule index flags"
+      rc=1
+      continue
+    }
+    if grep -q '^[a-zS]' <<< "$idx_flags"; then
+      warn "$nested — nested submodule has assume-unchanged/skip-worktree files"
+      rc=1
+      continue
+    fi
     probe "$nested" || rc=1
   done <<< "$nested_paths"
   return "$rc"

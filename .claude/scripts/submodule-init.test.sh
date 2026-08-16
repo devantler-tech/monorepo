@@ -816,6 +816,26 @@ report "advance nested-dirty: names the residual checkout" \
   "$(grep -q 'residual files after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 git -C "$c21/super/sub/nested" restore nested.txt
 
+# Hidden index flags suppress the same tracked edit even from the nested repository's own status.
+# Validate both forms at every initialized level, not only in the named outer checkout.
+for flag in assume-unchanged skip-worktree; do
+  git -C "$c21/super/sub/nested" update-index "--$flag" nested.txt
+  echo "hidden-$flag" >>"$c21/super/sub/nested/nested.txt"
+  report "advance nested-hidden-$flag precondition: parent status is empty" \
+    "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all --ignore-submodules=none)" ]] && echo yes || echo no)"
+  out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+  report "advance nested-hidden-$flag: fails closed at the recorded outer pin" \
+    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+  report "advance nested-hidden-$flag: names the hidden nested index flags" \
+    "$(grep -q 'nested submodule has assume-unchanged/skip-worktree files' <<<"$out" && echo yes || echo no)" \
+    "rc=$rc $out"
+  report "advance nested-hidden-$flag: preserves the hidden edit" \
+    "$(grep -q "hidden-$flag" "$c21/super/sub/nested/nested.txt" && echo yes || echo no)"
+  git -C "$c21/super/sub/nested" update-index --no-assume-unchanged nested.txt
+  git -C "$c21/super/sub/nested" update-index --no-skip-worktree nested.txt
+  git -C "$c21/super/sub/nested" restore nested.txt
+done
+
 # A stale shared core.worktree can redirect the nested repository at another session while its HEAD
 # still matches the gitlink. Parent status and recursive pin markers both remain clean under ignore=all.
 c21_nested_gitdir="$(git -C "$c21/super/sub/nested" rev-parse --path-format=absolute --git-common-dir)"
