@@ -156,6 +156,27 @@ not isolated. The probe is non-destructive — it never modifies submodule conte
 other sessions' worktrees — but not strictly read-only: it adds and removes a throwaway probe
 worktree to catch a dangling `core.worktree` a config read alone would miss.
 
+### Advancing a populated submodule to a new pin (`--advance`)
+
+After a pin-bump PR merges and you `git pull` the superproject, an already-populated submodule
+checkout stays on the **old** commit. Re-running `submodule-init.sh <path>` will not move it
+(populated trees are repair-only). Plain `git submodule update -- <path>` *would* move it, but it
+is the same family of command that writes shared `core.worktree` — do not use it here.
+
+**Verified procedure** (hermetic fixture in `submodule-init.test.sh`, cases 12–14 and 16):
+
+```sh
+# From the superproject, after pulling the pin bump. Refuses dirty / ahead-of-pin checkouts.
+.claude/scripts/submodule-init.sh --advance <path>
+.claude/scripts/submodule-init.sh --check   # must pass afterwards
+```
+
+`--advance` reads the gitlink at `HEAD:<path>`, checks out that commit **directly** inside the
+submodule (no `git submodule update`), then runs the usual repair + fail-closed probe. It refuses
+when the working tree is dirty or when `HEAD` has commits not reachable from the new pin, so it
+cannot discard uncommitted or unpushed work. Prefer this guarded flag over documenting the
+hazardous plain-Git command.
+
 What made it dangerous is that it fails **silently**: a `git worktree add` still succeeds, and the
 worktree looks real. Three live linked worktrees — including **two belonging to the parallel sibling
 agent** — were all resolving into the *shared main checkout*, i.e. actively colliding, with nothing

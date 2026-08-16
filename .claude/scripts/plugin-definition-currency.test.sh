@@ -493,4 +493,199 @@ case "${section}" in
   *) fail "the plugin contract section does not require comparison by blob identity" ;;
 esac
 
+# ── 10. The fallback must be EXECUTABLE, not just named ───────────────────────
+# monorepo#2854: naming the reviewed definition as the fallback is not enough, because neither way a
+# run can reach it works unaided. The submodule holding it is empty in a fresh per-run worktree
+# (measured 2026-08-15: most live worktrees carried zero entries there), and where it IS populated —
+# the shared checkout — it sits at whatever revision it was last left on rather than this commit's
+# gitlink (measured the same day: bfde8656 against a pinned 564a6a0f, differing by 311 inserted and
+# 43 deleted lines across all four definition files). The second is the fail-open: it returns a
+# plausible definition, so the run believes it complied while following an unreviewed revision.
+# Measured impact: of the 5 sessions that saw DRIFT that day, only 2 read any reviewed definition.
+# Matched as COMPLETE commands including their path argument. A bare "submodule-init.sh" would still
+# pass if an edit retargeted it at another submodule, and a bare "rev-parse HEAD" would pass if the
+# read-back were pointed somewhere other than the path just materialised — which is precisely the
+# wrong-revision read this section exists to stop.
+case "${section}" in
+  *".claude/scripts/submodule-init.sh libraries/agent-plugins"*)
+    ok "the contract names the exact materialisation command and its target" ;;
+  *) fail "the plugin contract section does not name the exact command that materialises the reviewed definition" ;;
+esac
+# The materialisation alone is still fail-open — it is the revision ASSERTION that converts a
+# wrong-revision read from a silent pass into a stop. Pinned separately so an edit cannot drop the
+# check while keeping the command, and bound to the SAME path so the two cannot drift apart.
+case "${section}" in
+  *"git -C libraries/agent-plugins rev-parse HEAD"*)
+    ok "the contract reads the revision back from the path it materialised" ;;
+  *) fail "the plugin contract section does not read the materialised revision back from that same path" ;;
+esac
+case "${section}" in
+  *"must equal the pinned revision"*)
+    ok "the contract requires the materialised revision to equal the pin" ;;
+  *) fail "the plugin contract section does not require the materialised revision to equal the pin" ;;
+esac
+# The shared checkout is the specific trap, so it is named rather than left to inference: a run that
+# has not been told the populated copy can be the WRONG copy has no reason to suspect it.
+case "${section}" in
+  *"shared checkout"*)
+    ok "the contract warns that the populated shared checkout may be the wrong revision" ;;
+  *) fail "the plugin contract section does not warn about the shared checkout's revision" ;;
+esac
+# Detecting the mismatch is only half of it: the run also has to be told what to DO. Re-running the
+# materialisation is the intuitive move and it cannot work — handed an already-populated submodule the
+# helper repairs isolation and refuses `git submodule update`, exiting `isolated ✓` on the stale
+# revision. Without this assertion the contract could name the comparison and leave the recovery to
+# guesswork, which lands straight back on the stale definition.
+case "${section}" in
+  *"a STOP, not a retry"*)
+    ok "the contract says a revision mismatch stops rather than retries" ;;
+  *) fail "the plugin contract section does not say a revision mismatch is a stop rather than a retry" ;;
+esac
+case "${section}" in
+  *"fresh isolated worktree"*)
+    ok "the contract names the recovery for a revision mismatch" ;;
+  *) fail "the plugin contract section does not name the recovery path after a revision mismatch" ;;
+esac
+
+# ── 11. The fallback must survive the cases that BREAK a working tree ─────────
+# Codex review of monorepo#2855 (3×P1, all verified against the scripts): the section 10 procedure
+# assumed a usable working tree, and each of its three assumptions fails in a case the fallback is
+# actually reached in.
+#
+# (a) The pin was sourced from "the pinned revision the check printed" — but every `die` in
+# plugin-definition-currency.sh exits BEFORE its reporting block (the pin prints at the `say` well
+# after the last `die`), so an UNKNOWN prints no pin at all. UNKNOWN is exactly when this fallback is
+# reached, so the instruction was unfollowable in its own trigger case. Matched as the complete
+# `HEAD:<path>` form: a bare "rev-parse" already appears above for the read-back.
+#
+# The match starts at `rev-parse`, NOT at `git`, because git-level flags sit between the two — the
+# section's pin line carries `--no-replace-objects` there, and a literal starting at `git` asserts
+# command SPELLING where the intent is that the pin comes from the gitlink rather than the check's
+# stdout. Hardening that command would then falsify this assertion, which is what it must not do.
+# `HEAD:<path>` is still what discriminates: the read-back above is `rev-parse HEAD` with no
+# colon-path, and the byte-comparison loop reads `rev-parse "HEAD:$f"`, so neither satisfies this.
+case "${section}" in
+  *"rev-parse HEAD:libraries/agent-plugins"*)
+    ok "the contract resolves the pin independently of the check's output" ;;
+  *) fail "the plugin contract section does not name a pin source independent of the check" ;;
+esac
+# (b) A working-tree-free path must exist, because BOTH tree-based paths can fail: the submodule is
+# empty in a fresh worktree and `submodule-init.sh` can die STILL EMPTY there (its own comment
+# records `git submodule update --init` exiting 0 having populated nothing, observed from a linked
+# superproject). Without this, the prescribed recovery dead-ends and the run stops rather than
+# reading the reviewed definition. Matched on the repo-qualified contents path so the assertion
+# cannot be satisfied by an unrelated `gh api` elsewhere in the section.
+case "${section}" in
+  *"repos/devantler-tech/agent-plugins/contents"*)
+    ok "the contract names a read that needs no working tree" ;;
+  *) fail "the plugin contract section does not name a working-tree-free read of the reviewed definition" ;;
+esac
+case "${section}" in
+  *"STILL EMPTY"*)
+    ok "the contract says a STILL EMPTY materialisation is not the end of the run" ;;
+  *) fail "the plugin contract section does not tell a run what to do when materialisation populates nothing" ;;
+esac
+# (c) HEAD == pin does not establish CONTENT. Handed an already-populated submodule the helper
+# repairs isolation in place and refuses `git submodule update`, so a modified tracked definition
+# survives with HEAD still at the pin — the revision assertion passes over unreviewed instructions.
+# Bound to the same path as the revision read so the two cannot drift apart.
+case "${section}" in
+  *"git -C libraries/agent-plugins status --porcelain"*)
+    ok "the contract asserts the materialised tree is clean, not just its revision" ;;
+  *) fail "the plugin contract section does not require the materialised submodule tree to be clean" ;;
+esac
+# status alone is blind to assume-unchanged/skip-worktree, which is how a foreign edit hides from it
+# — the same hidden-index hole the Git-safety contract already closes for checkout.
+case "${section}" in
+  *"ls-files -v"*)
+    ok "the contract closes the hidden-index hole in that cleanliness check" ;;
+  *) fail "the plugin contract section does not close the hidden-index hole in its cleanliness check" ;;
+esac
+
+# ── 12. The prose must pin the OUTCOME, not merely name the tool ──────────────
+# CodeRabbit on monorepo#2855: naming `STILL EMPTY`, `status --porcelain` and `ls-files -v` proves
+# only that the document mentions them — not that STILL EMPTY routes to the forge read, nor that the
+# status output is required to be EMPTY. A contract that names a command without its required outcome
+# is the same "named but not executable" gap section 10 exists to close, one level down.
+#
+# Patterns below are SINGLE-quoted: they contain `$(` and `${`, which inside a double-quoted case
+# pattern would be command-substituted / expanded, silently changing what is matched.
+#
+# Split around the git-level flag slot for the reason given at the pin-source assertion above: the
+# section's pin line carries `--no-replace-objects` between `git` and `rev-parse`, and each of the
+# two segments occurs exactly once in the section, so the split cannot be satisfied vacuously.
+case "${section}" in
+  *'pin=$(git '*'rev-parse HEAD:libraries/agent-plugins)'*)
+    ok "the contract BINDS the resolved pin to a variable" ;;
+  *) fail "the plugin contract section does not bind the resolved pin to a variable" ;;
+esac
+# The bind is only worth anything if the forge request consumes it — a resolved-then-retyped revision
+# is exactly the wrong-revision read this section exists to stop.
+case "${section}" in
+  *'?ref=${pin}'*)
+    ok "the forge read consumes the pin that was just resolved" ;;
+  *) fail "the plugin contract section does not pass the resolved pin to the forge read" ;;
+esac
+# Ordering matters: the pin must be resolved BEFORE it is consumed, or the documented sequence cannot
+# be executed top-to-bottom as written.
+case "${section}" in
+  *'pin=$(git '*'rev-parse HEAD:libraries/agent-plugins)'*'?ref=${pin}'*)
+    ok "the pin is resolved before the forge read consumes it" ;;
+  *) fail "the plugin contract section resolves the pin after the forge read that consumes it" ;;
+esac
+case "${section}" in
+  *"fall back to the forge read"*)
+    ok "STILL EMPTY routes to the forge read rather than ending the run" ;;
+  *) fail "the plugin contract section does not route a STILL EMPTY materialisation to the forge read" ;;
+esac
+case "${section}" in
+  *"must print nothing"*)
+    ok "the cleanliness check pins its required outcome, not just its command" ;;
+  *) fail "the plugin contract section does not require the cleanliness check to print nothing" ;;
+esac
+
+# ── 13. The byte check must FAIL CLOSED, not merely exist ────────────────────
+# CodeRabbit on monorepo#2855 (🟠 Major, verified on fixtures): the byte-comparison loop is the one
+# assertion that survives a clean/smudge filter, so a hole in IT has no backstop. Three failure paths
+# made the naive form report success on a check that never ran, and the emptiest evidence produced
+# the strongest-looking result:
+#   (a) piping `ls-tree` into the loop takes the WHILE's status, so an enumeration failure runs the
+#       body zero times and prints nothing — identical output to a verified tree;
+#   (b) in an UNINITIALISED submodule every git call fails, so `want` and `got` are BOTH empty and
+#       `[ "$want" = "$got" ]` compares EQUAL — and an empty submodule is precisely the state this
+#       fallback is reached in;
+#   (c) `ls-tree` without `--no-replace-objects` enumerates a replaced tree while the lookups beside
+#       it do not, spanning two object namespaces inside one comparison.
+# Each assertion below pins the OUTCOME (a marker is emitted / a value is rejected), per section 12.
+case "${section}" in
+  *'--no-replace-objects ls-tree -r --name-only HEAD'*)
+    ok "the byte check enumerates in the same object namespace it compares in" ;;
+  *) fail "the byte check's ls-tree does not carry --no-replace-objects (two object namespaces)" ;;
+esac
+# Matched contiguously ON PURPOSE: the flag appears three times in this section, so a split pattern
+# would be satisfied by the pin line's occurrence even if ls-tree lost the flag entirely.
+case "${section}" in
+  *'BYTES-UNKNOWN <enumeration failed>'*)
+    ok "an enumeration failure is reported rather than read as no-differences" ;;
+  *) fail "the byte check does not report an enumeration failure (silent pass on a check that never ran)" ;;
+esac
+case "${section}" in
+  *'[ -n "$want" ] && [ -n "$got" ]'*)
+    ok "the byte check rejects empty hashes instead of comparing them equal" ;;
+  *) fail "the byte check does not reject empty hashes (two failed lookups would compare EQUAL)" ;;
+esac
+# The markers are worthless if the prose still says only a DIFFER means trouble.
+case "${section}" in
+  *"unproven is not proven"*)
+    ok "the contract counts BYTES-UNKNOWN as a failure, not as a pass" ;;
+  *) fail "the contract does not say an unverifiable byte check fails closed" ;;
+esac
+# Command substitution strips the trailing newline, so a bare `printf '%s'` makes `read` return false
+# on the final entry and drops the LAST file from the sweep unchecked — a silent partial verification.
+case "${section}" in
+  *"printf '%s\\n' \"\$files\""*)
+    ok "the byte check sweeps every file, including the last" ;;
+  *) fail "the byte check drops its last entry (printf without a trailing newline)" ;;
+esac
+
 echo "plugin-definition-currency: ${pass_count} assertions passed"
