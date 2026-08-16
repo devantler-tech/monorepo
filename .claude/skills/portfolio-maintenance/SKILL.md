@@ -457,19 +457,39 @@ submodule. Split its work in two, because only one half is path-less:
   immediately before acting**. The comment shape is load-bearing — every instance still comments as
   `devantler`, so the disclosure line alone cannot tell siblings apart (monorepo#2265):
   1. **Unique token.** Every board-only claim comment MUST include the greppable token
-     `` `board-claim:<lane>` `` on its own line, where `<lane>` is exactly `claude`, `codex`, or
-     `cursor` (the posting instance's lane — never invent a fourth). Example for this skill's local
-     Claude instance: `` `board-claim:claude` ``. Match **your own** claim by that exact token; a
-     different lane's token is a sibling's.
-  2. **Body.** Disclosure line → the `board-claim:<lane>` token → one sentence naming what you are
-     about to change. No other prose is required.
+     `` `board-claim:<lane>-<run-id>` `` on its own line, where `<lane>` is exactly `claude`,
+     `codex`, or `cursor` (the posting instance's lane — never invent a fourth) and `<run-id>` is the
+     same trusted runtime run/thread id this loop already uses for `<session-owner-token>`. Example
+     for this skill's local Claude instance: `` `board-claim:claude-a1b2c3d4` ``. Match **your own**
+     claim by the **whole** token.
+     🔴 **The `<run-id>` is not decoration — a bare `board-claim:<lane>` breaks on same-lane
+     overlap, which is the normal case.** Lanes dispatch hourly and 46% of runs exceed 60 minutes,
+     so your lane's next tick routinely starts before you finish; under a lane-only token each run
+     reads the other's claim as *its own*, both pass the re-read, and both mutate the board. Any
+     token that is not **identical** to yours is a sibling's — **including your own lane under a
+     different `<run-id>`**.
+  2. **Body.** Disclosure line → the `board-claim:<lane>-<run-id>` token → one sentence naming what
+     you are about to change. No other prose is required.
   3. **Lease.** A claim is **live for ~2 hours** timed from the comment's `created_at` (matching the
-     branch-claim lease) and **stale after that**. An unreplied claim older than the lease is
+     branch-claim lease) and **stale after that**. An unclosed claim older than the lease is
      abandoned, not owned — take it over and say so in a **new** claim comment (do not edit the
-     stale one). If a sibling's live claim is already there, that lane is owned; pick something else.
-  4. **Close-out.** On finishing (or abandoning mid-flight), **reply to your own claim** stating
-     what changed. The reply is what ends the lease early; without it, siblings wait out the full
-     ~2h window.
+     stale one).
+  4. **Election — when a live foreign claim exists, order it against yours; never both retreat.**
+     Two instances converging on the same board issue is expected, and a symmetric "sibling claim
+     present ⇒ pick something else" makes **both** stand down, leaving the work unclaimed
+     indefinitely. Rank every live claim on the issue by **`created_at` ascending, tie-broken by
+     ascending comment id**; the earliest wins. If yours is the winner, proceed. If it is not, post
+     your close-out token and pick something else.
+  5. **Close-out.** On finishing (or abandoning mid-flight, including after losing the election),
+     post a comment carrying `` `board-claim-done:<lane>-<run-id>` `` with the **identical**
+     `<lane>-<run-id>` as your claim, plus one sentence on what changed.
+     🔴 **Post the token, do not "reply to your claim" — issue comments are FLAT.** There is no
+     reply-to or parent field, and `gh issue comment` offers only create/edit/delete, so a close-out
+     carrying neither the token nor the claim's id cannot be matched to the claim it ends. Every
+     instance posts as `devantler`, so without the matching token a sibling cannot tell which claim a
+     generic "here's what changed" note closes, and must wait out the full ~2h window or wrongly
+     treat a live claim as finished. The matching token is what ends the lease early; nothing else
+     does.
 - **Any accompanying file change** (an `add-to-project` workflow, an agent-definition or card update)
   is **ordinary monorepo work and keeps the FULL discipline** — per-run worktree, validate, draft PR.
   **Never skip isolation for it:** several instances run concurrently, and editing the shared checkout

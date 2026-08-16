@@ -827,11 +827,47 @@ touch of an unconfirmed repo:
    project-board mutations have no branch to push, so the claim is a **comment**. Every instance
    still comments as `devantler`, and the disclosure line alone cannot tell siblings apart
    (monorepo#2265). Every board-only claim comment MUST carry the greppable token
-   `` `board-claim:<lane>` `` where `<lane>` is exactly `claude`, `codex`, or `cursor`. An instance
-   matches **its own** claim by that token; a different lane's unreplied claim younger than ~2h
-   (timed from the comment's `created_at`) is a live sibling claim — stand down. Reply to your own claim comment when finished (or when abandoning); an unreplied claim older than the lease is
-   abandoned and may be taken over. Full procedure lives in the `portfolio-maintenance` skill's
-   project-board Act step.
+   `` `board-claim:<lane>-<run-id>` `` on its own line, where `<lane>` is exactly `claude`, `codex`,
+   or `cursor` and `<run-id>` is the same trusted runtime run/thread id that *Execution model*
+   already requires for `<session-owner-token>`.
+
+   🔴 **The `<run-id>` half is load-bearing — a lane-only token cannot distinguish two runs of the
+   SAME lane, which is the common case, not an edge one.** *Cadence & focus* records that same-lane
+   overlap is expected: the lanes dispatch hourly and 46% of measured runs exceed 60 minutes, so a
+   lane's next run routinely starts while its previous one is still working. Under a bare
+   `board-claim:<lane>` both runs read the *other's* token as **their own**, both pass the re-read,
+   and both mutate the board concurrently — the exact race this rule exists to serialise, reopened
+   by the token that was supposed to close it. *Execution model* already made this call for worktree
+   claims and states the reason in the same words: never use a stable agent, schedule, or lane slug,
+   *because overlapping ticks would then impersonate the same owner*. Board claims inherit that
+   reasoning rather than re-deriving it.
+
+   **Match your own claim on the WHOLE token.** Any other token is a sibling's — including one
+   carrying your own lane with a different `<run-id>`. A different-lane token is not the only foreign
+   claim, and treating lane equality as ownership is precisely the defect above.
+
+   **Close out by posting the matching `` `board-claim-done:<lane>-<run-id>` `` token** when finished
+   or when abandoning. 🔴 **"Reply to your own claim" is not implementable and must not be written as
+   though it were:** GitHub issue comments are **flat** — there is no reply-to or parent field, and
+   `gh issue comment` exposes only create/edit/delete — so a later comment carrying neither the token
+   nor the claim's id cannot be matched to the claim it closes. Since every instance posts as
+   `devantler`, a sibling reading a generic "here's what changed" note cannot tell *which* claim it
+   ends, and must then either wait out the full lease or wrongly treat a live claim as closed. The
+   done-token is the machine-matchable link that flatness otherwise denies: scanners pair a claim with
+   the `board-claim-done:` comment carrying the **identical** `<lane>-<run-id>`, and nothing else ends
+   a lease early. An unclosed claim older than ~2h (timed from the claim comment's `created_at`) is
+   abandoned and may be taken over.
+
+   **When two live claims overlap, elect a winner — never both stand down.** Rule 5's *abandon on a
+   lost race* assumes a push already decided the race; here nothing has, so a symmetric
+   "sibling claim present ⇒ stand down" leaves **both** instances retreating and the board work
+   unclaimed indefinitely — a deadlock, and worse than the duplication it replaces, because
+   convergence on the same small candidate set is the *expected* behaviour of the selection rule. So
+   order the live claims deterministically: **the winner is the earliest `created_at`, tie-broken by
+   the lowest comment id** (the id breaks the tie because two comments can share a timestamp, and
+   ordering must not depend on which instance happens to read first). The winner proceeds; **only the
+   losers** post their `board-claim-done:` token and pick something else. Full procedure lives in the
+   `portfolio-maintenance` skill's project-board Act step.
 
 **A live claim is a temporary skip — the one addition to the skip test.** *Drain oldest-first* lists
 when an older issue may be passed over; a **live claim** now joins it as skip reason **(e)**, and it
@@ -840,13 +876,18 @@ both** — a board-only claim has neither an assignee nor a branch, so an assign
 predicate would let an instance pass this test and repeat the very board mutation rule 6 exists to
 serialise:
 - **assigned *and* branched**, inside the ~2h window, with no PR yet; or
-- an **unreplied `board-claim:<lane>` comment from a different lane**, younger than ~2h timed from
-  the comment's `created_at` (rule 6 above).
+- an **unclosed `board-claim:<lane>-<run-id>` comment whose token is not your own**, younger than ~2h
+  timed from the comment's `created_at`, with no matching `board-claim-done:<lane>-<run-id>` (rule 6
+  above). ⚠️ **"Not your own" is a whole-token test, not a lane test** — a claim from your own lane
+  under a different `<run-id>` belongs to a concurrently-running sibling tick and skips exactly like
+  any other; reading lane equality as ownership is the defect rule 6 exists to close. **And it is a
+  skip only when you lost the election** — where your own live claim is the earliest, you are the
+  winner and proceed rather than skipping.
 
 Without that, an oldest issue carrying a fresh claim would be both un-takeable and un-skippable —
 which either stalls the queue or recreates the duplicate build the protocol exists to prevent. Note it
 in the report as claimed-elsewhere and move to the next actionable issue; once the window lapses —
-still branch-only, or the board-claim comment still unreplied — it is fair game again. **Nothing else in that test changes** — in particular, an
+still branch-only, or the board-claim comment still unclosed — it is fair game again. **Nothing else in that test changes** — in particular, an
 issue is never skipped merely because it *looks* contested, is large, or is hard.
 
 ### Professional-work repository boundary — hard exclusion
