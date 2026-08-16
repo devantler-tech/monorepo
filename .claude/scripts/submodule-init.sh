@@ -384,6 +384,11 @@ advance() {
   if grep -q '^[^ ]' <<< "$nested_status"; then
     die "nested submodule checkout does not match '$path' at $target — advance it separately before use"
   fi
+  # No checkout happened, so ignored artifacts are not residue from a pin transition. Preserve the
+  # historical idempotent behavior after still validating nested checkout integrity above.
+  if [ "$head" = "$target" ]; then
+    return 0
+  fi
   post_status=$(git --no-replace-objects -C "$path" status --porcelain \
     --untracked-files=all --ignore-submodules=none 2>/dev/null) ||
     die "could not verify post-advance status for '$path' — refusing to report success"
@@ -395,9 +400,7 @@ advance() {
   if [ -n "$residue" ]; then
     die "residual files after advancing '$path' to $target — preserve and handle them before use"
   fi
-  if [ "$head" != "$target" ]; then
-    printf 'submodule-init: %s — advanced to %s\n' "$path" "$target"
-  fi
+  printf 'submodule-init: %s — advanced to %s\n' "$path" "$target"
 }
 
 # Stop here when SOURCED, so the self-test can exercise the path-comparison helpers directly. The

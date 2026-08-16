@@ -405,6 +405,17 @@ report "advance: does not leave a shared core.worktree" \
   "$([[ -z "$(git config -f "$c12/super/.git/modules/sub/config" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)"
 out="$(cd "$c12/super" && "$helper" --check 2>&1)" && rc=0 || rc=$?
 report "advance: --check passes afterwards" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "$out"
+c12_excludes="$c12/excludes"
+printf 'ignored.log\n' >"$c12_excludes"
+git -C "$c12/super/sub" config core.excludesFile "$c12_excludes"
+echo reusable-cache >"$c12/super/sub/ignored.log"
+report "advance already-at-pin ignored precondition: status stays clean" \
+  "$([[ -z "$(git -C "$c12/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+out="$(cd "$c12/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance already-at-pin ignored: exits 0 without a checkout" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance already-at-pin ignored: preserves the ignored artifact" \
+  "$([[ "$(cat "$c12/super/sub/ignored.log")" == "reusable-cache" ]] && echo yes || echo no)"
 
 # 13. --advance refuses a dirty working tree.
 c13="$tmp/c13"
