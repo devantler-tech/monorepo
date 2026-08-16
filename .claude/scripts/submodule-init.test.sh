@@ -797,6 +797,40 @@ report "advance already-at-pin: still fails closed on the stale nested checkout"
 report "advance already-at-pin: still names the nested mismatch" \
   "$(grep -q 'nested submodule checkout does not match' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
+# Matching the nested gitlink is not enough: ignore=all can hide tracked dirt from the outer status,
+# and recursive submodule status reports only the matching commit marker.
+git -C "$c21/super/sub/nested" checkout -q --detach "$c21_nested_new"
+echo locally-modified >>"$c21/super/sub/nested/nested.txt"
+report "advance nested-dirty precondition: parent status hides the tracked edit" \
+  "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+report "advance nested-dirty precondition: recursive status still reports a matching pin" \
+  "$(git -C "$c21/super/sub" submodule status --recursive | grep -q '^ ' && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance nested-dirty: fails closed at the recorded outer pin" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance nested-dirty: names the residual checkout" \
+  "$(grep -q 'residual files after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+git -C "$c21/super/sub/nested" restore nested.txt
+
+# A stale shared core.worktree can redirect the nested repository at another session while its HEAD
+# still matches the gitlink. Parent status and recursive pin markers both remain clean under ignore=all.
+c21_nested_gitdir="$(git -C "$c21/super/sub/nested" rev-parse --path-format=absolute --git-common-dir)"
+c21_nested_decoy="$c21/nested-other-session"
+mkdir -p "$c21_nested_decoy"
+git config -f "$c21_nested_gitdir/config" core.worktree "$c21_nested_decoy"
+c21_nested_top="$(git -C "$c21/super/sub/nested" rev-parse --show-toplevel)"
+report "advance nested-isolation precondition: nested checkout resolves to the decoy" \
+  "$([[ "$c21_nested_top" -ef "$c21_nested_decoy" ]] && echo yes || echo no)" \
+  "got=$c21_nested_top configured=$(git config -f "$c21_nested_gitdir/config" core.worktree 2>/dev/null || true)"
+report "advance nested-isolation precondition: parent status stays empty" \
+  "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance nested-isolation: fails closed at the recorded outer pin" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance nested-isolation: names the nested isolation failure" \
+  "$(grep -q 'nested submodule isolation' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+git config -f "$c21_nested_gitdir/config" --unset-all core.worktree
+
 # 22. Removing an initialized nested submodule makes recursive status vacuous because the target no
 #     longer declares that gitlink. The old nested repository remains as residue, and a target-side
 #     ignore rule hides it from both status and a single-force clean dry run. The stronger embedded-

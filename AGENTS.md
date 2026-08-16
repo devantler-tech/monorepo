@@ -3131,7 +3131,8 @@ top-level checks read clean.
 never moves that checkout. `submodule-init.sh --advance <path>` is the permitted top-level pin-bump
 path: it refuses dirty, hidden-index, ahead-of-pin, replacement-object and ignored-overwrite hazards,
 moves only the named checkout, and fails closed when an initialised nested submodule no longer matches
-the new pin. It never recursively initialises additions or advances nested submodules for you.
+the new pin, contains tracked dirt, or resolves outside its own physical worktree. It never recursively
+initialises additions or advances nested submodules for you.
 📌 **Landing a worktree on a PR head *including newly introduced or mismatched nested submodules*
 therefore still needs a complete procedure — fetch, initialise additions, repair isolation, advance
 each populated checkout, then probe — not a recursive checkout flag. That is

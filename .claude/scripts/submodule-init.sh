@@ -26,7 +26,8 @@
 # `--advance` is the isolation-safe way to follow a pin bump after `git pull` on the superproject.
 # Plain `git submodule update` (with or without `--init`) rewrites shared `core.worktree`; this mode
 # checks out the recorded gitlink directly, then repair + probe. It refuses a dirty tree or a
-# checkout that is ahead of the pin, so it cannot discard uncommitted or unpushed work.
+# checkout that is ahead of the pin, so it cannot discard uncommitted or unpushed work. It does not
+# move nested submodules; it validates every initialized nested checkout's pin, dirt, and isolation.
 set -euo pipefail
 
 die() {
@@ -258,6 +259,23 @@ probe() {
   return "$rc"
 }
 
+# Probe every initialized nested checkout beneath $1. Pin markers alone are insufficient: a nested
+# repository can retain the expected HEAD while a stale shared core.worktree redirects commands into
+# another session. `submodule foreach` visits initialized checkouts only; uninitialized/mismatched
+# entries are rejected separately by the recursive status gate in `advance`.
+probe_nested_checkouts() {
+  local path=$1 nested_paths nested rc=0
+  nested_paths=$(git --no-replace-objects -C "$path" submodule foreach --quiet --recursive 'pwd -P') || {
+    warn "$path — could not enumerate initialized nested submodules"
+    return 1
+  }
+  while IFS= read -r nested; do
+    [ -n "$nested" ] || continue
+    probe "$nested" || rc=1
+  done <<< "$nested_paths"
+  return "$rc"
+}
+
 all_paths() { git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}'; }
 # "Initialised" means git actually treats it as its own repository here — again, asked, not assumed.
 # Select every submodule that is CHECKED OUT here. Deliberately NOT "every submodule git resolves
@@ -384,6 +402,14 @@ advance() {
   if grep -q '^[^ ]' <<< "$nested_status"; then
     die "nested submodule checkout does not match '$path' at $target — advance it separately before use"
   fi
+  probe_nested_checkouts "$path" ||
+    die "nested submodule isolation is broken for '$path' — repair it from its parent before use"
+  post_status=$(git --no-replace-objects -C "$path" status --porcelain \
+    --untracked-files=all --ignore-submodules=none 2>/dev/null) ||
+    die "could not verify post-advance status for '$path' — refusing to report success"
+  if [ -n "$post_status" ]; then
+    die "residual files after advancing '$path' to $target — preserve and handle them before use"
+  fi
   # No checkout happened, so ordinary ignored artifacts are not residue from a pin transition.
   # Still detect an embedded repository that the target no longer declares: one force protects it
   # even during a dry run, while two forces reveal it. Comparing the probes distinguishes that
@@ -397,12 +423,6 @@ advance() {
       die "residual files after advancing '$path' to $target — preserve and handle them before use"
     fi
     return 0
-  fi
-  post_status=$(git --no-replace-objects -C "$path" status --porcelain \
-    --untracked-files=all --ignore-submodules=none 2>/dev/null) ||
-    die "could not verify post-advance status for '$path' — refusing to report success"
-  if [ -n "$post_status" ]; then
-    die "residual files after advancing '$path' to $target — preserve and handle them before use"
   fi
   residue=$(git --no-replace-objects -C "$path" clean -nffdx 2>/dev/null) ||
     die "could not inspect ignored residue in '$path' — refusing to report success"
