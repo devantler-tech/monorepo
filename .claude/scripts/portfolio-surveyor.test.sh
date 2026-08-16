@@ -312,6 +312,17 @@ board_coverage_rows="$(grep -c '^- BOARD-COVERAGE' "${surveyor}" || true)"
 if grep -nE 'board_coverage=<?[0-9]|board_coverage=<n>' "${surveyor}"; then
   fail "surveyor prescribes a bare numeric board_coverage row outside the measured|unknown grammar"
 fi
+# Numerator and denominator must describe the SAME population. The denominator is pinned to
+# `is:public archived:false` above, so an unfiltered items census counts board items from private and
+# archived repositories that no denominator can contain. Measured 2026-08-16 with the prescribed
+# commands: unfiltered on_board 621 vs open_public 619, the excess being exactly 2 open issues still
+# boarded from the archived `reusable-workflows` repo — a 100.3% coverage, impossible for a fraction
+# and wrong in the gap-HIDING direction. The private half is 0 today but reachable by design, since
+# boarding a private repo's issue is a maintainer decision.
+grep -Fq '.content.repository.private == false' "${surveyor}" ||
+  fail "surveyor on_board census does not exclude private-repo items the denominator cannot contain"
+grep -Fq '.content.repository.archived == false' "${surveyor}" ||
+  fail "surveyor on_board census does not exclude archived-repo items the denominator cannot contain"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||

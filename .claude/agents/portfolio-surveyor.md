@@ -550,10 +550,25 @@ public and private — no per-repo loop needed to enumerate):
      # open Issue items only; --paginate walks every page to exhaustion
      gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid_status" \
        --paginate --jq '.[]' | jq -s '
-         map(select(.content_type=="Issue" and .archived_at==null))
+         map(select(.content_type=="Issue" and .archived_at==null
+                    and .content.repository.private == false
+                    and .content.repository.archived == false))
          | {on_board: length,
             status_less: map(select(([.fields[]?|select(.name=="Status")|.value] | length)==0)) | length}'
      ```
+
+     🔴 **The two repository predicates are not optional — without them the ratio compares two
+     different populations and overstates coverage.** The denominator below is explicitly
+     `is:public archived:false`, so any board item from a private or archived repository lands in
+     the numerator and in no denominator. Measured 2026-08-16: an unfiltered numerator returned
+     **621** against an `open_public` of **619**, because the board still carries **2** open issues
+     from `devantler-tech/reusable-workflows` (archived 2026-07-10). That emits a coverage of
+     **100.3%** — not a possible value for a fraction, and wrong in the gap-hiding direction the
+     rest of this section is built to avoid. The private half reads 0 today but is reachable by
+     design, since boarding a private repo's issue is a maintainer decision (*Every issue belongs on
+     the board*) and such items "never count against coverage" — which is an argument for excluding
+     them from **both** sides, not just one. `.content.repository` is already in the payload, so
+     both predicates are free.
 
      Pair it with a **complete** open-issue denominator, taken from the Search API's `total_count`
      **metadata** — never from a row listing. `gh search issues` returns items and defaults to **30
