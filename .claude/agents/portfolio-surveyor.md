@@ -1330,8 +1330,9 @@ Digest rules:
   claim; an expired tip is not `CLAIMED` and is annotated as `stale-claim` on the ordinary issue row.
   For lane fallbacks, match `(claude|cursor|codex)/*-<issue>`, a takeover branch
   (`(claude|cursor|codex)/*-<issue>-2`, `-3`, …), or a legacy normalised stem under any of those three
-  prefixes — resolve the claim ref from the **issue number**, never an assumed exact stem (contract
-  *Claim protocol* rule 4). 🔴 **Number resolution does NOT subsume the legacy stem — run both.** A
+  prefixes — match a lane branch by the **issue number or a normalised stem**, never an assumed exact
+  stem (contract *Claim protocol* rule 1). 🔴 **Number resolution does NOT subsume the legacy stem —
+  run both.** A
   `-<issue>` / `-<issue>-<k>` anchor matches nothing on a branch that predates the numbering rule and
   ends in its description, so a number-only scan reports `no claim` over a live legacy claim branch
   and the orchestrator duplicates the build. Match the numbered and takeover shapes by number **and**
