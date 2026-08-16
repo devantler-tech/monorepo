@@ -10,7 +10,9 @@
 # Rules (must stay in lockstep with .claude/agents/portfolio-surveyor.md § CI red on main):
 #   - keep only main-branch events: push, schedule, merge_group, workflow_dispatch, dynamic
 #   - take the latest run per workflow_id (greatest created_at; id, never display name)
-#   - report red only when that latest conclusion is failure or timed_out
+#   - report red only when that latest conclusion is failure, timed_out or startup_failure
+#     (startup_failure is a workflow/dependency config that could not even parse, so the run
+#     never started — the constitution's rung-0 red set names all three)
 #   - skipped / neutral / success / cancelled / in_progress are not red
 
 set -euo pipefail
@@ -45,7 +47,9 @@ jq -r '
         ))
       | group_by(.workflow_id)
       | map(sort_by(.created_at) | last)
-      | map(select(.conclusion == "failure" or .conclusion == "timed_out"))
+      | map(select(.conclusion == "failure"
+                   or .conclusion == "timed_out"
+                   or .conclusion == "startup_failure"))
       | sort_by(.workflow_id)
     )[]
   | [.workflow_id, .conclusion, (.html_url // ""), (.name // "")]

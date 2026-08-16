@@ -1295,6 +1295,27 @@ expect_main_ci_reds \
   ]' \
   $'99\ttimed_out\thttps://example.test/b-to\tCI'
 
+# A startup_failure is RED. The constitution's rung-0 red set is failure, timed_out AND
+# startup_failure, and this script is the surveyor's only classifier — so omitting it
+# reports `nothing_on_fire: true` while a workflow or dependency config cannot even parse,
+# which is precisely the state that stops CI and security coverage from running at all.
+expect_main_ci_reds \
+  "startup_failure on the latest run is red" \
+  '[
+    {"workflow_id":13,"event":"push","conclusion":"startup_failure","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/su","name":"CI"}
+  ]' \
+  $'13\tstartup_failure\thttps://example.test/su\tCI'
+
+# Guard the over-correction: startup_failure must obey the same latest-run-wins rule as the
+# other two, or adding it would resurrect superseded fires.
+expect_main_ci_reds \
+  "startup_failure superseded by a later success is not red" \
+  '[
+    {"workflow_id":13,"event":"push","conclusion":"startup_failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/su","name":"CI"},
+    {"workflow_id":13,"event":"push","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/ok","name":"CI"}
+  ]' \
+  ""
+
 # Multi-lane claim visibility (monorepo#2300): Cursor cloud and Codex siblings claim under
 # cursor/* and codex/*; a surveyor that only greps ^claude/ cannot see those pre-PR claims.
 # The scan must also NOT be gated on assignees — app/cursor cannot assign, so a Cursor claim
