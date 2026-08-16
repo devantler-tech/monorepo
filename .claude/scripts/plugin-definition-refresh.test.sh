@@ -204,11 +204,11 @@ mkdir -p "$PLUGINS/.plugin-definition-refresh.lock"
 # The owner must be a LIVE pid, or the liveness reaper correctly treats the lock as abandoned and
 # takes it — which is what this fixture did on its first version, failing for the right reason.
 printf '%s\n' "$$" > "$PLUGINS/.plugin-definition-refresh.lock/pid"
-STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
-  ok "A15 exits 2 (UNKNOWN) rather than applying while a LIVE run holds the lock"
-else bad "A15 exits 2 (UNKNOWN) rather than applying while a LIVE run holds the lock" \
-  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'holds .* after'; then
+  ok "A15 exits 2 (UNKNOWN, named reason) rather than applying while a LIVE run holds the lock"
+else bad "A15 exits 2 (UNKNOWN, named reason) rather than applying while a LIVE run holds the lock" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 rm -f "$PLUGINS/.plugin-definition-refresh.lock/pid"
 rmdir "$PLUGINS/.plugin-definition-refresh.lock" 2>/dev/null || true
 cleanup
@@ -220,11 +220,13 @@ cleanup
 make_fixture
 set_gitlink "$MK_NEW"
 mkdir -p "$PLUGINS/.plugin-definition-refresh.lock"          # fresh, no pid published yet
-STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run 2>&1)"; rc=$?
+# The reason matters here too: exit 2 covers eight conditions, so a regression that exits 2 before
+# the lock code runs would keep this green while the guard under test never executed.
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'holds .* after'; then
   ok "A15c does not steal a freshly-created lock that has not published its owner yet"
 else bad "A15c does not steal a freshly-created lock that has not published its owner yet" \
-  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 rmdir "$PLUGINS/.plugin-definition-refresh.lock" 2>/dev/null || true
 cleanup
 
@@ -330,8 +332,19 @@ git -C "$SUB" init -q -b main; git -C "$SUB" config user.email t@t; git -C "$SUB
 echo s > "$SUB/s"; git -C "$SUB" add s; git -C "$SUB" commit -qm sub
 SUB_SHA="$(git -C "$SUB" rev-parse HEAD)"
 git -C "$MK" checkout -q "$MK_NEW"
-printf 'na\xc3\xafve\n' > "$MK/na\xc3\xafve"
-git -C "$MK" add "$MK/na\xc3\xafve" >/dev/null 2>&1
+# ANSI-C quoting, NOT double quotes: bash does not expand \xNN inside "…", so `"na\xc3\xafve"` is
+# the literal 12-character ASCII name `na\xc3\xafve`. That name is still C-quoted by git (it contains
+# backslashes), so the case passed while testing something other than what it claimed. $'…' emits the
+# actual UTF-8 bytes.
+NONASCII=$'na\xc3\xafve'
+printf 'x\n' > "$MK/$NONASCII"
+git -C "$MK" add -- "$NONASCII" \
+  || { printf 'FIXTURE FAILURE: could not add the non-ASCII name\n' >&2; exit 9; }
+# A symlink's blob is its TARGET TEXT while `hash-object` on the link hashes the target's contents,
+# so an unhandled symlink also makes a clean marketplace refuse.
+ln -s f "$MK/alias"
+git -C "$MK" add -- alias \
+  || { printf 'FIXTURE FAILURE: could not add the symlink\n' >&2; exit 9; }
 # NOT `git add -A`: that stages the DELETION of the gitlink (its directory is absent at this point),
 # which silently produced a tree with zero gitlinks — a fixture that tested nothing. Caught by
 # ablating the gitlink skip and watching this assertion stay green.
@@ -343,15 +356,20 @@ MK_SUB="$(git -C "$MK" rev-parse HEAD)"
 git -c protocol.file.allow=always -C "$MK" clone -q "$SUB" vendored 2>/dev/null
 git -C "$MK/vendored" checkout -q "$SUB_SHA" 2>/dev/null
 set_gitlink "$MK_SUB"
-if [ "$(git -C "$MK" ls-tree -r HEAD | awk '$1=="160000"' | wc -l | tr -d ' ')" != "1" ] \
+gl_count="$(git -C "$MK" ls-tree -r HEAD | awk '$1=="160000"' | wc -l | tr -d ' ')"
+sl_count="$(git -C "$MK" ls-tree -r HEAD | awk '$1=="120000"' | wc -l | tr -d ' ')"
+# Prove the name really is C-quoted by `--name-only`; that quoting is what the -z streaming exists
+# to avoid, so if it is absent this case is not exercising the path it claims to.
+quoted="$(git -C "$MK" ls-tree -r --name-only HEAD | grep -c '^"' | tr -d ' ')"
+if [ "$gl_count" != "1" ] || [ "$sl_count" != "1" ] || [ "$quoted" -lt 1 ] \
   || [ -n "$(git -C "$MK" status --porcelain)" ]; then
-  bad "A18c fixture precondition: exactly one gitlink and a clean worktree" \
-    "gitlinks=$(git -C "$MK" ls-tree -r HEAD | awk '$1=="160000"' | wc -l | tr -d ' ') status=[$(git -C "$MK" status --porcelain)]"
+  bad "A18c fixture precondition: one gitlink, one symlink, a C-quoted name and a clean worktree" \
+    "gitlinks=$gl_count symlinks=$sl_count quoted-names=$quoted status=[$(git -C "$MK" status --porcelain)]"
 else
   out="$(STUB_MARKETPLACE_TARGET="$MK_SUB" run 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ]; then
-    ok "A18c a gitlink and a non-ASCII name do not make a clean marketplace refuse"
-  else bad "A18c a gitlink and a non-ASCII name do not make a clean marketplace refuse" \
+    ok "A18c a gitlink, a symlink and a non-ASCII name do not make a clean marketplace refuse"
+  else bad "A18c a gitlink, a symlink and a non-ASCII name do not make a clean marketplace refuse" \
     "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 fi
 cleanup

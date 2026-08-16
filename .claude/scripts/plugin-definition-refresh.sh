@@ -286,7 +286,15 @@ while IFS= read -r -d '' entry; do
   f="${entry#*$'\t'}"
   [ -n "$f" ] || continue
   want="$(git -C "$MARKETPLACE_DIR" --no-replace-objects rev-parse "HEAD:$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
-  got="$(git -C "$MARKETPLACE_DIR" hash-object --no-filters -- "$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
+  if [ "$mode" = "120000" ]; then
+    # A symlink's blob holds the TARGET PATH as text, but `hash-object` on the link follows it and
+    # hashes the target FILE's contents — so the two never match and a clean marketplace containing
+    # any symlink would refuse. Hash the link text instead, which keeps symlinks covered rather than
+    # exempting them.
+    got="$(printf '%s' "$(readlink "$MARKETPLACE_DIR/$f" 2>/dev/null)" | git -C "$MARKETPLACE_DIR" hash-object --stdin 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
+  else
+    got="$(git -C "$MARKETPLACE_DIR" hash-object --no-filters -- "$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
+  fi
   { [ -n "$want" ] && [ -n "$got" ]; } || { bytes_unknown=$((bytes_unknown + 1)); continue; }
   [ "$want" = "$got" ] || bytes_differ=$((bytes_differ + 1))
 done < "$tree_list"
