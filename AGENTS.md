@@ -909,7 +909,7 @@ namespace (`claude/*`, `codex/*`, `cursor/*`), so a race settled only on the wor
 arbitrated across lanes. The durable claim is therefore `agent-claim/<issue>` — a single shared ref
 every instance derives from the issue number alone — acquired **before** the lane-specific work
 branch via [`.claude/scripts/agent-claim.sh`](.claude/scripts/agent-claim.sh) (RED/GREEN coverage of
-the nine proven traps lives in `agent-claim.test.sh`).
+the eleven proven traps live in `agent-claim.test.sh`).
 
 1. **Check four signals before selecting, not one:** open PRs, remote `agent-claim/<issue>` tips,
    remote lane work branches (`claude/*` / `codex/*` / `cursor/*`), and issue assignees. An assignee
@@ -938,7 +938,12 @@ the nine proven traps lives in `agent-claim.test.sh`).
    <product-path>`) and stand down. Then (c)
    self-assign it when your identity can
    (**if `devantler` is already assigned, remove and re-add**, because the add is a no-op for an
-   existing assignee and would leave your lease carrying the *old* timestamp); and (d) push the
+   existing assignee and would leave your lease carrying the *old* timestamp); and (d)
+   **immediately before pushing the lane branch or opening its draft PR** — and **again after any
+   resumed pause** — verify that the retained ownership token is still the shared tip with
+   `.claude/scripts/agent-claim.sh verify <issue> "$claim_sha" --repo-dir <product-path>`. A failed
+   verify means a takeover won: abandon under rule 5 without pushing or opening a competing PR. Then
+   (e) push the
    lane-specific work branch **with the issue number in its name** —
    `<lane>/<area>-<desc>-<issue>` (e.g. `claude/war-foliage-spatial-hash-109`,
    `cursor/agent-claim-ref-2302`). Only **then** harden (tests, ablations, docs, comments). Opening
@@ -969,8 +974,10 @@ the nine proven traps lives in `agent-claim.test.sh`).
      optional hygiene.
    - **Project Board API-only work:** the board has no product checkout, but its roadmap issue lives
      in `devantler-tech/monorepo`. Acquire against the monorepo root, retain the SHA, and retire that
-     exact SHA after the board/API mutation is read back and verified. A controlled failure before
-     mutation also retires; only a crashed process leaves a tip for the ordinary lease/takeover path.
+     exact SHA after the board/API mutation is read back and verified. **Verify the acquired SHA
+     immediately before the board mutation**; if ownership was taken over, stand down without
+     mutating. A controlled failure before mutation also retires; only a crashed process leaves a tip
+     for the ordinary lease/takeover path.
    - **Lease clock for the shared tip** is the tip's **committer date** (the helper writes a fresh
      commit at acquire time, so this is wall-clock accurate). Check with
      `.claude/scripts/agent-claim.sh is-stale <issue> --repo-dir <product-path>`.

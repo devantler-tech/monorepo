@@ -140,7 +140,8 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    **`type:"Spike"` is not a skip and not a delivery-PR:** when it is the oldest actionable issue,
    record the decision on the Spike and file its follow-up issues — that pair is the floor artifact;
    do not open a delivery PR (#2267; contract *Issue hierarchy → Spike*). Since no PR opens to
-   perform normal cleanup, **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
+   perform normal cleanup, verify the retained SHA immediately before publishing the decision or
+   follow-up issues, then **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
    and before closing the Spike. **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
    when the oldest issue is large, **decompose it into a small first child and ship that increment**
@@ -170,7 +171,11 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    `Copilot`) is someone else's work-in-progress — respect it and pick a different issue. **Claim
    before you build:** acquire the shared `agent-claim/<issue>` tip in the selected repository and
    retain its SHA, immediately recheck for an open `#<issue>` PR (retire only that SHA and stand down
-   if one appeared), then self-assign and push the lane branch **with the issue number in its name**.
+   if one appeared), then self-assign. **Immediately before pushing the lane branch or opening its
+   draft PR**, and **again after any resumed pause**, run
+   `.claude/scripts/agent-claim.sh verify <issue> "$claim_sha" --repo-dir <product-path>`; if it
+   fails, a takeover won, so abandon without pushing or opening a competing PR. Then push the lane
+   branch **with the issue number in its name**.
    Check open PRs / shared claim tips / remote lane branches / assignees by **issue number rather than
    literal branch name**, and on a lost race
    **abandon** — then diff your build against the winner's and post only findings you have verified:

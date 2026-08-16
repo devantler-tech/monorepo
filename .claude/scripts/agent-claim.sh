@@ -10,7 +10,7 @@
 # alone, BEFORE creating its lane-specific work branch. The push decides the
 # race; the tip comparison (never the push's exit status) decides the winner.
 #
-# Ten traps, proven by the delivery and its review rounds — do not regress them:
+# Eleven traps, proven by the delivery and its review rounds — do not regress them:
 #   1. Second non-force push is refused; ls-remote returns the winner's sha.
 #   2. `git push … | tail` exits 0 on a REJECTED push — only the tip compare
 #      is safe (never judge by exit status, never through a pipe).
@@ -33,6 +33,8 @@
 #   9. Inherited Git dates must not backdate a new claim and expire its lease.
 #  10. --repo-dir must resolve to that exact repository root; an uninitialized
 #      submodule directory must never walk upward into the parent repository.
+#  11. A failed delete followed by a failed tip query is unknown, not proof
+#      that retirement succeeded.
 #
 # Usage:
 #   agent-claim.sh acquire <issue> [--remote NAME] [--repo-dir DIR]
@@ -245,10 +247,13 @@ cmd_retire() {
     fail "could not create private stderr capture for retire"
   if ! git_c push --quiet --force-with-lease="refs/heads/${branch}:${expected}" \
        "$REMOTE" ":${branch}" 2>"$err_file"; then
-    local err
+    local err remaining
     err="$(<"$err_file")"
     rm -f "$err_file"
-    if [[ -z "$(remote_tip "$issue")" ]]; then
+    if ! remaining="$(remote_tip "$issue")"; then
+      fail "retire of ${branch} failed and the remote tip could not be confirmed: ${err:-unknown error}"
+    fi
+    if [[ -z "$remaining" ]]; then
       echo "agent-claim: retired ${branch} (already absent)"
       exit 0
     fi

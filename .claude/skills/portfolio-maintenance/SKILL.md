@@ -460,7 +460,8 @@ submodule. Split its work in two, because only one half is path-less:
   mutation itself is path-less. Acquire it explicitly and retain the ownership token:
   `claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <monorepo-root>)"`.
   Immediately recheck for an open `#<issue>` PR and stand down (retiring only that SHA) if one
-  appeared. After the mutation, read the board state back; **retire the acquired SHA after the
+  appeared. **Verify the acquired SHA immediately before the board mutation** and stand down without
+  mutating if ownership was taken over. After the mutation, read the board state back; **retire the acquired SHA after the
   board/API mutation is verified** and before closing the issue or recording completion. On a
   controlled failure before mutation, retire before surfacing the failure. Only a crashed process
   leaves a tip, and the ordinary ~2h lease plus evidence-gated takeover recovers it.
@@ -681,7 +682,11 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    claim-to-draft handoff, retire only `"$claim_sha"` in that same repository and stand down. Then
    self-assign when your identity can (and if `devantler` is ALREADY assigned, **remove then
    re-add**, since adding an existing assignee is a no-op that would leave your lease carrying the
-   old timestamp), then push the lane work branch **with the issue number in its name**. **The
+   old timestamp). **Immediately before pushing the lane branch or opening its draft PR**, and
+   **again after any resumed pause**, run
+   `.claude/scripts/agent-claim.sh verify <issue> "$claim_sha" --repo-dir <product-path>`; a failed
+   verify means a takeover won, so abandon without pushing or opening a competing PR. Then push the
+   lane work branch **with the issue number in its name**. **The
    shared tip decides the race:** the helper writes a nonced commit, pushes without force, and
    verifies `git ls-remote` shows YOUR sha — never judge by the push's exit status or through a
    pipe (`push | tail` reports `tail`'s 0 on a rejection). Retire the tip when the draft PR opens
@@ -703,7 +708,8 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    (#2267): when the selected issue is a Spike, record the decision on the Spike and file its
    follow-up issues — that pair is the floor artifact; do **not** invent a draft PR for it (same
    rule as [`product-engineering`](../product-engineering/SKILL.md) §3). Since no PR opens to perform
-   normal cleanup, **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
+   normal cleanup, verify the retained SHA immediately before publishing the decision or follow-up
+   issues, then **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
    and before closing the Spike. Otherwise ship it: tests +
    validate + **draft PR**; use `Fixes #delivery` and, when later measurement keeps the experiment
    open, `Part of #experiment`.

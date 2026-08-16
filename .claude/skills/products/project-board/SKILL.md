@@ -294,9 +294,10 @@ hard-coded list goes stale the moment an issue closes or a new one is filed (the
 retired status-board made). Query it live:
 
 That issue repository also anchors coordination for path-less board/API work: acquire
-`agent-claim/<issue>` against the monorepo root before mutating, retain the returned SHA, and retire
-that exact SHA only after the resulting board state is read back and verified. A comment is an
-activity record, not an atomic claim.
+`agent-claim/<issue>` against the monorepo root before mutating, retain the returned SHA, **verify the
+acquired SHA immediately before the board mutation**, and retire that exact SHA only after the
+resulting board state is read back and verified. A failed verify means a takeover won, so stand down
+without mutating. A comment is an activity record, not an atomic claim.
 
 Board work hangs off the board Epic — **[monorepo#2261](https://github.com/devantler-tech/monorepo/issues/2261)** —
 so it is found **structurally**, never by string matching:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test for agent-claim.sh — RED/GREEN coverage of the ten traps proven
+# Self-test for agent-claim.sh — RED/GREEN coverage of the eleven traps proven
 # by monorepo#2302 and its review rounds. Fixtures use a local bare remote + two clones; nothing
 # touches a real network remote.
 #
@@ -15,6 +15,8 @@
 # Trap 9 — inherited Git dates cannot backdate a fresh claim's lease clock.
 # Trap 10 — an uninitialized submodule path must not resolve upward into the
 #           parent repository and claim the same-numbered issue there.
+# Trap 11 — a failed retire must not report success when its follow-up remote
+#           tip query also fails.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -488,6 +490,47 @@ fi
 check "trap7: rejected push leaves no competing claim tip" "" \
   "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE7}" | awk '{print $1}')"
 rm -f "$hook"
+
+# ---------------------------------------------------------------------------
+# Trap 11 — failed delete + failed confirmation is UNKNOWN, never retired.
+#
+# A transient transport failure can reject the compare-and-delete and then make
+# the follow-up ls-remote fail too. Empty output from that failed query does not
+# prove absence; the helper must fail closed so the caller retries cleanup.
+# ---------------------------------------------------------------------------
+ISSUE11=1111
+sha_11="$("$tool" acquire "$ISSUE11" --repo-dir "$clone_a" --remote origin 2>/dev/null)"
+shim_dir_11="$tmp/shim-11"
+mkdir -p "$shim_dir_11"
+real_git_11="$(command -v git)"
+cat > "$shim_dir_11/git" <<SHIM
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [[ "\$arg" == ":agent-claim/${ISSUE11}" || "\$arg" == ":refs/heads/agent-claim/${ISSUE11}" ]]; then
+    : > "$tmp/trap11-delete-failed"
+    echo "simulated delete transport failure" >&2
+    exit 1
+  fi
+done
+if [[ -f "$tmp/trap11-delete-failed" ]]; then
+  for arg in "\$@"; do
+    if [[ "\$arg" == "ls-remote" ]]; then
+      echo "simulated tip query transport failure" >&2
+      exit 1
+    fi
+  done
+fi
+exec "$real_git_11" "\$@"
+SHIM
+chmod +x "$shim_dir_11/git"
+
+rc_11=0
+PATH="$shim_dir_11:$PATH" "$tool" retire "$ISSUE11" "$sha_11" \
+  --repo-dir "$clone_a" --remote origin >"$tmp/out-11" 2>"$tmp/err-11" || rc_11=$?
+check "trap11: failed delete plus failed tip query exits 2" "2" "$rc_11"
+check "trap11: unknown retirement leaves the claim intact" "$sha_11" \
+  "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE11}" | awk '{print $1}')"
+"$tool" retire "$ISSUE11" "$sha_11" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
 
 # ---------------------------------------------------------------------------
 if (( failures > 0 )); then
