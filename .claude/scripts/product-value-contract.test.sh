@@ -87,6 +87,10 @@ grep -Fq '`type:"Spike"` is not a delivery-PR path' "${run_loop}" ||
   fail "run loop still treats Spikes as delivery-PR work (#2267)"
 grep -Fq 'do **not** invent a draft PR for it' "${run_loop}" ||
   fail "run loop lacks the Spike no-delivery-PR floor rule (#2267)"
+grep -Fq 'retire the acquired SHA after the decision and follow-up issue artifacts are recorded' "${run_loop}" ||
+  fail "run loop leaves the shared claim tip behind after a non-PR Spike completes"
+grep -Fq 'retire the acquired SHA after the decision and follow-up issue artifacts are recorded' "${engineering}" ||
+  fail "product engineering leaves the shared claim tip behind after a non-PR Spike completes"
 
 grep -Fq 'Blog Stewardship' "${site_card}" ||
   fail "site card has no recurring blog task"

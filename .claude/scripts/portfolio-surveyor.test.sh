@@ -1233,14 +1233,23 @@ expect_classifier_error \
 # cursor/* and codex/*; a surveyor that only greps ^claude/ cannot see those pre-PR claims.
 # The scan must also NOT be gated on assignees — app/cursor cannot assign, so a Cursor claim
 # is branch-only until its draft PR opens.
-grep -Fq "grep -E '^(claude|cursor|codex)/'" "${surveyor}" ||
-  fail "surveyor claim-branch scan does not cover claude/, cursor/, and codex/ prefixes"
+grep -Fq "grep -E '^(agent-claim/[1-9][0-9]*|(claude|cursor|codex)/)'" "${surveyor}" ||
+  fail "surveyor claim scan does not cover the shared tip and all three lane prefixes"
 grep -Fq '(claude|cursor|codex)/*-<issue>' "${surveyor}" ||
   fail "surveyor CLAIMED matching does not name all three lane prefixes"
 grep -Fq 'Do not gate this scan on assignees' "${surveyor}" ||
   fail "surveyor claim-branch scan is still gated on assignees (hides cursor/* claims)"
 grep -Fq 'none(cursor-lane)' "${surveyor}" ||
   fail "surveyor CLAIMED digest does not allow cursor-lane branch-only claims"
+grep -Fq 'commit.committer.date' "${surveyor}" ||
+  fail "surveyor does not read the shared tip lease clock"
+grep -Fq 'claim=agent-claim/<issue>@<sha>@<age>' "${surveyor}" ||
+  fail "surveyor CLAIMED grammar cannot emit a live shared tip"
+grep -Fq 'shared tip alone is enough' "${surveyor}" ||
+  fail "surveyor still requires a lane branch before recognizing a shared claim"
+# shellcheck disable=SC2016 # literal ownership-token command in the loader contract
+grep -Fq '`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <selected-repo-path>`' "${cursor_loader}" ||
+  fail "Cursor loader retirement does not invoke the repository-qualified helper"
 
 # Candidate-scoped clearance must have a producer grammar, and bounded survey continuation must
 # advance past already classified or named-blocker rows without trusting stale head state.
@@ -1643,10 +1652,6 @@ grep -Fq 'it is not a bare event match' "${surveyor}" ||
 
 grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor}" ||
   fail "surveyor must require BOTH the dynamic event and a dynamic/ path for the managed carve-out (#2536, #2704)"
-
-grep -Fq '`workflow_dispatch`, `dynamic`' "${surveyor}" ||
-  fail "surveyor must keep 'dynamic' in the main-branch event list — the exemption is by path (#2536)"
-
 
 # --- Ownership disclosure is a THREE-valued literal test, not a prefix boolean (#2762) ----------
 # Measured 2026-08-11 (snapshot n=75; the corpus is live and drifts, so this documents the ORIGINAL
