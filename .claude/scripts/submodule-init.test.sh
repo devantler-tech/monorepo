@@ -545,7 +545,9 @@ out="$(cd "$c16/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
 # DISCRIMINATING (both go RED when the repair is moved back after the checkout):
 report "stale-redirect: the stale shared core.worktree is cleared" \
   "$([[ -z "$(git config -f "$c16/super/.git/modules/sub/config" core.worktree 2>/dev/null || true)" ]] && echo yes || echo no)"
-report "stale-redirect: --advance succeeds instead of misreporting a dirty working tree" \
+report "stale-redirect: --advance exits successfully" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "stale-redirect: --advance checks out the recorded pin" \
   "$([[ "$(git -C "$c16/super/sub" rev-parse HEAD 2>/dev/null)" == "$c16_new" ]] && echo yes || echo no)" "rc=$rc $out"
 
 # SAFETY INVARIANT, not a discriminator: it holds pre-fix too, because the pre-fix run dies at the
