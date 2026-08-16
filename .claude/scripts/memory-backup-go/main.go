@@ -32,6 +32,7 @@ type manifestEntry struct {
 }
 
 type copyFileFunc func(src, dest string) error
+type copyFileWithInfoFunc func(src, dest string, info os.FileInfo) error
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -136,6 +137,10 @@ Exit codes:
 }
 
 func backupFile(cfg options, stdout io.Writer) error {
+	return backupFileWithCopy(cfg, stdout, copyIntoExisting)
+}
+
+func backupFileWithCopy(cfg options, stdout io.Writer, copyFile copyFileWithInfoFunc) error {
 	source, info, err := resolveRegularFile(cfg.target)
 	if err != nil {
 		return err
@@ -158,7 +163,38 @@ func backupFile(cfg options, stdout io.Writer) error {
 	if exists {
 		return fmt.Errorf("refusing to overwrite existing backup: %s", dest)
 	}
-	if err := copyFileExclusive(source, dest, info); err != nil {
+
+	before, err := captureFileFingerprint(source)
+	if err != nil {
+		return fmt.Errorf("failed to read source file %s: %w", source, err)
+	}
+	tmp, err := os.CreateTemp(backupDir, ".memory-backup.*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary backup in %s: %w", backupDir, err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to close temporary backup %s: %w", tmpPath, err)
+	}
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if err := copyFile(source, tmpPath, info); err != nil {
+		return fmt.Errorf("failed to back up %s -> %s: %w", source, dest, err)
+	}
+	copied, err := captureFileFingerprint(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to verify temporary backup for %s: %w", source, err)
+	}
+	after, err := captureFileFingerprint(source)
+	if err != nil {
+		return fmt.Errorf("failed to re-read source file %s: %w", source, err)
+	}
+	if before != copied || before != after {
+		return fmt.Errorf("source file changed during backup; refusing to publish %s", dest)
+	}
+
+	if err := os.Link(tmpPath, dest); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return fmt.Errorf("refusing to overwrite existing backup: %s", dest)
 		}
@@ -273,11 +309,30 @@ func backupStoreWithCopy(cfg options, stdout io.Writer, copyFile copyFileFunc) e
 	)
 	fmt.Fprintf(
 		stdout,
-		"Restore one file: cp %s/<basename> %s/<basename>\n",
-		shellQuote(storeDest),
-		shellQuote(memoryDir),
+		"Restore one file: cp %s %s\n",
+		shellQuote(filepath.Join(storeDest, before[0].name)),
+		shellQuote(filepath.Join(memoryDir, before[0].name)),
 	)
 	return nil
+}
+
+func captureFileFingerprint(path string) (manifestEntry, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return manifestEntry{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return manifestEntry{}, fmt.Errorf("not a regular file")
+	}
+	digest, err := digestFile(path)
+	if err != nil {
+		return manifestEntry{}, err
+	}
+	return manifestEntry{
+		size:   info.Size(),
+		mode:   info.Mode().Perm(),
+		digest: digest,
+	}, nil
 }
 
 func captureManifest(dir string) ([]manifestEntry, error) {
@@ -291,23 +346,12 @@ func captureManifest(dir string) ([]manifestEntry, error) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
-		info, err := entry.Info()
+		fingerprint, err := captureFileFingerprint(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to inspect memory file %s: %w", path, err)
 		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		digest, err := digestFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read memory file %s: %w", path, err)
-		}
-		manifest = append(manifest, manifestEntry{
-			name:   entry.Name(),
-			size:   info.Size(),
-			mode:   info.Mode().Perm(),
-			digest: digest,
-		})
+		fingerprint.name = entry.Name()
+		manifest = append(manifest, fingerprint)
 	}
 	sort.Slice(manifest, func(i, j int) bool { return manifest[i].name < manifest[j].name })
 	return manifest, nil
@@ -381,26 +425,6 @@ func copyFilePreserve(src, dest string) error {
 		return err
 	}
 	cleanDest = false
-	return nil
-}
-
-func copyFileExclusive(src, dest string, info os.FileInfo) error {
-	tmp, err := os.CreateTemp(filepath.Dir(dest), ".memory-backup.*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	defer func() { _ = os.Remove(tmpPath) }()
-	if err := copyIntoExisting(src, tmpPath, info); err != nil {
-		return err
-	}
-	if err := os.Link(tmpPath, dest); err != nil {
-		return err
-	}
 	return nil
 }
 

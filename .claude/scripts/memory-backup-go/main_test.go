@@ -24,6 +24,36 @@ func TestParseArgsConsumesDashPrefixedOperand(t *testing.T) {
 	}
 }
 
+func TestBackupFileRejectsChangedSourceBeforePublish(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "MEMORY.md")
+	backupDir := filepath.Join(root, "backups")
+	if err := os.WriteFile(source, []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := backupFileWithCopy(options{
+		target:    source,
+		backupDir: backupDir,
+		timestamp: "20260724T003000Z",
+	}, io.Discard, func(src, dest string, info os.FileInfo) error {
+		if err := copyIntoExisting(src, dest, info); err != nil {
+			return err
+		}
+		return os.WriteFile(src, []byte("after\n"), 0o600)
+	})
+	if err == nil {
+		t.Fatal("backupFileWithCopy published a backup after the source changed")
+	}
+	if !strings.Contains(err.Error(), "changed during backup") {
+		t.Fatalf("error = %q, want changed-during-backup context", err)
+	}
+	final := filepath.Join(backupDir, "MEMORY.md.20260724T003000Z")
+	if _, statErr := os.Lstat(final); !os.IsNotExist(statErr) {
+		t.Fatalf("final backup was published after source change: stat err=%v", statErr)
+	}
+}
+
 func TestBackupStoreRejectsChangedSourceManifest(t *testing.T) {
 	root := t.TempDir()
 	store := filepath.Join(root, "store")

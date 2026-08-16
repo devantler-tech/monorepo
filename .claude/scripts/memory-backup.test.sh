@@ -101,6 +101,19 @@ if grep -q "3 file" <<<"$out"; then
 else
   fail "--all reports file count (got: $out)"
 fi
+restore_cmd="$(printf '%s\n' "$out" | sed -n 's/^Restore one file: //p')"
+printf 'changed after snapshot\n' > "$store/MEMORY.md"
+restore_rc=0
+(
+  cd /
+  eval "$restore_cmd"
+) || restore_rc=$?
+check "whole-store restore command is runnable" "0" "$restore_rc"
+if cmp -s "$snap/MEMORY.md" "$store/MEMORY.md"; then
+  pass "whole-store restore command restores the named file"
+else
+  fail "whole-store restore command restores the named file"
+fi
 
 # ---------------------------------------------------------------------------
 # Usage / missing source → exit 2 (distinct from success).
