@@ -3126,15 +3126,17 @@ the tree half-switched; it silently **skips** a submodule the target commit intr
 a clean status over a directory containing no code; and its `--no-overwrite-ignore` protection **does
 not propagate**, so foreign ignored work inside a populated submodule is destroyed while both
 top-level checks read clean.
-⚠️ **`submodule-init.sh` is not the answer either, and must not be prescribed as one.** Handed an
-**already-populated** submodule it deliberately repairs isolation *only* and refuses
-`git submodule update`, precisely so it cannot discard a local branch or ahead-of-pin work — so it
-reports success while the submodule stays stale. Its job is populating an **uninitialised** submodule
-and repairing worktree isolation, which is a different job from moving a populated one onto a pin.
-📌 **Landing a worktree on a PR head *including* its submodules therefore needs a real procedure —
-fetch, initialise additions, repair isolation, then probe — not a flag. That is
-[#2833](https://github.com/devantler-tech/monorepo/issues/2833).** Until it exists, detect the
-condition and stop; never paper over it with a flag that fails closed at exit 128 or, worse, fails
+⚠️ **Bare init mode is not the answer for a populated mismatch; `--advance` is deliberately scoped.**
+`submodule-init.sh <path>` still repairs isolation *only* when `<path>` is already populated and
+never moves that checkout. `submodule-init.sh --advance <path>` is the permitted top-level pin-bump
+path: it refuses dirty, hidden-index, ahead-of-pin, replacement-object and ignored-overwrite hazards,
+moves only the named checkout, and fails closed when an initialised nested submodule no longer matches
+the new pin. It never recursively initialises additions or advances nested submodules for you.
+📌 **Landing a worktree on a PR head *including newly introduced or mismatched nested submodules*
+therefore still needs a complete procedure — fetch, initialise additions, repair isolation, advance
+each populated checkout, then probe — not a recursive checkout flag. That is
+[#2833](https://github.com/devantler-tech/monorepo/issues/2833).** Until it exists, detect those
+conditions and stop; never paper over them with a flag that fails closed at exit 128 or, worse, fails
 open with a clean-looking status.
 ⚠️ **The pre-check cannot see IGNORED paths, and checkout overwrites them by default — which is why
 `--no-overwrite-ignore` is in the command above.** `git checkout` documents `--overwrite-ignore` as

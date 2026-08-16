@@ -344,7 +344,7 @@ advance() {
     die "'$path' has assume-unchanged/skip-worktree files — clear those index flags before advancing"
   fi
 
-  local target head ahead
+  local target head ahead nested_status
   # Superproject HEAD's gitlink for this path — the pin a pin-bump PR just moved.
   target=$(git --no-replace-objects rev-parse "HEAD:$path" 2>/dev/null) ||
     die "no gitlink recorded for '$path' at HEAD"
@@ -382,6 +382,11 @@ advance() {
     die "failed to check out recorded pin $target in '$path'"
   repair "$path"
   probe "$path" || die "advance left '$path' unisolated — do not edit it"
+  nested_status=$(git --no-replace-objects -C "$path" submodule status --recursive 2>/dev/null) ||
+    die "could not verify nested submodules in '$path' — refusing to report a successful advance"
+  if grep -q '^[^ ]' <<< "$nested_status"; then
+    die "nested submodule checkout does not match '$path' at $target — advance it separately before use"
+  fi
   printf 'submodule-init: %s — advanced to %s\n' "$path" "$target"
 }
 

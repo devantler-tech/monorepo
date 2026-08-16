@@ -766,7 +766,10 @@ git -C "$c21/super/sub" config submodule.recurse true
 report "advance no-recurse precondition: nested checkout is at the old pin" \
   "$([[ "$(git -C "$c21/super/sub/nested" rev-parse HEAD)" == "$c21_nested_old" ]] && echo yes || echo no)"
 out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
-report "advance no-recurse: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance no-recurse: fails closed on the stale nested checkout" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance no-recurse: names the nested mismatch" \
+  "$(grep -q 'nested submodule checkout does not match' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 report "advance no-recurse: moves the named checkout to the recorded pin" \
   "$([[ "$(git -C "$c21/super/sub" rev-parse HEAD)" == "$c21_outer_new" ]] && echo yes || echo no)"
 report "advance no-recurse: leaves the nested checkout untouched" \
