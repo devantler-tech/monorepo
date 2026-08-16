@@ -709,6 +709,70 @@ report "advance ignored-file: preserves ignored local work" \
   "$([[ "$(cat "$c20/super/sub/future.txt")" == "precious-local-work" ]] && echo yes || echo no)" \
   "contents=$(cat "$c20/super/sub/future.txt")"
 
+# 21. A caller may have submodule.recurse=true in the populated submodule. The outer detach must
+#     override that setting: --advance owns only the named checkout and must not mutate nested
+#     submodules implicitly while moving it to the recorded pin.
+c21="$tmp/c21"
+mkdir -p "$c21"
+git init -q "$c21/remote-nested"
+(
+  cd "$c21/remote-nested"
+  echo old >nested.txt
+  git add nested.txt
+  git commit -q -m old
+)
+c21_nested_old="$(git -C "$c21/remote-nested" rev-parse HEAD)"
+(
+  cd "$c21/remote-nested"
+  echo new >nested.txt
+  git add nested.txt
+  git commit -q -m new
+)
+c21_nested_new="$(git -C "$c21/remote-nested" rev-parse HEAD)"
+git init -q "$c21/remote-sub"
+(
+  cd "$c21/remote-sub"
+  echo outer >outer.txt
+  git add outer.txt
+  git commit -q -m init
+  git submodule add -q ../remote-nested nested
+  git -C nested checkout -q --detach "$c21_nested_old"
+  git add .gitmodules nested
+  git commit -q -m "record old nested pin"
+)
+c21_outer_old="$(git -C "$c21/remote-sub" rev-parse HEAD)"
+(
+  cd "$c21/remote-sub"
+  git -C nested checkout -q --detach "$c21_nested_new"
+  git add nested
+  git commit -q -m "record new nested pin"
+)
+c21_outer_new="$(git -C "$c21/remote-sub" rev-parse HEAD)"
+git init -q "$c21/super"
+(
+  cd "$c21/super"
+  echo root >root.txt
+  git add root.txt
+  git commit -q -m init
+  git submodule add -q ../remote-sub sub
+  git -C sub checkout -q --detach "$c21_outer_old"
+  git -C sub submodule update -q --init nested
+  git add sub
+  git commit -q -m "record old outer pin"
+  git update-index --cacheinfo "160000,$c21_outer_new,sub"
+  git commit -q -m "bump outer pin"
+)
+git -C "$c21/super/sub" config submodule.recurse true
+report "advance no-recurse precondition: nested checkout is at the old pin" \
+  "$([[ "$(git -C "$c21/super/sub/nested" rev-parse HEAD)" == "$c21_nested_old" ]] && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance no-recurse: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance no-recurse: moves the named checkout to the recorded pin" \
+  "$([[ "$(git -C "$c21/super/sub" rev-parse HEAD)" == "$c21_outer_new" ]] && echo yes || echo no)"
+report "advance no-recurse: leaves the nested checkout untouched" \
+  "$([[ "$(git -C "$c21/super/sub/nested" rev-parse HEAD)" == "$c21_nested_old" ]] && echo yes || echo no)" \
+  "actual=$(git -C "$c21/super/sub/nested" rev-parse HEAD) expected=$c21_nested_old"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

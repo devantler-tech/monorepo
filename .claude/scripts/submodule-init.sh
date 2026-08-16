@@ -377,7 +377,8 @@ advance() {
   fi
 
   # Detach onto the recorded pin without `git submodule update` (which rewrites shared core.worktree).
-  git --no-replace-objects -C "$path" checkout --quiet --no-overwrite-ignore --detach "$target" ||
+  git --no-replace-objects -C "$path" checkout --quiet --no-overwrite-ignore \
+    --no-recurse-submodules --detach "$target" ||
     die "failed to check out recorded pin $target in '$path'"
   repair "$path"
   probe "$path" || die "advance left '$path' unisolated — do not edit it"
