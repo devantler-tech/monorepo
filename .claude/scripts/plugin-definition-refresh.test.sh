@@ -313,12 +313,22 @@ PLUGIN_REFRESH_BACKUP_KEEP=2 STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>
 kept="$(ls -1 "$PLUGINS"/installed_plugins.json.bak-*-plugin-definition-refresh 2>/dev/null | wc -l | tr -d ' ')"
 oldest_gone=yes
 [ -e "$PLUGINS/installed_plugins.json.bak-20260101T000000Z-plugin-definition-refresh" ] && oldest_gone=no
+# Name the survivors, never just count them: with KEEP=2 the run's own fresh backup takes one slot,
+# so exactly 20260103 may hold the other. A prune that dropped 20260101 and 20260103 while keeping
+# 20260102 satisfies the count AND oldest_gone, and is precisely the wrong-pair retention this case
+# exists to catch.
+middle_gone=yes
+[ -e "$PLUGINS/installed_plugins.json.bak-20260102T000000Z-plugin-definition-refresh" ] && middle_gone=no
+newest_fixture_kept=yes
+[ -e "$PLUGINS/installed_plugins.json.bak-20260103T000000Z-plugin-definition-refresh" ] || newest_fixture_kept=no
 neighbour=yes
 [ -e "$PLUGINS/installed_plugins.json.bak-20260101T000000Z-someone-else" ] || neighbour=no
-if [ "$rc" -eq 0 ] && [ "$kept" = "2" ] && [ "$oldest_gone" = yes ] && [ "$neighbour" = yes ]; then
+if [ "$rc" -eq 0 ] && [ "$kept" = "2" ] && [ "$oldest_gone" = yes ] \
+  && [ "$middle_gone" = yes ] && [ "$newest_fixture_kept" = yes ] && [ "$neighbour" = yes ]; then
   ok "A16b prunes registry backups to the bound, keeping the newest and sparing other files"
 else bad "A16b prunes registry backups to the bound, keeping the newest and sparing other files" \
-  "exit was $rc, kept=$kept (want 2), oldest_removed=$oldest_gone, unrelated_file_survived=$neighbour"; fi
+  "exit was $rc, kept=$kept (want 2), oldest_removed=$oldest_gone, middle_removed=$middle_gone," \
+  "newest_fixture_kept=$newest_fixture_kept, unrelated_file_survived=$neighbour"; fi
 cleanup
 
 # ── A17 — INT/TERM must TERMINATE the run, not merely clean up and resume ──────────────────────
