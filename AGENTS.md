@@ -425,10 +425,35 @@ which the helper deliberately dies `STILL EMPTY` rather than report a vacuous `i
 the prescribed recovery worktree failing in exactly the case it was reached for, so do not let it end
 the run: fall back to the forge read, which needs no working tree.
 
-Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow. **Never edit the plugin cache**; it is
-read-only evidence (see *Agent definition locations*). When the refresh needs an interactive session
-an unattended run cannot open, surface it on a declared *Maintainer channel* rather than leaving a
-silently superseded definition in place.
+Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow
+interactively, or, in an unattended run, that same control plane driven by
+[`.claude/scripts/plugin-definition-refresh.sh`](.claude/scripts/plugin-definition-refresh.sh)
+through the app-bundled binary. **Never edit the plugin cache**; it is read-only evidence (see
+*Agent definition locations*). The script exits `0` once the install is on the pin, `1` when it is
+not and could not safely be put there, and `2` UNKNOWN. Run it on a `DRIFT`; a `1` or `2` is
+reported, never a run-stopper, and you continue against the reviewed definition at the pinned
+gitlink exactly as above.
+
+🔴 **`plugin update` installs the MARKETPLACE LATEST — it is NOT a way to install the pin, and
+wiring the bare commands into pre-flight would be a fail-open worse than the drift.** Its own
+`--help` reads *"Update a plugin to the latest version"*, and it takes no ref or version selector.
+The two coincide only when the consumer's gitlink happens to equal the upstream tip, which is
+exactly what made the 2026-08-15 by-hand refresh look like it installed the pinned revision — the
+marketplace tip *was* `564a6a0f`. Measured the next day: pin `11b241cc` (4.3.4) against an upstream
+`main` already at `73109ad9` (4.3.6), so the bare commands would have installed a revision nobody
+here has reviewed. **Stale-install drift at least runs a previously reviewed definition; this would
+run one that was never read.** That is why the script gates on marketplace-HEAD **==** pin and
+refuses otherwise rather than taking the tip.
+
+⚠️ **A refusal is a real finding about the ROLLOUT, not a failure of the check.** It means the
+gitlink and upstream have diverged, so the fix is to bump `libraries/agent-plugins` to the revision
+you intend to run through the normal reviewed rollout — never to install the tip to make the
+message go away. ⚠️ And `plugin update` **requires a restart**, so a `0` never means *this* run used
+the new definition; the pinned copy is served from the next dispatch, and only a later run's
+currency check confirms it. Reading the apply-time `0` as "this run is current" is the same
+fail-open as the drift itself. When the script cannot resolve its CLI, or a refusal persists across
+rollouts, surface it on a declared *Maintainer channel* rather than leaving a silently superseded
+definition in place.
 
 ### Agent definition locations
 
