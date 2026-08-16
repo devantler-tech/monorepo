@@ -151,6 +151,12 @@ assert_prose 'A `blocked` label or blocker prose is never sufficient' \
   "${skill_flat}" "portfolio run loop does not reject stale labels and prose blockers"
 assert_prose "apply the contract's *External-blocker verification* rule before every external-blocker skip" \
   "${skill_flat}" "portfolio run loop bypasses structured live verification for external blockers"
+# The skill states its skip set as an exhaustive decision, so every contract clause it omits reads as
+# "not a skip reason". Clause (d) — a delivered experiment awaiting its named future measurement date
+# — has no other home in the run loop, and dropping it would send a run to re-open work whose whole
+# point is to wait for the signal that decides it.
+assert_prose 'awaiting its **named, future measurement date**' \
+  "${skill_flat}" "portfolio run loop omits contract skip clause (d), the future-measurement wait"
 
 # ── 5. the run-loop skill agrees with the contract ────────────────────────────
 assert_prose 'Your own DRAFTS are rung-1 work' \
