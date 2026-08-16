@@ -888,16 +888,19 @@ severity narrows the target pool from "the oldest of ~368 open issues" to "one o
 `type:"Security"` issues" (counts measured 2026-07-25), so every instance aims at the same handful
 instead of spreading across the age curve. Rung 1 pulls the other way — an own draft is owned by
 exactly one lane, so PR work barely collides — but the moment a run descends to rung 2 the collision
-odds jump, and cross-lane arbitration is still the **known-broken hole** in rule 4
-([monorepo#2302](https://github.com/devantler-tech/monorepo/issues/2302)). So on rungs 2–3: claim
-before you build, without exception, and scan **all three** namespaces first. And because an open PR
-only exists at the **end** of a build, the one recognised claim signal arrives exactly when it is too
-late to prevent the collision. Measured on `world-at-ruin` (2026-07-18): **six end-to-end builds
+odds jump. Before the lane-neutral ref delivered by
+[monorepo#2302](https://github.com/devantler-tech/monorepo/issues/2302), rule 4 had no cross-lane
+arbitration: each lane could push its own branch successfully, and an open PR appeared only at the
+**end** of a build. **The shared ref closes that historical hole before a build starts** — on rungs
+2–3, acquire it without exception and scan it plus **all three** lane namespaces. The evidence for
+why that protection is mandatory remains: measured on `world-at-ruin` (2026-07-18), **six
+end-to-end builds
 discarded in ~24 hours** — #66 built to completion twice over, #81 lost after a full build with a
 committed golden and five negative controls, #86 lost 12 minutes after filing, #88 lost by **52
 seconds**, #96 lost by **135 seconds**. Every one was correct, validated work; only the coordination
-failed. So, on every **in-scope `devantler-tech`** repo — claiming is a *write* action (an assignment
-and a pushed branch), so the *Professional-work repository boundary* below still wins outright: never
+failed. So, on every **in-scope `devantler-tech`** repo — claiming is a *write* action (a shared ref,
+then an assignment where supported and a pushed lane branch), so the *Professional-work repository
+boundary* below still wins outright: never
 claim, probe, or push anywhere that boundary has not been cleared, and nothing here licenses a first
 touch of an unconfirmed repo:
 
@@ -959,14 +962,18 @@ the nine proven traps lives in `agent-claim.test.sh`).
    PR after **~2 hours** is stale and may be taken over, so a crashed or abandoned session never
    parks an issue permanently.
    - **Retire on PR open:** the moment the draft PR that references `#<issue>` exists, run
-     `.claude/scripts/agent-claim.sh retire <issue> <acquired-sha>` so the shared tip cannot lock the issue after
+     `.claude/scripts/agent-claim.sh retire <issue> <acquired-sha> --repo-dir <product-path>` so the shared tip cannot lock the issue after
      coordination has succeeded. The acquired SHA is mandatory: a stale holder must never observe and
      delete a takeover winner's replacement tip. An unretired `agent-claim/*` tip is a **permanent
      lock** (nothing else sweeps that namespace) — trap 4 of #2302; retirement is mandatory, not
      optional hygiene.
+   - **Project Board API-only work:** the board has no product checkout, but its roadmap issue lives
+     in `devantler-tech/monorepo`. Acquire against the monorepo root, retain the SHA, and retire that
+     exact SHA after the board/API mutation is read back and verified. A controlled failure before
+     mutation also retires; only a crashed process leaves a tip for the ordinary lease/takeover path.
    - **Lease clock for the shared tip** is the tip's **committer date** (the helper writes a fresh
      commit at acquire time, so this is wall-clock accurate). Check with
-     `agent-claim.sh is-stale <issue>`.
+     `.claude/scripts/agent-claim.sh is-stale <issue> --repo-dir <product-path>`.
    - **Lease clock for the assignee** (when your identity can assign) remains the issue's **NEWEST
      `assigned` timeline event** for `devantler` — never a work-branch commit date (those usually
      point at the base commit and would make every fresh claim look long expired):
@@ -980,7 +987,7 @@ the nine proven traps lives in `agent-claim.test.sh`).
      line and take the max in the shell.
    - **Taking over a stale claim** needs BOTH evidence gates: (1) no open PR whose body references
      `#<issue>`, and (2) the `agent-claim/<issue>` tip past the lease (`is-stale` exits 0). Then
-     `agent-claim.sh acquire <issue> --takeover`. Also unassign-then-re-assign when your identity can
+     `.claude/scripts/agent-claim.sh acquire <issue> --takeover --repo-dir <product-path>`. Also unassign-then-re-assign when your identity can
      assign (GitHub's add-assignees endpoint is a no-op for an already-assigned user — a plain
      re-assign creates **no** new `assigned` event). **Always pass `-R <owner>/<repo>`**:
      ```sh
@@ -999,8 +1006,9 @@ the nine proven traps lives in `agent-claim.test.sh`).
      when no entropy source is available). A fixed message on a shared parent in the same second
      yields a **byte-identical** commit — reproduced exactly on 2026-07-20 — so both pushes succeed
      and both read the tip as theirs (trap 3). The nonce is the whole defence.
-   - Push **without force**, then **verify the remote tip is yours** (`agent-claim.sh verify <issue>
-     <sha>`, or `git ls-remote origin refs/heads/agent-claim/<issue>`). **Compare the tip — never
+   - Push **without force**, then **verify the remote tip is yours**
+     (`.claude/scripts/agent-claim.sh verify <issue> <sha> --repo-dir <product-path>`, or
+     `git -C <product-path> ls-remote origin refs/heads/agent-claim/<issue>`). **Compare the tip — never
      judge the race by the push's exit status**, and never through a pipe: `git push … | tail`
      reports `tail`'s status, so a *rejected* push reads as exit 0 (reproduced 2026-07-20, trap 2).
      If the tip is someone else's, **you lost the race** — stand down under rule 5 rather than

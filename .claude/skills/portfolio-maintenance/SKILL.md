@@ -455,19 +455,20 @@ submodule. Split its work in two, because only one half is path-less:
 - **Board/API mutations** (types, statuses, hierarchy links, item backfills, a browser pass for a
   *view* edit) touch no files, so **skip worktree/submodule-init/validate** — there is nothing to
   check out and no build to validate. Don't let the repo-shaped Act step below cause the board to be
-  skipped for want of a `<path>`. ⚠️ **But you still need a CLAIM**: with no branch to push, a bare
-  assignment is not a claim, so two instances can pick the same board issue and mutate the board
-  concurrently. Before mutating, **comment the claim on the issue** (disclosure line + what you are
-  about to change) and **re-read the issue immediately before acting** — if a sibling's disclosed
-  claim is already there, that lane is owned; pick something else. **The claim MUST expire and MUST be
-  closed out**, or a crashed run blocks the issue forever: treat a disclosed claim as **live for ~2
-  hours** (matching the branch-claim lease) and **stale after that — take it over and say so in a
-  reply**. On finishing, **reply to your own claim** stating what changed; an un-replied claim older
-  than the lease is abandoned, not owned.
+  skipped for want of a `<path>`. ⚠️ **But you still need the shared claim.** Board roadmap issues
+  live in `devantler-tech/monorepo`, so the issue-owning repository is the monorepo even though the
+  mutation itself is path-less. Acquire it explicitly and retain the ownership token:
+  `claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <monorepo-root>)"`.
+  Immediately recheck for an open `#<issue>` PR and stand down (retiring only that SHA) if one
+  appeared. After the mutation, read the board state back; **retire the acquired SHA after the
+  board/API mutation is verified** and before closing the issue or recording completion. On a
+  controlled failure before mutation, retire before surfacing the failure. Only a crashed process
+  leaves a tip, and the ordinary ~2h lease plus evidence-gated takeover recovers it.
 - **Any accompanying file change** (an `add-to-project` workflow, an agent-definition or card update)
   is **ordinary monorepo work and keeps the FULL discipline** — per-run worktree, validate, draft PR.
   **Never skip isolation for it:** several instances run concurrently, and editing the shared checkout
-  is exactly the collision this loop's worktree rule exists to prevent.
+  is exactly the collision this loop's worktree rule exists to prevent. Retire the board issue's
+  acquired SHA when that draft PR opens, using the same monorepo root.
 
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**

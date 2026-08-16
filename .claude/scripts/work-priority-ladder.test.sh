@@ -68,6 +68,24 @@ assert_absent() {
   esac
 }
 
+# Cross-lane claiming must be described as the current shared-ref protocol everywhere. A retired
+# warning that still calls arbitration broken can send a run back to lane-only claiming.
+assert_absent 'cross-lane arbitration is still the **known-broken hole**' \
+  "${constitution_flat}" "canonical claim prose still says cross-lane arbitration is broken"
+assert_absent 'the one recognised claim signal arrives exactly when it is too late' \
+  "${constitution_flat}" "canonical claim prose still says no pre-PR signal exists"
+assert_prose 'The shared ref closes that historical hole before a build starts' \
+  "${constitution_flat}" "canonical claim prose does not mark the collision evidence as historical"
+
+# Project Board API-only work has no product checkout, but its roadmap issue belongs to monorepo.
+# It therefore needs an explicit repository target and a successful-work retirement trigger.
+assert_absent 'comment the claim on the issue' \
+  "${skill_flat}" "board-only work still uses non-atomic comment claim arbitration"
+assert_prose 'claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <monorepo-root>)"' \
+  "${skill_flat}" "board-only work does not claim against its issue-owning monorepo repository"
+assert_prose 'retire the acquired SHA after the board/API mutation is verified' \
+  "${skill_flat}" "board-only work leaves its shared claim tip live after successful mutation"
+
 # ── 1. the ladder exists and is ordered ──────────────────────────────────────
 grep -Fq '### The work-selection ladder — one ordering, checked top-down every run' "${constitution}" ||
   fail "contract does not define the work-selection ladder"
