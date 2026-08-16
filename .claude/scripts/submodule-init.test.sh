@@ -557,6 +557,158 @@ report "stale-redirect: --advance never writes into the other session's worktree
   "$([[ -z "$(ls -A "$c16_decoy" 2>/dev/null)" ]] && echo yes || echo no)" \
   "decoy contains: $(ls -A "$c16_decoy" 2>/dev/null | tr '\n' ' ')"
 
+# 17. Hidden index flags make `status --porcelain` lie about cleanliness. Both forms must stop an
+#     advance before checkout, even when the flagged file is unchanged between the two pins (the
+#     exact case where checkout otherwise carries the hidden edit forward and exits successfully).
+for flag in assume-unchanged skip-worktree; do
+  c17="$tmp/c17-$flag"
+  mk_super "$c17"
+  c17_old="$(git -C "$c17/super/sub" rev-parse HEAD)"
+  (
+    cd "$c17/remote-sub"
+    echo target >added.txt
+    git add added.txt
+    git commit -q -m "target pin"
+  )
+  c17_target="$(git -C "$c17/remote-sub" rev-parse HEAD)"
+  (
+    cd "$c17/super"
+    git update-index --cacheinfo "160000,$c17_target,sub"
+    git commit -q -m "bump sub"
+  )
+  git -C "$c17/super/sub" update-index "--$flag" file.txt
+  echo "hidden edit" >>"$c17/super/sub/file.txt"
+  report "advance hidden-$flag precondition: status is empty despite the edit" \
+    "$([[ -z "$(git -C "$c17/super/sub" status --porcelain)" ]] && echo yes || echo no)"
+  out="$(cd "$c17/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+  report "advance hidden-$flag: exits non-zero" \
+    "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+  report "advance hidden-$flag: leaves the checkout at the old pin" \
+    "$([[ "$(git -C "$c17/super/sub" rev-parse HEAD)" == "$c17_old" ]] && echo yes || echo no)"
+  report "advance hidden-$flag: preserves the hidden edit" \
+    "$(grep -q 'hidden edit' "$c17/super/sub/file.txt" && echo yes || echo no)"
+done
+
+# 18. A superproject replace ref must not substitute a different gitlink for the one recorded by
+#     the actual HEAD commit. The helper must resolve HEAD:<path> with replacement objects disabled.
+c18="$tmp/c18"
+mk_super "$c18"
+c18_parent="$(git -C "$c18/remote-sub" rev-parse HEAD)"
+(
+  cd "$c18/remote-sub"
+  echo legitimate >legitimate.txt
+  git add legitimate.txt
+  git commit -q -m legitimate
+)
+c18_legitimate="$(git -C "$c18/remote-sub" rev-parse HEAD)"
+(
+  cd "$c18/remote-sub"
+  git checkout -q --detach "$c18_parent"
+  echo substituted >substituted.txt
+  git add substituted.txt
+  git commit -q -m substituted
+  git checkout -q main
+)
+c18_substituted="$(git -C "$c18/remote-sub" rev-parse --verify "HEAD@{1}")"
+(
+  cd "$c18/super"
+  git update-index --cacheinfo "160000,$c18_legitimate,sub"
+  git commit -q -m "record legitimate pin"
+  c18_actual_head="$(git rev-parse HEAD)"
+  git update-index --cacheinfo "160000,$c18_substituted,sub"
+  c18_replacement_tree="$(git write-tree)"
+  c18_replacement_head="$(printf 'replacement head\n' | git commit-tree "$c18_replacement_tree" -p "$(git rev-parse "${c18_actual_head}^")")"
+  git read-tree "$c18_actual_head"
+  git replace "$c18_actual_head" "$c18_replacement_head"
+)
+report "advance super-replace precondition: ordinary HEAD:sub is substituted" \
+  "$([[ "$(git -C "$c18/super" rev-parse HEAD:sub)" == "$c18_substituted" ]] && echo yes || echo no)"
+report "advance super-replace precondition: no-replace HEAD:sub is legitimate" \
+  "$([[ "$(git --no-replace-objects -C "$c18/super" rev-parse HEAD:sub)" == "$c18_legitimate" ]] && echo yes || echo no)"
+out="$(cd "$c18/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance super-replace: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance super-replace: checks out the actual HEAD gitlink" \
+  "$([[ "$(git -C "$c18/super/sub" rev-parse HEAD)" == "$c18_legitimate" ]] && echo yes || echo no)" \
+  "actual=$(git -C "$c18/super/sub" rev-parse HEAD) expected=$c18_legitimate"
+
+# 19. Replacement refs in the submodule must not change the tree materialised for the recorded SHA.
+#     Git otherwise leaves HEAD naming the requested target while checking out substituted contents.
+c19="$tmp/c19"
+mk_super "$c19"
+c19_parent="$(git -C "$c19/remote-sub" rev-parse HEAD)"
+(
+  cd "$c19/remote-sub"
+  echo legitimate >file.txt
+  git add file.txt
+  git commit -q -m legitimate
+)
+c19_target="$(git -C "$c19/remote-sub" rev-parse HEAD)"
+(
+  cd "$c19/remote-sub"
+  git checkout -q --detach "$c19_parent"
+  echo substituted >file.txt
+  git add file.txt
+  git commit -q -m substituted
+)
+c19_substituted="$(git -C "$c19/remote-sub" rev-parse HEAD)"
+git -C "$c19/super/sub" fetch -q origin "$c19_target"
+git -C "$c19/super/sub" fetch -q origin "$c19_substituted"
+git -C "$c19/super/sub" replace "$c19_target" "$c19_substituted"
+(
+  cd "$c19/super"
+  git update-index --cacheinfo "160000,$c19_target,sub"
+  git commit -q -m "record target pin"
+)
+report "advance submodule-replace precondition: ordinary target tree is substituted" \
+  "$([[ "$(git -C "$c19/super/sub" show "$c19_target:file.txt")" == "substituted" ]] && echo yes || echo no)"
+report "advance submodule-replace precondition: no-replace target tree is legitimate" \
+  "$([[ "$(git --no-replace-objects -C "$c19/super/sub" show "$c19_target:file.txt")" == "legitimate" ]] && echo yes || echo no)"
+out="$(cd "$c19/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance submodule-replace: exits 0" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance submodule-replace: materialises the recorded commit's real tree" \
+  "$([[ "$(cat "$c19/super/sub/file.txt")" == "legitimate" ]] && echo yes || echo no)" \
+  "contents=$(cat "$c19/super/sub/file.txt")"
+
+# 20. The old pin may ignore a path that the new pin starts tracking. Ordinary checkout overwrites
+#     that local ignored file; --no-overwrite-ignore must instead abort and preserve it.
+c20="$tmp/c20"
+mk_super "$c20"
+(
+  cd "$c20/remote-sub"
+  echo future.txt >.gitignore
+  git add .gitignore
+  git commit -q -m "ignore future path"
+)
+c20_old="$(git -C "$c20/remote-sub" rev-parse HEAD)"
+git -C "$c20/super/sub" fetch -q origin "$c20_old"
+git -C "$c20/super/sub" checkout -q --detach "$c20_old"
+(
+  cd "$c20/super"
+  git update-index --cacheinfo "160000,$c20_old,sub"
+  git commit -q -m "record ignore pin"
+)
+(
+  cd "$c20/remote-sub"
+  git rm -q .gitignore
+  echo tracked-by-target >future.txt
+  git add future.txt
+  git commit -q -m "track future path"
+)
+c20_target="$(git -C "$c20/remote-sub" rev-parse HEAD)"
+(
+  cd "$c20/super"
+  git update-index --cacheinfo "160000,$c20_target,sub"
+  git commit -q -m "bump to tracked path"
+)
+echo precious-local-work >"$c20/super/sub/future.txt"
+report "advance ignored-file precondition: status is empty" \
+  "$([[ -z "$(git -C "$c20/super/sub" status --porcelain)" ]] && echo yes || echo no)"
+out="$(cd "$c20/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance ignored-file: exits non-zero" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance ignored-file: preserves ignored local work" \
+  "$([[ "$(cat "$c20/super/sub/future.txt")" == "precious-local-work" ]] && echo yes || echo no)" \
+  "contents=$(cat "$c20/super/sub/future.txt")"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1

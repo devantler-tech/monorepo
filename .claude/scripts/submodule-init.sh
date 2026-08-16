@@ -328,15 +328,27 @@ advance() {
   repair "$path"
   probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
 
-  if [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]; then
+  local status
+  status=$(git --no-replace-objects -C "$path" status --porcelain --untracked-files=all 2>/dev/null) ||
+    die "could not read status for '$path' — refusing to advance"
+  if [ -n "$status" ]; then
     die "'$path' has a dirty working tree — commit, stash, or discard local changes before advancing"
+  fi
+
+  # `status` cannot see tracked edits hidden by assume-unchanged or skip-worktree. Their presence
+  # alone makes detaching unsafe: checkout can carry the invisible bytes onto the target pin.
+  local idx_flags
+  idx_flags=$(git --no-replace-objects -C "$path" ls-files -v 2>/dev/null) ||
+    die "could not read index flags for '$path' — refusing to advance"
+  if grep -q '^[a-zS]' <<< "$idx_flags"; then
+    die "'$path' has assume-unchanged/skip-worktree files — clear those index flags before advancing"
   fi
 
   local target head ahead
   # Superproject HEAD's gitlink for this path — the pin a pin-bump PR just moved.
-  target=$(git rev-parse "HEAD:$path" 2>/dev/null) ||
+  target=$(git --no-replace-objects rev-parse "HEAD:$path" 2>/dev/null) ||
     die "no gitlink recorded for '$path' at HEAD"
-  head=$(git -C "$path" rev-parse HEAD) ||
+  head=$(git --no-replace-objects -C "$path" rev-parse HEAD) ||
     die "could not read HEAD of '$path'"
 
   if [ "$head" = "$target" ]; then
@@ -348,24 +360,24 @@ advance() {
 
   # Ensure the pin object exists locally (a fresh pin bump may not have been fetched into the
   # submodule yet). Prefer fetching the exact SHA; fall back to a plain fetch.
-  if ! git -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null; then
-    git -C "$path" fetch --quiet origin "$target" 2>/dev/null ||
-      git -C "$path" fetch --quiet origin 2>/dev/null ||
+  if ! git --no-replace-objects -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null; then
+    git --no-replace-objects -C "$path" fetch --quiet origin "$target" 2>/dev/null ||
+      git --no-replace-objects -C "$path" fetch --quiet origin 2>/dev/null ||
       true
-    git -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null ||
+    git --no-replace-objects -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null ||
       die "recorded pin $target for '$path' is not available locally — fetch the submodule remote first"
   fi
 
   # Refuse when the checkout has commits that are not reachable from the new pin: advancing would
   # detach past them and look like a silent discard. Dirty trees are already refused above.
-  ahead=$(git -C "$path" rev-list --count "${target}..HEAD" 2>/dev/null) ||
+  ahead=$(git --no-replace-objects -C "$path" rev-list --count "${target}..HEAD" 2>/dev/null) ||
     die "could not compare '$path' HEAD to recorded pin $target"
   if [ "$ahead" -gt 0 ]; then
     die "'$path' is $ahead commit(s) ahead of the recorded pin — push or otherwise preserve that work before advancing"
   fi
 
   # Detach onto the recorded pin without `git submodule update` (which rewrites shared core.worktree).
-  git -C "$path" checkout --quiet --detach "$target" ||
+  git --no-replace-objects -C "$path" checkout --quiet --no-overwrite-ignore --detach "$target" ||
     die "failed to check out recorded pin $target in '$path'"
   repair "$path"
   probe "$path" || die "advance left '$path' unisolated — do not edit it"
