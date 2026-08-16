@@ -32,8 +32,13 @@ bad()  { fail=$((fail+1)); printf '  FAIL %s\n' "$1"; [ $# -ge 2 ] && printf '  
 # stub CLI that records every invocation and moves the clone on `marketplace update`.
 make_fixture() {
   ROOT="$(mktemp -d)"
-  MK="$ROOT/marketplace"; CONSUMER="$ROOT/consumer"; BIN="$ROOT/bin"
+  CONSUMER="$ROOT/consumer"; BIN="$ROOT/bin"
   PLUGINS="$ROOT/plugins"; INSTALLED="$ROOT/installed"
+  # The marketplace clone sits at the REAL derived location. The script no longer accepts a
+  # `--marketplace-dir` override, because an overridable directory is a decoy vector: a caller could
+  # point it at a checkout equal to the pin while both CLI commands still selected the runtime
+  # marketplace by name. The fixture therefore uses the same path the script computes.
+  MK="$PLUGINS/marketplaces/devantler-plugins"
   mkdir -p "$MK" "$CONSUMER" "$BIN" "$PLUGINS" "$INSTALLED"
 
   git -C "$MK" init -q -b main
@@ -94,7 +99,7 @@ set_gitlink() {
 
 run() {
   CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
-    --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --marketplace-dir "$MK" \
+    --repo-root "$CONSUMER" --plugins-root "$PLUGINS" \
     --verify-cmd "$VERIFY" "$@" 2>&1
 }
 
@@ -145,7 +150,7 @@ cleanup
 make_fixture
 set_gitlink "$MK_NEW"
 CLAUDE_CLI="$ROOT/nope" "$SCRIPT" --repo-root "$CONSUMER" --plugins-root "$PLUGINS" \
-  --marketplace-dir "$MK" >/dev/null 2>&1; rc=$?
+  >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 2 ]; then ok "A5 exits 2 (UNKNOWN) when the CLI cannot be resolved"
 else bad "A5 exits 2 (UNKNOWN) when the CLI cannot be resolved" "exit was $rc — 0/1 would be a fabricated verdict"; fi
 cleanup
@@ -195,13 +200,35 @@ cleanup
 # the same clone between this run's read and its install would have it apply an ungated revision.
 make_fixture
 set_gitlink "$MK_NEW"
-mkdir -p "$PLUGINS/.plugin-definition-refresh.lock"          # a live sibling holds it
+mkdir -p "$PLUGINS/.plugin-definition-refresh.lock"
+# The owner must be a LIVE pid, or the liveness reaper correctly treats the lock as abandoned and
+# takes it — which is what this fixture did on its first version, failing for the right reason.
+printf '%s\n' "$$" > "$PLUGINS/.plugin-definition-refresh.lock/pid"
 STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
-  ok "A15 exits 2 (UNKNOWN) rather than applying while another run holds the lock"
-else bad "A15 exits 2 (UNKNOWN) rather than applying while another run holds the lock" \
+  ok "A15 exits 2 (UNKNOWN) rather than applying while a LIVE run holds the lock"
+else bad "A15 exits 2 (UNKNOWN) rather than applying while a LIVE run holds the lock" \
   "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+rm -f "$PLUGINS/.plugin-definition-refresh.lock/pid"
 rmdir "$PLUGINS/.plugin-definition-refresh.lock" 2>/dev/null || true
+cleanup
+
+# ── A15b — a lock whose owner is GONE is reaped; age is deliberately not the test ───────────────
+# Reaping on age would let a sibling steal the lock from a refresh that legitimately ran long,
+# putting two runs in the section at once — the failure the lock exists to prevent, caused by the
+# reaper. Liveness is the correct test, and a crashed run must still not park the lock forever.
+make_fixture
+set_gitlink "$MK_NEW"
+mkdir -p "$PLUGINS/.plugin-definition-refresh.lock"
+# A pid that is certainly not running: claim one, then let it exit.
+dead_pid="$( (exec sh -c 'echo $$') )"
+while kill -0 "$dead_pid" 2>/dev/null; do dead_pid=$((dead_pid + 1)); done
+printf '%s\n' "$dead_pid" > "$PLUGINS/.plugin-definition-refresh.lock/pid"
+STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ -e "$ROOT/APPLIED" ]; then
+  ok "A15b reaps a lock whose owner process is gone, rather than parking forever"
+else bad "A15b reaps a lock whose owner process is gone, rather than parking forever" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
 cleanup
 
 # ── A16 — the lock is RELEASED on a normal apply, so the next run is not parked ────────────────
@@ -309,10 +336,29 @@ set_gitlink "$MK_NEW"
 STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1
 if grep -q -- "--repo-root $CONSUMER" "$VERIFY_LOG" \
   && grep -q -- "--plugins-root $PLUGINS" "$VERIFY_LOG" \
-  && grep -q -- "--plugin-id agentic-engineering@devantler-plugins" "$VERIFY_LOG"; then
-  ok "A18d passes the gated repo, plugins root and plugin id to the verifier"
-else bad "A18d passes the gated repo, plugins root and plugin id to the verifier" \
+  && grep -q -- "--plugin-id agentic-engineering@devantler-plugins" "$VERIFY_LOG" \
+  && grep -q -- "--gitlink $MK_NEW" "$VERIFY_LOG" \
+  && grep -q -- "--submodule-path libraries/agent-plugins" "$VERIFY_LOG"; then
+  ok "A18d passes the gated repo, plugins root, plugin id, PIN and submodule path to the verifier"
+else bad "A18d passes the gated repo, plugins root, plugin id, PIN and submodule path to the verifier" \
   "verifier args were: [$(tr '\n' '|' < "$VERIFY_LOG")]"; fi
+cleanup
+
+# ── A18e — the verifier's own UNKNOWN must survive, not become a drift verdict ──────────────────
+# `if ! cmd` collapses every non-zero status into one branch, so a verifier that exits 2 because it
+# could not read its evidence would be reported as "the install is not on the pin" — turning "I
+# could not check" into a false verdict and pointing the caller at the wrong remedy. That is the
+# exact conflation this script's own exit contract forbids.
+make_fixture
+set_gitlink "$MK_NEW"
+VERIFY_UNK="$BIN/verify-unknown"
+printf '#!/usr/bin/env bash\nexit 2\n' > "$VERIFY_UNK"; chmod +x "$VERIFY_UNK"
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
+  --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --verify-cmd "$VERIFY_UNK" 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'VERIFICATION IS UNKNOWN'; then
+  ok "A18e preserves the verifier's UNKNOWN (exit 2) instead of reporting a false drift"
+else bad "A18e preserves the verifier's UNKNOWN (exit 2) instead of reporting a false drift" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
 # ── A19 — --dry-run asserts nothing about the install, so it is never a 0 verdict ──────────────
@@ -334,7 +380,7 @@ cleanup
 make_fixture
 set_gitlink "$MK_NEW"
 STUB_MARKETPLACE_TARGET="$MK_NEW" CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
-  --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --marketplace-dir "$MK" \
+  --repo-root "$CONSUMER" --plugins-root "$PLUGINS" \
   --verify-cmd "$VERIFY_BAD" >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 1 ] && [ -e "$ROOT/APPLIED" ]; then
   ok "A20 exits 1 when the post-apply check still does not report CURRENT"
@@ -346,7 +392,7 @@ cleanup
 make_fixture
 set_gitlink "$MK_NEW"
 STUB_MARKETPLACE_TARGET="$MK_NEW" CLAUDE_CLI="$BIN/claude" "$SCRIPT" \
-  --repo-root "$CONSUMER" --plugins-root "$PLUGINS" --marketplace-dir "$MK" \
+  --repo-root "$CONSUMER" --plugins-root "$PLUGINS" \
   --verify-cmd "$ROOT/no-such-verifier" >/dev/null 2>&1; rc=$?
 # The contract for this path is "the apply HAPPENED, only the verdict is unknown" — so asserting the
 # code alone would also pass if the script refused before ever applying, a different outcome.

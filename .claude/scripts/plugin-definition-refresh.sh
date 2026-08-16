@@ -31,7 +31,7 @@
 # the runtime's own control plane, which is what AGENTS.md authorises.
 #
 # Usage: plugin-definition-refresh.sh [--repo-root DIR] [--plugins-root DIR] [--gitlink SHA]
-#                                     [--marketplace-dir DIR] [--marketplace NAME]
+#                                     [--marketplace NAME]
 #                                     [--plugin-id ID] [--submodule-path PATH]
 #                                     [--cli PATH] [--verify-cmd PATH] [--dry-run] [--quiet]
 #
@@ -54,7 +54,6 @@ set -euo pipefail
 REPO_ROOT=""
 PLUGINS_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"
 GITLINK=""
-MARKETPLACE_DIR=""
 MARKETPLACE="devantler-plugins"
 PLUGIN_ID="agentic-engineering@devantler-plugins"
 SUBMODULE_PATH="libraries/agent-plugins"
@@ -74,7 +73,6 @@ while [ $# -gt 0 ]; do
     --repo-root) need $# "$1"; REPO_ROOT="$2"; shift 2 ;;
     --plugins-root) need $# "$1"; PLUGINS_ROOT="$2"; shift 2 ;;
     --gitlink) need $# "$1"; GITLINK="$2"; shift 2 ;;
-    --marketplace-dir) need $# "$1"; MARKETPLACE_DIR="$2"; shift 2 ;;
     --marketplace) need $# "$1"; MARKETPLACE="$2"; shift 2 ;;
     --plugin-id) need $# "$1"; PLUGIN_ID="$2"; shift 2 ;;
     --submodule-path) need $# "$1"; SUBMODULE_PATH="$2"; shift 2 ;;
@@ -141,7 +139,12 @@ if [ -z "$GITLINK" ]; then
 fi
 [ -n "$GITLINK" ] || die "no gitlink for '$SUBMODULE_PATH' at HEAD — cannot establish the pinned revision"
 
-[ -n "$MARKETPLACE_DIR" ] || MARKETPLACE_DIR="$PLUGINS_ROOT/marketplaces/$MARKETPLACE"
+# DERIVED, never passed in. An overridable directory is a decoy vector: a caller could point this at
+# a checkout that happens to equal the pin while both CLI commands still select the runtime
+# marketplace by name, so the gate would pass against one tree and `plugin update` would install from
+# another. The only way to be sure the tree we inspect is the tree the CLI acts on is to compute it
+# from the same two values the CLI uses.
+MARKETPLACE_DIR="$PLUGINS_ROOT/marketplaces/$MARKETPLACE"
 [ -d "$MARKETPLACE_DIR" ] || die "marketplace clone not found: $MARKETPLACE_DIR"
 
 say "pinned revision ......... $GITLINK"
@@ -153,7 +156,16 @@ say "pinned revision ......... $GITLINK"
 # revision it never gated on — the exact fail-open the gate exists to close. `mkdir` is the atomic
 # primitive here; a lock file written with `>` is not.
 LOCK=""
-release_lock() { [ -n "$LOCK" ] && rmdir "$LOCK" 2>/dev/null; LOCK=""; }
+# Release only a lock this process still OWNS. A blind rmdir lets a run that overran its lock delete
+# a SIBLING's replacement on the way out, which would hand a third run the section while the sibling
+# believes it holds it.
+release_lock() {
+  if [ -n "$LOCK" ] && [ "$(cat "$LOCK/pid" 2>/dev/null || true)" = "$$" ]; then
+    rm -f "$LOCK/pid"
+    rmdir "$LOCK" 2>/dev/null || true
+  fi
+  LOCK=""
+}
 # INT/TERM must TERMINATE, not just clean up. A handler that returns normally resumes the script at
 # the point of interruption — so releasing the lock here and falling through would carry on into the
 # candidate check and `plugin update` with the lock already surrendered, which is precisely the
@@ -164,11 +176,18 @@ trap 'exit 143' TERM
 
 if [ "$DRY_RUN" -eq 0 ]; then
   lockdir="$PLUGINS_ROOT/.plugin-definition-refresh.lock"
-  # A crashed run must not park the lock forever (the stale-marker lesson from the worktree claim):
-  # reap one older than 10 minutes, then contend normally.
-  if [ -d "$lockdir" ] && [ -n "$(find "$lockdir" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
-    say "reaped a stale lock ..... $lockdir"
-    rmdir "$lockdir" 2>/dev/null || true
+  # A crashed run must not park the lock forever (the stale-marker lesson from the worktree claim),
+  # but AGE IS THE WRONG TEST: a refresh that legitimately runs longer than the threshold would have
+  # its lock reaped by a sibling, putting two runs in the section at once — the precise failure the
+  # lock exists to prevent, now triggered by the reaper itself. Reap on OWNER LIVENESS instead. The
+  # lock is runtime-local and both machine-local lanes run on this host, so a pid is meaningful here.
+  if [ -d "$lockdir" ]; then
+    owner="$(cat "$lockdir/pid" 2>/dev/null || true)"
+    if [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; then
+      say "reaped a lock ........... owner ${owner:-unknown} is not running"
+      rm -f "$lockdir/pid"
+      rmdir "$lockdir" 2>/dev/null || true
+    fi
   fi
   lock_wait="${PLUGIN_REFRESH_LOCK_WAIT:-30}"
   tries=0
@@ -178,6 +197,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
     sleep 1
   done
   LOCK="$lockdir"
+  printf '%s\n' "$$" > "$lockdir/pid" || die "cannot record lock ownership in $lockdir"
 fi
 
 # ── refresh the marketplace clone, THEN read what an update would install ──────
@@ -285,16 +305,32 @@ if [ ! -x "$VERIFY_CMD" ]; then
   say "  install now matches $GITLINK. The apply happened; the verdict is UNKNOWN, never 0."
   exit 2
 fi
-# Pass the gated target explicitly. The verifier resolves its own defaults otherwise, so under any
-# override it would happily check a different repository, plugins root, or plugin than the one this
-# run just updated — the same bind-the-target defect the marketplace/plugin-id check closes above.
-if ! "$VERIFY_CMD" --repo-root "$REPO_ROOT" --plugins-root "$PLUGINS_ROOT" --plugin-id "$PLUGIN_ID" >/dev/null 2>&1; then
-  say ""
-  say "APPLIED, BUT STILL NOT ON THE PIN — the post-apply currency check does not report CURRENT."
-  say "  'plugin update' exited 0 without bringing the install to $GITLINK, so the drift persists."
-  say "  Re-run plugin-definition-currency.sh for the per-file detail and report it."
-  exit 1
-fi
+# Pass the gated target explicitly — including the RESOLVED pin and submodule path. The verifier
+# resolves its own defaults otherwise, so under `--gitlink`/`--submodule-path` it would check a
+# different revision than the one that passed this run's gate and could report a correct install as
+# drifted. Same bind-the-target defect the marketplace/plugin-id check closes above.
+"$VERIFY_CMD" --repo-root "$REPO_ROOT" --plugins-root "$PLUGINS_ROOT" --plugin-id "$PLUGIN_ID" \
+  --gitlink "$GITLINK" --submodule-path "$SUBMODULE_PATH" >/dev/null 2>&1 && vrc=0 || vrc=$?
+# `if ! cmd` would collapse the verifier's own UNKNOWN into the drift branch, turning "I could not
+# check" into "the install is not on the pin" — the exact conflation this script's own exit contract
+# forbids, and it would point the caller at the wrong remedy.
+case "$vrc" in
+  0) : ;;
+  2)
+    say ""
+    say "APPLIED, BUT VERIFICATION IS UNKNOWN — the post-apply check could not determine the state."
+    say "  The apply happened; nothing here asserts whether the install is on $GITLINK."
+    say "  Re-run plugin-definition-currency.sh directly for the reason."
+    exit 2
+    ;;
+  *)
+    say ""
+    say "APPLIED, BUT STILL NOT ON THE PIN — the post-apply currency check does not report CURRENT."
+    say "  'plugin update' exited 0 without bringing the install to $GITLINK, so the drift persists."
+    say "  Re-run plugin-definition-currency.sh for the per-file detail and report it."
+    exit 1
+    ;;
+esac
 
 say ""
 say "APPLIED — the runtime install now points at the pinned revision $GITLINK."
