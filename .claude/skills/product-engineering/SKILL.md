@@ -139,7 +139,9 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    ⚠️ (f) matches the **author**, never the `automation` **label** — see the next sentence.
    **`type:"Spike"` is not a skip and not a delivery-PR:** when it is the oldest actionable issue,
    record the decision on the Spike and file its follow-up issues — that pair is the floor artifact;
-   do not open a delivery PR (#2267; contract *Issue hierarchy → Spike*). **Size, difficulty, a `roadmap`/`enhancement`/
+   do not open a delivery PR (#2267; contract *Issue hierarchy → Spike*). Since no PR opens to
+   perform normal cleanup, **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
+   and before closing the Spike. **Size, difficulty, a `roadmap`/`enhancement`/
    `security`/`repo-assist`/`automation` label, or a "maintainer-hot" feeling are NOT skip reasons** —
    when the oldest issue is large, **decompose it into a small first child and ship that increment**
    (`Fixes #child`; add `Part of #experiment` when the parent stays open) so the big thing advances

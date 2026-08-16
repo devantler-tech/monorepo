@@ -684,7 +684,7 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    shared tip decides the race:** the helper writes a nonced commit, pushes without force, and
    verifies `git ls-remote` shows YOUR sha — never judge by the push's exit status or through a
    pipe (`push | tail` reports `tail`'s 0 on a rejection). Retire the tip when the draft PR opens
-   (`agent-claim.sh retire <issue> "$claim_sha" --repo-dir <product-path>` — same repository and
+   (`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <product-path>` — same repository and
    exact acquired SHA as the acquire);
    a tip with no open PR past the ~2h lease may be taken over
    with `--takeover` only after confirming no open `#<issue>` PR. Check open PRs, remote
@@ -701,7 +701,9 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    contributor's branch locally (trust gate — execution only; driving and merging it is yours). **`type:"Spike"` is not a delivery-PR path**
    (#2267): when the selected issue is a Spike, record the decision on the Spike and file its
    follow-up issues — that pair is the floor artifact; do **not** invent a draft PR for it (same
-   rule as [`product-engineering`](../product-engineering/SKILL.md) §3). Otherwise ship it: tests +
+   rule as [`product-engineering`](../product-engineering/SKILL.md) §3). Since no PR opens to perform
+   normal cleanup, **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
+   and before closing the Spike. Otherwise ship it: tests +
    validate + **draft PR**; use `Fixes #delivery` and, when later measurement keeps the experiment
    open, `Part of #experiment`.
 8. **Capture new finds as issues** — a coverage hole, perf hotspot, refactor target, docs gap, security

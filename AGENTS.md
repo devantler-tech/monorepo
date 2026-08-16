@@ -734,7 +734,9 @@ governs the issue work that follows.) Two rules enforce that:
    keeps an experiment issue open, also use `Part of #experiment`. **Exception — `type:"Spike"`:** do
    **not** ship a delivery PR; close the Spike by recording the decision on the issue and filing the
    follow-up issues its DoD requires — that output satisfies both this drain rule and the run floor
-   (#2267). Among open issues prefer the oldest.
+   (#2267). Because no draft PR performs the ordinary cleanup,
+   **retire the acquired SHA after the decision and follow-up issue artifacts are recorded** and
+   before closing the Spike. Among open issues prefer the oldest.
    **"Actionable" is deliberately narrow — skip an older issue ONLY when one of these is true and you can
    *point to it*:** (a) it already has an open PR; (b) it is blocked on a **named, live-verified**
    external dependency (a specific upstream PR/release you can cite) — see *External-blocker
@@ -904,7 +906,7 @@ namespace (`claude/*`, `codex/*`, `cursor/*`), so a race settled only on the wor
 arbitrated across lanes. The durable claim is therefore `agent-claim/<issue>` — a single shared ref
 every instance derives from the issue number alone — acquired **before** the lane-specific work
 branch via [`.claude/scripts/agent-claim.sh`](.claude/scripts/agent-claim.sh) (RED/GREEN coverage of
-the seven proven traps lives in `agent-claim.test.sh`).
+the nine proven traps lives in `agent-claim.test.sh`).
 
 1. **Check four signals before selecting, not one:** open PRs, remote `agent-claim/<issue>` tips,
    remote lane work branches (`claude/*` / `codex/*` / `cursor/*`), and issue assignees. An assignee
@@ -929,7 +931,7 @@ the seven proven traps lives in `agent-claim.test.sh`).
    competing tip is a capability/service failure to record rather than an invented winner; (b)
    **immediately recheck for an open PR whose body references `#<issue>`**. The previous holder may
    have opened its draft and retired the shared tip while this acquire was fetching; if a matching PR
-   now exists, retire only your acquired tip (`agent-claim.sh retire <issue> "$claim_sha" --repo-dir
+   now exists, retire only your acquired tip (`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir
    <product-path>`) and stand down. Then (c)
    self-assign it when your identity can
    (**if `devantler` is already assigned, remove and re-add**, because the add is a no-op for an
@@ -957,7 +959,7 @@ the seven proven traps lives in `agent-claim.test.sh`).
    PR after **~2 hours** is stale and may be taken over, so a crashed or abandoned session never
    parks an issue permanently.
    - **Retire on PR open:** the moment the draft PR that references `#<issue>` exists, run
-     `agent-claim.sh retire <issue> <acquired-sha>` so the shared tip cannot lock the issue after
+     `.claude/scripts/agent-claim.sh retire <issue> <acquired-sha>` so the shared tip cannot lock the issue after
      coordination has succeeded. The acquired SHA is mandatory: a stale holder must never observe and
      delete a takeover winner's replacement tip. An unretired `agent-claim/*` tip is a **permanent
      lock** (nothing else sweeps that namespace) — trap 4 of #2302; retirement is mandatory, not

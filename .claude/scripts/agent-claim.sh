@@ -10,7 +10,7 @@
 # alone, BEFORE creating its lane-specific work branch. The push decides the
 # race; the tip comparison (never the push's exit status) decides the winner.
 #
-# Seven traps, proven by the delivery and its review rounds — do not regress them:
+# Nine traps, proven by the delivery and its review rounds — do not regress them:
 #   1. Second non-force push is refused; ls-remote returns the winner's sha.
 #   2. `git push … | tail` exits 0 on a REJECTED push — only the tip compare
 #      is safe (never judge by exit status, never through a pipe).
@@ -28,6 +28,9 @@
 #      constructing the empty claim commit.
 #   7. A rejected create with no competing tip is a capability/service failure,
 #      not a lost race.
+#   8. Acquire stdout is the SHA only, including takeover; callers retain that
+#      exact value as the ownership token used by retire.
+#   9. Inherited Git dates must not backdate a new claim and expire its lease.
 #
 # Usage:
 #   agent-claim.sh acquire <issue> [--remote NAME] [--repo-dir DIR]
@@ -246,7 +249,7 @@ cmd_acquire() {
         echo "agent-claim: REFUSED takeover — claim is still within the ${LEASE_HOURS}h lease (tip $existing)" >&2
         exit 1
       fi
-      echo "agent-claim: taking over stale claim ${branch} (tip $existing)"
+      echo "agent-claim: taking over stale claim ${branch} (tip $existing)" >&2
       # Delete the stale tip first so the subsequent non-force push can land.
       # Never --force onto a live tip — only delete after is-stale. The delete
       # is pinned to the tip the staleness check actually observed: a rival can
@@ -262,7 +265,7 @@ cmd_acquire() {
     fi
   fi
 
-  local nonce parent sha
+  local nonce parent sha claim_time
   nonce="$(claim_nonce)"
   # Anchor on the remote default branch tip when available so two acquirers
   # share a parent (the condition that makes trap 3 reproducible). Fall back
@@ -285,7 +288,12 @@ cmd_acquire() {
   # Empty commit with a UNIQUE message (nonce). Identical messages on the same
   # parent in the same second produce byte-identical commits (trap 3) — the
   # nonce is the whole defence.
-  sha="$(git_c commit-tree "$parent^{tree}" -p "$parent" -m "chore: agent-claim #${issue} nonce=${nonce}")"
+  # The commit is the lease clock. Ignore inherited Git dates: a scheduled
+  # process or test harness can export an old GIT_COMMITTER_DATE, which would
+  # make this just-acquired claim immediately stale and stealable.
+  claim_time="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  sha="$(GIT_AUTHOR_DATE="$claim_time" GIT_COMMITTER_DATE="$claim_time" \
+    git_c commit-tree "$parent^{tree}" -p "$parent" -m "chore: agent-claim #${issue} nonce=${nonce}")"
 
   # Push WITHOUT force. Capture status ourselves — never through a pipe
   # (trap 2: `push | tail` reports tail's status, so a rejection reads as 0).

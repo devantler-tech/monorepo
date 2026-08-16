@@ -123,7 +123,7 @@ machine-local engineer.
 >   `claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <selected-repo-path>)"`
 >   (this is your cross-lane signal — siblings can see it without an assignee). Immediately recheck
 >   for an open PR whose body references `#<issue>`; if one appeared, retire only your tip with
->   `agent-claim.sh retire <issue> "$claim_sha" --repo-dir <selected-repo-path>` and stand down. Then
+>   `.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <selected-repo-path>` and stand down. Then
 >   push `cursor/<area>-<desc>-<issue>` with a real commit and open the draft PR promptly so you can
 >   retire that same acquired SHA. The PR body's `#<issue>` reference remains the durable post-PR
 >   signal. Exit 2 with no competing tip is a capability gap to record, not a lost race.

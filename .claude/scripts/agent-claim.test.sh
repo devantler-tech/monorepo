@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test for agent-claim.sh — RED/GREEN coverage of the seven traps proven
+# Self-test for agent-claim.sh — RED/GREEN coverage of the nine traps proven
 # by monorepo#2302 and its review rounds. Fixtures use a local bare remote + two clones; nothing
 # touches a real network remote.
 #
@@ -11,6 +11,8 @@
 #          two acquirers produce distinct shas.
 # Trap 4 — unretired claim is a permanent lock; --takeover after lease expiry
 #          recovers it, and a third acquirer still loses to the takeover winner.
+# Trap 8 — takeover stdout is exactly the acquired SHA; diagnostics stay on stderr.
+# Trap 9 — inherited Git dates cannot backdate a fresh claim's lease clock.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,6 +43,7 @@ seed="$tmp/seed"
 git clone --quiet "$bare" "$seed"
 git -C "$seed" config user.email "agent-claim-test@example.com"
 git -C "$seed" config user.name "agent-claim-test"
+git -C "$seed" config commit.gpgsign false
 # One shared parent so trap 3 is reproducible (identical parent + message → same sha).
 echo seed > "$seed/README"
 git -C "$seed" add README
@@ -58,6 +61,7 @@ git clone --quiet "$bare" "$clone_c"
 for c in "$clone_a" "$clone_b" "$clone_c"; do
   git -C "$c" config user.email "agent-claim-test@example.com"
   git -C "$c" config user.name "agent-claim-test"
+  git -C "$c" config commit.gpgsign false
 done
 
 ISSUE=2302
@@ -181,6 +185,19 @@ fi
 "$tool" retire "$ISSUE3G" "$sha_a3_again" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
 unset GIT_AUTHOR_DATE GIT_COMMITTER_DATE
 
+# A caller's inherited Git dates must not backdate the helper's fresh lease
+# commit. Otherwise a winner can look stale while it is still actively building.
+ISSUE9=9306
+export GIT_AUTHOR_DATE="2020-01-01T00:00:00Z"
+export GIT_COMMITTER_DATE="2020-01-01T00:00:00Z"
+sha_9="$("$tool" acquire "$ISSUE9" --repo-dir "$clone_a" --remote origin 2>/dev/null)"
+rc_9=0
+"$tool" is-stale "$ISSUE9" --repo-dir "$clone_a" --remote origin --lease-hours 2 \
+  >/dev/null 2>&1 || rc_9=$?
+check "trap9: inherited Git dates do not make a fresh claim stale" "1" "$rc_9"
+"$tool" retire "$ISSUE9" "$sha_9" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
+unset GIT_AUTHOR_DATE GIT_COMMITTER_DATE
+
 # A controlled entropy-tool failure reaches nonce generation and must fail
 # closed with the helper's usage/safety exit, leaving no claim ref behind.
 entropy_shim="$tmp/entropy-shim"
@@ -225,6 +242,7 @@ out_b4b="$tmp/out-b4b"
   >"$out_b4b" 2>"$tmp/err-b4b" || rc_b4b=$?
 sha_b4="$(tail -n1 "$out_b4b")"
 check "trap4: B stale takeover exits 0" "0" "$rc_b4b"
+check "trap8: takeover stdout is exactly the acquired sha" "$sha_b4" "$(cat "$out_b4b")"
 check "trap4: tip equals B after takeover" "$sha_b4" \
   "$(git -C "$clone_b" ls-remote origin "refs/heads/agent-claim/${ISSUE4}" | awk '{print $1}')"
 if [[ "$sha_b4" != "$sha_a4" ]]; then
