@@ -195,12 +195,13 @@ if ! declared_ci_classifier_sha="$(jq -er '
     | .[0]
     | select(
         type == "object"
-        and keys == ["path", "sha256"]
+        and keys == ["executable", "path", "sha256"]
         and .path == "scripts/classify-default-branch-ci-runs.sh"
+        and .executable == true
       )
     | .sha256
   ' "${desired_state}" 2>/dev/null)"; then
-  fail "consumer desired state does not carry exactly one path-and-digest classifier runtime asset"
+  fail "consumer desired state does not carry exactly one executable path-and-digest classifier runtime asset"
 fi
 [ "${declared_ci_classifier_sha}" = "$(sha256_bytes "${canonical_ci_classifier}")" ] ||
   fail "consumer desired-state classifier sha256 does not match the pinned executable bytes"
