@@ -10,7 +10,7 @@
 # alone, BEFORE creating its lane-specific work branch. The push decides the
 # race; the tip comparison (never the push's exit status) decides the winner.
 #
-# Four traps, all proven before this script existed — do not regress them:
+# Seven traps, proven by the delivery and its review rounds — do not regress them:
 #   1. Second non-force push is refused; ls-remote returns the winner's sha.
 #   2. `git push … | tail` exits 0 on a REJECTED push — only the tip compare
 #      is safe (never judge by exit status, never through a pipe).
@@ -22,13 +22,19 @@
 #   4. An unretired claim ref is a permanent lock (nothing sweeps
 #      `agent-claim/*`). Retire on PR open; stale takeover needs BOTH evidence
 #      gates (no open PR for the issue AND tip older than the lease).
+#   5. Retirement must bind to the acquired SHA and compare-and-delete it; a
+#      stale holder or observe/delete race must not erase a successor.
+#   6. The remote default parent may not exist locally; fetch it before
+#      constructing the empty claim commit.
+#   7. A rejected create with no competing tip is a capability/service failure,
+#      not a lost race.
 #
 # Usage:
 #   agent-claim.sh acquire <issue> [--remote NAME] [--repo-dir DIR]
 #                                [--lease-hours N] [--takeover]
 #   agent-claim.sh verify  <issue> <expected-sha> [--remote NAME] [--repo-dir DIR]
 #   agent-claim.sh tip     <issue> [--remote NAME] [--repo-dir DIR]
-#   agent-claim.sh retire  <issue> [--remote NAME] [--repo-dir DIR]
+#   agent-claim.sh retire  <issue> <acquired-sha> [--remote NAME] [--repo-dir DIR]
 #   agent-claim.sh is-stale <issue> [--remote NAME] [--repo-dir DIR]
 #                                 [--lease-hours N]
 #
@@ -183,7 +189,9 @@ cmd_is_stale() {
 
 cmd_retire() {
   local issue="$1"
+  local expected="$2"
   require_issue "$issue"
+  [[ "$expected" =~ ^[0-9a-f]{40}$ ]] || fail "acquired-sha must be the full SHA returned by acquire (got '$expected')"
   local branch
   branch="$(claim_branch "$issue")"
   local tip
@@ -192,11 +200,16 @@ cmd_retire() {
     echo "agent-claim: nothing to retire — ${branch} absent"
     exit 0
   fi
-  # Compare-and-delete against the tip we just observed. A plain delete would
-  # also remove a tip that a rival retired and REACQUIRED in between, so both
-  # lanes would come away believing they hold the claim. Pinning the expected
-  # value makes the delete fail closed on any change.
-  if ! git_c push --quiet --force-with-lease="refs/heads/${branch}:${tip}" \
+  # Ownership comes from the SHA returned by acquire, never from whichever tip
+  # happens to be present when retire runs. A stale holder may wake after a
+  # takeover; observing the successor's tip does not authorize deleting it.
+  if [[ "$tip" != "$expected" ]]; then
+    echo "agent-claim: LOST — cannot retire ${branch}; tip $tip is not the acquired tip $expected" >&2
+    exit 1
+  fi
+  # Compare-and-delete against the acquired tip. This also closes the later
+  # observe→delete race: a rival retirement/reacquire makes the lease fail.
+  if ! git_c push --quiet --force-with-lease="refs/heads/${branch}:${expected}" \
        "$REMOTE" ":${branch}" 2>/tmp/agent-claim-retire-$$.err; then
     local err
     err="$(cat /tmp/agent-claim-retire-$$.err 2>/dev/null || true)"
@@ -274,8 +287,7 @@ cmd_acquire() {
 
   tip="$(remote_tip "$issue")"
   if [[ -z "$tip" ]]; then
-    echo "agent-claim: LOST — push produced no tip for ${branch} (push_rc=${push_rc})" >&2
-    exit 1
+    fail "FAILED — claim push produced no competing tip for ${branch} (push_rc=${push_rc}); check credentials, branch policy, and namespace capability"
   fi
   if [[ "$tip" != "$sha" ]]; then
     echo "agent-claim: LOST — tip ${tip} is not ours (ours=${sha}, push_rc=${push_rc})" >&2
@@ -283,7 +295,7 @@ cmd_acquire() {
   fi
   # Tip matches ours — we won, regardless of push_rc (defensive: a weird
   # transport that exits non-zero after a successful update still counts).
-  echo "agent-claim: WON ${branch} tip=${sha}"
+  echo "agent-claim: WON ${branch} tip=${sha}" >&2
   printf '%s\n' "$sha"
 }
 
@@ -313,7 +325,7 @@ while [[ $# -gt 0 ]]; do
     *)
       if [[ -z "$ISSUE" ]]; then
         ISSUE="$1"; shift
-      elif [[ "$COMMAND" == "verify" && -z "$EXPECTED_SHA" ]]; then
+      elif [[ ( "$COMMAND" == "verify" || "$COMMAND" == "retire" ) && -z "$EXPECTED_SHA" ]]; then
         EXPECTED_SHA="$1"; shift
       else
         fail "unexpected argument '$1'"
@@ -333,7 +345,10 @@ case "$COMMAND" in
     cmd_verify "$ISSUE" "$EXPECTED_SHA"
     ;;
   tip) cmd_tip "$ISSUE" ;;
-  retire) cmd_retire "$ISSUE" ;;
+  retire)
+    [[ -n "$EXPECTED_SHA" ]] || fail "retire requires <acquired-sha>"
+    cmd_retire "$ISSUE" "$EXPECTED_SHA"
+    ;;
   is-stale) cmd_is_stale "$ISSUE" ;;
   *) fail "unknown command '$COMMAND'" ;;
 esac

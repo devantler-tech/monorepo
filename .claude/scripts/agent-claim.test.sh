@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Self-test for agent-claim.sh — RED/GREEN coverage of the four traps proven
-# in monorepo#2302. Fixtures use a local bare remote + two clones; nothing
+# Self-test for agent-claim.sh — RED/GREEN coverage of the seven traps proven
+# by monorepo#2302 and its review rounds. Fixtures use a local bare remote + two clones; nothing
 # touches a real network remote.
 #
 # Trap 1 — arbitration works: second non-force push loses; ls-remote shows winner.
@@ -29,12 +29,6 @@ check() {
   if [[ "$expected" == "$actual" ]]; then pass "$desc"; else
     fail "$desc (expected '$expected', got '$actual')"
   fi
-}
-
-run() {
-  local rc=0
-  "$@" >/dev/null 2>&1 || rc=$?
-  echo "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -76,7 +70,12 @@ rc_a=0
 "$tool" acquire "$ISSUE" --repo-dir "$clone_a" --remote origin >"$out_a" 2>"$tmp/err-a" || rc_a=$?
 sha_a="$(tail -n1 "$out_a")"
 check "trap1: A acquire exits 0" "0" "$rc_a"
-[[ "$sha_a" =~ ^[0-9a-f]{40}$ ]] && pass "trap1: A printed a full sha" || fail "trap1: A sha missing ($sha_a)"
+if [[ "$sha_a" =~ ^[0-9a-f]{40}$ ]]; then
+  pass "trap1: A printed a full sha"
+else
+  fail "trap1: A sha missing ($sha_a)"
+fi
+check "trap1: stdout is exactly the acquired sha" "$sha_a" "$(cat "$out_a")"
 
 rc_b=0
 "$tool" acquire "$ISSUE" --repo-dir "$clone_b" --remote origin >"$tmp/out-b" 2>"$tmp/err-b" || rc_b=$?
@@ -162,7 +161,7 @@ check "trap3 GREEN: second acquire exits 1" "1" "$rc_b3"
 # More importantly: crafting two helper commits back-to-back must differ.
 nonce_x="$("$tool" acquire 999001 --repo-dir "$clone_a" --remote origin 2>/dev/null | tail -n1 || true)"
 # Retire the throwaway so it does not leak into later assertions.
-"$tool" retire 999001 --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || true
+"$tool" retire 999001 "$nonce_x" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || true
 # Two sequential commit-tree calls WITH distinct nonces must differ — mirror
 # what the helper does internally.
 n1="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
@@ -219,14 +218,32 @@ check "trap4: C acquire exits 1 (lost to B)" "1" "$rc_c4"
 check "trap4: tip still B's after C loses" "$sha_b4" \
   "$(git -C "$clone_c" ls-remote origin "refs/heads/agent-claim/${ISSUE4}" | awk '{print $1}')"
 
+# A stale holder must not be able to retire B's replacement claim. Retirement
+# is ownership-sensitive: the acquired SHA, not merely the currently observed
+# remote tip, is the authority to delete.
+rc_stale_r=0
+"$tool" retire "$ISSUE4" "$sha_a4" --repo-dir "$clone_a" --remote origin \
+  >"$tmp/out-stale-r4" 2>"$tmp/err-stale-r4" || rc_stale_r=$?
+check "trap4: stale holder retire exits 1 (lost ownership)" "1" "$rc_stale_r"
+check "trap4: stale holder cannot erase takeover winner" "$sha_b4" \
+  "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE4}" | awk '{print $1}')"
+
+# The actual holder can retire when it supplies the SHA returned by acquire.
+rc_owned_r=0
+"$tool" retire "$ISSUE4" "$sha_b4" --repo-dir "$clone_b" --remote origin \
+  >"$tmp/out-owned-r4" 2>"$tmp/err-owned-r4" || rc_owned_r=$?
+check "trap4: holder retire with acquired sha exits 0" "0" "$rc_owned_r"
+check "trap4: holder retire removes its own claim" "" \
+  "$(git -C "$clone_b" ls-remote origin "refs/heads/agent-claim/${ISSUE4}" | awk '{print $1}')"
+
 # Retire is idempotent and clears the lock.
 rc_r=0
-"$tool" retire "$ISSUE4" --repo-dir "$clone_b" --remote origin >/dev/null 2>&1 || rc_r=$?
+"$tool" retire "$ISSUE4" "$sha_b4" --repo-dir "$clone_b" --remote origin >/dev/null 2>&1 || rc_r=$?
 check "trap4: retire exits 0" "0" "$rc_r"
 tip_gone="$(git -C "$clone_b" ls-remote origin "refs/heads/agent-claim/${ISSUE4}" | awk '{print $1}')"
 check "trap4: tip absent after retire" "" "$tip_gone"
 rc_r2=0
-"$tool" retire "$ISSUE4" --repo-dir "$clone_b" --remote origin >/dev/null 2>&1 || rc_r2=$?
+"$tool" retire "$ISSUE4" "$sha_b4" --repo-dir "$clone_b" --remote origin >/dev/null 2>&1 || rc_r2=$?
 check "trap4: retire is idempotent" "0" "$rc_r2"
 
 # ---------------------------------------------------------------------------
@@ -252,7 +269,7 @@ sha_a5="$("$tool" acquire "$ISSUE5" --repo-dir "$clone_a" --remote origin 2>/dev
 check "trap5: first acquire wins" "$sha_a5" "$(git -C "$clone_a" ls-remote origin "$claim5" | awk '{print $1}')"
 
 # The rival retires and immediately reacquires — a legitimate, fresh claim.
-"$tool" retire "$ISSUE5" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
+"$tool" retire "$ISSUE5" "$sha_a5" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1
 sha_b5="$("$tool" acquire "$ISSUE5" --repo-dir "$clone_b" --remote origin 2>/dev/null | tail -1)"
 check "trap5: rival reacquires after retire" "$sha_b5" "$(git -C "$clone_b" ls-remote origin "$claim5" | awk '{print $1}')"
 
@@ -272,7 +289,7 @@ check "trap5: rival's claim survives the stale delete" "$sha_b5" \
 
 # The holder's own retire observes the current tip, so it still succeeds.
 rc_r5=0
-"$tool" retire "$ISSUE5" --repo-dir "$clone_b" --remote origin >/dev/null 2>&1 || rc_r5=$?
+"$tool" retire "$ISSUE5" "$sha_b5" --repo-dir "$clone_b" --remote origin >/dev/null 2>&1 || rc_r5=$?
 check "trap5: the real holder can still retire" "0" "$rc_r5"
 check "trap5: claim is gone after the holder's retire" "" \
   "$(git -C "$clone_b" ls-remote origin "$claim5" | awk '{print $1}')"
@@ -312,7 +329,7 @@ SHIM
 chmod +x "$shim_dir/git"
 
 rc_race=0
-PATH="$shim_dir:$PATH" "$tool" retire "$ISSUE5B" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || rc_race=$?
+PATH="$shim_dir:$PATH" "$tool" retire "$ISSUE5B" "$sha_a5b" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || rc_race=$?
 if [[ -f "$tmp/shim.fired" ]]; then
   pass "trap5b: fixture — the race actually fired inside the helper"
 else
@@ -355,7 +372,39 @@ sha_a6="$("$tool" acquire "$ISSUE6" --repo-dir "$clone_a" --remote origin 2>/dev
 check "trap6: acquire succeeds against an unfetched remote tip" "0" "$rc_acq6"
 check "trap6: the claim tip is ours" "$sha_a6" \
   "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE6}" | awk '{print $1}')"
-"$tool" retire "$ISSUE6" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || true
+"$tool" retire "$ISSUE6" "$sha_a6" --repo-dir "$clone_a" --remote origin >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# Trap 7 — a rejected create with no competing tip is a capability/service
+# failure, not a lost race. A pre-receive hook rejects only this issue ref so
+# the real push and remote-tip behavior remain under test.
+# ---------------------------------------------------------------------------
+ISSUE7=7007
+hook="$bare/hooks/pre-receive"
+cat > "$hook" <<'HOOK'
+#!/usr/bin/env bash
+while read -r _old _new ref; do
+  if [[ "$ref" == "refs/heads/agent-claim/7007" ]]; then
+    echo "claim namespace denied" >&2
+    exit 1
+  fi
+done
+exit 0
+HOOK
+chmod +x "$hook"
+
+rc_denied=0
+"$tool" acquire "$ISSUE7" --repo-dir "$clone_a" --remote origin \
+  >"$tmp/out-denied7" 2>"$tmp/err-denied7" || rc_denied=$?
+check "trap7: rejected push with no winner exits 2" "2" "$rc_denied"
+if grep -q "FAILED" "$tmp/err-denied7"; then
+  pass "trap7: rejected push is reported as capability/service failure"
+else
+  fail "trap7: rejected push is reported as capability/service failure"
+fi
+check "trap7: rejected push leaves no competing claim tip" "" \
+  "$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE7}" | awk '{print $1}')"
+rm -f "$hook"
 
 # ---------------------------------------------------------------------------
 if (( failures > 0 )); then

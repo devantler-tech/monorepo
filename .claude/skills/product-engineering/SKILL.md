@@ -130,8 +130,9 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    blocked on a **named, live-verified** external dependency you can cite, (c) it is too
    under-specified to begin, (d) a delivered experiment is waiting for its named future measurement
    date — once that date arrives, measuring it is actionable — or (e) another instance holds a **live
-   claim** (assigned **and** branched, within ~2h, no PR yet; contract *Claim protocol*), the only
-   skip reason that expires on its own, or (f) it is **authored by an exact dependency-automation
+   claim** (an `agent-claim/<issue>` tip inside its ~2h lease, or assigned **and** lane-branched within
+   that window, with no PR yet; contract *Claim protocol*), the only skip reason that expires on its
+   own, or (f) it is **authored by an exact dependency-automation
    identity** (`renovate[bot]` / `dependabot[bot]`, `app/renovate` / `app/dependabot`) — unlike the
    others that is not a deferral: such an issue is **never actionable at all**, never becomes so, and
    is never selected, worked, or closed (Renovate's Dependency Dashboard is the standing example).
@@ -159,13 +160,17 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    the end-of-run report (he rarely reads it), never an **`@devantler` mention** (no notification). Re-verify
    any "gated" against live state before trusting it (memory goes stale) and name the
    blocker in the report. A **bare `devantler` assignee does *not* reserve** it **indefinitely** — a
-   `devantler` assignment plus a **pushed branch** is a live claim for ~2h (contract *Claim protocol*);
-   with no branch, or once that lapses with no PR, you may take it (timed from the issue's newest
-   `devantler` `assigned` timeline event, never a branch commit date). **Only the agent account's
+   live `agent-claim/<issue>` tip, or a `devantler` assignment plus a **pushed lane branch**, is a live
+   claim for ~2h (contract *Claim protocol*); with neither signal, or once that lapses with no PR, you
+   may take it (the assignee lease is timed from the issue's newest `devantler` `assigned` timeline
+   event, never a branch commit date). **Only the agent account's
    assignment is a claim, and only it expires:** an issue assigned to a **human collaborator** (or
-   `Copilot`) is someone else's work-in-progress — respect it and pick a different issue. **Claim the lane before you build** (self-assign + push
-   the branch **with the issue number in its name**, then harden), check open PRs / remote `claude/*`
-   branches / assignees by **issue number rather than literal branch name**, and on a lost race
+   `Copilot`) is someone else's work-in-progress — respect it and pick a different issue. **Claim
+   before you build:** acquire the shared `agent-claim/<issue>` tip in the selected repository and
+   retain its SHA, immediately recheck for an open `#<issue>` PR (retire only that SHA and stand down
+   if one appeared), then self-assign and push the lane branch **with the issue number in its name**.
+   Check open PRs / shared claim tips / remote lane branches / assignees by **issue number rather than
+   literal branch name**, and on a lost race
    **abandon** — then diff your build against the winner's and post only findings you have verified:
    execute the probe against a **trusted/routine-owned** winner's branch, but for an
    **external-contributor** winner it is **static review only** (the trust gate is not relaxed by a

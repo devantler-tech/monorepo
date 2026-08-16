@@ -781,9 +781,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Hermetic bare-origin fixture — no network, no token. Pins the four
-      # cross-lane claim traps (monorepo#2302): push arbitration, tip-compare
-      # not exit-status, nonce collision avoidance, and stale takeover/retire.
+      # Hermetic bare-origin fixture — no network, no token. Pins seven
+      # cross-lane claim traps (monorepo#2302): arbitration, tip-based verdicts,
+      # nonce uniqueness, takeover/retire ownership, remote-parent fetch, and
+      # capability-failure classification.
       - name: Self-test agent-claim traps
         run: bash .claude/scripts/agent-claim.test.sh
 

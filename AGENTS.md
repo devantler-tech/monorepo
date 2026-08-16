@@ -741,8 +741,9 @@ governs the issue work that follows.) Two rules enforce that:
    verification* below; or (c) it is too under-specified to even begin; or (d) a delivered experiment is
    awaiting its **named, future measurement date**, which is recorded on the issue and has not elapsed.
    Once that date arrives, measuring and recording the decision is actionable work; or (e) another
-   instance holds a **live claim** on it — assigned **and** branched, within the ~2h window, no PR yet
-   (see *Claim protocol*). (e) is the only skip reason that expires on its own: once the window lapses
+   instance holds a **live claim** on it — an `agent-claim/<issue>` tip within the ~2h lease, or an
+   assignment **and** lane branch within that window, with no PR yet (see *Claim protocol*). (e) is
+   the only skip reason that expires on its own: once the window lapses
    with no PR, the issue is fair game again; or (f) it is
    **authored by an exact dependency-automation identity** (`renovate[bot]` / `dependabot[bot]`, or
    `app/renovate` / `app/dependabot`) — see the automation-owned carve-out under *Merge policy*.
@@ -815,10 +816,11 @@ governs the issue work that follows.) Two rules enforce that:
    KSail's own roadmap *feature specs* — part of this queue, NOT maintainer-interactive work**; the
    interactive-PR HANDS-OFF rule is about random-slug `claude/*` *PRs* (see *Untrusted input*), never
    about an *issue's* label or its bot author. **A bare
-   assignee does *not* reserve an issue INDEFINITELY:** a **`devantler`** assignment paired with a
-   **pushed claim branch** is a *live claim* for ~2 hours (see *Claim protocol* below); with no branch,
-   or once that window has elapsed with no open PR, you may pick the issue up — a stale assignment is
-   never work-in-progress. **Only the agent account's own assignment is a claim.** An issue assigned to
+   assignee does *not* reserve an issue INDEFINITELY:** an `agent-claim/<issue>` tip inside its lease,
+   or a **`devantler`** assignment paired with a **pushed lane branch**, is a *live claim* for ~2 hours
+   (see *Claim protocol* below); with no live tip/branch, or once that window has elapsed with no open
+   PR, you may pick the issue up — a stale assignment is never work-in-progress. **Only the agent
+   account's own assignment is a claim.** An issue assigned to
    a **human collaborator** (or `Copilot`) is not an agent lease and must never be taken over on this
    window: respect it as someone else's work-in-progress per the standing "do not do work others are
    assigned to" rule, and pick a different issue. If an issue **already
@@ -902,7 +904,7 @@ namespace (`claude/*`, `codex/*`, `cursor/*`), so a race settled only on the wor
 arbitrated across lanes. The durable claim is therefore `agent-claim/<issue>` — a single shared ref
 every instance derives from the issue number alone — acquired **before** the lane-specific work
 branch via [`.claude/scripts/agent-claim.sh`](.claude/scripts/agent-claim.sh) (RED/GREEN coverage of
-the four proven traps lives in `agent-claim.test.sh`).
+the seven proven traps lives in `agent-claim.test.sh`).
 
 1. **Check four signals before selecting, not one:** open PRs, remote `agent-claim/<issue>` tips,
    remote lane work branches (`claude/*` / `codex/*` / `cursor/*`), and issue assignees. An assignee
@@ -921,12 +923,17 @@ the four proven traps lives in `agent-claim.test.sh`).
    that merely contains it (a benchmark count, a date, another repo's issue number), which would hide
    the oldest actionable issue behind an unrelated PR.
 2. **Claim before you build, not after — lane-neutral ref FIRST.** The moment you select an issue:
-   (a) **acquire `agent-claim/<issue>`** with the helper
-   (`.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <product-path>`) — this is the
-   cross-lane race; a LOST exit means
-   stand down under rule 5; (b) self-assign it when your identity can
+   (a) **acquire `agent-claim/<issue>`** with the helper and retain the full SHA it prints
+   (`claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <product-path>)"`)
+   — this is the cross-lane race; a LOST (exit 1) means stand down under rule 5, while exit 2 with no
+   competing tip is a capability/service failure to record rather than an invented winner; (b)
+   **immediately recheck for an open PR whose body references `#<issue>`**. The previous holder may
+   have opened its draft and retired the shared tip while this acquire was fetching; if a matching PR
+   now exists, retire only your acquired tip (`agent-claim.sh retire <issue> "$claim_sha" --repo-dir
+   <product-path>`) and stand down. Then (c)
+   self-assign it when your identity can
    (**if `devantler` is already assigned, remove and re-add**, because the add is a no-op for an
-   existing assignee and would leave your lease carrying the *old* timestamp); and (c) push the
+   existing assignee and would leave your lease carrying the *old* timestamp); and (d) push the
    lane-specific work branch **with the issue number in its name** —
    `<lane>/<area>-<desc>-<issue>` (e.g. `claude/war-foliage-spatial-hash-109`,
    `cursor/agent-claim-ref-2302`). Only **then** harden (tests, ablations, docs, comments). Opening
@@ -950,9 +957,11 @@ the four proven traps lives in `agent-claim.test.sh`).
    PR after **~2 hours** is stale and may be taken over, so a crashed or abandoned session never
    parks an issue permanently.
    - **Retire on PR open:** the moment the draft PR that references `#<issue>` exists, run
-     `agent-claim.sh retire <issue>` so the shared tip cannot lock the issue after coordination has
-     succeeded. An unretired `agent-claim/*` tip is a **permanent lock** (nothing else sweeps that
-     namespace) — trap 4 of #2302; retirement is mandatory, not optional hygiene.
+     `agent-claim.sh retire <issue> <acquired-sha>` so the shared tip cannot lock the issue after
+     coordination has succeeded. The acquired SHA is mandatory: a stale holder must never observe and
+     delete a takeover winner's replacement tip. An unretired `agent-claim/*` tip is a **permanent
+     lock** (nothing else sweeps that namespace) — trap 4 of #2302; retirement is mandatory, not
+     optional hygiene.
    - **Lease clock for the shared tip** is the tip's **committer date** (the helper writes a fresh
      commit at acquire time, so this is wall-clock accurate). Check with
      `agent-claim.sh is-stale <issue>`.

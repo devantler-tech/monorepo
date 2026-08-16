@@ -661,26 +661,31 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    external-blocker skip, including its structured record and fresh per-run non-repository check. A
    missing, malformed, or inherited blocker record is not a skip. A **bare `devantler` assignee does
    *not* reserve** an issue
-   **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
-   (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
-   (timed from the issue's newest `devantler` `assigned` timeline event, never a branch commit date).
+   **indefinitely** — an `agent-claim/<issue>` tip inside its lease, or a `devantler` assignment plus
+   a **pushed lane branch**, is a live claim for ~2h (contract *Claim protocol*), and with neither
+   signal, or once that lapses with no PR, you may pick it up (the assignee lease is timed from the
+   issue's newest `devantler` `assigned` timeline event, never a branch commit date).
    **Only the agent account's assignment is a claim, and only it expires:** an issue assigned to a
    **human collaborator** (or `Copilot`) is someone else's work-in-progress — respect it and pick a
    different issue, never take it over on this window. **Claim
-   before you build — lane-neutral tip FIRST:** acquire `agent-claim/<issue>` via
-   `.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <product-path>` (cross-lane race;
-   LOST → stand down) — **`--repo-dir` is required for a submodule's issue**: numbers are
+   before you build — lane-neutral tip FIRST:** acquire `agent-claim/<issue>` and retain its SHA via
+   `claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <product-path>)"`
+   (cross-lane race; LOST/exit 1 → stand down; exit 2 with no competing tip → record a
+   capability/service gap) — **`--repo-dir` is required for a submodule's issue**: numbers are
    repository-scoped, so a bare call from the monorepo checkout locks the same-numbered *monorepo*
    issue and leaves the one you selected unclaimed. Populate the submodule first
    (`submodule-init.sh`), and call the **root** helper with `--repo-dir` rather than `cd`-ing into
-   the product (the relative script path does not resolve from there). Then
+   the product (the relative script path does not resolve from there). **Immediately after winning,
+   recheck for an open PR whose body references `#<issue>`**; if one appeared during the
+   claim-to-draft handoff, retire only `"$claim_sha"` in that same repository and stand down. Then
    self-assign when your identity can (and if `devantler` is ALREADY assigned, **remove then
    re-add**, since adding an existing assignee is a no-op that would leave your lease carrying the
    old timestamp), then push the lane work branch **with the issue number in its name**. **The
    shared tip decides the race:** the helper writes a nonced commit, pushes without force, and
    verifies `git ls-remote` shows YOUR sha — never judge by the push's exit status or through a
    pipe (`push | tail` reports `tail`'s 0 on a rejection). Retire the tip when the draft PR opens
-   (`agent-claim.sh retire <issue> --repo-dir <product-path>` — same repository as the acquire);
+   (`agent-claim.sh retire <issue> "$claim_sha" --repo-dir <product-path>` — same repository and
+   exact acquired SHA as the acquire);
    a tip with no open PR past the ~2h lease may be taken over
    with `--takeover` only after confirming no open `#<issue>` PR. Check open PRs, remote
    `agent-claim/<issue>` tips, lane work branches (`claude/*`/`codex/*`/`cursor/*`) AND assignees by
