@@ -38,7 +38,22 @@ while [[ $# -gt 0 ]]; do
     --all) mode="all"; shift ;;
     --backup-dir) backup_dir="${2-}"; shift 2 || exit 2 ;;
     -h|--help) usage; exit 0 ;;
-    --) shift; break ;;
+    --)
+      shift
+      if [[ -n "$target" || $# -eq 0 ]]; then
+        echo "memory-backup: -- must be followed by exactly one file (or memory-dir with --all)" >&2
+        usage >&2
+        exit 2
+      fi
+      target="$1"
+      shift
+      if [[ $# -ne 0 ]]; then
+        echo "memory-backup: unexpected extra argument '$1'" >&2
+        usage >&2
+        exit 2
+      fi
+      break
+      ;;
     -*)
       echo "memory-backup: unknown argument '$1'" >&2
       usage >&2
@@ -84,9 +99,13 @@ fi
 atomic_cp() {
   local src="$1" dest="$2"
   local dest_dir tmp rc
-  dest_dir="$(dirname "$dest")"
-  mkdir -p "$dest_dir"
-  tmp="$(mktemp "$dest_dir/.memory-backup.XXXXXX")"
+  dest_dir="$(dirname -- "$dest")"
+  if ! mkdir -p -- "$dest_dir"; then
+    return 1
+  fi
+  if ! tmp="$(mktemp "$dest_dir/.memory-backup.XXXXXX")"; then
+    return 1
+  fi
   # mktemp creates an empty file; replace it with the source contents.
   if ! cp -p "$src" "$tmp"; then
     rm -f "$tmp"
@@ -104,15 +123,31 @@ atomic_cp() {
   return 0
 }
 
+resolve_backup_dir() {
+  local dir="$1"
+  if ! mkdir -p -- "$dir"; then
+    echo "memory-backup: failed to create backup directory: $dir" >&2
+    return 1
+  fi
+  if ! (cd -- "$dir" && pwd -P); then
+    echo "memory-backup: failed to resolve backup directory: $dir" >&2
+    return 1
+  fi
+}
+
 if [[ "$mode" == "file" ]]; then
   if [[ ! -f "$target" ]]; then
     echo "memory-backup: not a readable file: $target" >&2
     exit 2
   fi
-  parent="$(cd "$(dirname "$target")" && pwd)"
-  base="$(basename "$target")"
+  parent="$(cd -- "$(dirname -- "$target")" && pwd -P)"
+  base="$(basename -- "$target")"
+  target="$parent/$base"
   if [[ -z "$backup_dir" ]]; then
     backup_dir="$parent/.memory-backups"
+  fi
+  if ! backup_dir="$(resolve_backup_dir "$backup_dir")"; then
+    exit 2
   fi
   dest="$backup_dir/${base}.${ts}"
   if [[ -e "$dest" ]]; then
@@ -141,9 +176,12 @@ if [[ ! -d "$target" ]]; then
   echo "memory-backup: not a directory: $target" >&2
   exit 2
 fi
-memory_dir="$(cd "$target" && pwd)"
+memory_dir="$(cd -- "$target" && pwd -P)"
 if [[ -z "$backup_dir" ]]; then
   backup_dir="$memory_dir/.memory-backups"
+fi
+if ! backup_dir="$(resolve_backup_dir "$backup_dir")"; then
+  exit 2
 fi
 store_dest="$backup_dir/store.${ts}"
 
@@ -156,32 +194,53 @@ if [[ -z "$file_list" ]]; then
   exit 2
 fi
 
-# `mkdir` without -p is the exclusive create that reserves this snapshot name.
-# An `-e` test followed by `mkdir -p` is two syscalls, so two instances landing on
-# the same timestamp could both pass and then interleave into one directory.
-mkdir -p "$backup_dir"
-if ! mkdir "$store_dest" 2>/dev/null; then
+# Copy into a hidden sibling first. The final name must never exist until every
+# file has landed: EXIT traps cannot run after SIGKILL or a host crash, so
+# populating store.<ts> directly can publish a partial snapshot that looks
+# restorable. A same-parent rename publishes the completed directory atomically.
+if [[ -e "$store_dest" || -L "$store_dest" ]]; then
   echo "memory-backup: refusing to overwrite existing snapshot: $store_dest" >&2
   exit 2
 fi
+if ! store_tmp="$(mktemp -d "$backup_dir/.store.${ts}.XXXXXX")"; then
+  echo "memory-backup: failed to create temporary snapshot in $backup_dir" >&2
+  exit 2
+fi
 
-# Nothing after this point may leave a half-populated snapshot behind: a partial
-# store.<ts> is indistinguishable from a complete one, so a later restore would
-# silently recover a subset of the store — and the directory would also block a
-# retry at that timestamp.
-trap 'if [[ -d "$store_dest" ]]; then rm -rf "$store_dest"; fi' EXIT
+# The publish lock preserves the old same-timestamp exclusivity without making
+# the final path visible early. Racers may each finish a private copy, but only
+# one can rename into store.<ts>; every loser removes its unpublished temp tree.
+publish_lock=""
+trap 'if [[ -n "$store_tmp" && -d "$store_tmp" ]]; then rm -rf "$store_tmp"; fi; if [[ -n "$publish_lock" && -d "$publish_lock" ]]; then rm -rf "$publish_lock"; fi' EXIT
 
 count=0
 while IFS= read -r file; do
   [[ -n "$file" ]] || continue
-  base="$(basename "$file")"
-  if ! atomic_cp "$file" "$store_dest/$base"; then
+  base="$(basename -- "$file")"
+  if ! atomic_cp "$file" "$store_tmp/$base"; then
     echo "memory-backup: failed to copy $file into $store_dest" >&2
     exit 2
   fi
   count=$(( count + 1 ))
 done <<< "$file_list"
-# Every file landed — disarm the cleanup so the finished snapshot survives.
+
+lock_candidate="${store_dest}.publish-lock"
+if ! mkdir "$lock_candidate" 2>/dev/null; then
+  echo "memory-backup: refusing to overwrite existing or in-progress snapshot: $store_dest" >&2
+  exit 2
+fi
+publish_lock="$lock_candidate"
+if [[ -e "$store_dest" || -L "$store_dest" ]]; then
+  echo "memory-backup: refusing to overwrite existing snapshot: $store_dest" >&2
+  exit 2
+fi
+if ! mv -- "$store_tmp" "$store_dest"; then
+  echo "memory-backup: failed to publish completed snapshot: $store_dest" >&2
+  exit 2
+fi
+store_tmp=""
+rm -rf "$publish_lock"
+publish_lock=""
 trap - EXIT
 
 printf 'Backed up %s file(s) from %s -> %s\n' "$count" "$memory_dir" "$store_dest"

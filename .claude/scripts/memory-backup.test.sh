@@ -100,6 +100,25 @@ mkdir -p "$empty"
 check "empty store with --all exits 2" "2" "$(run --all "$empty")"
 
 # ---------------------------------------------------------------------------
+# `--` consumes the following operand, including a filename beginning with `-`.
+# ---------------------------------------------------------------------------
+dash_store="$tmp/dash-operand"
+mkdir -p "$dash_store"
+printf 'dash-name\n' > "$dash_store/-memory.md"
+export MEMORY_BACKUP_TS=20260724T003005Z
+dash_rc=0
+(
+  cd "$dash_store"
+  "$tool" -- -memory.md >/dev/null 2>&1
+) || dash_rc=$?
+check "-- consumes a dash-prefixed file operand" "0" "$dash_rc"
+if [[ -f "$dash_store/.memory-backups/-memory.md.${MEMORY_BACKUP_TS}" ]]; then
+  pass "dash-prefixed operand is backed up"
+else
+  fail "dash-prefixed operand is backed up"
+fi
+
+# ---------------------------------------------------------------------------
 # Custom --backup-dir is honoured.
 # ---------------------------------------------------------------------------
 store="$tmp/custom"
@@ -112,6 +131,41 @@ if [[ -f "$alt/portfolio-status.md.${MEMORY_BACKUP_TS}" ]]; then
   pass "backup lands in --backup-dir"
 else
   fail "backup lands in --backup-dir"
+fi
+
+# A restore command is durable only when both paths remain correct after the
+# operator changes directory. Relative input and backup paths must therefore be
+# normalized before they are printed.
+relative_root="$tmp/relative-restore"
+mkdir -p "$relative_root/store"
+relative_root="$(cd "$relative_root" && pwd -P)"
+printf 'restore-me\n' > "$relative_root/store/relative.md"
+export MEMORY_BACKUP_TS=20260724T003006Z
+relative_rc=0
+relative_out="$(
+  cd "$relative_root"
+  "$tool" --backup-dir backups store/relative.md 2>&1
+)" || relative_rc=$?
+check "relative-path backup exits 0" "0" "$relative_rc"
+expected_restore="Restore: cp $relative_root/backups/relative.md.${MEMORY_BACKUP_TS} $relative_root/store/relative.md"
+if grep -Fqx "$expected_restore" <<<"$relative_out"; then
+  pass "restore command prints absolute source and target paths"
+else
+  fail "restore command prints absolute source and target paths (got: $relative_out)"
+fi
+
+# A destination that cannot be created is a documented copy failure: exit 2
+# with the tool's own contextual diagnostic, never a raw mkdir status 1.
+blocked_parent="$tmp/not-a-directory"
+printf 'block mkdir\n' > "$blocked_parent"
+export MEMORY_BACKUP_TS=20260724T003007Z
+mkdir_rc=0
+mkdir_out="$($tool --all --backup-dir "$blocked_parent/backups" "$store" 2>&1)" || mkdir_rc=$?
+check "backup-directory creation failure exits 2" "2" "$mkdir_rc"
+if grep -Fq "memory-backup:" <<<"$mkdir_out" && grep -Fq "$blocked_parent/backups" <<<"$mkdir_out"; then
+  pass "backup-directory creation failure is contextual"
+else
+  fail "backup-directory creation failure is contextual (got: $mkdir_out)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -171,6 +225,53 @@ leftovers="$(find "$race_backups" -maxdepth 1 -name '.memory-backup.*' | wc -l |
 check "publish race leaves no temp files behind" "0" "$leftovers"
 
 rm -rf "$race_a" "$race_b" "$race_backups"
+
+# ---------------------------------------------------------------------------
+# A process crash during --all must never publish a partial final snapshot.
+#
+# The cp shim kills the parent shell on the second file, after the first file
+# has landed. SIGKILL deliberately bypasses EXIT traps, reproducing the host-
+# crash boundary that cleanup-only implementations cannot cover.
+# ---------------------------------------------------------------------------
+crash_store="$tmp/crash-store"
+crash_bin="$tmp/crash-bin"
+mkdir -p "$crash_store" "$crash_bin"
+printf 'first\n' > "$crash_store/AAA-first.md"
+printf 'second\n' > "$crash_store/BBB-second.md"
+real_cp="$(command -v cp)"
+cat > "$crash_bin/cp" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+count=0
+if [[ -f "$CRASH_COUNT_FILE" ]]; then
+  read -r count < "$CRASH_COUNT_FILE"
+fi
+count=$(( count + 1 ))
+printf '%s\n' "$count" > "$CRASH_COUNT_FILE"
+if [[ "$count" -eq 2 ]]; then
+  kill -KILL "$PPID"
+  exit 137
+fi
+exec "$REAL_CP" "$@"
+EOF
+chmod +x "$crash_bin/cp"
+export MEMORY_BACKUP_TS=20260724T003008Z
+crash_rc=0
+PATH="$crash_bin:$PATH" REAL_CP="$real_cp" CRASH_COUNT_FILE="$tmp/crash-count" \
+  "$tool" --all "$crash_store" >/dev/null 2>&1 &
+crash_pid=$!
+wait "$crash_pid" 2>/dev/null || crash_rc=$?
+if [[ "$crash_rc" -eq 0 ]]; then
+  fail "crashed --all exits non-zero"
+else
+  pass "crashed --all exits non-zero"
+fi
+crash_final="$crash_store/.memory-backups/store.${MEMORY_BACKUP_TS}"
+if [[ -e "$crash_final" ]]; then
+  fail "SIGKILL leaves no published partial snapshot (found $crash_final)"
+else
+  pass "SIGKILL leaves no published partial snapshot"
+fi
 
 # ---------------------------------------------------------------------------
 # A failed --all run must leave NO snapshot directory behind.
