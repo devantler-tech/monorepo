@@ -50,6 +50,15 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
   echo "worktree-claim: cannot load shared claim protocol" >&2
   exit 2
 }
+# The shared branch-operation lock (monorepo#2209) is what serialises worktree creation against
+# local branch cleanup. `add` is the MANDATED creation path, so it has to take that lock itself —
+# a wrapper only the unmandated callers use leaves the race open on the path everything actually
+# takes, which is where cleanup's occupancy check can pass and delete the ref mid-checkout.
+# shellcheck source=branch-op-lock.sh
+. "$SCRIPT_DIR/branch-op-lock.sh" || {
+  echo "worktree-claim: cannot load the branch-operation lock" >&2
+  exit 2
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -429,7 +438,14 @@ cmd_add() {
   fi
   # Create parent so git worktree add can place the tree.
   mkdir -p "$(dirname "$wt")"
-  if ! add_worktree_on "$repo" "$wt" "$branch"; then
+  # Hold the shared lock across the WHOLE creation, not around each `git worktree add`.
+  # add_worktree_on has several branch-shape paths, and the ones that create a ref do it in more
+  # than one step (resolve a pinned tip, then add), so a per-command lock would still leave a gap
+  # between them. branch_op_lock_run invokes its command in the current shell, so it wraps this
+  # function directly and every internal add inherits the one lock.
+  if ! branch_op_lock_run "$repo" \
+    --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" \
+    -- add_worktree_on "$repo" "$wt" "$branch"; then
     fail "git worktree add failed for $wt (branch $branch)"
   fi
   # Claim BEFORE the advisory freshness check, not after. That check makes up to two bounded remote
