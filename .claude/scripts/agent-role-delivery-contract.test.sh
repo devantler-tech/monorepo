@@ -27,7 +27,7 @@ fail() {
   exit 1
 }
 
-sha256_file() {
+sha256_bytes() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
@@ -36,6 +36,8 @@ sha256_file() {
     fail "sha256sum or shasum is required to verify pinned agent definition integrity"
   fi
 }
+
+sha256_file() { sha256_bytes "$1"; }
 
 # Prose guards must survive re-wrapping: a boundary sentence that happens to break
 # across two lines is still present, so match against a whitespace-flattened copy
@@ -187,9 +189,21 @@ grep -Fq 'refuses partial or capped' "${canonical_surveyor}" ||
   fail "pinned portfolio surveyor does not fail closed on incomplete default-branch CI evidence"
 grep -Fq 'manual dispatch, and GitHub-managed dynamic runs' "${canonical_surveyor}" ||
   fail "pinned portfolio surveyor does not treat managed dynamic runs as default-branch events"
-jq -e '.spec.source.requiredRuntimeAssets == ["scripts/classify-default-branch-ci-runs.sh"]' \
-  "${desired_state}" > /dev/null ||
-  fail "consumer desired state does not carry the pinned surveyor classifier runtime asset"
+if ! declared_ci_classifier_sha="$(jq -er '
+    .spec.source.requiredRuntimeAssets
+    | select(type == "array" and length == 1)
+    | .[0]
+    | select(
+        type == "object"
+        and keys == ["path", "sha256"]
+        and .path == "scripts/classify-default-branch-ci-runs.sh"
+      )
+    | .sha256
+  ' "${desired_state}" 2>/dev/null)"; then
+  fail "consumer desired state does not carry exactly one path-and-digest classifier runtime asset"
+fi
+[ "${declared_ci_classifier_sha}" = "$(sha256_bytes "${canonical_ci_classifier}")" ] ||
+  fail "consumer desired-state classifier sha256 does not match the pinned executable bytes"
 [ ! -e "${repo_root}/.claude/scripts/classify-main-ci-runs.sh" ] ||
   fail "consumer still carries a local copy of the generic default-branch classifier"
 
