@@ -988,17 +988,22 @@ public and private — no per-repo loop needed to enumerate):
    2. `gh api --paginate "repos/devantler-tech/<repo>/actions/runs?head_sha=<full-sha>&branch=main&per_page=100"`
       — `--paginate`, because a busy head can carry more runs than one page (the API serves up to
       1,000 results per `head_sha` search at 100/page, and an unpaginated call silently drops the
-      rest; each page is a separate JSON document, so aggregate in the shell, never with a per-page
-      `--jq` reduction) and `branch=main`, because another branch can point at the same commit and
-      its runs share the `head_sha`.
+      rest; each page is a separate JSON document, so pipe the raw paginated stream directly into the
+      classifier below, or add `--slurp` and pass its array of page envelopes; never use a per-page
+      `--jq` reduction) and `branch=main`, because another branch can point at the same commit and its
+      runs share the `head_sha`.
    3. Pipe the aggregated runs into [`.claude/scripts/classify-main-ci-runs.sh`](../scripts/classify-main-ci-runs.sh)
-      (do not reimplement these rules inline): keep only runs whose `event` is a **main-branch event**
-      (`push`, `schedule`, `merge_group`, `workflow_dispatch`, `dynamic`), take the **latest run per
-      `workflow_id`** (greatest `created_at`; the id, never the display `name`, which two workflow
-      files can legally share — collapsing them hides one workflow's failure behind the other
-      file's later success), and report a red for any that concluded `failure`, `timed_out` or
-      `startup_failure`. A scheduled failure followed by a later successful `workflow_dispatch` of
-      the **same** `workflow_id` is therefore **not** red.
+      (do not reimplement these rules inline). It flattens all pages before deciding, keeps only runs
+      whose `event` is a **main-branch event** (`push`, `schedule`, `merge_group`,
+      `workflow_dispatch`, `dynamic`), and groups repository workflows by `workflow_id` (the id,
+      never the display `name`, which two workflow files can legally share). GitHub-managed dynamic
+      jobs are the exception: one managed `workflow_id` can carry independent jobs, so the classifier
+      adds the normalized logical run name — the trailing `( - Update)? #<digits>` removed — to their
+      identity. Within each identity, only a newer `success` clears a prior red; queued/in-progress,
+      cancelled, skipped, and neutral retries are not recovery evidence. Report a red when the latest
+      decisive run concluded `failure`, `timed_out` or `startup_failure`. The TSV preserves
+      `workflow_id`, conclusion, URL, name, event, path, and `created_at`, so the managed-run split and
+      failure date below require no unsafe rejoin to the original payload.
 
    All three filters are load-bearing, for different false positives:
    - **Not keyed to head** — a failed run stays attached to the sha it executed against, so it lingers

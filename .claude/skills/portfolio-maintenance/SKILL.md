@@ -196,7 +196,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   scoped `QUERY-UNKNOWN` described above and does not revoke already-complete candidate clearance;
 - resolves that `main` health by listing runs for main's current head sha (paginated) and classifying
   them with [`.claude/scripts/classify-main-ci-runs.sh`](../../scripts/classify-main-ci-runs.sh) —
-  latest run per `workflow_id` among main-branch events only; **never** `gh run list --status
+  all pages flattened before global latest-state selection, repository workflows keyed by
+  `workflow_id`, managed dynamic jobs keyed by workflow id plus normalized logical name, and only a
+  newer success clearing a prior red among main-branch events; **never** `gh run list --status
   failure`, which reports superseded historical failures as live fires (monorepo#2173);
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
   broad author-based search, because scheduled discovery must not expose professional-work repos;

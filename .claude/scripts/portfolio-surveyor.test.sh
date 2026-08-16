@@ -1277,7 +1277,18 @@ expect_main_ci_reds \
     {"workflow_id":11,"event":"schedule","conclusion":"success","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/ok","name":"Template Sync"},
     {"workflow_id":11,"event":"push","conclusion":"failure","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"}
   ]' \
-  $'11\tfailure\thttps://example.test/fail\tTemplate Sync'
+  $'11\tfailure\thttps://example.test/fail\tTemplate Sync\tpush\t\t2026-07-14T09:00:00Z'
+
+# A retry that has not succeeded cannot prove the preceding failure recovered. Ignoring the
+# non-decisive runs catches both the queued/in-progress window and terminal non-success outcomes.
+expect_main_ci_reds \
+  "pending and cancelled retries do not clear the preceding failure" \
+  '[
+    {"workflow_id":11,"event":"push","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"},
+    {"workflow_id":11,"event":"workflow_dispatch","conclusion":"cancelled","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/cancelled","name":"Template Sync"},
+    {"workflow_id":11,"event":"workflow_dispatch","conclusion":null,"status":"in_progress","created_at":"2026-07-14T10:00:00Z","html_url":"https://example.test/pending","name":"Template Sync"}
+  ]' \
+  $'11\tfailure\thttps://example.test/fail\tTemplate Sync\tpush\t\t2026-07-13T10:00:00Z'
 
 expect_main_ci_reds \
   "pull_request failures at the same sha are not main health" \
@@ -1293,7 +1304,53 @@ expect_main_ci_reds \
     {"workflow_id":11,"event":"workflow_dispatch","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/a-ok","name":"Template Sync"},
     {"workflow_id":99,"event":"push","conclusion":"timed_out","created_at":"2026-07-14T10:00:00Z","html_url":"https://example.test/b-to","name":"CI"}
   ]' \
-  $'99\ttimed_out\thttps://example.test/b-to\tCI'
+  $'99\ttimed_out\thttps://example.test/b-to\tCI\tpush\t\t2026-07-14T10:00:00Z'
+
+# GitHub assigns all dynamic Dependabot jobs in a repository one workflow_id. Their normalized
+# dependency-and-directory names are the independent health units; another dependency succeeding
+# must not clear this one's failure.
+expect_main_ci_reds \
+  "managed jobs sharing a workflow id stay independent" \
+  '[
+    {"workflow_id":107623015,"event":"dynamic","path":"dynamic/dependabot/dependabot-updates","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/helm-fail","name":"helm in /pkg/svc/installer/kyverno - Update #1510869626"},
+    {"workflow_id":107623015,"event":"dynamic","path":"dynamic/dependabot/dependabot-updates","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/docker-ok","name":"docker in /pkg/svc/installer/kyverno - Update #1510869627"}
+  ]' \
+  $'107623015\tfailure\thttps://example.test/helm-fail\thelm in /pkg/svc/installer/kyverno - Update #1510869626\tdynamic\tdynamic/dependabot/dependabot-updates\t2026-07-13T10:00:00Z'
+
+# The surveyor must split GitHub-managed failures from repository-owned fires and report their date.
+# Preserve the API fields that establish that classification in the classifier handoff.
+expect_main_ci_reds \
+  "managed red output preserves event path and creation time" \
+  '[
+    {"workflow_id":107623015,"event":"dynamic","path":"dynamic/dependabot/dependabot-updates","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/helm-fail","name":"helm in /pkg/svc/installer/kyverno - Update #1510869626"}
+  ]' \
+  $'107623015\tfailure\thttps://example.test/helm-fail\thelm in /pkg/svc/installer/kyverno - Update #1510869626\tdynamic\tdynamic/dependabot/dependabot-updates\t2026-07-13T10:00:00Z'
+
+# `gh api --paginate` emits one JSON envelope per page. Latest selection has to happen across the
+# entire stream, or an older-page failure survives despite a newer-page success.
+expect_main_ci_reds \
+  "raw paginated envelopes are classified globally" \
+  '{"workflow_runs":[
+    {"workflow_id":11,"event":"workflow_dispatch","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/ok","name":"Template Sync"}
+  ]}
+  {"workflow_runs":[
+    {"workflow_id":11,"event":"schedule","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"}
+  ]}' \
+  ""
+
+# `gh api --paginate --slurp` wraps those page envelopes in one outer array. Treating the envelopes
+# themselves as run objects silently returns a false green.
+expect_main_ci_reds \
+  "slurped paginated envelopes are flattened before classification" \
+  '[
+    {"workflow_runs":[
+      {"workflow_id":11,"event":"push","conclusion":"failure","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"}
+    ]},
+    {"workflow_runs":[
+      {"workflow_id":11,"event":"push","conclusion":"success","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/ok","name":"Template Sync"}
+    ]}
+  ]' \
+  $'11\tfailure\thttps://example.test/fail\tTemplate Sync\tpush\t\t2026-07-14T09:00:00Z'
 
 # A startup_failure is RED. The constitution's rung-0 red set is failure, timed_out AND
 # startup_failure, and this script is the surveyor's only classifier — so omitting it
@@ -1304,7 +1361,7 @@ expect_main_ci_reds \
   '[
     {"workflow_id":13,"event":"push","conclusion":"startup_failure","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/su","name":"CI"}
   ]' \
-  $'13\tstartup_failure\thttps://example.test/su\tCI'
+  $'13\tstartup_failure\thttps://example.test/su\tCI\tpush\t\t2026-07-14T09:00:00Z'
 
 # Guard the over-correction: startup_failure must obey the same latest-run-wins rule as the
 # other two, or adding it would resurrect superseded fires.
