@@ -776,6 +776,34 @@ report "advance no-recurse: leaves the nested checkout untouched" \
   "$([[ "$(git -C "$c21/super/sub/nested" rev-parse HEAD)" == "$c21_nested_old" ]] && echo yes || echo no)" \
   "actual=$(git -C "$c21/super/sub/nested" rev-parse HEAD) expected=$c21_nested_old"
 
+# 22. Removing an initialized nested submodule makes recursive status vacuous because the target no
+#     longer declares that gitlink. The old nested repository remains as untracked residue, which
+#     the post-detach status check must detect rather than reporting a clean advance.
+git -C "$c21/super/sub/nested" checkout -q --detach "$c21_nested_new"
+(
+  cd "$c21/remote-sub"
+  git rm -qf nested
+  git add .gitmodules
+  git commit -q -m "remove nested submodule"
+)
+c22_outer_removed="$(git -C "$c21/remote-sub" rev-parse HEAD)"
+(
+  cd "$c21/super"
+  git update-index --cacheinfo "160000,$c22_outer_removed,sub"
+  git commit -q -m "record outer pin without nested"
+)
+report "advance removed-nested precondition: named checkout is clean" \
+  "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance removed-nested: fails closed on residual files" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance removed-nested: names the residual checkout" \
+  "$(grep -q 'residual files after advancing' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
+report "advance removed-nested: moves the named checkout to the recorded pin" \
+  "$([[ "$(git -C "$c21/super/sub" rev-parse HEAD)" == "$c22_outer_removed" ]] && echo yes || echo no)"
+report "advance removed-nested: preserves the old nested repository for explicit handling" \
+  "$([[ -e "$c21/super/sub/nested/.git" ]] && echo yes || echo no)"
+
 if [[ $fail -ne 0 ]]; then
   echo "submodule-init self-test: FAILURES above" >&2
   exit 1
