@@ -775,6 +775,16 @@ report "advance no-recurse: moves the named checkout to the recorded pin" \
 report "advance no-recurse: leaves the nested checkout untouched" \
   "$([[ "$(git -C "$c21/super/sub/nested" rev-parse HEAD)" == "$c21_nested_old" ]] && echo yes || echo no)" \
   "actual=$(git -C "$c21/super/sub/nested" rev-parse HEAD) expected=$c21_nested_old"
+# A local ignore rule can hide that mismatch from the top-level status pre-check. Repeating
+# --advance at the now-current outer pin must still run the explicit recursive validation.
+git -C "$c21/super/sub" config submodule.nested.ignore all
+report "advance already-at-pin precondition: status hides the stale nested checkout" \
+  "$([[ -z "$(git -C "$c21/super/sub" status --porcelain --untracked-files=all)" ]] && echo yes || echo no)"
+out="$(cd "$c21/super" && "$helper" --advance sub 2>&1)" && rc=0 || rc=$?
+report "advance already-at-pin: still fails closed on the stale nested checkout" \
+  "$([[ $rc -ne 0 ]] && echo yes || echo no)" "rc=$rc $out"
+report "advance already-at-pin: still names the nested mismatch" \
+  "$(grep -q 'nested submodule checkout does not match' <<<"$out" && echo yes || echo no)" "rc=$rc $out"
 
 # 22. Removing an initialized nested submodule makes recursive status vacuous because the target no
 #     longer declares that gitlink. The old nested repository remains as untracked residue, which

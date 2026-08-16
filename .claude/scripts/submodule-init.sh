@@ -352,36 +352,33 @@ advance() {
     die "could not read HEAD of '$path'"
 
   if [ "$head" = "$target" ]; then
-    warn "$path — already at recorded pin $target; repairing isolation only"
+    warn "$path — already at recorded pin $target; validating checkout state"
+  else
+    # Ensure the pin object exists locally (a fresh pin bump may not have been fetched into the
+    # submodule yet). Prefer fetching the exact SHA; fall back to a plain fetch.
+    if ! git --no-replace-objects -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null; then
+      git --no-replace-objects -C "$path" fetch --quiet origin "$target" 2>/dev/null ||
+        git --no-replace-objects -C "$path" fetch --quiet origin 2>/dev/null ||
+        true
+      git --no-replace-objects -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null ||
+        die "recorded pin $target for '$path' is not available locally — fetch the submodule remote first"
+    fi
+
+    # Refuse when the checkout has commits that are not reachable from the new pin: advancing would
+    # detach past them and look like a silent discard. Dirty trees are already refused above.
+    ahead=$(git --no-replace-objects -C "$path" rev-list --count "${target}..HEAD" 2>/dev/null) ||
+      die "could not compare '$path' HEAD to recorded pin $target"
+    if [ "$ahead" -gt 0 ]; then
+      die "'$path' is $ahead commit(s) ahead of the recorded pin — push or otherwise preserve that work before advancing"
+    fi
+
+    # Detach onto the recorded pin without `git submodule update` (which rewrites shared core.worktree).
+    git --no-replace-objects -C "$path" checkout --quiet --no-overwrite-ignore \
+      --no-recurse-submodules --detach "$target" ||
+      die "failed to check out recorded pin $target in '$path'"
     repair "$path"
-    probe "$path" || die "repair did not restore isolation for '$path' — do not edit it"
-    return 0
+    probe "$path" || die "advance left '$path' unisolated — do not edit it"
   fi
-
-  # Ensure the pin object exists locally (a fresh pin bump may not have been fetched into the
-  # submodule yet). Prefer fetching the exact SHA; fall back to a plain fetch.
-  if ! git --no-replace-objects -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null; then
-    git --no-replace-objects -C "$path" fetch --quiet origin "$target" 2>/dev/null ||
-      git --no-replace-objects -C "$path" fetch --quiet origin 2>/dev/null ||
-      true
-    git --no-replace-objects -C "$path" cat-file -e "${target}^{commit}" 2>/dev/null ||
-      die "recorded pin $target for '$path' is not available locally — fetch the submodule remote first"
-  fi
-
-  # Refuse when the checkout has commits that are not reachable from the new pin: advancing would
-  # detach past them and look like a silent discard. Dirty trees are already refused above.
-  ahead=$(git --no-replace-objects -C "$path" rev-list --count "${target}..HEAD" 2>/dev/null) ||
-    die "could not compare '$path' HEAD to recorded pin $target"
-  if [ "$ahead" -gt 0 ]; then
-    die "'$path' is $ahead commit(s) ahead of the recorded pin — push or otherwise preserve that work before advancing"
-  fi
-
-  # Detach onto the recorded pin without `git submodule update` (which rewrites shared core.worktree).
-  git --no-replace-objects -C "$path" checkout --quiet --no-overwrite-ignore \
-    --no-recurse-submodules --detach "$target" ||
-    die "failed to check out recorded pin $target in '$path'"
-  repair "$path"
-  probe "$path" || die "advance left '$path' unisolated — do not edit it"
   nested_status=$(git --no-replace-objects -C "$path" submodule status --recursive 2>/dev/null) ||
     die "could not verify nested submodules in '$path' — refusing to report a successful advance"
   if grep -q '^[^ ]' <<< "$nested_status"; then
@@ -398,7 +395,9 @@ advance() {
   if [ -n "$residue" ]; then
     die "residual files after advancing '$path' to $target — preserve and handle them before use"
   fi
-  printf 'submodule-init: %s — advanced to %s\n' "$path" "$target"
+  if [ "$head" != "$target" ]; then
+    printf 'submodule-init: %s — advanced to %s\n' "$path" "$target"
+  fi
 }
 
 # Stop here when SOURCED, so the self-test can exercise the path-comparison helpers directly. The
