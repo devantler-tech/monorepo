@@ -186,6 +186,24 @@ case "${out}" in
   *) fail "exit 1 but the runtime asset mode difference was not reported: ${out}" ;;
 esac
 
+# A leaf-only symlink check still follows a symlinked parent directory. Redirect scripts/ to a
+# directory with identical classifier bytes and require the component walk to reject the path.
+runtime_parent_symlink="${tmp}/install-runtime-parent-symlink"
+make_install "${runtime_parent_symlink}"
+runtime_symlink_target="${tmp}/runtime-symlink-target"
+mkdir -p "${runtime_symlink_target}"
+cp "${runtime_parent_symlink}/${runtime_rel}" \
+  "${runtime_symlink_target}/classify-default-branch-ci-runs.sh"
+rm "${runtime_parent_symlink}/${runtime_rel}"
+rmdir "${runtime_parent_symlink}/scripts"
+ln -s "${runtime_symlink_target}" "${runtime_parent_symlink}/scripts"
+set +e; out="$(run "${runtime_parent_symlink}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a symlinked runtime asset parent must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT    ${runtime_rel}"*SYMLINK*) ok "a symlinked runtime asset parent is caught with identical leaf bytes" ;;
+  *) fail "exit 1 but the symlinked runtime asset parent was not reported: ${out}" ;;
+esac
+
 # ── 4. An EXTRA definition fires ──────────────────────────────────────────────
 # A role the runtime can still dispatch that the reviewed revision no longer describes. A check
 # driven only by the reviewed list cannot see this, which is why it is asserted separately.
