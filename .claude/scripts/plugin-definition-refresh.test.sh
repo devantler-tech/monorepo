@@ -213,6 +213,34 @@ rm -f "$PLUGINS/.plugin-definition-refresh.lock/pid"
 rmdir "$PLUGINS/.plugin-definition-refresh.lock" 2>/dev/null || true
 cleanup
 
+# ── A15c — a briefly OWNERLESS lock is acquisition-in-progress, not debris ─────────────────────
+# `mkdir` is atomic but publishing the pid is a separate step. A rival that reads the lock inside
+# that window sees no owner; treating THAT as abandoned lets it delete a live lock and put two runs
+# in the section — the failure the lock exists to prevent, reintroduced by the reaper.
+make_fixture
+set_gitlink "$MK_NEW"
+mkdir -p "$PLUGINS/.plugin-definition-refresh.lock"          # fresh, no pid published yet
+STUB_MARKETPLACE_TARGET="$MK_NEW" PLUGIN_REFRESH_LOCK_WAIT=2 run >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
+  ok "A15c does not steal a freshly-created lock that has not published its owner yet"
+else bad "A15c does not steal a freshly-created lock that has not published its owner yet" \
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+rmdir "$PLUGINS/.plugin-definition-refresh.lock" 2>/dev/null || true
+cleanup
+
+# ── A19b — a dry run cannot produce a NOT-ON-PIN verdict either ────────────────────────────────
+# --dry-run skips the refresh, so a stale clone is compared against the pin. An actual refresh may
+# bring it exactly to that pin, so this proves nothing about whether the marketplace can supply it;
+# emitting exit 1 here would point the caller at a gitlink bump it may not need.
+make_fixture
+set_gitlink "$MK_NEW"                        # clone is still at OLD; refresh is skipped in dry-run
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run --dry-run 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'NOT evidence the marketplace lacks the pin'; then
+  ok "A19b --dry-run against a stale clone exits 2, never a false NOT-ON-PIN"
+else bad "A19b --dry-run against a stale clone exits 2, never a false NOT-ON-PIN" \
+  "exit was $rc, out=$(printf '%s' "$out" | tr '\n' '|')"; fi
+cleanup
+
 # ── A15b — a lock whose owner is GONE is reaped; age is deliberately not the test ───────────────
 # Reaping on age would let a sibling steal the lock from a refresh that legitimately ran long,
 # putting two runs in the section at once — the failure the lock exists to prevent, caused by the
@@ -338,6 +366,7 @@ if grep -q -- "--repo-root $CONSUMER" "$VERIFY_LOG" \
   && grep -q -- "--plugins-root $PLUGINS" "$VERIFY_LOG" \
   && grep -q -- "--plugin-id agentic-engineering@devantler-plugins" "$VERIFY_LOG" \
   && grep -q -- "--gitlink $MK_NEW" "$VERIFY_LOG" \
+  && grep -q -- "--plugin-name agentic-engineering" "$VERIFY_LOG" \
   && grep -q -- "--submodule-path libraries/agent-plugins" "$VERIFY_LOG"; then
   ok "A18d passes the gated repo, plugins root, plugin id, PIN and submodule path to the verifier"
 else bad "A18d passes the gated repo, plugins root, plugin id, PIN and submodule path to the verifier" \

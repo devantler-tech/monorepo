@@ -183,10 +183,23 @@ if [ "$DRY_RUN" -eq 0 ]; then
   # lock is runtime-local and both machine-local lanes run on this host, so a pid is meaningful here.
   if [ -d "$lockdir" ]; then
     owner="$(cat "$lockdir/pid" 2>/dev/null || true)"
-    if [ -z "$owner" ] || ! kill -0 "$owner" 2>/dev/null; then
-      say "reaped a lock ........... owner ${owner:-unknown} is not running"
-      rm -f "$lockdir/pid"
-      rmdir "$lockdir" 2>/dev/null || true
+    if [ -n "$owner" ]; then
+      # Ownership published: liveness decides.
+      if ! kill -0 "$owner" 2>/dev/null; then
+        say "reaped a lock ........... owner $owner is not running"
+        rm -f "$lockdir/pid"
+        rmdir "$lockdir" 2>/dev/null || true
+      fi
+    else
+      # No pid yet. `mkdir` is atomic but publishing the pid is a separate step, so a rival that
+      # reads the lock in that window would see no owner — treating THAT as abandoned lets it delete
+      # a live lock and put two runs in the section. A genuine holder publishes within milliseconds,
+      # so an ownerless lock is acquisition-in-progress until a short grace has passed; only after
+      # that is it debris from a run that died between the two steps.
+      if [ -n "$(find "$lockdir" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+        say "reaped a lock ........... no owner published after the grace period"
+        rmdir "$lockdir" 2>/dev/null || true
+      fi
     fi
   fi
   lock_wait="${PLUGIN_REFRESH_LOCK_WAIT:-30}"
@@ -217,6 +230,17 @@ say "marketplace would install $candidate"
 
 # ── the gate ───────────────────────────────────────────────────────────────────
 if [ "$candidate" != "$GITLINK" ]; then
+  if [ "$DRY_RUN" -eq 1 ]; then
+    # A dry run skipped the refresh, so this comparison is against a possibly STALE clone. An actual
+    # refresh might bring it exactly to the pin, so the simulation has not established that the
+    # marketplace cannot supply it — emitting NOT-ON-PIN here would be a false verdict pointing the
+    # caller at a gitlink bump it may not need. Same reason the dry-run success path returns 2.
+    say ""
+    say "dry-run ................. clone is at $candidate, pin is $GITLINK — but the refresh was"
+    say "                          skipped, so this is NOT evidence the marketplace lacks the pin."
+    say "dry-run ................. exiting 2 (no verdict)."
+    exit 2
+  fi
   say ""
   say "NOT-ON-PIN — refusing to apply, nothing changed."
   say "  The marketplace carries $candidate; this consumer pins $GITLINK."
@@ -309,8 +333,13 @@ fi
 # resolves its own defaults otherwise, so under `--gitlink`/`--submodule-path` it would check a
 # different revision than the one that passed this run's gate and could report a correct install as
 # drifted. Same bind-the-target defect the marketplace/plugin-id check closes above.
+# The plugin NAME is derived from the qualified id rather than left at the verifier's default:
+# under a `--plugin-id` override the verifier would otherwise locate the selected plugin's install
+# but compare it against the DEFAULT plugin's pinned subtree — a false verdict either way, and one
+# that could even validate coincidentally matching files.
+PLUGIN_NAME="${PLUGIN_ID%@*}"
 "$VERIFY_CMD" --repo-root "$REPO_ROOT" --plugins-root "$PLUGINS_ROOT" --plugin-id "$PLUGIN_ID" \
-  --gitlink "$GITLINK" --submodule-path "$SUBMODULE_PATH" >/dev/null 2>&1 && vrc=0 || vrc=$?
+  --plugin-name "$PLUGIN_NAME" --gitlink "$GITLINK" --submodule-path "$SUBMODULE_PATH" >/dev/null 2>&1 && vrc=0 || vrc=$?
 # `if ! cmd` would collapse the verifier's own UNKNOWN into the drift branch, turning "I could not
 # check" into "the install is not on the pin" — the exact conflation this script's own exit contract
 # forbids, and it would point the caller at the wrong remedy.
