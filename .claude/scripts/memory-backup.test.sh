@@ -248,7 +248,12 @@ else
 fi
 
 # No temp scratch may be left behind by either racer.
-leftovers="$(find "$race_backups" -maxdepth 1 -name '.memory-backup.*' | wc -l | tr -d ' ')"
+leftovers=0
+for leftover in "$race_backups"/.memory-backup.*; do
+  if [[ -e "$leftover" ]]; then
+    leftovers=$(( leftovers + 1 ))
+  fi
+done
 check "publish race leaves no temp files behind" "0" "$leftovers"
 
 rm -rf "$race_a" "$race_b" "$race_backups"

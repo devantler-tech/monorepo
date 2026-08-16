@@ -758,10 +758,14 @@ jobs:
         run: bash .claude/scripts/memory-hygiene.test.sh
 
   test-memory-backup:
-    name: Test memory backup helper
+    name: Test memory backup helper (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.memory-backup == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:

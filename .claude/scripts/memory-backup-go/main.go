@@ -33,6 +33,7 @@ type manifestEntry struct {
 
 type copyFileFunc func(src, dest string) error
 type copyFileWithInfoFunc func(src, dest string, info os.FileInfo) error
+type syncDirectoryFunc func(path string) error
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -141,6 +142,15 @@ func backupFile(cfg options, stdout io.Writer) error {
 }
 
 func backupFileWithCopy(cfg options, stdout io.Writer, copyFile copyFileWithInfoFunc) error {
+	return backupFileWithDependencies(cfg, stdout, copyFile, syncDirectory)
+}
+
+func backupFileWithDependencies(
+	cfg options,
+	stdout io.Writer,
+	copyFile copyFileWithInfoFunc,
+	syncDir syncDirectoryFunc,
+) error {
 	source, info, err := resolveRegularFile(cfg.target)
 	if err != nil {
 		return err
@@ -200,6 +210,9 @@ func backupFileWithCopy(cfg options, stdout io.Writer, copyFile copyFileWithInfo
 		}
 		return fmt.Errorf("failed to back up %s -> %s: %w", source, dest, err)
 	}
+	if err := syncDir(backupDir); err != nil {
+		return fmt.Errorf("failed to sync backup directory %s: %w", backupDir, err)
+	}
 
 	fmt.Fprintf(stdout, "Backed up %s -> %s\n", source, dest)
 	fmt.Fprintf(stdout, "Restore: cp %s %s\n", shellQuote(dest), shellQuote(source))
@@ -207,6 +220,15 @@ func backupFileWithCopy(cfg options, stdout io.Writer, copyFile copyFileWithInfo
 }
 
 func backupStoreWithCopy(cfg options, stdout io.Writer, copyFile copyFileFunc) error {
+	return backupStoreWithDependencies(cfg, stdout, copyFile, syncDirectory)
+}
+
+func backupStoreWithDependencies(
+	cfg options,
+	stdout io.Writer,
+	copyFile copyFileFunc,
+	syncDir syncDirectoryFunc,
+) error {
 	memoryDir, err := resolveDirectory(cfg.target)
 	if err != nil {
 		return err
@@ -266,6 +288,9 @@ func backupStoreWithCopy(cfg options, stdout io.Writer, copyFile copyFileFunc) e
 	if !manifestsEqual(before, copied) || !manifestsEqual(before, after) {
 		return fmt.Errorf("memory store changed during snapshot; refusing to publish %s", storeDest)
 	}
+	if err := syncDir(storeTmp); err != nil {
+		return fmt.Errorf("failed to sync temporary snapshot %s: %w", storeTmp, err)
+	}
 
 	lockPath := storeDest + ".publish-lock"
 	if err := os.Mkdir(lockPath, 0o700); err != nil {
@@ -295,6 +320,9 @@ func backupStoreWithCopy(cfg options, stdout io.Writer, copyFile copyFileFunc) e
 		return fmt.Errorf("failed to publish completed snapshot %s: %w", storeDest, err)
 	}
 	cleanupTmp = false
+	if err := syncDir(backupDir); err != nil {
+		return fmt.Errorf("failed to sync backup directory %s: %w", backupDir, err)
+	}
 	if err := os.Remove(lockPath); err != nil {
 		return fmt.Errorf("snapshot published but publication lock cleanup failed: %w", err)
 	}
@@ -314,6 +342,15 @@ func backupStoreWithCopy(cfg options, stdout io.Writer, copyFile copyFileFunc) e
 		shellQuote(filepath.Join(memoryDir, before[0].name)),
 	)
 	return nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = directory.Close() }()
+	return directory.Sync()
 }
 
 func captureFileFingerprint(path string) (manifestEntry, error) {
@@ -342,10 +379,19 @@ func captureManifest(dir string) ([]manifestEntry, error) {
 	}
 	manifest := make([]manifestEntry, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || filepath.Ext(entry.Name()) != ".md" {
+		if filepath.Ext(entry.Name()) != ".md" {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf(
+				"top-level Markdown entry %s is a symbolic link; refusing an incomplete snapshot",
+				path,
+			)
+		}
+		if entry.IsDir() {
+			return nil, fmt.Errorf("top-level Markdown entry %s is not a regular file", path)
+		}
 		fingerprint, err := captureFileFingerprint(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to inspect memory file %s: %w", path, err)
