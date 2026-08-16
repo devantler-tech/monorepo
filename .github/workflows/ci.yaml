@@ -30,6 +30,7 @@ jobs:
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
       latency-discipline-contract: ${{ steps.filter.outputs.latency-discipline-contract }}
       control-character-command-contract: ${{ steps.filter.outputs.control-character-command-contract }}
+      one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
@@ -214,6 +215,10 @@ jobs:
             control-character-command-contract:
               - 'AGENTS.md'
               - '.claude/scripts/control-character-command-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            one-verb-per-bash-call-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/one-verb-per-bash-call-contract.test.sh'
               - '.github/workflows/ci.yaml'
             git-safety-contract:
               - 'AGENTS.md'
@@ -859,6 +864,21 @@ jobs:
       - name: Verify the control character command contract
         run: bash .claude/scripts/control-character-command-contract.test.sh
 
+  test-one-verb-per-bash-call-contract:
+    name: Test one verb per bash call contract
+    needs: changes
+    if: needs.changes.outputs.one-verb-per-bash-call-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the one verb per bash call contract
+        run: bash .claude/scripts/one-verb-per-bash-call-contract.test.sh
+
   test-git-safety-contract:
     name: Test git safety contract
     needs: changes
@@ -1023,6 +1043,7 @@ jobs:
       - test-memory-backup
       - test-latency-discipline-contract
       - test-control-character-command-contract
+      - test-one-verb-per-bash-call-contract
       - test-git-safety-contract
       - test-plugin-definition-currency
       - test-self-review-contract
@@ -1060,6 +1081,7 @@ jobs:
             ${{ needs.test-memory-backup.result }}
             ${{ needs.test-latency-discipline-contract.result }}
             ${{ needs.test-control-character-command-contract.result }}
+            ${{ needs.test-one-verb-per-bash-call-contract.result }}
             ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-self-review-contract.result }}
