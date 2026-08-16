@@ -438,8 +438,16 @@ supply that revision, or the apply ran and the post-apply check still does not r
 different marketplace than the clone being gated, a concurrent run holding the lock, a marketplace
 worktree whose bytes do not provably match the pinned commit, an unavailable verifier, or
 `--dry-run`, since a simulation asserts nothing about the install. Run it on a `DRIFT`; a `1` or `2`
-is reported, never a run-stopper, and you continue against the reviewed definition at the pinned
-gitlink exactly as above.
+is reported, never a run-stopper, and you continue by **reading** the reviewed definition at the
+pinned gitlink and following it, exactly as above.
+
+⚠️ **Running the refresh never makes the pin active for THIS run — do not report it as if it had.**
+On a `1` or `2` the installed definition is unchanged by construction, so the runtime is still
+serving whatever it served before; and even a `0` only records that the install is now on the pin,
+because `plugin update` requires a restart. In every case the definition this run executes is the
+one it booted with. That is exactly why the fallback is to read the reviewed definition at the pin
+rather than to trust the install: the currency check's next verdict, in a later run, is what
+establishes that the pinned definition is live.
 
 🔴 **`plugin update` installs the MARKETPLACE LATEST — it is NOT a way to install the pin, and
 wiring the bare commands into pre-flight would be a fail-open worse than the drift.** Its own

@@ -298,6 +298,29 @@ else bad "A16 releases the lock after a successful apply" \
   "exit was $rc, lock still present=$([ -d "$PLUGINS/.plugin-definition-refresh.lock" ] && echo yes || echo no)"; fi
 cleanup
 
+# ── A16b — registry backups are RETAINED to a bound, and the survivors are the NEWEST ──────────
+# Two lanes dispatch hourly, so an unbounded backup set grows forever while nothing reads the old
+# copies. Both halves are asserted: a count alone would pass a prune that kept the OLDEST, which is
+# the one outcome that loses the copy an operator would actually want.
+make_fixture
+set_gitlink "$MK_NEW"
+for stamp in 20260101T000000Z 20260102T000000Z 20260103T000000Z; do
+  echo stale > "$PLUGINS/installed_plugins.json.bak-$stamp-plugin-definition-refresh"
+done
+# An unrelated neighbour must survive: the prune matches only this script's own suffix.
+echo other > "$PLUGINS/installed_plugins.json.bak-20260101T000000Z-someone-else"
+PLUGIN_REFRESH_BACKUP_KEEP=2 STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1; rc=$?
+kept="$(ls -1 "$PLUGINS"/installed_plugins.json.bak-*-plugin-definition-refresh 2>/dev/null | wc -l | tr -d ' ')"
+oldest_gone=yes
+[ -e "$PLUGINS/installed_plugins.json.bak-20260101T000000Z-plugin-definition-refresh" ] && oldest_gone=no
+neighbour=yes
+[ -e "$PLUGINS/installed_plugins.json.bak-20260101T000000Z-someone-else" ] || neighbour=no
+if [ "$rc" -eq 0 ] && [ "$kept" = "2" ] && [ "$oldest_gone" = yes ] && [ "$neighbour" = yes ]; then
+  ok "A16b prunes registry backups to the bound, keeping the newest and sparing other files"
+else bad "A16b prunes registry backups to the bound, keeping the newest and sparing other files" \
+  "exit was $rc, kept=$kept (want 2), oldest_removed=$oldest_gone, unrelated_file_survived=$neighbour"; fi
+cleanup
+
 # ── A17 — INT/TERM must TERMINATE the run, not merely clean up and resume ──────────────────────
 # A bash handler that returns normally resumes at the point of interruption, so a combined
 # `trap release_lock EXIT INT TERM` would surrender the lock and then carry on into 'plugin update'
@@ -321,7 +344,11 @@ if [ ! -s "$lockdir/pid" ]; then
 else
   kill -TERM "$sig_pid" 2>/dev/null
   wait "$sig_pid" 2>/dev/null; trc=$?
-  if [ "$trc" -ne 0 ] && [ ! -e "$ROOT/APPLIED" ] && [ ! -d "$lockdir" ]; then
+  # 143 is the DECLARED status (`trap 'exit 143' TERM`), not merely "abnormal". A regression that
+  # removes that trap lets the default TERM disposition end the process, and `wait` reports a
+  # non-zero status for that too — so `-ne 0` would stay green while the signal contract this
+  # asserts had been deleted. Pin the exact status.
+  if [ "$trc" -eq 143 ] && [ ! -e "$ROOT/APPLIED" ] && [ ! -d "$lockdir" ]; then
     ok "A17b a TERM while holding the lock terminates without applying and releases the lock"
   else bad "A17b a TERM while holding the lock terminates without applying and releases the lock" \
     "exit was $trc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), lock_left=$([ -d "$lockdir" ] && echo yes || echo no)"; fi
@@ -343,11 +370,15 @@ make_fixture
 set_gitlink "$MK_NEW"
 git -C "$MK" checkout -q "$MK_NEW"                                 # clone already carries the pin
 echo tampered > "$MK/f"                                            # HEAD still == pin, bytes differ
-STUB_MARKETPLACE_TARGET="$MK_NEW" run >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ]; then
+out="$(STUB_MARKETPLACE_TARGET="$MK_NEW" run 2>&1)"; rc=$?
+# Assert the REASON, as A5/A12/A13/A15/A15c/A18b/A19b already do. Exit 2 covers eight conditions in
+# the script and almost none of them apply the update, so `rc -eq 2` plus "no APPLIED" discriminates
+# weakly: a regression that exits 2 anywhere earlier keeps this green while the dirty-worktree guard
+# under test never runs.
+if [ "$rc" -eq 2 ] && [ ! -e "$ROOT/APPLIED" ] && printf '%s' "$out" | grep -q 'is not clean at'; then
   ok "A18 refuses (exit 2) when the marketplace worktree is dirty at the pinned commit"
 else bad "A18 refuses (exit 2) when the marketplace worktree is dirty at the pinned commit" \
-  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no)"; fi
+  "exit was $rc, applied=$([ -e "$ROOT/APPLIED" ] && echo yes || echo no), out=$(printf '%s' "$out" | tr '\n' '|')"; fi
 cleanup
 
 # ── A18b — a clean FILTER defeats status and the index; only the byte check catches it ─────────
@@ -381,10 +412,14 @@ cleanup
 # bugs in the guard itself, which is worse than the drift it protects against.
 make_fixture
 SUB="$ROOT/sub"; mkdir -p "$SUB"
-git -C "$SUB" init -q -b main; git -C "$SUB" config user.email t@t; git -C "$SUB" config user.name t
-echo s > "$SUB/s"; git -C "$SUB" add s; git -C "$SUB" commit -qm sub
+# Routed through `g` (defined by make_fixture, which has already run, so it is in scope): an
+# unchecked setup command reports its failure as a downstream symptom — `gitlinks=0` in the
+# precondition — rather than naming the command that actually failed. stderr is kept for the same
+# reason.
+g git -C "$SUB" init -q -b main; g git -C "$SUB" config user.email t@t; g git -C "$SUB" config user.name t
+echo s > "$SUB/s"; g git -C "$SUB" add s; g git -C "$SUB" commit -qm sub
 SUB_SHA="$(git -C "$SUB" rev-parse HEAD)"
-git -C "$MK" checkout -q "$MK_NEW"
+g git -C "$MK" checkout -q "$MK_NEW"
 # ANSI-C quoting, NOT double quotes: bash does not expand \xNN inside "…", so `"na\xc3\xafve"` is
 # the literal 12-character ASCII name `na\xc3\xafve`. That name is still C-quoted by git (it contains
 # backslashes), so the case passed while testing something other than what it claimed. $'…' emits the
@@ -398,25 +433,32 @@ git -C "$MK" add -- "$NONASCII" \
 ln -s f "$MK/alias"
 git -C "$MK" add -- alias \
   || { printf 'FIXTURE FAILURE: could not add the symlink\n' >&2; exit 9; }
+# A target ending in a NEWLINE is the case the script's `perl` branch exists for, and `ln -s f` does
+# not reach it: command substitution strips trailing newlines, so `printf '%s' "$(readlink …)"`
+# hashes `f` for both links and stays green. Only a target whose bytes end in \n makes the shell
+# form differ from the blob — without this link, reverting that branch to the shell form would not
+# fail any assertion here.
+ln -s $'f\n' "$MK/alias-nl"
+g git -C "$MK" add -- alias-nl
 # NOT `git add -A`: that stages the DELETION of the gitlink (its directory is absent at this point),
 # which silently produced a tree with zero gitlinks — a fixture that tested nothing. Caught by
 # ablating the gitlink skip and watching this assertion stay green.
-git -C "$MK" update-index --add --cacheinfo 160000,"$SUB_SHA",vendored
-git -C "$MK" commit -qm "gitlink + non-ascii" >/dev/null 2>&1
+g git -C "$MK" update-index --add --cacheinfo 160000,"$SUB_SHA",vendored
+g git -C "$MK" commit -qm "gitlink + non-ascii"
 MK_SUB="$(git -C "$MK" rev-parse HEAD)"
 # Materialise the submodule so the worktree is genuinely CLEAN; otherwise the dirty-status guard
 # fires first and this case never reaches the byte loop it is meant to exercise.
-git -c protocol.file.allow=always -C "$MK" clone -q "$SUB" vendored 2>/dev/null
-git -C "$MK/vendored" checkout -q "$SUB_SHA" 2>/dev/null
+g git -c protocol.file.allow=always -C "$MK" clone -q "$SUB" vendored
+g git -C "$MK/vendored" checkout -q "$SUB_SHA"
 set_gitlink "$MK_SUB"
 gl_count="$(git -C "$MK" ls-tree -r HEAD | awk '$1=="160000"' | wc -l | tr -d ' ')"
 sl_count="$(git -C "$MK" ls-tree -r HEAD | awk '$1=="120000"' | wc -l | tr -d ' ')"
 # Prove the name really is C-quoted by `--name-only`; that quoting is what the -z streaming exists
 # to avoid, so if it is absent this case is not exercising the path it claims to.
 quoted="$(git -C "$MK" ls-tree -r --name-only HEAD | grep -c '^"' | tr -d ' ')"
-if [ "$gl_count" != "1" ] || [ "$sl_count" != "1" ] || [ "$quoted" -lt 1 ] \
+if [ "$gl_count" != "1" ] || [ "$sl_count" != "2" ] || [ "$quoted" -lt 1 ] \
   || [ -n "$(git -C "$MK" status --porcelain)" ]; then
-  bad "A18c fixture precondition: one gitlink, one symlink, a C-quoted name and a clean worktree" \
+  bad "A18c fixture precondition: one gitlink, two symlinks (one newline-terminated), a C-quoted name and a clean worktree" \
     "gitlinks=$gl_count symlinks=$sl_count quoted-names=$quoted status=[$(git -C "$MK" status --porcelain)]"
 else
   out="$(STUB_MARKETPLACE_TARGET="$MK_SUB" run 2>&1)"; rc=$?

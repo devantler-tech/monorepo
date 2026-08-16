@@ -66,6 +66,9 @@ CLI="${CLAUDE_CLI:-}"
 VERIFY_CMD="${PLUGIN_REFRESH_VERIFY:-}"
 DRY_RUN=0
 QUIET=0
+# How many registry backups to retain. Overridable so the suite can drive the prune with a small
+# bound instead of writing eleven files.
+PLUGIN_REFRESH_BACKUP_KEEP="${PLUGIN_REFRESH_BACKUP_KEEP:-10}"
 
 die() { printf 'plugin-definition-refresh: %s\n' "$*" >&2; exit 2; }
 # `shift 2` on a lone trailing flag returns 1, and under `set -e` that would exit with 1 — the code
@@ -141,8 +144,22 @@ if [ -z "$GITLINK" ]; then
   # entry for HEAD makes `HEAD:<path>` resolve THROUGH the replacement while `git rev-parse HEAD`
   # still prints the expected commit — so the gate below would faithfully compare against, and then
   # install, an unreviewed revision. That is a fail-open on the one value everything here trusts.
-  GITLINK="$(git --no-replace-objects -C "$REPO_ROOT" rev-parse "HEAD:$SUBMODULE_PATH" 2>/dev/null)" \
-    || die "cannot read the gitlink for '$SUBMODULE_PATH' at HEAD in $REPO_ROOT"
+  #
+  # Read the entry MODE, not just the object id. `HEAD:<path>` resolves for ANY tracked path: a
+  # regular file yields a blob id and a directory yields a tree id. Both are non-empty, so an
+  # emptiness check passes them through, and neither can ever equal a commit id — so the pin gate
+  # below reports NOT-ON-PIN and exits 1. That is a fabricated verdict produced by what is actually
+  # a configuration error (a mistyped --submodule-path), and the header contract puts that class at
+  # exit 2. Requiring mode 160000 is what keeps "I could not check" from being answered as "not on
+  # the pin".
+  pin_entry="$(git --no-replace-objects -C "$REPO_ROOT" ls-tree HEAD -- "$SUBMODULE_PATH" 2>/dev/null)" \
+    || die "cannot read the tree entry for '$SUBMODULE_PATH' at HEAD in $REPO_ROOT"
+  [ -n "$pin_entry" ] || die "no entry for '$SUBMODULE_PATH' at HEAD — cannot establish the pinned revision"
+  pin_mode="${pin_entry%% *}"
+  [ "$pin_mode" = "160000" ] || die "'$SUBMODULE_PATH' is not a submodule at HEAD (tree entry mode $pin_mode, expected 160000) — cannot establish a pinned revision"
+  pin_rest="${pin_entry#* }"
+  pin_rest="${pin_rest#* }"
+  GITLINK="${pin_rest%%$'\t'*}"
 fi
 [ -n "$GITLINK" ] || die "no gitlink for '$SUBMODULE_PATH' at HEAD — cannot establish the pinned revision"
 
@@ -309,6 +326,13 @@ while IFS= read -r -d '' entry; do
     # `perl`'s readlink returns the target EXACTLY. The shell form `printf '%s' "$(readlink …)"`
     # cannot: command substitution strips every trailing newline, so a target ending in one would
     # hash differently from its blob and refuse a clean marketplace.
+    # Name the missing interpreter instead of folding it into `bytes_unknown`. Without this, an
+    # absent `perl` makes EVERY symlink entry unverifiable, and the run refuses a perfectly clean
+    # pinned marketplace with "could not be byte-verified" — a message naming the wrong cause, with
+    # no path from it to the real one. That is the same wedge class as the gitlink and symlink
+    # defects above: the guard, not the drift, blocks every future refresh.
+    command -v perl >/dev/null 2>&1 \
+      || die "perl is required to verify symlink entries (mode 120000) and is not on PATH — install perl or the byte check cannot run"
     got="$(perl -e 'my $t = readlink($ARGV[0]); exit 1 unless defined $t; print $t' "$MARKETPLACE_DIR/$f" 2>/dev/null | git -C "$MARKETPLACE_DIR" hash-object --stdin 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
   else
     got="$(git -C "$MARKETPLACE_DIR" hash-object --no-filters -- "$f" 2>/dev/null)" || { bytes_unknown=$((bytes_unknown + 1)); continue; }
@@ -336,6 +360,17 @@ fi
 if [ -r "$registry" ]; then
   backup="$registry.bak-$(date -u +%Y%m%dT%H%M%SZ)-plugin-definition-refresh"
   cp "$registry" "$backup" || die "could not back up the runtime plugin registry: $registry"
+  # Bounded retention. Two lanes dispatch hourly, so an unbounded set grows forever while nothing
+  # ever reads the old copies. The name embeds a UTC ISO-8601 basic timestamp, so a lexical sort IS
+  # chronological. Only this script's own suffix is matched, never an unrelated neighbour.
+  #
+  # Pruning is hygiene and must NEVER change the verdict — a currency control that fails because it
+  # could not delete an old backup would be exactly the guard-wedges-the-run class fixed above —
+  # hence the trailing `|| true`.
+  ls -1 "$registry".bak-*-plugin-definition-refresh 2>/dev/null \
+    | sort -r \
+    | tail -n +"$((PLUGIN_REFRESH_BACKUP_KEEP + 1))" \
+    | while IFS= read -r stale; do [ -n "$stale" ] && rm -f "$stale"; done || true
   say "backed up ............... $backup"
 fi
 
