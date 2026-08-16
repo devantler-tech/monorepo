@@ -80,7 +80,9 @@ while [ $# -gt 0 ]; do
     --verify-cmd) need $# "$1"; VERIFY_CMD="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --quiet) QUIET=1; shift ;;
-    -h|--help) sed -n '1,44p' "$0"; exit 0 ;;
+    # Derived, not a hardcoded line count: the header grew past the old `1,44p` and `--help` began
+    # truncating mid-sentence, dropping the entire exit-code contract — the most important part of it.
+    -h|--help) sed -n '1,/^set -euo pipefail/{/^set -euo pipefail/!p;}' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
