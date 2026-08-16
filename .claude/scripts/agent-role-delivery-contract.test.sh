@@ -160,6 +160,7 @@ skill_upstream="$(yq --front-matter=extract '.metadata.github-repo // ""' "${bun
 # directory was absent, which made it a no-op in CI (actions/checkout does not initialise
 # submodules), so the guard against entrypoint drift would never have run where it matters.
 plugin_agents="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/agents"
+plugin_scripts="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/scripts"
 entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
 [ -d "${plugin_agents}" ] ||
   fail "cannot resolve the entrypoint: ${plugin_agents} is missing. Initialise it with
@@ -170,10 +171,27 @@ entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
 canonical_engineer="${plugin_agents}/${entrypoint}.agent.md"
 canonical_surveyor="${plugin_agents}/portfolio-surveyor.agent.md"
 canonical_improver="${plugin_agents}/agent-improver.agent.md"
+canonical_ci_classifier="${plugin_scripts}/classify-default-branch-ci-runs.sh"
 [ -f "${canonical_surveyor}" ] ||
   fail "pinned plugin does not bundle portfolio-surveyor.agent.md"
 [ -f "${canonical_improver}" ] ||
   fail "pinned plugin does not bundle agent-improver.agent.md"
+if [ ! -f "${canonical_ci_classifier}" ] \
+  || [ ! -x "${canonical_ci_classifier}" ] \
+  || [ -L "${canonical_ci_classifier}" ]; then
+  fail "pinned plugin does not bundle the regular executable default-branch classifier"
+fi
+grep -Fq '../scripts/classify-default-branch-ci-runs.sh' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not delegate default-branch CI to the bundled classifier"
+grep -Fq 'refuses partial or capped' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not fail closed on incomplete default-branch CI evidence"
+grep -Fq 'manual dispatch, and GitHub-managed dynamic runs' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not treat managed dynamic runs as default-branch events"
+jq -e '.spec.source.requiredRuntimeAssets == ["scripts/classify-default-branch-ci-runs.sh"]' \
+  "${desired_state}" > /dev/null ||
+  fail "consumer desired state does not carry the pinned surveyor classifier runtime asset"
+[ ! -e "${repo_root}/.claude/scripts/classify-main-ci-runs.sh" ] ||
+  fail "consumer still carries a local copy of the generic default-branch classifier"
 
 # The consumer copy used to omit role integrity fields while the pinned plugin resource already
 # carried them. That let the gitlink advance without proving that the machine-readable entrypoint,

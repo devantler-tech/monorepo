@@ -277,7 +277,6 @@ jobs:
               - '.claude/skills/products/platform/SKILL.md'
               - '.claude/scripts/portfolio-surveyor.test.sh'
               - '.claude/scripts/programmed-bot-review-exemption.sh'
-              - '.claude/scripts/classify-main-ci-runs.sh'
               - '.claude/skill-ownership-allowlist.tsv'
               # The contract test asserts the ownership classifier exists and
               # pins the matcher rules, so a change to it must re-run the test.

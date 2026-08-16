@@ -4,7 +4,6 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 classifier="${repo_root}/.claude/scripts/programmed-bot-review-exemption.sh"
-main_ci_classifier="${repo_root}/.claude/scripts/classify-main-ci-runs.sh"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
 constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
@@ -66,27 +65,8 @@ grep -Fq 'report `scanners_alive: cve=PARTIAL:<why>`' "${platform_security_surve
   fail "platform security surveyor does not route an incoherent CVE pair to the PARTIAL state"
 
 [[ -x "${classifier}" ]] || fail "programmed-bot exemption classifier is missing or not executable"
-[[ -x "${main_ci_classifier}" ]] || fail "main CI classifier is missing or not executable"
 grep -Fq '.claude/scripts/programmed-bot-review-exemption.sh' "${surveyor}" ||
   fail "surveyor does not delegate exemption decisions to the exact classifier"
-grep -Fq '.claude/scripts/classify-main-ci-runs.sh' "${surveyor}" ||
-  fail "surveyor does not delegate main-CI classification to classify-main-ci-runs.sh"
-grep -Fq 'head_sha=<full-sha>&branch=main' "${surveyor}" ||
-  fail "surveyor does not key main CI to the current head_sha + branch=main"
-# Delegation must be mandatory, not one of two options: an inline re-implementation of the
-# classification rules is exactly the drift the shared classifier exists to prevent, and it would
-# satisfy the delegation assertion above merely by naming the script.
-if grep -Fq 'or apply the same rules inline' "${surveyor}"; then
-  fail "surveyor permits bypassing classify-main-ci-runs.sh with an inline re-implementation"
-fi
-grep -Fq 'classify-main-ci-runs.sh' "${maintenance_skill}" ||
-  fail "portfolio-maintenance skill does not point at classify-main-ci-runs.sh for main CI"
-if grep -Fq 'gh run list --branch main --status failure' "${maintenance_skill}"; then
-  fail "portfolio-maintenance skill still teaches gh run list --status failure for main CI"
-fi
-if grep -Fq 'gh run list --branch main --status failure' "${surveyor}"; then
-  fail "surveyor still teaches gh run list --status failure for main CI"
-fi
 grep -Fq 'programmed agent-skills updater PRs' "${constitution}" ||
   fail "constitution does not exempt programmed agent-skills updater PRs from review"
 # Literal Markdown code spans; command substitution is intentionally disabled.
@@ -1249,130 +1229,6 @@ expect_classifier_error \
   "${ksail_files}" \
   'not-json'
 
-# --- main CI classifier (monorepo#2173): failure then success is not a live fire ---
-expect_main_ci_reds() {
-  local name="$1"
-  local runs_json="$2"
-  local expected="$3"
-  local got
-  got="$("${main_ci_classifier}" <<<"${runs_json}")" || fail "main CI classifier errored: ${name}"
-  [[ "${got}" == "${expected}" ]] || fail "main CI classifier mismatch for ${name}
-expected:
-${expected}
-got:
-${got}"
-}
-
-expect_main_ci_reds \
-  "scheduled failure superseded by later workflow_dispatch success" \
-  '[
-    {"workflow_id":11,"event":"schedule","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"},
-    {"workflow_id":11,"event":"workflow_dispatch","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/ok","name":"Template Sync"}
-  ]' \
-  ""
-
-expect_main_ci_reds \
-  "newest relevant execution still failed" \
-  '[
-    {"workflow_id":11,"event":"schedule","conclusion":"success","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/ok","name":"Template Sync"},
-    {"workflow_id":11,"event":"push","conclusion":"failure","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"}
-  ]' \
-  $'11\tfailure\thttps://example.test/fail\tTemplate Sync\tpush\t\t2026-07-14T09:00:00Z'
-
-# A retry that has not succeeded cannot prove the preceding failure recovered. Ignoring the
-# non-decisive runs catches both the queued/in-progress window and terminal non-success outcomes.
-expect_main_ci_reds \
-  "pending and cancelled retries do not clear the preceding failure" \
-  '[
-    {"workflow_id":11,"event":"push","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"},
-    {"workflow_id":11,"event":"workflow_dispatch","conclusion":"cancelled","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/cancelled","name":"Template Sync"},
-    {"workflow_id":11,"event":"workflow_dispatch","conclusion":null,"status":"in_progress","created_at":"2026-07-14T10:00:00Z","html_url":"https://example.test/pending","name":"Template Sync"}
-  ]' \
-  $'11\tfailure\thttps://example.test/fail\tTemplate Sync\tpush\t\t2026-07-13T10:00:00Z'
-
-expect_main_ci_reds \
-  "pull_request failures at the same sha are not main health" \
-  '[
-    {"workflow_id":12,"event":"pull_request","conclusion":"failure","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/pr","name":"CI"}
-  ]' \
-  ""
-
-expect_main_ci_reds \
-  "independent workflows stay independent" \
-  '[
-    {"workflow_id":11,"event":"schedule","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/a-fail","name":"Template Sync"},
-    {"workflow_id":11,"event":"workflow_dispatch","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/a-ok","name":"Template Sync"},
-    {"workflow_id":99,"event":"push","conclusion":"timed_out","created_at":"2026-07-14T10:00:00Z","html_url":"https://example.test/b-to","name":"CI"}
-  ]' \
-  $'99\ttimed_out\thttps://example.test/b-to\tCI\tpush\t\t2026-07-14T10:00:00Z'
-
-# GitHub assigns all dynamic Dependabot jobs in a repository one workflow_id. Their normalized
-# dependency-and-directory names are the independent health units; another dependency succeeding
-# must not clear this one's failure.
-expect_main_ci_reds \
-  "managed jobs sharing a workflow id stay independent" \
-  '[
-    {"workflow_id":107623015,"event":"dynamic","path":"dynamic/dependabot/dependabot-updates","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/helm-fail","name":"helm in /pkg/svc/installer/kyverno - Update #1510869626"},
-    {"workflow_id":107623015,"event":"dynamic","path":"dynamic/dependabot/dependabot-updates","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/docker-ok","name":"docker in /pkg/svc/installer/kyverno - Update #1510869627"}
-  ]' \
-  $'107623015\tfailure\thttps://example.test/helm-fail\thelm in /pkg/svc/installer/kyverno - Update #1510869626\tdynamic\tdynamic/dependabot/dependabot-updates\t2026-07-13T10:00:00Z'
-
-# The surveyor must split GitHub-managed failures from repository-owned fires and report their date.
-# Preserve the API fields that establish that classification in the classifier handoff.
-expect_main_ci_reds \
-  "managed red output preserves event path and creation time" \
-  '[
-    {"workflow_id":107623015,"event":"dynamic","path":"dynamic/dependabot/dependabot-updates","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/helm-fail","name":"helm in /pkg/svc/installer/kyverno - Update #1510869626"}
-  ]' \
-  $'107623015\tfailure\thttps://example.test/helm-fail\thelm in /pkg/svc/installer/kyverno - Update #1510869626\tdynamic\tdynamic/dependabot/dependabot-updates\t2026-07-13T10:00:00Z'
-
-# `gh api --paginate` emits one JSON envelope per page. Latest selection has to happen across the
-# entire stream, or an older-page failure survives despite a newer-page success.
-expect_main_ci_reds \
-  "raw paginated envelopes are classified globally" \
-  '{"workflow_runs":[
-    {"workflow_id":11,"event":"workflow_dispatch","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/ok","name":"Template Sync"}
-  ]}
-  {"workflow_runs":[
-    {"workflow_id":11,"event":"schedule","conclusion":"failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"}
-  ]}' \
-  ""
-
-# `gh api --paginate --slurp` wraps those page envelopes in one outer array. Treating the envelopes
-# themselves as run objects silently returns a false green.
-expect_main_ci_reds \
-  "slurped paginated envelopes are flattened before classification" \
-  '[
-    {"workflow_runs":[
-      {"workflow_id":11,"event":"push","conclusion":"failure","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/fail","name":"Template Sync"}
-    ]},
-    {"workflow_runs":[
-      {"workflow_id":11,"event":"push","conclusion":"success","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/ok","name":"Template Sync"}
-    ]}
-  ]' \
-  $'11\tfailure\thttps://example.test/fail\tTemplate Sync\tpush\t\t2026-07-14T09:00:00Z'
-
-# A startup_failure is RED. The constitution's rung-0 red set is failure, timed_out AND
-# startup_failure, and this script is the surveyor's only classifier — so omitting it
-# reports `nothing_on_fire: true` while a workflow or dependency config cannot even parse,
-# which is precisely the state that stops CI and security coverage from running at all.
-expect_main_ci_reds \
-  "startup_failure on the latest run is red" \
-  '[
-    {"workflow_id":13,"event":"push","conclusion":"startup_failure","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/su","name":"CI"}
-  ]' \
-  $'13\tstartup_failure\thttps://example.test/su\tCI\tpush\t\t2026-07-14T09:00:00Z'
-
-# Guard the over-correction: startup_failure must obey the same latest-run-wins rule as the
-# other two, or adding it would resurrect superseded fires.
-expect_main_ci_reds \
-  "startup_failure superseded by a later success is not red" \
-  '[
-    {"workflow_id":13,"event":"push","conclusion":"startup_failure","created_at":"2026-07-13T10:00:00Z","html_url":"https://example.test/su","name":"CI"},
-    {"workflow_id":13,"event":"push","conclusion":"success","created_at":"2026-07-14T09:00:00Z","html_url":"https://example.test/ok","name":"CI"}
-  ]' \
-  ""
-
 # Multi-lane claim visibility (monorepo#2300): Cursor cloud and Codex siblings claim under
 # cursor/* and codex/*; a surveyor that only greps ^claude/ cannot see those pre-PR claims.
 # The scan must also NOT be gated on assignees — app/cursor cannot assign, so a Cursor claim
@@ -1787,10 +1643,6 @@ grep -Fq 'it is not a bare event match' "${surveyor}" ||
 
 grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor}" ||
   fail "surveyor must require BOTH the dynamic event and a dynamic/ path for the managed carve-out (#2536, #2704)"
-
-grep -Fq '`workflow_dispatch`, `dynamic`' "${surveyor}" ||
-  fail "surveyor must keep 'dynamic' in the main-branch event list — the exemption is by path (#2536)"
-
 
 # --- Ownership disclosure is a THREE-valued literal test, not a prefix boolean (#2762) ----------
 # Measured 2026-08-11 (snapshot n=75; the corpus is live and drifts, so this documents the ORIGINAL
