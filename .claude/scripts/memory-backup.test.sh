@@ -9,10 +9,15 @@
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-tool="$script_dir/memory-backup.sh"
+wrapper="$script_dir/memory-backup.sh"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+tool="$tmp/memory-backup"
+if ! go -C "$script_dir/memory-backup-go" build -o "$tool" .; then
+  echo "FAIL — could not build memory-backup Go helper" >&2
+  exit 1
+fi
 
 failures=0
 pass() { printf 'ok   — %s\n' "$1"; }
@@ -29,6 +34,15 @@ check() {
 run() { local rc=0; "$tool" "$@" >/dev/null 2>&1 || rc=$?; echo "$rc"; }
 
 export MEMORY_BACKUP_TS=20260724T003000Z
+
+# The shipped Bash entrypoint stays a real, tested path even though the behavior
+# lives in Go. It must build and invoke the same helper successfully.
+wrapper_store="$tmp/wrapper"
+mkdir -p "$wrapper_store"
+printf 'wrapper\n' > "$wrapper_store/MEMORY.md"
+wrapper_rc=0
+"$wrapper" "$wrapper_store/MEMORY.md" >/dev/null 2>&1 || wrapper_rc=$?
+check "Bash launcher builds and invokes the Go helper" "0" "$wrapper_rc"
 
 # ---------------------------------------------------------------------------
 # Single-file backup lands under .memory-backups/ with the pinned timestamp,
@@ -229,37 +243,34 @@ rm -rf "$race_a" "$race_b" "$race_backups"
 # ---------------------------------------------------------------------------
 # A process crash during --all must never publish a partial final snapshot.
 #
-# The cp shim kills the parent shell on the second file, after the first file
-# has landed. SIGKILL deliberately bypasses EXIT traps, reproducing the host-
-# crash boundary that cleanup-only implementations cannot cover.
+# A large first file keeps the Go copy in flight after its hidden temporary
+# directory appears. SIGKILL deliberately bypasses process cleanup, reproducing
+# the host-crash boundary that cleanup-only implementations cannot cover.
 # ---------------------------------------------------------------------------
 crash_store="$tmp/crash-store"
-crash_bin="$tmp/crash-bin"
-mkdir -p "$crash_store" "$crash_bin"
-printf 'first\n' > "$crash_store/AAA-first.md"
+mkdir -p "$crash_store"
+dd if=/dev/zero of="$crash_store/AAA-first.md" bs=1048576 count=128 >/dev/null 2>&1
 printf 'second\n' > "$crash_store/BBB-second.md"
-real_cp="$(command -v cp)"
-cat > "$crash_bin/cp" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-count=0
-if [[ -f "$CRASH_COUNT_FILE" ]]; then
-  read -r count < "$CRASH_COUNT_FILE"
-fi
-count=$(( count + 1 ))
-printf '%s\n' "$count" > "$CRASH_COUNT_FILE"
-if [[ "$count" -eq 2 ]]; then
-  kill -KILL "$PPID"
-  exit 137
-fi
-exec "$REAL_CP" "$@"
-EOF
-chmod +x "$crash_bin/cp"
 export MEMORY_BACKUP_TS=20260724T003008Z
 crash_rc=0
-PATH="$crash_bin:$PATH" REAL_CP="$real_cp" CRASH_COUNT_FILE="$tmp/crash-count" \
-  "$tool" --all "$crash_store" >/dev/null 2>&1 &
+"$tool" --all "$crash_store" >/dev/null 2>&1 &
 crash_pid=$!
+crash_tmp_seen=0
+for (( attempt = 0; attempt < 200000; attempt++ )); do
+  if compgen -G "$crash_store/.memory-backups/.store.${MEMORY_BACKUP_TS}.*" >/dev/null; then
+    crash_tmp_seen=1
+    break
+  fi
+  if ! kill -0 "$crash_pid" 2>/dev/null; then
+    break
+  fi
+done
+if [[ "$crash_tmp_seen" -eq 1 ]]; then
+  pass "observed hidden snapshot before crash"
+  kill -KILL "$crash_pid" 2>/dev/null || true
+else
+  fail "observed hidden snapshot before crash"
+fi
 wait "$crash_pid" 2>/dev/null || crash_rc=$?
 if [[ "$crash_rc" -eq 0 ]]; then
   fail "crashed --all exits non-zero"

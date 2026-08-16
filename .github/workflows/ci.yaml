@@ -131,6 +131,7 @@ jobs:
             memory-backup:
               - '.claude/scripts/memory-backup.sh'
               - '.claude/scripts/memory-backup.test.sh'
+              - '.claude/scripts/memory-backup-go/**'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -768,8 +769,15 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/memory-backup-go/go.mod
+          cache: false
       - name: Verify the memory backup helper
-        run: bash .claude/scripts/memory-backup.test.sh
+        run: |
+          go -C .claude/scripts/memory-backup-go test ./...
+          bash .claude/scripts/memory-backup.test.sh
 
   test-product-value-contract:
     name: Test product value contract
