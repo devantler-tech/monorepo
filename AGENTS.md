@@ -3193,10 +3193,14 @@ The init command is *required* to populate a submodule, so **initialising and re
 operation, never two**:
 
 ```sh
-.claude/scripts/submodule-init.sh <path>     # init at the pinned commit + repair + probe (fail-closed)
+.claude/scripts/submodule-init.sh <path>            # init at the pinned commit + repair + probe (fail-closed)
+.claude/scripts/submodule-init.sh --advance <path>  # after a pin-bump pull: move a populated checkout to HEAD's gitlink
 ```
 
-Use it instead of a bare `git submodule update --init <path>` (never `--remote`). If you do run a bare
+Use it instead of a bare `git submodule update --init <path>` (never `--remote`), and use `--advance`
+instead of `git submodule update -- <path>` when a pin bump has landed and the checkout is still on
+the old commit — plain `update` rewrites shared `core.worktree`. `--advance` refuses a dirty tree or
+a checkout ahead of the pin. If you do run a bare
 init — or inherit a tree someone else initialised — **probe before you trust it**: confirm
 `git -C <wt> rev-parse --show-toplevel` returns the worktree's **own** path, not a `.git/modules/<name>`
 path, and repair it in place before editing anything. The diagnosis, the regression watch, and the
@@ -3274,15 +3278,26 @@ the tree half-switched; it silently **skips** a submodule the target commit intr
 a clean status over a directory containing no code; and its `--no-overwrite-ignore` protection **does
 not propagate**, so foreign ignored work inside a populated submodule is destroyed while both
 top-level checks read clean.
-⚠️ **`submodule-init.sh` is not the answer either, and must not be prescribed as one.** Handed an
-**already-populated** submodule it deliberately repairs isolation *only* and refuses
-`git submodule update`, precisely so it cannot discard a local branch or ahead-of-pin work — so it
-reports success while the submodule stays stale. Its job is populating an **uninitialised** submodule
-and repairing worktree isolation, which is a different job from moving a populated one onto a pin.
-📌 **Landing a worktree on a PR head *including* its submodules therefore needs a real procedure —
-fetch, initialise additions, repair isolation, then probe — not a flag. That is
-[#2833](https://github.com/devantler-tech/monorepo/issues/2833).** Until it exists, detect the
-condition and stop; never paper over it with a flag that fails closed at exit 128 or, worse, fails
+⚠️ **Bare init mode is not the answer for a populated mismatch; `--advance` is deliberately scoped.**
+`submodule-init.sh <path>` still repairs isolation *only* when `<path>` is already populated and
+never moves that checkout. `submodule-init.sh --advance <path>` is the permitted top-level pin-bump
+path: it refuses dirty, hidden-index, ahead-of-pin, replacement-object and ignored-overwrite hazards,
+moves only the named checkout, and fails closed when an initialised nested submodule no longer matches
+the new pin, contains tracked dirt or hidden index flags, or resolves outside its own physical
+worktree. It never recursively initialises additions or advances nested submodules for you. It also
+refuses when untracked material
+remains after checkout or when an ignored embedded repository remains — including a removed nested
+submodule the non-recursive checkout could not delete. Ordinary ignored artifacts that do not overlap
+target paths are preserved.
+🔴 **A post-checkout refusal does NOT roll back.** The nested, isolation, and residue gates run after
+the detach, so a non-zero exit can leave the named checkout already on the new pin. Treat the refusal
+as "do not use this tree yet", not "nothing changed": handle the reported condition, re-run
+`--advance`, and require exit 0 before evaluating anything.
+📌 **Landing a worktree on a PR head *including newly introduced or mismatched nested submodules*
+therefore still needs a complete procedure — fetch, initialise additions, repair isolation, advance
+each populated checkout, then probe — not a recursive checkout flag. That is
+[#2833](https://github.com/devantler-tech/monorepo/issues/2833).** Until it exists, detect those
+conditions and stop; never paper over them with a flag that fails closed at exit 128 or, worse, fails
 open with a clean-looking status.
 ⚠️ **The pre-check cannot see IGNORED paths, and checkout overwrites them by default — which is why
 `--no-overwrite-ignore` is in the command above.** `git checkout` documents `--overwrite-ignore` as
