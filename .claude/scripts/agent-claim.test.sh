@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test for agent-claim.sh — RED/GREEN coverage of the nine traps proven
+# Self-test for agent-claim.sh — RED/GREEN coverage of the ten traps proven
 # by monorepo#2302 and its review rounds. Fixtures use a local bare remote + two clones; nothing
 # touches a real network remote.
 #
@@ -13,6 +13,8 @@
 #          recovers it, and a third acquirer still loses to the takeover winner.
 # Trap 8 — takeover stdout is exactly the acquired SHA; diagnostics stay on stderr.
 # Trap 9 — inherited Git dates cannot backdate a fresh claim's lease clock.
+# Trap 10 — an uninitialized submodule path must not resolve upward into the
+#           parent repository and claim the same-numbered issue there.
 set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -65,6 +67,27 @@ for c in "$clone_a" "$clone_b" "$clone_c"; do
 done
 
 ISSUE=2302
+
+# ---------------------------------------------------------------------------
+# Trap 10 — --repo-dir must identify that exact repository root.
+#
+# Git's -C lookup walks upward from an ordinary directory. An uninitialized
+# submodule is such a directory, so without an explicit boundary check the
+# helper silently operates on the parent monorepo and claims the wrong issue.
+# ---------------------------------------------------------------------------
+ISSUE10=1010
+uninitialized_submodule="$clone_a/applications/uninitialized"
+mkdir -p "$uninitialized_submodule"
+rc_uninitialized=0
+"$tool" acquire "$ISSUE10" --repo-dir "$uninitialized_submodule" --remote origin \
+  >"$tmp/out-uninitialized" 2>"$tmp/err-uninitialized" || rc_uninitialized=$?
+check "trap10: uninitialized submodule path exits 2" "2" "$rc_uninitialized"
+parent_claim="$(git -C "$clone_a" ls-remote origin "refs/heads/agent-claim/${ISSUE10}" | awk '{print $1}')"
+check "trap10: uninitialized submodule path leaves parent remote untouched" "" "$parent_claim"
+# RED cleanup: before the boundary fix, the helper creates this wrong ref.
+if [[ -n "$parent_claim" ]]; then
+  git -C "$clone_a" push --quiet --delete origin "agent-claim/${ISSUE10}" >/dev/null 2>&1 || true
+fi
 
 # ---------------------------------------------------------------------------
 # Trap 1 — A wins, B loses. Tip equals A's sha.

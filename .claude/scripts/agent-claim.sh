@@ -10,7 +10,7 @@
 # alone, BEFORE creating its lane-specific work branch. The push decides the
 # race; the tip comparison (never the push's exit status) decides the winner.
 #
-# Nine traps, proven by the delivery and its review rounds — do not regress them:
+# Ten traps, proven by the delivery and its review rounds — do not regress them:
 #   1. Second non-force push is refused; ls-remote returns the winner's sha.
 #   2. `git push … | tail` exits 0 on a REJECTED push — only the tip compare
 #      is safe (never judge by exit status, never through a pipe).
@@ -31,6 +31,8 @@
 #   8. Acquire stdout is the SHA only, including takeover; callers retain that
 #      exact value as the ownership token used by retire.
 #   9. Inherited Git dates must not backdate a new claim and expire its lease.
+#  10. --repo-dir must resolve to that exact repository root; an uninitialized
+#      submodule directory must never walk upward into the parent repository.
 #
 # Usage:
 #   agent-claim.sh acquire <issue> [--remote NAME] [--repo-dir DIR]
@@ -88,6 +90,28 @@ claim_branch() {
 # kills the subshell, so a bad issue would otherwise soft-fail into exit 1.
 require_issue() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]] || fail "issue must be a positive integer (got '$1')"
+}
+
+# `git -C <ordinary-directory>` searches parent directories for a repository.
+# That convenience is unsafe here: an uninitialized submodule is an ordinary
+# directory inside the monorepo, so a missed initialization would otherwise
+# claim the same-numbered issue against the parent remote. Require --repo-dir
+# to name the exact physical repository root before any remote operation.
+validate_repo_dir() {
+  [[ -n "$REPO_DIR" ]] || return 0
+  [[ -d "$REPO_DIR" ]] || fail "--repo-dir is not a directory: '$REPO_DIR'"
+
+  local requested_root resolved_root
+  requested_root="$(cd -P -- "$REPO_DIR" 2>/dev/null && pwd)" ||
+    fail "could not resolve --repo-dir: '$REPO_DIR'"
+  resolved_root="$(git -C "$REPO_DIR" rev-parse --show-toplevel 2>/dev/null)" ||
+    fail "--repo-dir is not an initialized git repository: '$REPO_DIR'"
+  resolved_root="$(cd -P -- "$resolved_root" 2>/dev/null && pwd)" ||
+    fail "could not resolve repository root for --repo-dir: '$REPO_DIR'"
+
+  [[ "$resolved_root" == "$requested_root" ]] ||
+    fail "--repo-dir must name the repository root exactly (requested '$requested_root', resolved '$resolved_root'); initialize the submodule first"
+  REPO_DIR="$requested_root"
 }
 
 # git wrapper scoped to --repo-dir when set.
@@ -352,6 +376,7 @@ done
 [[ -n "$COMMAND" ]] || { usage >&2; exit 2; }
 [[ -n "$ISSUE" ]] || fail "issue number required"
 [[ "$LEASE_HOURS" =~ ^[0-9]+$ ]] || fail "--lease-hours must be a non-negative integer"
+validate_repo_dir
 
 case "$COMMAND" in
   acquire) cmd_acquire "$ISSUE" ;;
