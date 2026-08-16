@@ -41,26 +41,60 @@ trap 'rm -rf "${tmp}"' EXIT
 
 # ── the fixture "pinned revision" ─────────────────────────────────────────────
 # A real git repository, so the script exercises its local-object-database path exactly as it does
-# against the live submodule. Two agents and two skills, plus a README and a manifest that the
-# selector must ignore.
+# against the live submodule. Two agents, two skills, and the provider-neutral required runtime
+# asset, plus a README and a manifest that the selector must ignore.
 pin_repo="${tmp}/consumer/libraries/agent-plugins"
 mkdir -p "${pin_repo}/plugins/agentic-engineering/agents" \
          "${pin_repo}/plugins/agentic-engineering/skills/alpha" \
          "${pin_repo}/plugins/agentic-engineering/skills/beta" \
-         "${pin_repo}/plugins/agentic-engineering/.claude-plugin"
+         "${pin_repo}/plugins/agentic-engineering/.claude-plugin" \
+         "${pin_repo}/plugins/agentic-engineering/scripts" \
+         "${tmp}/consumer/.claude/plugin-consumption"
 p="${pin_repo}/plugins/agentic-engineering"
 printf 'reviewed engineer definition\n' > "${p}/agents/agentic-engineer.agent.md"
 printf 'reviewed improver definition\n'  > "${p}/agents/agent-improver.agent.md"
 printf 'reviewed alpha procedure\n'      > "${p}/skills/alpha/SKILL.md"
 printf 'reviewed beta procedure\n'       > "${p}/skills/beta/SKILL.md"
+printf '#!/bin/sh\necho classified\n'    > "${p}/scripts/classify-default-branch-ci-runs.sh"
+chmod +x "${p}/scripts/classify-default-branch-ci-runs.sh"
+fixture_runtime_sha="$(shasum -a 256 "${p}/scripts/classify-default-branch-ci-runs.sh" | awk '{print $1}')"
 printf 'readme prose\n'                  > "${p}/README.md"
 printf '{"version":"9.9.9"}\n'           > "${p}/.claude-plugin/plugin.json"
+cat > "${tmp}/consumer/.claude/plugin-consumption/agentic-engineering.desired-state.json" <<JSON
+{
+  "spec": {
+    "source": {
+      "requiredRuntimeAssets": [
+        {
+          "path": "scripts/classify-default-branch-ci-runs.sh",
+          "sha256": "${fixture_runtime_sha}",
+          "executable": true
+        }
+      ]
+    }
+  }
+}
+JSON
+fixture_desired_state="${tmp}/consumer/.claude/plugin-consumption/agentic-engineering.desired-state.json"
+write_desired_state_fixture() {
+  local consumer_root="$1"
+  mkdir -p "${consumer_root}/.claude/plugin-consumption"
+  cp "${fixture_desired_state}" \
+    "${consumer_root}/.claude/plugin-consumption/agentic-engineering.desired-state.json"
+}
+add_runtime_asset_fixture() {
+  local plugin_root="$1"
+  mkdir -p "${plugin_root}/scripts"
+  cp "${p}/scripts/classify-default-branch-ci-runs.sh" \
+    "${plugin_root}/scripts/classify-default-branch-ci-runs.sh"
+  chmod +x "${plugin_root}/scripts/classify-default-branch-ci-runs.sh"
+}
 
 git -C "${pin_repo}" init -q
 git -C "${pin_repo}" config user.email t@example.invalid
 git -C "${pin_repo}" config user.name t
 git -C "${pin_repo}" add -A
-git -C "${pin_repo}" commit -qm pin
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm pin
 gitlink="$(git -C "${pin_repo}" rev-parse HEAD)"
 
 run() { "${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --installed "$1" 2>&1; }
@@ -70,7 +104,7 @@ run() { "${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --insta
 make_install() {
   local dest="$1"
   mkdir -p "${dest}"
-  cp -R "${p}/agents" "${p}/skills" "${p}/README.md" "${dest}/"
+  cp -R "${p}/agents" "${p}/skills" "${p}/scripts" "${p}/README.md" "${dest}/"
 }
 
 # ── 1. NEGATIVE CONTROL — an identical install must NOT fire ──────────────────
@@ -114,6 +148,60 @@ set +e; out="$(run "${mis}")"; rc=$?; set -e
 case "${out}" in
   *"MISSING  skills/beta/SKILL.md"*) ok "a definition absent from the install exits 1 as MISSING" ;;
   *) fail "exit 1 but the missing file was not named: ${out}" ;;
+esac
+
+# ── 3b. Required runtime assets are part of the LOADED surface ────────────────
+# The surveyor executes this provider-neutral classifier. Checking only agents/ and skills/ reports
+# CURRENT while the runtime actually runs stale bytes, has no classifier at all, or cannot execute
+# it. Each state gets its own fixture so a single broad failure cannot satisfy all three claims.
+runtime_rel="scripts/classify-default-branch-ci-runs.sh"
+
+runtime_changed="${tmp}/install-runtime-changed"
+make_install "${runtime_changed}"
+printf '#!/bin/sh\necho stale\n' > "${runtime_changed}/${runtime_rel}"
+set +e; out="$(run "${runtime_changed}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a changed required runtime asset must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT    ${runtime_rel}"*) ok "a changed required runtime asset exits 1 and names the file" ;;
+  *) fail "exit 1 but the changed runtime asset was not named: ${out}" ;;
+esac
+
+runtime_missing="${tmp}/install-runtime-missing"
+make_install "${runtime_missing}"
+rm "${runtime_missing}/${runtime_rel}"
+set +e; out="$(run "${runtime_missing}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a missing required runtime asset must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"MISSING  ${runtime_rel}"*) ok "a missing required runtime asset exits 1 and names the file" ;;
+  *) fail "exit 1 but the missing runtime asset was not named: ${out}" ;;
+esac
+
+runtime_mode="${tmp}/install-runtime-mode"
+make_install "${runtime_mode}"
+chmod -x "${runtime_mode}/${runtime_rel}"
+set +e; out="$(run "${runtime_mode}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a non-executable required runtime asset must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"mode differs"*) ok "a required runtime asset's lost executable bit is caught" ;;
+  *) fail "exit 1 but the runtime asset mode difference was not reported: ${out}" ;;
+esac
+
+# A leaf-only symlink check still follows a symlinked parent directory. Redirect scripts/ to a
+# directory with identical classifier bytes and require the component walk to reject the path.
+runtime_parent_symlink="${tmp}/install-runtime-parent-symlink"
+make_install "${runtime_parent_symlink}"
+runtime_symlink_target="${tmp}/runtime-symlink-target"
+mkdir -p "${runtime_symlink_target}"
+cp "${runtime_parent_symlink}/${runtime_rel}" \
+  "${runtime_symlink_target}/classify-default-branch-ci-runs.sh"
+rm "${runtime_parent_symlink}/${runtime_rel}"
+rmdir "${runtime_parent_symlink}/scripts"
+ln -s "${runtime_symlink_target}" "${runtime_parent_symlink}/scripts"
+set +e; out="$(run "${runtime_parent_symlink}")"; rc=$?; set -e
+[ "${rc}" -eq 1 ] || fail "a symlinked runtime asset parent must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT    ${runtime_rel}"*SYMLINK*) ok "a symlinked runtime asset parent is caught with identical leaf bytes" ;;
+  *) fail "exit 1 but the symlinked runtime asset parent was not reported: ${out}" ;;
 esac
 
 # ── 4. An EXTRA definition fires ──────────────────────────────────────────────
@@ -178,6 +266,8 @@ for case_name in depth space; do
   mkdir -p "${op}/agents" "${op}/skills/alpha"
   printf 'reviewed engineer definition\n' > "${op}/agents/agentic-engineer.agent.md"
   printf 'reviewed alpha procedure\n'      > "${op}/skills/alpha/SKILL.md"
+  add_runtime_asset_fixture "${op}"
+  write_desired_state_fixture "${tmp}/odd-${case_name}"
   if [ "${case_name}" = depth ]; then
     odd_path="skills/group/nested/SKILL.md"
   else
@@ -189,13 +279,14 @@ for case_name in depth space; do
   git -C "${odd_repo}" config user.email t@example.invalid
   git -C "${odd_repo}" config user.name t
   git -C "${odd_repo}" add -A
-  git -C "${odd_repo}" commit -qm pin
+  git -C "${odd_repo}" -c commit.gpgsign=false commit -qm pin
   odd_link="$(git -C "${odd_repo}" rev-parse HEAD)"
 
   # The install deliberately does NOT contain the odd path — that is the invisible-on-both-sides case.
   odd_install="${tmp}/install-odd-${case_name}"
   mkdir -p "${odd_install}"
   cp -R "${op}/agents" "${odd_install}/"
+  cp -R "${op}/scripts" "${odd_install}/"
   mkdir -p "${odd_install}/skills/alpha"
   cp "${op}/skills/alpha/SKILL.md" "${odd_install}/skills/alpha/SKILL.md"
 
@@ -287,15 +378,17 @@ printf 'reviewed alpha procedure
 '      > "${sp}/skills/alpha/SKILL.md"
 printf 'reviewed reference material
 '   > "${sp}/skills/alpha/references/notes.md"
+add_runtime_asset_fixture "${sp}"
+write_desired_state_fixture "${tmp}/sup"
 git -C "${sup_repo}" init -q
 git -C "${sup_repo}" config user.email t@example.invalid
 git -C "${sup_repo}" config user.name t
 git -C "${sup_repo}" add -A
-git -C "${sup_repo}" commit -qm pin
+git -C "${sup_repo}" -c commit.gpgsign=false commit -qm pin
 sup_link="$(git -C "${sup_repo}" rev-parse HEAD)"
 sup_inst="${tmp}/install-sup"
 mkdir -p "${sup_inst}"
-cp -R "${sp}/agents" "${sp}/skills" "${sup_inst}/"
+cp -R "${sp}/agents" "${sp}/skills" "${sp}/scripts" "${sup_inst}/"
 # Identical package must be CURRENT -- the permanent-UNKNOWN regression this guards against.
 if out="$("${script}" --repo-root "${tmp}/sup" --gitlink "${sup_link}" --installed "${sup_inst}" 2>&1)"; then
   ok "a skill package with supporting files reports CURRENT when identical"
@@ -333,15 +426,17 @@ printf 'reviewed engineer definition\n' > "${mp}/agents/agentic-engineer.agent.m
 printf 'reviewed alpha procedure\n'      > "${mp}/skills/alpha/SKILL.md"
 printf '#!/bin/sh\necho helper\n'        > "${mp}/skills/alpha/helper.sh"
 chmod +x "${mp}/skills/alpha/helper.sh"
+add_runtime_asset_fixture "${mp}"
+write_desired_state_fixture "${tmp}/mode"
 git -C "${mode_repo}" init -q
 git -C "${mode_repo}" config user.email t@example.invalid
 git -C "${mode_repo}" config user.name t
 git -C "${mode_repo}" add -A
-git -C "${mode_repo}" commit -qm pin
+git -C "${mode_repo}" -c commit.gpgsign=false commit -qm pin
 mode_link="$(git -C "${mode_repo}" rev-parse HEAD)"
 mode_inst="${tmp}/install-mode"
 mkdir -p "${mode_inst}"
-cp -R "${mp}/agents" "${mp}/skills" "${mode_inst}/"
+cp -R "${mp}/agents" "${mp}/skills" "${mp}/scripts" "${mode_inst}/"
 # Identical, executable bit intact -> CURRENT. Without this the next assertion could pass trivially.
 if "${script}" --repo-root "${tmp}/mode" --gitlink "${mode_link}" --installed "${mode_inst}" >/dev/null 2>&1; then
   ok "an executable helper with its mode intact reports CURRENT"
@@ -368,6 +463,7 @@ printf '{"truncated":true,"tree":[]}\n'
 SHIM
 chmod +x "${shim}/gh"
 mkdir -p "${tmp}/trunc"
+write_desired_state_fixture "${tmp}/trunc"
 cat > "${tmp}/trunc/.gitmodules" <<'GM'
 [submodule "libraries/agent-plugins"]
 	path = libraries/agent-plugins

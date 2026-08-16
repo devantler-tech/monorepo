@@ -198,6 +198,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   continues the remaining portfolio-wide default-head sweep as broad health evidence. A candidate
   repository query failure blocks that candidate; a different repository's failure remains the
   scoped `QUERY-UNKNOWN` described above and does not revoke already-complete candidate clearance;
+- uses the reviewed plugin surveyor's required default-branch classifier for current-head `main`
+  health and keeps only the deployment-specific GitHub-managed routing policy in the local overlay;
+  a local copy or inline reimplementation is definition drift (monorepo#2173, agent-plugins#137);
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
   broad author-based search, because scheduled discovery must not expose professional-work repos;
 - flags untriaged issues/PRs, stale actionable PRs (>14d), `roadmap`-ready issues, and products with

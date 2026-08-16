@@ -1644,10 +1644,6 @@ grep -Fq 'it is not a bare event match' "${surveyor}" ||
 grep -Fq 'Requiring **both** `event: dynamic` and a `dynamic/` path' "${surveyor}" ||
   fail "surveyor must require BOTH the dynamic event and a dynamic/ path for the managed carve-out (#2536, #2704)"
 
-grep -Fq '`workflow_dispatch`, `dynamic`' "${surveyor}" ||
-  fail "surveyor must keep 'dynamic' in the main-branch event list — the exemption is by path (#2536)"
-
-
 # --- Ownership disclosure is a THREE-valued literal test, not a prefix boolean (#2762) ----------
 # Measured 2026-08-11 (snapshot n=75; the corpus is live and drifts, so this documents the ORIGINAL
 # defect rather than a current total): the two-valued

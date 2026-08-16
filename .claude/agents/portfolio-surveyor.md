@@ -978,35 +978,12 @@ public and private — no per-repo loop needed to enumerate):
      `CANDIDATE-MAINTAINER-ISSUE-COMMENT` with a one-line gist. The orchestrator decides whether the
      comment is addressed to it; unlike a PR, an issue carries no author-disclosure marker, so the
      comment's own disclosure is the whole test.
-4. **CI red on `main` (bounded, per-repo).** Judge `main` by **its current head**, and only by runs
-   that actually represent main's health. Two calls per repo:
-   1. `gh api repos/devantler-tech/<repo>/commits/main --jq '.sha'` — resolve the head first. Use the
-      **full 40-character sha**: the runs endpoint silently returns an empty set for an abbreviated
-      one, which reads exactly like "nothing failed".
-   2. `gh api --paginate "repos/devantler-tech/<repo>/actions/runs?head_sha=<full-sha>&branch=main&per_page=100"`
-      — `--paginate`, because a busy head can carry more runs than one page (the API serves up to
-      1,000 results per `head_sha` search at 100/page, and an unpaginated call silently drops the
-      rest; each page is a separate JSON document, so aggregate in the shell, never with a per-page
-      `--jq` reduction) and `branch=main`, because another branch can point at the same commit and
-      its runs share the `head_sha`. Then keep only runs whose `event` is a **main-branch event**
-      (`push`, `schedule`, `merge_group`, `workflow_dispatch`, `dynamic`), take the **latest run per
-      `workflow_id`** (greatest `created_at`; the id, never the display `name`, which two workflow
-      files can legally share — collapsing them hides one workflow's failure behind the other
-      file's later success), and report a red for any that concluded `failure`, `timed_out` or
-      `startup_failure`.
-
-   All three filters are load-bearing, for different false positives:
-   - **Not keyed to head** — a failed run stays attached to the sha it executed against, so it lingers
-     in history long after `main` moved on. This is what made a two-day-old `CI - KSail` failure
-     surface as live breakage.
-   - **Not a main-branch event** — a `pull_request`/`issue_comment`-triggered workflow can carry
-     `head_sha` equal to main's sha and `head_branch: main` while testing a PR. Those runs are not
-     main's health. Do **not** instead de-duplicate check-runs by name to suppress them: several
-     independent comment-triggered runs coexist at one sha, so "newest per check name" hides a genuine
-     failure behind a later `skipped` — a fail-open this exact check was caught making.
-   - **Not filtered to `branch=main`** — a release or sync branch can point at main's exact commit,
-     and its `push`/`workflow_dispatch` runs then pass both filters above while failing for reasons
-     that are not main's health.
+4. **CI red on `main` — deployment delta only.** The reviewed plugin surveyor owns current-head
+   default-branch classification and its required runtime helper; this consumer carries no second
+   implementation. For every mapped repository the deployment names that branch `main`, invokes the
+   installed reviewed helper exactly as the generic role prescribes, and treats any helper error as
+   `QUERY-UNKNOWN`. The paragraphs below add only this portfolio's GitHub-managed routing policy to
+   the generic classifier output.
 
    **Split GitHub-MANAGED runs out of that red set before reporting it.** Identify the class by the
    **property, not by an enumerated path**: `event: dynamic` **and** a `path` under `dynamic/` — which
