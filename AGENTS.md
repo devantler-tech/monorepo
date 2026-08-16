@@ -278,6 +278,158 @@ that the generic plugin does not carry yet; remove it only after the side-by-sid
 [`.claude/plugin-consumption/agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md)
 passes.
 
+🔴 **Verify that the definition the runtime LOADED is the one this consumer PINNED — the desired
+state's `refreshTiming: before-starting-each-run` is a declaration, not a mechanism.** Two controls
+already watch this chain and neither reaches its last link: [#2736](https://github.com/devantler-tech/monorepo/issues/2736)
+tracks the gitlink against upstream `main`, and `agent-role-delivery-contract.test.sh` hashes the
+desired state against the **repository submodule** at that gitlink. The copy the agent and skill
+entrypoints are actually served from is a runtime-managed install that **no writer advances**, so
+unlike the gitlink its staleness is unbounded rather than self-healing — and both controls read
+clean throughout. Measured on the Claude instance 2026-08-14: **7 of 9 definition files differed
+from the pin and had not moved in 20 days**, spanning all three roles, so every hourly dispatch and
+every delegated survey ran a superseded definition while reporting a clean run
+([#2847](https://github.com/devantler-tech/monorepo/issues/2847)).
+
+Run [`.claude/scripts/plugin-definition-currency.sh`](.claude/scripts/plugin-definition-currency.sh)
+before acting on a plugin-sourced role. It compares every file under the plugin's `agents/` and
+`skills/` directories by **git blob identity, never a version string** — a version can be bumped
+without the definitions moving, and the definitions can be superseded while the installed version
+still looks plausible. It exits `0` current, `1` drift, and `2` **UNKNOWN**.
+
+⚠️ **`2` means UNCHECKED — never read it as current, and never let it halt a run.** Report it, continue against
+the reviewed definition at the pinned gitlink, and act on the recovery the script names. Treating an
+UNKNOWN as a stop condition would turn a diagnostic into the passive self-blocking this contract
+forbids everywhere else.
+
+🔴 **Scoped to the Claude machine-local runtime today.** Its default resolution reads that runtime's
+plugin registry, which is where the drift was measured. The Codex lane keeps its own cache and the
+Cursor lane has no local registry at all (it loads the reviewed role from the submodule), so neither
+is covered yet — see [#2850](https://github.com/devantler-tech/monorepo/issues/2850). Do not read a
+`CURRENT` from this check as a statement about a sibling instance.
+
+**On drift, do not proceed as if the loaded definition were current: read the reviewed definition at
+the pinned gitlink and follow that**, and report the drift.
+
+🔴 **"At the pinned gitlink" is a REVISION, not a directory — and both ways of reaching it fail
+unaided.** The reviewed copy lives in the `libraries/agent-plugins` submodule, which is **empty in a
+fresh per-run worktree**, so there is nothing to read; and where it is already populated — the
+**shared checkout** — it sits at whatever revision it was last left on, **not this commit's
+gitlink**. Measured 2026-08-15: the shared checkout stood at `bfde8656` against a pinned `564a6a0f`,
+a difference of **311 inserted and 43 deleted lines across all four definition files**, including the
+entire observation-plane and research-fallback material. The second case is the dangerous one,
+because it returns a plausible definition and the run believes it complied while following an
+unreviewed revision. Of the five sessions that saw `DRIFT` that day, **only two read any reviewed
+definition at all** ([#2854](https://github.com/devantler-tech/monorepo/issues/2854)).
+
+🔴 **Resolve the pin yourself — do NOT depend on the check having printed it.** Every `die` in
+`plugin-definition-currency.sh` exits **before** its reporting block, so an **UNKNOWN prints no
+pinned revision at all** — and UNKNOWN is precisely when this fallback is reached. Read the gitlink
+straight out of this commit, which cannot fail for the reasons the check does:
+
+```sh
+pin=$(git --no-replace-objects rev-parse HEAD:libraries/agent-plugins)   # the pinned revision
+```
+
+⚠️ **`--no-replace-objects` is load-bearing here, exactly as it is in *Git safety*.** A `refs/replace`
+entry for `HEAD` makes `HEAD:libraries/agent-plugins` resolve **through the replacement commit** while
+`git rev-parse HEAD` still prints the expected commit — so the pin silently names an unreviewed
+revision, and the forge read below then fetches the wrong definitions **faithfully**, reporting them
+as reviewed. That is a fail-open on the one value everything downstream trusts, and the replace ref
+lives in the shared repository, so a single stale entry reaches every worktree.
+
+**Prefer the forge read: it needs no working tree, so none of the traps below can reach it.** The
+revision is named in the request, so what comes back is the reviewed content by construction — this
+is the one path that works in a fresh worktree, a populated one, and a broken one alike. Pass the
+`$pin` you just resolved, never a revision retyped from somewhere else — binding the two is what
+makes this executable rather than merely described:
+
+```sh
+gh api "repos/devantler-tech/agent-plugins/contents/<file>?ref=${pin}" \
+  -H "Accept: application/vnd.github.raw"
+```
+
+**Materialising it locally is the fallback, and it carries two assertions rather than one** — in a
+fresh session worktree, where that submodule is still empty:
+
+```sh
+.claude/scripts/submodule-init.sh libraries/agent-plugins   # populates an EMPTY submodule at this commit's gitlink
+git -C libraries/agent-plugins rev-parse HEAD               # read the revision back
+git -C libraries/agent-plugins status --porcelain           # and prove the tree is CLEAN
+```
+
+That read-back **must equal the pinned revision**, and the status must print nothing.
+
+🔴 **The revision alone does NOT establish the content — assert the tree is clean too.** Handed an
+already-populated submodule, `submodule-init.sh` repairs isolation and deliberately refuses
+`git submodule update`, so a **modified tracked definition survives with `HEAD` still equal to the
+pin**: the revision assertion passes and the run follows unreviewed instructions anyway. Require an
+empty `status --porcelain`, and with it the hidden-index check *Git safety* prescribes
+(`git -C libraries/agent-plugins ls-files -v` showing no lowercase flag and no `S`), because
+`assume-unchanged` and `skip-worktree` hide a modification from `status` entirely.
+
+🔴 **Even those three together do NOT prove the BYTES — a clean/smudge filter defeats all of them.**
+When `.gitattributes` (repository, global, or `$GIT_DIR/info/attributes`) assigns a filter to these
+paths, git compares the *cleaned* form: the file on disk can carry different instructions while
+`status --porcelain` prints nothing and `ls-files -v` reports an ordinary entry. Every assertion above
+passes and the run follows altered definitions. The three checks answer "is the tree unmodified
+**as git sees it**", which is a weaker claim than "are these the reviewed bytes" — and it is the
+weaker claim that is easy to mistake for proof.
+
+Assert byte identity against the pinned blobs directly, which no filter can launder because
+`--no-filters` bypasses the clean stage:
+
+```sh
+files=$(git -C libraries/agent-plugins --no-replace-objects ls-tree -r --name-only HEAD -- plugins/agentic-engineering) || echo "BYTES-UNKNOWN <enumeration failed>"
+printf '%s\n' "$files" |
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    want=$(git -C libraries/agent-plugins --no-replace-objects rev-parse "HEAD:$f") \
+      || { echo "BYTES-UNKNOWN $f"; continue; }
+    got=$(git -C libraries/agent-plugins hash-object --no-filters -- "$f") \
+      || { echo "BYTES-UNKNOWN $f"; continue; }
+    { [ -n "$want" ] && [ -n "$got" ]; } || { echo "BYTES-UNKNOWN $f"; continue; }
+    [ "$want" = "$got" ] || echo "BYTES-DIFFER $f"
+  done
+```
+
+Any output means the working tree is **not** the reviewed definition, whatever the other three said —
+and that includes `BYTES-UNKNOWN`, because unproven is not proven.
+
+🔴 **Every one of those guards closes a path where the naive form reports success on a check that
+never ran.** Piping `ls-tree` straight into the loop takes the **while's** exit status, so an
+enumeration failure runs the body zero times and prints nothing — indistinguishable from a verified
+tree. Worse, an **uninitialised submodule** makes *every* command fail: `rev-parse` and `hash-object`
+both return empty, and `[ "$want" = "$got" ]` then compares **equal**, so the emptiest possible
+evidence reads as the strongest. Capture the enumeration and check its status, reject an empty hash,
+and treat a failed lookup as `BYTES-UNKNOWN` rather than as a match. `--no-replace-objects` belongs on
+`ls-tree` too: without it the enumeration walks a replaced tree while the lookups beside it do not, so
+the check silently spans two object namespaces. And keep `printf '%s\n'` — command substitution strips
+the trailing newline, and a bare `printf '%s'` makes `read` return false on the final entry, dropping
+the last file from the sweep unchecked.
+
+This is also why **the forge read above is preferred and not merely more convenient**: it names the
+revision in the request, so it is immune to replace refs, filters, and index bits alike — the local
+fallback needs all four assertions to reach the same confidence the forge read has by construction.
+
+🔴 **A mismatch is a STOP, not a retry — re-running that command cannot fix it.** The same in-place
+repair means it exits `isolated ✓` with the stale revision still checked out — the warning *Git
+safety* already carries. Moving a populated submodule onto a pin has **no procedure yet**
+([#2833](https://github.com/devantler-tech/monorepo/issues/2833)), so on a mismatch use the forge
+read above, or materialise in a fresh isolated worktree and repeat the comparison. Never read a
+definition out of an already-populated submodule until its `HEAD` equals the pinned revision **and
+its tree is clean**.
+
+🔴 **`submodule-init.sh` can also stop having materialised NOTHING — which is not a dead end.** Run
+from a linked worktree, `git submodule update --init` can exit 0 while populating nothing, after
+which the helper deliberately dies `STILL EMPTY` rather than report a vacuous `isolated ✓`. That is
+the prescribed recovery worktree failing in exactly the case it was reached for, so do not let it end
+the run: fall back to the forge read, which needs no working tree.
+
+Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow. **Never edit the plugin cache**; it is
+read-only evidence (see *Agent definition locations*). When the refresh needs an interactive session
+an unattended run cannot open, surface it on a declared *Maintainer channel* rather than leaving a
+silently superseded definition in place.
+
 ### Agent definition locations
 
 The Agent Improver may change only the surfaces named here. A path being readable does not make it a
@@ -3041,10 +3193,14 @@ The init command is *required* to populate a submodule, so **initialising and re
 operation, never two**:
 
 ```sh
-.claude/scripts/submodule-init.sh <path>     # init at the pinned commit + repair + probe (fail-closed)
+.claude/scripts/submodule-init.sh <path>            # init at the pinned commit + repair + probe (fail-closed)
+.claude/scripts/submodule-init.sh --advance <path>  # after a pin-bump pull: move a populated checkout to HEAD's gitlink
 ```
 
-Use it instead of a bare `git submodule update --init <path>` (never `--remote`). If you do run a bare
+Use it instead of a bare `git submodule update --init <path>` (never `--remote`), and use `--advance`
+instead of `git submodule update -- <path>` when a pin bump has landed and the checkout is still on
+the old commit — plain `update` rewrites shared `core.worktree`. `--advance` refuses a dirty tree or
+a checkout ahead of the pin. If you do run a bare
 init — or inherit a tree someone else initialised — **probe before you trust it**: confirm
 `git -C <wt> rev-parse --show-toplevel` returns the worktree's **own** path, not a `.git/modules/<name>`
 path, and repair it in place before editing anything. The diagnosis, the regression watch, and the
@@ -3122,15 +3278,26 @@ the tree half-switched; it silently **skips** a submodule the target commit intr
 a clean status over a directory containing no code; and its `--no-overwrite-ignore` protection **does
 not propagate**, so foreign ignored work inside a populated submodule is destroyed while both
 top-level checks read clean.
-⚠️ **`submodule-init.sh` is not the answer either, and must not be prescribed as one.** Handed an
-**already-populated** submodule it deliberately repairs isolation *only* and refuses
-`git submodule update`, precisely so it cannot discard a local branch or ahead-of-pin work — so it
-reports success while the submodule stays stale. Its job is populating an **uninitialised** submodule
-and repairing worktree isolation, which is a different job from moving a populated one onto a pin.
-📌 **Landing a worktree on a PR head *including* its submodules therefore needs a real procedure —
-fetch, initialise additions, repair isolation, then probe — not a flag. That is
-[#2833](https://github.com/devantler-tech/monorepo/issues/2833).** Until it exists, detect the
-condition and stop; never paper over it with a flag that fails closed at exit 128 or, worse, fails
+⚠️ **Bare init mode is not the answer for a populated mismatch; `--advance` is deliberately scoped.**
+`submodule-init.sh <path>` still repairs isolation *only* when `<path>` is already populated and
+never moves that checkout. `submodule-init.sh --advance <path>` is the permitted top-level pin-bump
+path: it refuses dirty, hidden-index, ahead-of-pin, replacement-object and ignored-overwrite hazards,
+moves only the named checkout, and fails closed when an initialised nested submodule no longer matches
+the new pin, contains tracked dirt or hidden index flags, or resolves outside its own physical
+worktree. It never recursively initialises additions or advances nested submodules for you. It also
+refuses when untracked material
+remains after checkout or when an ignored embedded repository remains — including a removed nested
+submodule the non-recursive checkout could not delete. Ordinary ignored artifacts that do not overlap
+target paths are preserved.
+🔴 **A post-checkout refusal does NOT roll back.** The nested, isolation, and residue gates run after
+the detach, so a non-zero exit can leave the named checkout already on the new pin. Treat the refusal
+as "do not use this tree yet", not "nothing changed": handle the reported condition, re-run
+`--advance`, and require exit 0 before evaluating anything.
+📌 **Landing a worktree on a PR head *including newly introduced or mismatched nested submodules*
+therefore still needs a complete procedure — fetch, initialise additions, repair isolation, advance
+each populated checkout, then probe — not a recursive checkout flag. That is
+[#2833](https://github.com/devantler-tech/monorepo/issues/2833).** Until it exists, detect those
+conditions and stop; never paper over them with a flag that fails closed at exit 128 or, worse, fails
 open with a clean-looking status.
 ⚠️ **The pre-check cannot see IGNORED paths, and checkout overwrites them by default — which is why
 `--no-overwrite-ignore` is in the command above.** `git checkout` documents `--overwrite-ignore` as
@@ -3339,6 +3506,36 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   IFS-split; only parameter expansion is exempt), so an unexpected result there is ordinary
   whitespace splitting, not this bug. Keep the two diagnoses apart — the parameter-expansion family
   is `set -- $var` and `cmd $args`.
+- **A raw non-whitespace C0 control byte anywhere in a `Bash` command loses the WHOLE call — write the
+  delimiter as an escape instead.** The runtime refuses the call outright with
+  `InputValidationError: command contains control characters that would be hidden in the approval
+  dialog`, which is a **correct guard** — you cannot approve what you cannot see — so never touch it
+  or any permission surface to work around this; fix the command. Measured over the 7 days to
+  2026-08-15: **18 occurrences across 14 distinct sessions**, spread over 10+ branches in both the
+  routine and the maintainer-interactive lanes, making it the largest diagnosed avoidable reliability
+  cost. Nothing is partially applied — the call never runs, and the message names neither the
+  offending byte nor its position, which is why lanes rediscover it by improvising a second spelling
+  of the same command.
+  🔴 **It is NOT "newlines and tabs" — that natural reading is measured-false and sends you to a fix
+  that changes nothing.** A raw newline and a raw **tab** are both **accepted** (verified directly;
+  every multi-line command in this contract relies on it), so "put the multi-line program in a file"
+  addresses nothing. The bytes that actually fire it are the **non-whitespace C0 delimiters**, chosen
+  deliberately as collision-proof field/record separators for TSV-ish pipelines and then typed as raw
+  bytes: measured census **NUL ×5, SOH ×5, US ×4, SOH+STX ×2** — i.e. the habit is sound engineering
+  (a body containing tabs and newlines needs a separator that cannot collide) and only its *spelling*
+  is wrong.
+  **Write the separator so the source stays printable — verified to emit the identical byte:**
+  ```sh
+  printf 'a%sb' $'\x1f'                      # ANSI-C quoting -> the 0x1F byte
+  while IFS=$'\x1f' read -r a b; do …; done  # same split, printable source
+  printf 'p\0q\0' | xargs -0 -n1 …           # NUL: the \0 escape, never a raw byte
+  ```
+  For a `jq` program, the six printable characters `\u001f` are a jq string escape and emit the byte
+  at runtime, so the program text itself stays clean. The rule is only ever about **how the byte is
+  spelled in the command you send**, never about which byte the pipeline uses.
+  ⚠️ **The guard scans the ENTIRE command string, comments included** — reproduced live while writing
+  this rule: a trailing `# …` explaining the delimiter carried a raw byte and cost the call, with the
+  code itself already correct. So a command that looks fixed can still fail on its own annotation.
 
 This changes only *ordering and overlap* — never the quality bar. Validation, RED/GREEN proof,
 root-cause fixing, and every guardrail are unaffected; the point is to stop paying for them serially.
