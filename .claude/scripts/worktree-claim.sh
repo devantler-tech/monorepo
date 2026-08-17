@@ -441,8 +441,10 @@ cmd_add() {
   # Hold the shared lock across the WHOLE creation, not around each `git worktree add`.
   # add_worktree_on has several branch-shape paths, and the ones that create a ref do it in more
   # than one step (resolve a pinned tip, then add), so a per-command lock would still leave a gap
-  # between them. branch_op_lock_run invokes its command in the current shell, so it wraps this
-  # function directly and every internal add inherits the one lock.
+  # between them. branch_op_lock_run runs its command in a SUBSHELL, which is safe here because
+  # add_worktree_on needs no caller-visible shell state — it works through its own locals, the
+  # repository's on-disk worktree state, diagnostics on stderr, and its exit status. Wrapping the
+  # whole function means every internal add inherits the one lock.
   if ! branch_op_lock_run "$repo" \
     --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" \
     -- add_worktree_on "$repo" "$wt" "$branch"; then

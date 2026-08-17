@@ -115,7 +115,9 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 
 add_rc=0
-BRANCH_OP_LOCK_TIMEOUT_SEC=10
+# EXPORTED: the bound is enforced in the `bash "$wt_add"` CHILD below, which a plain assignment
+# never reaches — the child would fall back to the 120s default and this case would assert nothing.
+export BRANCH_OP_LOCK_TIMEOUT_SEC=10
 date -u +%s >"$tmp/add_attempt_start"
 bash "$wt_add" "$repo" "$wt_path" claude/spent-fixture-2209 >/dev/null 2>&1 || add_rc=$?
 date -u +%s >"$tmp/add_done"
@@ -355,7 +357,15 @@ probe_mtime=$(_branch_op_lock_dir_mtime "$mtime_probe_dir" || echo FAILED)
 check "dir mtime probe resolves on this host" "1" \
   "$([[ "$probe_mtime" =~ ^[0-9]+$ ]] && echo 1 || echo 0)"
 # A just-created directory must read as ~0s old, never as 1970 (which is >= any TTL ⇒ instant reap).
-probe_age=$(( $(date -u +%s) - probe_mtime ))
+# When every probe failed, probe_mtime holds the string FAILED, which arithmetic would treat as a
+# variable name — aborting under `set -u` BEFORE the failure summary runs, so the operator sees a
+# bash error instead of the failing check. Substitute an obviously-out-of-range age instead, and
+# let the check below report it.
+if [[ "$probe_mtime" =~ ^[0-9]+$ ]]; then
+  probe_age=$(( $(date -u +%s) - probe_mtime ))
+else
+  probe_age=999999
+fi
 check "a brand-new dir is NOT already past a 600s TTL" "1" \
   "$([[ "$probe_age" -lt 600 ]] && echo 1 || echo 0)"
 rm -rf "$mtime_probe_dir"

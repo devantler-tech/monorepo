@@ -135,6 +135,9 @@ jobs:
               - '.claude/scripts/branch-op-lock.test.sh'
               - '.claude/scripts/worktree-add.sh'
               - '.claude/scripts/worktree-remove.sh'
+              # worktree-claim.sh `add` holds the same lock across its whole creation path, so a
+              # change there can break serialisation without touching any file listed above.
+              - '.claude/scripts/worktree-claim.sh'
               - '.claude/scripts/branch-cleanup.sh'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.

@@ -75,11 +75,43 @@ cd "$REPO_PATH" || exit 1
 # Resolve to an absolute path so lock release still works if a later step cds.
 REPO_PATH=$(pwd)
 LOCK_HELD=0
+LOCK_RELEASE_FAILED=0
 release_branch_op_lock() {
   if [ "$LOCK_HELD" = 1 ]; then
-    branch_op_lock_release "$REPO_PATH" || true
-    LOCK_HELD=0
+    if branch_op_lock_release "$REPO_PATH"; then
+      LOCK_HELD=0
+    else
+      # A failed release leaves the lock directory in place, so every later branch or worktree
+      # operation blocks on it until the TTL expires. Clearing LOCK_HELD here would record a
+      # release that did not happen, and discarding the status let the sweep report success over a
+      # leaked lock — the one outcome nobody goes looking for.
+      LOCK_RELEASE_FAILED=1
+      echo "$SLUG: WARN — branch-op lock release FAILED; lock left in place under '$REPO_PATH'" >&2
+    fi
   fi
+}
+
+# Runs last in every EXIT path. Only ever UPGRADES a clean exit to a failure: an abort code from
+# one of the explicit `exit 1` guards above carries a more specific reason and must survive.
+exit_with_lock_status() {
+  if [ "$1" -eq 0 ] && [ "$LOCK_RELEASE_FAILED" = 1 ]; then exit 3; fi
+  exit "$1"
+}
+
+# The two EXIT handlers are functions rather than inline trap bodies so `$?` is captured as the
+# handler's FIRST action — the script's real exit status, before any cleanup command overwrites it.
+on_exit_pre_tmpfiles() {
+  local rc=$?
+  release_branch_op_lock
+  return_to_default
+  exit_with_lock_status "$rc"
+}
+on_exit() {
+  local rc=$?
+  rm -f "$keep" "$prs" "$keep2"
+  release_branch_op_lock
+  return_to_default
+  exit_with_lock_status "$rc"
 }
 
 # --- <repo_path> and <slug> must describe the SAME repository -------------
@@ -273,7 +305,7 @@ sw=""
 # be returned to the default branch, or it stays worktree-protected on the next
 # sweep and defeats the end-of-tick return-and-reap guarantee. Always release
 # the branch-op lock on the way out when we hold it.
-trap 'release_branch_op_lock; return_to_default' EXIT
+trap on_exit_pre_tmpfiles EXIT
 return_to_default
 
 # Stale refs make every later judgement wrong — abort the whole run on fetch
@@ -315,7 +347,7 @@ fetch_open_heads() {
 
 # --- KEEP set -------------------------------------------------------------
 keep=$(mktemp); prs=$(mktemp); keep2=$(mktemp)
-trap 'rm -f "$keep" "$prs" "$keep2"; release_branch_op_lock; return_to_default' EXIT
+trap on_exit EXIT
 # Capture the worktree enumeration SEPARATELY and ABORT on failure: the REMOTE
 # delete loop trusts this one snapshot for its worktree KEEP rule (the local loop
 # re-checks per branch, the remote loop does not), so a silently-empty list here

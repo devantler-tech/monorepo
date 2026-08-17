@@ -16,7 +16,8 @@ repo="${1-}"; shift || true
 wt_path="${1-}"; shift || true
 
 if [[ -z "$repo" || -z "$wt_path" ]]; then
-  sed -n '/^# Usage:/,/^# lock./p' "$0" | sed 's/^# \{0,1\}//' >&2
+  printf 'Usage: %s <repo_path> <worktree_path> [git-worktree-remove-args...]\n' \
+    "$(basename "$0")" >&2
   exit 2
 fi
 

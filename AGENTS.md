@@ -3462,7 +3462,9 @@ for a **remote-only** sweep of spent `cursor/*` (the cloud lane has no local che
 local instances run that pass so cursor remotes do not accumulate forever — monorepo#2298). Never pass
 `codex` — the Codex sibling owns that lane. Apply-mode cleanup holds the shared branch-operation lock
 ([`branch-op-lock.sh`](.claude/scripts/branch-op-lock.sh)) for the whole pass so it cannot overlap a
-harness worktree create/remove; dry-run skips the lock. Stale-lock recovery is same-host dead PID or
+harness worktree operation — `worktree-add.sh`, `worktree-remove.sh`, and `worktree-claim.sh add`,
+which holds the same lock across its entire creation path (branch resolution, the pinned-tip lookup,
+and the `git worktree add` itself); dry-run skips the lock. Stale-lock recovery is same-host dead PID or
 age ≥ 600s — if a live holder is wedged past that, confirm no agent holds it and `rm -rf` the lock
 directory under the repo's `git-common-dir`.
 

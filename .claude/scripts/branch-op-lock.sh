@@ -57,7 +57,17 @@ branch_op_lock_dir() {
   fi
   case "$common" in
     /*) ;;
-    *) common="$(cd "$repo" && cd "$common" && pwd)" ;;
+    # This file deliberately does not `set -e`, so an unchecked command substitution here is
+    # silent: a failed `cd` leaves `common` EMPTY and the lock path becomes
+    # `/devantler-branch-op.lock` — every caller then serialises on a directory at the filesystem
+    # root instead of the repository, so branch cleanup and worktree operations lose mutual
+    # exclusion with no error anywhere. Fail closed instead.
+    *)
+      if ! common="$(cd "$repo" && cd "$common" && pwd)" || [[ -z "$common" ]]; then
+        echo "branch-op-lock: cannot resolve absolute git-common-dir for '$repo'" >&2
+        return 2
+      fi
+      ;;
   esac
   printf '%s\n' "$common/devantler-branch-op.lock"
 }
@@ -138,12 +148,21 @@ _branch_op_lock_is_stale() {
   fi
 
   if [[ -f "$lockdir/acquired_epoch" ]]; then
-    now=$(date -u +%s)
-    age=$(( now - $(tr -d '[:space:]' <"$lockdir/acquired_epoch") ))
-    if (( age >= stale_ttl )); then
-      return 0
+    local stamp
+    stamp=$(tr -d '[:space:]' <"$lockdir/acquired_epoch" 2>/dev/null || true)
+    # A holder that died mid-write leaves this file empty or partial. Feeding that straight into
+    # `$(( ))` makes bash treat it as a VARIABLE NAME, which aborts the caller under `set -u` and
+    # otherwise prints an arithmetic error — either way the staleness question goes unanswered.
+    # An unreadable stamp is not evidence of age, so fall through to the directory-mtime test
+    # below rather than guessing.
+    if [[ "$stamp" =~ ^[0-9]+$ ]]; then
+      now=$(date -u +%s)
+      age=$(( now - stamp ))
+      if (( age >= stale_ttl )); then
+        return 0
+      fi
+      return 1
     fi
-    return 1
   fi
 
   if [[ -f "$at_file" ]]; then
@@ -306,8 +325,12 @@ branch_op_lock_run() {
   # release trap instead, which leaves the caller's own handler untouched on every bash version.
   local rc=0
   (
-    # shellcheck disable=SC2064
-    trap "branch_op_lock_release '$repo' '$token' >/dev/null 2>&1 || true" EXIT
+    # Single-quoted so `$repo` and `$token` are expanded when the trap FIRES, not when it is armed.
+    # Double-quoting bakes the values into the trap body, so a repository path containing a single
+    # quote produces a syntactically broken handler and the safety-net release never runs — the
+    # lock then leaks until its TTL expires. Both names are locals of `branch_op_lock_run` and stay
+    # visible inside this subshell, so deferring the expansion is also correct.
+    trap 'branch_op_lock_release "$repo" "$token" >/dev/null 2>&1 || true' EXIT
     inner_rc=0
     "$@" || inner_rc=$?
     # Normal completion: drop the safety net (this subshell's slot only) so the accountable release
