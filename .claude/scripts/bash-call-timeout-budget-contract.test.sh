@@ -3,11 +3,12 @@
 # Guards the *Latency discipline* bullet that stops a `Bash` call being killed by the tool's
 # two-minute default timeout.
 #
-# Why this needs a guard. Measured over the 7 days to 2026-08-17 across 300 Claude sessions and
-# 26,979 `Bash` calls: 112 foreground calls were killed by the timeout and 90 of them (80%) ran at
-# the untouched default, costing ~180 minutes of blocked wall-clock that produced nothing. 66 of the
-# 300 sessions (22%) lost at least one call that way, at most 5 in any one session — so this is
-# broad behaviour rather than one looping run.
+# Why this needs a guard. Measured over the 7 days to 2026-08-17T10:03Z on a single denominator —
+# every `Bash` call whose own record falls in that window, measuring session excluded: 26,967 calls
+# across 299 sessions. 112 were killed by the timeout and 90 of them (80%) ran at the untouched
+# default, costing ~180 minutes of blocked wall-clock that produced nothing. 66 of those 299 sessions
+# (22%) lost at least one call that way, at most 5 in any one session — so this is broad behaviour
+# rather than one looping run.
 #
 # The subtle part, and the reason a presence-only check is not enough: 56 of those 66 sessions (85%)
 # used `timeout` or `run_in_background` elsewhere in the SAME session. The capability was never

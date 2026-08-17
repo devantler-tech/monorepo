@@ -3722,19 +3722,22 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   indication of how far it got — so the measurement it was making is discarded along with the wait,
   and the retry pays the wall-clock again.
   🔴 **This is a BUDGETING failure, not a slow-command problem — the budget is usually never
-  considered at all.** Measured over the 7 days to 2026-08-17 across 300 Claude sessions and 26,979
-  `Bash` calls: **112 foreground calls were killed by the timeout, and 90 of them (80%) ran at the
-  untouched two-minute default**, costing ~180 minutes of blocked wall-clock that produced nothing.
-  **66 of 300 sessions (22%) lost at least one call this way**, at most 5 in any one session — broad
-  behaviour, not one looping run.
+  considered at all.** Measured over the 7 days to 2026-08-17T10:03Z, over every `Bash` call in the
+  Claude corpus whose own record falls in that window, with the measuring session excluded: **26,967
+  calls across 299 sessions**. Of those, **112 were killed by the timeout, and 90 of them (80%) ran
+  at the untouched two-minute default** — costing ~180 minutes of blocked wall-clock that produced
+  nothing. **66 of the 299 sessions (22%) lost at least one call this way**, at most 5 in any one
+  session, so this is broad behaviour rather than one looping run. For scale on the same denominator:
+  `timeout` is set on 1,536 calls (5.7%) and `run_in_background` on 662 (2.5%).
   ⚠️ **The capability is already known; only its TIMING is wrong.** **56 of those 66 sessions (85%)
   used `timeout` or `run_in_background` elsewhere in the same session** — just never before the first
   failure. So the fix is not to learn a parameter, it is to choose one *up front*, on the call you
   are about to make.
   **These classes reliably exceed the default — background or bound them without waiting to find
-  out.** Of the 76 calls killed at exactly two minutes: **32 contract-test-suite runs, 25 `gh`
-  portfolio sweeps, 8 corpus scans over the session transcripts, 6 `ksail` validations.** Every one
-  is a mandated run-loop operation, so this is the ordinary path rather than an unusual one.
+  out.** Classifying those same 90 calls: **29 contract-test-suite runs, 20 `gh` portfolio sweeps,
+  13 corpus scans over the session transcripts, 7 `ksail` validations**, and 21 that fit no single
+  class. Every named one is a mandated run-loop operation, so this is the ordinary path rather than
+  an unusual one.
   🔴 **Raising `timeout` is the WRONG default reflex — prefer `run_in_background: true`.** The
   ceiling is ten minutes and several of these classes exceed it outright, so a bump converts a
   two-minute loss into a ten-minute one and still returns nothing; a bumped call also blocks the
