@@ -203,6 +203,37 @@ check "lost frontmatter exits non-zero" "1" "$rc"
 check_unchanged "lost frontmatter leaves target untouched" "$fm_guard_original" "$target"
 
 # ---------------------------------------------------------------------------
+# Happy path via --stdin. The other --stdin fixture below only ever exercises
+# the REJECTION path, so without this the success path of a whole input mode
+# goes untested — and a silent corruption there would land straight in an
+# unversioned store. Asserts the replacement is installed byte-exactly and the
+# backup still matches the pre-rewrite original.
+# ---------------------------------------------------------------------------
+target="$tmp/stdin-happy.md"
+printf '%s\n' '---' 'version: 1' '---' '# Notes' '' 'original stdin body' 'padding so the shrink guard is not what rejects this' > "$target"
+stdin_original="$tmp/stdin-happy-original.md"
+cp "$target" "$stdin_original"
+stdin_new="$tmp/stdin-happy-new.md"
+printf '%s\n' '---' 'version: 1' '---' '# Notes' '' 'rewritten stdin body' 'padding so the shrink guard is not what rejects this' > "$stdin_new"
+rc=0
+out="$("$tool" --file "$target" --stdin < "$stdin_new" 2>&1)" || rc=$?
+check "stdin rewrite exit code" "0" "$rc"
+# Byte-exact, not a grep: a substring check passes on a truncated write that
+# happens to retain the probe line, which is the corruption that matters here.
+check_unchanged "stdin rewrite installs the piped content byte-for-byte" "$stdin_new" "$target"
+if grep -q 'backup=' <<<"$out"; then
+  pass "stdin rewrite reports backup= path"
+  bak="$(sed -n 's/.*backup=//p' <<<"$out" | awk '{print $1}' | head -1)"
+  if [[ -f "$bak" ]] && cmp -s "$stdin_original" "$bak"; then
+    pass "stdin backup is byte-identical to the pre-rewrite target"
+  else
+    fail "stdin backup is byte-identical to the pre-rewrite target (bak='$bak')"
+  fi
+else
+  fail "stdin rewrite reports backup= path (got: $out)"
+fi
+
+# ---------------------------------------------------------------------------
 # Staleness guard: a sibling rewrites the shared file WHILE the candidate is
 # being assembled. The stale candidate must not silently replace that newer
 # content — the store is multi-writer and unversioned, so a clobber here is
