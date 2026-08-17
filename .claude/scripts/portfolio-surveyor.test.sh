@@ -328,7 +328,11 @@ grep -Fq '.content.repository.archived == false' "${surveyor}" ||
 # `measured:`. Same truncation defect as a single-page read, reintroduced by the shell. And an empty
 # Status field id does not fail: `--jq` selecting nothing exits 0, the items read then runs with
 # `fields=`, and every item looks status-less.
-grep -Fq 'set -o pipefail' "${surveyor}" ||
+# Anchored to the COMMAND form, not a bare substring: the same file explains `set -o pipefail` in
+# backticked prose one paragraph below, so an unanchored grep stays green while the prescribed
+# command itself loses the setting — verified by ablating one of the two occurrences and watching
+# this assertion pass. Prose never begins a line with the bare command.
+grep -Eq '^ *set -o pipefail' "${surveyor}" ||
   fail "surveyor board-coverage census does not run under pipefail, so a partial paginated read can report measured:"
 grep -Fq 'board_coverage=unknown:items-census-failed' "${surveyor}" ||
   fail "surveyor has no unknown token for a failed or partially-walked items census"
