@@ -39,7 +39,12 @@
 # legitimately fast run; inbox-presence alone fires on a run that wrote nothing for a benign reason.
 # Requiring both, on consecutive runs, is what keeps a real verdict rare enough to act on.
 
-set -euo pipefail
+set -Eeuo pipefail
+
+# Exit 1 is a VERDICT ("this lane is not producing"), so no internal failure may reach it. Under
+# `set -e` the abort status is the failing command's, and 1 is the commonest — a failing `date` or a
+# closed stdout would otherwise page an operator for a dead lane. Any unhandled error becomes 2.
+trap 'ec=$?; [ "$ec" -eq 0 ] || exit 2' ERR
 
 STORE="${CODEX_HOME:-$HOME/.codex}/sqlite/codex-dev.db"
 AUTOMATION=""
@@ -87,7 +92,13 @@ for pair in "GRACE_SECONDS:$GRACE_SECONDS" "STUB_SECONDS:$STUB_SECONDS" "CONSECU
     ''|*[!0-9]*) die_unknown "$name must be a non-negative integer, got: $val" ;;
   esac
 done
+# All three carry a floor of 1, because 0 defeats the invariant each one exists to hold:
+# --grace-seconds 0 makes settled_before == now, so an in-flight run is classified — the exact trap
+# the settled-window filter exists to close; --stub-seconds 0 makes the stub window unreachable, so
+# the check could only ever return 0 or 2 and never its actual verdict.
 [ "$CONSECUTIVE" -ge 1 ] || die_unknown "--consecutive must be at least 1"
+[ "$GRACE_SECONDS" -ge 1 ] || die_unknown "--grace-seconds must be at least 1"
+[ "$STUB_SECONDS" -ge 1 ] || die_unknown "--stub-seconds must be at least 1"
 
 if [ -n "$NOW_MS" ]; then
   case "$NOW_MS" in
@@ -103,11 +114,22 @@ command -v sqlite3 >/dev/null 2>&1 || die_unknown "sqlite3 is not available"
 
 # Open read-only. The sibling lane may be mid-dispatch, and *Obligations* forbids a change that could
 # break a sibling in flight; a read-only URI cannot create the -wal/-shm files a plain open would.
+#
+# Every output-affecting knob is PINNED and `~/.sqliterc` is refused with `-init /dev/null`. The CLI
+# reads that file at startup, so a user or CI `.headers on` prepends a header row and `.mode column`
+# removes the `|` separator entirely — either one makes the parse below silently mis-read every row
+# as a non-stub, which reports a dead lane as healthy. Asserting column NAMES does not assert the
+# WIRE FORMAT their values arrive in.
 sq() {
-  sqlite3 "file:${STORE}?mode=ro" "$@" 2>/dev/null || return 1
+  sqlite3 -batch -init /dev/null -noheader -list -separator '|' \
+    "file:${STORE}?mode=ro" "$@" 2>/dev/null || return 1
 }
 
 sq 'SELECT 1;' >/dev/null || die_unknown "scheduler store could not be opened read-only: $STORE"
+
+# Prove the wire format really is what the parse assumes, rather than trusting the flags took effect.
+probe=$(sq "SELECT 1,2;") || die_unknown "scheduler store probe query failed"
+[ "$probe" = "1|2" ] || die_unknown "unexpected sqlite3 output format (got '${probe}', want '1|2')"
 
 # Schema is asserted, never assumed. A renamed column would otherwise make every comparison below
 # return empty, and an empty result set reads exactly like "no stubs found" — a silent pass in the
@@ -141,7 +163,16 @@ any_unknown=0
 report=""
 
 while IFS= read -r id; do
-  [ -n "$id" ] || continue
+  # A blank id is recorded, never silently skipped. SQLite permits NULL in a TEXT PRIMARY KEY, so an
+  # ACTIVE automation can enumerate as an empty line — and if that were the dead lane, a bare
+  # `continue` would exit 0 having examined nothing about it. This is the only skip in the file that
+  # would otherwise leave no trace.
+  if [ -z "$id" ]; then
+    report="${report}  UNKNOWN  <blank automation id> — cannot judge
+"
+    any_unknown=1
+    continue
+  fi
   # The id came out of a local store rather than from this script, so it is validated before being
   # interpolated into SQL — the same discipline the contract applies to any value it did not construct.
   case "$id" in
@@ -159,18 +190,27 @@ while IFS= read -r id; do
                     CASE WHEN inbox_title IS NULL OR trim(inbox_title) = '' THEN 1 ELSE 0 END AS no_inbox
              FROM automation_runs
              WHERE automation_id = '${id}' AND updated_at <= ${settled_before}
-             ORDER BY created_at DESC
+             ORDER BY updated_at DESC
              LIMIT ${CONSECUTIVE};") || die_unknown "could not read runs for ${id}"
 
   n=0
   stubs=0
   maxdur=-1
+  malformed=0
   while IFS='|' read -r dur no_inbox; do
     [ -n "$dur" ] || continue
     n=$(( n + 1 ))
-    # A negative or absent duration is not evidence of anything; treat it as non-stub so a clock
-    # anomaly can never manufacture a verdict.
-    case "$dur" in ''|*[!0-9-]*) dur=-1 ;; esac
+    # BOTH fields are validated. An unparsable value must never fall through to the healthy verdict:
+    # `no_inbox` in particular is compared against the literal 1, so without this check every
+    # unexpected value (empty, NULL, a header token, a shifted column) would read as "produced an
+    # inbox item" and therefore as NOT a stub — making the default for "I could not parse this" the
+    # answer that exits 0. Strip at most one leading '-' so forms like `--5` or `1-2` are rejected
+    # rather than reaching `[ ]` and erroring into a false non-stub.
+    case "${dur#-}" in ''|*[!0-9]*) dur=-1 ;; esac
+    case "$no_inbox" in
+      0|1) : ;;
+      *) malformed=1; break ;;
+    esac
     # An `[ ... ] && x=y` here would return non-zero whenever the test is false and abort the loop
     # under `set -e`, so the assignment is written as a full conditional.
     if [ "$dur" -gt "$maxdur" ]; then maxdur=$dur; fi
@@ -181,7 +221,11 @@ while IFS= read -r id; do
 $rows
 EOF
 
-  if [ "$n" -lt "$CONSECUTIVE" ]; then
+  if [ "$malformed" -eq 1 ]; then
+    report="${report}  UNKNOWN  ${id} — unparsable run row, cannot judge
+"
+    any_unknown=1
+  elif [ "$n" -lt "$CONSECUTIVE" ]; then
     report="${report}  UNKNOWN  ${id} — only ${n} settled run(s), need ${CONSECUTIVE} to judge
 "
     any_unknown=1
