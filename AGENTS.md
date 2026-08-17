@@ -3718,9 +3718,17 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   code itself already correct. So a command that looks fixed can still fail on its own annotation.
 - **SIZE A `Bash` CALL BEFORE YOU MAKE IT — the default budget is TWO MINUTES, and overrunning it
   loses the WHOLE call.** `timeout` is in milliseconds, defaults to `120000`, and caps at `600000`
-  (ten minutes). A killed call returns **nothing**: no partial output, no partial effect, and no
-  indication of how far it got — so the measurement it was making is discarded along with the wait,
-  and the retry pays the wall-clock again.
+  (ten minutes). A killed call returns **nothing** — no partial output and no indication of how far
+  it got — so the measurement it was making is discarded along with the wait, and the retry pays the
+  wall-clock again.
+  🔴 **Its SIDE EFFECTS are not rolled back, and assuming otherwise is the one way this bullet can
+  cause harm rather than cost time.** The kill removes the *result*, never the *effects*: a call
+  killed at the boundary has already run for its whole budget, so a `git push` may have landed on the
+  remote, a `gh pr merge` may have merged, a comment may have posted, a file may be written. The
+  reader's next move is the retry this bullet describes — so **re-read state before retrying any call
+  that writes, pushes, merges, or posts**, exactly as *Git safety* requires a push be verified by git
+  output **and** a re-read. Retrying a non-idempotent call on the assumption that the first attempt
+  was a no-op is how a double-merge or a clobbering second push happens.
   🔴 **This is a BUDGETING failure, not a slow-command problem — the budget is usually never
   considered at all.** Measured over the 7 days to 2026-08-17T10:03Z, over every `Bash` call in the
   Claude corpus whose own record falls in that window, with the measuring session excluded: **26,967
