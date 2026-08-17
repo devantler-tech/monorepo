@@ -34,6 +34,7 @@ jobs:
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
+      codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
@@ -257,6 +258,11 @@ jobs:
               # The refresh script's DEFAULT post-apply verifier. Its exit codes are the verdict, so
               # a change there changes this script's behaviour without touching either file above.
               - '.claude/scripts/plugin-definition-currency.sh'
+              - '.github/workflows/ci.yaml'
+            codex-lane-liveness:
+              - 'AGENTS.md'
+              - '.claude/scripts/codex-lane-liveness.sh'
+              - '.claude/scripts/codex-lane-liveness.test.sh'
               - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
@@ -968,6 +974,21 @@ jobs:
       - name: Verify the plugin definition currency check
         run: bash .claude/scripts/plugin-definition-currency.test.sh
 
+  test-codex-lane-liveness:
+    name: Test codex lane liveness
+    needs: changes
+    if: needs.changes.outputs.codex-lane-liveness == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the codex lane liveness check
+        run: bash .claude/scripts/codex-lane-liveness.test.sh
+
   test-plugin-definition-refresh:
     name: Test plugin definition refresh
     needs: changes
@@ -1123,6 +1144,7 @@ jobs:
       - test-git-safety-contract
       - test-plugin-definition-currency
       - test-plugin-definition-refresh
+      - test-codex-lane-liveness
       - test-self-review-contract
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
@@ -1164,6 +1186,7 @@ jobs:
             ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-plugin-definition-refresh.result }}
+            ${{ needs.test-codex-lane-liveness.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}
