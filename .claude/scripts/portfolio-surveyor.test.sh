@@ -358,6 +358,120 @@ grep -Fq 'authored by an exact dependency-automation' "${product_engineering_ski
   fail "advance playbook's skip set omits the automation-author exclusion (f)"
 grep -Fq 'never actionable at all' "${product_engineering_skill}" ||
   fail "advance playbook does not state that an automation-authored issue is never actionable"
+# Board coverage (#2326): a single unpaginated page counted 237 while totalCount was 4487.
+# The digest must carry an explicit measured|unknown grammar, forbid emitting a count from one
+# page, and prefer unknown under budget pressure — otherwise every survey re-improvises the metric
+# and a truncated census looks complete.
+# Literal Markdown code spans; command substitution is intentionally disabled.
+# shellcheck disable=SC2016
+grep -Fq 'board_coverage=<measured:' "${surveyor}" ||
+  fail "surveyor digest has no board_coverage measured|unknown grammar"
+grep -Fq 'never emit a count from a single page' "${surveyor}" ||
+  fail "surveyor may still emit a board-coverage count from a single-page read"
+grep -Fq 'board_coverage=unknown' "${surveyor}" ||
+  fail "surveyor has no unknown token for a truncated or budget-limited board census"
+# shellcheck disable=SC2016
+grep -Fq 'prefer `unknown` over a partial number' "${surveyor}" ||
+  fail "surveyor does not prefer unknown over a partial board-coverage number under budget pressure"
+# The phrase assertions above all pass while the digest row template is absent, so pin the concrete
+# BOARD-COVERAGE line and both sides of the ratio. Coverage is a fraction: a complete numerator over
+# a truncated denominator still reports a fake census, and it fails in the direction that HIDES gaps.
+grep -Fq 'BOARD-COVERAGE — `board_coverage=<measured: open_public=<n> on_board=<m> status_less=<k>' "${surveyor}" ||
+  fail "surveyor digest has no concrete BOARD-COVERAGE row template"
+# shellcheck disable=SC2016
+grep -Fq 'never a single-page `.length`' "${surveyor}" ||
+  fail "surveyor BOARD-COVERAGE row does not forbid a single-page length as the board census"
+# Numerator: `on_board` has exactly ONE source. Measured 2026-08-16 in the same minute, the REST
+# read returned 618 while `items(first:1){totalCount}` returned 5282 against an open_public of 616 —
+# because totalCount counts every item ever added (closed issues, PRs, drafts), a different
+# population. Offering the two as interchangeable emits ~857% coverage, which hides gaps rather than
+# revealing them, and totalCount carries no field data so status_less is unobtainable from it.
+grep -Fq 'items(first:1){totalCount}' "${surveyor}" ||
+  fail "surveyor does not name the totalCount shape it must warn about"
+grep -Fq 'must never fill' "${surveyor}" ||
+  fail "surveyor does not forbid totalCount as the on_board source"
+# The prescription must not offer them as substitutes. Keyed on the retired "pick ONE" framing.
+if grep -Fq 'pick ONE; both are complete' "${surveyor}"; then
+  fail "surveyor still offers totalCount and the REST read as interchangeable on_board sources"
+fi
+# Forbidding totalCount in the prescription is not enough while another sentence still ACCEPTS it.
+# Two places named totalCount as a legitimating mechanism for the numerator: the fail-closed bullet
+# ("a read that does not use totalCount/--paginate is unknown" => one that DOES is measured) and the
+# digest row template ("measured: only after a paginated/totalCount census"). The row template is
+# the normative output grammar, so that one alone would re-admit the 8.6x overstatement.
+if grep -Fq 'does not use `totalCount` / `--paginate`' "${surveyor}"; then
+  fail "surveyor fail-closed bullet still treats a totalCount read as escaping unknown:single-page-read"
+fi
+if grep -Fq 'paginated/`totalCount` census' "${surveyor}"; then
+  fail "surveyor BOARD-COVERAGE row still admits a totalCount census as measured:"
+fi
+# Denominator: measured 2026-08-14, `gh search issues` returned 30 against a true 593 (default
+# --limit 30, and its --json emits item rows, never search metadata). Require the total_count
+# metadata path with an explicit public filter, and a fail-closed token when it cannot be obtained.
+# Keyed on `total_count`, not on `search/issues` — that path already appears in the issue-type
+# sweep above, so an assertion on it would pass with the whole denominator fix removed.
+grep -Fq 'total_count' "${surveyor}" ||
+  fail "surveyor does not take the open-public denominator from Search API metadata"
+grep -Fq 'incomplete_results' "${surveyor}" ||
+  fail "surveyor does not fail closed on an incomplete Search denominator response"
+grep -Fq 'is:public archived:false' "${surveyor}" ||
+  fail "surveyor open-public denominator lacks an explicit public/non-archived filter"
+grep -Fq 'board_coverage=unknown:incomplete-denominator' "${surveyor}" ||
+  fail "surveyor has no unknown token for a truncated or incomplete open-public denominator"
+# Negative: the default-limited row-listing command must not be PRESCRIBED as the denominator.
+# Keyed on the prescription shape (the flag run), so the prose that warns about `gh search issues`
+# is not itself a failure.
+if grep -Fq 'gh search issues --owner devantler-tech --state open --archived=false' "${surveyor}"; then
+  fail "surveyor still prescribes the default-limited gh search issues row set as the denominator"
+fi
+# The assertions above only prove the valid forms are PRESENT. A document carrying the valid template
+# AND a bare numeric row would satisfy every one of them, so bound the output shape from both ends:
+# exactly one digest row, and no board_coverage form outside the measured|unknown grammar.
+board_coverage_rows="$(grep -c '^- BOARD-COVERAGE' "${surveyor}" || true)"
+[ "${board_coverage_rows}" = "1" ] ||
+  fail "surveyor must carry exactly one BOARD-COVERAGE digest row (found ${board_coverage_rows})"
+if grep -nE 'board_coverage=<?[0-9]|board_coverage=<n>' "${surveyor}"; then
+  fail "surveyor prescribes a bare numeric board_coverage row outside the measured|unknown grammar"
+fi
+# Numerator and denominator must describe the SAME population. The denominator is pinned to
+# `is:public archived:false` above, so an unfiltered items census counts board items from private and
+# archived repositories that no denominator can contain. Measured 2026-08-16 with the prescribed
+# commands: unfiltered on_board 621 vs open_public 619, the excess being exactly 2 open issues still
+# boarded from the archived `reusable-workflows` repo — a 100.3% coverage, impossible for a fraction
+# and wrong in the gap-HIDING direction. The private half is 0 today but reachable by design, since
+# boarding a private repo's issue is a maintainer decision.
+grep -Fq '.content.repository.private == false' "${surveyor}" ||
+  fail "surveyor on_board census does not exclude private-repo items the denominator cannot contain"
+grep -Fq '.content.repository.archived == false' "${surveyor}" ||
+  fail "surveyor on_board census does not exclude archived-repo items the denominator cannot contain"
+# Error propagation: `gh api --paginate | jq -s` hands jq whatever pages it fetched before dying, and
+# jq exits 0 on them — so without pipefail a half-walked census emits a confident smaller on_board as
+# `measured:`. Same truncation defect as a single-page read, reintroduced by the shell. And an empty
+# Status field id does not fail: `--jq` selecting nothing exits 0, the items read then runs with
+# `fields=`, and every item looks status-less.
+# Anchored to the COMMAND form, not a bare substring: the same file explains `set -o pipefail` in
+# backticked prose one paragraph below, so an unanchored grep stays green while the prescribed
+# command itself loses the setting — verified by ablating one of the two occurrences and watching
+# this assertion pass. Prose never begins a line with the bare command.
+grep -Eq '^ *set -o pipefail' "${surveyor}" ||
+  fail "surveyor board-coverage census does not run under pipefail, so a partial paginated read can report measured:"
+grep -Fq 'board_coverage=unknown:items-census-failed' "${surveyor}" ||
+  fail "surveyor has no unknown token for a failed or partially-walked items census"
+grep -Fq 'board_coverage=unknown:status-field-not-found' "${surveyor}" ||
+  fail "surveyor does not reject an empty Status field id before computing status_less"
+# Empty payload: neither pipefail nor the census-failed guard catches it, because `jq -s` turns an
+# empty stream into `[]` and exits 0 — measured, the prescribed pipeline emits
+# {"on_board":0,"status_less":0} on empty input. Against a live open_public of 621 that is a 0%
+# coverage row, and it fails in the gap-INVENTING direction: it sends the orchestrator into a full
+# backfill against an already-complete board, the exact failure this section opens by describing.
+# The prose bullet already declared the unknown token; only the command was missing the guard.
+# Anchored to the COMMAND form for the same reason as pipefail above: the fail-closed bullet
+# discusses `board_coverage=unknown:empty-payload` in prose, so a bare token grep stays green while
+# the prescribed command still emits a measured zero.
+grep -Fq 'board_coverage=unknown:empty-payload' "${surveyor}" ||
+  fail "surveyor has no unknown token for an empty or fully-filtered items payload"
+grep -Eq '^ *\[ .*on_board.* -gt 0 \]' "${surveyor}" ||
+  fail "surveyor board-coverage census does not fail closed on a zero on_board, so an empty payload reports a measured 0%"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 # Literal Markdown code spans; command substitution is intentionally disabled.
