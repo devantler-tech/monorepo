@@ -338,6 +338,19 @@ grep -Fq 'board_coverage=unknown:items-census-failed' "${surveyor}" ||
   fail "surveyor has no unknown token for a failed or partially-walked items census"
 grep -Fq 'board_coverage=unknown:status-field-not-found' "${surveyor}" ||
   fail "surveyor does not reject an empty Status field id before computing status_less"
+# Empty payload: neither pipefail nor the census-failed guard catches it, because `jq -s` turns an
+# empty stream into `[]` and exits 0 — measured, the prescribed pipeline emits
+# {"on_board":0,"status_less":0} on empty input. Against a live open_public of 621 that is a 0%
+# coverage row, and it fails in the gap-INVENTING direction: it sends the orchestrator into a full
+# backfill against an already-complete board, the exact failure this section opens by describing.
+# The prose bullet already declared the unknown token; only the command was missing the guard.
+# Anchored to the COMMAND form for the same reason as pipefail above: the fail-closed bullet
+# discusses `board_coverage=unknown:empty-payload` in prose, so a bare token grep stays green while
+# the prescribed command still emits a measured zero.
+grep -Fq 'board_coverage=unknown:empty-payload' "${surveyor}" ||
+  fail "surveyor has no unknown token for an empty or fully-filtered items payload"
+grep -Eq '^ *\[ .*on_board.* -gt 0 \]' "${surveyor}" ||
+  fail "surveyor board-coverage census does not fail closed on a zero on_board, so an empty payload reports a measured 0%"
 grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill does not defer dependency PRs to automation"
 grep -Fq 'agent-skills updater PRs' "${maintenance_skill}" ||

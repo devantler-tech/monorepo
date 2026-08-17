@@ -555,14 +555,21 @@ public and private — no per-repo loop needed to enumerate):
      [ -n "$fid_status" ] \
        || { echo "board_coverage=unknown:status-field-not-found"; exit 0; }
      # open Issue items only; --paginate walks every page to exhaustion
-     gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid_status" \
+     census=$(gh api "orgs/devantler-tech/projectsV2/5/items?per_page=100&q=is:open&fields=$fid_status" \
        --paginate --jq '.[]' | jq -s '
          map(select(.content_type=="Issue" and .archived_at==null
                     and .content.repository.private == false
                     and .content.repository.archived == false))
          | {on_board: length,
-            status_less: map(select(([.fields[]?|select(.name=="Status")|.value] | length)==0)) | length}' \
+            status_less: map(select(([.fields[]?|select(.name=="Status")|.value] | length)==0)) | length}') \
        || { echo "board_coverage=unknown:items-census-failed"; exit 0; }
+     # An empty or fully-filtered payload is NEVER a measured zero: project 5 is never empty, so
+     # on_board=0 means the read returned nothing, not that coverage is 0%. `jq -s` turns an empty
+     # stream into `[]` and exits 0, so neither pipefail nor the guard above catches it — and a 0
+     # numerator sends the orchestrator into a full backfill against an already-complete board.
+     [ "$(printf '%s' "$census" | jq '.on_board')" -gt 0 ] \
+       || { echo "board_coverage=unknown:empty-payload"; exit 0; }
+     printf '%s\n' "$census"
      ```
 
      🔴 **`set -o pipefail` and both guards are load-bearing — without them a FAILED census emits a
