@@ -299,29 +299,31 @@ branch_op_lock_run() {
   branch_op_lock_acquire "$repo" "$timeout" "$stale_ttl" >/dev/null || return $?
   local token="$BRANCH_OP_LOCK_TOKEN"
   # This helper is sourceable, so the caller may already own an EXIT handler — `worktree-claim.sh`
-  # releases its ownership mutex there. Installing ours and then clearing it with a bare `trap - EXIT`
-  # deleted theirs permanently, so a later exit left the CAS claim ref behind. Capture whatever was
-  # installed and put it back verbatim instead.
-  local prev_exit_trap
-  prev_exit_trap=$(trap -p EXIT)
-  # shellcheck disable=SC2064
-  trap "BRANCH_OP_LOCK_TOKEN='$token'; branch_op_lock_release '$repo' '$token' || true" EXIT
+  # releases its ownership mutex there. The caller's EXIT slot is therefore never read or replaced:
+  # `trap -p EXIT` reports a handler INHERITED from an ancestor shell on bash >= 5 even when this
+  # shell armed none, and no probe separates the two cases, so capturing it and eval-ing it back
+  # ARMED a dormant ancestor handler and fired that cleanup at the wrong time. A subshell owns the
+  # release trap instead, which leaves the caller's own handler untouched on every bash version.
   local rc=0
-  "$@" || rc=$?
-  if [[ -n "$prev_exit_trap" ]]; then
-    eval "$prev_exit_trap"
-  else
+  (
+    # shellcheck disable=SC2064
+    trap "branch_op_lock_release '$repo' '$token' >/dev/null 2>&1 || true" EXIT
+    inner_rc=0
+    "$@" || inner_rc=$?
+    # Normal completion: drop the safety net (this subshell's slot only) so the accountable release
+    # below reports its own status instead of finding the lock already gone.
     trap - EXIT
-  fi
+    # A failed release means the lock directory is still there — every later worktree or branch
+    # operation will block on it until the TTL expires. Discarding that status reported a clean
+    # cleanup over a leaked lock, so it is propagated when the wrapped command itself succeeded.
+    release_rc=0
+    branch_op_lock_release "$repo" "$token" || release_rc=$?
+    if (( inner_rc == 0 && release_rc != 0 )); then
+      exit "$release_rc"
+    fi
+    exit "$inner_rc"
+  ) || rc=$?
   BRANCH_OP_LOCK_TOKEN="$token"
-  # A failed release means the lock directory is still there — every later worktree or branch
-  # operation will block on it until the TTL expires. Discarding that status reported a clean
-  # cleanup over a leaked lock, so it is propagated when the wrapped command itself succeeded.
-  local release_rc=0
-  branch_op_lock_release "$repo" "$token" || release_rc=$?
-  if (( rc == 0 && release_rc != 0 )); then
-    return "$release_rc"
-  fi
   return "$rc"
 }
 

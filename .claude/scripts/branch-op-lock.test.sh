@@ -240,14 +240,29 @@ rm -f "$caller_trap_marker"
 check "run preserves the caller's pre-existing EXIT trap" "ran" \
   "$(cat "$caller_trap_marker" 2>/dev/null || echo MISSING)"
 
-# …and with no caller trap installed, `run` must still leave EXIT clear rather than restoring junk.
+# …and with no caller trap installed, `run` must not ARM one.
+#
+# `trap -p EXIT` cannot express this assertion: on bash >= 5 it reports a handler inherited from an
+# ancestor shell even when the current shell armed none, so an introspective check reads a dormant
+# ancestor handler as "junk was restored" on GNU bash and as clean on bash 3.2. The observable
+# consequence is what matters — an ancestor's handler must still be dormant when a shell that armed
+# nothing of its own exits, so `run` must not resurrect it.
+ancestor_marker="$tmp/ancestor-exit-ran"
+early_verdict="$tmp/ancestor-early-verdict"
+rm -f "$ancestor_marker" "$early_verdict"
 (
-  # shellcheck source=branch-op-lock.sh
-  source "$lock_tool"
-  branch_op_lock_run "$stale_repo" -- true >/dev/null 2>&1
-  [[ -z "$(trap -p EXIT)" ]]
-)
-check "run leaves EXIT clear when the caller had no trap" "0" "$?"
+  trap 'printf ran >"'"$ancestor_marker"'"' EXIT
+  (
+    # shellcheck source=branch-op-lock.sh
+    source "$lock_tool"
+    branch_op_lock_run "$stale_repo" -- true >/dev/null 2>&1
+  )
+  # The inner shell has exited. It armed no EXIT handler of its own, so this ancestor's handler must
+  # not have fired yet — it belongs to *this* shell's exit, which has not happened.
+  cat "$ancestor_marker" 2>/dev/null >"$early_verdict" || printf CLEAN >"$early_verdict"
+) || true
+check "run leaves EXIT clear when the caller had no trap" "CLEAN" \
+  "$(cat "$early_verdict" 2>/dev/null || echo MISSING)"
 rm -rf "$stale_lockdir"
 
 # ---------------------------------------------------------------------------
@@ -290,9 +305,14 @@ ident_orig=$(_branch_op_lock_identity "$stale_lockdir")
 check "identity is readable for an existing lock dir" "1" \
   "$([[ -n "$ident_orig" ]] && echo 1 || echo 0)"
 
-# Replace the directory (new inode) and confirm the identity actually changes — otherwise the guard
-# below would pass vacuously.
+# Replace the directory and confirm the identity actually changes — otherwise the guard below would
+# pass vacuously. The replacement is a DIFFERENT HOLDER, so it writes its own token, and the token is
+# what carries this assertion. A bare inode cannot: filesystems routinely hand the same inode number
+# straight back after an rmdir (measured — overlayfs reuses it on every attempt, APFS never does), so
+# an inode-only fixture asserts nothing on Linux while passing on macOS. That is exactly the case the
+# identity function's token half exists for.
 rm -rf "$stale_lockdir"; mkdir -p "$stale_lockdir"
+printf '%s\n' "replacement-holder-token" >"$stale_lockdir/token"
 ident_new=$(_branch_op_lock_identity "$stale_lockdir")
 check "a replaced lock dir has a DIFFERENT identity" "1" \
   "$([[ "$ident_orig" != "$ident_new" ]] && echo 1 || echo 0)"
