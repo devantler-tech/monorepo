@@ -425,10 +425,50 @@ which the helper deliberately dies `STILL EMPTY` rather than report a vacuous `i
 the prescribed recovery worktree failing in exactly the case it was reached for, so do not let it end
 the run: fall back to the forge read, which needs no working tree.
 
-Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow. **Never edit the plugin cache**; it is
-read-only evidence (see *Agent definition locations*). When the refresh needs an interactive session
-an unattended run cannot open, surface it on a declared *Maintainer channel* rather than leaving a
-silently superseded definition in place.
+Refresh only through the runtime's own control plane — the `/plugin` marketplace update flow
+interactively, or, in an unattended run, that same control plane driven by
+[`.claude/scripts/plugin-definition-refresh.sh`](.claude/scripts/plugin-definition-refresh.sh)
+through the resolved Claude CLI (`--cli`, `$CLAUDE_CLI`, `PATH`, then the app bundle). **Never edit
+the plugin cache**; it is read-only evidence (see
+*Agent definition locations*). It exits `0` only once the install is on the pin **and an independent
+blob-identity check confirms it** — never on `plugin update`'s own exit status, which can report
+success having repaired nothing. `1` means the install is not on the pin (the marketplace could not
+supply that revision, or the apply ran and the post-apply check still does not report `CURRENT`).
+`2` is UNKNOWN — no verdict produced: no CLI, an unreadable pin or marketplace, a plugin id naming a
+different marketplace than the clone being gated, a concurrent run holding the lock, a marketplace
+worktree whose bytes do not provably match the pinned commit, an unavailable verifier, or
+`--dry-run`, since a simulation asserts nothing about the install. Run it on a `DRIFT`; a `1` or `2`
+is reported, never a run-stopper, and you continue by **reading** the reviewed definition at the
+pinned gitlink and following it, exactly as above.
+
+⚠️ **Running the refresh never makes the pin active for THIS run — do not report it as if it had.**
+On a `1` or `2` the installed definition is unchanged by construction, so the runtime is still
+serving whatever it served before; and even a `0` only records that the install is now on the pin,
+because `plugin update` requires a restart. In every case the definition this run executes is the
+one it booted with. That is exactly why the fallback is to read the reviewed definition at the pin
+rather than to trust the install: the currency check's next verdict, in a later run, is what
+establishes that the pinned definition is live.
+
+🔴 **`plugin update` installs the MARKETPLACE LATEST — it is NOT a way to install the pin, and
+wiring the bare commands into pre-flight would be a fail-open worse than the drift.** Its own
+`--help` reads *"Update a plugin to the latest version"*, and it takes no ref or version selector.
+The two coincide only when the consumer's gitlink happens to equal the upstream tip, which is
+exactly what made the 2026-08-15 by-hand refresh look like it installed the pinned revision — the
+marketplace tip *was* `564a6a0f`. Measured the next day: pin `11b241cc` (4.3.4) against an upstream
+`main` already at `73109ad9` (4.3.6), so the bare commands would have installed a revision nobody
+here has reviewed. **Stale-install drift at least runs a previously reviewed definition; this would
+run one that was never read.** That is why the script gates on marketplace-HEAD **==** pin and
+refuses otherwise rather than taking the tip.
+
+⚠️ **A refusal is a real finding about the ROLLOUT, not a failure of the check.** It means the
+gitlink and upstream have diverged, so the fix is to bump `libraries/agent-plugins` to the revision
+you intend to run through the normal reviewed rollout — never to install the tip to make the
+message go away. ⚠️ And `plugin update` **requires a restart**, so a `0` never means *this* run used
+the new definition; the pinned copy is served from the next dispatch, and only a later run's
+currency check confirms it. Reading the apply-time `0` as "this run is current" is the same
+fail-open as the drift itself. When the script cannot resolve its CLI, or a refusal persists across
+rollouts, surface it on a declared *Maintainer channel* rather than leaving a silently superseded
+definition in place.
 
 ### Agent definition locations
 
@@ -3460,7 +3500,13 @@ names the origin.
 **Namespace:** default `claude` sweeps local + remote `claude/*`. Pass `cursor` as the fifth argument
 for a **remote-only** sweep of spent `cursor/*` (the cloud lane has no local checkout on this host;
 local instances run that pass so cursor remotes do not accumulate forever — monorepo#2298). Never pass
-`codex` — the Codex sibling owns that lane.
+`codex` — the Codex sibling owns that lane. Apply-mode cleanup holds the shared branch-operation lock
+([`branch-op-lock.sh`](.claude/scripts/branch-op-lock.sh)) for the whole pass so it cannot overlap a
+harness worktree operation — `worktree-add.sh`, `worktree-remove.sh`, and `worktree-claim.sh add`,
+which holds the same lock across its entire creation path (branch resolution, the pinned-tip lookup,
+and the `git worktree add` itself); dry-run skips the lock. Stale-lock recovery is same-host dead PID or
+age ≥ 600s — if a live holder is wedged past that, confirm no agent holds it and `rm -rf` the lock
+directory under the repo's `git-common-dir`.
 
 **🔴 Deleting a remote branch CLOSES its open PR — so the keep-set is the whole safety property:**
 - **KEEP:** the head of an **OPEN PR**; any branch **checked out by a worktree**; the default branch;
@@ -3610,6 +3656,36 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   IFS-split; only parameter expansion is exempt), so an unexpected result there is ordinary
   whitespace splitting, not this bug. Keep the two diagnoses apart — the parameter-expansion family
   is `set -- $var` and `cmd $args`.
+- **Put ONE verb in a `Bash` call — the classifier's denials concentrate on calls that prefix the real
+  command with `cd` or a variable assignment.** Measured over the 7 days to 2026-08-16: **58 auto-mode
+  classifier denials across 15 distinct sessions**, of which the **27 multi-statement** ones span **12
+  sessions** and **25 of those 27 open with `cd ` (18) or an assignment (7)** before the verb that
+  matters. Each denial loses the **whole call** — nothing is partially applied — so the setup work in
+  front of the verb is discarded with it, which is the same total-loss shape *Git safety* already
+  records for a compound `fetch`+`checkout`. This bullet is that rule's general case; the git pair is
+  simply where it was first measured.
+  🔴 **The prefix is almost always UNNECESSARY, which is what makes this cheap to fix.** Pass the
+  location to the command instead of walking to it: `git -C <path>`, `gh --repo <owner>/<repo>` and an
+  absolute script path each carry their own location, so the `cd` was never load-bearing and the
+  denial class disappears without any loss of capability.
+  🔴 **Do NOT "fix" it by setting the directory once and using relative paths afterwards — the cwd
+  survives only INSIDE the workspace.** Verified 2026-08-16 by direct probe: a `cd` to a path within
+  the session worktree persists to the next call, while a `cd` **outside** it — `~/.claude/projects`,
+  which is the corpus every telemetry pass reads — is **silently reset** to the session worktree before
+  the next call runs. A later command's relative paths then resolve in the worktree, so it reads or
+  writes a different file than intended **and still reports success**. That is not hypothetical: it is
+  the measured cause of a mining pass that reported zero tool errors out of an empty file it had itself
+  just written somewhere else, while 44 of 63 transcripts held errors. **Absolute paths are the only
+  form that is correct on both sides of that boundary.**
+  ⚠️ **It is PROBABILISTIC on this shape, and that is precisely why it persists.** The same
+  `cd … ; <verb>` spelling usually succeeds, so a lane reads the occasional refusal as noise and keeps
+  the habit — one measured session led **every** Bash call with `cd <worktree>` and paid for it
+  repeatedly. Treat a denial as a signal about the **shape**, never about that one call.
+  **On a denial, SPLIT the call — never re-issue a variant spelling.** A denied *command* may pass on
+  a plain retry, but a denied *content shape* will not, so re-spelling it burns another call to learn
+  nothing; issuing the setup and the verb as separate calls is the recovery that has actually worked.
+  Never touch the permission surface to work around this: like the control-byte guard below, refusing
+  what it cannot classify is the guard behaving correctly, and the command is what changes.
 - **A raw non-whitespace C0 control byte anywhere in a `Bash` command loses the WHOLE call — write the
   delimiter as an escape instead.** The runtime refuses the call outright with
   `InputValidationError: command contains control characters that would be hidden in the approval

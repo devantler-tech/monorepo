@@ -30,8 +30,10 @@ jobs:
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
       latency-discipline-contract: ${{ steps.filter.outputs.latency-discipline-contract }}
       control-character-command-contract: ${{ steps.filter.outputs.control-character-command-contract }}
+      one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
+      plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
@@ -40,6 +42,7 @@ jobs:
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
       memory-rewrite: ${{ steps.filter.outputs.memory-rewrite }}
+      branch-op-lock: ${{ steps.filter.outputs.branch-op-lock }}
       agent-claim: ${{ steps.filter.outputs.agent-claim }}
       memory-backup: ${{ steps.filter.outputs.memory-backup }}
       worktree-claim: ${{ steps.filter.outputs.worktree-claim }}
@@ -136,6 +139,18 @@ jobs:
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
+            branch-op-lock:
+              - '.claude/scripts/branch-op-lock.sh'
+              - '.claude/scripts/branch-op-lock.test.sh'
+              - '.claude/scripts/worktree-add.sh'
+              - '.claude/scripts/worktree-remove.sh'
+              # worktree-claim.sh `add` holds the same lock across its whole creation path, so a
+              # change there can break serialisation without touching any file listed above.
+              - '.claude/scripts/worktree-claim.sh'
+              - '.claude/scripts/branch-cleanup.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
             agent-claim:
               - '.claude/scripts/agent-claim.sh'
               - '.claude/scripts/agent-claim.test.sh'
@@ -222,6 +237,10 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/control-character-command-contract.test.sh'
               - '.github/workflows/ci.yaml'
+            one-verb-per-bash-call-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/one-verb-per-bash-call-contract.test.sh'
+              - '.github/workflows/ci.yaml'
             git-safety-contract:
               - 'AGENTS.md'
               - '.claude/scripts/git-safety-contract.test.sh'
@@ -230,6 +249,14 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/plugin-definition-currency.sh'
               - '.claude/scripts/plugin-definition-currency.test.sh'
+              - '.github/workflows/ci.yaml'
+            plugin-definition-refresh:
+              - 'AGENTS.md'
+              - '.claude/scripts/plugin-definition-refresh.sh'
+              - '.claude/scripts/plugin-definition-refresh.test.sh'
+              # The refresh script's DEFAULT post-apply verifier. Its exit codes are the verdict, so
+              # a change there changes this script's behaviour without touching either file above.
+              - '.claude/scripts/plugin-definition-currency.sh'
               - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
@@ -787,6 +814,21 @@ jobs:
       - name: Verify the memory rewrite guard
         run: bash .claude/scripts/memory-rewrite.test.sh
 
+  test-branch-op-lock:
+    name: Test branch-operation lock
+    needs: changes
+    if: needs.changes.outputs.branch-op-lock == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the branch-operation lock
+        run: bash .claude/scripts/branch-op-lock.test.sh
+
   test-agent-claim:
     name: Test agent-claim arbitration
     needs: changes
@@ -881,6 +923,21 @@ jobs:
       - name: Verify the control character command contract
         run: bash .claude/scripts/control-character-command-contract.test.sh
 
+  test-one-verb-per-bash-call-contract:
+    name: Test one verb per bash call contract
+    needs: changes
+    if: needs.changes.outputs.one-verb-per-bash-call-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the one verb per bash call contract
+        run: bash .claude/scripts/one-verb-per-bash-call-contract.test.sh
+
   test-git-safety-contract:
     name: Test git safety contract
     needs: changes
@@ -910,6 +967,21 @@ jobs:
           persist-credentials: false
       - name: Verify the plugin definition currency check
         run: bash .claude/scripts/plugin-definition-currency.test.sh
+
+  test-plugin-definition-refresh:
+    name: Test plugin definition refresh
+    needs: changes
+    if: needs.changes.outputs.plugin-definition-refresh == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the gated plugin definition refresh
+        run: bash .claude/scripts/plugin-definition-refresh.test.sh
 
   test-self-review-contract:
     name: Test self-review contract
@@ -1042,12 +1114,15 @@ jobs:
       - test-maintainer-preflight
       - test-memory-hygiene
       - test-memory-rewrite
+      - test-branch-op-lock
       - test-agent-claim
       - test-memory-backup
       - test-latency-discipline-contract
       - test-control-character-command-contract
+      - test-one-verb-per-bash-call-contract
       - test-git-safety-contract
       - test-plugin-definition-currency
+      - test-plugin-definition-refresh
       - test-self-review-contract
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
@@ -1080,12 +1155,15 @@ jobs:
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
             ${{ needs.test-memory-rewrite.result }}
+            ${{ needs.test-branch-op-lock.result }}
             ${{ needs.test-agent-claim.result }}
             ${{ needs.test-memory-backup.result }}
             ${{ needs.test-latency-discipline-contract.result }}
             ${{ needs.test-control-character-command-contract.result }}
+            ${{ needs.test-one-verb-per-bash-call-contract.result }}
             ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-plugin-definition-currency.result }}
+            ${{ needs.test-plugin-definition-refresh.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}
