@@ -3716,6 +3716,34 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   ⚠️ **The guard scans the ENTIRE command string, comments included** — reproduced live while writing
   this rule: a trailing `# …` explaining the delimiter carried a raw byte and cost the call, with the
   code itself already correct. So a command that looks fixed can still fail on its own annotation.
+- **SIZE A `Bash` CALL BEFORE YOU MAKE IT — the default budget is TWO MINUTES, and overrunning it
+  loses the WHOLE call.** `timeout` is in milliseconds, defaults to `120000`, and caps at `600000`
+  (ten minutes). A killed call returns **nothing**: no partial output, no partial effect, and no
+  indication of how far it got — so the measurement it was making is discarded along with the wait,
+  and the retry pays the wall-clock again.
+  🔴 **This is a BUDGETING failure, not a slow-command problem — the budget is usually never
+  considered at all.** Measured over the 7 days to 2026-08-17 across 300 Claude sessions and 26,979
+  `Bash` calls: **112 foreground calls were killed by the timeout, and 90 of them (80%) ran at the
+  untouched two-minute default**, costing ~180 minutes of blocked wall-clock that produced nothing.
+  **66 of 300 sessions (22%) lost at least one call this way**, at most 5 in any one session — broad
+  behaviour, not one looping run.
+  ⚠️ **The capability is already known; only its TIMING is wrong.** **56 of those 66 sessions (85%)
+  used `timeout` or `run_in_background` elsewhere in the same session** — just never before the first
+  failure. So the fix is not to learn a parameter, it is to choose one *up front*, on the call you
+  are about to make.
+  **These classes reliably exceed the default — background or bound them without waiting to find
+  out.** Of the 76 calls killed at exactly two minutes: **32 contract-test-suite runs, 25 `gh`
+  portfolio sweeps, 8 corpus scans over the session transcripts, 6 `ksail` validations.** Every one
+  is a mandated run-loop operation, so this is the ordinary path rather than an unusual one.
+  🔴 **Raising `timeout` is the WRONG default reflex — prefer `run_in_background: true`.** The
+  ceiling is ten minutes and several of these classes exceed it outright, so a bump converts a
+  two-minute loss into a ten-minute one and still returns nothing; a bumped call also blocks the
+  foreground for its whole budget, which is the waste the rest of this section exists to stop. A
+  backgrounded call has neither problem: the runtime **announces its completion**, so it costs no
+  wall-clock and needs no waiting. Raise `timeout` only when the work is genuinely bounded, you need
+  the result before the next call can be written, and it comfortably fits inside the ceiling.
+  ⚠️ **And do not then poll what you backgrounded** — the announcement is the notification, so a
+  `sleep`-and-read loop over its output file is the busy-wait this section already forbids.
 
 This changes only *ordering and overlap* — never the quality bar. Validation, RED/GREEN proof,
 root-cause fixing, and every guardrail are unaffected; the point is to stop paying for them serially.

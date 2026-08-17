@@ -36,9 +36,17 @@ fail() {
 
 # Extract ONLY this bullet, then flatten it: the sentences wrap across source lines, so a fragment
 # spanning a line break would never match and the test would be always-red regardless of content.
+#
+# The end anchor is the NEXT BULLET, not the section's closing paragraph. It has to be: the
+# size-the-call bullet that follows also contains the phrase `loses the WHOLE call`, so a
+# paragraph-anchored extraction spans both and assertion 1 becomes satisfiable by the neighbour.
+# Verified by ablation on 2026-08-17 — with that phrase removed from THIS bullet and left intact in
+# the next one, the paragraph-anchored version still reported all 8 assertions passing. The closing
+# paragraph is kept as a second stop so the extraction still terminates if that bullet is renamed.
 bullet="$(
   awk '
-    /^- \*\*A raw / { inb = 1 }
+    /^- \*\*A raw /             { inb = 1 }
+    inb && /^- \*\*SIZE A /     { inb = 0 }
     inb && /^This changes only/ { inb = 0 }
     inb                         { print }
   ' "${constitution}" | tr '\n' ' ' | tr -s '[:space:]' ' '
