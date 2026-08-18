@@ -914,9 +914,23 @@ actionable work**:
 |---|---|---|
 | **0** | **Live breakage** | CI red on `main`, a broken build or site, an urgent security fix. Preempts everything and is the one exception to capture-before-you-build. **A failing GitHub-*managed* run is NOT breakage** — identify the class by the **property, never by an enumerated path**: `event: dynamic` with a `path` under `dynamic/`, meaning **no workflow file exists in the repository** to fix and GitHub refuses to re-run it (`403`). That covers `dynamic/github-code-scanning/*` **and** `dynamic/dependabot/*` and whatever GitHub adds next; each is reported `GITHUB-MANAGED (NO-ACTION)` and never counts against `nothing_on_fire`. **Only the first failure of a streak** — a managed run still red (`failure`, `timed_out` or `startup_failure`) on the next run of `main` is ours to repair (the build, the scanning or dependency configuration, or moving off default setup) and IS actionable (see the surveyor). |
 | **1** | **Open PRs — INCLUDING your own drafts** | Every actionable open PR in the portfolio, **draft and non-draft alike**, whoever authored it — your own lane, a sibling lane, the maintainer's interactive sessions, our bots, and external contributors — driven to a terminal state: merged, closed with the reason recorded, or parked on a **named, live-verified** blocker. Exact `renovate[bot]`/`dependabot[bot]` dependency PRs stay automation-owned and excluded (see *Merge policy*). An external branch is still never run locally (see *You own EVERY pull request in the portfolio*). |
-| **2** | **Security issues** | `type:"Security"`, regardless of age. |
-| **3** | **Bugs** | `type:"Bug"`, regardless of age. |
+| **2** | **Security issues** | `type:Security`, regardless of age. |
+| **3** | **Bugs** | `type:Bug`, regardless of age. |
 | **4** | **Oldest actionable issue** | Everything else, oldest-first (see *Drain oldest-first*). |
+
+🔴 **Write that type filter UNQUOTED — `gh search issues` returns ZERO rows for the quoted
+form, and exits 0 while doing it.** Measured across the portfolio 2026-08-18:
+`gh search issues --owner devantler-tech --state open 'type:"Security"'` returns **0** while the
+unquoted `type:Security` returns **73**, and the same split holds for `type:"Bug"`, which returns
+**0** against **269** genuinely open. So a run building its rung-2/3 query by retyping a quoted literal
+descends straight past every open Security and Bug issue and reports a clean sweep — and
+nothing in the exit status distinguishes that from a genuinely empty queue. The raw REST
+surface is indifferent (`gh api "search/issues?q=…type:Security"` returns the same count either
+way), which is why the surveyor is safe: it queries that surface, unquoted. Prefer running the
+surveyor or the REST form over retyping either literal. This is the standing rule that **an
+empty FILTERED read is a claim about the FILTER** — run the unfiltered control before believing
+a zero. Scoped to issue search: the project board's own view filters are a different surface and
+are not measured here.
 
 Then **capture any new finds as issues** (see *Issue-driven → Capture before you build*), and **keep
 going** — don't stop after a few items; work until actionable work is exhausted or blocked (see
@@ -2478,7 +2492,7 @@ dates/iterations only — grouping by `Parent issue` yields flat groups, not nes
 parent is **not documented** to cascade to children in either direction — never assume it does.
 
 **EVERY issue carries an Issue Type — no exceptions** (maintainer direction 2026-07-18). Types are
-org-wide, exactly **one per issue**, filterable as `type:"Bug"`, and they are the structured
+org-wide, exactly **one per issue**, filterable as `type:Bug` (unquoted — see the ladder's warning), and they are the structured
 replacement for type-labels. An untyped issue is an incomplete issue: fix it at triage. Set it at
 creation — `gh issue create --repo devantler-tech/<repo> --type "Feature"` — or retrofit with
 `gh issue edit <N> --repo devantler-tech/<repo> --type "Bug"`. **Always name the repo** (or pass the

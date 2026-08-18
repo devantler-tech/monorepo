@@ -33,6 +33,7 @@ jobs:
       one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
+      rung-type-filter-contract: ${{ steps.filter.outputs.rung-type-filter-contract }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
@@ -250,6 +251,10 @@ jobs:
             git-safety-contract:
               - 'AGENTS.md'
               - '.claude/scripts/git-safety-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            rung-type-filter-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/rung-type-filter-contract.test.sh'
               - '.github/workflows/ci.yaml'
             plugin-definition-currency:
               - 'AGENTS.md'
@@ -934,6 +939,21 @@ jobs:
       - name: Verify the control character command contract
         run: bash .claude/scripts/control-character-command-contract.test.sh
 
+  test-rung-type-filter-contract:
+    name: Test rung type filter contract
+    needs: changes
+    if: needs.changes.outputs.rung-type-filter-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the rung type filter contract
+        run: bash .claude/scripts/rung-type-filter-contract.test.sh
+
   test-one-verb-per-bash-call-contract:
     name: Test one verb per bash call contract
     needs: changes
@@ -1163,6 +1183,7 @@ jobs:
       - test-one-verb-per-bash-call-contract
       - test-bash-call-timeout-budget-contract
       - test-git-safety-contract
+      - test-rung-type-filter-contract
       - test-plugin-definition-currency
       - test-plugin-definition-refresh
       - test-codex-lane-liveness
@@ -1206,6 +1227,7 @@ jobs:
             ${{ needs.test-one-verb-per-bash-call-contract.result }}
             ${{ needs.test-bash-call-timeout-budget-contract.result }}
             ${{ needs.test-git-safety-contract.result }}
+            ${{ needs.test-rung-type-filter-contract.result }}
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-plugin-definition-refresh.result }}
             ${{ needs.test-codex-lane-liveness.result }}
