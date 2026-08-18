@@ -3377,6 +3377,39 @@ verified per-submodule fix are in
 [`.claude/worktree-isolation.md`](.claude/worktree-isolation.md). If a repo's working area is
 unexpectedly dirty or you can't get an isolated tree, do GitHub-API-only work (triage/comment) there.
 
+🔴 **`submodule-init.sh` leaves you on the GITLINK PIN, so a NEW product work branch cut from it is
+based on the pin — not on the product's `main`.** That is correct behaviour for the helper, and the
+plugin-definition rules depend on it: reading a reviewed definition **at the pinned revision** is the
+whole point there, and it is **unchanged**. But a *product* work branch wants the product's current
+tip, and the pin lags it by however long it has been since a bump merged.
+
+**The failure is silent, and every local measurement agrees with itself.** Measured 2026-08-18: a run
+selected the oldest open Security issue, cut a branch from the pin, fixed a `checkov` finding, and
+drove it to a draft PR with RED/GREEN, a negative control and a build — for work that had **merged
+nine hours earlier**. The pin was 6 commits behind and one of those six was the fix. `checkov`
+genuinely reported the finding at the pin, and the repository's own scan script agreed **because it
+also ran at the pin**. Nothing in the scan, the controls, or the build could have revealed it: they
+were all correct about a tree that is not the one the PR merges into. The only signal was
+`mergeStateStatus: DIRTY`, after the whole claim → build → validate → PR cycle was spent
+([#2891](https://github.com/devantler-tech/monorepo/issues/2891)).
+
+⚠️ **It degrades exactly when dependency automation is unhealthy** — pins move by bump PRs, so a
+stalled ecosystem ([#2779](https://github.com/devantler-tech/monorepo/issues/2779) records six days)
+freezes every pin and widens this for every submodule at once.
+
+So **before building a new slice in a submodule, ask how stale the pin is** — a fetch and a
+`rev-list`, seconds:
+
+```sh
+.claude/scripts/submodule-pin-currency.sh <path>   # 0 CURRENT · 1 BEHIND (prints the tip to branch from) · 2 UNKNOWN
+```
+
+On `BEHIND`, base the new branch on the product's own default branch rather than the checked-out pin
+(the script prints the exact revision). ⚠️ **`2` is UNCHECKED, never CURRENT** — report it and resolve
+what it names rather than proceeding as if the pin were fresh. This is about **new work branches
+only**: an existing branch is landed on its own `headRefOid` per *Git safety*, and a pinned definition
+is still read at the gitlink.
+
 ### Git safety
 Never `git reset --hard`, `git stash`, force-push, or discard changes you did not author. Never
 `git add -A` / `git add .` — stage only files you edited. Never stage submodule-pointer bumps unless
