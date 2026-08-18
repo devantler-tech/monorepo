@@ -92,10 +92,21 @@ privacy="$(extract_section '### Sensitive information stays private' '### Local 
 assert_contains "${privacy}" 'provider and account posture' \
   'the doctrine must state that provider/account posture is governed by this rule'
 
-for cls in 'quota/billing' 'credentials/auth' 'runtime/config'; do
+# Backticked so each match is unambiguous: bare `unknown` could be satisfied by a future sentence,
+# and an assertion a passing sentence satisfies by accident guards nothing.
+for cls in '`quota/billing`' '`credentials/auth`' '`runtime/config`' '`unknown`'; do
   assert_contains "${privacy}" "${cls}" "the publishable cause classes must be enumerated (${cls})"
 done
 
+# The remaining publishable rows. Without these the table's LEFT column could be emptied row by row —
+# reaching the same "make it all private" end state the two-sided assertions below guard against, but
+# by deleting rows rather than by deleting the rule, so those assertions would not notice.
+assert_contains "${privacy}" 'named lane or provider is degraded' \
+  'the degraded lane/provider fact must stay publishable'
+assert_contains "${privacy}" 'agent-actionable or maintainer-only' \
+  'remediation ownership must stay publishable — it decides escalate vs act'
+assert_contains "${privacy}" 'last-verified <date>: <result>' \
+  'the blocker line verification record must stay publishable'
 # The private side. Each is a distinct disclosure, so each is pinned separately — a single
 # catch-all phrase could be narrowed later without any assertion noticing.
 assert_contains "${privacy}" 'reset or retry timestamps' \
