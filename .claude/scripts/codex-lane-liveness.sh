@@ -48,6 +48,10 @@ trap 'ec=$?; [ "$ec" -eq 0 ] || exit 2' ERR
 
 STORE="${CODEX_HOME:-$HOME/.codex}/sqlite/codex-dev.db"
 AUTOMATION=""
+# Tracked separately from the value, because `--automation ""` is a REQUEST for one automation that
+# happens to be empty, not an absent flag. Testing the value alone would silently widen that request
+# to every ACTIVE automation — the opposite of what the caller asked for.
+AUTOMATION_SET=0
 GRACE_SECONDS=300
 STUB_SECONDS=60
 CONSECUTIVE=2
@@ -73,7 +77,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
     --store) [ "$#" -ge 2 ] || die_unknown "--store needs a value"; STORE="$2"; shift 2 ;;
-    --automation) [ "$#" -ge 2 ] || die_unknown "--automation needs a value"; AUTOMATION="$2"; shift 2 ;;
+    --automation) [ "$#" -ge 2 ] || die_unknown "--automation needs a value"; AUTOMATION="$2"; AUTOMATION_SET=1; shift 2 ;;
     --grace-seconds) [ "$#" -ge 2 ] || die_unknown "--grace-seconds needs a value"; GRACE_SECONDS="$2"; shift 2 ;;
     --stub-seconds) [ "$#" -ge 2 ] || die_unknown "--stub-seconds needs a value"; STUB_SECONDS="$2"; shift 2 ;;
     --consecutive) [ "$#" -ge 2 ] || die_unknown "--consecutive needs a value"; CONSECUTIVE="$2"; shift 2 ;;
@@ -142,10 +146,18 @@ for spec in "automations:id" "automations:status" "automation_runs:automation_id
   [ "${have:-0}" = "1" ] || die_unknown "unexpected schema: ${tbl}.${col} is missing"
 done
 
-if [ -n "$AUTOMATION" ]; then
+if [ "$AUTOMATION_SET" -eq 1 ]; then
+  [ -n "$AUTOMATION" ] || die_unknown "--automation must not be empty"
   case "$AUTOMATION" in
     *[!A-Za-z0-9._-]*) die_unknown "unusable automation id: $AUTOMATION" ;;
   esac
+  # A named automation is held to the SAME ACTIVE filter the unfiltered branch applies. An inactive
+  # automation does not dispatch, so its newest settled runs are old by definition and would classify
+  # as a dead lane — reporting NOT-PRODUCING for something that is not supposed to be producing. That
+  # is a false positive on the one verdict this check exists to make, so it fails closed to UNKNOWN.
+  active=$(sq "SELECT COUNT(*) FROM automations WHERE id = '${AUTOMATION}' AND status = 'ACTIVE';") \
+    || die_unknown "could not look up automation ${AUTOMATION}"
+  [ "${active:-0}" = "1" ] || die_unknown "automation ${AUTOMATION} is not an ACTIVE automation in $STORE"
   ids=$AUTOMATION
 else
   ids=$(sq "SELECT id FROM automations WHERE status='ACTIVE' ORDER BY id;") \
@@ -186,7 +198,11 @@ while IFS= read -r id; do
   # Only SETTLED runs are classified. An in-flight run is short BECAUSE it is still running — most
   # acutely when the checking run inspects its own row — so classifying it would make the guard fire
   # on a healthy lane every time it ran. This is the trap that would have made the check useless.
-  rows=$(sq "SELECT ((updated_at - created_at) / 1000) AS dur,
+  # The duration is selected in RAW MILLISECONDS and compared in milliseconds. Dividing by 1000 here
+  # truncates, so a run lasting `STUB_SECONDS * 1000 + 999` ms would report as exactly STUB_SECONDS
+  # and be counted a stub — a run that is genuinely over the threshold classified as under it, which
+  # is the direction that produces a false NOT-PRODUCING on a healthy lane.
+  rows=$(sq "SELECT (updated_at - created_at) AS dur_ms,
                     CASE WHEN inbox_title IS NULL OR trim(inbox_title) = '' THEN 1 ELSE 0 END AS no_inbox
              FROM automation_runs
              WHERE automation_id = '${id}' AND updated_at <= ${settled_before}
@@ -195,26 +211,28 @@ while IFS= read -r id; do
 
   n=0
   stubs=0
-  maxdur=-1
+  maxdur_ms=-1
   malformed=0
-  while IFS='|' read -r dur no_inbox; do
-    [ -n "$dur" ] || continue
+  stub_ms=$(( STUB_SECONDS * 1000 ))
+  while IFS='|' read -r dur_ms no_inbox; do
+    [ -n "$dur_ms" ] || continue
     n=$(( n + 1 ))
     # BOTH fields are validated. An unparsable value must never fall through to the healthy verdict:
     # `no_inbox` in particular is compared against the literal 1, so without this check every
     # unexpected value (empty, NULL, a header token, a shifted column) would read as "produced an
     # inbox item" and therefore as NOT a stub — making the default for "I could not parse this" the
-    # answer that exits 0. Strip at most one leading '-' so forms like `--5` or `1-2` are rejected
-    # rather than reaching `[ ]` and erroring into a false non-stub.
-    case "${dur#-}" in ''|*[!0-9]*) dur=-1 ;; esac
+    # answer that exits 0. A NEGATIVE duration (updated_at before created_at) is corrupt timing data,
+    # not a long run, so it is malformed too: accepting it would have made it a non-stub and fed the
+    # healthy verdict, which is the same fall-through this validation exists to prevent.
+    case "$dur_ms" in ''|*[!0-9]*) malformed=1; break ;; esac
     case "$no_inbox" in
       0|1) : ;;
       *) malformed=1; break ;;
     esac
     # An `[ ... ] && x=y` here would return non-zero whenever the test is false and abort the loop
     # under `set -e`, so the assignment is written as a full conditional.
-    if [ "$dur" -gt "$maxdur" ]; then maxdur=$dur; fi
-    if [ "$dur" -ge 0 ] && [ "$dur" -le "$STUB_SECONDS" ] && [ "$no_inbox" = "1" ]; then
+    if [ "$dur_ms" -gt "$maxdur_ms" ]; then maxdur_ms=$dur_ms; fi
+    if [ "$dur_ms" -le "$stub_ms" ] && [ "$no_inbox" = "1" ]; then
       stubs=$(( stubs + 1 ))
     fi
   done <<EOF
@@ -234,7 +252,7 @@ EOF
 "
     any_dead=1
   else
-    report="${report}  OK  ${id} — ${stubs}/${n} newest settled runs are stubs, longest ${maxdur}s
+    report="${report}  OK  ${id} — ${stubs}/${n} newest settled runs are stubs, longest $(( maxdur_ms / 1000 ))s
 "
   fi
 done <<EOF

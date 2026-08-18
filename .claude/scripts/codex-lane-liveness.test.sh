@@ -54,11 +54,26 @@ add_automation() {
                 VALUES ('$2','$3','RRULE:FREQ=DAILY',$NOW_MS,$NOW_MS);"
 }
 
+# `thread_id` is the PRIMARY KEY, so its uniqueness has to be guaranteed rather than likely. A
+# `$RANDOM` component can repeat, which would make two runs sharing an automation/ago/duration
+# collide and abort the whole fixture under `set -e` — a flake with no relation to what is being
+# tested. A monotonic counter also keeps every id reproducible, which the header's "no assertion
+# depends on a non-pinned input" property requires.
+run_seq=0
+
 # add_run <db> <automation> <ended_ms_ago> <duration_s> <inbox:yes|no>
 add_run() {
   local db=$1 auto=$2 ago=$3 dur=$4 inbox=$5
+  add_run_ms "$db" "$auto" "$ago" "$(( dur * 1000 ))" "$inbox"
+}
+
+# add_run_ms <db> <automation> <ended_ms_ago> <duration_MS> <inbox:yes|no>
+# Millisecond-precision variant, so a fixture can sit just above a whole-second stub threshold.
+add_run_ms() {
+  local db=$1 auto=$2 ago=$3 dur_ms=$4 inbox=$5
   local ended=$(( NOW_MS - ago )) created
-  created=$(( ended - dur * 1000 ))
+  created=$(( ended - dur_ms ))
+  run_seq=$(( run_seq + 1 ))
   local title
   case "$inbox" in
     yes)   title="'an inbox item'" ;;
@@ -68,7 +83,7 @@ add_run() {
   esac
   sqlite3 "$db" "INSERT INTO automation_runs
     (thread_id,automation_id,status,thread_title,inbox_title,inbox_summary,last_error,created_at,updated_at)
-    VALUES ('t-$auto-$RANDOM-$ago-$dur','$auto','PENDING_REVIEW','Run',$title,'sum','PRIVATE-ERROR-PAYLOAD',$created,$ended);"
+    VALUES ('t-$auto-$run_seq-$ago-$dur_ms','$auto','PENDING_REVIEW','Run',$title,'sum','PRIVATE-ERROR-PAYLOAD',$created,$ended);"
 }
 
 run_check() {
@@ -317,9 +332,51 @@ case "$OUT" in
   *PRIVATE-ERROR-PAYLOAD*) note_fail "a run's error payload reached the check's output" ;;
 esac
 
+# --- an explicitly EMPTY --automation must not widen to every automation ------------------------
+# The failure this pins is silent: the request was for one automation, and testing the value rather
+# than the flag turned it into a sweep of all of them, reporting on lanes nobody asked about.
+db=$TMP/emptyauto.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  4 no
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 5 no
+run_check "$db" --automation ""
+expect_rc 2 "an empty --automation must be UNKNOWN, never a silent sweep of every automation"
+expect_out "must not be empty" "the empty --automation refusal must say so"
+
+# --- a NAMED but INACTIVE automation must not be judged ------------------------------------------
+# An inactive lane does not dispatch, so its newest settled runs are old by construction and would
+# classify as a dead lane. That is a false NOT-PRODUCING on the one verdict this check exists to make.
+db=$TMP/inactive.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_automation "$db" lane-b INACTIVE
+add_run "$db" lane-b $(( GRACE_MS + 60000 ))  4 no
+add_run "$db" lane-b $(( GRACE_MS + 900000 )) 5 no
+run_check "$db" --automation lane-b
+expect_rc 2 "an inactive automation must be UNKNOWN, never NOT-PRODUCING"
+expect_out "not an ACTIVE automation" "the inactive refusal must name the reason"
+
+# --- a run just OVER the stub threshold is not a stub --------------------------------------------
+# Whole-second truncation classified `STUB_SECONDS*1000 + 999` ms as exactly STUB_SECONDS, so a run
+# genuinely over the threshold counted as under it. Both runs sit 999 ms over, so the comparison
+# precision is the only thing deciding the verdict.
+db=$TMP/justover.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))  60999 no
+add_run_ms "$db" lane-a $(( GRACE_MS + 900000 )) 60999 no
+run_check "$db"
+expect_rc 0 "a run 999ms over the stub threshold must not be counted a stub"
+expect_out "OK" "a just-over-threshold lane must report OK"
+
+# --- a NEGATIVE duration is corrupt timing data, not a long run ----------------------------------
+# updated_at before created_at cannot describe a real run. Treating it as a large duration made it a
+# non-stub, which fed the healthy verdict — the same fall-through the field validation exists to stop.
+db=$TMP/negdur.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run_ms "$db" lane-a $(( GRACE_MS + 60000 ))  -5000 no
+add_run_ms "$db" lane-a $(( GRACE_MS + 900000 )) -5000 no
+run_check "$db"
+expect_rc 2 "a negative run duration must be UNKNOWN, never a silent non-stub"
+expect_out "unparsable run row" "a negative duration must report as an unparsable row"
+
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 38 ]; then
+if [ "$asserts" -lt 46 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi
