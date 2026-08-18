@@ -3291,8 +3291,7 @@ not a public tracking epic. If you are unsure whether something is safe to publi
 sensitive and keep it private. *(Maintainer
 direction 2026-07-11: "We generally do not want to share sensitive information publicly.")*
 
-
-**Provider and account posture is this same rule's third case — and the one where the deployment
+**This rule extends to provider and account posture — the case where the deployment
 contradicted itself.** A lane, review provider, or other vendor dependency that stops serving must be
 reported through the mandated `**Blocker:**` line (*Issue-driven → Drain oldest-first*, skip clause
 (b)), which on a public repository is a **public** artifact — while
@@ -3309,9 +3308,11 @@ half of it, so the split is by **granularity**, exactly as it already is for a s
 | | correlation of posture **across vendors** |
 
 The right-hand column is what turns an outage note into a map of the deployment's dependencies and
-their failure windows. The bare fact that a lane is down is not the disclosure that matters here — a
-published *availability window* is: it names the interval during which review independence is
-degraded and scrutiny on incoming changes is weakest.
+their failure windows. Note which half of the window each column holds: *degraded since* is
+publishable because triage needs to know whether a blocker is current or stale, and it says nothing
+about when the gap closes. A *reset or retry time* is the other half, and it is the sensitive one —
+it advertises in advance exactly how long review independence stays degraded and scrutiny on
+incoming changes stays weakest.
 
 🔴 **A cause CLASS is never withheld to satisfy this, and "make it all private" is NOT a valid
 tightening.** An issue whose blocker cannot be named at all is under-specified for **skip clause (b)**

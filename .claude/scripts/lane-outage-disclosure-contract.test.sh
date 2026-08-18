@@ -89,7 +89,7 @@ privacy="$(extract_section '### Sensitive information stays private' '### Local 
 # assert real content was captured before testing it.
 [ "${#privacy}" -gt 400 ] || fail "privacy section captured only ${#privacy} chars — extraction is broken"
 
-assert_contains "${privacy}" 'Provider and account posture' \
+assert_contains "${privacy}" 'provider and account posture' \
   'the doctrine must state that provider/account posture is governed by this rule'
 
 for cls in 'quota/billing' 'credentials/auth' 'runtime/config'; do
@@ -111,7 +111,7 @@ assert_contains "${privacy}" 'across vendors' \
 # tightening and every blocker line becomes under-specified for skip clause (b).
 assert_contains "${privacy}" 'never withheld' \
   'the doctrine must state that a cause CLASS is never withheld'
-assert_contains "${privacy}" 'skip clause (b)' \
+assert_contains "${privacy}" 'under-specified for **skip clause (b)**' \
   'the doctrine must tie the publishable class back to the blocker-line requirement'
 
 # ---------------------------------------------------------------------------
