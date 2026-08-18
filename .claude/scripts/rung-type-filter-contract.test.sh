@@ -57,11 +57,25 @@ case "${rows}" in
     ;;
 esac
 
-# 2. Both rows must still actually name their type filter — otherwise assertion 1 passes by absence.
-printf '%s\n' "${rows}" | grep -q 'type:Security' ||
+# 2. Each row must name ITS OWN filter. Searching the combined output would accept the two filters
+# swapped between the rungs — a table that still contains both strings, still satisfies assertion 1,
+# and inverts the Security-before-Bug order the ladder exists to impose.
+rung2_row="$(printf '%s\n' "${rows}" | grep -F '| **2** | **Security issues**')"
+rung3_row="$(printf '%s\n' "${rows}" | grep -F '| **3** | **Bugs**')"
+[ -n "${rung2_row}" ] || fail "could not isolate the rung-2 row"
+[ -n "${rung3_row}" ] || fail "could not isolate the rung-3 row"
+
+printf '%s\n' "${rung2_row}" | grep -q 'type:Security' ||
   fail "the rung-2 row no longer names type:Security, so assertion 1 would pass with no filter present at all"
-printf '%s\n' "${rows}" | grep -q 'type:Bug' ||
+printf '%s\n' "${rung3_row}" | grep -q 'type:Bug' ||
   fail "the rung-3 row no longer names type:Bug, so assertion 1 would pass with no filter present at all"
+
+# ...and only its own. Without these, a row naming BOTH filters satisfies the two assertions above
+# while still pointing that rung at the wrong type.
+! printf '%s\n' "${rung2_row}" | grep -q 'type:Bug' ||
+  fail "the rung-2 (Security) row also names type:Bug — the rung filters are crossed"
+! printf '%s\n' "${rung3_row}" | grep -q 'type:Security' ||
+  fail "the rung-3 (Bug) row also names type:Security — the rung filters are crossed"
 
 # 3. The warning that explains WHY must survive, with its measurement. Flattened, because the
 # sentences wrap across source lines.
