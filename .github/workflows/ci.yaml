@@ -23,6 +23,7 @@ jobs:
       branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
       worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
+      submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
@@ -128,6 +129,11 @@ jobs:
             submodule-init:
               - '.claude/scripts/submodule-init.sh'
               - '.claude/scripts/submodule-init.test.sh'
+            submodule-pin-currency:
+              - 'AGENTS.md'
+              - '.claude/scripts/submodule-pin-currency.sh'
+              - '.claude/scripts/submodule-pin-currency.test.sh'
+              - '.github/workflows/ci.yaml'
             memory-hygiene:
               - 'AGENTS.md'
               - '.claude/scripts/memory-hygiene.sh'
@@ -645,6 +651,28 @@ jobs:
       # guard resolves worktree paths with `pwd -P` (macOS /private/tmp symlinks).
       - name: Self-test the submodule-init isolation guard
         run: bash .claude/scripts/submodule-init.test.sh
+
+  test-submodule-pin-currency:
+    name: Test submodule pin currency
+    needs: changes
+    if: needs.changes.outputs.submodule-pin-currency == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Throwaway git fixtures only (file:// remotes, hermetic config) — no network and no real
+      # submodule touched. Both OSes because the check compares resolved worktree paths with
+      # `pwd -P`, which differs under macOS /private/tmp symlinks.
+      - name: Verify the submodule pin currency check
+        run: bash .claude/scripts/submodule-pin-currency.test.sh
 
   test-pipefail-grep-guard:
     name: Test pipefail grep guard
@@ -1191,6 +1219,7 @@ jobs:
       - test-branch-cleanup
       - test-worktree-cleanup
       - test-submodule-init
+      - test-submodule-pin-currency
       - test-pipefail-grep-guard
       - test-maintainer-preflight
       - test-memory-hygiene
@@ -1236,6 +1265,7 @@ jobs:
             ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-submodule-init.result }}
+            ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-pipefail-grep-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
