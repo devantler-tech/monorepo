@@ -572,6 +572,31 @@ pointer and must equal that scheduler record before the drift check reports `MAT
 ambiguous store, missing baseline, marker that did not advance, or incomplete recurrence rule is
 `UNKNOWN`, never `MATCH`.
 
+🔴 **`last_run_at` is a DISPATCH marker, never a LIVENESS signal — a fully dead lane advances it
+exactly like a healthy one.** The scheduler records when it *started* a run, not whether the run did
+anything, so when every dispatched turn dies seconds in, `last_run_at` and `next_run_at` both stay
+perfectly healthy and this drift check reports `MATCH` over a lane producing nothing. Measured
+2026-08-17: **32 consecutive dead dispatches over ~29h across BOTH Codex automations** (3
+`agent-improver`, 29 `daily-ai-engineer`), undetected. Two other signals fail with it — the scheduler
+records these runs `PENDING_REVIEW`, the **same** status healthy runs carry, so status cannot
+discriminate and `notification_policy = "failed_runs_only"` never fires.
+
+⚠️ **The Improver's mandated sibling cross-read is what this silently corrupts.** A frozen ledger is
+indistinguishable from an ordinary quiet period, so a sibling's pending hypotheses read as merely
+un-advanced rather than *unable* to advance, and any telemetry mined for that lane over the window is
+an artifact of the outage rather than agent behaviour — a naive read scores the dead lane as having
+**improved**, because its error count falls to zero. Record such hypotheses as blocked by the outage;
+never as a verdict, a directional reading, or a "no movement" inference.
+
+Run [`.claude/scripts/codex-lane-liveness.sh`](.claude/scripts/codex-lane-liveness.sh) for the
+liveness question. It classifies each ACTIVE automation's newest **settled** runs by run duration and
+inbox-item presence — the discriminators that actually separate the two states (healthy runs measured
+768–24,428 s with an inbox item, against 4-second stubs with none) — and exits `0` producing, `1` not
+producing, `2` **UNKNOWN**. It reads only timings and an inbox-presence flag, never a run's error
+payload, so it stays generic across causes and cannot carry private runtime state into an artifact.
+A `1` is reported and its cause pursued; it is never a run-stopper, and the remedy may lie outside
+agent authority.
+
 The deployed Cursor Automation has no supported local write surface. Its reviewed source is
 `.claude/loaders/cursor-daily-ai-engineer.md`; after that source merges, use a declared Maintainer
 channel for the UI paste rather than claiming the server-side prompt changed. Marketplace/plugin
