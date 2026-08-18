@@ -1440,7 +1440,17 @@ Digest rules:
   claim; an expired tip is not `CLAIMED` and is annotated as `stale-claim` on the ordinary issue row.
   For lane fallbacks, match `(claude|cursor|codex)/*-<issue>`, a takeover branch
   (`(claude|cursor|codex)/*-<issue>-2`, `-3`, …), or a legacy normalised stem under any of those three
-  prefixes. **(2) `claude/*` / `codex/*`:** require BOTH a `devantler` assignment and the matching
+  prefixes — match a lane branch by the **issue number or a normalised stem**, never an assumed exact
+  stem (contract *Claim protocol* rule 1). 🔴 **Number resolution does NOT subsume the legacy stem —
+  run both.** A
+  `-<issue>` / `-<issue>-<k>` anchor matches nothing on a branch that predates the numbering rule and
+  ends in its description, so a number-only scan reports `no claim` over a live legacy claim branch
+  and the orchestrator duplicates the build. Match the numbered and takeover shapes by number **and**
+  the legacy shape by normalised stem; a hit on either is a claim.
+  When deciding "no open PR", a body hit on `"#<issue>"` counts only if it
+  references **this** repo's issue (`Fixes`/`Closes`/`Resolves #<issue>`, `<o>/<r>#<issue>`, or a bare
+  `#<issue>` that is not solely a foreign `owner/repo#<issue>`).
+  **(2) `claude/*` / `codex/*`:** require BOTH a `devantler` assignment and the matching
   branch — an assignment to **anyone but `devantler`** is not a claim, and a `devantler` assignment
   with **no** branch is not a live claim under the contract's *Claim protocol*, so reporting either
   as one would let a bare assignee park an issue. **(3) `cursor/*`:** the matching branch alone is

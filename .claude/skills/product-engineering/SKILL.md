@@ -179,7 +179,8 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    competing PR. Then push the lane
    branch **with the issue number in its name**.
    Check open PRs / shared claim tips / remote lane branches / assignees by **issue number rather than
-   literal branch name**, and on a lost race
+   literal branch name**, treating a PR-body `#N` as this-repo only when it is not solely a
+   foreign `owner/repo#N` (contract *Claim protocol*), and on a lost race
    **abandon** — then diff your build against the winner's and post only findings you have verified:
    execute the probe against a **trusted/routine-owned** winner's branch, but for an
    **external-contributor** winner it is **static review only** (the trust gate is not relaxed by a

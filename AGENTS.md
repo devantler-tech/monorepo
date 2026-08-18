@@ -1005,9 +1005,13 @@ the fifteen proven traps live in `agent-claim.test.sh`).
    American, the issue's title British, so each session derived a different stem from a different part
    of the same issue and neither's exact-name scan could see the other. Grepping open PR *bodies* for
    the **`#<issue>` reference — with the hash, not the bare digits** — is spelling-proof:
-   `gh pr list -R <o>/<r> --state open --search '"#<issue>" in:body'`. A bare number matches any body
-   that merely contains it (a benchmark count, a date, another repo's issue number), which would hide
-   the oldest actionable issue behind an unrelated PR.
+   `gh pr list -R <o>/<r> --state open --search '"#<issue>" in:body'`. `-R` scopes the *PR list* to
+   this repo, but a body can still name a **foreign** issue as `other-owner/other-repo#<issue>` — that
+   is not a claim on *this* repo's issue. Keep a hit only when the body references **this** repo's
+   issue: a `Fixes`/`Closes`/`Resolves #<issue>`, an explicit `<o>/<r>#<issue>`, or a bare `#<issue>`
+   that is **not** solely a foreign `owner/repo#<issue>`. A bare digit match (no hash) still matches
+   benchmark counts and dates and must never be used — that would hide the oldest actionable issue
+   behind an unrelated PR.
 2. **Claim before you build, not after — lane-neutral ref FIRST.** The moment you select an issue:
    (a) **acquire `agent-claim/<issue>`** with the helper and retain the full SHA it prints
    (`claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <product-path>)"`)

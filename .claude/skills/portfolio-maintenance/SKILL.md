@@ -698,7 +698,8 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    (`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <product-path>` — same repository and
    exact acquired SHA as the acquire);
    a tip with no open PR past the ~2h lease may be taken over
-   with `--takeover` only after confirming no open `#<issue>` PR. Check open PRs, remote
+   with `--takeover` only after confirming no open `#<issue>` PR. Check open PRs (same-repo body refs
+   only — drop hits whose only `#<issue>` is a foreign `owner/repo#<issue>`), remote
    `agent-claim/<issue>` tips, lane work branches (`claude/*`/`codex/*`/`cursor/*`) AND assignees by
    **issue number, never literal branch name**. A live claim (shared tip in-window, or assigned +
    branched in-window, no PR) is skip reason **(e)** — the only one that expires by

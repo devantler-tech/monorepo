@@ -1365,6 +1365,39 @@ grep -Fq 'shared tip alone is enough' "${surveyor}" ||
 grep -Fq '`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <selected-repo-path>`' "${cursor_loader}" ||
   fail "Cursor loader retirement does not invoke the repository-qualified helper"
 
+# Same-repo PR-body claim filter (#2250) — echoed at every site that tells a run how to decide
+# "no open PR". `-R` scopes the PR *list* to this repo, but a body can still name a foreign
+# `owner/repo#<issue>`, which is not a claim on this repo's issue; counting it hides the oldest
+# actionable issue behind an unrelated PR.
+grep -Fq 'foreign `owner/repo#<issue>`' "${constitution}" ||
+  fail "constitution missing same-repo PR-body claim filter (#2250)"
+grep -Fq 'foreign `owner/repo#<issue>`' "${maintenance_skill}" ||
+  fail "portfolio-maintenance missing same-repo PR-body claim filter (#2250)"
+grep -Fq 'foreign `owner/repo#N`' "${product_engineering_skill}" ||
+  fail "product-engineering missing same-repo body-ref echo (#2250)"
+grep -Fq 'foreign `owner/repo#<issue>`' "${surveyor}" ||
+  fail "surveyor missing same-repo PR-body claim filter (#2250)"
+grep -Fq 'foreign `owner/repo#<issue>`' "${monorepo_skill}" ||
+  fail "monorepo card missing same-repo body-ref echo (#2250)"
+# The exclusion alone is only HALF the rule, and pinning only that half lets an edit drop the
+# positive clause while this block stays green — leaving a filter that rejects valid local claims,
+# which stalls the queue in the same way the foreign hit does. The constitution is where the full
+# rule is stated, so both halves are pinned there: the accepted forms, and the "not SOLELY foreign"
+# qualifier that keeps a body naming both repos a valid local claim.
+# shellcheck disable=SC2016 # literal Markdown code spans; expansion is intentionally disabled
+grep -Fq '`Fixes`/`Closes`/`Resolves #<issue>`' "${constitution}" ||
+  fail "constitution does not enumerate the accepted same-repo reference forms (#2250)"
+# shellcheck disable=SC2016
+grep -Fq 'solely a foreign `owner/repo#<issue>`' "${constitution}" ||
+  fail "constitution drops the not-SOLELY-foreign qualifier, so a body naming both repos is rejected (#2250)"
+
+# Lane-branch discovery still runs alongside number resolution. The cross-lane race is decided on the
+# shared `agent-claim/<issue>` tip, but lane branches remain one of the four pre-selection signals —
+# and a branch predating the numbering rule ends in its description, matching no `-<issue>` anchor.
+# A number-only scan therefore reports "no claim" over a live legacy claim branch: the #96 collision.
+grep -Fq 'Number resolution does NOT subsume the legacy stem' "${surveyor}" ||
+  fail "surveyor does not require the legacy stem pass alongside number resolution (#2250)"
+
 # Candidate-scoped clearance must have a producer grammar, and bounded survey continuation must
 # advance past already classified or named-blocker rows without trusting stale head state.
 grep -Fq 'QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>' "${surveyor}" ||
