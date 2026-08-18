@@ -107,6 +107,7 @@ assert_contains "${privacy}" 'agent-actionable or maintainer-only' \
   'remediation ownership must stay publishable — it decides escalate vs act'
 assert_contains "${privacy}" 'last-verified <date>: <result>' \
   'the blocker line verification record must stay publishable'
+
 # The private side. Each is a distinct disclosure, so each is pinned separately — a single
 # catch-all phrase could be narrowed later without any assertion noticing.
 assert_contains "${privacy}" 'reset or retry timestamps' \
