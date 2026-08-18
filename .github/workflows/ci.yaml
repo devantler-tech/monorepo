@@ -34,6 +34,7 @@ jobs:
       one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
       codex-dispatch-supersession-contract: ${{ steps.filter.outputs.codex-dispatch-supersession-contract }}
+      lane-outage-disclosure-contract: ${{ steps.filter.outputs.lane-outage-disclosure-contract }}
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
       rung-type-filter-contract: ${{ steps.filter.outputs.rung-type-filter-contract }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
@@ -258,6 +259,10 @@ jobs:
             codex-dispatch-supersession-contract:
               - 'AGENTS.md'
               - '.claude/scripts/codex-dispatch-supersession-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            lane-outage-disclosure-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/lane-outage-disclosure-contract.test.sh'
               - '.github/workflows/ci.yaml'
             git-safety-contract:
               - 'AGENTS.md'
@@ -1032,6 +1037,21 @@ jobs:
       - name: Verify the codex dispatch supersession contract
         run: bash .claude/scripts/codex-dispatch-supersession-contract.test.sh
 
+  test-lane-outage-disclosure-contract:
+    name: Test lane outage disclosure contract
+    needs: changes
+    if: needs.changes.outputs.lane-outage-disclosure-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the lane outage disclosure contract
+        run: bash .claude/scripts/lane-outage-disclosure-contract.test.sh
+
   test-git-safety-contract:
     name: Test git safety contract
     needs: changes
@@ -1232,6 +1252,7 @@ jobs:
       - test-one-verb-per-bash-call-contract
       - test-bash-call-timeout-budget-contract
       - test-codex-dispatch-supersession-contract
+      - test-lane-outage-disclosure-contract
       - test-git-safety-contract
       - test-rung-type-filter-contract
       - test-plugin-definition-currency
@@ -1278,6 +1299,7 @@ jobs:
             ${{ needs.test-one-verb-per-bash-call-contract.result }}
             ${{ needs.test-bash-call-timeout-budget-contract.result }}
             ${{ needs.test-codex-dispatch-supersession-contract.result }}
+            ${{ needs.test-lane-outage-disclosure-contract.result }}
             ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-rung-type-filter-contract.result }}
             ${{ needs.test-plugin-definition-currency.result }}

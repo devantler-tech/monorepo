@@ -594,6 +594,15 @@ inbox-item presence — the discriminators that actually separate the two states
 768–24,428 s with an inbox item, against 4-second stubs with none) — and exits `0` producing, `1` not
 producing, `2` **UNKNOWN**. It reads only timings and an inbox-presence flag, never a run's error
 payload, so it stays generic across causes and cannot carry private runtime state into an artifact.
+⚠️ **That narrowness is defence in depth, NOT a claim that the cause may never be named.**
+*Sensitive information stays private* governs what may be published, and it permits — and the
+`**Blocker:**` line requires — the bounded **cause class**. So diagnose a `1` from the runtime's own
+per-turn outcome record rather than the scheduler's: each rollout's `task_complete` event carries a
+`codex_error_info` classifier naming the cause (`usage_limit_exceeded`, …) beside the operator-facing
+message. That classifier is ground truth, where duration-plus-inbox-presence is only a proxy and
+cannot separate a short *healthy* run from a stub — a start time derived from the proxy was measured
+wrong by ~2.7 hours. Report at **class** granularity; the message beside it carries reset times and
+account detail that stay in the private operator notes.
 A `1` is reported and its cause pursued; it is never a run-stopper, and the remedy may lie outside
 agent authority.
 
@@ -3281,6 +3290,35 @@ sensitive detail. Drive fixes through
 not a public tracking epic. If you are unsure whether something is safe to publish, treat it as
 sensitive and keep it private. *(Maintainer
 direction 2026-07-11: "We generally do not want to share sensitive information publicly.")*
+
+**This rule extends to provider and account posture — the case where the deployment
+contradicted itself.** A lane, review provider, or other vendor dependency that stops serving must be
+reported through the mandated `**Blocker:**` line (*Issue-driven → Drain oldest-first*, skip clause
+(b)), which on a public repository is a **public** artifact — while
+[`codex-lane-liveness.sh`](.claude/scripts/codex-lane-liveness.sh) treats "billing, credentials,
+account posture" as private runtime state it must never carry into an artifact. Each is right about
+half of it, so the split is by **granularity**, exactly as it already is for a security finding:
+
+| Publishable — this is what triage acts on | Private operator notes only |
+|---|---|
+| the **cause class**: `quota/billing`, `credentials/auth`, `runtime/config`, `unknown` | exact reset or retry timestamps |
+| that a named lane or provider is degraded, and since when | quota, credit, or balance figures |
+| whether the remedy is **agent-actionable or maintainer-only** | plan, tier, or subscription identity |
+| the `last-verified <date>: <result>` the blocker line requires | account, organisation, or billing identifiers |
+| | correlation of posture **across vendors** |
+
+The right-hand column is what turns an outage note into a map of the deployment's dependencies and
+their failure windows. Note which half of the window each column holds: *degraded since* is
+publishable because triage needs to know whether a blocker is current or stale, and it says nothing
+about when the gap closes. A *reset or retry time* is the other half, and it is the sensitive one —
+it advertises in advance exactly how long review independence stays degraded and scrutiny on
+incoming changes stays weakest.
+
+🔴 **A cause CLASS is never withheld to satisfy this, and "make it all private" is NOT a valid
+tightening.** An issue whose blocker cannot be named at all is under-specified for **skip clause (b)**
+— which then either parks the issue permanently or lets a run skip it with no live-verified reason.
+Silence there is the failure mode that clause exists to prevent, so the class is published and only
+the detail is held back.
 
 ### Local agent host — least-privilege runtime (part of the portfolio)
 The machine that runs the scheduled AI engineers (this Claude Code agent and the Codex sibling) is
