@@ -252,7 +252,11 @@ EOF
 "
     any_dead=1
   else
-    report="${report}  OK  ${id} — ${stubs}/${n} newest settled runs are stubs, longest $(( maxdur_ms / 1000 ))s
+    # Reported in MILLISECONDS, matching the comparison. Dividing back to whole seconds here would
+    # make a run just over the threshold print as exactly STUB_SECONDS beside a `stub<=${STUB_SECONDS}s`
+    # header — a correct OK verdict that reads as a contradiction, in a diagnostic whose only job is to
+    # be believed.
+    report="${report}  OK  ${id} — ${stubs}/${n} newest settled runs are stubs, longest ${maxdur_ms}ms
 "
   fi
 done <<EOF
