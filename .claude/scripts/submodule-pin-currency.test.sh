@@ -174,6 +174,94 @@ run_check "$super" sub --branch no-such-branch
 expect_rc 2 "an unfetchable branch must exit 2"
 expect_no_match "CURRENT" "an unfetchable branch must never read as CURRENT"
 
+# -------------------------------------------------------------------- AHEAD --
+# The third way to manufacture a false CURRENT, and the one a commit COUNT cannot see.
+# `<pin>..<tip>` counts commits reachable from the tip but not the pin, so it is zero when the pin
+# is the tip AND when the pin is AHEAD of it. Testing `behind -eq 0` alone therefore prints
+# "CURRENT — the pin is the tip", which is simply false for an ahead pin: the gitlink carries work
+# that is not on the default branch. Only SHA equality establishes CURRENT.
+# mkfixture_ahead <name> <n_commits> <pushed_index> — origin/main stops at <pushed_index>, the
+# superproject pins the final commit, so the pin leads the branch.
+mkfixture_ahead() {
+  local name=$1 n=$2 pushed=$3
+  local root="$TMP/$name"
+  mkdir -p "$root"
+
+  git_q init -q "$root/product"
+  local i
+  for i in $(seq 1 "$n"); do
+    echo "commit $i" >"$root/product/file.txt"
+    git_q -C "$root/product" add file.txt
+    git_q -C "$root/product" commit -q -m "c$i"
+  done
+
+  git_q init -q --bare "$root/origin.git"
+  git_q -C "$root/product" remote add origin "$root/origin.git"
+
+  # Publish only the first <pushed> commits as the branch; the rest stay local and become the pin.
+  local pushed_sha pin
+  pushed_sha=$(git_q -C "$root/product" rev-list --reverse main | sed -n "${pushed}p")
+  git_q -C "$root/product" push -q origin "${pushed_sha}:refs/heads/main"
+  pin=$(git_q -C "$root/product" rev-parse main)
+
+  git_q init -q "$root/super"
+  git_q -c protocol.file.allow=always -C "$root/super" submodule -q add "$root/origin.git" sub
+  git_q -C "$root/super" -c protocol.file.allow=always submodule -q update --init sub
+  # Fetch the unpublished commits into the submodule clone so the gitlink can name one.
+  git_q -C "$root/super/sub" fetch -q "$root/product" main
+  git_q -C "$root/super/sub" checkout -q "$pin"
+  git_q -C "$root/super" add .gitmodules sub
+  git_q -C "$root/super" commit -q -m "pin sub ahead at $pin"
+
+  printf '%s\n' "$root/super"
+}
+
+super=$(mkfixture_ahead ahead 5 2)
+run_check "$super" sub
+expect_no_match "CURRENT" "a pin AHEAD of the branch tip must never read as CURRENT"
+expect_rc 2 "an ahead pin has no CURRENT/BEHIND verdict and must exit 2"
+expect_match "AHEAD" "the ahead state must be named explicitly, not folded into UNKNOWN"
+expect_match "3 commit" "the ahead distance must be reported from <tip>..<pin>"
+expect_no_match "BEHIND" "an ahead pin must never read as BEHIND"
+
+# ------------------------------------------------------ PATH QUOTING (BEHIND) --
+# The BEHIND verdict emits a copy-paste `git -C <path> checkout -b ...`. The path comes from
+# .gitmodules, so a bare %s emits a command that does something other than it appears to when the
+# path carries a space or a shell metacharacter. Assert the emitted path is quoted.
+mkfixture_spacepath() {
+  local root="$TMP/spacepath"
+  mkdir -p "$root"
+
+  git_q init -q "$root/product"
+  local i
+  for i in $(seq 1 4); do
+    echo "commit $i" >"$root/product/file.txt"
+    git_q -C "$root/product" add file.txt
+    git_q -C "$root/product" commit -q -m "c$i"
+  done
+
+  git_q init -q --bare "$root/origin.git"
+  git_q -C "$root/product" remote add origin "$root/origin.git"
+  git_q -C "$root/product" push -q origin main
+
+  local pin
+  pin=$(git_q -C "$root/product" rev-list --reverse main | sed -n '2p')
+
+  git_q init -q "$root/super"
+  git_q -c protocol.file.allow=always -C "$root/super" submodule -q add "$root/origin.git" 'my sub'
+  git_q -C "$root/super" -c protocol.file.allow=always submodule -q update --init 'my sub'
+  git_q -C "$root/super/my sub" checkout -q "$pin"
+  git_q -C "$root/super" add .gitmodules 'my sub'
+  git_q -C "$root/super" commit -q -m "pin spaced sub at $pin"
+
+  printf '%s\n' "$root/super"
+}
+
+super=$(mkfixture_spacepath)
+run_check "$super" 'my sub'
+expect_rc 1 "a spaced submodule path must still produce the BEHIND verdict"
+expect_match "git -C 'my sub'" "the emitted command must shell-quote the submodule path"
+
 # ------------------------------------------------------------------ report --
 if [ "$fails" -ne 0 ]; then
   echo "submodule-pin-currency.test.sh: $fails failure(s) across $asserts assertion(s)" >&2

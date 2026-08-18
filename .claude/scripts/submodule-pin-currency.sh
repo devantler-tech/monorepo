@@ -19,7 +19,8 @@
 #
 #   exit 0  CURRENT   the pin is the tip of the product's default branch
 #   exit 1  BEHIND    the pin is N commits behind; base a new work branch on origin/<branch>
-#   exit 2  UNKNOWN   no verdict produced — never read this as CURRENT
+#   exit 2  UNKNOWN   no verdict produced, or the pin is AHEAD of the branch tip —
+#                     never read either as CURRENT
 set -euo pipefail
 
 usage() {
@@ -73,8 +74,21 @@ super="$(git rev-parse --show-toplevel 2>/dev/null)" ||
 
 # Tracked-submodule check. Without it a plain directory would be compared against its PARENT
 # repository's history, because `git -C <not-a-repo>` silently resolves upward.
-git -C "$super" config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null |
-  awk '{print $2}' | grep -qxF -- "$sub" ||
+#
+# Parsed NUL-delimited, which is the only space-safe form. `--get-regexp` prints
+# `submodule.<name>.path <value>` on one line, and BOTH halves can contain a space — the section
+# name is the submodule's name, not a slug. So a `.gitmodules` entry of `path = my sub` prints
+# `submodule.my sub.path my sub`, where `awk '{print $2}'` yields `sub` and stripping to the first
+# space yields `sub.path my sub`. Either way a legitimate submodule is rejected as untracked, and
+# the run dies naming the wrong cause. With `-z` git emits `key\nvalue\0`, so the value is
+# unambiguous however many spaces it holds.
+found=0
+while IFS= read -r -d '' record; do
+  [ "${record#*$'\n'}" = "$sub" ] || continue
+  found=1
+  break
+done < <(git -C "$super" config -z -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
+[ "$found" -eq 1 ] ||
   die_unknown "$sub is not a submodule path in .gitmodules"
 
 [ -d "$super/$sub" ] ||
@@ -113,6 +127,12 @@ tip="$(git -C "$subabs" rev-parse FETCH_HEAD 2>/dev/null)" ||
 # The pin must be an object this clone actually has, or the count below is about nothing.
 git -C "$subabs" cat-file -e "${pin}^{commit}" 2>/dev/null ||
   die_unknown "the pinned commit $pin is not present in $sub"
+# Shell-quote a value for the copy-paste command emitted below. The submodule path comes from
+# .gitmodules and is attacker-influenceable in principle; a bare %s would emit a command that does
+# something other than what it appears to when the path carries a space or a metacharacter.
+shq() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
 
 # Order is load-bearing: `<pin>..<tip>` counts commits on the tip that the pin lacks. The reverse
 # reports 0 for a pin that is behind, which is a false CURRENT.
@@ -127,12 +147,28 @@ printf 'pinned gitlink   : %s\n' "$pin"
 printf 'default branch   : origin/%s (%s)\n' "$branch" "$tip"
 
 if [ "$behind" -eq 0 ]; then
-  printf '\nCURRENT — the pin is the tip of origin/%s.\n' "$branch"
-  exit 0
+  # A zero count is NOT the same as "the pin is the tip". `<pin>..<tip>` counts commits reachable
+  # from the tip but not the pin, so it is also zero when the pin is AHEAD of the tip — a gitlink
+  # carrying commits that are not on the default branch. Reporting CURRENT there would state
+  # something false ("the pin is the tip") in the one direction this script exists to prevent:
+  # a confident verdict that sends a run off to build on a tree it has not actually checked.
+  # Only SHA equality establishes CURRENT.
+  if [ "$pin" = "$tip" ]; then
+    printf '\nCURRENT — the pin is the tip of origin/%s.\n' "$branch"
+    exit 0
+  fi
+
+  ahead="$(git -C "$subabs" rev-list --count "${tip}..${pin}" 2>/dev/null)" ||
+    die_unknown "cannot count $tip..$pin in $sub"
+  printf '\nAHEAD — the pin is not behind origin/%s, but it is not that tip either' "$branch"
+  printf ' (%s commit(s) the branch does not carry).\n' "$ahead"
+  printf 'This is a real state to resolve, not a stale pin: the gitlink points at work that is not\n'
+  printf 'on the default branch. Establish why before basing anything on it.\n'
+  exit 2
 fi
 
 printf '\nBEHIND — the pin is %s commit(s) behind origin/%s.\n' "$behind" "$branch"
 printf 'Base a NEW work branch on origin/%s, not on the checked-out pin:\n' "$branch"
-printf '  git -C %s checkout -b <lane>/<area>-<desc>-<issue> %s\n' "$sub" "$tip"
+printf '  git -C %s checkout -b <lane>/<area>-<desc>-<issue> %s\n' "$(shq "$sub")" "$tip"
 printf 'Reading a pinned plugin definition is UNCHANGED and must still use the gitlink.\n'
 exit 1
