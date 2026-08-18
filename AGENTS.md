@@ -3952,6 +3952,22 @@ task and records it as `per_task_limit`. The reading over that same window was
 **Claude dispatched 108/161** — 53 ticks, 32.9% — with 36.6% over 2026-08-01→08-07. Those measurements
 are preserved as what they were; **both overstate the loss, and the cause is the METHOD, not the lane.**
 
+🔴 **SUPERSEDING NOTICE (2026-08-18) — `161/161` measured DISPATCH, and dispatch is not PRODUCTION.**
+The reading above stands as what it was: across that window the Codex scheduler started a run in every
+scheduled slot. It says nothing about whether those runs did any work, because a dispatch is recorded
+when a turn *starts* — so a lane whose every turn dies seconds in scores `161/161` exactly like a
+healthy one. That is the same defect *Agent definition locations* records beside `last_run_at`, and it
+is why "the scheduler is reliable" and "the lane is producing" are two claims, not one.
+The consequence is the one that matters here: a run reading `161/161` as a **current** property routes
+its carry-forward to "the dependable lane" on a number that never measured dependability, and then
+reads that lane's silence as an ordinary quiet period.
+**Establish production separately, per lane, and re-derive it — never inherit it.** That is what
+[`codex-lane-liveness.sh`](.claude/scripts/codex-lane-liveness.sh) answers (`0` producing, `1` not
+producing, `2` UNKNOWN). Run on 2026-08-18 it reported **both Codex automations NOT-PRODUCING**, while
+the same code against the same store pinned inside 2026-08-16 reported `OK` with multi-thousand-second
+runs — one store, one check, opposite verdicts. **Both of those readings are dated measurements, this
+one included: neither is a standing property of any lane.**
+
 🔴 **A `per_task_limit` record is a per-minute liveness sample of "a run is currently open" — NOT a
 per-slot drop record.** Measured 2026-08-12: **1871 of 1922 inter-record gaps are 59–60 seconds**, so
 the scheduler re-records a skip every minute a run stays open and one long run writes dozens of them.

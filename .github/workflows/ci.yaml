@@ -32,6 +32,7 @@ jobs:
       control-character-command-contract: ${{ steps.filter.outputs.control-character-command-contract }}
       one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
       bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
+      codex-dispatch-supersession-contract: ${{ steps.filter.outputs.codex-dispatch-supersession-contract }}
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
@@ -246,6 +247,10 @@ jobs:
             bash-call-timeout-budget-contract:
               - 'AGENTS.md'
               - '.claude/scripts/bash-call-timeout-budget-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            codex-dispatch-supersession-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/codex-dispatch-supersession-contract.test.sh'
               - '.github/workflows/ci.yaml'
             git-safety-contract:
               - 'AGENTS.md'
@@ -964,6 +969,21 @@ jobs:
       - name: Verify the bash call timeout budget contract
         run: bash .claude/scripts/bash-call-timeout-budget-contract.test.sh
 
+  test-codex-dispatch-supersession-contract:
+    name: Test codex dispatch supersession contract
+    needs: changes
+    if: needs.changes.outputs.codex-dispatch-supersession-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the codex dispatch supersession contract
+        run: bash .claude/scripts/codex-dispatch-supersession-contract.test.sh
+
   test-git-safety-contract:
     name: Test git safety contract
     needs: changes
@@ -1162,6 +1182,7 @@ jobs:
       - test-control-character-command-contract
       - test-one-verb-per-bash-call-contract
       - test-bash-call-timeout-budget-contract
+      - test-codex-dispatch-supersession-contract
       - test-git-safety-contract
       - test-plugin-definition-currency
       - test-plugin-definition-refresh
@@ -1205,6 +1226,7 @@ jobs:
             ${{ needs.test-control-character-command-contract.result }}
             ${{ needs.test-one-verb-per-bash-call-contract.result }}
             ${{ needs.test-bash-call-timeout-budget-contract.result }}
+            ${{ needs.test-codex-dispatch-supersession-contract.result }}
             ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-plugin-definition-refresh.result }}
