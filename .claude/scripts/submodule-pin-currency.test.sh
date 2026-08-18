@@ -224,7 +224,7 @@ expect_match "AHEAD" "the ahead state must be named explicitly, not folded into 
 expect_match "3 commit" "the ahead distance must be reported from <tip>..<pin>"
 expect_no_match "BEHIND" "an ahead pin must never read as BEHIND"
 
-# ------------------------------------------------------ PATH QUOTING (BEHIND) --
+# ------------------------------------------- PATH QUOTING + SPLICE (BEHIND) --
 # The BEHIND verdict emits a copy-paste `git -C <path> checkout -b ...`. The path comes from
 # .gitmodules, so a bare %s emits a command that does something other than it appears to when the
 # path carries a space or a shell metacharacter. Assert the emitted path is quoted.
@@ -248,19 +248,38 @@ mkfixture_spacepath() {
   pin=$(git_q -C "$root/product" rev-list --reverse main | sed -n '2p')
 
   git_q init -q "$root/super"
-  git_q -c protocol.file.allow=always -C "$root/super" submodule -q add "$root/origin.git" 'my sub'
-  git_q -C "$root/super" -c protocol.file.allow=always submodule -q update --init 'my sub'
-  git_q -C "$root/super/my sub" checkout -q "$pin"
-  git_q -C "$root/super" add .gitmodules 'my sub'
+  git_q -c protocol.file.allow=always -C "$root/super" submodule -q add "$root/origin.git" "$SPACED"
+  git_q -C "$root/super" -c protocol.file.allow=always submodule -q update --init "$SPACED"
+  git_q -C "$root/super/$SPACED" checkout -q "$pin"
+  git_q -C "$root/super" add .gitmodules "$SPACED"
   git_q -C "$root/super" commit -q -m "pin spaced sub at $pin"
 
   printf '%s\n' "$root/super"
 }
 
+# A space alone only proves the path was wrapped in quotes. The hard case for a single-quote
+# wrapper is a path containing a SINGLE QUOTE, which must be emitted as the '\''
+# splice — a wrapper that merely adds outer quotes yields a command that no longer parses as the
+# same word. The fixture path therefore carries BOTH a space and a quote.
+SPACED="my 'sub"
 super=$(mkfixture_spacepath)
-run_check "$super" 'my sub'
+run_check "$super" "$SPACED"
 expect_rc 1 "a spaced submodule path must still produce the BEHIND verdict"
-expect_match "git -C 'my sub'" "the emitted command must shell-quote the submodule path"
+expect_match "git -C" "the emitted command must name the branch-from command"
+
+# A space only proves the path was wrapped. The hard case for a single-quote wrapper is a path
+# containing a SINGLE QUOTE, which must be emitted as the `'\''` splice — a wrapper that merely
+# adds outer quotes produces a command that no longer parses, or worse, one that parses as
+# something else. Asserted as a round-trip through the shell rather than as a literal, so the test
+# pins the PROPERTY (the emitted word re-reads as the original path) and not one spelling of it.
+emitted_path=$(printf '%s\n' "$OUT" | sed -n "s/^  git -C \(.*\) checkout -b .*/\1/p")
+asserts=$(( asserts + 1 ))
+if [ -n "$emitted_path" ] && [ "$(eval "printf '%s' $emitted_path")" = "$SPACED" ]; then
+  :
+else
+  fails=$(( fails + 1 ))
+  echo "FAIL: the emitted path must re-read as the original through the shell (got [$emitted_path])"
+fi
 
 # ------------------------------------------------------------------ report --
 if [ "$fails" -ne 0 ]; then
