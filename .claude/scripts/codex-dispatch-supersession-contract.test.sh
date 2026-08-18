@@ -76,15 +76,48 @@ has() {
   esac
 }
 
-# 1. The HISTORICAL RECORD survives. These three literals are the measurement itself — its value, its
-#    window, and its denominator. A "fix" that edits the number to match today's lane state would
-#    falsify the record, which is the failure this half exists to prevent.
-has '**Codex dispatched 161/161**' ||
-  fail "the historical '161/161' measurement is gone — a measurement record is preserved verbatim, never rewritten to match a later reading"
-has '2026-08-02T03:50Z → 2026-08-08T19:50Z' ||
-  fail "the measurement's window is gone — a reading with no window cannot be told apart from a standing claim"
-has '**161 scheduled' ||
-  fail "the measurement's denominator (161 scheduled slots per lane) is gone"
+# 1. The HISTORICAL RECORD survives BYTE-FOR-BYTE.
+#
+# Three fragment assertions are NOT enough, and the difference is the whole point of this half: a
+# fragment check pins the number, the window and the denominator while leaving every other byte of
+# the paragraph free to be edited — its prose, its Markdown, its wrapping, the order of its clauses.
+# A measurement record is preserved verbatim, so what has to be asserted is the record, not three
+# quotations from it. This compares the RAW block (never the flattened one, which would collapse the
+# whitespace and line structure that "verbatim" is precisely about) against the literal below.
+# `read -r -d ''` rather than `$(cat <<EOF …)`: bash 3.2 (the macOS default) scans a command
+# substitution for quotes and parens WITHOUT skipping heredoc bodies, so the apostrophe in
+# "Claude's" below makes it die with `unexpected EOF while looking for matching `)''`. It parses
+# fine under bash 5, so CI would have gone green while every macOS run failed — verified 2026-08-18.
+IFS= read -r -d '' historical_expected <<'HISTORICAL' || true
+🔴 **Scheduled is not delivered — on the Claude lane about one tick in five never happens.** The two
+machine-local schedulers differ. Measured across 2026-08-02T03:50Z → 2026-08-08T19:50Z (**161 scheduled
+slots per lane**), **Codex dispatched 161/161**, because that scheduler starts a run even when the
+previous one is still open — one run whose record stayed open for 240 minutes did not block any of the
+four ticks behind it. Claude's refuses any dispatch that would overlap the previous run of the same
+task and records it as `per_task_limit`. The reading over that same window was
+**Claude dispatched 108/161** — 53 ticks, 32.9% — with 36.6% over 2026-08-01→08-07. Those measurements
+are preserved as what they were; **both overstate the loss, and the cause is the METHOD, not the lane.**
+HISTORICAL
+# `read -d ''` keeps the body's trailing newline; `$(…)` strips it from the actual. Strip it here so
+# the comparison is between the same two things.
+historical_expected=${historical_expected%$'\n'}
+
+# Read the block back from the file the same way: from the start anchor through the line that ends
+# the historical paragraph. `awk` exits at that line, so a later paragraph cannot pad the capture.
+historical_actual="$(
+  awk '
+    /^🔴 \*\*Scheduled is not delivered/ { ins = 1 }
+    ins                                  { print }
+    ins && /not the lane\.\*\*$/         { exit }
+  ' "${constitution}"
+)"
+
+[ -n "${historical_actual}" ] ||
+  fail "could not capture the historical block — its start anchor moved, so the byte comparison below would be vacuous"
+
+if [ "${historical_actual}" != "${historical_expected}" ]; then
+  fail "the historical measurement block is no longer byte-identical — a measurement record is preserved verbatim, never rewritten to match a later reading. Diff it against the literal in this test before changing either."
+fi
 
 # 2. A DATED notice sits beside it. The date is asserted by SHAPE, not by value: pinning today's date
 #    would make a legitimate re-dating fail, while dropping the date entirely is exactly the defect —
