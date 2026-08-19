@@ -418,6 +418,9 @@ jobs:
         working-directory: docs
         run: npm run build
 
+  # The Audit step below is mirrored by .github/workflows/audit-docs.yaml, which runs it
+  # on a cadence so advisories surface before they can block an automated dependency PR.
+  # Keep the two in lockstep: a change to the Audit step here needs the same change there.
   audit-docs:
     needs: changes
     if: needs.changes.outputs.docs-deps == 'true'
