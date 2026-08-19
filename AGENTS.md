@@ -3689,6 +3689,35 @@ lines). **Don't re-read what's already in context** (this contract, via the `CLA
 **duplicate live GitHub state into memory**. This is the *native-to-Claude* design principle
 (subagents, memory) applied to cost: same work and same guardrails, fewer tokens.
 
+
+🔴 **A SUBAGENT'S DEFINITION LOAD IS THE LARGEST RECURRING COST HERE, AND NOTHING WAS MEASURING IT.**
+Measured 2026-08-19 over the 7-day session corpus (182 sidechains extracted, 0 extraction failures):
+the `portfolio-surveyor` is **157 of 182 subagent dispatches (86%)** and its first-turn
+`cache_creation` median is **191,397 tokens** — against `Explore`'s **29,310**, which receives no
+project instructions. That gap is this contract plus `.claude/agents/portfolio-surveyor.md`.
+`cache_read` is **0 on 160 of 161** surveyor dispatches, because every subagent writes the
+**5-minute** cache (`ephemeral_5m` on 182/182, `ephemeral_1h` on 0/182) while the surveyor is
+dispatched roughly hourly — so reuse is structurally zero and every dispatch pays the write premium
+in full. The trend is **monotonic, not a spike**: daily medians ran **155,212 → 207,321** across
+08-13→08-19, **+52,109 tokens per dispatch in one week**.
+
+🔴 **The OVERLAY is the actionable half, because that file is declared TEMPORARY.** *Agentic
+engineering plugin contract* retains it only until digest parity, and *Agent definition locations*
+allows it to carry **only its named deployment/provider delta** — generic role logic changes at its
+owning upstream. That parity gate was reached: `agent-plugins#78` closed **COMPLETED 2026-07-25**.
+The overlay then grew **61,144 B → 148,356 B (+143%)**, because generic refinements (the `4b`–`4e`
+items in [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
+were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
+closed, pushing the file's own deletion further away, and charging every hourly dispatch for it.
+
+**So a new surveyor refinement goes UPSTREAM unless it is a genuine deployment fact.**
+[`definition-load-budget-contract.test.sh`](.claude/scripts/definition-load-budget-contract.test.sh)
+ratchets the overlay's byte ceiling: growth fails CI, and the failure names both remedies — upstream
+it, or raise the ceiling **in the same PR** and say why. ⚠️ The ceiling **never vetoes mandated
+work**; raising it is always available, so its only job is to make the cost a decision somebody made
+rather than one nobody saw. Deliberately **no gate on `AGENTS.md` itself** — rules legitimately
+accrete here, and a ratchet firing on every definition PR (safety fixes included) would train the
+raise into a reflex and destroy the signal.
 ### Latency discipline — overlap the waiting, never block on it
 Token discipline above spends context well; this spends **wall-clock** well. The dominant cost of a
 run is **not** thinking or authoring — it is **waiting on remote systems** (CI, reviewers,
