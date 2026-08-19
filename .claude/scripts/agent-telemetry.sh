@@ -652,6 +652,26 @@ function mask_line(s) {
 # wide window can push hundreds of thousands of tagged rows through here, so the
 # footprint scales with the SELECTED WINDOW, not with the report size.
 { L[NR] = $0 }
+# 🔴 A CLOSER PAIRS TO ITS OPENER LABEL, NEVER TO ANY `PRIVATE KEY` MARKER.
+# Treating every label ending in PRIVATE KEY as a closer let an UNRELATED label
+# terminate a span: `BEGIN RSA` / body / `END EC` closed at the EC marker and
+# emitted everything after it VERBATIM — the under-mask direction the governing
+# asymmetry of this file forbids. Reproduced on the shipped program (#2662).
+#
+# ⚠️ NO SINGLE QUOTES BELOW: this program is a single-quoted shell string, so an
+# apostrophe here terminates it and the rest of the file becomes shell code.
+#
+# The key is the label text alone, so BEGIN and END are comparable. Runs of
+# spaces collapse because the marker regex tolerates a repeated space before the
+# label, so `RSA  PRIVATE KEY` must still pair with `RSA PRIVATE KEY`. A label
+# that fails to pair does not close, so the span runs on and masks MORE — the
+# safe side, and why this needs no character-class widening to be correct.
+function labelkey(m) {
+  sub(/^-----(BEGIN|END) */, "", m)
+  sub(/-----$/, "", m)
+  gsub(/  +/, " ", m)
+  return m
+}
 END {
   n = NR
   # Pass A — collapse every span COMPLETE ON ONE LINE, closing each BEGIN at the
@@ -674,6 +694,7 @@ END {
     while (match(s, /-----BEGIN ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----/)) {
       bs = RSTART; bl = RLENGTH
       head = substr(s, 1, bs - 1)
+      oplbl = labelkey(substr(s, bs, bl))
       # `scan`, deliberately NOT `tail`: pass B owns a global of that name. It
       # assigns before every use today, so sharing it is not a live defect —
       # but a value from pass A surviving into pass B is the same class as the
@@ -683,8 +704,14 @@ END {
       while (depth > 0 && match(scan, /-----(BEGIN|END) ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----/)) {
         mark = substr(scan, RSTART, RLENGTH)
         scan = substr(scan, RSTART + RLENGTH)
+        # 🔴 ANY opener DEEPENS the span, whatever its label; only a MATCHING closer
+        # may end it. Skipping a nested opener of another label was a regression:
+        # `BEGIN RSA` .. `BEGIN EC` .. `END RSA` on ONE line then closed at depth 0
+        # and the tail printed VERBATIM, where the depth-only walk had masked it.
+        # An unclosed nested block means what follows this closer is still key
+        # material, so the conservative count is the correct one.
         if (mark ~ /^-----BEGIN/) depth++
-        else if (--depth == 0) closed = 1
+        else if (labelkey(mark) == oplbl && --depth == 0) closed = 1
       }
       out = out head PH
       if (closed) {
@@ -702,6 +729,7 @@ END {
         # reached through pass A folding two openers into one line.
         s = ""
         U[i] = depth
+        ULBL[i] = oplbl
         break
       }
     }
@@ -775,8 +803,10 @@ END {
         # balanced the depth, not the first one on the line — closing at the
         # first would mask LESS than the nesting requires, which is the wrong
         # side of the governing asymmetry.
+        bmark = substr(bscan, RSTART, RLENGTH)
         bdrop += RSTART + RLENGTH - 1
         bscan = substr(bscan, RSTART + RLENGTH)
+        if (labelkey(bmark) != ULBL[i]) continue
         if (--bdepth == 0) { close_at = j; close_end = bdrop; break }
       }
       if (close_at == 0) bdepth += U[j]
