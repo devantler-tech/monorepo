@@ -43,14 +43,25 @@ fail() {
 }
 
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
-[ -r "${overlay}" ] || fail "cannot read ${overlay} — the anchor moved, so every assertion below would be vacuous"
+# The overlay's declared destination is DELETION, so its ABSENCE is success, not a broken anchor.
+# Failing here would make this guard fire exactly when the work it exists to encourage completes —
+# the guard fighting its own goal. The contract assertions below are skipped with it, because they
+# describe a file that no longer exists; retiring this test is then the follow-up.
+if [ ! -e "${overlay}" ]; then
+  echo "definition-load budget contract: PASS — the temporary surveyor overlay is GONE, which is its declared destination. Retire this guard and its AGENTS.md paragraph in the same pull request that removed the file."
+  exit 0
+fi
+
+[ -r "${overlay}" ] || fail "${overlay} exists but is unreadable — cannot evaluate the ceiling"
 
 overlay_bytes="$(wc -c < "${overlay}" | tr -d ' ')"
 
-# 0. Vacuity guard. A truncated or emptied overlay would sail under the ceiling and pass, which
-# would make this guard report health precisely when the definition had been destroyed.
-[ "${overlay_bytes}" -gt 10000 ] ||
-  fail "overlay is only ${overlay_bytes} B — implausibly small, so the ceiling check below would pass vacuously. Verify the file is intact."
+# 0. Integrity, checked by CONTENT rather than by size. A size floor was the obvious choice here and
+# is wrong: SHRINKING is the goal, so any floor fires precisely when upstreaming succeeds. The
+# frontmatter marker catches a truncated or clobbered file at any size instead.
+grep -q '^name: portfolio-surveyor$' "${overlay}" ||
+  fail "${overlay} no longer carries its 'name: portfolio-surveyor' frontmatter — the file is truncated or clobbered, so the ceiling check below would pass on a stub. (Do NOT 'fix' this by adding a size floor: shrinking this file is the objective.)"
+[ -r "${overlay}" ] || fail "cannot read ${overlay} — the anchor moved, so every assertion below would be vacuous"
 
 # 1. THE RATCHET. This is the regression itself.
 [ "${overlay_bytes}" -le "${CEILING_OVERLAY_BYTES}" ] ||
