@@ -6072,6 +6072,62 @@ else
 fi
 
 echo
+echo "── extraction canary: a broken embedded jq must not read as improvement ──"
+# The efficiency section's numbers ALL derive from TAGGED. A jq PROGRAM error
+# (one `?//` typo — the exact bug that produced a silent `errors=0` over 182
+# sessions on 2026-08-19) empties every file at once, so the busy-wait metrics
+# read 0. That is indistinguishable from a quiet window and points in the
+# direction that looks like success, which is why it is guarded rather than
+# left to reviewer vigilance.
+XFX="$FIX/xfcanary"
+mkdir -p "$XFX/nest/sub/deep" "$XFX/cxnest/sessions" "$XFX/empty"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$XFX/nest/sub/deep\"}}" \
+  > "$XFX/cxnest/sessions/r.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 11\"}"}}' \
+  >> "$XFX/cxnest/sessions/r.jsonl"
+
+xf_run() { # $1 = script to run
+  CLAUDE_PROJECTS_DIR="$XFX/empty" CODEX_HOME="$XFX/cxnest" MONOREPO_DIR="$XFX/nest" \
+    PORTFOLIO_PATHS="$XFX/nest:$XFX/nest/sub" HOME="$XFX" \
+    bash "$1" --since-days 3650 --section efficiency 2>&1
+}
+
+# Baseline: the healthy extractor reads the sleep AND stays silent. Both halves
+# matter — a canary that always fires guards nothing.
+XF_BASE=$(xf_run "$TARGET")
+if grep -qE 'sleep/poll calls \.\. 1' <<<"$XF_BASE" \
+   && ! grep -qiE 'EXTRACTION FAILED|extraction failed' <<<"$XF_BASE"; then
+  ok "healthy extractor reads the sleep and raises no canary"
+else
+  bad "healthy extractor reads the sleep and raises no canary" \
+      "got: $(grep -E 'sleep/poll calls|extraction' <<<"$XF_BASE" | head -2)"
+fi
+
+# Ablation: break ONLY the embedded jq program in tagged_commands_in.
+XF_AB="$FIX/xf_ablate.sh"
+cp "$TARGET" "$XF_AB"
+sed -i.bak 's#(\.id? // "") as \$i#(.id?//"") as $i#' "$XF_AB"; rm -f "$XF_AB.bak"
+xf_changed=$(diff "$TARGET" "$XF_AB" | grep -c '^<')
+if [ "$xf_changed" -ne 1 ]; then
+  # A mutation that did not land makes the arm judge nothing. Withhold the
+  # verdict rather than report a pass the run never earned.
+  bad "ablation: a broken extractor jq raises the canary" \
+      "sed changed $xf_changed lines, expected 1 — VACUOUS MUTATION, arm cannot judge"
+else
+  XF_OUT=$(xf_run "$XF_AB")
+  # The number must still collapse to 0 (proving the arm really broke the
+  # extractor) AND the canary must say so. Asserting only the canary would pass
+  # even if the mutation had been harmless.
+  if grep -qE 'sleep/poll calls \.\. 0' <<<"$XF_OUT" \
+     && grep -qF 'EXTRACTION FAILED on ALL' <<<"$XF_OUT" \
+     && grep -qF 'Do not record these as a measurement' <<<"$XF_OUT"; then
+    ok "ablation: a broken extractor jq collapses the count AND raises the canary"
+  else
+    bad "ablation: a broken extractor jq collapses the count AND raises the canary" \
+        "got: $(grep -E 'sleep/poll calls|EXTRACTION' <<<"$XF_OUT" | head -3)"
+  fi
+fi
+
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

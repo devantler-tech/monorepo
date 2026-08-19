@@ -250,6 +250,12 @@ PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot creat
 CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDCONC=$(mktemp "${TMPDIR:-/tmp}/.agtel_credconc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Extraction-failure counter for the efficiency walk. A jq PROGRAM error
+# (a typo in the embedded program) makes `tagged_commands_in` emit nothing
+# for EVERY file while exiting non-zero, so the busy-wait metrics below
+# would read 0 and the run would report the agent had stopped busy-waiting.
+# The walk runs in a pipeline subshell, so the count must survive on disk.
+XFTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_xf.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Blob-embedded evidence set (#2522): the subset of table values whose
 # occurrences are ALL inside a base64 run. Holds normalised credential values,
 # so it is created with mktemp's private mode and removed by the same traps as
@@ -267,8 +273,8 @@ CREDMATCH=$(mktemp "${TMPDIR:-/tmp}/.agtel_credmatch.XXXXXXXX") || { echo "canno
 SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP" "$XFTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP" "$XFTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -2541,7 +2547,13 @@ if want efficiency; then
     # leave anything on disk to clean up.
     TAGGED=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
              | while IFS= read -r f; do
-                 tagged_commands_in "$f"
+                 # A jq PROGRAM error empties EVERY file at once, which would
+                 # read as "the agent stopped busy-waiting" rather than as a
+                 # broken instrument. Record the failure; the canary below
+                 # turns that silent zero into a stated one. Its stdout still
+                 # flows through, so a per-file malformed session degrades
+                 # exactly as before instead of aborting the walk.
+                 tagged_commands_in "$f" || printf x >> "$XFTMP"
                  # File boundary. The wait-target split below asks "did the NEXT
                  # command poll a remote system", and without this the last
                  # command of one transcript would be adjacent to the first of
@@ -2928,6 +2940,23 @@ if want efficiency; then
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"
+    # Extraction canary. Every number in this section derives from TAGGED,
+    # so an extractor that failed makes them all read 0 — indistinguishable
+    # from a genuinely quiet window, and in the direction that looks like
+    # improvement. State the failure count rather than letting a broken
+    # instrument report success. XF == the file count means the embedded jq
+    # program itself is broken, not that one session was malformed.
+    XFAIL=$(wc -c < "$XFTMP" | tr -d " ")
+    XTOTAL=$(printf "%s\\n%s\\n" "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true)
+    if [ "${XFAIL:-0}" -gt 0 ]; then
+      if [ "${XFAIL:-0}" -ge "${XTOTAL:-0}" ] && [ "${XTOTAL:-0}" -gt 0 ]; then
+        echo "  ⚠️  EXTRACTION FAILED on ALL ${XTOTAL} file(s) — the embedded jq program is broken."
+        echo "      Every efficiency number below is 0 because NOTHING WAS READ, not because"
+        echo "      the agent stopped busy-waiting. Do not record these as a measurement."
+      else
+        echo "  ⚠️  extraction failed on ${XFAIL} of ${XTOTAL} file(s) — numbers below UNDER-COUNT."
+      fi
+    fi
     echo "  explicit sleep/poll calls .. ${SLEEPS}   (contract: arm a watcher, never busy-wait)"
     # The raw total above cannot answer the question the contract actually asks,
     # because it scores a CONTRACT-COMPLIANT backgrounded watcher (`sleep N &&
