@@ -704,11 +704,14 @@ END {
       while (depth > 0 && match(scan, /-----(BEGIN|END) ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----/)) {
         mark = substr(scan, RSTART, RLENGTH)
         scan = substr(scan, RSTART + RLENGTH)
-        # Only the label of this opener may move its depth; any other label is a
-        # different span and is left to its own walk.
-        if (labelkey(mark) != oplbl) continue
+        # 🔴 ANY opener DEEPENS the span, whatever its label; only a MATCHING closer
+        # may end it. Skipping a nested opener of another label was a regression:
+        # `BEGIN RSA` .. `BEGIN EC` .. `END RSA` on ONE line then closed at depth 0
+        # and the tail printed VERBATIM, where the depth-only walk had masked it.
+        # An unclosed nested block means what follows this closer is still key
+        # material, so the conservative count is the correct one.
         if (mark ~ /^-----BEGIN/) depth++
-        else if (--depth == 0) closed = 1
+        else if (labelkey(mark) == oplbl && --depth == 0) closed = 1
       }
       out = out head PH
       if (closed) {

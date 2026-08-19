@@ -5543,6 +5543,29 @@ OUT=$(printf -- 'boom -----%s RSA  PRIVATE KEY-----\nMIIEvgSECRETSPPAIR\n%s\nAFT
 check   "shape 9 control 4d: a repeated-space label still pairs with its closer" "$OUT" "AFTER-SPPAIR-KEEP"
 nocheck "shape 9 control 4d: and its body is still masked"                       "$OUT" "SECRETSPPAIR"
 
+# 🔴 REGRESSION CONTROL 4e — a NESTED opener of ANOTHER label still deepens the span.
+# Found by review on #2925 and REPRODUCED before accepting it. The first draft of
+# the pairing skipped any marker whose label differed, which silently reintroduced
+# an under-mask one shape over: `BEGIN RSA` .. `BEGIN EC` .. `END RSA` on a single
+# line closed at depth 0 and printed the tail VERBATIM, where the original
+# depth-only walk had masked it. Controls 4a/4b cannot see this — neither carries a
+# nested opener — which is exactly the "fixing one shape is not fixing the defect"
+# lesson this file already records for 5c/5d.
+#
+# The rule that resolves both directions: ANY opener deepens the span whatever its
+# label, and only a MATCHING closer may end it. An unclosed nested block means the
+# material after this closer is still key material.
+ECB=$(printf -- '-----%s EC PRIVATE KEY-----' 'BEGIN')
+OUT=$(printf 'boom %s K1 %s MIIEvgNEST1 %s TAILNESTED\n' "$RB" "$ECB" "$RE" | awk "$AWK_PROG")
+nocheck "shape 9 control 4e: a nested other-label opener keeps a single-line span open" "$OUT" "TAILNESTED"
+OUT=$(printf 'boom %s\nB1\n%s\nMIIEvgNEST2\n%s\nMIIEvgAFTERNEST\n' "$RB" "$ECB" "$RE" | awk "$AWK_PROG")
+nocheck "shape 9 control 4e: and the same holds across lines" "$OUT" "AFTERNEST"
+
+# CONTROL — nesting of the SAME label must still close normally, or 4e is satisfied
+# by the walker simply never closing anything.
+OUT=$(printf 'boom %s K1 %s K2 %s %s TAILSAMENEST\n' "$RB" "$RB" "$RE" "$RE" | awk "$AWK_PROG")
+check "shape 9 control 4e: same-label nesting still closes at depth 0" "$OUT" "TAILSAMENEST"
+
 # ── SHAPE 9 (structural) — ONE label expression, at EVERY marker site ─────────
 # The defect was never a single bad regex: the same label class was spelled out
 # at nine independent sites (four awk regexes, three marker `sed` rules, and the
