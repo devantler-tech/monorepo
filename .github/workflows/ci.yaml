@@ -37,6 +37,7 @@ jobs:
       lane-outage-disclosure-contract: ${{ steps.filter.outputs.lane-outage-disclosure-contract }}
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
       rung-type-filter-contract: ${{ steps.filter.outputs.rung-type-filter-contract }}
+      definition-load-budget-contract: ${{ steps.filter.outputs.definition-load-budget-contract }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
@@ -271,6 +272,14 @@ jobs:
             rung-type-filter-contract:
               - 'AGENTS.md'
               - '.claude/scripts/rung-type-filter-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            definition-load-budget-contract:
+              - 'AGENTS.md'
+              # The overlay itself MUST be here: a pull request that grows it without
+              # touching AGENTS.md is precisely the case this guard exists to catch, and
+              # would otherwise skip the job entirely.
+              - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/scripts/definition-load-budget-contract.test.sh'
               - '.github/workflows/ci.yaml'
             plugin-definition-currency:
               - 'AGENTS.md'
@@ -995,6 +1004,21 @@ jobs:
       - name: Verify the rung type filter contract
         run: bash .claude/scripts/rung-type-filter-contract.test.sh
 
+  test-definition-load-budget-contract:
+    name: Test definition load budget contract
+    needs: changes
+    if: needs.changes.outputs.definition-load-budget-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the definition load budget contract
+        run: bash .claude/scripts/definition-load-budget-contract.test.sh
+
   test-one-verb-per-bash-call-contract:
     name: Test one verb per bash call contract
     needs: changes
@@ -1258,6 +1282,7 @@ jobs:
       - test-lane-outage-disclosure-contract
       - test-git-safety-contract
       - test-rung-type-filter-contract
+      - test-definition-load-budget-contract
       - test-plugin-definition-currency
       - test-plugin-definition-refresh
       - test-codex-lane-liveness
@@ -1305,6 +1330,7 @@ jobs:
             ${{ needs.test-lane-outage-disclosure-contract.result }}
             ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-rung-type-filter-contract.result }}
+            ${{ needs.test-definition-load-budget-contract.result }}
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-plugin-definition-refresh.result }}
             ${{ needs.test-codex-lane-liveness.result }}
