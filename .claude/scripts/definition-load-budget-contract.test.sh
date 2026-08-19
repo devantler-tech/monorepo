@@ -75,8 +75,8 @@ grep -qF '157 of 182 subagent dispatches' "${constitution}" ||
   fail "AGENTS.md no longer records the dispatch share the cost is multiplied by — a raise could not be weighed without it"
 
 # 3. Both remedies must stay named, so the guard keeps failing WITH the fix rather than just failing.
-grep -qF 'upstream' "${constitution}" ||
-  fail "AGENTS.md no longer names the upstream remedy"
+grep -qF 'goes UPSTREAM unless it is a genuine deployment fact' "${constitution}" ||
+  fail "AGENTS.md no longer names the upstream remedy in the routing sentence. NOTE: do not weaken this to a bare 'upstream' match — that word appears ~49 times in this contract, so the assertion would pass with this whole section deleted."
 grep -qF 'raise the ceiling' "${constitution}" ||
   fail "AGENTS.md no longer names the deliberate-raise remedy, leaving the ceiling looking like a hard veto"
 
