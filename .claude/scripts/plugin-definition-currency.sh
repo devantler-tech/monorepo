@@ -106,7 +106,7 @@ if [ -z "$GITLINK" ]; then
   # `ls-tree` prints "160000 commit <sha>\t<path>" for a gitlink. Read the sha field.
   # Guarded: an explicitly-passed --repo-root that is not a git repository would otherwise abort
   # with git's own 128 rather than the documented UNKNOWN, and that is the path every caller uses.
-  gitlink_line="$(git -C "$REPO_ROOT" ls-tree HEAD "$SUBMODULE_PATH" 2>/dev/null)" \
+  gitlink_line="$(git -C "$REPO_ROOT" --no-replace-objects ls-tree HEAD "$SUBMODULE_PATH" 2>/dev/null)" \
     || die "cannot read HEAD in $REPO_ROOT — is it a git repository?"
   GITLINK="$(printf '%s\n' "$gitlink_line" | awk '$2=="commit"{print $3}')"
 fi
@@ -139,14 +139,35 @@ fi
 if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
   config="$CODEX_HOME_DIR/config.toml"
   [ -r "$config" ] || die "cannot read the Codex runtime config: $config"
-  enabled="$(awk -v target="[plugins.\"$PLUGIN_ID\"]" '
-      $0 == target { in_plugin = 1; next }
-      in_plugin && /^\[/ { exit }
-      in_plugin && /^[[:space:]]*enabled[[:space:]]*=[[:space:]]*true[[:space:]]*$/ {
-        print "true"
-        exit
-      }
-    ' "$config")"
+  # Enablement is an EFFECTIVE-STATE question, so ask the runtime first: `codex plugin list --json`
+  # reports what Codex actually loaded. CODEX_HOME is passed explicitly so this reads the home under
+  # test and never the host's. The CLI only knows plugins it has INSTALLED from a marketplace
+  # snapshot, so a configured-but-not-installed id yields nothing and the config parse below decides.
+  enabled=""
+  if command -v codex >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    codex_json="$(CODEX_HOME="$CODEX_HOME_DIR" codex plugin list --json 2>/dev/null)" || codex_json=""
+    if [ -n "$codex_json" ]; then
+      enabled="$(printf '%s' "$codex_json" | jq -r --arg id "$PLUGIN_ID" '
+          [ .installed[]? | select(.pluginId == $id) | .enabled ]
+          | if length == 0 then empty elif any(. == true) then "true" else "false" end
+        ' 2>/dev/null)" || enabled=""
+    fi
+  fi
+  # Fallback: parse the serialized config. Deliberately tolerant — TOML permits whitespace around the
+  # table header and a trailing comment after the value, and Codex loads all of those as enabled, so
+  # an exact-line match would report UNKNOWN for a correctly-configured lane.
+  if [ -z "$enabled" ]; then
+    enabled="$(awk -v target="[plugins.\"$PLUGIN_ID\"]" '
+        { line = $0
+          sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line) }
+        line == target { in_plugin = 1; next }
+        in_plugin && line ~ /^\[/ { exit }
+        in_plugin && line ~ /^enabled[[:space:]]*=[[:space:]]*true([[:space:]]*#.*)?$/ {
+          print "true"
+          exit
+        }
+      ' "$config")"
+  fi
   [ "$enabled" = true ] \
     || die "plugin '$PLUGIN_ID' is not enabled in the Codex runtime config: $config"
 
@@ -376,8 +397,19 @@ say ""
 say "What to do, in this order:"
 say "  1. Do NOT proceed as if the loaded definition were current. Read the reviewed definition at"
 say "     $GITLINK and follow that, then report the drift in the run report."
-say "  2. Refresh through the runtime's own control plane — the /plugin marketplace update flow."
-say "     Never edit the plugin cache: it is read-only evidence."
+# The control plane is per-runtime. `codex plugin` exposes add/list/marketplace/remove and no update
+# command, so prescribing Claude's /plugin flow to a Codex operator names an action that cannot
+# repair this lane — and could refresh the sibling Claude installation instead.
+say "  2. Refresh through the runtime's own control plane. Never edit the plugin cache: it is"
+say "     read-only evidence."
+if [ "$RUNTIME" = codex ]; then
+  say "     For Codex: refresh the marketplace snapshot with"
+  say "       codex plugin marketplace upgrade ${PLUGIN_ID#*@}"
+  say "     then reinstall the plugin with"
+  say "       codex plugin remove $PLUGIN_ID && codex plugin add $PLUGIN_ID"
+else
+  say "     For Claude: the /plugin marketplace update flow."
+fi
 say "  3. If the refresh needs an interactive session this run cannot open, surface it to the"
 say "     maintainer on a declared channel rather than leaving it unreported."
 exit 1

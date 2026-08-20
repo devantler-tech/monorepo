@@ -957,4 +957,81 @@ case "${section}" in
   *) fail "the byte check drops its last entry (printf without a trailing newline)" ;;
 esac
 
+
+# ── 7q. The PIN ITSELF must be resolved without replacement objects ───────────
+# Every other case passes --gitlink explicitly, so nothing exercised the `ls-tree HEAD` resolution
+# that every real caller uses. AGENTS.md requires --no-replace-objects there: a refs/replace entry
+# for HEAD makes ls-tree read the REPLACEMENT's gitlink while `rev-parse HEAD` still prints the
+# expected commit, so the run compares against a pin nobody reviewed. Asserted in the fail-OPEN
+# direction — without the flag this reports CURRENT, which is the dangerous verdict.
+rc_root="${tmp}/replace-consumer"
+mkdir -p "${rc_root}/libraries"
+cp -R "${pin_repo}" "${rc_root}/libraries/agent-plugins"
+write_desired_state_fixture "${rc_root}"
+git -C "${rc_root}" init -q
+git -C "${rc_root}" config user.email t@example.com
+git -C "${rc_root}" config user.name t
+git -C "${rc_root}" update-index --add --cacheinfo "160000,${gitlink},libraries/agent-plugins"
+git -C "${rc_root}" -c commit.gpgsign=false commit -qm true-pin
+rc_true="$(git -C "${rc_root}" rev-parse HEAD)"
+# A decoy commit carrying a DIFFERENT gitlink, built on a side branch so HEAD never moves by reset.
+git -C "${rc_root}" checkout -q -b decoy
+git -C "${rc_root}" update-index --add --cacheinfo "160000,${cursor_drift},libraries/agent-plugins"
+git -C "${rc_root}" -c commit.gpgsign=false commit -qm decoy-pin
+rc_decoy="$(git -C "${rc_root}" rev-parse HEAD)"
+git -C "${rc_root}" checkout -q -
+git -C "${rc_root}" replace "${rc_true}" "${rc_decoy}"
+# The loader ref matches the DECOY's gitlink, so a replacement-poisoned read sees them as equal.
+git -C "${rc_root}/libraries/agent-plugins" update-ref refs/remotes/origin/main "${cursor_drift}"
+set +e
+out="$("${script}" --runtime cursor --repo-root "${rc_root}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "a replace-poisoned pin must still report DRIFT (exit 1), got ${rc}: ${out}"
+case "${out}" in
+  *"${gitlink}"*) ok "the pin is resolved without replacement objects" ;;
+  *) fail "the pin was read through refs/replace — reported the decoy gitlink: ${out}" ;;
+esac
+
+# ── 7r. Codex enablement is an EFFECTIVE-STATE question, not a line match ─────
+# Codex loads `enabled = true # keep enabled` as enabled. An exact-line regex rejects the trailing
+# comment and exits UNKNOWN before inspecting the cache, so a correctly-configured lane reports that
+# it cannot be checked.
+cat > "${codex_home}/config.toml" <<'TOML'
+[plugins."agentic-engineering@devantler-plugins"]
+enabled = true # keep this lane enabled
+TOML
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 0 ] || fail "a trailing TOML comment must stay enabled (exit 0), got ${rc}: ${out}"
+case "${out}" in
+  *CURRENT*) ok "Codex enablement tolerates a valid trailing TOML comment" ;;
+  *) fail "commented-but-enabled Codex config did not report CURRENT: ${out}" ;;
+esac
+cat > "${codex_home}/config.toml" <<'TOML'
+[plugins."agentic-engineering@devantler-plugins"]
+enabled = true
+TOML
+
+# ── 7s. Codex drift must not be sent to a Claude-only remediation ─────────────
+# `codex plugin` exposes add/list/marketplace/remove and no update command, so telling a Codex
+# operator to use the /plugin marketplace update flow prescribes an action that cannot repair this
+# lane — and may refresh the sibling Claude installation instead.
+printf 'stale under codex remediation\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"/plugin marketplace update"*)
+    fail "Codex drift prescribes the Claude-only /plugin update flow: ${out}" ;;
+  *) ok "Codex drift is not routed to the Claude /plugin update flow" ;;
+esac
+case "${out}" in
+  *"codex plugin"*) ok "Codex drift names a codex-specific control-plane action" ;;
+  *) fail "Codex drift names no codex-specific remediation: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
 echo "plugin-definition-currency: ${pass_count} assertions passed"
