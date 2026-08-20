@@ -33,13 +33,14 @@
 # than skipped so the refusal is a recorded decision — a prose-exclusion list
 # hid them before, which let a real refusal pass unclassified.
 #
-# The two `gh search` gaps are pure query FILTERS — `--commenter` selects issues a
-# user commented on, `--merged-at` bounds a merge window — so both are reads the
-# guard should allow. Both are prescribed by the surveyor definition today, so
-# with the guard enforcing, the maintainer-comment sweep and the merged-PR
-# retrospective would each fail closed mid-run. Tracked upstream as
-# agent-plugins#147. They were found by the sources-to-corpus coverage check in
-# `surveyor-vocabulary-coverage.test.sh`, which is the companion to this file.
+# The two `gh search` query FILTERS — `--commenter` selects issues a user commented
+# on, `--merged-at` bounds a merge window — are `allow`. Both are reads, both are
+# prescribed by the surveyor definition, and the guard refused both until
+# agent-plugins#148 fixed it; while it did, the maintainer-comment sweep and the
+# merged-PR retrospective would each have failed closed mid-run. They were found by
+# the sources-to-corpus coverage check in `surveyor-vocabulary-coverage.test.sh`,
+# tracked as `gap` rows, and promoted here when this repo's pin picked the fix up —
+# which is exactly the lifecycle a `gap` row exists to drive.
 #
 #
 # On `$ENV` in a `--jq` filter: the guard refuses it, and that refusal is RIGHT, so
@@ -124,8 +125,8 @@ allow	gh pr view 2927 --repo devantler-tech/monorepo --json number,isDraft,headR
 allow	gh issue view 108 --repo devantler-tech/agent-plugins --json number,title,state
 allow	gh search prs --owner devantler-tech --state open --limit 100
 allow	gh search issues --owner devantler-tech --state open --limit 100
-gap	gh search issues --owner devantler-tech --state open --commenter devantler --limit 100
-gap	gh search prs --owner devantler-tech --merged --merged-at "2026-08-01..2026-08-02" --limit 100
+allow	gh search issues --owner devantler-tech --state open --commenter devantler --limit 100
+allow	gh search prs --owner devantler-tech --merged --merged-at "2026-08-01..2026-08-02" --limit 100
 allow	gh run list --repo devantler-tech/monorepo --branch main --limit 50 --json conclusion,path,event
 allow	gh repo list devantler-tech --limit 100 --json name,isArchived,visibility
 allow	gh api repos/devantler-tech/monorepo/pulls/2927/reviews --paginate
