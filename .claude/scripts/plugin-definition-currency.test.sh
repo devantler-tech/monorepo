@@ -1117,8 +1117,26 @@ case "${out}" in
   *UNKNOWN*"refs/replace/"*) ok "a submodule replace ref refuses a verdict instead of reporting CURRENT" ;;
   *) fail "submodule replace ref did not name the replacement refs: ${out}" ;;
 esac
+# The same UNKNOWN must remain visible under --quiet: say() is suppressed, so the reason has to
+# travel on stderr (every other UNKNOWN path already does via die()).
+set +e
+quiet_out="$("${script}" --runtime cursor --quiet --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; quiet_rc=$?
+set -e
+[ "${quiet_rc}" -eq 2 ] \
+  || fail "a replace ref under --quiet must still be UNKNOWN (exit 2), got ${quiet_rc}: ${quiet_out}"
+case "${quiet_out}" in
+  *UNKNOWN*"refs/replace/"*)
+    ok "a submodule replace ref names the replacement refs even under --quiet" ;;
+  *) fail "submodule replace ref under --quiet hid the UNKNOWN reason: ${quiet_out}" ;;
+esac
 git -C "${pin_repo}" replace -d "${gitlink}"
 git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+# Put the shared pin fixture back: this case advanced HEAD and left unreviewed README bytes.
+git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
+[ "$(git -C "${pin_repo}" rev-parse HEAD)" = "${gitlink}" ] \
+  || fail "the submodule replace case did not restore the shared pin fixture HEAD"
+[ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
+  || fail "the submodule replace case left the shared pin fixture dirty"
 
 # ── 7u. The Codex reinstall must be gated on the pin ──────────────────────────
 # `codex plugin add` installs the marketplace snapshot's LATEST. Prescribing a bare

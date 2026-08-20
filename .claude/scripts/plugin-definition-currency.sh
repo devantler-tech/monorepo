@@ -127,16 +127,19 @@ if [ "$RUNTIME" = cursor ]; then
   replaced="$(git -C "$cursor_sub" for-each-ref --format='%(refname)' 'refs/replace/*' 2>/dev/null)" \
     || die "cannot enumerate replacement refs in $cursor_sub"
   if [ -n "$replaced" ]; then
-    say "pinned revision        : $GITLINK"
-    say ""
-    say "UNKNOWN — the plugin submodule carries replacement ref(s):"
-    printf '%s\n' "$replaced" | while IFS= read -r r; do
-      [ -n "$r" ] && say "  $r"
-    done
-    say ""
-    say "The Cursor loader reads content with a plain 'git show', which resolves through"
-    say "refs/replace, so comparing revisions cannot establish what it actually loads. Remove the"
-    say "replacement ref, or verify the loaded blobs against the pinned tree directly."
+    # UNKNOWN reasons must survive --quiet: say() is suppressed when QUIET=1, and every other
+    # UNKNOWN path uses die() → stderr. Keep this multi-line explanation on stderr so a quiet
+    # caller still sees why the Cursor lane refused a verdict.
+    {
+      printf 'pinned revision        : %s\n\n' "$GITLINK"
+      printf 'UNKNOWN — the plugin submodule carries replacement ref(s):\n'
+      printf '%s\n' "$replaced" | while IFS= read -r r; do
+        [ -n "$r" ] && printf '  %s\n' "$r"
+      done
+      printf '\nThe Cursor loader reads content with a plain '\''git show'\'', which resolves through\n'
+      printf 'refs/replace, so comparing revisions cannot establish what it actually loads. Remove the\n'
+      printf 'replacement ref, or verify the loaded blobs against the pinned tree directly.\n'
+    } >&2
     exit 2
   fi
   loaded_revision="$(git -C "$cursor_sub" --no-replace-objects rev-parse "$CURSOR_REF^{commit}" 2>/dev/null)" \
