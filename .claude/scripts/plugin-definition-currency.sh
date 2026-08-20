@@ -217,7 +217,14 @@ if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
             rest = substr(header, length(features) + 1)
             if (rest == "" || rest ~ /^[[:space:]]*#/) header = features
           }
+          # TOML dotted keys at the document root are equivalent to a [features] table. Once a table
+          # header has appeared, the same spelling is relative to that table and must not be mistaken
+          # for the global gate.
+          if (!saw_table && line ~ /^features[[:space:]]*[.][[:space:]]*plugins[[:space:]]*=[[:space:]]*false([[:space:]]*#.*)?$/) {
+            feature_disabled = 1
+          }
           if (line ~ /^\[/) {
+            saw_table = 1
             in_plugin = (header == target)
             in_features = (header == features)
             next
