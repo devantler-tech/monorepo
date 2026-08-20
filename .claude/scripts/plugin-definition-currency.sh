@@ -182,15 +182,20 @@ if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
   # report CURRENT for a definition the runtime never executed.
   enabled=""
   if command -v codex >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-    codex_json="$(CODEX_HOME="$CODEX_HOME_DIR" codex plugin list --json 2>/dev/null)" || codex_json=""
-    if [ -n "$codex_json" ]; then
+    if codex_json="$(CODEX_HOME="$CODEX_HOME_DIR" codex plugin list --json 2>/dev/null)"; then
+      [ -n "$codex_json" ] \
+        || die "Codex runtime state query returned no data for $CODEX_HOME_DIR"
       enabled="$(printf '%s' "$codex_json" | jq -r --arg id "$PLUGIN_ID" '
           if (.installed | type) != "array" then "unparseable"
           else [ .installed[] | select(.pluginId == $id) | .enabled ]
                | if length == 0 then "false" elif any(. == true) then "true" else "false" end
           end
-        ' 2>/dev/null)" || enabled=""
-      if [ "$enabled" = unparseable ]; then enabled=""; fi
+        ' 2>/dev/null)" \
+        || die "Codex runtime state query returned malformed JSON for $CODEX_HOME_DIR"
+      [ "$enabled" != unparseable ] \
+        || die "Codex runtime state query returned an unexpected shape for $CODEX_HOME_DIR"
+    else
+      die "Codex runtime state query failed for $CODEX_HOME_DIR — cannot establish effective plugin state"
     fi
   fi
   # Fallback: parse the serialized config. Preserve BOTH layers of effective state: a stale enabled
@@ -350,6 +355,14 @@ else
   case "$(printf '%s' "$raw" | jq -r '.truncated // false')" in
     true) die "the forge returned a TRUNCATED tree for $GITLINK — cannot verify completeness${RECOVERY}" ;;
   esac
+  path_safety="$(printf '%s' "$raw" | jq -er '
+      if any(.tree[] | select(.type=="blob");
+          .path | (contains("\\") or contains("\t") or contains("\r") or contains("\n")))
+      then "unsafe" else "safe" end
+    ' 2>/dev/null)" \
+    || die "could not validate pinned forge paths for $GITLINK from $slug"
+  [ "$path_safety" = safe ] \
+    || die "the forge tree contains an unsafe path (tab, newline, carriage return or backslash) — cannot serialize it losslessly${RECOVERY}"
   tree="$(printf '%s' "$raw" | jq -r '.tree[] | select(.type=="blob") | [.sha,.mode,.path] | @tsv')" \
     || die "could not parse the pinned tree $GITLINK from $slug"
 fi

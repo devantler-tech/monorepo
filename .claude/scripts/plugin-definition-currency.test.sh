@@ -522,6 +522,43 @@ case "${out}" in
   *) fail "exit 2 but not because of truncation: ${out}" ;;
 esac
 
+# The forge branch receives decoded JSON paths, then @tsv escapes tabs/newlines/backslashes. Without
+# a pre-serialization rejection, an actual tab in the reviewed path collides with a literal `\t` in
+# the installed path and can report CURRENT for different filenames.
+cat > "${shim}/gh" <<'SHIM'
+#!/bin/sh
+cat "${FORGE_TREE_FIXTURE:?}"
+SHIM
+chmod +x "${shim}/gh"
+forge_install="${tmp}/install-forge-escaped"
+mkdir -p "${forge_install}/agents" "${forge_install}/scripts"
+printf 'reviewed engineer definition\n' > "${forge_install}/agents/agentic-engineer.agent.md"
+printf 'escaped collision bytes\n' > "${forge_install}/agents/a\\tb"
+cp "${p}/scripts/classify-default-branch-ci-runs.sh" "${forge_install}/scripts/"
+ordinary_sha="$(git hash-object --no-filters "${forge_install}/agents/agentic-engineer.agent.md")"
+escaped_sha="$(git hash-object --no-filters "${forge_install}/agents/a\\tb")"
+runtime_sha="$(git hash-object --no-filters "${forge_install}/scripts/classify-default-branch-ci-runs.sh")"
+forge_tree_fixture="${tmp}/forge-escaped-tree.json"
+jq -n --arg ordinary "${ordinary_sha}" --arg escaped "${escaped_sha}" --arg runtime "${runtime_sha}" '
+  {truncated:false,tree:[
+    {type:"blob",mode:"100644",sha:$ordinary,
+     path:"plugins/agentic-engineering/agents/agentic-engineer.agent.md"},
+    {type:"blob",mode:"100644",sha:$escaped,
+     path:"plugins/agentic-engineering/agents/a\tb"},
+    {type:"blob",mode:"100755",sha:$runtime,
+     path:"plugins/agentic-engineering/scripts/classify-default-branch-ci-runs.sh"}
+  ]}' > "${forge_tree_fixture}"
+set +e
+out="$(FORGE_TREE_FIXTURE="${forge_tree_fixture}" PATH="${shim}:${PATH}" "${script}" \
+        --repo-root "${tmp}/trunc" --installed "${forge_install}" \
+        --gitlink 2222222222222222222222222222222222222222 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "an escape-bearing forge path must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"forge tree contains an unsafe path"*) ok "forge paths with TSV-colliding escapes fail closed" ;;
+  *) fail "unsafe forge path did not name the serialization reason: ${out}" ;;
+esac
+
 # ── 7j. A SYMLINK is not a definition ────────────────────────────────────────
 # -f, `git hash-object` and -x all FOLLOW a symlink, so an installed definition replaced by a link to
 # an identical file passed every single test and reported CURRENT.
@@ -577,13 +614,32 @@ case "${CODEX_SHIM_MODE:-enabled}" in
     printf '{"installed":[{"pluginId":"agentic-engineering@devantler-plugins","enabled":false}],"available":[]}\n' ;;
   feature-off)
     printf '{"installed":[],"available":[]}\n' ;;
-  unavailable)
+  config-error)
+    printf 'failed to load configuration\n' >&2
     exit 1 ;;
 esac
 SHIMBIN
 chmod +x "${codex_shim}/codex"
 PATH="${codex_shim}:${PATH}"
 export PATH
+
+# Build a production-like PATH with no `codex` executable for the static-fallback cases. A shim that
+# exists but exits 1 models a runtime/config failure, not an unavailable CLI; conflating those two is
+# the fail-open this suite now rejects.
+path_without_codex=""
+old_ifs="${IFS}"
+IFS=:
+for path_dir in ${PATH}; do
+  [ -x "${path_dir}/codex" ] && continue
+  path_without_codex="${path_without_codex}${path_without_codex:+:}${path_dir}"
+done
+IFS="${old_ifs}"
+[ -n "${path_without_codex}" ] || fail "could not construct a PATH without codex"
+if PATH="${path_without_codex}" command -v codex >/dev/null 2>&1; then
+  fail "the static-fallback PATH still resolves codex"
+fi
+PATH="${path_without_codex}" command -v jq >/dev/null 2>&1 \
+  || fail "the static-fallback PATH lost jq"
 
 # ── 7m. CODEX resolves the copy its own runtime loaded ────────────────────────
 # Codex has no Claude-style installed_plugins.json. Its enabled plugin is served from the versioned
@@ -610,6 +666,19 @@ if out="$("${script}" --runtime codex --codex-home "${codex_home}" \
 else
   fail "Codex matching cache must exit 0, got $? — ${out}"
 fi
+
+# An installed runtime command that rejects the config is authoritative failure evidence, not an
+# unavailable CLI. Falling through to the line parser can find a later valid-looking table inside a
+# malformed document and report CURRENT even though Codex could not load any effective state.
+set +e
+out="$(CODEX_SHIM_MODE=config-error "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "a failed Codex runtime-state query must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"runtime state query failed"*) ok "a Codex config/runtime error never falls back to static CURRENT" ;;
+  *) fail "failed Codex state query did not name the UNKNOWN reason: ${out}" ;;
+esac
 
 printf 'stale Codex improver definition\n' > "${codex_install}/agents/agent-improver.agent.md"
 set +e
@@ -1086,7 +1155,7 @@ cat > "${codex_home}/config.toml" <<'TOML'
 enabled = true # keep this lane enabled
 TOML
 set +e
-out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 0 ] || fail "a trailing TOML comment must stay enabled (exit 0), got ${rc}: ${out}"
@@ -1109,7 +1178,7 @@ cat > "${codex_home}/config.toml" <<'TOML'
 enabled = true
 TOML
 set +e
-out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 0 ] || fail "a commented table header must stay enabled (exit 0), got ${rc}: ${out}"
@@ -1124,7 +1193,7 @@ cat > "${codex_home}/config.toml" <<'TOML'
 enabled = false
 TOML
 set +e
-out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 2 ] || fail "a commented header with enabled=false must stay UNKNOWN, got ${rc}: ${out}"
@@ -1140,7 +1209,7 @@ for plugin_header in '[ plugins."agentic-engineering@devantler-plugins" ]' \
                      '[ plugins."agentic-engineering@devantler-plugins" ] # managed plugin'; do
   printf '%s\n%s\n' "${plugin_header}" 'enabled = true' > "${codex_home}/config.toml"
   set +e
-  out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+  out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                     --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
   set -e
   [ "${rc}" -eq 0 ] || fail "spaced plugin header '${plugin_header}' must stay enabled: ${out}"
@@ -1311,7 +1380,7 @@ esac
 
 # The fallback still exists for the case it is actually for: the CLI could not answer at all.
 set +e
-out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 0 ] || fail "an unavailable CLI must fall back to the config (exit 0), got ${rc}: ${out}"
@@ -1331,7 +1400,7 @@ plugins = false
 enabled = true
 TOML
 set +e
-out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 2 ] \
@@ -1351,7 +1420,7 @@ plugins = false
 enabled = true
 TOML
 set +e
-out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 2 ] \
@@ -1371,7 +1440,7 @@ features.plugins = false
 enabled = true
 TOML
 set +e
-out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 2 ] \
@@ -1390,7 +1459,7 @@ for dotted_gate in '"features".plugins = false' 'features."plugins" = false' \
     '[plugins."agentic-engineering@devantler-plugins"]' 'enabled = true' \
     > "${codex_home}/config.toml"
   set +e
-  out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+  out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                     --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
   set -e
   [ "${rc}" -eq 2 ] \
@@ -1488,7 +1557,7 @@ cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver
 # unstated is the fail-open direction: the run reports itself current while following a superseded
 # definition.
 set +e
-out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 0 ] || fail "the CURRENT case must exit 0, got ${rc}: ${out}"
