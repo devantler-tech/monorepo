@@ -254,8 +254,16 @@ extract_fenced() {
         }
         return s
       }
+      # Both substitution spellings. The guard refuses each -- `dollar-paren
+      # command substitution is not a read` and `backtick command substitution
+      # is not a read` -- so recognising only `$(` leaves the legacy form
+      # fail-OPEN in a way that is worse than being dropped: extract_inline
+      # reads the wrapper backticks as a Markdown code span and submits the
+      # INNER read, which the guard allows, so the job goes green on a line
+      # the deployment would be refused for.
       function strip_subst(s) {
         if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\(/)) return substr(s, RSTART + RLENGTH)
+        if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?`/)) return substr(s, RSTART + RLENGTH)
         return ""
       }
       function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
@@ -447,6 +455,22 @@ assign_extracted=$(extract_commands "$fixdir/assign.md" | grep -c '^fenced RUN_N
 subst_extracted=$(extract_commands "$fixdir/subst.md" | grep -c '^fenced fid_status=\$(gh api ')
 [ "${subst_extracted:-0}" -ge 1 ] \
   || die_unknown "self-test: a command-substitution command did not reach the guard as prescribed (fail-open)"
+
+# The LEGACY backtick substitution must reach the guard too. This form fails open
+# more sharply than being dropped would: extract_inline reads the wrapper
+# backticks as a Markdown code span and submits the INNER read, which the guard
+# ALLOWS -- so the job goes green on a line the deployment is refused for
+# (`backtick command substitution is not a read`). The fixture asserts both that
+# the complete line is extracted AND that its unclassified refusal is DETECTED,
+# so it cannot pass by extracting something harmless.
+printf '%s\n' 'The census runs:' '' '```sh' \
+  'result=`gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100"`' '```' > "$fixdir/backtick.md"
+bt_extracted=$(extract_commands "$fixdir/backtick.md" | grep -c '^fenced result=`gh api ')
+[ "${bt_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a backtick command substitution did not reach the guard as prescribed (fail-open)"
+if check_sources "$fixdir/backtick.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a backtick substitution's unclassified refusal was NOT detected (fail-open)"
+fi
 
 # A MULTI-LINE inline span must be seen. A per-line scan cannot match one, so the
 # span is dropped whole and its refusal never surfaces -- fail-open, and the run
