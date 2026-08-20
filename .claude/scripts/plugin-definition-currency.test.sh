@@ -1034,4 +1034,48 @@ case "${out}" in
   *) fail "Codex drift names no codex-specific remediation: ${out}" ;;
 esac
 cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7t. A replace ref INSIDE the submodule defeats a revision comparison ──────
+# The Cursor loader reads content with a plain `git show <ref>:<path>`, which resolves THROUGH
+# refs/replace. So a replacement inside the submodule changes the bytes it loads while leaving BOTH
+# compared revisions identical — `--no-replace-objects rev-parse` still returns the original commit.
+# A revision equality check therefore cannot establish the loaded content and must refuse a verdict.
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+printf 'UNREVIEWED replacement content\n' > "${p}/README.md"
+git -C "${pin_repo}" add plugins/agentic-engineering/README.md
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm replacement-payload
+sub_replacement="$(git -C "${pin_repo}" rev-parse HEAD)"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+git -C "${pin_repo}" replace "${gitlink}" "${sub_replacement}"
+set +e
+out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "a replace ref inside the submodule must be UNKNOWN (exit 2), got ${rc}: ${out}"
+case "${out}" in
+  *UNKNOWN*"refs/replace/"*) ok "a submodule replace ref refuses a verdict instead of reporting CURRENT" ;;
+  *) fail "submodule replace ref did not name the replacement refs: ${out}" ;;
+esac
+git -C "${pin_repo}" replace -d "${gitlink}"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+
+# ── 7u. The Codex reinstall must be gated on the pin ──────────────────────────
+# `codex plugin add` installs the marketplace snapshot's LATEST. Prescribing a bare
+# `marketplace upgrade` + `remove && add` therefore tells an operator to install whatever the tip is,
+# which is the same hazard the Claude refresh path is explicitly gated against.
+printf 'stale under codex pin gate\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"ONLY when the marketplace snapshot is at ${gitlink}"*)
+    ok "the Codex reinstall is gated on the pinned revision" ;;
+  *) fail "Codex remediation prescribes a reinstall without a pin gate: ${out}" ;;
+esac
+case "${out}" in
+  *"AHEAD of the pin"*) ok "the Codex remediation says what to do when the snapshot is ahead" ;;
+  *) fail "Codex remediation does not cover a snapshot ahead of the pin: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
 echo "plugin-definition-currency: ${pass_count} assertions passed"

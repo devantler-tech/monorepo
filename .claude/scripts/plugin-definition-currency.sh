@@ -119,6 +119,26 @@ if [ "$RUNTIME" = cursor ]; then
   cursor_sub="$REPO_ROOT/$SUBMODULE_PATH"
   [ -e "$cursor_sub/.git" ] \
     || die "Cursor plugin submodule is not initialised: $cursor_sub"
+  # The loader reads its definition with a plain `git show <ref>:<path>`, which resolves THROUGH
+  # refs/replace. A revision comparison made with --no-replace-objects therefore cannot establish the
+  # bytes it loads: a replacement inside THIS submodule changes the loaded content without changing
+  # either compared revision, so an equality check here would report CURRENT over unreviewed bytes.
+  # There is no safe verdict available from a revision comparison, so refuse to produce one.
+  replaced="$(git -C "$cursor_sub" for-each-ref --format='%(refname)' 'refs/replace/*' 2>/dev/null)" \
+    || die "cannot enumerate replacement refs in $cursor_sub"
+  if [ -n "$replaced" ]; then
+    say "pinned revision        : $GITLINK"
+    say ""
+    say "UNKNOWN — the plugin submodule carries replacement ref(s):"
+    printf '%s\n' "$replaced" | while IFS= read -r r; do
+      [ -n "$r" ] && say "  $r"
+    done
+    say ""
+    say "The Cursor loader reads content with a plain 'git show', which resolves through"
+    say "refs/replace, so comparing revisions cannot establish what it actually loads. Remove the"
+    say "replacement ref, or verify the loaded blobs against the pinned tree directly."
+    exit 2
+  fi
   loaded_revision="$(git -C "$cursor_sub" --no-replace-objects rev-parse "$CURSOR_REF^{commit}" 2>/dev/null)" \
     || die "cannot resolve Cursor loaded revision '$CURSOR_REF' in $cursor_sub"
   say "pinned revision        : $GITLINK"
@@ -403,10 +423,13 @@ say "     $GITLINK and follow that, then report the drift in the run report."
 say "  2. Refresh through the runtime's own control plane. Never edit the plugin cache: it is"
 say "     read-only evidence."
 if [ "$RUNTIME" = codex ]; then
-  say "     For Codex: refresh the marketplace snapshot with"
+  say "     For Codex: \`codex plugin add\` installs the marketplace snapshot's LATEST, which is NOT"
+  say "     necessarily this pin — so gate the reinstall exactly as the Claude refresh path is gated."
+  say "     ONLY when the marketplace snapshot is at $GITLINK:"
   say "       codex plugin marketplace upgrade ${PLUGIN_ID#*@}"
-  say "     then reinstall the plugin with"
   say "       codex plugin remove $PLUGIN_ID && codex plugin add $PLUGIN_ID"
+  say "     If the snapshot is AHEAD of the pin, do not reinstall: that installs a revision nobody"
+  say "     here has reviewed. Bump the consumer gitlink through the reviewed rollout instead."
 else
   say "     For Claude: the /plugin marketplace update flow."
 fi
