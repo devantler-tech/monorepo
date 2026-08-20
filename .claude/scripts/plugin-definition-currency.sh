@@ -194,11 +194,11 @@ if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
       if [ "$enabled" = unparseable ]; then enabled=""; fi
     fi
   fi
-  # Fallback: parse the serialized config. Deliberately tolerant — TOML permits whitespace around the
-  # table header, a comment after the table header, and a comment after the value, and Codex loads
-  # all of those as enabled, so an exact-line match would report UNKNOWN for a correctly-configured
-  # lane. Tolerance is one-directional: it decides which SECTION is in scope, never what the value
-  # inside it says, so a commented header above `enabled = false` still reads as disabled.
+  # Fallback: parse the serialized config. Preserve BOTH layers of effective state: a stale enabled
+  # plugin table may remain when `[features] plugins = false`, and reporting CURRENT in that state
+  # would describe bytes the runtime cannot load. Deliberately tolerate whitespace and trailing TOML
+  # comments around both table headers and values; an exact-line match would report UNKNOWN for a
+  # correctly-configured lane.
   if [ -z "$enabled" ]; then
     enabled="$(awk -v target="[plugins.\"$PLUGIN_ID\"]" '
         { line = $0
@@ -211,12 +211,27 @@ if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
           if (substr(header, 1, length(target)) == target) {
             rest = substr(header, length(target) + 1)
             if (rest == "" || rest ~ /^[[:space:]]*#/) header = target
-          } }
-        header == target { in_plugin = 1; next }
-        in_plugin && line ~ /^\[/ { exit }
-        in_plugin && line ~ /^enabled[[:space:]]*=[[:space:]]*true([[:space:]]*#.*)?$/ {
-          print "true"
-          exit
+          }
+          features = "[features]"
+          if (substr(header, 1, length(features)) == features) {
+            rest = substr(header, length(features) + 1)
+            if (rest == "" || rest ~ /^[[:space:]]*#/) header = features
+          }
+          if (line ~ /^\[/) {
+            in_plugin = (header == target)
+            in_features = (header == features)
+            next
+          }
+          if (in_features && line ~ /^plugins[[:space:]]*=[[:space:]]*false([[:space:]]*#.*)?$/) {
+            feature_disabled = 1
+          }
+          if (in_plugin && line ~ /^enabled[[:space:]]*=[[:space:]]*true([[:space:]]*#.*)?$/) {
+            plugin_enabled = 1
+          }
+        }
+        END {
+          if (feature_disabled) print "false"
+          else if (plugin_enabled) print "true"
         }
       ' "$config")"
   fi

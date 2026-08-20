@@ -22,6 +22,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="${repo_root}/.claude/scripts/plugin-definition-currency.sh"
 constitution="${repo_root}/AGENTS.md"
+cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
 
 pass_count=0
 fail() {
@@ -35,6 +36,7 @@ ok() {
 
 [ -x "${script}" ] || fail "${script} is missing or not executable"
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
+[ -r "${cursor_loader}" ] || fail "cannot read ${cursor_loader}"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
@@ -698,6 +700,32 @@ git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
   || fail "Cursor cases did not restore the shared loader ref"
 ok "Cursor cases restore the shared pin fixture before later checks"
 
+# The loader must resolve the same unambiguous remote-tracking ref the currency check verifies.
+# A tag can legally contain a slash, so a tag named `origin/main` makes the shorthand ambiguous:
+# plain `git show origin/main:<path>` then follows the tag while the check follows
+# `refs/remotes/origin/main` and can report CURRENT over different bytes.
+printf 'UNREVIEWED ambiguous-ref agent\n' > "${p}/agents/agentic-engineer.agent.md"
+git -C "${pin_repo}" add plugins/agentic-engineering/agents/agentic-engineer.agent.md
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm ambiguous-loader-ref
+ambiguous_loader_commit="$(git -C "${pin_repo}" rev-parse HEAD)"
+git -C "${pin_repo}" tag origin/main "${ambiguous_loader_commit}"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+loader_ref="$(sed -n \
+  's/.*git -C libraries\/agent-plugins show \([^:][^:]*\):plugins\/agentic-engineering\/agents\/agentic-engineer\.agent\.md.*/\1/p' \
+  "${cursor_loader}" | tail -n 1)"
+[ -n "${loader_ref}" ] || fail "could not extract the Cursor loader definition ref"
+loaded_agent="$(git -C "${pin_repo}" show \
+  "${loader_ref}:plugins/agentic-engineering/agents/agentic-engineer.agent.md" 2>/dev/null)"
+pinned_agent="$(git -C "${pin_repo}" show \
+  "${gitlink}:plugins/agentic-engineering/agents/agentic-engineer.agent.md")"
+[ "${loaded_agent}" = "${pinned_agent}" ] \
+  || fail "Cursor loader ref '${loader_ref}' resolved ambiguous content instead of the verified remote-tracking ref"
+git -C "${pin_repo}" tag -d origin/main >/dev/null
+git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
+[ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
+  || fail "ambiguous Cursor loader case left the shared pin fixture dirty"
+ok "Cursor loader reads the unambiguous remote-tracking ref the currency check verifies"
+
 # ── 8. The remediation is NAMED in the failure output ─────────────────────────
 # The deployment's own "fail with the fix" rule: a guard that blocks without naming the resolving
 # action is a friction tax, and it trains the reader to route around it. It must also keep saying
@@ -1240,6 +1268,31 @@ case "${out}" in
   *CURRENT*) ok "the config fallback is reserved for a CLI that could not answer" ;;
   *) fail "CLI-unavailable fallback did not report CURRENT: ${out}" ;;
 esac
+
+# The fallback has to preserve the runtime's GLOBAL plugin feature gate too. A stale per-plugin
+# table and cache can remain after `[features] plugins = false`; reading only the table would report
+# CURRENT for a definition Codex cannot load whenever the CLI is unavailable.
+cat > "${codex_home}/config.toml" <<'TOML'
+[features]
+plugins = false
+
+[plugins."agentic-engineering@devantler-plugins"]
+enabled = true
+TOML
+set +e
+out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] \
+  || fail "a globally disabled Codex plugin must stay UNKNOWN in config fallback, got ${rc}: ${out}"
+case "${out}" in
+  *"not enabled"*) ok "the config fallback honours the global Codex plugin feature gate" ;;
+  *) fail "global Codex plugin disablement did not name the reason: ${out}" ;;
+esac
+cat > "${codex_home}/config.toml" <<'TOML'
+[plugins."agentic-engineering@devantler-plugins"]
+enabled = true
+TOML
 
 # ── 7w. The Codex remediation must never advance the snapshot before installing ──
 # `marketplace upgrade` moves the snapshot to the upstream tip, so a precondition checked BEFORE it
