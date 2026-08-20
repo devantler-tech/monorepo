@@ -1138,6 +1138,28 @@ git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
 [ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
   || fail "the submodule replace case left the shared pin fixture dirty"
 
+# ── 7ab. The replacement NAMESPACE is configurable, so a hard-coded scan misses it ─────
+# GIT_REPLACE_REF_BASE moves Git's effective replacement namespace off refs/replace/. A scan
+# hard-coded to refs/replace/* then returns nothing while the loader's plain `git show` still
+# resolves through the replacement — so the branch proceeds to a revision comparison, which
+# --no-replace-objects answers with the pin, and reports CURRENT over unreviewed bytes. The
+# enumeration has to follow the namespace Git is actually honouring, not the default one.
+git -C "${pin_repo}" update-ref "refs/evil/${gitlink}" "${sub_replacement}"
+set +e
+out="$(GIT_REPLACE_REF_BASE=refs/evil/ "${script}" --runtime cursor \
+        --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] \
+  || fail "a replacement in a configured namespace must be UNKNOWN (exit 2), got ${rc}: ${out}"
+case "${out}" in
+  *UNKNOWN*"refs/evil/"*)
+    ok "a configured replacement namespace refuses a verdict instead of reporting CURRENT" ;;
+  *) fail "the configured replacement namespace was not enumerated: ${out}" ;;
+esac
+git -C "${pin_repo}" update-ref -d "refs/evil/${gitlink}"
+[ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
+  || fail "the configured-namespace case left the shared pin fixture dirty"
+
 # ── 7v. A replace ref must not be able to REDEFINE the pinned tree ────────────
 # 7q proves the PIN ITSELF is resolved without replacement objects, and 7t refuses a verdict for
 # Cursor, whose loader reads through refs/replace. Neither covers the read every OTHER runtime

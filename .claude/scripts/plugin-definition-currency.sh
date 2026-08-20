@@ -124,8 +124,21 @@ if [ "$RUNTIME" = cursor ]; then
   # bytes it loads: a replacement inside THIS submodule changes the loaded content without changing
   # either compared revision, so an equality check here would report CURRENT over unreviewed bytes.
   # There is no safe verdict available from a revision comparison, so refuse to produce one.
-  replaced="$(git -C "$cursor_sub" for-each-ref --format='%(refname)' 'refs/replace/*' 2>/dev/null)" \
-    || die "cannot enumerate replacement refs in $cursor_sub"
+  # Git's replacement namespace is CONFIGURABLE: GIT_REPLACE_REF_BASE moves it off refs/replace/,
+  # and git then honours only that namespace. A scan hard-coded to the default therefore returns
+  # nothing while a plain `git show` still resolves through the replacement — the enumeration reads
+  # clean and the verdict is issued over unreviewed bytes. Follow the namespace git is actually
+  # honouring, and keep scanning the default too so neither placement can hide a replacement.
+  replace_base="${GIT_REPLACE_REF_BASE:-refs/replace/}"
+  replace_base="${replace_base%/}"
+  if [ "$replace_base" = "refs/replace" ]; then
+    replaced="$(git -C "$cursor_sub" for-each-ref --format='%(refname)' 'refs/replace/*' 2>/dev/null)" \
+      || die "cannot enumerate replacement refs in $cursor_sub"
+  else
+    replaced="$(git -C "$cursor_sub" for-each-ref --format='%(refname)' \
+        'refs/replace/*' "$replace_base/*" 2>/dev/null)" \
+      || die "cannot enumerate replacement refs in $cursor_sub"
+  fi
   if [ -n "$replaced" ]; then
     # UNKNOWN reasons must survive --quiet: say() is suppressed when QUIET=1, and every other
     # UNKNOWN path uses die() → stderr. Keep this multi-line explanation on stderr so a quiet
