@@ -77,6 +77,16 @@
 # guard the inner read rather than the shell that captures it; tracked as
 # monorepo#2943.
 #
+# `for T in Epic Feature ...; do gh api ...; done` — the mandated issue-type sweep,
+# and the same category one step further out: a compound whose every segment is a
+# read, refused as `chaining with ; can carry a write`. Pinned `deny` for exactly
+# the reason above — proving that a whole shell construct is read-only means
+# parsing shell, inside a security boundary, so promoting it is not the outcome
+# being waited on. The refusal is real rather than theoretical: the runtime submits
+# the WHOLE construct, so a deployment that wires the guard onto the surveyor has
+# this sweep fail closed mid-run. The caller-side fix is to express the sweep
+# without a shell loop; tracked as monorepo#2955.
+#
 # On `git status`: the surveyor definition names `git log/status` among its read
 # verbs, but only the hardened invocation is actually a read, and the guard is
 # right to insist on it. Bare `git status` is pinned as `deny` for two reasons
@@ -170,6 +180,7 @@ allow	gh api --method GET "repos/devantler-tech/monorepo/activity" -f per_page=1
 allow	gh api -X GET search/issues -f q=org:devantler-tech --paginate
 deny	RUN_NAME="$run_name" gh api --paginate "repos/devantler-tech/monorepo/actions/workflows/ci.yaml/runs?branch=main&per_page=100" --jq '[.workflow_runs[]]'
 deny	fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
+deny	for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10], .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/" done
 CORPUS
 )
 

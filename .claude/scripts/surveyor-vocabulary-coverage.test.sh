@@ -351,6 +351,47 @@ extract_fenced() {
       # verb. Without this every `x=$(date)` would reach the guard and stand as a
       # permanent false finding.
       function has_forge(s) { return (s ~ /(^|[[:space:]]|[;&|(])(gh|git)[[:space:]]/) }
+      # A forge read is also prescribed INSIDE a shell compound construct -- the
+      # issue-type sweep in the surveyor definition is a `for T in …; do gh api …; done` loop.
+      # Anchored on the verb, the buffer starts at the nested `gh api` line and the
+      # guard is asked about that read alone, which it ALLOWS, while the deployment
+      # submits the whole loop, which it refuses (`chaining with ; can carry a
+      # write`). Same fail-open shape as the verb-less substitution above, on the
+      # mandated type sweep.
+      function compound_starter(s) {
+        return (s ~ /^[[:space:]]*(for|while|until|if|case)[[:space:]]/)
+      }
+      # Quoted spans blanked, so a keyword inside a jq filter or a message cannot
+      # open or close a construct. Same reasoning as `unbalanced`: quote state is a
+      # machine, not a count.
+      function unquoted(s,   i, c, sq, dq, out) {
+        out = ""
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          if (c == "\\" && !sq) { i++; continue }
+          else if (c == "'"'"'" && !dq) { sq = !sq; out = out " "; continue }
+          else if (c == "\"" && !sq) { dq = !dq; out = out " "; continue }
+          out = out ((sq || dq) ? " " : c)
+        }
+        return out
+      }
+      # Exact word count via split, never gsub: gsub consumes the delimiter it
+      # matched, so two adjacent keywords would count as one.
+      function countw(t, w,   n, i, arr, c) {
+        n = split(t, arr, /[^[:alnum:]_]+/)
+        c = 0
+        for (i = 1; i <= n; i++) if (arr[i] == w) c++
+        return c
+      }
+      # Block STARTERS against TERMINATORS -- deliberately not `do`/`then`, because
+      # an `if/elif/else/fi` carries several `then` and exactly one `fi`, which
+      # would leave the construct permanently open.
+      function compound_open(s,   t) {
+        t = unquoted(s)
+        return ((countw(t, "for") + countw(t, "while") + countw(t, "until") \
+                 + countw(t, "if") + countw(t, "case")) \
+                > (countw(t, "done") + countw(t, "fi") + countw(t, "esac")))
+      }
       function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
       function candidate(s) { return (opens(s) || opens(strip_assigns(s)) || opens(strip_subst(s))) }
       function flush(   keep) {
@@ -358,16 +399,23 @@ extract_fenced() {
         if (buf != "" && keep) print buf
         buf = ""; pend = 0
       }
-      # Fences are DELIMITER-AWARE. `~~~` is a valid Markdown fence, and a machine
-      # knowing only backticks never ENTERS such a block: the command inside is
-      # dropped before classification and its refusal never surfaces -- fail-open,
-      # with the per-source floor still passing on the other candidates. Closing
-      # only on the delimiter that opened the block is what keeps a `~~~` written
-      # inside a ```-block from ending it early.
+      # Fences are DELIMITER- AND LENGTH-aware. `~~~` is a valid Markdown fence, and
+      # a machine knowing only backticks never ENTERS such a block: the command
+      # inside is dropped before classification and its refusal never surfaces --
+      # fail-open, with the per-source floor still passing on the other candidates.
+      #
+      # Length matters for the same reason. CommonMark closes a fence only on a run
+      # of the SAME character at least as long as the opener, which is how a block
+      # embeds a shorter fence as content -- a ````-block containing a ``` example.
+      # Recording only the character lets that inner line close the outer block, so
+      # every prescription after it is read as prose and silently dropped.
       /^[[:space:]]*(```|~~~)/ {
-        fd = ($0 ~ /^[[:space:]]*~~~/) ? "~" : "`"
-        if (!inb) { inb = 1; fence = fd }
-        else if (fd == fence) { inb = 0; fence = ""; flush() }
+        fline = $0; sub(/^[[:space:]]*/, "", fline)
+        fd = substr(fline, 1, 1)
+        flen = 0
+        while (substr(fline, flen + 1, 1) == fd) flen++
+        if (!inb) { inb = 1; fence = fd; fencelen = flen }
+        else if (fd == fence && flen >= fencelen) { inb = 0; fence = ""; fencelen = 0; flush() }
         next
       }
       !inb { next }
@@ -376,7 +424,7 @@ extract_fenced() {
         sub(/^[[:space:]]*\$[[:space:]]+/, "", line)
         if (buf == "") {
           if (candidate(line)) { buf = line; pend = 0 }
-          else if (opens_subst(line)) { buf = line; pend = 1 }
+          else if (opens_subst(line) || compound_starter(line)) { buf = line; pend = 1 }
           else next
         }
         else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
@@ -387,7 +435,7 @@ extract_fenced() {
         # failure the multi-line quoted operand above already avoids. An unclosed
         # substitution is a continuation too, and the only one whose opening line
         # carries no trailing marker at all.
-        if (!unbalanced(buf) && !subst_open(buf) && buf !~ /\\[[:space:]]*$/ && buf !~ /(\||&&)[[:space:]]*$/) flush()
+        if (!unbalanced(buf) && !subst_open(buf) && !compound_open(buf) && buf !~ /\\[[:space:]]*$/ && buf !~ /(\||&&)[[:space:]]*$/) flush()
       }
       END { flush() }
     ' "$f" 2>/dev/null
@@ -628,6 +676,46 @@ mb_extracted=$(extract_commands "$fixdir/multibacktick.md" | grep -c '^inline re
 if check_sources "$fixdir/multibacktick.md" >/dev/null 2>&1; then
   die_unknown "self-test: a multi-backtick span's unclassified refusal was NOT detected (fail-open)"
 fi
+
+# A shell COMPOUND CONSTRUCT must reach the guard whole. The mandated issue-type
+# sweep is a `for … do … done` loop, and anchored on the verb the buffer starts at
+# the nested read: the guard ALLOWs that, while the deployment submits the loop,
+# which it refuses. The fixture omits the semicolon so the refusal is
+# `a read must begin with a forge command, not .for.` -- a reason no corpus row
+# acknowledges, so the detection half cannot pass merely because the real sweep is
+# now classified. Asserts extraction AND detection.
+printf '%s\n' 'The type sweep runs:' '' '```sh' \
+  'for T in Epic Feature' 'do' \
+  '  gh release create "v-$T" --repo devantler-tech/monorepo' \
+  'done' '```' > "$fixdir/compound.md"
+cp_extracted=$(extract_commands "$fixdir/compound.md" | grep -c "^fenced for T in Epic Feature do gh release create ")
+[ "${cp_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a shell compound construct did not reach the guard as prescribed (fail-open)"
+if check_sources "$fixdir/compound.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a compound construct's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# ...and a construct wrapping no forge verb must not become a candidate, or every
+# `for`/`if` in a fenced block would reach the guard as a false finding.
+printf '%s\n' 'Loop over files:' '' '```sh' \
+  'for f in a b; do' '  echo "$f"' 'done' '```' > "$fixdir/compound-nonforge.md"
+cn_extracted=$(extract_commands "$fixdir/compound-nonforge.md" | grep -c .)
+[ "${cn_extracted:-0}" -eq 0 ] \
+  || die_unknown "self-test: a construct wrapping no forge verb yielded $cn_extracted candidate(s), expected 0 (false finding)"
+
+# A LONGER fence must not be closed by a shorter one. CommonMark closes a fence
+# only on a run of the same character at least as long as the opener, which is how
+# a block embeds a ``` example as content. Recording only the delimiter character
+# lets that inner line close the outer block, so every prescription after it is
+# read as prose and silently dropped -- fail-open, and the per-source floor still
+# passes on the earlier candidates.
+printf '%s\n' 'Outer block with an embedded example:' '' '````sh' \
+  'gh release create v1 --repo devantler-tech/monorepo' \
+  '```' \
+  'gh release delete v2 --repo devantler-tech/monorepo' '````' > "$fixdir/fencelen.md"
+fl_extracted=$(extract_commands "$fixdir/fencelen.md" | grep -c '^fenced gh release delete v2 ')
+[ "${fl_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a command after an embedded shorter fence was dropped, so it cannot reach the guard (fail-open)"
 
 # A MULTI-LINE inline span must be seen. A per-line scan cannot match one, so the
 # span is dropped whole and its refusal never surfaces -- fail-open, and the run
