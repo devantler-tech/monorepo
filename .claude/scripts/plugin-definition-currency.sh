@@ -172,97 +172,31 @@ fi
 
 # ── the INSTALLED copy ─────────────────────────────────────────────────────────
 if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
-  config="$CODEX_HOME_DIR/config.toml"
-  [ -r "$config" ] || die "cannot read the Codex runtime config: $config"
-  # Enablement is an EFFECTIVE-STATE question, so ask the runtime first: `codex plugin list --json`
-  # reports what Codex actually loaded. CODEX_HOME is passed explicitly so this reads the home under
-  # test and never the host's. A VALID response is authoritative in both directions — an empty
-  # `installed` array means the runtime did not load this plugin (its plugin feature can be off while
-  # the table and cache remain present), so it must NOT fall through to the static table, which would
-  # report CURRENT for a definition the runtime never executed.
-  enabled=""
-  if command -v codex >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-    if codex_json="$(CODEX_HOME="$CODEX_HOME_DIR" codex plugin list --json 2>/dev/null)"; then
-      [ -n "$codex_json" ] \
-        || die "Codex runtime state query returned no data for $CODEX_HOME_DIR"
-      enabled="$(printf '%s' "$codex_json" | jq -r --arg id "$PLUGIN_ID" '
-          if (.installed | type) != "array" then "unparseable"
-          else [ .installed[] | select(.pluginId == $id) | .enabled ]
-               | if length == 0 then "false" elif any(. == true) then "true" else "false" end
-          end
-        ' 2>/dev/null)" \
-        || die "Codex runtime state query returned malformed JSON for $CODEX_HOME_DIR"
-      [ "$enabled" != unparseable ] \
-        || die "Codex runtime state query returned an unexpected shape for $CODEX_HOME_DIR"
-    else
-      die "Codex runtime state query failed for $CODEX_HOME_DIR — cannot establish effective plugin state"
-    fi
-  fi
-  # Fallback: parse the serialized config. Preserve BOTH layers of effective state: a stale enabled
-  # plugin table may remain when `[features] plugins = false`, and reporting CURRENT in that state
-  # would describe bytes the runtime cannot load. Deliberately tolerate whitespace and trailing TOML
-  # comments around both table headers and values; an exact-line match would report UNKNOWN for a
-  # correctly-configured lane.
-  if [ -z "$enabled" ]; then
-    enabled="$(awk -v target="[plugins.\"$PLUGIN_ID\"]" '
-        { line = $0
-          sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line)
-          # TOML permits every key segment to be quoted. Normalise only the two literal feature-gate
-          # segments before matching their complete assignment; values and unrelated keys remain
-          # untouched. sprintf keeps a literal single quote out of this shell single-quoted program.
-          sq = sprintf("%c", 39)
-          gsub(/"features"/, "features", line); gsub(/"plugins"/, "plugins", line)
-          gsub(sq "features" sq, "features", line); gsub(sq "plugins" sq, "plugins", line)
-          # Match the header by PREFIX and then require the remainder to be a comment, rather than
-          # interpolating the plugin id into a regex: the id is a quoted TOML key that may contain
-          # regex metacharacters, and escaping it here is what would actually break. An unrelated
-          # trailing token is not a comment, so it still fails to match.
-          header = line
-          if (header ~ /^\[/) {
-            sub(/^\[[[:space:]]*/, "[", header)
-            sub(/[[:space:]]*\]/, "]", header)
-          }
-          if (substr(header, 1, length(target)) == target) {
-            rest = substr(header, length(target) + 1)
-            if (rest == "" || rest ~ /^[[:space:]]*#/) header = target
-          }
-          features = "[features]"
-          # Whitespace inside TOML table brackets is insignificant. Quoted literal segments were
-          # normalised above, so one structural match covers bare and quoted feature headers.
-          if (line ~ /^\[[[:space:]]*features[[:space:]]*\]([[:space:]]*#.*)?$/) {
-            header = features
-          }
-          if (substr(header, 1, length(features)) == features) {
-            rest = substr(header, length(features) + 1)
-            if (rest == "" || rest ~ /^[[:space:]]*#/) header = features
-          }
-          # TOML dotted keys at the document root are equivalent to a [features] table. Once a table
-          # header has appeared, the same spelling is relative to that table and must not be mistaken
-          # for the global gate.
-          if (!saw_table && line ~ /^features[[:space:]]*[.][[:space:]]*plugins[[:space:]]*=[[:space:]]*false([[:space:]]*#.*)?$/) {
-            feature_disabled = 1
-          }
-          if (line ~ /^\[/) {
-            saw_table = 1
-            in_plugin = (header == target)
-            in_features = (header == features)
-            next
-          }
-          if (in_features && line ~ /^plugins[[:space:]]*=[[:space:]]*false([[:space:]]*#.*)?$/) {
-            feature_disabled = 1
-          }
-          if (in_plugin && line ~ /^enabled[[:space:]]*=[[:space:]]*true([[:space:]]*#.*)?$/) {
-            plugin_enabled = 1
-          }
-        }
-        END {
-          if (feature_disabled) print "false"
-          else if (plugin_enabled) print "true"
-        }
-      ' "$config")"
+  # Enablement is an EFFECTIVE-STATE question. Only the runtime can parse its complete TOML model
+  # (including multiline strings and every valid key spelling), so never infer loaded state from
+  # line-oriented config text. If either half of the structured query is unavailable, the only safe
+  # verdict is UNKNOWN.
+  command -v codex >/dev/null 2>&1 \
+    || die "codex is required to establish effective plugin state for $CODEX_HOME_DIR"
+  command -v jq >/dev/null 2>&1 \
+    || die "jq is required to parse Codex runtime state for $CODEX_HOME_DIR"
+  if codex_json="$(CODEX_HOME="$CODEX_HOME_DIR" codex plugin list --json 2>/dev/null)"; then
+    [ -n "$codex_json" ] \
+      || die "Codex runtime state query returned no data for $CODEX_HOME_DIR"
+    enabled="$(printf '%s' "$codex_json" | jq -r --arg id "$PLUGIN_ID" '
+        if (.installed | type) != "array" then "unparseable"
+        else [ .installed[] | select(.pluginId == $id) | .enabled ]
+             | if length == 0 then "false" elif any(. == true) then "true" else "false" end
+        end
+      ' 2>/dev/null)" \
+      || die "Codex runtime state query returned malformed JSON for $CODEX_HOME_DIR"
+    [ "$enabled" != unparseable ] \
+      || die "Codex runtime state query returned an unexpected shape for $CODEX_HOME_DIR"
+  else
+    die "Codex runtime state query failed for $CODEX_HOME_DIR — cannot establish effective plugin state"
   fi
   [ "$enabled" = true ] \
-    || die "plugin '$PLUGIN_ID' is not enabled in the Codex runtime config: $config"
+    || die "plugin '$PLUGIN_ID' is not enabled according to the Codex runtime state query"
 
   marketplace="${PLUGIN_ID#*@}"
   [ "$marketplace" != "$PLUGIN_ID" ] \

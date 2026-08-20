@@ -623,9 +623,8 @@ chmod +x "${codex_shim}/codex"
 PATH="${codex_shim}:${PATH}"
 export PATH
 
-# Build a production-like PATH with no `codex` executable for the static-fallback cases. A shim that
-# exists but exits 1 models a runtime/config failure, not an unavailable CLI; conflating those two is
-# the fail-open this suite now rejects.
+# Build production-like PATHs missing each structured-query dependency. A shim that exists but exits
+# 1 models a runtime/config failure, not an unavailable CLI; every one of these states is UNKNOWN.
 path_without_codex=""
 old_ifs="${IFS}"
 IFS=:
@@ -636,10 +635,24 @@ done
 IFS="${old_ifs}"
 [ -n "${path_without_codex}" ] || fail "could not construct a PATH without codex"
 if PATH="${path_without_codex}" command -v codex >/dev/null 2>&1; then
-  fail "the static-fallback PATH still resolves codex"
+  fail "the no-Codex PATH still resolves codex"
 fi
 PATH="${path_without_codex}" command -v jq >/dev/null 2>&1 \
-  || fail "the static-fallback PATH lost jq"
+  || fail "the no-Codex PATH lost jq"
+
+path_without_jq=""
+IFS=:
+for path_dir in ${PATH}; do
+  [ -x "${path_dir}/jq" ] && continue
+  path_without_jq="${path_without_jq}${path_without_jq:+:}${path_dir}"
+done
+IFS="${old_ifs}"
+[ -n "${path_without_jq}" ] || fail "could not construct a PATH without jq"
+if PATH="${path_without_jq}" command -v jq >/dev/null 2>&1; then
+  fail "the no-jq PATH still resolves jq"
+fi
+PATH="${path_without_jq}" command -v codex >/dev/null 2>&1 \
+  || fail "the no-jq PATH lost the Codex shim"
 
 # ── 7m. CODEX resolves the copy its own runtime loaded ────────────────────────
 # Codex has no Claude-style installed_plugins.json. Its enabled plugin is served from the versioned
@@ -1146,79 +1159,34 @@ case "${out}" in
   *) fail "the pin was read through refs/replace — reported the decoy gitlink: ${out}" ;;
 esac
 
-# ── 7r. Codex enablement is an EFFECTIVE-STATE question, not a line match ─────
-# Codex loads `enabled = true # keep enabled` as enabled. An exact-line regex rejects the trailing
-# comment and exits UNKNOWN before inspecting the cache, so a correctly-configured lane reports that
-# it cannot be checked.
+# ── 7r. Effective Codex state has NO line-oriented TOML fallback ──────────────
+# A valid multiline TOML string can contain text that looks exactly like plugin headers and values.
+# If the runtime query cannot run, no line parser can distinguish those strings from registration;
+# the only safe verdict is UNKNOWN, even when a stale cache and plausible-looking config remain.
 cat > "${codex_home}/config.toml" <<'TOML'
-[plugins."agentic-engineering@devantler-plugins"]
-enabled = true # keep this lane enabled
-TOML
-set +e
-out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
-                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
-set -e
-[ "${rc}" -eq 0 ] || fail "a trailing TOML comment must stay enabled (exit 0), got ${rc}: ${out}"
-case "${out}" in
-  *CURRENT*) ok "Codex enablement tolerates a valid trailing TOML comment" ;;
-  *) fail "commented-but-enabled Codex config did not report CURRENT: ${out}" ;;
-esac
-cat > "${codex_home}/config.toml" <<'TOML'
+decoy = '''
 [plugins."agentic-engineering@devantler-plugins"]
 enabled = true
-TOML
-
-# ── 7r-bis. The tolerance must cover the TABLE HEADER, not only the value line ─
-# TOML permits a comment after a table expression, and Codex loads the plugin regardless. 7r proves
-# the value line tolerates one; the header comparison is a separate exact-equality test, so a lane
-# configured this way is enabled in Codex while this check dies UNKNOWN before it ever reads the
-# cache — the check silently stops covering a healthy lane rather than reporting on it.
-cat > "${codex_home}/config.toml" <<'TOML'
-[plugins."agentic-engineering@devantler-plugins"] # managed plugin
-enabled = true
+'''
 TOML
 set +e
 out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
-[ "${rc}" -eq 0 ] || fail "a commented table header must stay enabled (exit 0), got ${rc}: ${out}"
+[ "${rc}" -eq 2 ] || fail "an unavailable Codex query must be UNKNOWN, got ${rc}: ${out}"
 case "${out}" in
-  *CURRENT*) ok "Codex enablement tolerates a comment after the table header" ;;
-  *) fail "commented-header Codex config did not report CURRENT: ${out}" ;;
+  *"codex is required"*) ok "an unavailable Codex query never parses TOML-looking strings" ;;
+  *) fail "unavailable Codex query did not name the UNKNOWN reason: ${out}" ;;
 esac
-# A comment must never make a DISABLED lane read as enabled: the tolerance is about the header's
-# trailing comment only, never about the value it introduces.
-cat > "${codex_home}/config.toml" <<'TOML'
-[plugins."agentic-engineering@devantler-plugins"] # managed plugin
-enabled = false
-TOML
 set +e
-out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(PATH="${path_without_jq}" "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
-[ "${rc}" -eq 2 ] || fail "a commented header with enabled=false must stay UNKNOWN, got ${rc}: ${out}"
+[ "${rc}" -eq 2 ] || fail "an unavailable Codex JSON parser must be UNKNOWN, got ${rc}: ${out}"
 case "${out}" in
-  *"not enabled"*) ok "a commented header does not enable a disabled Codex plugin" ;;
-  *) fail "commented-header disabled config was not reported as not enabled: ${out}" ;;
+  *"jq is required"*) ok "an unavailable JSON parser never falls back to config text" ;;
+  *) fail "unavailable Codex JSON parser did not name the UNKNOWN reason: ${out}" ;;
 esac
-
-# TOML also permits whitespace immediately inside the plugin table brackets. The runtime loads both
-# forms below; the fallback must resolve the literal target table instead of degrading a healthy lane
-# to UNKNOWN. Cover the plain and trailing-comment forms independently.
-for plugin_header in '[ plugins."agentic-engineering@devantler-plugins" ]' \
-                     '[ plugins."agentic-engineering@devantler-plugins" ] # managed plugin'; do
-  printf '%s\n%s\n' "${plugin_header}" 'enabled = true' > "${codex_home}/config.toml"
-  set +e
-  out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
-                    --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
-  set -e
-  [ "${rc}" -eq 0 ] || fail "spaced plugin header '${plugin_header}' must stay enabled: ${out}"
-  case "${out}" in
-    *CURRENT*) ;;
-    *) fail "spaced plugin header did not report CURRENT: ${out}" ;;
-  esac
-done
-ok "Codex enablement tolerates plugin-header whitespace with and without comments"
 cat > "${codex_home}/config.toml" <<'TOML'
 [plugins."agentic-engineering@devantler-plugins"]
 enabled = true
@@ -1378,99 +1346,6 @@ case "${out}" in
   *) fail "unloaded Codex plugin did not name the reason: ${out}" ;;
 esac
 
-# The fallback still exists for the case it is actually for: the CLI could not answer at all.
-set +e
-out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
-                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
-set -e
-[ "${rc}" -eq 0 ] || fail "an unavailable CLI must fall back to the config (exit 0), got ${rc}: ${out}"
-case "${out}" in
-  *CURRENT*) ok "the config fallback is reserved for a CLI that could not answer" ;;
-  *) fail "CLI-unavailable fallback did not report CURRENT: ${out}" ;;
-esac
-
-# The fallback has to preserve the runtime's GLOBAL plugin feature gate too. A stale per-plugin
-# table and cache can remain after `[features] plugins = false`; reading only the table would report
-# CURRENT for a definition Codex cannot load whenever the CLI is unavailable.
-cat > "${codex_home}/config.toml" <<'TOML'
-[features]
-plugins = false
-
-[plugins."agentic-engineering@devantler-plugins"]
-enabled = true
-TOML
-set +e
-out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
-                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
-set -e
-[ "${rc}" -eq 2 ] \
-  || fail "a globally disabled Codex plugin must stay UNKNOWN in config fallback, got ${rc}: ${out}"
-case "${out}" in
-  *"not enabled"*) ok "the config fallback honours the global Codex plugin feature gate" ;;
-  *) fail "global Codex plugin disablement did not name the reason: ${out}" ;;
-esac
-
-# TOML permits whitespace inside table brackets. This is the same global feature table, not an
-# unknown section; missing it lets the later enabled plugin table manufacture CURRENT.
-cat > "${codex_home}/config.toml" <<'TOML'
-[ features ] # global gates
-plugins = false
-
-[plugins."agentic-engineering@devantler-plugins"]
-enabled = true
-TOML
-set +e
-out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
-                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
-set -e
-[ "${rc}" -eq 2 ] \
-  || fail "a spaced global feature table must stay UNKNOWN, got ${rc}: ${out}"
-case "${out}" in
-  *"not enabled"*) ok "the config fallback honours whitespace in the global feature header" ;;
-  *) fail "spaced global feature header did not name the disabled reason: ${out}" ;;
-esac
-
-# TOML's dotted-key spelling is the same effective global gate. Codex itself documents
-# `features.<name>=false` for CLI overrides, so the static fallback must not treat this valid form as
-# an unrelated top-level key and then trust the stale enabled plugin table below it.
-cat > "${codex_home}/config.toml" <<'TOML'
-features.plugins = false
-
-[plugins."agentic-engineering@devantler-plugins"]
-enabled = true
-TOML
-set +e
-out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
-                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
-set -e
-[ "${rc}" -eq 2 ] \
-  || fail "a dotted globally disabled Codex plugin must stay UNKNOWN, got ${rc}: ${out}"
-case "${out}" in
-  *"not enabled"*) ok "the config fallback honours the dotted global Codex plugin feature gate" ;;
-  *) fail "dotted global Codex plugin disablement did not name the reason: ${out}" ;;
-esac
-
-# Every dotted TOML key segment may be quoted. These spellings resolve to the same effective
-# `features.plugins = false` value and must not let the stale enabled plugin table manufacture a
-# CURRENT verdict when the runtime CLI is unavailable.
-for dotted_gate in '"features".plugins = false' 'features."plugins" = false' \
-                   "'features'.plugins = false" "features.'plugins' = false"; do
-  printf '%s\n\n%s\n%s\n' "${dotted_gate}" \
-    '[plugins."agentic-engineering@devantler-plugins"]' 'enabled = true' \
-    > "${codex_home}/config.toml"
-  set +e
-  out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
-                    --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
-  set -e
-  [ "${rc}" -eq 2 ] \
-    || fail "quoted dotted gate '${dotted_gate}' must stay UNKNOWN, got ${rc}: ${out}"
-done
-ok "the config fallback honours quoted dotted global feature keys"
-cat > "${codex_home}/config.toml" <<'TOML'
-[plugins."agentic-engineering@devantler-plugins"]
-enabled = true
-TOML
-
 # ── 7w. The Codex remediation must never advance the snapshot before installing ──
 # `marketplace upgrade` moves the snapshot to the upstream tip, so a precondition checked BEFORE it
 # is invalidated by it: a following `add` installs a revision nobody reviewed.
@@ -1557,7 +1432,7 @@ cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver
 # unstated is the fail-open direction: the run reports itself current while following a superseded
 # definition.
 set +e
-out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 0 ] || fail "the CURRENT case must exit 0, got ${rc}: ${out}"
