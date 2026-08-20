@@ -134,20 +134,42 @@ extract_commands() {
   local f=$1
   {
     grep -ohE '`[^`]+`' "$f" 2>/dev/null | sed 's/^`//; s/`$//' \
+      | sed -E 's/^[[:space:]]*\$[[:space:]]+//' \
       | grep -E '^[[:space:]]*(gh|git)[[:space:]]'
     # Fenced blocks carry MULTI-LINE commands: a trailing backslash, or a quoted
     # operand (a GraphQL query) that runs across lines. Splitting on newlines
     # hands the guard half a command, which it rightly refuses as unbalanced
     # quoting -- an extraction artifact that would read as a real finding. Join
     # continuation lines until quotes balance and no backslash is pending.
+    #
+    # A documented command may also be written with a shell PROMPT (`$ gh ...`).
+    # That one is stripped BEFORE the verb filter, and it is the dangerous
+    # direction: an unstripped prompt does not match `^(gh|git)`, so the command
+    # is skipped ENTIRELY and a refusal nobody classified passes unnoticed --
+    # fail-open, where the split-command case merely produces a noisy finding.
+    #
+    # Quote state is tracked as a MACHINE, not a count: `'"'"'` inside a double-quoted
+    # operand (and `"` inside a single-quoted one) is a literal, so counting either
+    # delimiter alone would leave an apostrophe in `--jq "won'"'"'t"` permanently
+    # unbalanced and swallow the rest of the block into one candidate.
     awk '
+      function unbalanced(s,   i, c, sq, dq) {
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          if (c == "\\" && !sq) { i++; continue }
+          else if (c == "'"'"'" && !dq) sq = !sq
+          else if (c == "\"" && !sq) dq = !dq
+        }
+        return (sq || dq)
+      }
       /^[[:space:]]*```/ { inb = !inb; if (!inb && buf != "") { print buf; buf = "" } next }
       !inb { next }
       {
-        if (buf == "") { if ($0 !~ /^[[:space:]]*(gh|git)[[:space:]]/) next; buf = $0 }
-        else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " $0 }
-        tmp = buf; cnt = gsub(/'"'"'/, "x", tmp)
-        if (cnt % 2 == 0 && buf !~ /\\[[:space:]]*$/) { print buf; buf = "" }
+        line = $0
+        sub(/^[[:space:]]*\$[[:space:]]+/, "", line)
+        if (buf == "") { if (line !~ /^[[:space:]]*(gh|git)[[:space:]]/) next; buf = line }
+        else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
+        if (!unbalanced(buf) && buf !~ /\\[[:space:]]*$/) { print buf; buf = "" }
       }
       END { if (buf != "") print buf }
     ' "$f" 2>/dev/null
@@ -233,6 +255,25 @@ printf '%s\n' 'The surveyor must now also run:' '' '```sh' \
 printf '%s\n' 'A newly mandated read:' '' '```sh' \
   'gh pr list --repo devantler-tech/monorepo --state open --limit 50' '```' > "$fixdir/good.md"
 
+# A command written with a shell PROMPT must still be extracted. This is the
+# fail-OPEN direction: unstripped, `$ gh ...` never matches the verb filter, so
+# the command is skipped entirely and its unclassified refusal passes unnoticed.
+printf '%s\n' 'Run it like this:' '' '```sh' \
+  '$ gh release create v1 --repo devantler-tech/monorepo' '```' > "$fixdir/prompt.md"
+# A fenced command whose DOUBLE-quoted operand spans lines must be joined into one
+# candidate. Split, the guard rightly refuses half a command as unbalanced quoting
+# and it reads as a real finding -- the fail-CLOSED direction, noisy but safe.
+printf '%s\n' 'The surveyor runs:' '' '```sh' \
+  'gh api graphql -f query="query {' \
+  '  repository(owner: \\"devantler-tech\\", name: \\"monorepo\\") { name }' \
+  '}"' '```' > "$fixdir/dquote.md"
+
+if check_sources "$fixdir/prompt.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a prompt-prefixed command was skipped instead of checked (fail-open)"
+fi
+if ! check_sources "$fixdir/dquote.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a multi-line double-quoted command was split and reported as a finding"
+fi
 if ! check_sources "$fixdir/prose.md" >/dev/null 2>&1; then
   die_unknown "self-test: prose fragments were flagged as unclassified commands"
 fi
