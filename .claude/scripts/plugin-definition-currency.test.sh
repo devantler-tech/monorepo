@@ -1014,6 +1014,44 @@ cat > "${codex_home}/config.toml" <<'TOML'
 enabled = true
 TOML
 
+# ── 7r-bis. The tolerance must cover the TABLE HEADER, not only the value line ─
+# TOML permits a comment after a table expression, and Codex loads the plugin regardless. 7r proves
+# the value line tolerates one; the header comparison is a separate exact-equality test, so a lane
+# configured this way is enabled in Codex while this check dies UNKNOWN before it ever reads the
+# cache — the check silently stops covering a healthy lane rather than reporting on it.
+cat > "${codex_home}/config.toml" <<'TOML'
+[plugins."agentic-engineering@devantler-plugins"] # managed plugin
+enabled = true
+TOML
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 0 ] || fail "a commented table header must stay enabled (exit 0), got ${rc}: ${out}"
+case "${out}" in
+  *CURRENT*) ok "Codex enablement tolerates a comment after the table header" ;;
+  *) fail "commented-header Codex config did not report CURRENT: ${out}" ;;
+esac
+# A comment must never make a DISABLED lane read as enabled: the tolerance is about the header's
+# trailing comment only, never about the value it introduces.
+cat > "${codex_home}/config.toml" <<'TOML'
+[plugins."agentic-engineering@devantler-plugins"] # managed plugin
+enabled = false
+TOML
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "a commented header with enabled=false must stay UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"not enabled"*) ok "a commented header does not enable a disabled Codex plugin" ;;
+  *) fail "commented-header disabled config was not reported as not enabled: ${out}" ;;
+esac
+cat > "${codex_home}/config.toml" <<'TOML'
+[plugins."agentic-engineering@devantler-plugins"]
+enabled = true
+TOML
+
 # ── 7s. Codex drift must not be sent to a Claude-only remediation ─────────────
 # `codex plugin` exposes add/list/marketplace/remove and no update command, so telling a Codex
 # operator to use the /plugin marketplace update flow prescribes an action that cannot repair this

@@ -174,13 +174,24 @@ if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
     fi
   fi
   # Fallback: parse the serialized config. Deliberately tolerant — TOML permits whitespace around the
-  # table header and a trailing comment after the value, and Codex loads all of those as enabled, so
-  # an exact-line match would report UNKNOWN for a correctly-configured lane.
+  # table header, a comment after the table header, and a comment after the value, and Codex loads
+  # all of those as enabled, so an exact-line match would report UNKNOWN for a correctly-configured
+  # lane. Tolerance is one-directional: it decides which SECTION is in scope, never what the value
+  # inside it says, so a commented header above `enabled = false` still reads as disabled.
   if [ -z "$enabled" ]; then
     enabled="$(awk -v target="[plugins.\"$PLUGIN_ID\"]" '
         { line = $0
-          sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line) }
-        line == target { in_plugin = 1; next }
+          sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line)
+          # Match the header by PREFIX and then require the remainder to be a comment, rather than
+          # interpolating the plugin id into a regex: the id is a quoted TOML key that may contain
+          # regex metacharacters, and escaping it here is what would actually break. An unrelated
+          # trailing token is not a comment, so it still fails to match.
+          header = line
+          if (substr(header, 1, length(target)) == target) {
+            rest = substr(header, length(target) + 1)
+            if (rest == "" || rest ~ /^[[:space:]]*#/) header = target
+          } }
+        header == target { in_plugin = 1; next }
         in_plugin && line ~ /^\[/ { exit }
         in_plugin && line ~ /^enabled[[:space:]]*=[[:space:]]*true([[:space:]]*#.*)?$/ {
           print "true"
