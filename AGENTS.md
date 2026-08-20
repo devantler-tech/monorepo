@@ -76,8 +76,9 @@ cross-tool agent skills) + `devantler-tech/agent-plugins` (a tool-neutral market
 for VS Code / Copilot CLI / Claude Code), and the cluster-guardrail
 catalog `devantler-tech/kyverno-policies` (shared, tested Kyverno policies the platform and
 platform-template consume instead of vendoring copies). A generic pattern proven in one
-product belongs in a shared library so *every* product inherits it — keep them **industry-standard and
-tool-neutral** (the portability principle).
+product remains owned by that product. Move it into a shared library only after demonstrated use in
+at least two repositories proves a product-neutral contract worth inheriting — keep shared components
+**industry-standard and tool-neutral** (the portability principle).
 
 ## Stack map
 
@@ -4262,10 +4263,21 @@ quietly defaulting to another easy artifact.
 Most runs are bottom-up (one product at a time). **Periodically (~monthly, on rotation) step back and
 look at the whole repertoire top-down** — across *every* product at once — to catch what per-product
 work misses:
-- **Emergent generic patterns.** When the same approach (a CI step, a release config, a workflow, a
-  lint/test setup, an agent skill, a docs convention) has independently appeared in 2+ products, it has
-  become *generic* — extract it into the right **shared library** so every product inherits it instead
-  of drifting: CI → `devantler-tech/actions` (composite actions + reusable workflows); agent skills →
+- **Sharing is earned; local ownership is the default.** `devantler-tech/actions` and organization-wide
+  `.github` automation surfaces exist only for actions and workflows whose reuse across repositories is
+  already real. Extraction requires **all** of the following: demonstrated consumers in at least two
+  repositories; one product-neutral behaviour and interface; less real duplication or drift after the
+  move; and a thin local caller wherever repository-specific triggers or context remain. Product-specific
+  actions, workflows, paths, permissions, secrets, release semantics, and policy stay in the product
+  repository they serve. Possible future reuse, superficial similarity, or a desire to centralise is not
+  evidence. If any condition is missing, fail closed to local ownership — never move the first consumer
+  merely to manufacture a shared abstraction. World at Ruin-specific automation therefore stays in
+  `devantler-tech/world-at-ruin` unless a second repository demonstrates the same product-neutral need.
+- **Emergent generic patterns.** Once that sharing boundary is met, an approach (a CI step, a release
+  config, a workflow, a lint/test setup, an agent skill, a docs convention) that independently appears
+  in 2+ products has become *generic* — extract the reusable mechanism into the right **shared library**
+  so its actual consumers inherit it instead of drifting: CI → `devantler-tech/actions` (composite actions
+  + reusable workflows); agent skills →
   `devantler-tech/agent-skills`; (plugins → `devantler-tech/agent-plugins` once created); cluster
   guardrail / admission / generation policies → `devantler-tech/kyverno-policies`. Then propagate consumers
   to the shared version.
@@ -4274,8 +4286,9 @@ work misses:
 - **Industry-standard vs. native** (per *Design principles*): anything generic should sit in a portable,
   standard form (e.g. `AGENTS.md`); only genuinely Claude-specific power should rely on Claude-native
   primitives.
-Each finding becomes a `roadmap`/`enhancement` issue (or a draft PR if small and confident), on the
-owning shared-library repo, with consumers updated additively & backward-compatibly. The
+Each demonstrated multi-repository finding becomes a `roadmap`/`enhancement` issue (or a draft PR if
+small and confident) on the owning shared-library repo, with consumers updated additively &
+backward-compatibly. A single-product finding stays in that product's repository. The
 [`product-engineering`](.claude/skills/product-engineering/SKILL.md) skill carries the how-to.
 
 ### Durable memory — your native memory + the run report
