@@ -56,6 +56,26 @@
 # — filter in the shell instead of in jq — and is tracked as monorepo#2939. This row
 # records the refusal as a decision so it stops being invisible; it is deliberately
 # NOT a gap, because promoting it to `allow` is the one outcome that would be unsafe.
+# On the two WRAPPED prescriptions: both are pinned `deny` because the refusal is
+# right in each case, and in each the fix belongs to the CALLER, not the guard.
+#
+# `RUN_NAME="$run_name" gh api ...` — a one-shot environment assignment in front
+# of the verb. Allowing an assignment prefix in general is unsafe for the same
+# reason `$ENV` is: the guard classifies statically from argv, and a prefix is an
+# execution vector (`LD_PRELOAD=`, `GIT_SSH_COMMAND=`, `GH_HOST=`), so it would
+# have to whitelist names and reason about their semantics inside a security
+# boundary. This is the same overlay line the `$ENV` row above covers, so the one
+# overlay fix tracked as monorepo#2939 — filter in the shell, not in jq — removes
+# both refusals together.
+#
+# `fid_status=$(gh api ...)` — a read wrapped in a command substitution. The guard
+# refuses BOTH substitution forms (backtick and dollar-paren) as a category, which
+# is a deliberate rule rather than an oversight: proving a whole compound shell
+# line is a read means parsing shell. So this is NOT a `gap` — promoting it to
+# `allow` is not the outcome being waited on. The caller-side fix is to hand the
+# guard the inner read rather than the shell that captures it; tracked as
+# monorepo#2943.
+#
 # On `git status`: the surveyor definition names `git log/status` among its read
 # verbs, but only the hardened invocation is actually a read, and the guard is
 # right to insist on it. Bare `git status` is pinned as `deny` for two reasons
@@ -147,6 +167,8 @@ deny	gh project item-add 5 --owner devantler-tech --url https://github.com/x/y/i
 allow	gh api -X GET "repos/devantler-tech/monorepo/activity" -f per_page=100 -f "ref=refs/heads/main"
 allow	gh api --method GET "repos/devantler-tech/monorepo/activity" -f per_page=100
 allow	gh api -X GET search/issues -f q=org:devantler-tech --paginate
+deny	RUN_NAME="$run_name" gh api --paginate "repos/devantler-tech/monorepo/actions/workflows/ci.yaml/runs?branch=main&per_page=100" --jq '[.workflow_runs[]]'
+deny	fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
 CORPUS
 )
 

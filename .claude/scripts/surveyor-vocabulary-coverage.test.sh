@@ -124,7 +124,19 @@ normalize() {
 }
 
 # Candidates: inline code spans plus fenced-block lines, kept when they open with
-# a forge verb. Generous on purpose -- the guard does the discriminating.
+# a forge verb -- or would open with one once a leading assignment or command
+# substitution is stripped. Generous on purpose: the guard does the discriminating.
+#
+# WHAT REACHES THE GUARD IS THE COMPLETE PRESCRIBED LINE, never a stripped form.
+# The stripping decides only WHETHER a line is a candidate; it never rewrites the
+# text being classified. That distinction is the whole correctness of this file:
+# the runtime hands the guard the shell command it is about to run, so a check
+# that classifies `gh api ...` while the deployment would run
+# `RUN_NAME="$run_name" gh api ...` is asserting the boundary holds for a command
+# nobody runs. Measured against the pinned guard: the bare read is ALLOWed, while
+# both prescribed wrappers are refused -- `a read must begin with a forge command`
+# and `dollar-paren command substitution is not a read`. Classifying the stripped
+# form reported those two prescriptions covered.
 #
 # The two streams are extracted SEPARATELY and tagged, because PROSE_FRAGMENTS must
 # apply to only one of them. That list holds exact runnable forms -- `git fetch`,
@@ -136,10 +148,48 @@ normalize() {
 # exclusion keep serving prose without also excusing a prescription.
 extract_inline() {
   local f=$1
-  grep -ohE '`[^`]+`' "$f" 2>/dev/null | sed 's/^`//; s/`$//' \
+  # A Markdown code span may cross newlines, so a per-LINE scan cannot see one:
+  # `grep -ohE` matched within a line and silently dropped every multi-line span.
+  # The run loop's own paginated CodeRabbit read is one (SKILL.md, five physical
+  # lines), so the check was blind to a command it is specifically meant to cover.
+  #
+  # Joining more than that is what must NOT be done. Backticks pair sequentially,
+  # so one stray backtick re-pairs every span after it, and these sources are not
+  # paragraph-shaped -- the surveyor overlay runs 478 consecutive lines with no
+  # blank line, so a paragraph bound is no bound at all. Measured: joining on that
+  # bound silently LOST the `--commenter` and `--merged-at` reads, both of which
+  # carry a corpus row.
+  #
+  # So join ONLY while a span is genuinely open (an odd backtick count), and cap
+  # it. Every line whose spans already close is left exactly where line-based
+  # pairing had it, which is what makes this add the multi-line case while moving
+  # nothing else: measured, zero candidates lost across all three sources.
+  # A fence marker is a hard reset -- ``` is itself an odd run and would otherwise
+  # start swallowing the block.
+  awk '
+    function bt(s,   n) { n = gsub(/`/, "`", s); return n }
+    /^[[:space:]]*```/ { if (buf != "") print buf; buf = ""; held = 0; next }
+    {
+      buf = (buf == "" ? $0 : buf " " $0)
+      if (bt(buf) % 2 == 1 && held < 10) { held++; next }
+      print buf; buf = ""; held = 0
+    }
+    END { if (buf != "") print buf }
+  ' "$f" 2>/dev/null \
+    | grep -oE '`[^`]+`' | sed 's/^`//; s/`$//' \
     | sed -E 's/^[[:space:]]*\$[[:space:]]+//' \
-    | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]("'"'"']*)[[:space:]]+)+//' \
-    | grep -E '^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])'
+    | awk '
+        function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
+        function strip_assigns(s) {
+          while (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]("'"'"']*)[[:space:]]+/)) s = substr(s, RSTART + RLENGTH)
+          return s
+        }
+        function strip_subst(s) {
+          if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\(/)) return substr(s, RSTART + RLENGTH)
+          return ""
+        }
+        opens($0) || opens(strip_assigns($0)) || opens(strip_subst($0))
+      '
 }
 
 extract_fenced() {
@@ -166,8 +216,11 @@ extract_fenced() {
     # at the start of the line in either: a one-shot environment assignment in
     # front of the verb (`RUN_NAME="$run_name" gh api ...`), and a verb nested in
     # a command substitution (`fid_status=$(gh api ...)`). Both are prescribed by
-    # the surveyor overlay today, and an unmatched line is dropped before
-    # classification, so a guard refusal of either stays invisible to CI.
+    # the surveyor overlay today, so an unmatched line dropped before
+    # classification hides a guard refusal from CI. The strip is therefore a
+    # RECOGNISER only -- it decides that the line is worth classifying, and the
+    # COMPLETE line is what the guard is then asked about, because that is what
+    # the deployment would actually run.
     #
     # Quote state is tracked as a MACHINE, not a count: `'"'"'` inside a double-quoted
     # operand (and `"` inside a single-quoted one) is a literal, so counting either
@@ -183,60 +236,37 @@ extract_fenced() {
         }
         return (sq || dq)
       }
-      # Drop leading `VAR=value ` assignments. The assignment is not the command
-      # being classified, and leaving it in front makes the line fail the verb
-      # test and vanish. The unquoted-value branch excludes `(` and both quotes so
-      # it cannot swallow a `$(`, which the substitution branch below owns.
+      # Recognisers. Neither rewrites what gets classified: each answers only
+      # "would this line open with a forge verb once its wrapper is set aside".
       function strip_assigns(s) {
         while (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]("'"'"']*)[[:space:]]+/)) {
           s = substr(s, RSTART + RLENGTH)
         }
         return s
       }
-      # `VAR=$(gh ...)` / `VAR="$(gh ...)"`. Returns the text from the verb on, or
-      # "" when the line is not that shape.
       function strip_subst(s) {
         if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\(/)) return substr(s, RSTART + RLENGTH)
         return ""
       }
-      # Cut at the paren CLOSING the substitution so a trailing `|| { ... }` is not
-      # handed to the guard as part of the command. Parens inside quotes are
-      # literals -- a jq filter is full of them -- so the same quote machine runs
-      # here rather than a bare character count.
-      function cut_subst(s,   i, c, sq, dq, depth) {
-        depth = 0
-        for (i = 1; i <= length(s); i++) {
-          c = substr(s, i, 1)
-          if (c == "\\" && !sq) { i++; continue }
-          else if (c == "'"'"'" && !dq) sq = !sq
-          else if (c == "\"" && !sq) dq = !dq
-          else if (!sq && !dq && c == "(") depth++
-          else if (!sq && !dq && c == ")") { if (depth == 0) return substr(s, 1, i - 1); depth-- }
-        }
-        return s
-      }
       function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
-      /^[[:space:]]*```/ { inb = !inb; if (!inb && buf != "") { print (subst ? cut_subst(buf) : buf); buf = ""; subst = 0 } next }
+      function candidate(s) { return (opens(s) || opens(strip_assigns(s)) || opens(strip_subst(s))) }
+      /^[[:space:]]*```/ { inb = !inb; if (!inb && buf != "") { print buf; buf = "" } next }
       !inb { next }
       {
         line = $0
         sub(/^[[:space:]]*\$[[:space:]]+/, "", line)
         if (buf == "") {
-          cand = strip_assigns(line)
-          if (opens(cand)) { buf = cand; subst = 0 }
-          else {
-            cand = strip_subst(line)
-            if (opens(cand)) { buf = cand; subst = 1 }
-            else next
-          }
+          if (candidate(line)) buf = line
+          else next
         }
         else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
-        if (!unbalanced(buf) && buf !~ /\\[[:space:]]*$/) { print (subst ? cut_subst(buf) : buf); buf = ""; subst = 0 }
+        if (!unbalanced(buf) && buf !~ /\\[[:space:]]*$/) { print buf; buf = "" }
       }
-      END { if (buf != "") print (subst ? cut_subst(buf) : buf) }
+      END { if (buf != "") print buf }
     ' "$f" 2>/dev/null
   }
 }
+
 
 # Emits `<origin> <command>`, origin being `inline` or `fenced`. Each stream is
 # normalised BEFORE the tag is prefixed: normalize collapses whitespace runs, so
@@ -387,18 +417,33 @@ printf '%s\n' 'The board census runs:' '' '```sh' \
   '  --jq '"'"'.[]|select(.name=="Status")|.id'"'"') \' \
   '  || { echo "board_coverage=unknown:field-lookup-failed"; exit 0; }' '```' > "$fixdir/subst.md"
 
-assign_extracted=$(extract_commands "$fixdir/assign.md" | grep -c '^fenced gh api ')
+# The assignment-prefixed command must reach the guard AS PRESCRIBED. Asserting
+# `^fenced gh api ` would pass on the stripped form, which is the fail-open this
+# pair closes: the deployment runs the prefix, and the guard refuses it
+# (`a read must begin with a forge command`), so classifying the bare read
+# reports a boundary that holds for a command nobody runs.
+assign_extracted=$(extract_commands "$fixdir/assign.md" | grep -c '^fenced RUN_NAME="\$run_name" gh api ')
 [ "${assign_extracted:-0}" -ge 1 ] \
-  || die_unknown "self-test: an assignment-prefixed command was never extracted, so it cannot reach the guard (fail-open)"
+  || die_unknown "self-test: an assignment-prefixed command did not reach the guard as prescribed (fail-open)"
 
-subst_extracted=$(extract_commands "$fixdir/subst.md" | grep -c '^fenced gh api ')
+# Same for the substitution, and here the wrapper is what the guard refuses
+# (`dollar-paren command substitution is not a read`), so the complete form is
+# the only one whose verdict describes the deployment.
+subst_extracted=$(extract_commands "$fixdir/subst.md" | grep -c '^fenced fid_status=\$(gh api ')
 [ "${subst_extracted:-0}" -ge 1 ] \
-  || die_unknown "self-test: a command-substitution command was never extracted, so it cannot reach the guard (fail-open)"
+  || die_unknown "self-test: a command-substitution command did not reach the guard as prescribed (fail-open)"
 
-# The substitution must be CUT at its closing paren. Without that the guard is handed
-# `... ) || { echo ...; exit 0; }` and classifies shell that is not the command.
-if extract_commands "$fixdir/subst.md" | grep -q 'board_coverage=unknown'; then
-  die_unknown "self-test: a command substitution was extracted with its trailing shell attached"
+# A MULTI-LINE inline span must be seen. A per-line scan cannot match one, so the
+# span is dropped whole and its refusal never surfaces -- fail-open, and the run
+# loop prescribes one of these today.
+printf '%s\n' 'Per PR also check' \
+  '`gh release create v1 --repo devantler-tech/monorepo' \
+  '  --title "x"`.' > "$fixdir/multiline.md"
+ml_extracted=$(extract_commands "$fixdir/multiline.md" | grep -c '^inline gh release create ')
+[ "${ml_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a multi-line inline code span was never extracted, so it cannot reach the guard (fail-open)"
+if check_sources "$fixdir/multiline.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a multi-line inline span's unclassified refusal was NOT detected"
 fi
 if check_sources "$fixdir/prompt.md" >/dev/null 2>&1; then
   die_unknown "self-test: a prompt-prefixed command was skipped instead of checked (fail-open)"
