@@ -836,7 +836,16 @@ jobs:
   test-surveyor-forge-vocabulary:
     name: Test surveyor forge vocabulary conformance
     needs: changes
-    if: needs.changes.outputs.surveyor-forge-vocabulary == 'true'
+    # The guard this job EXECUTES is checked out at a gitlink read from the
+    # PR's own tree, so a fork could repoint it at any commit in agent-plugins
+    # and run that code here. Restrict the job to branches in this repository,
+    # which is the same trust boundary AGENTS.md sets for external branches:
+    # review them statically, never execute them. merge_group carries no
+    # pull_request payload and is already past that gate.
+    if: >-
+      needs.changes.outputs.surveyor-forge-vocabulary == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       contents: read
