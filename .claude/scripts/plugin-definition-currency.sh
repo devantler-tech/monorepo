@@ -3,11 +3,11 @@
 #
 # The deployment verifies that chain everywhere except its last link. `agent-role-delivery-contract`
 # hashes the desired state against the repository submodule at the gitlink, and monorepo#2736 tracks
-# the gitlink against upstream `main` — but the copy the agent and skill entrypoints are actually
-# served from is a runtime-managed install with no writer at all. Its staleness is therefore
-# unbounded: nothing advances it, and nothing notices. Measured 2026-08-14 on the Claude instance,
-# 7 of 9 definition files differed from the pin and had not moved in 20 days, while both existing
-# controls read clean. See monorepo#2847.
+# the gitlink against upstream `main` — but the machine-local copy the agent and skill entrypoints are
+# actually served from is a runtime-managed install. Its staleness can therefore be unbounded.
+# Measured 2026-08-14 on the Claude instance, 7 of 9 definition files differed from the pin and had
+# not moved in 20 days, while both existing controls read clean. See monorepo#2847. Cursor instead
+# loads a submodule ref, so that lane verifies the loaded revision rather than inventing an install.
 #
 # READ-ONLY. It never edits, and never needs write access to, the runtime's plugin install. Refresh
 # is a runtime control-plane action (the `/plugin` marketplace update), never a cache edit.
@@ -17,8 +17,10 @@
 # installed version string still looks plausible. The loaded surface is every agent and skill file
 # plus every provider-neutral requiredRuntimeAsset declared by this consumer.
 #
-# Usage: plugin-definition-currency.sh [--repo-root DIR] [--plugins-root DIR] [--gitlink SHA]
-#                                      [--installed DIR] [--submodule-path PATH] [--quiet]
+# Usage: plugin-definition-currency.sh [--runtime claude|codex|cursor] [--repo-root DIR]
+#                                      [--plugins-root DIR] [--codex-home DIR] [--gitlink SHA]
+#                                      [--installed DIR] [--submodule-path PATH]
+#                                      [--cursor-ref REF] [--quiet]
 #
 # Exit 0  every pinned loaded file was CLASSIFIED and MATCHED
 #      1  DRIFT — at least one differs, is missing, or is unexpected
@@ -39,11 +41,14 @@ set -euo pipefail
 
 REPO_ROOT=""
 PLUGINS_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"
+CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 GITLINK=""
 INSTALLED=""
 SUBMODULE_PATH="libraries/agent-plugins"
 PLUGIN_ID="agentic-engineering@devantler-plugins"
 PLUGIN_NAME="agentic-engineering"
+RUNTIME="claude"
+CURSOR_REF="refs/remotes/origin/main"
 QUIET=0
 nl="\n"
 
@@ -63,20 +68,30 @@ need() { [ "$1" -ge 2 ] || die "missing value for $2"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --runtime) need $# "$1"; RUNTIME="$2"; shift 2 ;;
     --repo-root) need $# "$1"; REPO_ROOT="$2"; shift 2 ;;
     --plugins-root) need $# "$1"; PLUGINS_ROOT="$2"; shift 2 ;;
+    --codex-home) need $# "$1"; CODEX_HOME_DIR="$2"; shift 2 ;;
     --gitlink) need $# "$1"; GITLINK="$2"; shift 2 ;;
     --installed) need $# "$1"; INSTALLED="$2"; shift 2 ;;
     --submodule-path) need $# "$1"; SUBMODULE_PATH="$2"; shift 2 ;;
     --plugin-id) need $# "$1"; PLUGIN_ID="$2"; shift 2 ;;
     --plugin-name) need $# "$1"; PLUGIN_NAME="$2"; shift 2 ;;
+    --cursor-ref) need $# "$1"; CURSOR_REF="$2"; shift 2 ;;
     --quiet) QUIET=1; shift ;;
-    -h|--help) sed -n '1,34p' "$0"; exit 0 ;;
+    -h|--help) awk '/^set -euo pipefail$/ { exit } { print }' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
 
 command -v git >/dev/null 2>&1 || die "git is required"
+case "$RUNTIME" in
+  claude|codex|cursor) ;;
+  *) die "unsupported runtime '$RUNTIME' (expected claude, codex, or cursor)" ;;
+esac
+if [ "$RUNTIME" != claude ] && [ -n "$INSTALLED" ]; then
+  die "runtime '$RUNTIME' does not accept --installed; resolve the copy that lane actually loaded"
+fi
 
 say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 
@@ -97,10 +112,60 @@ if [ -z "$GITLINK" ]; then
 fi
 [ -n "$GITLINK" ] || die "no gitlink for '$SUBMODULE_PATH' at HEAD — cannot establish the pinned revision"
 
+# Cursor has no runtime-managed install. Its deployment loader fetches and reads origin/main
+# directly from this submodule's object database, so the commit behind that exact ref is the loaded
+# definition source. Comparing any Claude or Codex cache here would inspect another lane's copy.
+if [ "$RUNTIME" = cursor ]; then
+  cursor_sub="$REPO_ROOT/$SUBMODULE_PATH"
+  [ -e "$cursor_sub/.git" ] \
+    || die "Cursor plugin submodule is not initialised: $cursor_sub"
+  loaded_revision="$(git -C "$cursor_sub" --no-replace-objects rev-parse "$CURSOR_REF^{commit}" 2>/dev/null)" \
+    || die "cannot resolve Cursor loaded revision '$CURSOR_REF' in $cursor_sub"
+  say "pinned revision        : $GITLINK"
+  say "Cursor loaded revision : $loaded_revision ($CURSOR_REF)"
+  say ""
+  if [ "$loaded_revision" = "$GITLINK" ]; then
+    say "CURRENT — Cursor loaded revision matches the pinned gitlink."
+    exit 0
+  fi
+  say "DRIFT — Cursor loaded revision $loaded_revision differs from pinned gitlink $GITLINK."
+  say ""
+  say "Do not inspect another runtime's cache. Follow the reviewed definition at $GITLINK and"
+  say "report that the Cursor loader's $CURSOR_REF must be reconciled with the consumer pin."
+  exit 1
+fi
+
 # ── the INSTALLED copy ─────────────────────────────────────────────────────────
-# Resolved from the runtime's own record rather than guessed from a directory listing: the cache can
-# hold several versions at once and only this file says which one is served.
-if [ -z "$INSTALLED" ]; then
+if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
+  config="$CODEX_HOME_DIR/config.toml"
+  [ -r "$config" ] || die "cannot read the Codex runtime config: $config"
+  enabled="$(awk -v target="[plugins.\"$PLUGIN_ID\"]" '
+      $0 == target { in_plugin = 1; next }
+      in_plugin && /^\[/ { exit }
+      in_plugin && /^[[:space:]]*enabled[[:space:]]*=[[:space:]]*true[[:space:]]*$/ {
+        print "true"
+        exit
+      }
+    ' "$config")"
+  [ "$enabled" = true ] \
+    || die "plugin '$PLUGIN_ID' is not enabled in the Codex runtime config: $config"
+
+  marketplace="${PLUGIN_ID#*@}"
+  [ "$marketplace" != "$PLUGIN_ID" ] \
+    || die "Codex plugin id '$PLUGIN_ID' has no marketplace suffix"
+  codex_cache="$CODEX_HOME_DIR/plugins/cache/$marketplace/$PLUGIN_NAME"
+  [ -d "$codex_cache" ] \
+    || die "Codex plugin cache does not exist: $codex_cache"
+  paths="$(find "$codex_cache" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null)" \
+    || die "could not enumerate the Codex plugin cache: $codex_cache"
+  [ -n "$paths" ] || die "Codex plugin '$PLUGIN_ID' has no cached copy in $codex_cache"
+  count="$(printf '%s\n' "$paths" | wc -l | tr -d ' ')"
+  [ "$count" -eq 1 ] \
+    || die "Codex plugin '$PLUGIN_ID' has $count cached copies; cannot identify the loaded one"
+  INSTALLED="$paths"
+elif [ -z "$INSTALLED" ]; then
+  # Claude resolves from the runtime's own record rather than guessing from a directory listing: its
+  # cache can hold several versions at once and only this registry says which one is served.
   # jq is checked HERE, not at the top: it is needed only to read the registry, and every caller
   # that passes --installed (the whole test suite) would otherwise fail for an unrelated reason.
   command -v jq >/dev/null 2>&1 || die "jq is required to read the runtime plugin registry"

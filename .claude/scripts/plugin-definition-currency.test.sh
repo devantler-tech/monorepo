@@ -309,11 +309,20 @@ done
 # `shift 2` on a lone trailing flag returns 1, and under `set -e` that exited the script with 1 — the
 # code that tells a caller the definition is stale. A typo would have produced a silent, output-free
 # drift verdict, which is the most misleading failure this script can have.
-for flag in --repo-root --gitlink --installed --plugins-root; do
+for flag in --runtime --repo-root --gitlink --installed --plugins-root --codex-home --cursor-ref; do
   set +e; out="$("${script}" "${flag}" 2>&1)"; rc=$?; set -e
   [ "${rc}" -eq 2 ] || fail "a missing value for ${flag} must exit 2, got ${rc}: ${out}"
 done
 ok "a missing option value exits 2, never 1 (DRIFT)"
+
+# Header growth must not silently truncate --help. A fixed line range did exactly that when the
+# runtime selector expanded Usage, dropping part of the exit-code contract from operator output.
+out="$("${script}" --help)" || fail "--help must exit 0"
+case "${out}" in
+  *"--runtime claude|codex|cursor"*"collapsing them is how a currency check becomes decoration"*)
+    ok "--help prints the complete runtime-aware header and exit contract" ;;
+  *) fail "--help truncated the runtime-aware header: ${out}" ;;
+esac
 
 # ── 7d. Registry resolution — the only path production actually uses ──────────
 # Every case above passes --installed, so without these the jq expression, the single-path check and
@@ -322,7 +331,7 @@ reg_root="${tmp}/plugins-root"
 mkdir -p "${reg_root}"
 printf '{"version":2,"plugins":{"agentic-engineering@devantler-plugins":[{"installPath":"%s"}]}}\n' \
   "${cur}" > "${reg_root}/installed_plugins.json"
-if out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}")"; then
+if out="$("${script}" --runtime claude --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}")"; then
   case "${out}" in
     *"${cur}"*) ok "a single registry entry resolves to its installPath" ;;
     *) fail "resolved from the registry but did not use its installPath: ${out}" ;;
@@ -519,6 +528,139 @@ esac
 # A vacuous assertion is worse than none: it manufactures confidence in an untested path. Left absent
 # and explained rather than left green and meaningless.
 
+# ── 7m. CODEX resolves the copy its own runtime loaded ────────────────────────
+# Codex has no Claude-style installed_plugins.json. Its enabled plugin is served from the versioned
+# cache under CODEX_HOME, so the lane must inspect that cache rather than silently falling back to
+# Claude's registry. Start with the negative control: one enabled, matching cached copy must pass.
+codex_home="${tmp}/codex-home"
+codex_install="${codex_home}/plugins/cache/devantler-plugins/agentic-engineering/9.9.9"
+mkdir -p "${codex_home}"
+cat > "${codex_home}/config.toml" <<'TOML'
+[plugins."agentic-engineering@devantler-plugins"]
+enabled = true
+TOML
+make_install "${codex_install}"
+if out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                      --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; then
+  case "${out}" in
+    *CURRENT*) ;;
+    *) fail "Codex matching cache exited 0 without reporting CURRENT: ${out}" ;;
+  esac
+  case "${out}" in
+    *"${codex_install}"*) ok "Codex resolves its one enabled cached copy and reports CURRENT" ;;
+    *) fail "Codex matching cache did not name its loaded copy: ${out}" ;;
+  esac
+else
+  fail "Codex matching cache must exit 0, got $? — ${out}"
+fi
+
+printf 'stale Codex improver definition\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "a drifted Codex cache must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT    agents/agent-improver.agent.md"*) ok "a drifted Codex cached definition fires" ;;
+  *) fail "Codex drift did not name the changed definition: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# More than one version is deliberately UNKNOWN. Picking newest-looking, first, or last would guess
+# which cache the runtime loaded and could report CURRENT for a copy this process never executed.
+codex_extra="${codex_home}/plugins/cache/devantler-plugins/agentic-engineering/10.0.0"
+make_install "${codex_extra}"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "ambiguous Codex caches must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"2 cached copies"*) ok "multiple Codex caches are UNKNOWN rather than guessed" ;;
+  *) fail "ambiguous Codex cache did not name the reason: ${out}" ;;
+esac
+rm -rf "${codex_extra}"
+
+sed 's/enabled = true/enabled = false/' "${codex_home}/config.toml" > "${codex_home}/config.disabled"
+mv "${codex_home}/config.disabled" "${codex_home}/config.toml"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "a disabled Codex plugin must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"not enabled"*) ok "a disabled Codex plugin is UNKNOWN, not a cached CURRENT" ;;
+  *) fail "disabled Codex plugin did not name the reason: ${out}" ;;
+esac
+sed 's/enabled = false/enabled = true/' "${codex_home}/config.toml" > "${codex_home}/config.enabled"
+mv "${codex_home}/config.enabled" "${codex_home}/config.toml"
+
+# An explicit install override is useful to the Claude fixture suite, but in another named lane it
+# would let a caller point at Claude's copy and manufacture a verdict about bytes Codex never loaded.
+set +e
+out="$("${script}" --runtime codex --installed "${cur}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "Codex with an install override must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"does not accept --installed"*) ok "Codex cannot be pointed at another lane's installed copy" ;;
+  *) fail "Codex install override was rejected without naming the reason: ${out}" ;;
+esac
+
+# ── 7n. CURSOR compares the exact submodule ref its loader reads ──────────────
+# The Cursor loader fetches and reads origin/main directly from the submodule object database. It
+# has no installed plugin copy, so this lane compares that resolved commit with the consumer pin.
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+if out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" \
+                      --gitlink "${gitlink}" 2>&1)"; then
+  case "${out}" in
+    *CURRENT*) ;;
+    *) fail "Cursor matching ref exited 0 without reporting CURRENT: ${out}" ;;
+  esac
+  case "${out}" in
+    *"refs/remotes/origin/main"*) ok "Cursor matching loaded revision reports CURRENT" ;;
+    *) fail "Cursor matching ref did not name its source ref: ${out}" ;;
+  esac
+else
+  fail "Cursor matching loaded revision must exit 0, got $? — ${out}"
+fi
+
+printf 'newer upstream prose\n' > "${p}/README.md"
+git -C "${pin_repo}" add plugins/agentic-engineering/README.md
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm cursor-drift
+cursor_drift="$(git -C "${pin_repo}" rev-parse HEAD)"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${cursor_drift}"
+set +e
+out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" \
+                  --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "a drifted Cursor loaded revision must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *DRIFT*"${cursor_drift}"*"${gitlink}"*) ok "a drifted Cursor loaded revision fires and names both commits" ;;
+  *) fail "Cursor revision drift did not name loaded and pinned commits: ${out}" ;;
+esac
+
+git -C "${pin_repo}" update-ref -d refs/remotes/origin/main
+set +e
+out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" \
+                  --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "an unresolved Cursor loaded revision must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"cannot resolve Cursor loaded revision"*) ok "an unresolved Cursor ref is UNKNOWN and names the reason" ;;
+  *) fail "missing Cursor ref did not name the reason: ${out}" ;;
+esac
+
+set +e
+out="$("${script}" --runtime cursor --installed "${cur}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "Cursor with an install override must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"does not accept --installed"*) ok "Cursor cannot be pointed at another lane's installed copy" ;;
+  *) fail "Cursor install override was rejected without naming the reason: ${out}" ;;
+esac
+
 # ── 8. The remediation is NAMED in the failure output ─────────────────────────
 # The deployment's own "fail with the fix" rule: a guard that blocks without naming the resolving
 # action is a friction tax, and it trains the reader to route around it. It must also keep saying
@@ -587,6 +729,24 @@ esac
 case "${section}" in
   *"blob identity"*) ok "the contract pins comparison by blob identity, not a version string" ;;
   *) fail "the plugin contract section does not require comparison by blob identity" ;;
+esac
+# The command is lane-scoped: a bare invocation still defaults to Claude for compatibility, so each
+# deployed adapter must name itself or Codex/Cursor can silently inspect the wrong lane.
+for runtime in claude codex cursor; do
+  case "${section}" in
+    *"--runtime ${runtime}"*) ok "the contract names the ${runtime} runtime selector" ;;
+    *) fail "the plugin contract section does not name --runtime ${runtime}" ;;
+  esac
+done
+case "${section}" in
+  *"more than one cached version"*UNKNOWN*)
+    ok "the contract makes ambiguous Codex caches UNKNOWN rather than guessed" ;;
+  *) fail "the plugin contract section does not fail closed on ambiguous Codex caches" ;;
+esac
+case "${section}" in
+  *"refs/remotes/origin/main"*)
+    ok "the contract binds Cursor verification to the ref its loader reads" ;;
+  *) fail "the plugin contract section does not name Cursor's loaded submodule ref" ;;
 esac
 
 # ── 10. The fallback must be EXECUTABLE, not just named ───────────────────────
