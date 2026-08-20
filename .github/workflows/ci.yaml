@@ -379,7 +379,9 @@ jobs:
               # enumerated subset would let a change to an unlisted surface skip the negative control
               - '.claude/**/*.md'
               - '.claude/**/*.json'
-              - '.claude/scripts/merge-preflight-thread-gate.test.sh'
+              # the enforcement SCRIPTS are scanned too: a prescription can live in a sibling
+              # guard's comments or failure messages, so an edit there must run this control
+              - '.claude/**/*.sh'
               # the PINNED plugin definitions are scanned too, so a gitlink advance that
               # reintroduces a thread field must run this guard rather than sail past it
               - 'libraries/agent-plugins'

@@ -41,6 +41,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+self_basename="$(basename "${BASH_SOURCE[0]}")"
 constitution="${repo_root}/AGENTS.md"
 
 fail() {
@@ -215,6 +216,33 @@ plugin_defs="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering"
   fail "pinned plugin definitions are absent at ${plugin_defs}, so they cannot be scanned and an OK here would be vacuous
   populate them:  git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init libraries/agent-plugins"
 
+# "PINNED" is a REVISION, not a directory — and a nonempty directory is the weaker claim.
+# A shared checkout sits at whatever revision it was last left on, which is the dangerous case: it
+# returns plausible definitions and the scan passes while inspecting a revision this commit does not
+# pin. So resolve the gitlink and require the populated tree to match it, with a clean worktree.
+# `--no-replace-objects` on the gitlink read for the reason AGENTS.md gives: a `refs/replace` entry
+# for HEAD makes `HEAD:<path>` resolve through the replacement while `rev-parse HEAD` still prints
+# the expected commit, so the pin would silently name a revision nobody reviewed.
+pinned_rev="$(git -C "${repo_root}" --no-replace-objects rev-parse HEAD:libraries/agent-plugins 2>/dev/null)" ||
+  fail "could not resolve this commit's libraries/agent-plugins gitlink, so the scanned revision cannot be verified"
+[ -n "${pinned_rev}" ] ||
+  fail "this commit's libraries/agent-plugins gitlink resolved empty — unproven is not proven"
+actual_rev="$(git -C "${repo_root}/libraries/agent-plugins" rev-parse HEAD 2>/dev/null)" ||
+  fail "could not read the populated libraries/agent-plugins revision, so the scan target is unverified"
+[ "${actual_rev}" = "${pinned_rev}" ] ||
+  fail "libraries/agent-plugins is at ${actual_rev} but this commit pins ${pinned_rev} — the scan would
+  inspect a revision this commit does not pin, which passes while proving nothing about the pinned definitions"
+# A matching revision still does not establish the CONTENT: a modified tracked file survives with HEAD
+# equal to the pin, and `assume-unchanged`/`skip-worktree` hide a modification from `status` entirely.
+sub_status="$(git -C "${repo_root}/libraries/agent-plugins" status --porcelain 2>/dev/null)" ||
+  fail "could not read libraries/agent-plugins worktree status, so its content is unverified"
+[ -z "${sub_status}" ] ||
+  fail "libraries/agent-plugins has uncommitted changes, so the scanned definitions are not the pinned ones"
+hidden="$(git -C "${repo_root}/libraries/agent-plugins" ls-files -v 2>/dev/null | awk '$1 ~ /^[a-z]$/ || $1 == "S"')" ||
+  fail "could not read libraries/agent-plugins index flags, so a hidden modification cannot be ruled out"
+[ -z "${hidden}" ] ||
+  fail "libraries/agent-plugins carries assume-unchanged/skip-worktree entries, which hide a modification from status"
+
 # `ci.yaml` is a definition surface in its own right, not just the thing that decides WHEN this job
 # runs. AGENTS.md classifies it as one, and the paths-filter below already triggers on it — so leaving
 # it out of the SCAN meant an edit there ran the guard against every file except the one that
@@ -244,10 +272,36 @@ while IFS= read -r surface; do
   esac
   found="$(bad_lists_in "${surface}")"
   [ -n "${found}" ] && offenders="${offenders}${surface}:"$'\n'"${found}"
+# 🔴 The block below is a PROCESS SUBSTITUTION, and on bash 3.2 (the macOS default, and what this
+# repository runs) a comment inside `<( ... )` breaks it AT RUNTIME while `bash -n` still passes:
+# the parser rescans the body for the closing paren, and an apostrophe or an unbalanced paren in a
+# comment sends it past the `)`. It fails as `bad substitution: no closing ")" in <(`, which names
+# neither the comment nor its line. Both forms were reproduced on 3.2.57. So every explanation for
+# that block lives HERE, outside it — do not move these lines back inside.
+#
+# WHY THE SURFACES ARE WHAT THEY ARE.
+# The enforcement SCRIPTS are definition surfaces too (AGENTS.md, *Agent definition locations*),
+# and prescriptions live in their comments and failure messages, not only in prose. Discovering
+# only .md/.json left a sibling `*.test.sh` free to add a `--json ...reviewThreads` prescription
+# with this control neither running nor inspecting it.
+#
+# THIS file is the one exclusion, and it is structural rather than a convenience: the extractor
+# self-test above holds deliberate BAD forms as fixtures, so scanning itself would report its own
+# fixtures as offenders and fail on a correct tree. Measured across `.claude/scripts/*.sh`, it is
+# the ONLY file carrying such a literal, so excluding it costs no real coverage today — and the
+# positive control below refuses if the exclusion ever swallows the whole class.
+#
+# The exclusion is built from `repo_root`, not from `BASH_SOURCE[0]` directly: the latter is
+# whatever path the caller typed, while `find` emits absolute paths, so a direct comparison
+# silently matches nothing and the file reports its own fixtures as offenders. That was observed,
+# not predicted. `repo_root` is itself derived from this file location, so the constructed path is
+# exact rather than a basename guess.
 done < <(
   {
     printf '%s\n' "${constitution}" "${workflow}"
     find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null
+    find "${repo_root}/.claude/scripts" -type f -name '*.sh' \
+      ! -path "${repo_root}/.claude/scripts/${self_basename}" 2>/dev/null
     find "${plugin_defs}" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null
   } | sort -u
 )
@@ -261,6 +315,13 @@ done < <(
 # loudly instead of quietly narrowing what the guard sees.
 printf '%s' "${scanned_list}" | grep -qxF -- "${workflow}" ||
   fail "ci.yaml was not among the ${scanned} scanned surfaces — the guard triggers on it but would not inspect it"
+
+# The self-exclusion above is one path; this refuses if it ever becomes the whole class. Without it,
+# a mistyped `find` or a widened `! -path` would silently scan no enforcement script at all and the
+# size check would still pass on the ~40 `.claude` Markdown files.
+other_scripts=$(printf '%s' "${scanned_list}" | grep -cE '\.claude/scripts/.*\.sh$' || true)
+[ "${other_scripts}" -gt 0 ] ||
+  fail "no enforcement script under .claude/scripts was scanned — the self-exclusion has swallowed the whole surface class"
 
 if [ -n "${offenders}" ]; then
   printf 'merge-preflight thread gate: FAIL — a thread field is prescribed in a `gh pr view --json` list.\n' >&2
@@ -309,7 +370,7 @@ for trigger in \
   "              - 'AGENTS.md'" \
   "              - '.claude/**/*.md'" \
   "              - '.claude/**/*.json'" \
-  "              - '.claude/scripts/merge-preflight-thread-gate.test.sh'" \
+  "              - '.claude/**/*.sh'" \
   "              - 'libraries/agent-plugins'" \
   "              - '.gitmodules'" \
   "              - '.github/workflows/ci.yaml'"; do
