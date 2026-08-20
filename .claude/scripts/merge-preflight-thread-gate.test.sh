@@ -215,11 +215,23 @@ plugin_defs="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering"
   fail "pinned plugin definitions are absent at ${plugin_defs}, so they cannot be scanned and an OK here would be vacuous
   populate them:  git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init libraries/agent-plugins"
 
+# `ci.yaml` is a definition surface in its own right, not just the thing that decides WHEN this job
+# runs. AGENTS.md classifies it as one, and the paths-filter below already triggers on it — so leaving
+# it out of the SCAN meant an edit there ran the guard against every file except the one that
+# changed. Watching a source decides when a job runs, never what it knows about.
+workflow="${repo_root}/.github/workflows/ci.yaml"
+# FAIL, never skip: `ci.yaml` is a fixed path, so guarding these with `if [ -r … ]` would turn a
+# missing workflow into a silent pass — the exact vacuity this file exists to prevent.
+[ -r "${workflow}" ] ||
+  fail "ci.yaml is missing or unreadable at ${workflow} — this job's own wiring cannot be verified, so an OK here would be vacuous"
+
 offenders=""
 scanned=0
+scanned_list=""
 while IFS= read -r surface; do
   [ -r "${surface}" ] || continue
   scanned=$((scanned + 1))
+  scanned_list="${scanned_list}${surface}"$'\n'
   # VALIDATE a JSON surface HERE, in the MAIN shell, before it is scanned. `bad_lists_in` reads its
   # input through process substitution (`< <(...)`), whose failure `set -e` does NOT catch — so a
   # `fail` inside the extraction chain leaves the loop with empty output and exit 0, and the surface is
@@ -234,7 +246,7 @@ while IFS= read -r surface; do
   [ -n "${found}" ] && offenders="${offenders}${surface}:"$'\n'"${found}"
 done < <(
   {
-    printf '%s\n' "${constitution}"
+    printf '%s\n' "${constitution}" "${workflow}"
     find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null
     find "${plugin_defs}" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null
   } | sort -u
@@ -242,6 +254,13 @@ done < <(
 
 [ "${scanned}" -gt 5 ] ||
   fail "only ${scanned} definition surface(s) discovered — the negative control would be vacuous"
+
+# A POSITIVE control on the surface set, not just its size. `${scanned} -gt 5` is satisfied by the
+# ~40 `.claude` files alone, so `ci.yaml` could be dropped from the generator — or made unreadable —
+# and the count would still sail past. Name the surface that has to be there, so its removal fails
+# loudly instead of quietly narrowing what the guard sees.
+printf '%s' "${scanned_list}" | grep -qxF -- "${workflow}" ||
+  fail "ci.yaml was not among the ${scanned} scanned surfaces — the guard triggers on it but would not inspect it"
 
 if [ -n "${offenders}" ]; then
   printf 'merge-preflight thread gate: FAIL — a thread field is prescribed in a `gh pr view --json` list.\n' >&2
@@ -260,11 +279,6 @@ echo "merge-preflight thread gate: OK — ${ASSERTED} prose properties held; neg
 # longer gate the required check. In every one of those cases this script still exits 0 — it cannot
 # detect its own disconnection unless it looks. `merge-confirmation-read.test.sh` guards the identical
 # five-point mode for the same reason; this is that pattern, not a new idea.
-workflow="${repo_root}/.github/workflows/ci.yaml"
-# FAIL, never skip: `ci.yaml` is a fixed path, so guarding these with `if [ -r … ]` would turn a
-# missing workflow into a silent pass — the exact vacuity this file exists to prevent.
-[ -r "${workflow}" ] ||
-  fail "ci.yaml is missing or unreadable at ${workflow} — this job's own wiring cannot be verified, so an OK here would be vacuous"
 
 for spec in \
   '            merge-preflight-thread-gate:|paths-filter entry' \
