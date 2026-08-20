@@ -307,6 +307,37 @@ for case_name in depth space; do
   esac
 done
 
+# A quoted pinned path must fail closed even when ordinary records sort before it. The old sentinel
+# check looked for a literal two-character `\n`, so a trailing QUOTED record escaped detection; the
+# missing unusual definition then disappeared from both comparison sides and reported CURRENT.
+quoted_root="${tmp}/quoted-pinned"
+quoted_repo="${quoted_root}/libraries/agent-plugins"
+quoted_plugin="${quoted_repo}/plugins/agentic-engineering"
+mkdir -p "${quoted_plugin}/agents"
+printf 'reviewed engineer definition\n' > "${quoted_plugin}/agents/agentic-engineer.agent.md"
+printf 'quoted path definition\n' > "${quoted_plugin}/agents/odd\\name.md"
+add_runtime_asset_fixture "${quoted_plugin}"
+write_desired_state_fixture "${quoted_root}"
+git -C "${quoted_repo}" init -q
+git -C "${quoted_repo}" config user.email t@example.invalid
+git -C "${quoted_repo}" config user.name t
+git -C "${quoted_repo}" add -A
+git -C "${quoted_repo}" -c commit.gpgsign=false commit -qm pin
+quoted_link="$(git -C "${quoted_repo}" rev-parse HEAD)"
+quoted_install="${tmp}/install-quoted-pinned"
+mkdir -p "${quoted_install}/agents"
+cp "${quoted_plugin}/agents/agentic-engineer.agent.md" "${quoted_install}/agents/"
+cp -R "${quoted_plugin}/scripts" "${quoted_install}/"
+set +e
+out="$("${script}" --repo-root "${quoted_root}" --gitlink "${quoted_link}" \
+                  --installed "${quoted_install}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "a mixed ordinary-plus-quoted pinned tree must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"path git had to quote"*) ok "a quoted pinned path is detected anywhere in the sorted tree" ;;
+  *) fail "quoted pinned path did not name the fail-closed reason: ${out}" ;;
+esac
+
 # ── 7c. A missing option VALUE is UNKNOWN, not DRIFT ──────────────────────────
 # `shift 2` on a lone trailing flag returns 1, and under `set -e` that exited the script with 1 — the
 # code that tells a caller the definition is stale. A typo would have produced a silent, output-free

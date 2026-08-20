@@ -50,7 +50,6 @@ PLUGIN_NAME="agentic-engineering"
 RUNTIME="claude"
 CURSOR_REF="refs/remotes/origin/main"
 QUIET=0
-nl="\n"
 
 # Named beside every UNKNOWN that a fresh worktree can actually hit. A guard that blocks without
 # naming the resolving action is a friction tax the deployment's own hardening rule forbids — and it
@@ -362,9 +361,9 @@ reviewed="$(printf '%s
         if (rel ~ /^agents\// || rel ~ /^skills\// || required[rel]) print $1 "	" $2 "	" rel
       }' \
   | sort -k3,3)"
-case "$reviewed" in
-  QUOTED*|*"${nl}QUOTED"*) die "the pinned tree contains a path git had to quote (tab, newline or backslash) — cannot verify it${RECOVERY}" ;;
-esac
+quoted_record="$(printf '%s\n' "$reviewed" | awk '$0=="QUOTED"{print 1; exit}')"
+[ -z "$quoted_record" ] \
+  || die "the pinned tree contains a path git had to quote (tab, newline or backslash) — cannot verify it${RECOVERY}"
 [ -n "$reviewed" ] || die "pinned revision $GITLINK contains no definition files under $prefix"
 
 # A declaration absent from the pinned tree must be UNKNOWN, not silently omitted from both sides.
