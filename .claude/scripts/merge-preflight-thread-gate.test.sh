@@ -81,7 +81,7 @@ assert_prose 'reviewThreads(first:100)' \
 assert_prose 'isResolved==false' \
   "Merge policy does not prescribe selecting UNRESOLVED threads — a bare thread count is not the gate"
 # The invalid improvisation is named explicitly, exactly as `merged` is for the post-merge read.
-assert_prose 'is NOT a valid `gh pr view --json` field' \
+assert_prose '`reviewThreads` is NOT a valid `gh pr view --json` field' \
   "Merge policy does not state that reviewThreads is not a gh pr view --json field"
 
 # ── 3. exception (a) cannot swallow this class ──────────────────────────────────────────────────────
