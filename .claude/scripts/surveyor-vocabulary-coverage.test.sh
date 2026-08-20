@@ -37,6 +37,13 @@
 # deliberately exact-match and deliberately small: a NEW prose fragment fails the
 # run and forces a decision, which is the intended direction.
 #
+# Membership states that a fragment is NOT RUNNABLE -- not that the guard happens
+# to refuse it. Three entries (`gh pr view`, `gh search prs`, `gh search issues`)
+# are currently allowed by the guard and so would be skipped anyway; they are kept
+# because the property being recorded is a property of the PROSE, and a later
+# guard revision that tightened a bare verb should not silently turn a sentence
+# fragment into a finding.
+#
 # The corpus is READ FROM the sibling file rather than duplicated, so the two can
 # never drift into disagreeing about what is classified.
 #
@@ -49,13 +56,23 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd) || exit 2
 guard="$repo_root/libraries/agent-plugins/plugins/agentic-engineering/scripts/forge-readonly-guard.sh"
 corpus_file="$repo_root/.claude/scripts/surveyor-forge-vocabulary.test.sh"
 
-SOURCES="$repo_root/.claude/agents/portfolio-surveyor.md
-$repo_root/.claude/skills/portfolio-maintenance/SKILL.md"
-
-# A real source change must not be able to drop the candidate count to near zero
-# and pass vacuously. Set well under the ~59 the two files yield today, so
-# ordinary editing does not trip it but a broken extractor does.
-MIN_CANDIDATES=30
+# Every file that PRESCRIBES a survey command, with a per-source candidate floor.
+#
+# The plugin's own surveyor definition is here because the run loop sources that
+# entry point and only THEN reads the local file as a compatibility overlay, so a
+# gitlink bump can introduce a command that no local file mentions. It lives in
+# the same submodule as the guard, so it adds no failure mode this script did not
+# already have: no submodule, no verdict, exit 2.
+#
+# The floor is PER SOURCE, not a combined total. A combined count hides the
+# failure it is meant to catch — the overlay alone clears any total worth
+# setting, so extraction could stop matching an entire other surface unnoticed.
+# Counts today are 38 / 23 / 4; each floor sits below its own count so ordinary
+# editing does not trip it, and a surface dropping out does.
+SOURCE_FLOORS="$repo_root/.claude/agents/portfolio-surveyor.md	25
+$repo_root/.claude/skills/portfolio-maintenance/SKILL.md	15
+$repo_root/libraries/agent-plugins/plugins/agentic-engineering/agents/portfolio-surveyor.agent.md	3"
+SOURCES="$(printf '%s\n' "$SOURCE_FLOORS" | cut -f1)"
 MIN_CORPUS_ROWS=25
 
 die_unknown() { echo "surveyor-vocabulary-coverage: UNKNOWN — $1" >&2; exit 2; }
@@ -204,10 +221,15 @@ trap 'rm -rf "$fixdir"' EXIT
 
 printf '%s\n' 'Prose: run `gh api` then `gh pr view`, never `gh pr merge/create/comment/edit/review`.' \
   '' 'Also `git log/status` and `gh search prs --help` are families, not commands.' > "$fixdir/prose.md"
-# A NOVEL refusal on purpose. An already-acknowledged one (`gh pr merge`) would
-# be correctly reported as covered, which is the design working, not a miss.
+# The refusal must be NOVEL (an already-acknowledged one like `gh pr merge` is
+# correctly reported as covered) and INVARIANT. An evolving read FLAG is the
+# wrong choice: `--involves` is an ordinary search filter that will plausibly join
+# `--commenter` on the allowlist, and on the day it does this fixture flips to
+# allowed and the self-test reports the detector broken — blocking CI over a
+# guard improvement. A create VERB can never become a read, so its denial cannot
+# age out, and `gh release create` carries a reason no corpus row acknowledges.
 printf '%s\n' 'The surveyor must now also run:' '' '```sh' \
-  'gh search issues --owner devantler-tech --state open --involves devantler' '```' > "$fixdir/bad.md"
+  'gh release create v1 --repo devantler-tech/monorepo' '```' > "$fixdir/bad.md"
 printf '%s\n' 'A newly mandated read:' '' '```sh' \
   'gh pr list --repo devantler-tech/monorepo --state open --limit 50' '```' > "$fixdir/good.md"
 
@@ -229,14 +251,14 @@ corpus_rows=$(read_corpus | grep -c .)
 [ "$corpus_rows" -ge "$MIN_CORPUS_ROWS" ] \
   || die_unknown "parsed only $corpus_rows corpus row(s) from ${corpus_file#"$repo_root"/}; the heredoc markers likely moved"
 
-total_candidates=0
-while IFS= read -r f; do
-  [ -n "$f" ] || continue
+while IFS=$'\t' read -r f floor; do
+  [ -n "${f:-}" ] || continue
+  [ -r "$f" ] || die_unknown "source is unreadable: ${f#"$repo_root"/}
+  (populate the submodule: .claude/scripts/submodule-init.sh libraries/agent-plugins)"
   n=$(extract_commands "$f" | grep -c .)
-  total_candidates=$((total_candidates + n))
-done <<< "$SOURCES"
-[ "$total_candidates" -ge "$MIN_CANDIDATES" ] \
-  || die_unknown "extracted only $total_candidates candidate(s) from the sources (expected >= $MIN_CANDIDATES); the extractor is not matching"
+  [ "$n" -ge "$floor" ] \
+    || die_unknown "extracted only $n candidate(s) from ${f#"$repo_root"/} (floor $floor); the extractor is not matching this source"
+done <<< "$SOURCE_FLOORS"
 
 # ── The real check ───────────────────────────────────────────────────────────
 CHECKED=0; SKIPPED=0; CLASSIFIED=0
