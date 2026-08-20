@@ -292,21 +292,25 @@ every delegated survey ran a superseded definition while reporting a clean run
 ([#2847](https://github.com/devantler-tech/monorepo/issues/2847)).
 
 Run [`.claude/scripts/plugin-definition-currency.sh`](.claude/scripts/plugin-definition-currency.sh)
-before acting on a plugin-sourced role. It compares every file under the plugin's `agents/` and
-`skills/` directories by **git blob identity, never a version string** — a version can be bumped
-without the definitions moving, and the definitions can be superseded while the installed version
-still looks plausible. It exits `0` current, `1` drift, and `2` **UNKNOWN**.
+before acting on a plugin-sourced role, naming the lane explicitly. It compares every file under the
+plugin's `agents/` and `skills/` directories by **git blob identity, never a version string** — a
+version can be bumped without the definitions moving, and the definitions can be superseded while the
+installed version still looks plausible. It exits `0` current, `1` drift, and `2` **UNKNOWN**.
+
+| Instance | Command | What is compared |
+|---|---|---|
+| Claude machine-local | `.claude/scripts/plugin-definition-currency.sh --runtime claude` | The one install path in Claude's runtime registry. |
+| Codex machine-local | `.claude/scripts/plugin-definition-currency.sh --runtime codex` | The one enabled version under Codex's own plugin cache. A disabled plugin, no cached version, or **more than one cached version** is **UNKNOWN** — the check never guesses which copy was loaded. |
+| Cursor cloud | `.claude/scripts/plugin-definition-currency.sh --runtime cursor` | The commit at `refs/remotes/origin/main` in the plugin submodule, which is the exact ref the Cursor loader reads, against the consumer gitlink. |
+
+The bare command retains its Claude default only for compatibility with existing callers; deployed
+instances always pass their runtime. Never use a sibling lane's registry or cache as evidence, and
+never read one lane's `CURRENT` as a fleet-wide statement.
 
 ⚠️ **`2` means UNCHECKED — never read it as current, and never let it halt a run.** Report it, continue against
 the reviewed definition at the pinned gitlink, and act on the recovery the script names. Treating an
 UNKNOWN as a stop condition would turn a diagnostic into the passive self-blocking this contract
 forbids everywhere else.
-
-🔴 **Scoped to the Claude machine-local runtime today.** Its default resolution reads that runtime's
-plugin registry, which is where the drift was measured. The Codex lane keeps its own cache and the
-Cursor lane has no local registry at all (it loads the reviewed role from the submodule), so neither
-is covered yet — see [#2850](https://github.com/devantler-tech/monorepo/issues/2850). Do not read a
-`CURRENT` from this check as a statement about a sibling instance.
 
 **On drift, do not proceed as if the loaded definition were current: read the reviewed definition at
 the pinned gitlink and follow that**, and report the drift.
