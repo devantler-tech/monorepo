@@ -2265,9 +2265,12 @@ gh api graphql -f query='{repository(owner:"devantler-tech",name:"<repo>"){pullR
   --jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
 ```
 
-**That must read `0` before the merge.** The pentad's zero-unresolved-threads item is evaluated
-**before promotion**, and every review lane re-reviews on each push, so a thread routinely arrives
-*after* a PR is promoted — this final read is the only gate left that can catch it.
+**That must read `0` immediately before the merge — not once, earlier, from the survey.** The survey
+pentad does carry unresolved threads, but it is a **snapshot taken earlier in the run**, and this
+fresh read exists precisely for state that moves after that snapshot — the same reason `title` is
+re-validated above. Every review lane re-reviews on each push and can post at any moment: on
+monorepo#2927 the blocking review landed **93 minutes after** the PR was promoted. So a survey-time
+zero is not evidence at merge time.
 ⚠️ **`--repo` is part of the prescription, not an optional convenience** —
 none of those fields carries the *base* repository's identity (`headRepositoryOwner`, where it exists,
 names the contributor's **fork**), so without the flag the command resolves against whatever checkout

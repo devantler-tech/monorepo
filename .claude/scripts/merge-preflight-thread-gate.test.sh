@@ -18,10 +18,12 @@
 # checks, 0 open code-scanning alerts repo-wide (unfiltered control), no CHANGES_REQUESTED — and 2
 # unresolved `coderabbitai` threads. Promoted 05:59:20Z, still unmerged hours later.
 #
-# The pentad's zero-unresolved-threads item is evaluated BEFORE promotion, and every review lane
-# re-reviews on each push, so a thread routinely arrives AFTER a PR is promoted (on #2927 the blocking
-# review landed at 07:32:06Z, 93 minutes after `ready_for_review`). The final pre-merge read is the only
-# gate left that could catch it, and it cannot.
+# The survey pentad DOES carry unresolved threads, so the gap is not that no thread check exists — it
+# is that thread state comes only from a SNAPSHOT taken earlier in the run, while the fresh pre-merge
+# read (which exists precisely for state that moves after that snapshot, and re-validates `title` for
+# exactly that reason) omits it. Every review lane re-reviews on each push and can post at any moment:
+# on #2927 the blocking review landed at 07:32:06Z, 93 minutes after `ready_for_review`. So a
+# survey-time zero is not evidence at merge time, and the final read cannot supply one.
 #
 # Guarded properties:
 #   1. the mechanism is named, so a reader can verify the rule themselves;
