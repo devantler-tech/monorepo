@@ -1309,6 +1309,23 @@ case "${out}" in
   *"not enabled"*) ok "the config fallback honours the dotted global Codex plugin feature gate" ;;
   *) fail "dotted global Codex plugin disablement did not name the reason: ${out}" ;;
 esac
+
+# Every dotted TOML key segment may be quoted. These spellings resolve to the same effective
+# `features.plugins = false` value and must not let the stale enabled plugin table manufacture a
+# CURRENT verdict when the runtime CLI is unavailable.
+for dotted_gate in '"features".plugins = false' 'features."plugins" = false' \
+                   "'features'.plugins = false" "features.'plugins' = false"; do
+  printf '%s\n\n%s\n%s\n' "${dotted_gate}" \
+    '[plugins."agentic-engineering@devantler-plugins"]' 'enabled = true' \
+    > "${codex_home}/config.toml"
+  set +e
+  out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+                    --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+  set -e
+  [ "${rc}" -eq 2 ] \
+    || fail "quoted dotted gate '${dotted_gate}' must stay UNKNOWN, got ${rc}: ${out}"
+done
+ok "the config fallback honours quoted dotted global feature keys"
 cat > "${codex_home}/config.toml" <<'TOML'
 [plugins."agentic-engineering@devantler-plugins"]
 enabled = true
@@ -1356,6 +1373,16 @@ case "${out}" in
   *"status --porcelain"*)
     ok "the at-the-pin path also requires a clean snapshot tree" ;;
   *) fail "Codex remediation does not require a clean snapshot tree: ${out}" ;;
+esac
+case "${out}" in
+  *"--no-replace-objects rev-parse HEAD:<f>"*)
+    ok "snapshot expected-blob reads bypass replacement objects" ;;
+  *) fail "Codex remediation reads expected snapshot blobs through replacements: ${out}" ;;
+esac
+case "${out}" in
+  *"ls-tree HEAD -- <runtime-asset>"*"test -x <snapshot>/<runtime-asset>"*)
+    ok "snapshot verification checks executable runtime-asset modes" ;;
+  *) fail "Codex remediation can reinstall a non-executable required helper: ${out}" ;;
 esac
 cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
 

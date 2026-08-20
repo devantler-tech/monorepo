@@ -203,6 +203,12 @@ if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
     enabled="$(awk -v target="[plugins.\"$PLUGIN_ID\"]" '
         { line = $0
           sub(/^[[:space:]]+/, "", line); sub(/[[:space:]]+$/, "", line)
+          # TOML permits every key segment to be quoted. Normalise only the two literal feature-gate
+          # segments before matching their complete assignment; values and unrelated keys remain
+          # untouched. sprintf keeps a literal single quote out of this shell single-quoted program.
+          sq = sprintf("%c", 39)
+          gsub(/"features"/, "features", line); gsub(/"plugins"/, "plugins", line)
+          gsub(sq "features" sq, "features", line); gsub(sq "plugins" sq, "plugins", line)
           # Match the header by PREFIX and then require the remainder to be a comment, rather than
           # interpolating the plugin id into a regex: the id is a quoted TOML key that may contain
           # regex metacharacters, and escaping it here is what would actually break. An unrelated
@@ -495,13 +501,17 @@ if [ "$RUNTIME" = codex ]; then
   say "     against $GITLINK first — and the revision ALONE does not establish the content, because"
   say "     a dirty file, a clean/smudge filter, or a replacement object each leave the revision"
   say "     reading correct while the bytes on disk differ. In the snapshot checkout <snapshot>,"
-  say "     all three must pass before any install:"
+  say "     all four must pass before any install:"
   say "         git -C <snapshot> --no-replace-objects rev-parse HEAD   # must equal $GITLINK"
   say "         git -C <snapshot> status --porcelain                    # must print NOTHING"
   say "         and EVERY definition file must equal its pinned blob — one file proves only itself,"
   say "         so a filter or index flag altering any OTHER file survives a single-file check:"
   say "           git -C <snapshot> --no-replace-objects ls-tree -r --name-only HEAD -- <prefix>"
-  say "           # for each: rev-parse HEAD:<f> must equal hash-object --no-filters -- <f>"
+  say "           # for each: --no-replace-objects rev-parse HEAD:<f> must equal"
+  say "           # hash-object --no-filters -- <f>"
+  say "         and EVERY executable requiredRuntimeAsset must retain its pinned mode:"
+  say "           git -C <snapshot> --no-replace-objects ls-tree HEAD -- <runtime-asset>"
+  say "           # must start '100755 blob'; test -x <snapshot>/<runtime-asset> must succeed"
   say "       * snapshot AT the pin and all of the above clean -> reinstall WITHOUT upgrading."
   say "         \`codex plugin remove\` deletes the plugin from local config AND cache, so an 'add'"
   say "         that then fails — bad snapshot, disk error, interrupted run — leaves this lane with"
