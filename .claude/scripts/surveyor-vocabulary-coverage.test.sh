@@ -144,9 +144,10 @@ normalize() {
 # `git worktree add`, `gh api` -- so a source PRESCRIBING one of those inside a
 # fenced block would exact-match the exclusion and be skipped before the guard ever
 # saw it. That is fail-open on precisely the commands this check exists to catch:
-# measured against the pinned guard, 20 of the 23 fragments are DENIED, and 16 of
-# those carry a deny reason no corpus row acknowledges. Provenance is what lets the
-# exclusion keep serving prose without also excusing a prescription.
+# measured against the pinned guard (re-measured 2026-08-20), 21 of the 24 fragments
+# are DENIED, and 17 of those carry a deny reason no corpus row acknowledges.
+# Provenance is what lets the exclusion keep serving prose without also excusing
+# a prescription.
 extract_inline() {
   local f=$1
   # A Markdown code span may cross newlines, so a per-LINE scan cannot see one:
