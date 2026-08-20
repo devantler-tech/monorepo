@@ -1450,6 +1450,24 @@ case "${out}" in
   *) fail "CURRENT verdict does not distinguish the install from the booted copy: ${out}" ;;
 esac
 
+# ── 7ab. Ignored loaded files must block a Codex reinstall ────────────────────
+# `status --porcelain` deliberately omits ignored untracked files, but the Codex marketplace
+# installer copies them from the snapshot. An ignored agent, skill resource, or runtime asset can
+# therefore pass a clean-tree gate and become loaded after reinstall unless it is inventoried
+# separately across every loaded surface.
+printf 'stale under ignored-file check\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"ls-files --others --ignored --exclude-standard"*"<prefix>/agents"*"<prefix>/skills"*"<runtime-asset>"*)
+    ok "the Codex reinstall rejects ignored files across every loaded surface" ;;
+  *) fail "Codex remediation can reinstall an ignored loaded file: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
 # ── 7x. The test script itself must stay executable ───────────────────────────
 # It carries a shebang and is invoked directly by local callers; CI happening to run it through
 # `bash` masks a lost mode bit, so assert the bit rather than relying on the runner.
