@@ -1240,6 +1240,71 @@ case "${out}" in
 esac
 cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
 
+# ── 7y. The at-the-pin reinstall must verify BYTES, not just the revision ──────
+# A revision equality is a claim about the commit id, never about the working-tree content. A dirty
+# file, a clean/smudge filter, or a replacement object all leave `rev-parse` reporting the pinned
+# revision while the bytes on disk differ — so a revision-only precondition hands `add` a snapshot
+# carrying unreviewed definitions and reports the reinstall as safe. This is the same four-assertion
+# doctrine the consumer contract already requires when reading a definition at the pin.
+printf 'stale under snapshot-bytes check\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"--no-filters"*)
+    ok "the at-the-pin path verifies snapshot bytes, not just the revision" ;;
+  *) fail "Codex remediation gates the reinstall on the revision alone: ${out}" ;;
+esac
+case "${out}" in
+  *"status --porcelain"*)
+    ok "the at-the-pin path also requires a clean snapshot tree" ;;
+  *) fail "Codex remediation does not require a clean snapshot tree: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7z. The reinstall must not delete the working plugin before it can restore ──
+# `codex plugin remove` deletes the plugin from local config AND cache. Prescribing `remove && add`
+# means a failed `add` — bad snapshot, disk error, interrupted run — leaves the lane with no
+# definition to load and no way to self-repair, turning a drift report into an outage. The ordering
+# must not depend on `add` being idempotent over an existing install, which the CLI does not
+# document.
+printf 'stale under destructive-order check\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"Back up"*)
+    ok "the reinstall backs the cached copy up before removing it" ;;
+  *) fail "Codex remediation removes the only copy with no backup: ${out}" ;;
+esac
+case "${out}" in
+  *"restore that backup"*)
+    ok "the reinstall names the restore path for a failed add" ;;
+  *) fail "Codex remediation has no recovery for a failed add: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7aa. A CURRENT verdict must not be read as "this process is current" ───────
+# The check inspects the INSTALLED copy on disk. The running process executes whatever it loaded at
+# startup, and a refresh needs a restart to take effect — so a CURRENT verdict produced after a
+# concurrent refresh says nothing about the definition this process is still executing. Leaving that
+# unstated is the fail-open direction: the run reports itself current while following a superseded
+# definition.
+set +e
+out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 0 ] || fail "the CURRENT case must exit 0, got ${rc}: ${out}"
+case "${out}" in
+  *"booted"*)
+    ok "a CURRENT verdict states that it describes the install, not the booted definition" ;;
+  *) fail "CURRENT verdict does not distinguish the install from the booted copy: ${out}" ;;
+esac
+
 # ── 7x. The test script itself must stay executable ───────────────────────────
 # It carries a shebang and is invoked directly by local callers; CI happening to run it through
 # `bash` masks a lost mode bit, so assert the bit rather than relying on the runner.

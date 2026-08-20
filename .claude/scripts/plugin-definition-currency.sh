@@ -431,6 +431,14 @@ done < <(sort "$inst_list")
 say ""
 if [ "$drift" -eq 0 ]; then
   say "CURRENT — $checked pinned loaded file(s) match the installed copy."
+  # Scope the verdict explicitly. This compares the INSTALLED copy on disk; the running process
+  # executes whatever it loaded at startup, and an install only becomes live on the next dispatch.
+  # Left unstated, a CURRENT produced after a concurrent refresh reads as "this run is current" —
+  # the fail-open direction, since the run would then follow a superseded definition believing it
+  # had verified otherwise.
+  say "Scope: this describes the INSTALLED copy on disk, not the definition this process booted."
+  say "An install becomes live on the next dispatch, so a run whose install changed mid-flight is"
+  say "still executing what it booted; only a LATER run's check establishes that the pin is live."
   exit 0
 fi
 
@@ -449,9 +457,22 @@ say "     read-only evidence."
 if [ "$RUNTIME" = codex ]; then
   say "     For Codex: \`codex plugin add\` installs the marketplace snapshot's LATEST, so the only"
   say "     safe sequence is one that never advances the snapshot. Check the snapshot's revision"
-  say "     against $GITLINK first:"
-  say "       * snapshot AT the pin  -> reinstall WITHOUT upgrading:"
+  say "     against $GITLINK first — and the revision ALONE does not establish the content, because"
+  say "     a dirty file, a clean/smudge filter, or a replacement object each leave the revision"
+  say "     reading correct while the bytes on disk differ. In the snapshot checkout <snapshot>,"
+  say "     all three must pass before any install:"
+  say "         git -C <snapshot> --no-replace-objects rev-parse HEAD   # must equal $GITLINK"
+  say "         git -C <snapshot> status --porcelain                    # must print NOTHING"
+  say "         git -C <snapshot> hash-object --no-filters -- <file>    # must equal the pinned blob"
+  say "       * snapshot AT the pin and all three clean -> reinstall WITHOUT upgrading."
+  say "         \`codex plugin remove\` deletes the plugin from local config AND cache, so an 'add'"
+  say "         that then fails — bad snapshot, disk error, interrupted run — leaves this lane with"
+  say "         no definition to load and no way to repair itself. Do NOT rely on 'add' overwriting"
+  say "         an existing install; the CLI does not document that. Back up first, then reinstall:"
+  say "           cp -R \"$INSTALLED\" \"\$TMPDIR/codex-plugin-backup\""
   say "           codex plugin remove $PLUGIN_ID && codex plugin add $PLUGIN_ID"
+  say "         If the 'add' fails, restore that backup before the next dispatch rather than"
+  say "         leaving the lane with nothing to load."
   say "       * snapshot NOT at the pin -> do NOT reinstall, and do NOT run"
   say "         'codex plugin marketplace upgrade': it moves the snapshot to the upstream tip, so a"
   say "         following 'add' installs a revision nobody here has reviewed. Reconcile the consumer"
