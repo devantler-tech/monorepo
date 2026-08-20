@@ -57,6 +57,7 @@ jobs:
       comment-disclosure-drift: ${{ steps.filter.outputs.comment-disclosure-drift }}
       pr-ownership-disclosure: ${{ steps.filter.outputs.pr-ownership-disclosure }}
       pipefail-grep-guard: ${{ steps.filter.outputs.pipefail-grep-guard }}
+      surveyor-forge-vocabulary: ${{ steps.filter.outputs.surveyor-forge-vocabulary }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -173,6 +174,19 @@ jobs:
               - '.claude/scripts/memory-backup.sh'
               - '.claude/scripts/memory-backup.test.sh'
               - '.claude/scripts/memory-backup-go/**'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            surveyor-forge-vocabulary:
+              - '.claude/scripts/surveyor-forge-vocabulary.test.sh'
+              - '.gitmodules'
+              - 'libraries/agent-plugins'
+              # The surveyor definition and its run loop are what DEFINE the
+              # vocabulary this job pins. A PR that adds or changes a survey
+              # command in either of them must run the conformance test, or the
+              # guard can start refusing a newly mandated read with CI silent.
+              - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
@@ -825,6 +839,47 @@ jobs:
       - name: Verify the comment disclosure drift guard
         run: bash .claude/scripts/comment-disclosure-drift.test.sh
 
+  test-surveyor-forge-vocabulary:
+    name: Test surveyor forge vocabulary conformance
+    needs: changes
+    # The guard this job EXECUTES is checked out at a gitlink read from the
+    # PR's own tree, so a fork could repoint it at any commit in agent-plugins
+    # and run that code here. Restrict the job to branches in this repository,
+    # which is the same trust boundary AGENTS.md sets for external branches:
+    # review them statically, never execute them. merge_group carries no
+    # pull_request payload and is already past that gate.
+    if: >-
+      needs.changes.outputs.surveyor-forge-vocabulary == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The guard under test lives in the pinned plugin submodule, whose .gitmodules
+      # URL is SSH — unusable on a runner. Check the pinned revision out over HTTPS
+      # instead, so the test runs against exactly the reviewed commit this repo pins.
+      - name: Resolve the pinned agent-plugins revision
+        id: pin
+        # --no-replace-objects: a refs/replace entry would otherwise resolve the
+        # gitlink through a replacement commit while HEAD still looks correct.
+        run: echo "sha=$(git --no-replace-objects rev-parse HEAD:libraries/agent-plugins)" >> "$GITHUB_OUTPUT"
+      - name: Check out the guard at that revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: devantler-tech/agent-plugins
+          ref: ${{ steps.pin.outputs.sha }}
+          path: libraries/agent-plugins
+          persist-credentials: false
+      # The guard is a pure argv classifier: the test makes no API call and
+      # contacts no forge. The checkout above is this job's only network use.
+      - name: Verify the surveyor read vocabulary against the forge guard
+        run: bash .claude/scripts/surveyor-forge-vocabulary.test.sh
+
   test-pr-ownership-disclosure:
     name: Test PR ownership disclosure classifier
     needs: changes
@@ -1259,6 +1314,7 @@ jobs:
       - test-agent-telemetry
       - test-board-add
       - test-comment-disclosure-drift
+      - test-surveyor-forge-vocabulary
       - test-pr-ownership-disclosure
       - test-worktree-claim
       - test-flow-scorecard
@@ -1307,6 +1363,7 @@ jobs:
             ${{ needs.test-agent-telemetry.result }}
             ${{ needs.test-board-add.result }}
             ${{ needs.test-comment-disclosure-drift.result }}
+            ${{ needs.test-surveyor-forge-vocabulary.result }}
             ${{ needs.test-pr-ownership-disclosure.result }}
             ${{ needs.test-worktree-claim.result }}
             ${{ needs.test-flow-scorecard.result }}
