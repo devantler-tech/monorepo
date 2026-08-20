@@ -186,7 +186,43 @@ extract_inline() {
     }
     END { if (buf != "") print buf }
   ' "$f" 2>/dev/null \
-    | grep -oE '`[^`]+`' | sed 's/^`//; s/`$//' \
+    | awk '
+        # Code spans with VARIABLE-LENGTH delimiters, per CommonMark: a span opens
+        # on a run of N backticks and closes on the next run of EXACTLY N. The
+        # single-backtick regex this replaces (`[^`]+`) cannot express that, and the
+        # gap is a fail-open rather than a dropped line: a prescription written as
+        #
+        #   ``result=`gh api rate_limit` ``
+        #
+        # is split at the INNER shell backticks, both fragments fail the verb filter,
+        # and NOTHING reaches the guard -- while the deployment runs a command the
+        # guard refuses (`backtick command substitution is not a read`). A run with
+        # no matching closer is literal text, so scanning resumes after it instead of
+        # pairing across it.
+        {
+          s = $0; n = length(s); i = 1
+          while (i <= n) {
+            if (substr(s, i, 1) != "`") { i++; continue }
+            j = i; while (j <= n && substr(s, j, 1) == "`") j++
+            olen = j - i
+            k = j; found = 0
+            while (k <= n) {
+              if (substr(s, k, 1) == "`") {
+                m = k; while (m <= n && substr(s, m, 1) == "`") m++
+                if (m - k == olen) { found = 1; break }
+                k = m
+              } else k++
+            }
+            if (!found) { i = j; continue }
+            content = substr(s, j, k - j)
+            # CommonMark strips one leading AND trailing space when both are present,
+            # which is how a span may end with a backtick at all.
+            if (content ~ /^ / && content ~ / $/ && content ~ /[^ ]/) \
+              content = substr(content, 2, length(content) - 2)
+            if (content != "") print content
+            i = m
+          }
+        }' \
     | sed -E 's/^[[:space:]]*\$[[:space:]]+//' \
     | awk '
         function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
@@ -194,8 +230,14 @@ extract_inline() {
           while (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]("'"'"']*)[[:space:]]+/)) s = substr(s, RSTART + RLENGTH)
           return s
         }
+        # Both substitution spellings, exactly as the fenced recogniser carries them.
+        # Recovering the multi-backtick SPAN above is only half the path: the span it
+        # yields is `result=`gh api rate_limit``, whose verb sits behind a legacy
+        # backtick substitution, so a `$(`-only test drops it here instead and the
+        # command still never reaches the guard.
         function strip_subst(s) {
           if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\(/)) return substr(s, RSTART + RLENGTH)
+          if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?`/)) return substr(s, RSTART + RLENGTH)
           return ""
         }
         opens($0) || opens(strip_assigns($0)) || opens(strip_subst($0))
@@ -569,6 +611,21 @@ tl_extracted=$(extract_commands "$fixdir/tilde.md" | grep -c '^fenced gh release
   || die_unknown "self-test: a tilde-fenced command was never extracted, so it cannot reach the guard (fail-open)"
 if check_sources "$fixdir/tilde.md" >/dev/null 2>&1; then
   die_unknown "self-test: a tilde-fenced command's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# A MULTI-BACKTICK inline span must be parsed by its own delimiter length. A span
+# opens on a run of N backticks and closes on the next run of exactly N, which is
+# how a prescription may contain a shell backtick substitution at all. Matched with
+# a single-backtick regex the text splits at the INNER backticks, both fragments
+# fail the verb filter, and NOTHING reaches the guard -- while the deployment runs a
+# command the guard refuses (`backtick command substitution is not a read`). Asserts
+# extraction AND detection, so it cannot pass by extracting a harmless fragment.
+printf '%s\n' 'The census runs ``result=`gh api rate_limit` `` before selecting.' > "$fixdir/multibacktick.md"
+mb_extracted=$(extract_commands "$fixdir/multibacktick.md" | grep -c '^inline result=`gh api ')
+[ "${mb_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a multi-backtick inline span did not reach the guard as prescribed (fail-open)"
+if check_sources "$fixdir/multibacktick.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a multi-backtick span's unclassified refusal was NOT detected (fail-open)"
 fi
 
 # A MULTI-LINE inline span must be seen. A per-line scan cannot match one, so the
