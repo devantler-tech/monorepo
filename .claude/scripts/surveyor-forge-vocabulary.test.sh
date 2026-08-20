@@ -31,7 +31,7 @@
 # guard should allow. Both are prescribed by the surveyor definition today, so
 # with the guard enforcing, the maintainer-comment sweep and the merged-PR
 # retrospective would each fail closed mid-run. Tracked upstream as
-# agent-plugins#146. They were found by the sources-to-corpus coverage check in
+# agent-plugins#147. They were found by the sources-to-corpus coverage check in
 # `surveyor-vocabulary-coverage.test.sh`, which is the companion to this file.
 #
 # On `git status`: the surveyor definition names `git log/status` among its read
