@@ -612,6 +612,19 @@ refute_prose 'The Agent Improver is otherwise unaffected' \
 refute_prose 'next scheduled tick is always one hour later' \
   "cadence still asserts an unconditional hourly next tick alongside its own refutation"
 
+# Shared automation is a reuse boundary, not a centralisation target. A product's own
+# action or workflow belongs beside that product until a second real repository consumes
+# the same product-neutral contract. Pin all three parts so "this might be reusable later"
+# cannot silently move product policy into an organisation-wide repository.
+assert_prose 'demonstrated consumers in at least two repositories' \
+  "shared automation does not require demonstrated multi-repository consumption"
+assert_prose 'Product-specific actions, workflows, paths, permissions, secrets, release semantics, and policy stay in the product repository they serve' \
+  "consumer contract does not keep product-specific automation close to its source"
+assert_prose 'Possible future reuse, superficial similarity, or a desire to centralise is not evidence' \
+  "consumer contract still permits speculative workflow centralisation"
+assert_prose 'World at Ruin-specific automation therefore stays in `devantler-tech/world-at-ruin`' \
+  "consumer contract does not pin the named World at Ruin locality example"
+
 # --- The merged spend mandate -------------------------------------------------
 # Spend is a dimension of the Agentic Engineer. The consumer must supply the Spend
 # contract the plugin entrypoint resolves, and must keep the money boundary that
