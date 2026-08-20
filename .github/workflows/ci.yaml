@@ -181,6 +181,12 @@ jobs:
               - '.claude/scripts/surveyor-forge-vocabulary.test.sh'
               - '.gitmodules'
               - 'libraries/agent-plugins'
+              # The surveyor definition and its run loop are what DEFINE the
+              # vocabulary this job pins. A PR that adds or changes a survey
+              # command in either of them must run the conformance test, or the
+              # guard can start refusing a newly mandated read with CI silent.
+              - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
