@@ -26,6 +26,14 @@
 #          ALLOWED — which is the signal that the upstream fix has landed and
 #          this entry should be promoted to `allow`.
 #
+# The two `gh search` gaps are pure query FILTERS — `--commenter` selects issues a
+# user commented on, `--merged-at` bounds a merge window — so both are reads the
+# guard should allow. Both are prescribed by the surveyor definition today, so
+# with the guard enforcing, the maintainer-comment sweep and the merged-PR
+# retrospective would each fail closed mid-run. Tracked upstream as
+# agent-plugins#146. They were found by the sources-to-corpus coverage check in
+# `surveyor-vocabulary-coverage.test.sh`, which is the companion to this file.
+#
 # On `git status`: the surveyor definition names `git log/status` among its read
 # verbs, but only the hardened invocation is actually a read, and the guard is
 # right to insist on it. Bare `git status` is pinned as `deny` for two reasons
@@ -74,6 +82,8 @@ allow	gh pr view 2927 --repo devantler-tech/monorepo --json number,isDraft,headR
 allow	gh issue view 108 --repo devantler-tech/agent-plugins --json number,title,state
 allow	gh search prs --owner devantler-tech --state open --limit 100
 allow	gh search issues --owner devantler-tech --state open --limit 100
+gap	gh search issues --owner devantler-tech --state open --commenter devantler --limit 100
+gap	gh search prs --owner devantler-tech --merged --merged-at "2026-08-01..2026-08-02" --limit 100
 allow	gh run list --repo devantler-tech/monorepo --branch main --limit 50 --json conclusion,path,event
 allow	gh repo list devantler-tech --limit 100 --json name,isArchived,visibility
 allow	gh api repos/devantler-tech/monorepo/pulls/2927/reviews --paginate
@@ -105,6 +115,7 @@ allow	git log -1 --format=%cI
 allow	git --no-optional-locks -c core.fsmonitor= status --porcelain
 deny	git status --porcelain
 deny	git push origin HEAD
+deny	git fetch origin main && git merge --ff-only origin/main
 deny	git ls-remote origin refs/heads/main
 deny	gh project item-add 5 --owner devantler-tech --url https://github.com/x/y/issues/1
 allow	gh api -X GET "repos/devantler-tech/monorepo/activity" -f per_page=100 -f "ref=refs/heads/main"
