@@ -647,6 +647,14 @@ for path_dir in ${PATH}; do
   path_without_jq="${path_without_jq}${path_without_jq:+:}${path_dir}"
 done
 IFS="${old_ifs}"
+# On Linux, jq commonly shares /usr/bin with bash and git (and /bin may be a symlink to that same
+# directory). Removing jq's directory must not make the script itself unlaunchable or fail its
+# earlier git prerequisite, because then this fixture never reaches the jq fail-closed branch.
+no_jq_runtime_bin="${tmp}/no-jq-runtime-bin"
+mkdir -p "${no_jq_runtime_bin}"
+ln -s "$(command -v bash)" "${no_jq_runtime_bin}/bash"
+ln -s "$(command -v git)" "${no_jq_runtime_bin}/git"
+path_without_jq="${no_jq_runtime_bin}${path_without_jq:+:}${path_without_jq}"
 [ -n "${path_without_jq}" ] || fail "could not construct a PATH without jq"
 if PATH="${path_without_jq}" command -v jq >/dev/null 2>&1; then
   fail "the no-jq PATH still resolves jq"
