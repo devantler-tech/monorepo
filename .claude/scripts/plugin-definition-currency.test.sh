@@ -1025,7 +1025,7 @@ cat > "${codex_home}/config.toml" <<'TOML'
 enabled = true # keep this lane enabled
 TOML
 set +e
-out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 0 ] || fail "a trailing TOML comment must stay enabled (exit 0), got ${rc}: ${out}"
@@ -1048,7 +1048,7 @@ cat > "${codex_home}/config.toml" <<'TOML'
 enabled = true
 TOML
 set +e
-out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 0 ] || fail "a commented table header must stay enabled (exit 0), got ${rc}: ${out}"
@@ -1063,7 +1063,7 @@ cat > "${codex_home}/config.toml" <<'TOML'
 enabled = false
 TOML
 set +e
-out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 2 ] || fail "a commented header with enabled=false must stay UNKNOWN, got ${rc}: ${out}"
