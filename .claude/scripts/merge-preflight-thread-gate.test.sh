@@ -27,7 +27,9 @@
 #
 # Guarded properties:
 #   1. the mechanism is named, so a reader can verify the rule themselves;
-#   2. a WORKING vocabulary for the thread read is prescribed (GraphQL — see 4);
+#   2. a WORKING vocabulary for the thread read is prescribed — GraphQL (see 5), and PAGINATED: a
+#      first-page-only `reviewThreads(first:100)` under-counts a PR with >100 threads, so the gate's
+#      single number can read 0 while unresolved threads remain;
 #   3. exception (a) cannot swallow this class: unresolved threads are a real blocker, not staleness;
 #   4. a merge refusal is DIAGNOSED before it is escalated as a maintainer blocker;
 #   5. NEGATIVE CONTROL: no `gh pr view --json` list in ANY definition surface names a thread field.
@@ -80,10 +82,18 @@ assert_prose 'required_review_thread_resolution' \
 # ── 2. a WORKING vocabulary is prescribed ───────────────────────────────────────────────────────────
 # Assert the GraphQL shape, not a bare mention of threads: the whole lesson of the post-merge `merged`
 # field is that an unprescribed read gets improvised into an invalid one.
-assert_prose 'reviewThreads(first:100)' \
-  "Merge policy does not prescribe the GraphQL reviewThreads read for pre-merge thread state"
+assert_prose 'reviewThreads(first:100,after:$endCursor)' \
+  "Merge policy does not prescribe the paginated GraphQL reviewThreads read for pre-merge thread state"
 assert_prose 'isResolved==false' \
   "Merge policy does not prescribe selecting UNRESOLVED threads — a bare thread count is not the gate"
+# PAGINATION is part of the working vocabulary, not tidiness: `reviewThreads(first:100)` alone returns
+# one page, so a PR with >100 threads reports a PARTIAL count and this gate's single number can read 0
+# while unresolved threads remain — the same "authoritative-looking but wrong read" the rule exists to
+# prevent. Require both the cursor plumbing and the page-walk.
+assert_prose 'pageInfo{hasNextPage endCursor}' \
+  "Merge policy prescribes a thread read without the pageInfo cursor — a first-page-only count"
+assert_prose 'gh api graphql --paginate' \
+  "Merge policy prescribes a thread read that does not walk every page"
 # The invalid improvisation is named explicitly, exactly as `merged` is for the post-merge read.
 assert_prose '`reviewThreads` is NOT a valid `gh pr view --json` field' \
   "Merge policy does not state that reviewThreads is not a gh pr view --json field"
@@ -105,7 +115,7 @@ decode_surface() {
     # A scalar boundary is a HARD boundary: `jq -r '.. | strings'` emits one line per decoded value and
     # flattening would otherwise weld the end of one value onto the start of the next. `%` is outside
     # `[A-Za-z,]`, so it terminates a field list wherever it lands.
-    *.json) jq -r '.. | strings | ., "%"' "$1" 2>/dev/null || true ;;
+    *.json) jq -r '.. | strings | ., "%"' "$1" ;;
     *)      cat "$1" ;;
   esac
 }
@@ -182,6 +192,16 @@ scanned=0
 while IFS= read -r surface; do
   [ -r "${surface}" ] || continue
   scanned=$((scanned + 1))
+  # VALIDATE a JSON surface HERE, in the MAIN shell, before it is scanned. `bad_lists_in` reads its
+  # input through process substitution (`< <(...)`), whose failure `set -e` does NOT catch — so a
+  # `fail` inside the extraction chain leaves the loop with empty output and exit 0, and the surface is
+  # counted as scanned while nothing was inspected. Reproduced: a malformed `.json` planted under
+  # `.claude/` raised `scanned` from 28 to 29 and the control still reported OK. Validating in the main
+  # shell is what makes the failure actually abort.
+  case "${surface}" in
+    *.json) jq empty "${surface}" >/dev/null 2>&1 ||
+      fail "cannot decode JSON definition surface, so it cannot be scanned: ${surface}" ;;
+  esac
   found="$(bad_lists_in "${surface}")"
   [ -n "${found}" ] && offenders="${offenders}${surface}:"$'\n'"${found}"
 done < <(
@@ -200,4 +220,4 @@ if [ -n "${offenders}" ]; then
   exit 1
 fi
 
-echo "merge-preflight thread gate: OK — 5 properties held; negative control scanned ${scanned} surfaces."
+echo "merge-preflight thread gate: OK — 8 prose properties held; negative control scanned ${scanned} surfaces."

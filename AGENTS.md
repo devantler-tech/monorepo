@@ -2261,8 +2261,15 @@ the post-merge `merged` field causes, in the one place the merge gate cannot aff
 it over GraphQL, as its own call:
 
 ```sh
-gh api graphql -f query='{repository(owner:"devantler-tech",name:"<repo>"){pullRequest(number:<n>){reviewThreads(first:100){nodes{isResolved}}}}}' \
-  --jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
+gh api graphql --paginate -f owner=devantler-tech -f name=<repo> -F number=<n> -f query='
+query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
+  repository(owner:$owner,name:$name){
+    pullRequest(number:$number){
+      reviewThreads(first:100,after:$endCursor){
+        nodes{isResolved}
+        pageInfo{hasNextPage endCursor}
+      }}}}' |
+  jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
 ```
 
 **That must read `0` immediately before the merge — not once, earlier, from the survey.** The survey
@@ -2271,6 +2278,13 @@ fresh read exists precisely for state that moves after that snapshot — the sam
 re-validated above. Every review lane re-reviews on each push and can post at any moment: on
 monorepo#2927 the blocking review landed **93 minutes after** the PR was promoted. So a survey-time
 zero is not evidence at merge time.
+
+🔴 **`--paginate` and the `pageInfo` cursor are REQUIRED, not tidiness — a first-page-only read
+silently under-counts.** `reviewThreads(first:100)` returns at most one page, so a long-lived PR whose
+threads exceed 100 reports a **partial** count, and the one number this gate depends on reads `0` while
+unresolved threads remain. That is the same failure the rule exists to prevent, one level down: a read
+that looks authoritative and is not. Note `--slurp` is **not** usable here — `gh` rejects it together
+with `--jq` — so the pages are slurped with `jq -s` instead.
 ⚠️ **`--repo` is part of the prescription, not an optional convenience** —
 none of those fields carries the *base* repository's identity (`headRepositoryOwner`, where it exists,
 names the contributor's **fork**), so without the flag the command resolves against whatever checkout
