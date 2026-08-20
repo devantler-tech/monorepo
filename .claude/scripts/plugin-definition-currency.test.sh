@@ -753,6 +753,8 @@ pinned_agent="$(git -C "${pin_repo}" show \
   || fail "Cursor loader ref '${loader_ref}' resolved ambiguous content instead of the verified remote-tracking ref"
 git -C "${pin_repo}" tag -d origin/main >/dev/null
 git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
+[ "$(git -C "${pin_repo}" rev-parse HEAD)" = "${gitlink}" ] \
+  || fail "the ambiguous Cursor loader case did not restore the shared pin fixture HEAD"
 [ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
   || fail "ambiguous Cursor loader case left the shared pin fixture dirty"
 ok "Cursor loader reads the unambiguous remote-tracking ref the currency check verifies"
@@ -1130,6 +1132,24 @@ case "${out}" in
   *"not enabled"*) ok "a commented header does not enable a disabled Codex plugin" ;;
   *) fail "commented-header disabled config was not reported as not enabled: ${out}" ;;
 esac
+
+# TOML also permits whitespace immediately inside the plugin table brackets. The runtime loads both
+# forms below; the fallback must resolve the literal target table instead of degrading a healthy lane
+# to UNKNOWN. Cover the plain and trailing-comment forms independently.
+for plugin_header in '[ plugins."agentic-engineering@devantler-plugins" ]' \
+                     '[ plugins."agentic-engineering@devantler-plugins" ] # managed plugin'; do
+  printf '%s\n%s\n' "${plugin_header}" 'enabled = true' > "${codex_home}/config.toml"
+  set +e
+  out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+                    --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+  set -e
+  [ "${rc}" -eq 0 ] || fail "spaced plugin header '${plugin_header}' must stay enabled: ${out}"
+  case "${out}" in
+    *CURRENT*) ;;
+    *) fail "spaced plugin header did not report CURRENT: ${out}" ;;
+  esac
+done
+ok "Codex enablement tolerates plugin-header whitespace with and without comments"
 cat > "${codex_home}/config.toml" <<'TOML'
 [plugins."agentic-engineering@devantler-plugins"]
 enabled = true

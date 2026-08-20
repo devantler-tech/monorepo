@@ -213,6 +213,10 @@ if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
           # regex metacharacters, and escaping it here is what would actually break. An unrelated
           # trailing token is not a comment, so it still fails to match.
           header = line
+          if (header ~ /^\[/) {
+            sub(/^\[[[:space:]]*/, "[", header)
+            sub(/[[:space:]]*\]/, "]", header)
+          }
           if (substr(header, 1, length(target)) == target) {
             rest = substr(header, length(target) + 1)
             if (rest == "" || rest ~ /^[[:space:]]*#/) header = target
