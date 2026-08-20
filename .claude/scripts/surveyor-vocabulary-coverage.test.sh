@@ -125,13 +125,26 @@ normalize() {
 
 # Candidates: inline code spans plus fenced-block lines, kept when they open with
 # a forge verb. Generous on purpose -- the guard does the discriminating.
-extract_commands() {
+#
+# The two streams are extracted SEPARATELY and tagged, because PROSE_FRAGMENTS must
+# apply to only one of them. That list holds exact runnable forms -- `git fetch`,
+# `git worktree add`, `gh api` -- so a source PRESCRIBING one of those inside a
+# fenced block would exact-match the exclusion and be skipped before the guard ever
+# saw it. That is fail-open on precisely the commands this check exists to catch:
+# measured against the pinned guard, 20 of the 23 fragments are DENIED, and 16 of
+# those carry a deny reason no corpus row acknowledges. Provenance is what lets the
+# exclusion keep serving prose without also excusing a prescription.
+extract_inline() {
+  local f=$1
+  grep -ohE '`[^`]+`' "$f" 2>/dev/null | sed 's/^`//; s/`$//' \
+    | sed -E 's/^[[:space:]]*\$[[:space:]]+//' \
+    | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]("'"'"']*)[[:space:]]+)+//' \
+    | grep -E '^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])'
+}
+
+extract_fenced() {
   local f=$1
   {
-    grep -ohE '`[^`]+`' "$f" 2>/dev/null | sed 's/^`//; s/`$//' \
-      | sed -E 's/^[[:space:]]*\$[[:space:]]+//' \
-      | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]("'"'"']*)[[:space:]]+)+//' \
-      | grep -E '^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])'
     # Fenced blocks carry MULTI-LINE commands: a trailing backslash, or a quoted
     # operand (a GraphQL query) that runs across lines. Splitting on newlines
     # hands the guard half a command, which it rightly refuses as unbalanced
@@ -222,7 +235,20 @@ extract_commands() {
       }
       END { if (buf != "") print (subst ? cut_subst(buf) : buf) }
     ' "$f" 2>/dev/null
-  } | normalize | sort -u
+  }
+}
+
+# Emits `<origin> <command>`, origin being `inline` or `fenced`. Each stream is
+# normalised BEFORE the tag is prefixed: normalize collapses whitespace runs, so
+# tagging first would let it eat the separator and make the two fields
+# unsplittable. One command appearing in both streams yields both rows, which is
+# intended -- the fenced one still gets classified.
+extract_commands() {
+  local f=$1
+  {
+    extract_inline "$f" | normalize | sed 's/^/inline /'
+    extract_fenced "$f" | normalize | sed 's/^/fenced /'
+  } | sort -u
 }
 
 raw_corpus() {
@@ -254,13 +280,19 @@ corpus_deny_reasons() {
 CORPUS_REASONS=""
 
 check_sources() {
-  local findings=0 checked=0 skipped=0 classified=0 cand reason
+  local findings=0 checked=0 skipped=0 classified=0 tagged origin cand reason
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     [ -r "$f" ] || { echo "  unreadable source: $f" >&2; return 2; }
-    while IFS= read -r cand; do
+    while IFS= read -r tagged; do
+      [ -n "$tagged" ] || continue
+      origin=${tagged%% *}
+      cand=${tagged#* }
       [ -n "$cand" ] || continue
-      if printf '%s\n' "$PROSE_FRAGMENTS" | grep -qxF -- "$cand"; then
+      # Prose exclusion applies to INLINE candidates only. A fenced block is a
+      # prescription, so it always reaches the guard however it is spelled.
+      if [ "$origin" = inline ] \
+         && printf '%s\n' "$PROSE_FRAGMENTS" | grep -qxF -- "$cand"; then
         skipped=$((skipped+1)); continue
       fi
       checked=$((checked+1))
@@ -292,6 +324,14 @@ trap 'rm -rf "$fixdir"' EXIT
 
 printf '%s\n' 'Prose: run `gh api` then `gh pr view`, never `gh pr merge/create/comment/edit/review`.' \
   '' 'Also `git log/status` and `gh search prs --help` are families, not commands.' > "$fixdir/prose.md"
+# The SAME text as a fenced PRESCRIPTION must still be classified. `git worktree add`
+# is an exact PROSE_FRAGMENTS entry, so an exclusion applied without provenance skips
+# it and no decision is ever prompted -- fail-open on a mutating command. Chosen for
+# the same two reasons bad.md's is: the refusal is NOVEL (no corpus row acknowledges
+# `git worktree is not a read verb`) and INVARIANT, because creating a working tree
+# can never become a read operation, so this fixture cannot age out.
+printf '%s\n' 'The surveyor must now also run:' '' '```sh' \
+  'git worktree add' '```' > "$fixdir/prose-fenced.md"
 # The refusal must be NOVEL (an already-acknowledged one like `gh pr merge` is
 # correctly reported as covered) and INVARIANT. An evolving read FLAG is the
 # wrong choice: `--involves` is an ordinary search filter that will plausibly join
@@ -327,7 +367,7 @@ printf '%s\n' 'On a rejected credential run:' '' '```sh' \
 # so once that reason is classified the command is correctly "covered". What the
 # grammar buys is that the command reaches the guard AT ALL -- without it the span
 # is dropped before classification and no decision is ever prompted.
-env_extracted=$(extract_commands "$fixdir/env.md" | grep -c '^env ')
+env_extracted=$(extract_commands "$fixdir/env.md" | grep -c '^fenced env ')
 [ "${env_extracted:-0}" -ge 1 ] \
   || die_unknown "self-test: an env-prefixed command was never extracted, so it cannot reach the guard (fail-open)"
 
@@ -347,11 +387,11 @@ printf '%s\n' 'The board census runs:' '' '```sh' \
   '  --jq '"'"'.[]|select(.name=="Status")|.id'"'"') \' \
   '  || { echo "board_coverage=unknown:field-lookup-failed"; exit 0; }' '```' > "$fixdir/subst.md"
 
-assign_extracted=$(extract_commands "$fixdir/assign.md" | grep -c '^gh api ')
+assign_extracted=$(extract_commands "$fixdir/assign.md" | grep -c '^fenced gh api ')
 [ "${assign_extracted:-0}" -ge 1 ] \
   || die_unknown "self-test: an assignment-prefixed command was never extracted, so it cannot reach the guard (fail-open)"
 
-subst_extracted=$(extract_commands "$fixdir/subst.md" | grep -c '^gh api ')
+subst_extracted=$(extract_commands "$fixdir/subst.md" | grep -c '^fenced gh api ')
 [ "${subst_extracted:-0}" -ge 1 ] \
   || die_unknown "self-test: a command-substitution command was never extracted, so it cannot reach the guard (fail-open)"
 
@@ -368,6 +408,12 @@ if ! check_sources "$fixdir/dquote.md" >/dev/null 2>&1; then
 fi
 if ! check_sources "$fixdir/prose.md" >/dev/null 2>&1; then
   die_unknown "self-test: prose fragments were flagged as unclassified commands"
+fi
+if check_sources "$fixdir/prose-fenced.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a prose-fragment command PRESCRIBED in a fenced block was skipped
+  as prose instead of classified (fail-open). If a corpus row now acknowledges
+  'git worktree is not a read verb', this fixture is stale rather than the check broken --
+  pick another denied PROSE_FRAGMENTS entry whose refusal no corpus row covers."
 fi
 if check_sources "$fixdir/bad.md" >/dev/null 2>&1; then
   die_unknown "self-test: an unclassified guard-denied command was NOT detected"
