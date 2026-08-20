@@ -112,4 +112,14 @@ for legacy in 'Daily AI Engineer' 'Daily AI Assistant'; do
 done
 ok
 
+# 7. THE OPERATIVE INSTRUCTION. Assertions 1-2 make the actor word DEFINED; this one makes it
+#    EMITTED. Without it a run follows *GitHub artifact conventions* verbatim, emits the engineer
+#    form from either role, and the whole change becomes documentation that alters no behaviour —
+#    the "would the fix have prevented it?" test, applied to this change itself.
+operative="$(extract '- Begin every PR/issue/comment with the disclosure line' '"Begin" is the whole rule')"
+case "${operative}" in
+  *"${improver_form}"*) ok ;;
+  *) fail "the authoring rule in *GitHub artifact conventions* does not name '${improver_form}'" ;;
+esac
+
 echo "improver-role-disclosure contract: OK — ${passed} assertions passed"
