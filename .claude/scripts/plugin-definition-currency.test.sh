@@ -1138,6 +1138,40 @@ git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
 [ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
   || fail "the submodule replace case left the shared pin fixture dirty"
 
+# ── 7v. A replace ref must not be able to REDEFINE the pinned tree ────────────
+# 7q proves the PIN ITSELF is resolved without replacement objects, and 7t refuses a verdict for
+# Cursor, whose loader reads through refs/replace. Neither covers the read every OTHER runtime
+# makes: the pinned TREE is read with `cat-file`/`ls-tree`, which also resolve THROUGH refs/replace.
+# A replacement therefore rewrites the REVIEWED side of the comparison itself, so an install
+# carrying the unreviewed replacement bytes matches it and reports CURRENT. That is a fail-open on
+# the one value everything downstream trusts, and it is reachable from the machine-local runtimes.
+printf 'UNREVIEWED replacement definition\n' > "${p}/agents/agent-improver.agent.md"
+git -C "${pin_repo}" add plugins/agentic-engineering/agents/agent-improver.agent.md
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm tree-replacement-payload
+tree_replacement="$(git -C "${pin_repo}" rev-parse HEAD)"
+git -C "${pin_repo}" replace "${gitlink}" "${tree_replacement}"
+repl_install="${tmp}/install-replacement"
+make_install "${repl_install}"
+add_runtime_asset_fixture "${repl_install}"
+printf 'UNREVIEWED replacement definition\n' > "${repl_install}/agents/agent-improver.agent.md"
+set +e
+out="$(run "${repl_install}")"; rc=$?
+set -e
+[ "${rc}" -ne 0 ] \
+  || fail "an install matching REPLACEMENT bytes reported CURRENT — the pinned tree was read through refs/replace: ${out}"
+case "${out}" in
+  *DRIFT*agent-improver*)
+    ok "a replace ref cannot redefine the pinned tree — the install is compared against the reviewed bytes" ;;
+  *) fail "expected DRIFT naming agent-improver against the reviewed pin, got rc=${rc}: ${out}" ;;
+esac
+git -C "${pin_repo}" replace -d "${gitlink}"
+# Put the shared pin fixture back: this case advanced HEAD and left unreviewed definition bytes.
+git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
+[ "$(git -C "${pin_repo}" rev-parse HEAD)" = "${gitlink}" ] \
+  || fail "the pinned-tree replace case did not restore the shared pin fixture HEAD"
+[ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
+  || fail "the pinned-tree replace case left the shared pin fixture dirty"
+
 # ── 7u. The Codex reinstall must be gated on the pin ──────────────────────────
 # `codex plugin add` installs the marketplace snapshot's LATEST. Prescribing a bare
 # `marketplace upgrade` + `remove && add` therefore tells an operator to install whatever the tip is,

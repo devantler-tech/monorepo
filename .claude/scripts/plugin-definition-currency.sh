@@ -276,8 +276,13 @@ runtime_assets="$(jq -er '
 prefix="plugins/$PLUGIN_NAME/"
 tree=""
 sub="$REPO_ROOT/$SUBMODULE_PATH"
-if [ -e "$sub" ] && git -C "$sub" cat-file -e "$GITLINK^{commit}" 2>/dev/null; then
-  tree="$(git -C "$sub" ls-tree -r "$GITLINK" -- "$prefix" 2>/dev/null \
+# --no-replace-objects on BOTH reads. `cat-file` and `ls-tree` resolve THROUGH refs/replace, so a
+# replacement for the gitlink rewrites the REVIEWED side of the comparison itself: an install
+# carrying the replacement bytes then matches and reports CURRENT. The Cursor branch above refuses a
+# verdict for the same hazard, but it exits before this point, so every other runtime reaches these
+# reads unprotected. Same rule the pin resolution above already follows.
+if [ -e "$sub" ] && git -C "$sub" --no-replace-objects cat-file -e "$GITLINK^{commit}" 2>/dev/null; then
+  tree="$(git -C "$sub" --no-replace-objects ls-tree -r "$GITLINK" -- "$prefix" 2>/dev/null \
             | awk -F'\t' '{split($1, m, " "); if (m[2]=="blob") print m[3] "\t" m[1] "\t" $2}')" \
     || die "could not read the pinned tree $GITLINK from $sub${RECOVERY}"
 else
