@@ -1461,8 +1461,11 @@ out="$("${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+ignored_scan_command="$(printf '%s\n%s' \
+  '         git -C <snapshot> ls-files --others --ignored --exclude-standard -- \' \
+  '           <prefix>/agents <prefix>/skills <runtime-asset>        # must print NOTHING')"
 case "${out}" in
-  *"ls-files --others --ignored --exclude-standard"*"<prefix>/agents"*"<prefix>/skills"*"<runtime-asset>"*)
+  *"${ignored_scan_command}"*)
     ok "the Codex reinstall rejects ignored files across every loaded surface" ;;
   *) fail "Codex remediation can reinstall an ignored loaded file: ${out}" ;;
 esac

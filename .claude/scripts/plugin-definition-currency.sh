@@ -459,7 +459,7 @@ if [ "$RUNTIME" = codex ]; then
   say "     all four must pass before any install:"
   say "         git -C <snapshot> --no-replace-objects rev-parse HEAD   # must equal $GITLINK"
   say "         git -C <snapshot> status --porcelain                    # must print NOTHING"
-  say "         git -C <snapshot> ls-files --others --ignored --exclude-standard --"
+  say "         git -C <snapshot> ls-files --others --ignored --exclude-standard -- \\"
   say "           <prefix>/agents <prefix>/skills <runtime-asset>        # must print NOTHING"
   say "         # repeat <runtime-asset> for every declared requiredRuntimeAsset; ignored untracked"
   say "         # files are hidden from status but the marketplace installer can still copy them"
