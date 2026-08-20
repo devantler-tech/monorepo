@@ -2250,7 +2250,8 @@ against Conventional Commits in this final read**, not only when you set it.
 
 🔴 **The preflight field list CANNOT see review-thread resolution — and an unresolved thread is a
 REQUIRED merge rule on every repository here.** `required_review_thread_resolution: true` is set on
-**all eleven** portfolio repositories checked (2026-08-20), via one of the `pull_request` rules on
+**all nineteen** portfolio repositories (2026-08-20 — every repo in the Portfolio map, no
+exception), via one of the `pull_request` rules on
 `main`, so an unresolved thread blocks the merge exactly like a failing required check. Yet
 `mergeStateStatus` reports it only as a bare `BLOCKED`, and **no `gh pr view --json` field carries it
 at all** — so the seven-field read above is structurally blind to it.
