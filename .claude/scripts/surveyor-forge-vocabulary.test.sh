@@ -99,9 +99,9 @@ deny	git status --porcelain
 deny	git push origin HEAD
 deny	git ls-remote origin refs/heads/main
 deny	gh project item-add 5 --owner devantler-tech --url https://github.com/x/y/issues/1
-gap	gh api -X GET "repos/devantler-tech/monorepo/activity" -f per_page=100 -f "ref=refs/heads/main"
-gap	gh api --method GET "repos/devantler-tech/monorepo/activity" -f per_page=100
-gap	gh api -X GET search/issues -f q=org:devantler-tech --paginate
+allow	gh api -X GET "repos/devantler-tech/monorepo/activity" -f per_page=100 -f "ref=refs/heads/main"
+allow	gh api --method GET "repos/devantler-tech/monorepo/activity" -f per_page=100
+allow	gh api -X GET search/issues -f q=org:devantler-tech --paginate
 CORPUS
 )
 
