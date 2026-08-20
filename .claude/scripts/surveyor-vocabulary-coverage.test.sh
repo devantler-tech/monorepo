@@ -178,7 +178,7 @@ extract_inline() {
   # extracted set is unchanged except for the multi-line span it recovers.
   awk '
     function bt(s,   n) { n = gsub(/`/, "`", s); return n }
-    /^[[:space:]]*```/ { if (buf != "") print buf; buf = ""; held = 0; next }
+    /^[[:space:]]*(```|~~~)/ { if (buf != "") print buf; buf = ""; held = 0; next }
     {
       buf = (buf == "" ? $0 : buf " " $0)
       if (bt(buf) % 2 == 1 && held < 10) { held++; next }
@@ -266,15 +266,74 @@ extract_fenced() {
         if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?`/)) return substr(s, RSTART + RLENGTH)
         return ""
       }
+      # A substitution may also OPEN on a line carrying no verb at all -- the shape
+      # the MANDATORY merge preflight is written in:
+      #
+      #   unresolved=$(
+      #     set -o pipefail
+      #     gh api graphql ... | jq -s ...
+      #   ) || { echo "thread read FAILED" >&2; exit 1; }
+      #
+      # Anchored on the verb, the buffer starts at the bare `gh api` line, so the
+      # guard is asked about the INNER read -- which it ALLOWS -- while the
+      # deployment runs the whole substitution, which it refuses (`dollar-paren
+      # command substitution is not a read`). Same fail-open the backtick spelling
+      # above closes, on the one read this repo makes mandatory before every merge.
+      #
+      # Only the `$(` spelling is tracked, because the closing test below is
+      # paren-depth: a multi-line BACKTICK substitution has no depth to model, so
+      # claiming it here would assert coverage this cannot deliver.
+      function opens_subst(s) {
+        return (s ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\([[:space:]]*$/)
+      }
+      # Depth of substitution still OPEN -- quote-aware for exactly the reason
+      # `unbalanced` is: a `(` inside a jq filter is a literal, so a bare paren
+      # count would never close. A buffer opening no paren scores 0, which is what
+      # leaves every other candidate precisely where it was.
+      function subst_open(s,   i, c, sq, dq, d) {
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          if (c == "\\" && !sq) { i++; continue }
+          else if (c == "'"'"'" && !dq) sq = !sq
+          else if (c == "\"" && !sq) dq = !dq
+          else if (!sq && !dq) {
+            if (c == "(") d++
+            else if (c == ")" && d > 0) d--
+          }
+        }
+        return (d > 0)
+      }
+      # A verb-less opener cannot be judged until the substitution CLOSES, so such a
+      # buffer is provisional: kept only if the joined text turns out to wrap a forge
+      # verb. Without this every `x=$(date)` would reach the guard and stand as a
+      # permanent false finding.
+      function has_forge(s) { return (s ~ /(^|[[:space:]]|[;&|(])(gh|git)[[:space:]]/) }
       function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
       function candidate(s) { return (opens(s) || opens(strip_assigns(s)) || opens(strip_subst(s))) }
-      /^[[:space:]]*```/ { inb = !inb; if (!inb && buf != "") { print buf; buf = "" } next }
+      function flush(   keep) {
+        keep = (!pend || has_forge(buf))
+        if (buf != "" && keep) print buf
+        buf = ""; pend = 0
+      }
+      # Fences are DELIMITER-AWARE. `~~~` is a valid Markdown fence, and a machine
+      # knowing only backticks never ENTERS such a block: the command inside is
+      # dropped before classification and its refusal never surfaces -- fail-open,
+      # with the per-source floor still passing on the other candidates. Closing
+      # only on the delimiter that opened the block is what keeps a `~~~` written
+      # inside a ```-block from ending it early.
+      /^[[:space:]]*(```|~~~)/ {
+        fd = ($0 ~ /^[[:space:]]*~~~/) ? "~" : "`"
+        if (!inb) { inb = 1; fence = fd }
+        else if (fd == fence) { inb = 0; fence = ""; flush() }
+        next
+      }
       !inb { next }
       {
         line = $0
         sub(/^[[:space:]]*\$[[:space:]]+/, "", line)
         if (buf == "") {
-          if (candidate(line)) buf = line
+          if (candidate(line)) { buf = line; pend = 0 }
+          else if (opens_subst(line)) { buf = line; pend = 1 }
           else next
         }
         else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
@@ -282,10 +341,12 @@ extract_fenced() {
         # and the operand it joins is often where the real verdict lives. Flushing there
         # hands the guard a command ending in `|`, which it rightly refuses as an empty
         # pipeline segment -- a split artifact reading as a real finding, the same
-        # failure the multi-line quoted operand above already avoids.
-        if (!unbalanced(buf) && buf !~ /\\[[:space:]]*$/ && buf !~ /(\||&&)[[:space:]]*$/) { print buf; buf = "" }
+        # failure the multi-line quoted operand above already avoids. An unclosed
+        # substitution is a continuation too, and the only one whose opening line
+        # carries no trailing marker at all.
+        if (!unbalanced(buf) && !subst_open(buf) && buf !~ /\\[[:space:]]*$/ && buf !~ /(\||&&)[[:space:]]*$/) flush()
       }
-      END { if (buf != "") print buf }
+      END { flush() }
     ' "$f" 2>/dev/null
   }
 }
@@ -470,6 +531,44 @@ bt_extracted=$(extract_commands "$fixdir/backtick.md" | grep -c '^fenced result=
   || die_unknown "self-test: a backtick command substitution did not reach the guard as prescribed (fail-open)"
 if check_sources "$fixdir/backtick.md" >/dev/null 2>&1; then
   die_unknown "self-test: a backtick substitution's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# A substitution that OPENS before the verb, which is how the MANDATORY merge
+# preflight is written. Anchored on the verb, extraction starts at the bare
+# `gh api` line and submits the INNER read -- ALLOWed -- while the deployment runs
+# the whole substitution, which is refused. Measured on the real sources, this is
+# not hypothetical: the preflight in `.claude/skills/portfolio-maintenance/SKILL.md`
+# is the one and only extraction this recogniser changes.
+printf '%s\n' 'The merge preflight runs:' '' '```sh' \
+  'unresolved=$(' \
+  '  set -o pipefail' \
+  '  gh api graphql --paginate -f owner=devantler-tech -f name=monorepo' \
+  ') || { echo "thread read FAILED" >&2; exit 1; }' '```' > "$fixdir/opensubst.md"
+os_extracted=$(extract_commands "$fixdir/opensubst.md" | grep -c '^fenced unresolved=\$( set -o pipefail gh api ')
+[ "${os_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a substitution opening before the verb did not reach the guard as prescribed (fail-open)"
+
+# ...and the provisional buffer it needs must not turn every assignment into a
+# candidate. A verb-less opener wrapping no forge command is discarded, or it
+# would reach the guard and stand as a permanent false finding.
+printf '%s\n' 'Timestamp it:' '' '```sh' \
+  'stamp=$(' '  date -u +%Y' ')' '```' > "$fixdir/opensubst-nonforge.md"
+nf_extracted=$(extract_commands "$fixdir/opensubst-nonforge.md" | grep -c .)
+[ "${nf_extracted:-0}" -eq 0 ] \
+  || die_unknown "self-test: a substitution wrapping no forge verb yielded $nf_extracted candidate(s), expected 0 (false finding)"
+
+# A TILDE-fenced block must be entered. `~~~` is valid Markdown, and a fence
+# machine knowing only backticks never enters one, so the command inside is
+# dropped before classification and its refusal never surfaces -- fail-open, with
+# the per-source floor still passing on the other candidates. Asserts extraction
+# AND detection, so it cannot pass by extracting something harmless.
+printf '%s\n' 'The surveyor runs:' '' '~~~sh' \
+  'gh release create v1 --repo devantler-tech/monorepo' '~~~' > "$fixdir/tilde.md"
+tl_extracted=$(extract_commands "$fixdir/tilde.md" | grep -c '^fenced gh release create ')
+[ "${tl_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a tilde-fenced command was never extracted, so it cannot reach the guard (fail-open)"
+if check_sources "$fixdir/tilde.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a tilde-fenced command's unclassified refusal was NOT detected (fail-open)"
 fi
 
 # A MULTI-LINE inline span must be seen. A per-line scan cannot match one, so the
