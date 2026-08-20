@@ -218,6 +218,11 @@ if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
             if (rest == "" || rest ~ /^[[:space:]]*#/) header = target
           }
           features = "[features]"
+          # Whitespace inside TOML table brackets is insignificant. Quoted literal segments were
+          # normalised above, so one structural match covers bare and quoted feature headers.
+          if (line ~ /^\[[[:space:]]*features[[:space:]]*\]([[:space:]]*#.*)?$/) {
+            header = features
+          }
           if (substr(header, 1, length(features)) == features) {
             rest = substr(header, length(features) + 1)
             if (rest == "" || rest ~ /^[[:space:]]*#/) header = features

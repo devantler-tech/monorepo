@@ -1321,6 +1321,26 @@ case "${out}" in
   *) fail "global Codex plugin disablement did not name the reason: ${out}" ;;
 esac
 
+# TOML permits whitespace inside table brackets. This is the same global feature table, not an
+# unknown section; missing it lets the later enabled plugin table manufacture CURRENT.
+cat > "${codex_home}/config.toml" <<'TOML'
+[ features ] # global gates
+plugins = false
+
+[plugins."agentic-engineering@devantler-plugins"]
+enabled = true
+TOML
+set +e
+out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] \
+  || fail "a spaced global feature table must stay UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"not enabled"*) ok "the config fallback honours whitespace in the global feature header" ;;
+  *) fail "spaced global feature header did not name the disabled reason: ${out}" ;;
+esac
+
 # TOML's dotted-key spelling is the same effective global gate. Codex itself documents
 # `features.<name>=false` for CLI overrides, so the static fallback must not treat this valid form as
 # an unrelated top-level key and then trust the stale enabled plugin table below it.
