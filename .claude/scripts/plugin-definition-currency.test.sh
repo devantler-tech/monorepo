@@ -661,6 +661,19 @@ case "${out}" in
   *) fail "Cursor install override was rejected without naming the reason: ${out}" ;;
 esac
 
+# These cases share the pinned repository with later checks. They must leave both the checkout and
+# the loader ref exactly as they found them, or a later assertion can inherit Cursor-case state and
+# pass or fail for the wrong reason.
+git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+[ "$(git -C "${pin_repo}" rev-parse HEAD)" = "${gitlink}" ] \
+  || fail "Cursor cases did not restore the shared pin fixture HEAD"
+[ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
+  || fail "Cursor cases left the shared pin fixture dirty"
+[ "$(git -C "${pin_repo}" rev-parse refs/remotes/origin/main)" = "${gitlink}" ] \
+  || fail "Cursor cases did not restore the shared loader ref"
+ok "Cursor cases restore the shared pin fixture before later checks"
+
 # ── 8. The remediation is NAMED in the failure output ─────────────────────────
 # The deployment's own "fail with the fix" rule: a guard that blocks without naming the resolving
 # action is a friction tax, and it trains the reader to route around it. It must also keep saying
