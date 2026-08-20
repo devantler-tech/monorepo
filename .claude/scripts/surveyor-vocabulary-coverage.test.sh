@@ -166,6 +166,15 @@ extract_inline() {
   # nothing else: measured, zero candidates lost across all three sources.
   # A fence marker is a hard reset -- ``` is itself an odd run and would otherwise
   # start swallowing the block.
+  #
+  # The residual, stated rather than hidden: an odd count cannot tell an OPENING
+  # backtick from a CLOSING one, because the state a line starts in is exactly what
+  # per-line scanning discards. So a stray or unmatched backtick joins the lines
+  # after it and can mis-pair a span there. It is bounded by the cap and re-syncs
+  # on the next flush -- unlike a whole-file join, where one stray backtick
+  # re-pairs the entire remainder -- and the per-source floors below would catch a
+  # material loss. Measured on all three sources today it costs nothing: the
+  # extracted set is unchanged except for the multi-line span it recovers.
   awk '
     function bt(s,   n) { n = gsub(/`/, "`", s); return n }
     /^[[:space:]]*```/ { if (buf != "") print buf; buf = ""; held = 0; next }
