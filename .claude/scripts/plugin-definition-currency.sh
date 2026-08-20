@@ -161,16 +161,21 @@ if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
   [ -r "$config" ] || die "cannot read the Codex runtime config: $config"
   # Enablement is an EFFECTIVE-STATE question, so ask the runtime first: `codex plugin list --json`
   # reports what Codex actually loaded. CODEX_HOME is passed explicitly so this reads the home under
-  # test and never the host's. The CLI only knows plugins it has INSTALLED from a marketplace
-  # snapshot, so a configured-but-not-installed id yields nothing and the config parse below decides.
+  # test and never the host's. A VALID response is authoritative in both directions — an empty
+  # `installed` array means the runtime did not load this plugin (its plugin feature can be off while
+  # the table and cache remain present), so it must NOT fall through to the static table, which would
+  # report CURRENT for a definition the runtime never executed.
   enabled=""
   if command -v codex >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     codex_json="$(CODEX_HOME="$CODEX_HOME_DIR" codex plugin list --json 2>/dev/null)" || codex_json=""
     if [ -n "$codex_json" ]; then
       enabled="$(printf '%s' "$codex_json" | jq -r --arg id "$PLUGIN_ID" '
-          [ .installed[]? | select(.pluginId == $id) | .enabled ]
-          | if length == 0 then empty elif any(. == true) then "true" else "false" end
+          if (.installed | type) != "array" then "unparseable"
+          else [ .installed[] | select(.pluginId == $id) | .enabled ]
+               | if length == 0 then "false" elif any(. == true) then "true" else "false" end
+          end
         ' 2>/dev/null)" || enabled=""
+      if [ "$enabled" = unparseable ]; then enabled=""; fi
     fi
   fi
   # Fallback: parse the serialized config. Deliberately tolerant — TOML permits whitespace around the
@@ -423,13 +428,15 @@ say "     $GITLINK and follow that, then report the drift in the run report."
 say "  2. Refresh through the runtime's own control plane. Never edit the plugin cache: it is"
 say "     read-only evidence."
 if [ "$RUNTIME" = codex ]; then
-  say "     For Codex: \`codex plugin add\` installs the marketplace snapshot's LATEST, which is NOT"
-  say "     necessarily this pin — so gate the reinstall exactly as the Claude refresh path is gated."
-  say "     ONLY when the marketplace snapshot is at $GITLINK:"
-  say "       codex plugin marketplace upgrade ${PLUGIN_ID#*@}"
-  say "       codex plugin remove $PLUGIN_ID && codex plugin add $PLUGIN_ID"
-  say "     If the snapshot is AHEAD of the pin, do not reinstall: that installs a revision nobody"
-  say "     here has reviewed. Bump the consumer gitlink through the reviewed rollout instead."
+  say "     For Codex: \`codex plugin add\` installs the marketplace snapshot's LATEST, so the only"
+  say "     safe sequence is one that never advances the snapshot. Check the snapshot's revision"
+  say "     against $GITLINK first:"
+  say "       * snapshot AT the pin  -> reinstall WITHOUT upgrading:"
+  say "           codex plugin remove $PLUGIN_ID && codex plugin add $PLUGIN_ID"
+  say "       * snapshot NOT at the pin -> do NOT reinstall, and do NOT run"
+  say "         'codex plugin marketplace upgrade': it moves the snapshot to the upstream tip, so a"
+  say "         following 'add' installs a revision nobody here has reviewed. Reconcile the consumer"
+  say "         gitlink with the revision you intend to run through the reviewed rollout instead."
 else
   say "     For Claude: the /plugin marketplace update flow."
 fi

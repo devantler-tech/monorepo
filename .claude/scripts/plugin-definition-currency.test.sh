@@ -528,6 +528,30 @@ esac
 # A vacuous assertion is worse than none: it manufactures confidence in an untested path. Left absent
 # and explained rather than left green and meaningless.
 
+# A `codex` shim keeps this suite hermetic. The lane asks the runtime for effective state, so a real
+# `codex` on PATH would answer about the HOST rather than this fixture — and its answer for a fixture
+# home is "no installed plugins", which is a legitimate *disabled* verdict and would make every case
+# below fail for an unrelated reason. CODEX_SHIM_MODE selects what the runtime reports.
+codex_shim="${tmp}/codex-shim"
+mkdir -p "${codex_shim}"
+cat > "${codex_shim}/codex" <<'SHIMBIN'
+#!/bin/sh
+# only implements: plugin list --json
+case "${CODEX_SHIM_MODE:-enabled}" in
+  enabled)
+    printf '{"installed":[{"pluginId":"agentic-engineering@devantler-plugins","enabled":true}],"available":[]}\n' ;;
+  disabled)
+    printf '{"installed":[{"pluginId":"agentic-engineering@devantler-plugins","enabled":false}],"available":[]}\n' ;;
+  feature-off)
+    printf '{"installed":[],"available":[]}\n' ;;
+  unavailable)
+    exit 1 ;;
+esac
+SHIMBIN
+chmod +x "${codex_shim}/codex"
+PATH="${codex_shim}:${PATH}"
+export PATH
+
 # ── 7m. CODEX resolves the copy its own runtime loaded ────────────────────────
 # Codex has no Claude-style installed_plugins.json. Its enabled plugin is served from the versioned
 # cache under CODEX_HOME, so the lane must inspect that cache rather than silently falling back to
@@ -584,7 +608,7 @@ rm -rf "${codex_extra}"
 sed 's/enabled = true/enabled = false/' "${codex_home}/config.toml" > "${codex_home}/config.disabled"
 mv "${codex_home}/config.disabled" "${codex_home}/config.toml"
 set +e
-out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+out="$(CODEX_SHIM_MODE=disabled "${script}" --runtime codex --codex-home "${codex_home}" \
                   --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
 set -e
 [ "${rc}" -eq 2 ] || fail "a disabled Codex plugin must exit 2, got ${rc}: ${out}"
@@ -1069,13 +1093,69 @@ out="$("${script}" --runtime codex --codex-home "${codex_home}" \
 set -e
 [ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
 case "${out}" in
-  *"ONLY when the marketplace snapshot is at ${gitlink}"*)
+  *"Check the snapshot's revision"*"${gitlink}"*)
     ok "the Codex reinstall is gated on the pinned revision" ;;
   *) fail "Codex remediation prescribes a reinstall without a pin gate: ${out}" ;;
 esac
 case "${out}" in
-  *"AHEAD of the pin"*) ok "the Codex remediation says what to do when the snapshot is ahead" ;;
+  *"snapshot NOT at the pin"*) ok "the Codex remediation says what to do when the snapshot is not at the pin" ;;
   *) fail "Codex remediation does not cover a snapshot ahead of the pin: ${out}" ;;
 esac
 cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7v. An empty effective result means NOT LOADED, never "ask the static table" ──
+# Codex's plugin feature can be off while this plugin's table entry and cached copy both remain
+# present. `codex plugin list --json` then correctly returns an empty `installed` array. Treating
+# that as "no answer" and falling back to the config would report CURRENT for a definition the
+# runtime never loaded — the config still says enabled = true.
+set +e
+out="$(CODEX_SHIM_MODE=feature-off "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "an unloaded Codex plugin must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"not enabled"*) ok "an empty effective result is disabled, not a fallback to the static table" ;;
+  *) fail "unloaded Codex plugin did not name the reason: ${out}" ;;
+esac
+
+# The fallback still exists for the case it is actually for: the CLI could not answer at all.
+set +e
+out="$(CODEX_SHIM_MODE=unavailable "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 0 ] || fail "an unavailable CLI must fall back to the config (exit 0), got ${rc}: ${out}"
+case "${out}" in
+  *CURRENT*) ok "the config fallback is reserved for a CLI that could not answer" ;;
+  *) fail "CLI-unavailable fallback did not report CURRENT: ${out}" ;;
+esac
+
+# ── 7w. The Codex remediation must never advance the snapshot before installing ──
+# `marketplace upgrade` moves the snapshot to the upstream tip, so a precondition checked BEFORE it
+# is invalidated by it: a following `add` installs a revision nobody reviewed.
+printf 'stale under snapshot-advance check\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"do NOT run"*"marketplace upgrade"*)
+    ok "the Codex remediation forbids advancing the snapshot before installing" ;;
+  *) fail "Codex remediation still prescribes upgrade-then-install: ${out}" ;;
+esac
+case "${out}" in
+  *"reinstall WITHOUT upgrading"*)
+    ok "the at-the-pin path reinstalls without advancing the snapshot" ;;
+  *) fail "Codex remediation has no snapshot-preserving path: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7x. The test script itself must stay executable ───────────────────────────
+# It carries a shebang and is invoked directly by local callers; CI happening to run it through
+# `bash` masks a lost mode bit, so assert the bit rather than relying on the runner.
+if [ -x "${script%/*}/plugin-definition-currency.test.sh" ]; then
+  ok "the test script keeps its executable bit"
+else
+  fail "the test script lost its executable bit (mode must stay 100755)"
+fi
 echo "plugin-definition-currency: ${pass_count} assertions passed"
