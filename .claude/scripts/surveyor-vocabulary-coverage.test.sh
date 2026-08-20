@@ -101,6 +101,7 @@ gh pr/issue list
 gh pr create
 gh pr merge
 gh pr view
+gh pr view --json
 gh run list --json
 gh search
 gh search prs
@@ -269,7 +270,12 @@ extract_fenced() {
           else next
         }
         else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
-        if (!unbalanced(buf) && buf !~ /\\[[:space:]]*$/) { print buf; buf = "" }
+        # A trailing pipe or boolean is a shell CONTINUATION exactly as a backslash is,
+        # and the operand it joins is often where the real verdict lives. Flushing there
+        # hands the guard a command ending in `|`, which it rightly refuses as an empty
+        # pipeline segment -- a split artifact reading as a real finding, the same
+        # failure the multi-line quoted operand above already avoids.
+        if (!unbalanced(buf) && buf !~ /\\[[:space:]]*$/ && buf !~ /(\||&&)[[:space:]]*$/) { print buf; buf = "" }
       }
       END { if (buf != "") print buf }
     ' "$f" 2>/dev/null
@@ -454,6 +460,25 @@ ml_extracted=$(extract_commands "$fixdir/multiline.md" | grep -c '^inline gh rel
 if check_sources "$fixdir/multiline.md" >/dev/null 2>&1; then
   die_unknown "self-test: a multi-line inline span's unclassified refusal was NOT detected"
 fi
+
+# A command split across a trailing PIPE must be joined before classification.
+# This is the fail-CLOSED direction and it is noisy rather than dangerous, but it
+# is not hypothetical: the merge preflight's own `gh api graphql … | jq -s …` read
+# is written this way, and split at the pipe the guard rightly refuses the first
+# half as an `empty pipeline segment`. Joined, the complete read is ALLOWed -- so
+# the split turned a mandated, permitted read into a standing false finding.
+# The fixture is chosen so the two halves DISAGREE: the whole is allowed, the
+# first half alone is denied, so the assertion cannot pass by accident.
+printf '%s\n' 'The preflight runs:' '' '```sh' \
+  'gh pr list --repo devantler-tech/monorepo --state open --json number |' \
+  '  jq -r '"'"'.[].number'"'"'' '```' > "$fixdir/pipe.md"
+pipe_candidates=$(extract_commands "$fixdir/pipe.md" | grep -c .)
+[ "${pipe_candidates:-0}" -eq 1 ] \
+  || die_unknown "self-test: a pipe-continued command yielded $pipe_candidates candidate(s), expected 1 joined"
+if ! check_sources "$fixdir/pipe.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a command split at a trailing pipe was reported as a finding"
+fi
+
 if check_sources "$fixdir/prompt.md" >/dev/null 2>&1; then
   die_unknown "self-test: a prompt-prefixed command was skipped instead of checked (fail-open)"
 fi
