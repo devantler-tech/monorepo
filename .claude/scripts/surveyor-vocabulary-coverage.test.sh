@@ -415,7 +415,11 @@ extract_fenced() {
         flen = 0
         while (substr(fline, flen + 1, 1) == fd) flen++
         if (!inb) { inb = 1; fence = fd; fencelen = flen }
-        else if (fd == fence && flen >= fencelen) { inb = 0; fence = ""; fencelen = 0; flush() }
+        # A closer may carry only spaces or tabs after its run. `` ```example `` inside a
+        # block is CONTENT: checking the delimiter and its length alone ends the block
+        # there, and `!inb { next }` then drops every later line, so a prescription after
+        # it never reaches the guard -- fail-open, exactly as the two cases above.
+        else if (fd == fence && flen >= fencelen && substr(fline, flen + 1) ~ /^[[:blank:]]*$/) { inb = 0; fence = ""; fencelen = 0; flush() }
         next
       }
       !inb { next }
@@ -660,6 +664,22 @@ tl_extracted=$(extract_commands "$fixdir/tilde.md" | grep -c '^fenced gh release
   || die_unknown "self-test: a tilde-fenced command was never extracted, so it cannot reach the guard (fail-open)"
 if check_sources "$fixdir/tilde.md" >/dev/null 2>&1; then
   die_unknown "self-test: a tilde-fenced command's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# A CLOSING fence may carry only spaces or tabs after its delimiter run. `` ```example ``
+# inside a block is CONTENT, not a closer -- but a parser checking only the delimiter and
+# its LENGTH ends the block there, and `!inb { next }` then drops every later line. A
+# prescription after that point never reaches the guard -- fail-open, with the per-source
+# floor still passing on the other candidates, which is the same silent shape the tilde and
+# length cases above carry. Asserts extraction AND detection, so it cannot pass by
+# extracting something harmless.
+printf '%s\n' 'The sweep runs:' '' '```sh' '```example' \
+  'gh release create v2 --repo devantler-tech/monorepo' '```' > "$fixdir/fencesuffix.md"
+fs_extracted=$(extract_commands "$fixdir/fencesuffix.md" | grep -c '^fenced gh release create v2 ')
+[ "${fs_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a command after an invalid closing-fence suffix was never extracted, so it cannot reach the guard (fail-open)"
+if check_sources "$fixdir/fencesuffix.md" >/dev/null 2>&1; then
+  die_unknown "self-test: an invalid-closing-fence-suffix command's unclassified refusal was NOT detected (fail-open)"
 fi
 
 # A MULTI-BACKTICK inline span must be parsed by its own delimiter length. A span
