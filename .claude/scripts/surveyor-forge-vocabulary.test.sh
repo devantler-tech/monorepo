@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# Pins THIS deployment's portfolio-surveyor read vocabulary against the plugin's
-# read-only forge guard, so enabling the guard can never silently remove a
-# mandated survey dimension.
+# Pins the corpus of survey commands below against the plugin's read-only forge
+# guard, so a guard revision cannot silently start refusing one of them.
+#
+# SCOPE, precisely: this pins CORPUS -> GUARD. It does NOT pin SOURCES -> CORPUS.
+# The corpus is hand-maintained, so a mandated read added to the surveyor
+# definition or its run loop is not classified here merely because those files
+# are watched: the job runs, re-checks this unchanged list, and stays green. The
+# path filter decides WHEN this runs; it cannot decide WHAT it knows about.
+# Closing that second half needs a source-to-corpus coverage check or a
+# machine-readable command inventory -- monorepo#2936. Until it lands, adding a
+# survey command means adding its row here by hand.
 #
 # Why this exists. `plugins/agentic-engineering/README.md` makes the wiring the
 # consumer's step and says plainly: "run your own deployment's survey vocabulary
