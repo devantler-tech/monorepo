@@ -2261,7 +2261,9 @@ the post-merge `merged` field causes, in the one place the merge gate cannot aff
 it over GraphQL, as its own call:
 
 ```sh
-gh api graphql --paginate -f owner=devantler-tech -f name=<repo> -F number=<n> -f query='
+unresolved=$(
+  set -o pipefail   # WITHOUT this a failed read prints the ALL-CLEAR value: `false | jq -s …` emits 0, exit 0
+  gh api graphql --paginate -f owner=devantler-tech -f name=<repo> -F number=<n> -f query='
 query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$number){
@@ -2269,7 +2271,8 @@ query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
         nodes{isResolved}
         pageInfo{hasNextPage endCursor}
       }}}}' |
-  jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
+    jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
+) || { echo "thread read FAILED — UNKNOWN, never 0" >&2; exit 1; }
 ```
 
 **That must read `0` immediately before the merge — not once, earlier, from the survey.** The survey
@@ -2278,6 +2281,13 @@ fresh read exists precisely for state that moves after that snapshot — the sam
 re-validated above. Every review lane re-reviews on each push and can post at any moment: on
 monorepo#2927 the blocking review landed **93 minutes after** the PR was promoted. So a survey-time
 zero is not evidence at merge time.
+
+🔴 **A FAILED read must never satisfy this gate — that is why the command captures and checks instead
+of piping straight to `jq`.** Without `pipefail`, `gh api … | jq -s …` on an auth, network, or API
+failure leaves an empty stream, `jq -s` evaluates it as `[]`, prints **`0`**, and exits **`0`** —
+reproduced directly (`false | jq -s '[.[]]|length'` → `0`, rc `0`). The all-clear value and the
+broken-read value are the same character, so the gate would pass hardest exactly when it can see least.
+Treat a non-zero exit as **UNKNOWN, never as zero**, and merge only on a `0` a successful read produced.
 
 🔴 **`--paginate` and the `pageInfo` cursor are REQUIRED, not tidiness — a first-page-only read
 silently under-counts.** `reviewThreads(first:100)` returns at most one page, so a long-lived PR whose

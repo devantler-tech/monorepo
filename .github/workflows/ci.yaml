@@ -366,6 +366,10 @@ jobs:
               - '.claude/**/*.md'
               - '.claude/**/*.json'
               - '.claude/scripts/merge-preflight-thread-gate.test.sh'
+              # the PINNED plugin definitions are scanned too, so a gitlink advance that
+              # reintroduces a thread field must run this guard rather than sail past it
+              - 'libraries/agent-plugins'
+              - '.gitmodules'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
@@ -1252,6 +1256,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The negative control scans the PINNED plugin definitions as well, so that one submodule
+      # must be present — without it the test fails closed rather than skipping, because `find` on a
+      # missing directory prints nothing and the added surfaces would be a silent no-op. Only this
+      # submodule is initialised (not `submodules: true`, which would also try the private ones), over
+      # HTTPS because .gitmodules uses SSH and no deploy key exists in CI. The rewrite is
+      # command-scoped and carries no credential: agent-plugins is public and this is an anonymous
+      # read. NOT shallow — `--depth 1` resolves the pin only while it equals the branch tip, so every
+      # upstream merge past the pin would turn an unrelated PR red.
+      - name: Initialise the agent-plugins submodule
+        run: |
+          git -c 'url.https://github.com/.insteadOf=git@github.com:' \
+            submodule update --init libraries/agent-plugins
       - name: Verify the merge-preflight thread gate
         run: bash .claude/scripts/merge-preflight-thread-gate.test.sh
 

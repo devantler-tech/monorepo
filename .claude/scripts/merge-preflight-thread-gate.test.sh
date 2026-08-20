@@ -94,6 +94,13 @@ assert_prose 'pageInfo{hasNextPage endCursor}' \
   "Merge policy prescribes a thread read without the pageInfo cursor — a first-page-only count"
 assert_prose 'gh api graphql --paginate' \
   "Merge policy prescribes a thread read that does not walk every page"
+# FAIL-CLOSED is part of the vocabulary too. Without `pipefail` the prescribed pipeline prints the
+# ALL-CLEAR value on a broken read: `false | jq -s '[.[]]|length'` emits 0 and exits 0 (reproduced), so
+# an auth/network/API failure would satisfy the gate hardest exactly when it can see least.
+assert_prose 'set -o pipefail' \
+  "Merge policy prescribes a thread read whose pipeline can print 0 from a FAILED read"
+assert_prose 'UNKNOWN, never as zero' \
+  "Merge policy does not say a failed thread read is UNKNOWN rather than zero"
 # The invalid improvisation is named explicitly, exactly as `merged` is for the post-merge read.
 assert_prose '`reviewThreads` is NOT a valid `gh pr view --json` field' \
   "Merge policy does not state that reviewThreads is not a gh pr view --json field"
@@ -124,7 +131,11 @@ normalise_and_extract() {           # $1 = file; emits one `--json <fields>` per
   # ONE canonicalisation, not a rule per formatting. Code delimiters are NOT flattened: a backtick or
   # quote must TERMINATE a field list, or Markdown prose following an inline command joins across a
   # comma into a false positive. A comma is joined to what follows ONLY across a line break — that is
-  # the one place a real field list is ever split.
+  # the one place a real field list is ever split. Whitespace AROUND COMMAS is collapsed last: the
+  # extractor ends at any character outside `[A-Za-z,]`, so `--json "number, reviewThreads"` would
+  # otherwise yield `--json number,` and the thread field would escape the control entirely. Collapsing
+  # after the delimiter strip keeps the quote/backtick terminator intact, so prose that merely follows
+  # an inline command across a comma still cannot join into a false positive.
   decode_surface "$1" \
     | sed -E -e 's/\\[nrt]/ /g' -e 's/\\/ /g' \
     | awk '{
@@ -136,6 +147,7 @@ normalise_and_extract() {           # $1 = file; emits one `--json <fields>` per
     | sed -E -e 's/…/,/g' -e 's/\.\.\./,/g' \
              -e 's/[[:space:]]+/ /g' \
              -e 's/--json[[:space:]]*[=,]*[[:space:]]*[`"'"'"']?[[:space:]]*/--json /g' \
+             -e 's/[[:space:]]*,[[:space:]]*/,/g' \
     | grep -o -- '--json [A-Za-z,]*' | sort -u
 }
 
@@ -169,6 +181,8 @@ quoted: gh pr view 1 --json "title,reviewThreads"
 wrapped: gh pr view 1 --json headRefOid,
   reviewThreads
 elided: gh pr view 1 --json …,isResolved
+spaced-after: gh pr view 1 --json "author, reviewThreads"
+spaced-before: gh pr view 1 --json "mergedAt ,isResolved"
 FIXTURE
 
 cat > "${self_test_dir}/good.md" <<'FIXTURE'
@@ -179,14 +193,28 @@ graphql is not a --json list: reviewThreads(first:100){nodes{isResolved}}
 FIXTURE
 
 bad_found="$(bad_lists_in "${self_test_dir}/bad.md" | grep -c . || true)"
-[ "${bad_found}" -eq 5 ] ||
-  fail "extractor self-test: caught ${bad_found}/5 planted bad forms — the control would scan vacuously"
+[ "${bad_found}" -eq 7 ] ||
+  fail "extractor self-test: caught ${bad_found}/7 planted bad forms — the control would scan vacuously"
 
 good_found="$(bad_lists_in "${self_test_dir}/good.md" | grep -c . || true)"
 [ "${good_found}" -eq 0 ] ||
   fail "extractor self-test: flagged ${good_found} VALID form(s) — the control would condemn correct content"
 
 # ── 5b. scan the real definition surfaces ───────────────────────────────────────────────────────────
+#
+# The PINNED plugin definitions are consumed definition surfaces too — AGENTS.md classifies the
+# plugin-authored agent files as version-controlled definition surfaces, and every run loads its role
+# from them. Scanning only `AGENTS.md` and `.claude` leaves a gitlink advance free to reintroduce the
+# exact blind spot this guard exists to close, with the guard still green.
+#
+# FAIL, never skip, when they are absent. `find` on a missing directory prints nothing and exits
+# quietly, so an unpopulated submodule would make this addition a silent no-op — the vacuity the whole
+# file is written against. The message names the fix, so the failure is actionable rather than a wall.
+plugin_defs="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering"
+[ -d "${plugin_defs}" ] && [ -n "$(find "${plugin_defs}" -type f -name '*.md' 2>/dev/null | head -1)" ] ||
+  fail "pinned plugin definitions are absent at ${plugin_defs}, so they cannot be scanned and an OK here would be vacuous
+  populate them:  git -c 'url.https://github.com/.insteadOf=git@github.com:' submodule update --init libraries/agent-plugins"
+
 offenders=""
 scanned=0
 while IFS= read -r surface; do
@@ -208,6 +236,7 @@ done < <(
   {
     printf '%s\n' "${constitution}"
     find "${repo_root}/.claude" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null
+    find "${plugin_defs}" -type f \( -name '*.md' -o -name '*.json' \) 2>/dev/null
   } | sort -u
 )
 
@@ -220,4 +249,56 @@ if [ -n "${offenders}" ]; then
   exit 1
 fi
 
-echo "merge-preflight thread gate: OK — 8 prose properties held; negative control scanned ${scanned} surfaces."
+ASSERTED=$(grep -c '^assert_prose ' "${BASH_SOURCE[0]}")
+echo "merge-preflight thread gate: OK — ${ASSERTED} prose properties held; negative control scanned ${scanned} surfaces."
+
+# ── 6. THIS JOB'S OWN CI WIRING — five edits, and a job can ship with four ──────────────────────────
+#
+# Wiring a contract test into `ci.yaml` takes FIVE edits. Drop the `changes` output and
+# `needs.changes.outputs.…` is empty, so the `if:` never matches and the job SKIPS SILENTLY. Drop it
+# from the `status` job's `needs:`/`job-results:` and it runs and prints OK while its failures no
+# longer gate the required check. In every one of those cases this script still exits 0 — it cannot
+# detect its own disconnection unless it looks. `merge-confirmation-read.test.sh` guards the identical
+# five-point mode for the same reason; this is that pattern, not a new idea.
+workflow="${repo_root}/.github/workflows/ci.yaml"
+# FAIL, never skip: `ci.yaml` is a fixed path, so guarding these with `if [ -r … ]` would turn a
+# missing workflow into a silent pass — the exact vacuity this file exists to prevent.
+[ -r "${workflow}" ] ||
+  fail "ci.yaml is missing or unreadable at ${workflow} — this job's own wiring cannot be verified, so an OK here would be vacuous"
+
+for spec in \
+  '            merge-preflight-thread-gate:|paths-filter entry' \
+  '      merge-preflight-thread-gate: ${{ steps.filter.outputs.merge-preflight-thread-gate }}|changes-job outputs declaration (its absence makes the job skip silently)' \
+  '  test-merge-preflight-thread-gate:|job definition' \
+  '      - test-merge-preflight-thread-gate|status job needs: entry (its absence stops the job gating the merge)' \
+  '            ${{ needs.test-merge-preflight-thread-gate.result }}|status job job-results entry'; do
+  line="${spec%%|*}"; what="${spec#*|}"
+  grep -qxF -- "${line}" "${workflow}" ||
+    fail "ci.yaml is missing this job's ${what} — the guard would not gate"
+done
+
+# The scan of the pinned plugin definitions only happens if CI populates that submodule. Without the
+# init step the job fails closed rather than passing vacuously, but it fails on EVERY run — so assert
+# the step is wired, and the failure names the cause instead of leaving a red job to be diagnosed.
+#
+# SCOPED TO THIS JOB'S BLOCK, deliberately. A whole-file grep is vacuous here: the delivery-contract
+# job carries the identical init line, so the assertion would pass with this job's step deleted — and
+# it passed against the revision that predates this step entirely. Slice the block, then look inside it.
+job_block=$(awk '/^  test-merge-preflight-thread-gate:$/{f=1;next} f&&/^  [a-z]/{exit} f' "${workflow}")
+[ -n "${job_block}" ] ||
+  fail "could not locate the test-merge-preflight-thread-gate job block in ci.yaml — its wiring cannot be verified"
+printf '%s\n' "${job_block}" | grep -qF -- 'submodule update --init libraries/agent-plugins' ||
+  fail "this job does not initialise libraries/agent-plugins — the pinned plugin definitions could not be scanned"
+
+# The filter must cover every surface the scan discovers, or an edit to an unlisted one skips the job.
+for trigger in \
+  "              - 'AGENTS.md'" \
+  "              - '.claude/**/*.md'" \
+  "              - '.claude/**/*.json'" \
+  "              - '.claude/scripts/merge-preflight-thread-gate.test.sh'" \
+  "              - 'libraries/agent-plugins'" \
+  "              - '.gitmodules'" \
+  "              - '.github/workflows/ci.yaml'"; do
+  grep -qxF -- "${trigger}" "${workflow}" ||
+    fail "ci.yaml filter is missing ${trigger# *} — an edit there would not run this guard"
+done
