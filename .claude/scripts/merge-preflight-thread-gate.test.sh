@@ -243,6 +243,42 @@ hidden="$(git -C "${repo_root}/libraries/agent-plugins" ls-files -v 2>/dev/null 
 [ -z "${hidden}" ] ||
   fail "libraries/agent-plugins carries assume-unchanged/skip-worktree entries, which hide a modification from status"
 
+# The three checks above answer "is the tree unmodified AS GIT SEES IT", which is weaker than "are
+# these the reviewed bytes" — and it is the weaker claim that is easy to mistake for proof. A
+# clean/smudge filter assigned to these paths through the repository, a global, or
+# $GIT_DIR/info/attributes makes git compare the CLEANED form, so the file on disk can carry
+# different instructions while status prints nothing and ls-files -v reports an ordinary entry.
+# This scanner then reads the worktree bytes directly (`cat`), so a forbidden thread field would be
+# scanned from altered bytes with every check above passing. Assert byte identity against the pinned
+# blobs, which no filter can launder because --no-filters bypasses the clean stage.
+#
+# Every guard below closes a path where the naive form reports success on a check that never ran:
+# piping ls-tree straight into the loop takes the WHILE's status, so an enumeration failure runs the
+# body zero times and prints nothing — indistinguishable from a verified tree. An uninitialised
+# submodule makes rev-parse and hash-object both return empty, and [ "$want" = "$got" ] then compares
+# EQUAL, so the emptiest possible evidence would read as the strongest. --no-replace-objects belongs
+# on ls-tree too, or the enumeration walks a replaced tree while the lookups beside it do not.
+# printf '%s\n' is required: command substitution strips the trailing newline, so a bare printf '%s'
+# makes read return false on the final entry and drops the last file unchecked.
+byte_files="$(git -C "${repo_root}/libraries/agent-plugins" --no-replace-objects ls-tree -r --name-only HEAD -- plugins/agentic-engineering 2>/dev/null)" ||
+  fail "could not enumerate the pinned plugin definition blobs, so their bytes are unverified — unproven is not proven"
+[ -n "${byte_files}" ] ||
+  fail "the pinned plugin definition enumeration came back empty, so a byte check here would pass vacuously"
+byte_mismatch="$(printf '%s\n' "${byte_files}" | while IFS= read -r bf; do
+  [ -n "${bf}" ] || continue
+  want="$(git -C "${repo_root}/libraries/agent-plugins" --no-replace-objects rev-parse "HEAD:${bf}" 2>/dev/null)" ||
+    { printf 'BYTES-UNKNOWN %s\n' "${bf}"; continue; }
+  got="$(git -C "${repo_root}/libraries/agent-plugins" hash-object --no-filters -- "${bf}" 2>/dev/null)" ||
+    { printf 'BYTES-UNKNOWN %s\n' "${bf}"; continue; }
+  { [ -n "${want}" ] && [ -n "${got}" ]; } ||
+    { printf 'BYTES-UNKNOWN %s\n' "${bf}"; continue; }
+  [ "${want}" = "${got}" ] || printf 'BYTES-DIFFER %s\n' "${bf}"
+done)"
+[ -z "${byte_mismatch}" ] ||
+  fail "the plugin definition worktree bytes are not the pinned blobs, so the scan would inspect
+  unreviewed content while revision, status and index flags all read clean:
+${byte_mismatch}"
+
 # `ci.yaml` is a definition surface in its own right, not just the thing that decides WHEN this job
 # runs. AGENTS.md classifies it as one, and the paths-filter below already triggers on it — so leaving
 # it out of the SCAN meant an edit there ran the guard against every file except the one that

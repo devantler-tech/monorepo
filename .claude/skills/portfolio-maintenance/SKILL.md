@@ -584,7 +584,16 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    merge (contract *Trust gate*), so an external PR that has cleared every evaluation and review gate
    would otherwise be refused at the last step for being external, which is the whole class the
    2026-08-08 widening exists to admit. Exact `renovate[bot]`/`dependabot[bot]` PRs stay excluded as
-   automation-owned. A refused
+   automation-owned. 🔴 **DIAGNOSE a refused merge before escalating it — a one-click is for what you
+   cannot fix, never for what you did not look at.** The thread read above is taken *immediately*
+   before the merge, but "immediately" is not "atomically": a lane can post a thread in the gap, and
+   a ruleset condition the pentad never modelled can refuse just as easily. Both surface as a bare
+   refusal, and both are agent-fixable. So on a refusal, **re-read the unresolved-thread count and
+   the head's check state, then name the cause** — a thread that landed in the gap gets fixed and
+   resolved, a newly-red check gets root-caused, and only a cause that is genuinely outside agent
+   authority is escalated. Escalating an undiagnosed refusal converts your own unfinished hygiene
+   into a maintainer gate, which is the passive self-blocking the contract forbids everywhere else.
+   Once diagnosed and genuinely not agent-fixable, a refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
    variant-evidence retries. **On merge-queue repos, root-cause a stall/kick-out before re-queuing**
    (contract *Merge policy → Merge-queue repos*): a PR that "was queued" but didn't merge has usually been
