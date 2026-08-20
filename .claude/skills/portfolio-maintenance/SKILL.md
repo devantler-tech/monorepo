@@ -553,11 +553,47 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    showing the same
    `headRefOid`, `isDraft:false`, owner `devantler-tech`, and `CLEAN`; merge only when the pentad also has zero
    findings and a green review at that
-   head. 🔴 **Do not re-add a `trusted author` condition here** — trust gates **execution**, never the
+   head.
+   🔴 **That field list CANNOT see unresolved review threads, and thread resolution is a REQUIRED
+   merge rule on every repository here** (contract *Merge policy*, `required_review_thread_resolution`
+   on all nineteen). `reviewThreads` is **not** a valid `gh pr view --json` field, so adding it would
+   void the whole read. Take it over GraphQL as its own call, **immediately before the merge** — the
+   survey pentad carries a thread count, but it is a snapshot from earlier in the run and every lane
+   can post at any moment (on monorepo#2927 the blocking review landed 93 minutes after promotion):
+
+   ```sh
+   unresolved=$(
+     set -o pipefail   # WITHOUT this a FAILED read prints the ALL-CLEAR value: `false | jq -s …` → 0, exit 0
+     gh api graphql --paginate -f owner=devantler-tech -f name=<repo> -F number=<n> -f query='
+   query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
+     repository(owner:$owner,name:$name){
+       pullRequest(number:$number){
+         reviewThreads(first:100,after:$endCursor){
+           nodes{isResolved}
+           pageInfo{hasNextPage endCursor}
+         }}}}' |
+       jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
+   ) || { echo "thread read FAILED — UNKNOWN, never 0" >&2; exit 1; }
+   ```
+
+   Merge only on a `0` a **successful** read produced; treat any non-zero exit as UNKNOWN, never as
+   zero. `--paginate` and the cursor are required — a first-page-only read silently under-counts on a
+   PR with more than 100 threads. Without this, a bare `BLOCKED` from an unresolved thread is
+   indistinguishable from the stale `mergeStateStatus` that exception (a) tells you to merge through,
+   and the refusal that follows gets escalated as a maintainer gate. 🔴 **Do not re-add a `trusted author` condition here** — trust gates **execution**, never the
    merge (contract *Trust gate*), so an external PR that has cleared every evaluation and review gate
    would otherwise be refused at the last step for being external, which is the whole class the
    2026-08-08 widening exists to admit. Exact `renovate[bot]`/`dependabot[bot]` PRs stay excluded as
-   automation-owned. A refused
+   automation-owned. 🔴 **DIAGNOSE a refused merge before escalating it — a one-click is for what you
+   cannot fix, never for what you did not look at.** The thread read above is taken *immediately*
+   before the merge, but "immediately" is not "atomically": a lane can post a thread in the gap, and
+   a ruleset condition the pentad never modelled can refuse just as easily. Both surface as a bare
+   refusal, and both are agent-fixable. So on a refusal, **re-read the unresolved-thread count and
+   the head's check state, then name the cause** — a thread that landed in the gap gets fixed and
+   resolved, a newly-red check gets root-caused, and only a cause that is genuinely outside agent
+   authority is escalated. Escalating an undiagnosed refusal converts your own unfinished hygiene
+   into a maintainer gate, which is the passive self-blocking the contract forbids everywhere else.
+   Once diagnosed and genuinely not agent-fixable, a refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
    variant-evidence retries. **On merge-queue repos, root-cause a stall/kick-out before re-queuing**
    (contract *Merge policy → Merge-queue repos*): a PR that "was queued" but didn't merge has usually been

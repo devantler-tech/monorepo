@@ -42,6 +42,7 @@ jobs:
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
+      merge-preflight-thread-gate: ${{ steps.filter.outputs.merge-preflight-thread-gate }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
@@ -372,6 +373,20 @@ jobs:
               - '.claude/**/*.md'
               - '.claude/**/*.json'
               - '.claude/scripts/merge-confirmation-read.test.sh'
+              - '.github/workflows/ci.yaml'
+            merge-preflight-thread-gate:
+              - 'AGENTS.md'
+              # every Markdown/JSON definition surface, matching the test's own discovery — an
+              # enumerated subset would let a change to an unlisted surface skip the negative control
+              - '.claude/**/*.md'
+              - '.claude/**/*.json'
+              # the enforcement SCRIPTS are scanned too: a prescription can live in a sibling
+              # guard's comments or failure messages, so an edit there must run this control
+              - '.claude/**/*.sh'
+              # the PINNED plugin definitions are scanned too, so a gitlink advance that
+              # reintroduces a thread field must run this guard rather than sail past it
+              - 'libraries/agent-plugins'
+              - '.gitmodules'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
@@ -1294,6 +1309,33 @@ jobs:
       - name: Verify the merge-confirmation read contract
         run: bash .claude/scripts/merge-confirmation-read.test.sh
 
+  test-merge-preflight-thread-gate:
+    name: Test merge-preflight thread gate
+    needs: changes
+    if: needs.changes.outputs.merge-preflight-thread-gate == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The negative control scans the PINNED plugin definitions as well, so that one submodule
+      # must be present — without it the test fails closed rather than skipping, because `find` on a
+      # missing directory prints nothing and the added surfaces would be a silent no-op. Only this
+      # submodule is initialised (not `submodules: true`, which would also try the private ones), over
+      # HTTPS because .gitmodules uses SSH and no deploy key exists in CI. The rewrite is
+      # command-scoped and carries no credential: agent-plugins is public and this is an anonymous
+      # read. NOT shallow — `--depth 1` resolves the pin only while it equals the branch tip, so every
+      # upstream merge past the pin would turn an unrelated PR red.
+      - name: Initialise the agent-plugins submodule
+        run: |
+          git -c 'url.https://github.com/.insteadOf=git@github.com:' \
+            submodule update --init libraries/agent-plugins
+      - name: Verify the merge-preflight thread gate
+        run: bash .claude/scripts/merge-preflight-thread-gate.test.sh
+
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
     needs: changes
@@ -1355,6 +1397,7 @@ jobs:
       - test-agent-role-delivery-contract
       - test-work-priority-ladder
       - test-merge-confirmation-read
+      - test-merge-preflight-thread-gate
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
@@ -1404,5 +1447,6 @@ jobs:
             ${{ needs.test-agent-role-delivery-contract.result }}
             ${{ needs.test-work-priority-ladder.result }}
             ${{ needs.test-merge-confirmation-read.result }}
+            ${{ needs.test-merge-preflight-thread-gate.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}
