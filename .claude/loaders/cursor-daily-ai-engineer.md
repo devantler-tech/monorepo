@@ -61,10 +61,10 @@ machine-local engineer.
 >    main; no action taken." If the `libraries/agent-plugins` submodule is uninitialised, initialise
 >    it with `.claude/scripts/submodule-init.sh libraries/agent-plugins`. Then refresh the declared
 >    reviewed source with `git -C libraries/agent-plugins fetch origin main --quiet` and verify
->    `origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md` resolves. If either
+>    `refs/remotes/origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md` resolves. If either
 >    operation fails, **STOP and report** "reviewed plugin definition unavailable; no action taken."
 > 3. **Read and follow `AGENTS.md`, then load the portable role with
->    `git -C libraries/agent-plugins show origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md`.**
+>    `git -C libraries/agent-plugins show refs/remotes/origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md`.**
 >    This implements the desired state's `latest-reviewed-default-branch` /
 >    `before-starting-each-run` policy without checking out or dirtying the consumer gitlink. The
 >    contract supplies deployment facts; the refreshed plugin entrypoint supplies the portable

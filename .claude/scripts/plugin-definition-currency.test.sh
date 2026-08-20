@@ -22,6 +22,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script="${repo_root}/.claude/scripts/plugin-definition-currency.sh"
 constitution="${repo_root}/AGENTS.md"
+cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
 
 pass_count=0
 fail() {
@@ -35,6 +36,7 @@ ok() {
 
 [ -x "${script}" ] || fail "${script} is missing or not executable"
 [ -r "${constitution}" ] || fail "cannot read ${constitution}"
+[ -r "${cursor_loader}" ] || fail "cannot read ${cursor_loader}"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
@@ -305,15 +307,55 @@ for case_name in depth space; do
   esac
 done
 
+# A quoted pinned path must fail closed even when ordinary records sort before it. The old sentinel
+# check looked for a literal two-character `\n`, so a trailing QUOTED record escaped detection; the
+# missing unusual definition then disappeared from both comparison sides and reported CURRENT.
+quoted_root="${tmp}/quoted-pinned"
+quoted_repo="${quoted_root}/libraries/agent-plugins"
+quoted_plugin="${quoted_repo}/plugins/agentic-engineering"
+mkdir -p "${quoted_plugin}/agents"
+printf 'reviewed engineer definition\n' > "${quoted_plugin}/agents/agentic-engineer.agent.md"
+printf 'quoted path definition\n' > "${quoted_plugin}/agents/odd\\name.md"
+add_runtime_asset_fixture "${quoted_plugin}"
+write_desired_state_fixture "${quoted_root}"
+git -C "${quoted_repo}" init -q
+git -C "${quoted_repo}" config user.email t@example.invalid
+git -C "${quoted_repo}" config user.name t
+git -C "${quoted_repo}" add -A
+git -C "${quoted_repo}" -c commit.gpgsign=false commit -qm pin
+quoted_link="$(git -C "${quoted_repo}" rev-parse HEAD)"
+quoted_install="${tmp}/install-quoted-pinned"
+mkdir -p "${quoted_install}/agents"
+cp "${quoted_plugin}/agents/agentic-engineer.agent.md" "${quoted_install}/agents/"
+cp -R "${quoted_plugin}/scripts" "${quoted_install}/"
+set +e
+out="$("${script}" --repo-root "${quoted_root}" --gitlink "${quoted_link}" \
+                  --installed "${quoted_install}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "a mixed ordinary-plus-quoted pinned tree must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"path git had to quote"*) ok "a quoted pinned path is detected anywhere in the sorted tree" ;;
+  *) fail "quoted pinned path did not name the fail-closed reason: ${out}" ;;
+esac
+
 # ── 7c. A missing option VALUE is UNKNOWN, not DRIFT ──────────────────────────
 # `shift 2` on a lone trailing flag returns 1, and under `set -e` that exited the script with 1 — the
 # code that tells a caller the definition is stale. A typo would have produced a silent, output-free
 # drift verdict, which is the most misleading failure this script can have.
-for flag in --repo-root --gitlink --installed --plugins-root; do
+for flag in --runtime --repo-root --gitlink --installed --plugins-root --codex-home --cursor-ref; do
   set +e; out="$("${script}" "${flag}" 2>&1)"; rc=$?; set -e
   [ "${rc}" -eq 2 ] || fail "a missing value for ${flag} must exit 2, got ${rc}: ${out}"
 done
 ok "a missing option value exits 2, never 1 (DRIFT)"
+
+# Header growth must not silently truncate --help. A fixed line range did exactly that when the
+# runtime selector expanded Usage, dropping part of the exit-code contract from operator output.
+out="$("${script}" --help)" || fail "--help must exit 0"
+case "${out}" in
+  *"--runtime claude|codex|cursor"*"collapsing them is how a currency check becomes decoration"*)
+    ok "--help prints the complete runtime-aware header and exit contract" ;;
+  *) fail "--help truncated the runtime-aware header: ${out}" ;;
+esac
 
 # ── 7d. Registry resolution — the only path production actually uses ──────────
 # Every case above passes --installed, so without these the jq expression, the single-path check and
@@ -322,7 +364,7 @@ reg_root="${tmp}/plugins-root"
 mkdir -p "${reg_root}"
 printf '{"version":2,"plugins":{"agentic-engineering@devantler-plugins":[{"installPath":"%s"}]}}\n' \
   "${cur}" > "${reg_root}/installed_plugins.json"
-if out="$("${script}" --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}")"; then
+if out="$("${script}" --runtime claude --repo-root "${tmp}/consumer" --gitlink "${gitlink}" --plugins-root "${reg_root}")"; then
   case "${out}" in
     *"${cur}"*) ok "a single registry entry resolves to its installPath" ;;
     *) fail "resolved from the registry but did not use its installPath: ${out}" ;;
@@ -480,6 +522,43 @@ case "${out}" in
   *) fail "exit 2 but not because of truncation: ${out}" ;;
 esac
 
+# The forge branch receives decoded JSON paths, then @tsv escapes tabs/newlines/backslashes. Without
+# a pre-serialization rejection, an actual tab in the reviewed path collides with a literal `\t` in
+# the installed path and can report CURRENT for different filenames.
+cat > "${shim}/gh" <<'SHIM'
+#!/bin/sh
+cat "${FORGE_TREE_FIXTURE:?}"
+SHIM
+chmod +x "${shim}/gh"
+forge_install="${tmp}/install-forge-escaped"
+mkdir -p "${forge_install}/agents" "${forge_install}/scripts"
+printf 'reviewed engineer definition\n' > "${forge_install}/agents/agentic-engineer.agent.md"
+printf 'escaped collision bytes\n' > "${forge_install}/agents/a\\tb"
+cp "${p}/scripts/classify-default-branch-ci-runs.sh" "${forge_install}/scripts/"
+ordinary_sha="$(git hash-object --no-filters "${forge_install}/agents/agentic-engineer.agent.md")"
+escaped_sha="$(git hash-object --no-filters "${forge_install}/agents/a\\tb")"
+runtime_sha="$(git hash-object --no-filters "${forge_install}/scripts/classify-default-branch-ci-runs.sh")"
+forge_tree_fixture="${tmp}/forge-escaped-tree.json"
+jq -n --arg ordinary "${ordinary_sha}" --arg escaped "${escaped_sha}" --arg runtime "${runtime_sha}" '
+  {truncated:false,tree:[
+    {type:"blob",mode:"100644",sha:$ordinary,
+     path:"plugins/agentic-engineering/agents/agentic-engineer.agent.md"},
+    {type:"blob",mode:"100644",sha:$escaped,
+     path:"plugins/agentic-engineering/agents/a\tb"},
+    {type:"blob",mode:"100755",sha:$runtime,
+     path:"plugins/agentic-engineering/scripts/classify-default-branch-ci-runs.sh"}
+  ]}' > "${forge_tree_fixture}"
+set +e
+out="$(FORGE_TREE_FIXTURE="${forge_tree_fixture}" PATH="${shim}:${PATH}" "${script}" \
+        --repo-root "${tmp}/trunc" --installed "${forge_install}" \
+        --gitlink 2222222222222222222222222222222222222222 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "an escape-bearing forge path must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"forge tree contains an unsafe path"*) ok "forge paths with TSV-colliding escapes fail closed" ;;
+  *) fail "unsafe forge path did not name the serialization reason: ${out}" ;;
+esac
+
 # ── 7j. A SYMLINK is not a definition ────────────────────────────────────────
 # -f, `git hash-object` and -x all FOLLOW a symlink, so an installed definition replaced by a link to
 # an identical file passed every single test and reported CURRENT.
@@ -518,6 +597,257 @@ esac
 # every implementation regardless of the guard — verified by ablation, which did not fire.
 # A vacuous assertion is worse than none: it manufactures confidence in an untested path. Left absent
 # and explained rather than left green and meaningless.
+
+# A `codex` shim keeps this suite hermetic. The lane asks the runtime for effective state, so a real
+# `codex` on PATH would answer about the HOST rather than this fixture — and its answer for a fixture
+# home is "no installed plugins", which is a legitimate *disabled* verdict and would make every case
+# below fail for an unrelated reason. CODEX_SHIM_MODE selects what the runtime reports.
+codex_shim="${tmp}/codex-shim"
+mkdir -p "${codex_shim}"
+cat > "${codex_shim}/codex" <<'SHIMBIN'
+#!/bin/sh
+# only implements: plugin list --json
+case "${CODEX_SHIM_MODE:-enabled}" in
+  enabled)
+    printf '{"installed":[{"pluginId":"agentic-engineering@devantler-plugins","enabled":true}],"available":[]}\n' ;;
+  disabled)
+    printf '{"installed":[{"pluginId":"agentic-engineering@devantler-plugins","enabled":false}],"available":[]}\n' ;;
+  feature-off)
+    printf '{"installed":[],"available":[]}\n' ;;
+  config-error)
+    printf 'failed to load configuration\n' >&2
+    exit 1 ;;
+esac
+SHIMBIN
+chmod +x "${codex_shim}/codex"
+PATH="${codex_shim}:${PATH}"
+export PATH
+
+# Build production-like PATHs missing each structured-query dependency. A shim that exists but exits
+# 1 models a runtime/config failure, not an unavailable CLI; every one of these states is UNKNOWN.
+path_without_codex=""
+old_ifs="${IFS}"
+IFS=:
+for path_dir in ${PATH}; do
+  [ -x "${path_dir}/codex" ] && continue
+  path_without_codex="${path_without_codex}${path_without_codex:+:}${path_dir}"
+done
+IFS="${old_ifs}"
+[ -n "${path_without_codex}" ] || fail "could not construct a PATH without codex"
+if PATH="${path_without_codex}" command -v codex >/dev/null 2>&1; then
+  fail "the no-Codex PATH still resolves codex"
+fi
+PATH="${path_without_codex}" command -v jq >/dev/null 2>&1 \
+  || fail "the no-Codex PATH lost jq"
+
+path_without_jq=""
+IFS=:
+for path_dir in ${PATH}; do
+  [ -x "${path_dir}/jq" ] && continue
+  path_without_jq="${path_without_jq}${path_without_jq:+:}${path_dir}"
+done
+IFS="${old_ifs}"
+# On Linux, jq commonly shares /usr/bin with bash and git (and /bin may be a symlink to that same
+# directory). Removing jq's directory must not make the script itself unlaunchable or fail its
+# earlier git prerequisite, because then this fixture never reaches the jq fail-closed branch.
+no_jq_runtime_bin="${tmp}/no-jq-runtime-bin"
+mkdir -p "${no_jq_runtime_bin}"
+ln -s "$(command -v bash)" "${no_jq_runtime_bin}/bash"
+ln -s "$(command -v git)" "${no_jq_runtime_bin}/git"
+path_without_jq="${no_jq_runtime_bin}${path_without_jq:+:}${path_without_jq}"
+[ -n "${path_without_jq}" ] || fail "could not construct a PATH without jq"
+if PATH="${path_without_jq}" command -v jq >/dev/null 2>&1; then
+  fail "the no-jq PATH still resolves jq"
+fi
+PATH="${path_without_jq}" command -v codex >/dev/null 2>&1 \
+  || fail "the no-jq PATH lost the Codex shim"
+
+# ── 7m. CODEX resolves the copy its own runtime loaded ────────────────────────
+# Codex has no Claude-style installed_plugins.json. Its enabled plugin is served from the versioned
+# cache under CODEX_HOME, so the lane must inspect that cache rather than silently falling back to
+# Claude's registry. Start with the negative control: one enabled, matching cached copy must pass.
+codex_home="${tmp}/codex-home"
+codex_install="${codex_home}/plugins/cache/devantler-plugins/agentic-engineering/9.9.9"
+mkdir -p "${codex_home}"
+cat > "${codex_home}/config.toml" <<'TOML'
+[plugins."agentic-engineering@devantler-plugins"]
+enabled = true
+TOML
+make_install "${codex_install}"
+if out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                      --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; then
+  case "${out}" in
+    *CURRENT*) ;;
+    *) fail "Codex matching cache exited 0 without reporting CURRENT: ${out}" ;;
+  esac
+  case "${out}" in
+    *"${codex_install}"*) ok "Codex resolves its one enabled cached copy and reports CURRENT" ;;
+    *) fail "Codex matching cache did not name its loaded copy: ${out}" ;;
+  esac
+else
+  fail "Codex matching cache must exit 0, got $? — ${out}"
+fi
+
+# An installed runtime command that rejects the config is authoritative failure evidence, not an
+# unavailable CLI. Falling through to the line parser can find a later valid-looking table inside a
+# malformed document and report CURRENT even though Codex could not load any effective state.
+set +e
+out="$(CODEX_SHIM_MODE=config-error "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "a failed Codex runtime-state query must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"runtime state query failed"*) ok "a Codex config/runtime error never falls back to static CURRENT" ;;
+  *) fail "failed Codex state query did not name the UNKNOWN reason: ${out}" ;;
+esac
+
+printf 'stale Codex improver definition\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "a drifted Codex cache must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT    agents/agent-improver.agent.md"*) ok "a drifted Codex cached definition fires" ;;
+  *) fail "Codex drift did not name the changed definition: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# More than one version is deliberately UNKNOWN. Picking newest-looking, first, or last would guess
+# which cache the runtime loaded and could report CURRENT for a copy this process never executed.
+codex_extra="${codex_home}/plugins/cache/devantler-plugins/agentic-engineering/10.0.0"
+make_install "${codex_extra}"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "ambiguous Codex caches must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"2 cached copies"*) ok "multiple Codex caches are UNKNOWN rather than guessed" ;;
+  *) fail "ambiguous Codex cache did not name the reason: ${out}" ;;
+esac
+rm -rf "${codex_extra}"
+
+sed 's/enabled = true/enabled = false/' "${codex_home}/config.toml" > "${codex_home}/config.disabled"
+mv "${codex_home}/config.disabled" "${codex_home}/config.toml"
+set +e
+out="$(CODEX_SHIM_MODE=disabled "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "a disabled Codex plugin must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"not enabled"*) ok "a disabled Codex plugin is UNKNOWN, not a cached CURRENT" ;;
+  *) fail "disabled Codex plugin did not name the reason: ${out}" ;;
+esac
+sed 's/enabled = false/enabled = true/' "${codex_home}/config.toml" > "${codex_home}/config.enabled"
+mv "${codex_home}/config.enabled" "${codex_home}/config.toml"
+
+# An explicit install override is useful to the Claude fixture suite, but in another named lane it
+# would let a caller point at Claude's copy and manufacture a verdict about bytes Codex never loaded.
+set +e
+out="$("${script}" --runtime codex --installed "${cur}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "Codex with an install override must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"does not accept --installed"*) ok "Codex cannot be pointed at another lane's installed copy" ;;
+  *) fail "Codex install override was rejected without naming the reason: ${out}" ;;
+esac
+
+# ── 7n. CURSOR compares the exact submodule ref its loader reads ──────────────
+# The Cursor loader fetches and reads origin/main directly from the submodule object database. It
+# has no installed plugin copy, so this lane compares that resolved commit with the consumer pin.
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+if out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" \
+                      --gitlink "${gitlink}" 2>&1)"; then
+  case "${out}" in
+    *CURRENT*) ;;
+    *) fail "Cursor matching ref exited 0 without reporting CURRENT: ${out}" ;;
+  esac
+  case "${out}" in
+    *"refs/remotes/origin/main"*) ok "Cursor matching loaded revision reports CURRENT" ;;
+    *) fail "Cursor matching ref did not name its source ref: ${out}" ;;
+  esac
+else
+  fail "Cursor matching loaded revision must exit 0, got $? — ${out}"
+fi
+
+printf 'newer upstream prose\n' > "${p}/README.md"
+git -C "${pin_repo}" add plugins/agentic-engineering/README.md
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm cursor-drift
+cursor_drift="$(git -C "${pin_repo}" rev-parse HEAD)"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${cursor_drift}"
+set +e
+out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" \
+                  --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "a drifted Cursor loaded revision must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *DRIFT*"${cursor_drift}"*"${gitlink}"*) ok "a drifted Cursor loaded revision fires and names both commits" ;;
+  *) fail "Cursor revision drift did not name loaded and pinned commits: ${out}" ;;
+esac
+
+git -C "${pin_repo}" update-ref -d refs/remotes/origin/main
+set +e
+out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" \
+                  --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "an unresolved Cursor loaded revision must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"cannot resolve Cursor loaded revision"*) ok "an unresolved Cursor ref is UNKNOWN and names the reason" ;;
+  *) fail "missing Cursor ref did not name the reason: ${out}" ;;
+esac
+
+set +e
+out="$("${script}" --runtime cursor --installed "${cur}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "Cursor with an install override must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"does not accept --installed"*) ok "Cursor cannot be pointed at another lane's installed copy" ;;
+  *) fail "Cursor install override was rejected without naming the reason: ${out}" ;;
+esac
+
+# These cases share the pinned repository with later checks. They must leave both the checkout and
+# the loader ref exactly as they found them, or a later assertion can inherit Cursor-case state and
+# pass or fail for the wrong reason.
+git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+[ "$(git -C "${pin_repo}" rev-parse HEAD)" = "${gitlink}" ] \
+  || fail "Cursor cases did not restore the shared pin fixture HEAD"
+[ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
+  || fail "Cursor cases left the shared pin fixture dirty"
+[ "$(git -C "${pin_repo}" rev-parse refs/remotes/origin/main)" = "${gitlink}" ] \
+  || fail "Cursor cases did not restore the shared loader ref"
+ok "Cursor cases restore the shared pin fixture before later checks"
+
+# The loader must resolve the same unambiguous remote-tracking ref the currency check verifies.
+# A tag can legally contain a slash, so a tag named `origin/main` makes the shorthand ambiguous:
+# plain `git show origin/main:<path>` then follows the tag while the check follows
+# `refs/remotes/origin/main` and can report CURRENT over different bytes.
+printf 'UNREVIEWED ambiguous-ref agent\n' > "${p}/agents/agentic-engineer.agent.md"
+git -C "${pin_repo}" add plugins/agentic-engineering/agents/agentic-engineer.agent.md
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm ambiguous-loader-ref
+ambiguous_loader_commit="$(git -C "${pin_repo}" rev-parse HEAD)"
+git -C "${pin_repo}" tag origin/main "${ambiguous_loader_commit}"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+loader_ref="$(sed -n \
+  's/.*git -C libraries\/agent-plugins show \([^:][^:]*\):plugins\/agentic-engineering\/agents\/agentic-engineer\.agent\.md.*/\1/p' \
+  "${cursor_loader}" | tail -n 1)"
+[ -n "${loader_ref}" ] || fail "could not extract the Cursor loader definition ref"
+loaded_agent="$(git -C "${pin_repo}" show \
+  "${loader_ref}:plugins/agentic-engineering/agents/agentic-engineer.agent.md" 2>/dev/null)"
+pinned_agent="$(git -C "${pin_repo}" show \
+  "${gitlink}:plugins/agentic-engineering/agents/agentic-engineer.agent.md")"
+[ "${loaded_agent}" = "${pinned_agent}" ] \
+  || fail "Cursor loader ref '${loader_ref}' resolved ambiguous content instead of the verified remote-tracking ref"
+git -C "${pin_repo}" tag -d origin/main >/dev/null
+git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
+[ "$(git -C "${pin_repo}" rev-parse HEAD)" = "${gitlink}" ] \
+  || fail "the ambiguous Cursor loader case did not restore the shared pin fixture HEAD"
+[ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
+  || fail "ambiguous Cursor loader case left the shared pin fixture dirty"
+ok "Cursor loader reads the unambiguous remote-tracking ref the currency check verifies"
 
 # ── 8. The remediation is NAMED in the failure output ─────────────────────────
 # The deployment's own "fail with the fix" rule: a guard that blocks without naming the resolving
@@ -587,6 +917,24 @@ esac
 case "${section}" in
   *"blob identity"*) ok "the contract pins comparison by blob identity, not a version string" ;;
   *) fail "the plugin contract section does not require comparison by blob identity" ;;
+esac
+# The command is lane-scoped: a bare invocation still defaults to Claude for compatibility, so each
+# deployed adapter must name itself or Codex/Cursor can silently inspect the wrong lane.
+for runtime in claude codex cursor; do
+  case "${section}" in
+    *"--runtime ${runtime}"*) ok "the contract names the ${runtime} runtime selector" ;;
+    *) fail "the plugin contract section does not name --runtime ${runtime}" ;;
+  esac
+done
+case "${section}" in
+  *"more than one cached version"*UNKNOWN*)
+    ok "the contract makes ambiguous Codex caches UNKNOWN rather than guessed" ;;
+  *) fail "the plugin contract section does not fail closed on ambiguous Codex caches" ;;
+esac
+case "${section}" in
+  *"refs/remotes/origin/main"*)
+    ok "the contract binds Cursor verification to the ref its loader reads" ;;
+  *) fail "the plugin contract section does not name Cursor's loaded submodule ref" ;;
 esac
 
 # ── 10. The fallback must be EXECUTABLE, not just named ───────────────────────
@@ -784,4 +1132,351 @@ case "${section}" in
   *) fail "the byte check drops its last entry (printf without a trailing newline)" ;;
 esac
 
+
+# ── 7q. The PIN ITSELF must be resolved without replacement objects ───────────
+# Every other case passes --gitlink explicitly, so nothing exercised the `ls-tree HEAD` resolution
+# that every real caller uses. AGENTS.md requires --no-replace-objects there: a refs/replace entry
+# for HEAD makes ls-tree read the REPLACEMENT's gitlink while `rev-parse HEAD` still prints the
+# expected commit, so the run compares against a pin nobody reviewed. Asserted in the fail-OPEN
+# direction — without the flag this reports CURRENT, which is the dangerous verdict.
+rc_root="${tmp}/replace-consumer"
+mkdir -p "${rc_root}/libraries"
+cp -R "${pin_repo}" "${rc_root}/libraries/agent-plugins"
+write_desired_state_fixture "${rc_root}"
+git -C "${rc_root}" init -q
+git -C "${rc_root}" config user.email t@example.com
+git -C "${rc_root}" config user.name t
+git -C "${rc_root}" update-index --add --cacheinfo "160000,${gitlink},libraries/agent-plugins"
+git -C "${rc_root}" -c commit.gpgsign=false commit -qm true-pin
+rc_true="$(git -C "${rc_root}" rev-parse HEAD)"
+# A decoy commit carrying a DIFFERENT gitlink, built on a side branch so HEAD never moves by reset.
+git -C "${rc_root}" checkout -q -b decoy
+git -C "${rc_root}" update-index --add --cacheinfo "160000,${cursor_drift},libraries/agent-plugins"
+git -C "${rc_root}" -c commit.gpgsign=false commit -qm decoy-pin
+rc_decoy="$(git -C "${rc_root}" rev-parse HEAD)"
+git -C "${rc_root}" checkout -q -
+git -C "${rc_root}" replace "${rc_true}" "${rc_decoy}"
+# The loader ref matches the DECOY's gitlink, so a replacement-poisoned read sees them as equal.
+git -C "${rc_root}/libraries/agent-plugins" update-ref refs/remotes/origin/main "${cursor_drift}"
+set +e
+out="$("${script}" --runtime cursor --repo-root "${rc_root}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "a replace-poisoned pin must still report DRIFT (exit 1), got ${rc}: ${out}"
+case "${out}" in
+  *"${gitlink}"*) ok "the pin is resolved without replacement objects" ;;
+  *) fail "the pin was read through refs/replace — reported the decoy gitlink: ${out}" ;;
+esac
+
+# ── 7r. Effective Codex state has NO line-oriented TOML fallback ──────────────
+# A valid multiline TOML string can contain text that looks exactly like plugin headers and values.
+# If the runtime query cannot run, no line parser can distinguish those strings from registration;
+# the only safe verdict is UNKNOWN, even when a stale cache and plausible-looking config remain.
+cat > "${codex_home}/config.toml" <<'TOML'
+decoy = '''
+[plugins."agentic-engineering@devantler-plugins"]
+enabled = true
+'''
+TOML
+set +e
+out="$(PATH="${path_without_codex}" "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "an unavailable Codex query must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"codex is required"*) ok "an unavailable Codex query never parses TOML-looking strings" ;;
+  *) fail "unavailable Codex query did not name the UNKNOWN reason: ${out}" ;;
+esac
+set +e
+out="$(PATH="${path_without_jq}" "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "an unavailable Codex JSON parser must be UNKNOWN, got ${rc}: ${out}"
+case "${out}" in
+  *"jq is required"*) ok "an unavailable JSON parser never falls back to config text" ;;
+  *) fail "unavailable Codex JSON parser did not name the UNKNOWN reason: ${out}" ;;
+esac
+cat > "${codex_home}/config.toml" <<'TOML'
+[plugins."agentic-engineering@devantler-plugins"]
+enabled = true
+TOML
+
+# ── 7s. Codex drift must not be sent to a Claude-only remediation ─────────────
+# `codex plugin` exposes add/list/marketplace/remove and no update command, so telling a Codex
+# operator to use the /plugin marketplace update flow prescribes an action that cannot repair this
+# lane — and may refresh the sibling Claude installation instead.
+printf 'stale under codex remediation\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"/plugin marketplace update"*)
+    fail "Codex drift prescribes the Claude-only /plugin update flow: ${out}" ;;
+  *) ok "Codex drift is not routed to the Claude /plugin update flow" ;;
+esac
+case "${out}" in
+  *"codex plugin"*) ok "Codex drift names a codex-specific control-plane action" ;;
+  *) fail "Codex drift names no codex-specific remediation: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7t. A replace ref INSIDE the submodule defeats a revision comparison ──────
+# The Cursor loader reads content with a plain `git show <ref>:<path>`, which resolves THROUGH
+# refs/replace. So a replacement inside the submodule changes the bytes it loads while leaving BOTH
+# compared revisions identical — `--no-replace-objects rev-parse` still returns the original commit.
+# A revision equality check therefore cannot establish the loaded content and must refuse a verdict.
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+printf 'UNREVIEWED replacement content\n' > "${p}/README.md"
+git -C "${pin_repo}" add plugins/agentic-engineering/README.md
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm replacement-payload
+sub_replacement="$(git -C "${pin_repo}" rev-parse HEAD)"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+git -C "${pin_repo}" replace "${gitlink}" "${sub_replacement}"
+set +e
+out="$("${script}" --runtime cursor --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "a replace ref inside the submodule must be UNKNOWN (exit 2), got ${rc}: ${out}"
+case "${out}" in
+  *UNKNOWN*"refs/replace/"*) ok "a submodule replace ref refuses a verdict instead of reporting CURRENT" ;;
+  *) fail "submodule replace ref did not name the replacement refs: ${out}" ;;
+esac
+# The same UNKNOWN must remain visible under --quiet: say() is suppressed, so the reason has to
+# travel on stderr (every other UNKNOWN path already does via die()).
+set +e
+quiet_out="$("${script}" --runtime cursor --quiet --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; quiet_rc=$?
+set -e
+[ "${quiet_rc}" -eq 2 ] \
+  || fail "a replace ref under --quiet must still be UNKNOWN (exit 2), got ${quiet_rc}: ${quiet_out}"
+case "${quiet_out}" in
+  *UNKNOWN*"refs/replace/"*)
+    ok "a submodule replace ref names the replacement refs even under --quiet" ;;
+  *) fail "submodule replace ref under --quiet hid the UNKNOWN reason: ${quiet_out}" ;;
+esac
+git -C "${pin_repo}" replace -d "${gitlink}"
+git -C "${pin_repo}" update-ref refs/remotes/origin/main "${gitlink}"
+# Put the shared pin fixture back: this case advanced HEAD and left unreviewed README bytes.
+git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
+[ "$(git -C "${pin_repo}" rev-parse HEAD)" = "${gitlink}" ] \
+  || fail "the submodule replace case did not restore the shared pin fixture HEAD"
+[ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
+  || fail "the submodule replace case left the shared pin fixture dirty"
+
+# ── 7ab. The replacement NAMESPACE is configurable, so a hard-coded scan misses it ─────
+# GIT_REPLACE_REF_BASE moves Git's effective replacement namespace off refs/replace/. A scan
+# hard-coded to refs/replace/* then returns nothing while the loader's plain `git show` still
+# resolves through the replacement — so the branch proceeds to a revision comparison, which
+# --no-replace-objects answers with the pin, and reports CURRENT over unreviewed bytes. The
+# enumeration has to follow the namespace Git is actually honouring, not the default one.
+git -C "${pin_repo}" update-ref "refs/evil/${gitlink}" "${sub_replacement}"
+set +e
+out="$(GIT_REPLACE_REF_BASE=refs/evil/ "${script}" --runtime cursor \
+        --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] \
+  || fail "a replacement in a configured namespace must be UNKNOWN (exit 2), got ${rc}: ${out}"
+case "${out}" in
+  *UNKNOWN*"refs/evil/"*)
+    ok "a configured replacement namespace refuses a verdict instead of reporting CURRENT" ;;
+  *) fail "the configured replacement namespace was not enumerated: ${out}" ;;
+esac
+git -C "${pin_repo}" update-ref -d "refs/evil/${gitlink}"
+[ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
+  || fail "the configured-namespace case left the shared pin fixture dirty"
+
+# ── 7v. A replace ref must not be able to REDEFINE the pinned tree ────────────
+# 7q proves the PIN ITSELF is resolved without replacement objects, and 7t refuses a verdict for
+# Cursor, whose loader reads through refs/replace. Neither covers the read every OTHER runtime
+# makes: the pinned TREE is read with `cat-file`/`ls-tree`, which also resolve THROUGH refs/replace.
+# A replacement therefore rewrites the REVIEWED side of the comparison itself, so an install
+# carrying the unreviewed replacement bytes matches it and reports CURRENT. That is a fail-open on
+# the one value everything downstream trusts, and it is reachable from the machine-local runtimes.
+printf 'UNREVIEWED replacement definition\n' > "${p}/agents/agent-improver.agent.md"
+git -C "${pin_repo}" add plugins/agentic-engineering/agents/agent-improver.agent.md
+git -C "${pin_repo}" -c commit.gpgsign=false commit -qm tree-replacement-payload
+tree_replacement="$(git -C "${pin_repo}" rev-parse HEAD)"
+git -C "${pin_repo}" replace "${gitlink}" "${tree_replacement}"
+repl_install="${tmp}/install-replacement"
+make_install "${repl_install}"
+add_runtime_asset_fixture "${repl_install}"
+printf 'UNREVIEWED replacement definition\n' > "${repl_install}/agents/agent-improver.agent.md"
+set +e
+out="$(run "${repl_install}")"; rc=$?
+set -e
+[ "${rc}" -ne 0 ] \
+  || fail "an install matching REPLACEMENT bytes reported CURRENT — the pinned tree was read through refs/replace: ${out}"
+case "${out}" in
+  *DRIFT*agent-improver*)
+    ok "a replace ref cannot redefine the pinned tree — the install is compared against the reviewed bytes" ;;
+  *) fail "expected DRIFT naming agent-improver against the reviewed pin, got rc=${rc}: ${out}" ;;
+esac
+git -C "${pin_repo}" replace -d "${gitlink}"
+# Put the shared pin fixture back: this case advanced HEAD and left unreviewed definition bytes.
+git -C "${pin_repo}" switch --detach --quiet "${gitlink}"
+[ "$(git -C "${pin_repo}" rev-parse HEAD)" = "${gitlink}" ] \
+  || fail "the pinned-tree replace case did not restore the shared pin fixture HEAD"
+[ -z "$(git -C "${pin_repo}" status --porcelain)" ] \
+  || fail "the pinned-tree replace case left the shared pin fixture dirty"
+
+# ── 7u. The Codex reinstall must be gated on the pin ──────────────────────────
+# `codex plugin add` installs the marketplace snapshot's LATEST. Prescribing a bare
+# `marketplace upgrade` + `remove && add` therefore tells an operator to install whatever the tip is,
+# which is the same hazard the Claude refresh path is explicitly gated against.
+printf 'stale under codex pin gate\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"Check the snapshot's revision"*"${gitlink}"*)
+    ok "the Codex reinstall is gated on the pinned revision" ;;
+  *) fail "Codex remediation prescribes a reinstall without a pin gate: ${out}" ;;
+esac
+case "${out}" in
+  *"snapshot NOT at the pin"*) ok "the Codex remediation says what to do when the snapshot is not at the pin" ;;
+  *) fail "Codex remediation does not cover a snapshot ahead of the pin: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7v. An empty effective result means NOT LOADED, never "ask the static table" ──
+# Codex's plugin feature can be off while this plugin's table entry and cached copy both remain
+# present. `codex plugin list --json` then correctly returns an empty `installed` array. Treating
+# that as "no answer" and falling back to the config would report CURRENT for a definition the
+# runtime never loaded — the config still says enabled = true.
+set +e
+out="$(CODEX_SHIM_MODE=feature-off "${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 2 ] || fail "an unloaded Codex plugin must exit 2, got ${rc}: ${out}"
+case "${out}" in
+  *"not enabled"*) ok "an empty effective result is disabled, not a fallback to the static table" ;;
+  *) fail "unloaded Codex plugin did not name the reason: ${out}" ;;
+esac
+
+# ── 7w. The Codex remediation must never advance the snapshot before installing ──
+# `marketplace upgrade` moves the snapshot to the upstream tip, so a precondition checked BEFORE it
+# is invalidated by it: a following `add` installs a revision nobody reviewed.
+printf 'stale under snapshot-advance check\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"do NOT run"*"marketplace upgrade"*)
+    ok "the Codex remediation forbids advancing the snapshot before installing" ;;
+  *) fail "Codex remediation still prescribes upgrade-then-install: ${out}" ;;
+esac
+case "${out}" in
+  *"reinstall WITHOUT upgrading"*)
+    ok "the at-the-pin path reinstalls without advancing the snapshot" ;;
+  *) fail "Codex remediation has no snapshot-preserving path: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7y. The at-the-pin reinstall must verify BYTES, not just the revision ──────
+# A revision equality is a claim about the commit id, never about the working-tree content. A dirty
+# file, a clean/smudge filter, or a replacement object all leave `rev-parse` reporting the pinned
+# revision while the bytes on disk differ — so a revision-only precondition hands `add` a snapshot
+# carrying unreviewed definitions and reports the reinstall as safe. This is the same four-assertion
+# doctrine the consumer contract already requires when reading a definition at the pin.
+printf 'stale under snapshot-bytes check\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"EVERY definition file"*)
+    ok "the at-the-pin path verifies every definition byte, not just the revision" ;;
+  *) fail "Codex remediation gates the reinstall on the revision alone: ${out}" ;;
+esac
+case "${out}" in
+  *"status --porcelain"*)
+    ok "the at-the-pin path also requires a clean snapshot tree" ;;
+  *) fail "Codex remediation does not require a clean snapshot tree: ${out}" ;;
+esac
+case "${out}" in
+  *"--no-replace-objects rev-parse HEAD:<f>"*)
+    ok "snapshot expected-blob reads bypass replacement objects" ;;
+  *) fail "Codex remediation reads expected snapshot blobs through replacements: ${out}" ;;
+esac
+case "${out}" in
+  *"ls-tree HEAD -- <runtime-asset>"*"test -x <snapshot>/<runtime-asset>"*)
+    ok "snapshot verification checks executable runtime-asset modes" ;;
+  *) fail "Codex remediation can reinstall a non-executable required helper: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7z. The reinstall must not delete the working plugin before it can restore ──
+# `codex plugin remove` deletes the plugin from local config AND cache. Prescribing `remove && add`
+# means a failed `add` — bad snapshot, disk error, interrupted run — leaves the lane with no
+# definition to load and no way to self-repair, turning a drift report into an outage. The ordering
+# must not depend on `add` being idempotent over an existing install, which the CLI does not
+# document.
+printf 'stale under destructive-order check\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"config entry"*)
+    ok "the reinstall preserves the config entry the removal deletes" ;;
+  *) fail "Codex remediation removes the only copy with no backup: ${out}" ;;
+esac
+case "${out}" in
+  *"rather than editing the cache"*)
+    ok "a failed add is an outage to surface, never a hand-restored cache" ;;
+  *) fail "Codex remediation has no recovery for a failed add: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7aa. A CURRENT verdict must not be read as "this process is current" ───────
+# The check inspects the INSTALLED copy on disk. The running process executes whatever it loaded at
+# startup, and a refresh needs a restart to take effect — so a CURRENT verdict produced after a
+# concurrent refresh says nothing about the definition this process is still executing. Leaving that
+# unstated is the fail-open direction: the run reports itself current while following a superseded
+# definition.
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 0 ] || fail "the CURRENT case must exit 0, got ${rc}: ${out}"
+case "${out}" in
+  *"booted"*)
+    ok "a CURRENT verdict states that it describes the install, not the booted definition" ;;
+  *) fail "CURRENT verdict does not distinguish the install from the booted copy: ${out}" ;;
+esac
+
+# ── 7ab. Ignored loaded files must block a Codex reinstall ────────────────────
+# `status --porcelain` deliberately omits ignored untracked files, but the Codex marketplace
+# installer copies them from the snapshot. An ignored agent, skill resource, or runtime asset can
+# therefore pass a clean-tree gate and become loaded after reinstall unless it is inventoried
+# separately across every loaded surface.
+printf 'stale under ignored-file check\n' > "${codex_install}/agents/agent-improver.agent.md"
+set +e
+out="$("${script}" --runtime codex --codex-home "${codex_home}" \
+                  --repo-root "${tmp}/consumer" --gitlink "${gitlink}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
+ignored_scan_command="$(printf '%s\n%s' \
+  '         git -C <snapshot> ls-files --others --ignored --exclude-standard -- \' \
+  '           <prefix>/agents <prefix>/skills <runtime-asset>        # must print NOTHING')"
+case "${out}" in
+  *"${ignored_scan_command}"*)
+    ok "the Codex reinstall rejects ignored files across every loaded surface" ;;
+  *) fail "Codex remediation can reinstall an ignored loaded file: ${out}" ;;
+esac
+cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
+
+# ── 7x. The test script itself must stay executable ───────────────────────────
+# It carries a shebang and is invoked directly by local callers; CI happening to run it through
+# `bash` masks a lost mode bit, so assert the bit rather than relying on the runner.
+if [ -x "${script%/*}/plugin-definition-currency.test.sh" ]; then
+  ok "the test script keeps its executable bit"
+else
+  fail "the test script lost its executable bit (mode must stay 100755)"
+fi
 echo "plugin-definition-currency: ${pass_count} assertions passed"

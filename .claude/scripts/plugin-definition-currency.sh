@@ -3,11 +3,11 @@
 #
 # The deployment verifies that chain everywhere except its last link. `agent-role-delivery-contract`
 # hashes the desired state against the repository submodule at the gitlink, and monorepo#2736 tracks
-# the gitlink against upstream `main` — but the copy the agent and skill entrypoints are actually
-# served from is a runtime-managed install with no writer at all. Its staleness is therefore
-# unbounded: nothing advances it, and nothing notices. Measured 2026-08-14 on the Claude instance,
-# 7 of 9 definition files differed from the pin and had not moved in 20 days, while both existing
-# controls read clean. See monorepo#2847.
+# the gitlink against upstream `main` — but the machine-local copy the agent and skill entrypoints are
+# actually served from is a runtime-managed install. Its staleness can therefore be unbounded.
+# Measured 2026-08-14 on the Claude instance, 7 of 9 definition files differed from the pin and had
+# not moved in 20 days, while both existing controls read clean. See monorepo#2847. Cursor instead
+# loads a submodule ref, so that lane verifies the loaded revision rather than inventing an install.
 #
 # READ-ONLY. It never edits, and never needs write access to, the runtime's plugin install. Refresh
 # is a runtime control-plane action (the `/plugin` marketplace update), never a cache edit.
@@ -17,8 +17,10 @@
 # installed version string still looks plausible. The loaded surface is every agent and skill file
 # plus every provider-neutral requiredRuntimeAsset declared by this consumer.
 #
-# Usage: plugin-definition-currency.sh [--repo-root DIR] [--plugins-root DIR] [--gitlink SHA]
-#                                      [--installed DIR] [--submodule-path PATH] [--quiet]
+# Usage: plugin-definition-currency.sh [--runtime claude|codex|cursor] [--repo-root DIR]
+#                                      [--plugins-root DIR] [--codex-home DIR] [--gitlink SHA]
+#                                      [--installed DIR] [--submodule-path PATH]
+#                                      [--cursor-ref REF] [--quiet]
 #
 # Exit 0  every pinned loaded file was CLASSIFIED and MATCHED
 #      1  DRIFT — at least one differs, is missing, or is unexpected
@@ -39,13 +41,15 @@ set -euo pipefail
 
 REPO_ROOT=""
 PLUGINS_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"
+CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 GITLINK=""
 INSTALLED=""
 SUBMODULE_PATH="libraries/agent-plugins"
 PLUGIN_ID="agentic-engineering@devantler-plugins"
 PLUGIN_NAME="agentic-engineering"
+RUNTIME="claude"
+CURSOR_REF="refs/remotes/origin/main"
 QUIET=0
-nl="\n"
 
 # Named beside every UNKNOWN that a fresh worktree can actually hit. A guard that blocks without
 # naming the resolving action is a friction tax the deployment's own hardening rule forbids — and it
@@ -63,20 +67,30 @@ need() { [ "$1" -ge 2 ] || die "missing value for $2"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --runtime) need $# "$1"; RUNTIME="$2"; shift 2 ;;
     --repo-root) need $# "$1"; REPO_ROOT="$2"; shift 2 ;;
     --plugins-root) need $# "$1"; PLUGINS_ROOT="$2"; shift 2 ;;
+    --codex-home) need $# "$1"; CODEX_HOME_DIR="$2"; shift 2 ;;
     --gitlink) need $# "$1"; GITLINK="$2"; shift 2 ;;
     --installed) need $# "$1"; INSTALLED="$2"; shift 2 ;;
     --submodule-path) need $# "$1"; SUBMODULE_PATH="$2"; shift 2 ;;
     --plugin-id) need $# "$1"; PLUGIN_ID="$2"; shift 2 ;;
     --plugin-name) need $# "$1"; PLUGIN_NAME="$2"; shift 2 ;;
+    --cursor-ref) need $# "$1"; CURSOR_REF="$2"; shift 2 ;;
     --quiet) QUIET=1; shift ;;
-    -h|--help) sed -n '1,34p' "$0"; exit 0 ;;
+    -h|--help) awk '/^set -euo pipefail$/ { exit } { print }' "$0"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
 
 command -v git >/dev/null 2>&1 || die "git is required"
+case "$RUNTIME" in
+  claude|codex|cursor) ;;
+  *) die "unsupported runtime '$RUNTIME' (expected claude, codex, or cursor)" ;;
+esac
+if [ "$RUNTIME" != claude ] && [ -n "$INSTALLED" ]; then
+  die "runtime '$RUNTIME' does not accept --installed; resolve the copy that lane actually loaded"
+fi
 
 say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 
@@ -91,16 +105,115 @@ if [ -z "$GITLINK" ]; then
   # `ls-tree` prints "160000 commit <sha>\t<path>" for a gitlink. Read the sha field.
   # Guarded: an explicitly-passed --repo-root that is not a git repository would otherwise abort
   # with git's own 128 rather than the documented UNKNOWN, and that is the path every caller uses.
-  gitlink_line="$(git -C "$REPO_ROOT" ls-tree HEAD "$SUBMODULE_PATH" 2>/dev/null)" \
+  gitlink_line="$(git -C "$REPO_ROOT" --no-replace-objects ls-tree HEAD "$SUBMODULE_PATH" 2>/dev/null)" \
     || die "cannot read HEAD in $REPO_ROOT — is it a git repository?"
   GITLINK="$(printf '%s\n' "$gitlink_line" | awk '$2=="commit"{print $3}')"
 fi
 [ -n "$GITLINK" ] || die "no gitlink for '$SUBMODULE_PATH' at HEAD — cannot establish the pinned revision"
 
+# Cursor has no runtime-managed install. Its deployment loader fetches and reads origin/main
+# directly from this submodule's object database, so the commit behind that exact ref is the loaded
+# definition source. Comparing any Claude or Codex cache here would inspect another lane's copy.
+if [ "$RUNTIME" = cursor ]; then
+  cursor_sub="$REPO_ROOT/$SUBMODULE_PATH"
+  [ -e "$cursor_sub/.git" ] \
+    || die "Cursor plugin submodule is not initialised: $cursor_sub"
+  # The loader reads its definition with a plain `git show <ref>:<path>`, which resolves THROUGH
+  # refs/replace. A revision comparison made with --no-replace-objects therefore cannot establish the
+  # bytes it loads: a replacement inside THIS submodule changes the loaded content without changing
+  # either compared revision, so an equality check here would report CURRENT over unreviewed bytes.
+  # There is no safe verdict available from a revision comparison, so refuse to produce one.
+  # Git's replacement namespace is CONFIGURABLE: GIT_REPLACE_REF_BASE moves it off refs/replace/,
+  # and git then honours only that namespace. A scan hard-coded to the default therefore returns
+  # nothing while a plain `git show` still resolves through the replacement — the enumeration reads
+  # clean and the verdict is issued over unreviewed bytes. Follow the namespace git is actually
+  # honouring, and keep scanning the default too so neither placement can hide a replacement.
+  replace_base="${GIT_REPLACE_REF_BASE:-refs/replace/}"
+  replace_base="${replace_base%/}"
+  if [ "$replace_base" = "refs/replace" ]; then
+    replaced="$(git -C "$cursor_sub" for-each-ref --format='%(refname)' 'refs/replace/*' 2>/dev/null)" \
+      || die "cannot enumerate replacement refs in $cursor_sub"
+  else
+    replaced="$(git -C "$cursor_sub" for-each-ref --format='%(refname)' \
+        'refs/replace/*' "$replace_base/*" 2>/dev/null)" \
+      || die "cannot enumerate replacement refs in $cursor_sub"
+  fi
+  if [ -n "$replaced" ]; then
+    # UNKNOWN reasons must survive --quiet: say() is suppressed when QUIET=1, and every other
+    # UNKNOWN path uses die() → stderr. Keep this multi-line explanation on stderr so a quiet
+    # caller still sees why the Cursor lane refused a verdict.
+    {
+      printf 'pinned revision        : %s\n\n' "$GITLINK"
+      printf 'UNKNOWN — the plugin submodule carries replacement ref(s):\n'
+      printf '%s\n' "$replaced" | while IFS= read -r r; do
+        [ -n "$r" ] && printf '  %s\n' "$r"
+      done
+      printf '\nThe Cursor loader reads content with a plain '\''git show'\'', which resolves through\n'
+      printf 'refs/replace, so comparing revisions cannot establish what it actually loads. Remove the\n'
+      printf 'replacement ref, or verify the loaded blobs against the pinned tree directly.\n'
+    } >&2
+    exit 2
+  fi
+  loaded_revision="$(git -C "$cursor_sub" --no-replace-objects rev-parse "$CURSOR_REF^{commit}" 2>/dev/null)" \
+    || die "cannot resolve Cursor loaded revision '$CURSOR_REF' in $cursor_sub"
+  say "pinned revision        : $GITLINK"
+  say "Cursor loaded revision : $loaded_revision ($CURSOR_REF)"
+  say ""
+  if [ "$loaded_revision" = "$GITLINK" ]; then
+    say "CURRENT — Cursor loaded revision matches the pinned gitlink."
+    exit 0
+  fi
+  say "DRIFT — Cursor loaded revision $loaded_revision differs from pinned gitlink $GITLINK."
+  say ""
+  say "Do not inspect another runtime's cache. Follow the reviewed definition at $GITLINK and"
+  say "report that the Cursor loader's $CURSOR_REF must be reconciled with the consumer pin."
+  exit 1
+fi
+
 # ── the INSTALLED copy ─────────────────────────────────────────────────────────
-# Resolved from the runtime's own record rather than guessed from a directory listing: the cache can
-# hold several versions at once and only this file says which one is served.
-if [ -z "$INSTALLED" ]; then
+if [ -z "$INSTALLED" ] && [ "$RUNTIME" = codex ]; then
+  # Enablement is an EFFECTIVE-STATE question. Only the runtime can parse its complete TOML model
+  # (including multiline strings and every valid key spelling), so never infer loaded state from
+  # line-oriented config text. If either half of the structured query is unavailable, the only safe
+  # verdict is UNKNOWN.
+  command -v codex >/dev/null 2>&1 \
+    || die "codex is required to establish effective plugin state for $CODEX_HOME_DIR"
+  command -v jq >/dev/null 2>&1 \
+    || die "jq is required to parse Codex runtime state for $CODEX_HOME_DIR"
+  if codex_json="$(CODEX_HOME="$CODEX_HOME_DIR" codex plugin list --json 2>/dev/null)"; then
+    [ -n "$codex_json" ] \
+      || die "Codex runtime state query returned no data for $CODEX_HOME_DIR"
+    enabled="$(printf '%s' "$codex_json" | jq -r --arg id "$PLUGIN_ID" '
+        if (.installed | type) != "array" then "unparseable"
+        else [ .installed[] | select(.pluginId == $id) | .enabled ]
+             | if length == 0 then "false" elif any(. == true) then "true" else "false" end
+        end
+      ' 2>/dev/null)" \
+      || die "Codex runtime state query returned malformed JSON for $CODEX_HOME_DIR"
+    [ "$enabled" != unparseable ] \
+      || die "Codex runtime state query returned an unexpected shape for $CODEX_HOME_DIR"
+  else
+    die "Codex runtime state query failed for $CODEX_HOME_DIR — cannot establish effective plugin state"
+  fi
+  [ "$enabled" = true ] \
+    || die "plugin '$PLUGIN_ID' is not enabled according to the Codex runtime state query"
+
+  marketplace="${PLUGIN_ID#*@}"
+  [ "$marketplace" != "$PLUGIN_ID" ] \
+    || die "Codex plugin id '$PLUGIN_ID' has no marketplace suffix"
+  codex_cache="$CODEX_HOME_DIR/plugins/cache/$marketplace/$PLUGIN_NAME"
+  [ -d "$codex_cache" ] \
+    || die "Codex plugin cache does not exist: $codex_cache"
+  paths="$(find "$codex_cache" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null)" \
+    || die "could not enumerate the Codex plugin cache: $codex_cache"
+  [ -n "$paths" ] || die "Codex plugin '$PLUGIN_ID' has no cached copy in $codex_cache"
+  count="$(printf '%s\n' "$paths" | wc -l | tr -d ' ')"
+  [ "$count" -eq 1 ] \
+    || die "Codex plugin '$PLUGIN_ID' has $count cached copies; cannot identify the loaded one"
+  INSTALLED="$paths"
+elif [ -z "$INSTALLED" ]; then
+  # Claude resolves from the runtime's own record rather than guessing from a directory listing: its
+  # cache can hold several versions at once and only this registry says which one is served.
   # jq is checked HERE, not at the top: it is needed only to read the registry, and every caller
   # that passes --installed (the whole test suite) would otherwise fail for an unrelated reason.
   command -v jq >/dev/null 2>&1 || die "jq is required to read the runtime plugin registry"
@@ -151,8 +264,13 @@ runtime_assets="$(jq -er '
 prefix="plugins/$PLUGIN_NAME/"
 tree=""
 sub="$REPO_ROOT/$SUBMODULE_PATH"
-if [ -e "$sub" ] && git -C "$sub" cat-file -e "$GITLINK^{commit}" 2>/dev/null; then
-  tree="$(git -C "$sub" ls-tree -r "$GITLINK" -- "$prefix" 2>/dev/null \
+# --no-replace-objects on BOTH reads. `cat-file` and `ls-tree` resolve THROUGH refs/replace, so a
+# replacement for the gitlink rewrites the REVIEWED side of the comparison itself: an install
+# carrying the replacement bytes then matches and reports CURRENT. The Cursor branch above refuses a
+# verdict for the same hazard, but it exits before this point, so every other runtime reaches these
+# reads unprotected. Same rule the pin resolution above already follows.
+if [ -e "$sub" ] && git -C "$sub" --no-replace-objects cat-file -e "$GITLINK^{commit}" 2>/dev/null; then
+  tree="$(git -C "$sub" --no-replace-objects ls-tree -r "$GITLINK" -- "$prefix" 2>/dev/null \
             | awk -F'\t' '{split($1, m, " "); if (m[2]=="blob") print m[3] "\t" m[1] "\t" $2}')" \
     || die "could not read the pinned tree $GITLINK from $sub${RECOVERY}"
 else
@@ -171,6 +289,14 @@ else
   case "$(printf '%s' "$raw" | jq -r '.truncated // false')" in
     true) die "the forge returned a TRUNCATED tree for $GITLINK — cannot verify completeness${RECOVERY}" ;;
   esac
+  path_safety="$(printf '%s' "$raw" | jq -er '
+      if any(.tree[] | select(.type=="blob");
+          .path | (contains("\\") or contains("\t") or contains("\r") or contains("\n")))
+      then "unsafe" else "safe" end
+    ' 2>/dev/null)" \
+    || die "could not validate pinned forge paths for $GITLINK from $slug"
+  [ "$path_safety" = safe ] \
+    || die "the forge tree contains an unsafe path (tab, newline, carriage return or backslash) — cannot serialize it losslessly${RECOVERY}"
   tree="$(printf '%s' "$raw" | jq -r '.tree[] | select(.type=="blob") | [.sha,.mode,.path] | @tsv')" \
     || die "could not parse the pinned tree $GITLINK from $slug"
 fi
@@ -191,9 +317,9 @@ reviewed="$(printf '%s
         if (rel ~ /^agents\// || rel ~ /^skills\// || required[rel]) print $1 "	" $2 "	" rel
       }' \
   | sort -k3,3)"
-case "$reviewed" in
-  QUOTED*|*"${nl}QUOTED"*) die "the pinned tree contains a path git had to quote (tab, newline or backslash) — cannot verify it${RECOVERY}" ;;
-esac
+quoted_record="$(printf '%s\n' "$reviewed" | awk '$0=="QUOTED"{print 1; exit}')"
+[ -z "$quoted_record" ] \
+  || die "the pinned tree contains a path git had to quote (tab, newline or backslash) — cannot verify it${RECOVERY}"
 [ -n "$reviewed" ] || die "pinned revision $GITLINK contains no definition files under $prefix"
 
 # A declaration absent from the pinned tree must be UNKNOWN, not silently omitted from both sides.
@@ -301,6 +427,14 @@ done < <(sort "$inst_list")
 say ""
 if [ "$drift" -eq 0 ]; then
   say "CURRENT — $checked pinned loaded file(s) match the installed copy."
+  # Scope the verdict explicitly. This compares the INSTALLED copy on disk; the running process
+  # executes whatever it loaded at startup, and an install only becomes live on the next dispatch.
+  # Left unstated, a CURRENT produced after a concurrent refresh reads as "this run is current" —
+  # the fail-open direction, since the run would then follow a superseded definition believing it
+  # had verified otherwise.
+  say "Scope: this describes the INSTALLED copy on disk, not the definition this process booted."
+  say "An install becomes live on the next dispatch, so a run whose install changed mid-flight is"
+  say "still executing what it booted; only a LATER run's check establishes that the pin is live."
   exit 0
 fi
 
@@ -311,8 +445,52 @@ say ""
 say "What to do, in this order:"
 say "  1. Do NOT proceed as if the loaded definition were current. Read the reviewed definition at"
 say "     $GITLINK and follow that, then report the drift in the run report."
-say "  2. Refresh through the runtime's own control plane — the /plugin marketplace update flow."
-say "     Never edit the plugin cache: it is read-only evidence."
+# The control plane is per-runtime. `codex plugin` exposes add/list/marketplace/remove and no update
+# command, so prescribing Claude's /plugin flow to a Codex operator names an action that cannot
+# repair this lane — and could refresh the sibling Claude installation instead.
+say "  2. Refresh through the runtime's own control plane. Never edit the plugin cache: it is"
+say "     read-only evidence."
+if [ "$RUNTIME" = codex ]; then
+  say "     For Codex: \`codex plugin add\` installs the marketplace snapshot's LATEST, so the only"
+  say "     safe sequence is one that never advances the snapshot. Check the snapshot's revision"
+  say "     against $GITLINK first — and the revision ALONE does not establish the content, because"
+  say "     a dirty file, a clean/smudge filter, or a replacement object each leave the revision"
+  say "     reading correct while the bytes on disk differ. In the snapshot checkout <snapshot>,"
+  say "     all four must pass before any install:"
+  say "         git -C <snapshot> --no-replace-objects rev-parse HEAD   # must equal $GITLINK"
+  say "         git -C <snapshot> status --porcelain                    # must print NOTHING"
+  say "         git -C <snapshot> ls-files --others --ignored --exclude-standard -- \\"
+  say "           <prefix>/agents <prefix>/skills <runtime-asset>        # must print NOTHING"
+  say "         # repeat <runtime-asset> for every declared requiredRuntimeAsset; ignored untracked"
+  say "         # files are hidden from status but the marketplace installer can still copy them"
+  say "         and EVERY definition file must equal its pinned blob — one file proves only itself,"
+  say "         so a filter or index flag altering any OTHER file survives a single-file check:"
+  say "           git -C <snapshot> --no-replace-objects ls-tree -r --name-only HEAD -- <prefix>"
+  say "           # for each: --no-replace-objects rev-parse HEAD:<f> must equal"
+  say "           # hash-object --no-filters -- <f>"
+  say "         and EVERY executable requiredRuntimeAsset must retain its pinned mode:"
+  say "           git -C <snapshot> --no-replace-objects ls-tree HEAD -- <runtime-asset>"
+  say "           # must start '100755 blob'; test -x <snapshot>/<runtime-asset> must succeed"
+  say "       * snapshot AT the pin and all of the above clean -> reinstall WITHOUT upgrading."
+  say "         \`codex plugin remove\` deletes the plugin from local config AND cache, so an 'add'"
+  say "         that then fails — bad snapshot, disk error, interrupted run — leaves this lane with"
+  say "         no definition to load. Do NOT rely on 'add' overwriting an existing install; the"
+  say "         CLI does not document that. There is no safe local rollback of the cache: it is"
+  say "         read-only evidence, so restoring a copy of it by hand is itself a violation, and a"
+  say "         cache copy would not restore the deleted config entry in any case. Save the config"
+  say "         entry first so registration can be rebuilt through the control plane:"
+  say "           # copy the [plugins.\"$PLUGIN_ID\"] table out of $CODEX_HOME_DIR/config.toml"
+  say "           codex plugin remove $PLUGIN_ID && codex plugin add $PLUGIN_ID"
+  say "         If the 'add' fails, restore that config entry and re-run 'add'. If it still fails,"
+  say "         this lane can neither load a definition nor repair itself: surface it to the"
+  say "         maintainer on a declared channel as an outage, rather than editing the cache."
+  say "       * snapshot NOT at the pin -> do NOT reinstall, and do NOT run"
+  say "         'codex plugin marketplace upgrade': it moves the snapshot to the upstream tip, so a"
+  say "         following 'add' installs a revision nobody here has reviewed. Reconcile the consumer"
+  say "         gitlink with the revision you intend to run through the reviewed rollout instead."
+else
+  say "     For Claude: the /plugin marketplace update flow."
+fi
 say "  3. If the refresh needs an interactive session this run cannot open, surface it to the"
 say "     maintainer on a declared channel rather than leaving it unreported."
 exit 1
