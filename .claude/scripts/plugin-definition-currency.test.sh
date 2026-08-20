@@ -1253,8 +1253,8 @@ out="$("${script}" --runtime codex --codex-home "${codex_home}" \
 set -e
 [ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
 case "${out}" in
-  *"--no-filters"*)
-    ok "the at-the-pin path verifies snapshot bytes, not just the revision" ;;
+  *"EVERY definition file"*)
+    ok "the at-the-pin path verifies every definition byte, not just the revision" ;;
   *) fail "Codex remediation gates the reinstall on the revision alone: ${out}" ;;
 esac
 case "${out}" in
@@ -1277,13 +1277,13 @@ out="$("${script}" --runtime codex --codex-home "${codex_home}" \
 set -e
 [ "${rc}" -eq 1 ] || fail "codex drift must exit 1, got ${rc}: ${out}"
 case "${out}" in
-  *"Back up"*)
-    ok "the reinstall backs the cached copy up before removing it" ;;
+  *"config entry"*)
+    ok "the reinstall preserves the config entry the removal deletes" ;;
   *) fail "Codex remediation removes the only copy with no backup: ${out}" ;;
 esac
 case "${out}" in
-  *"restore that backup"*)
-    ok "the reinstall names the restore path for a failed add" ;;
+  *"rather than editing the cache"*)
+    ok "a failed add is an outage to surface, never a hand-restored cache" ;;
   *) fail "Codex remediation has no recovery for a failed add: ${out}" ;;
 esac
 cp "${p}/agents/agent-improver.agent.md" "${codex_install}/agents/agent-improver.agent.md"
