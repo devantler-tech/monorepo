@@ -161,9 +161,12 @@ corpus_deny_reasons() {
   done <<< "$(raw_corpus)"
 }
 
+# Computed ONCE: ~44 guard calls, and check_sources runs five times per
+# invocation (four self-tests plus the real pass).
+CORPUS_REASONS=""
+
 check_sources() {
-  local findings=0 checked=0 skipped=0 classified=0 reasons cand reason
-  reasons=$(corpus_deny_reasons)
+  local findings=0 checked=0 skipped=0 classified=0 cand reason
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     [ -r "$f" ] || { echo "  unreadable source: $f" >&2; return 2; }
@@ -175,7 +178,7 @@ check_sources() {
       checked=$((checked+1))
       if "$guard" --command "$cand" >/dev/null 2>&1; then continue; fi
       reason=$("$guard" --command "$cand" 2>&1 | head -1)
-      if printf '%s\n' "$reasons" | grep -qxF -- "$reason"; then
+      if printf '%s\n' "$CORPUS_REASONS" | grep -qxF -- "$reason"; then
         classified=$((classified+1)); continue
       fi
       findings=$((findings+1))
@@ -191,6 +194,9 @@ check_sources() {
   CHECKED=$checked; SKIPPED=$skipped; CLASSIFIED=$classified
   [ "$findings" -eq 0 ]
 }
+
+CORPUS_REASONS=$(corpus_deny_reasons)
+[ -n "$CORPUS_REASONS" ] || die_unknown "no corpus row produced a deny reason; the corpus or the guard is not being read"
 
 # ── Self-tests: planted fixtures, before any real verdict is trusted ──────────
 fixdir=$(mktemp -d) || die_unknown "cannot create fixture dir"
@@ -234,13 +240,18 @@ done <<< "$SOURCES"
 
 # ── The real check ───────────────────────────────────────────────────────────
 CHECKED=0; SKIPPED=0; CLASSIFIED=0
-if check_sources "$SOURCES"; then
+# Capture the status DIRECTLY. After `fi`, `$?` is the status of the `if`
+# compound (0 when the condition merely failed), so reading it there cannot
+# distinguish a finding from an UNKNOWN and would silently report an unreadable
+# source as a finding.
+check_sources "$SOURCES"
+status=$?
+if [ "$status" -eq 0 ]; then
   echo "surveyor-vocabulary-coverage: $CHECKED prescribed command(s) covered" \
        "($CLASSIFIED classified in corpus, $SKIPPED prose fragment(s) skipped," \
        "$corpus_rows corpus row(s))"
   exit 0
 fi
-status=$?
 [ "$status" -eq 2 ] && die_unknown "a source was unreadable"
 echo "surveyor-vocabulary-coverage: unclassified command(s) found — see above" >&2
 exit 1
