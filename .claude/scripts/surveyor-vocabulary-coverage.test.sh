@@ -130,6 +130,7 @@ extract_commands() {
   {
     grep -ohE '`[^`]+`' "$f" 2>/dev/null | sed 's/^`//; s/`$//' \
       | sed -E 's/^[[:space:]]*\$[[:space:]]+//' \
+      | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]("'"'"']*)[[:space:]]+)+//' \
       | grep -E '^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])'
     # Fenced blocks carry MULTI-LINE commands: a trailing backslash, or a quoted
     # operand (a GraphQL query) that runs across lines. Splitting on newlines
@@ -148,6 +149,13 @@ extract_commands() {
     # is skipped ENTIRELY and a refusal nobody classified passes unnoticed --
     # fail-open, where the split-command case merely produces a noisy finding.
     #
+    # The SAME fail-open reaches two more prescribed shapes, and the verb is not
+    # at the start of the line in either: a one-shot environment assignment in
+    # front of the verb (`RUN_NAME="$run_name" gh api ...`), and a verb nested in
+    # a command substitution (`fid_status=$(gh api ...)`). Both are prescribed by
+    # the surveyor overlay today, and an unmatched line is dropped before
+    # classification, so a guard refusal of either stays invisible to CI.
+    #
     # Quote state is tracked as a MACHINE, not a count: `'"'"'` inside a double-quoted
     # operand (and `"` inside a single-quoted one) is a literal, so counting either
     # delimiter alone would leave an apostrophe in `--jq "won'"'"'t"` permanently
@@ -162,16 +170,57 @@ extract_commands() {
         }
         return (sq || dq)
       }
-      /^[[:space:]]*```/ { inb = !inb; if (!inb && buf != "") { print buf; buf = "" } next }
+      # Drop leading `VAR=value ` assignments. The assignment is not the command
+      # being classified, and leaving it in front makes the line fail the verb
+      # test and vanish. The unquoted-value branch excludes `(` and both quotes so
+      # it cannot swallow a `$(`, which the substitution branch below owns.
+      function strip_assigns(s) {
+        while (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]("'"'"']*)[[:space:]]+/)) {
+          s = substr(s, RSTART + RLENGTH)
+        }
+        return s
+      }
+      # `VAR=$(gh ...)` / `VAR="$(gh ...)"`. Returns the text from the verb on, or
+      # "" when the line is not that shape.
+      function strip_subst(s) {
+        if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\(/)) return substr(s, RSTART + RLENGTH)
+        return ""
+      }
+      # Cut at the paren CLOSING the substitution so a trailing `|| { ... }` is not
+      # handed to the guard as part of the command. Parens inside quotes are
+      # literals -- a jq filter is full of them -- so the same quote machine runs
+      # here rather than a bare character count.
+      function cut_subst(s,   i, c, sq, dq, depth) {
+        depth = 0
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          if (c == "\\" && !sq) { i++; continue }
+          else if (c == "'"'"'" && !dq) sq = !sq
+          else if (c == "\"" && !sq) dq = !dq
+          else if (!sq && !dq && c == "(") depth++
+          else if (!sq && !dq && c == ")") { if (depth == 0) return substr(s, 1, i - 1); depth-- }
+        }
+        return s
+      }
+      function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
+      /^[[:space:]]*```/ { inb = !inb; if (!inb && buf != "") { print (subst ? cut_subst(buf) : buf); buf = ""; subst = 0 } next }
       !inb { next }
       {
         line = $0
         sub(/^[[:space:]]*\$[[:space:]]+/, "", line)
-        if (buf == "") { if (line !~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) next; buf = line }
+        if (buf == "") {
+          cand = strip_assigns(line)
+          if (opens(cand)) { buf = cand; subst = 0 }
+          else {
+            cand = strip_subst(line)
+            if (opens(cand)) { buf = cand; subst = 1 }
+            else next
+          }
+        }
         else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
-        if (!unbalanced(buf) && buf !~ /\\[[:space:]]*$/) { print buf; buf = "" }
+        if (!unbalanced(buf) && buf !~ /\\[[:space:]]*$/) { print (subst ? cut_subst(buf) : buf); buf = ""; subst = 0 }
       }
-      END { if (buf != "") print buf }
+      END { if (buf != "") print (subst ? cut_subst(buf) : buf) }
     ' "$f" 2>/dev/null
   } | normalize | sort -u
 }
@@ -281,6 +330,36 @@ printf '%s\n' 'On a rejected credential run:' '' '```sh' \
 env_extracted=$(extract_commands "$fixdir/env.md" | grep -c '^env ')
 [ "${env_extracted:-0}" -ge 1 ] \
   || die_unknown "self-test: an env-prefixed command was never extracted, so it cannot reach the guard (fail-open)"
+
+# An ASSIGNMENT-PREFIXED command must reach the guard. The overlay prescribes
+# `RUN_NAME="$run_name" gh api ...` for the default-branch streak walk; with the verb
+# no longer at the start of the line, an opener test anchored on the verb drops it.
+printf '%s\n' 'The streak walk runs:' '' '```sh' \
+  'RUN_NAME="$run_name" gh api --paginate "repos/devantler-tech/monorepo/actions/runs" --jq ".workflow_runs[].id"' '```' > "$fixdir/assign.md"
+
+# A command SUBSTITUTION must reach the guard too, and must arrive without the shell
+# that surrounds it: the overlay prescribes `fid_status=$(gh api ... ) || { ...; }`,
+# and handing the guard the trailing `|| { ... }` classifies something that is not
+# the command. Spans lines and carries parens inside a jq filter, which is what makes
+# a bare paren count wrong.
+printf '%s\n' 'The board census runs:' '' '```sh' \
+  'fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" \' \
+  '  --jq '"'"'.[]|select(.name=="Status")|.id'"'"') \' \
+  '  || { echo "board_coverage=unknown:field-lookup-failed"; exit 0; }' '```' > "$fixdir/subst.md"
+
+assign_extracted=$(extract_commands "$fixdir/assign.md" | grep -c '^gh api ')
+[ "${assign_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: an assignment-prefixed command was never extracted, so it cannot reach the guard (fail-open)"
+
+subst_extracted=$(extract_commands "$fixdir/subst.md" | grep -c '^gh api ')
+[ "${subst_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a command-substitution command was never extracted, so it cannot reach the guard (fail-open)"
+
+# The substitution must be CUT at its closing paren. Without that the guard is handed
+# `... ) || { echo ...; exit 0; }` and classifies shell that is not the command.
+if extract_commands "$fixdir/subst.md" | grep -q 'board_coverage=unknown'; then
+  die_unknown "self-test: a command substitution was extracted with its trailing shell attached"
+fi
 if check_sources "$fixdir/prompt.md" >/dev/null 2>&1; then
   die_unknown "self-test: a prompt-prefixed command was skipped instead of checked (fail-open)"
 fi

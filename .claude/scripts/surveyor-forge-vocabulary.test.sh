@@ -41,6 +41,21 @@
 # agent-plugins#147. They were found by the sources-to-corpus coverage check in
 # `surveyor-vocabulary-coverage.test.sh`, which is the companion to this file.
 #
+#
+# On `$ENV` in a `--jq` filter: the guard refuses it, and that refusal is RIGHT, so
+# it is pinned `deny` rather than tracked as a gap. `$ENV` hands the filter the whole
+# environment, `GITHUB_TOKEN` included, and the guard classifies statically — it
+# cannot tell `$ENV.RUN_NAME` from `$ENV.GITHUB_TOKEN`, so allowing the construct at
+# all would open a credential path straight into the surveyor's own digest. Teaching
+# it to whitelist safe names means parsing jq programs inside a security boundary,
+# which is more attack surface than the one benign use is worth.
+#
+# The surveyor overlay prescribes exactly that benign use today (the default-branch
+# streak walk, to avoid pasting a run name into a jq program as a literal), so with
+# the guard enforcing, that walk fails closed mid-run. The fix belongs in the overlay
+# — filter in the shell instead of in jq — and is tracked as monorepo#2939. This row
+# records the refusal as a decision so it stops being invisible; it is deliberately
+# NOT a gap, because promoting it to `allow` is the one outcome that would be unsafe.
 # On `git status`: the surveyor definition names `git log/status` among its read
 # verbs, but only the hardened invocation is actually a read, and the guard is
 # right to insist on it. Bare `git status` is pinned as `deny` for two reasons
@@ -116,6 +131,7 @@ deny	gh api -X DELETE repos/devantler-tech/monorepo/git/refs/heads/x
 deny	gh api repos/devantler-tech/monorepo/issues -f title=pwned
 deny	gh api -X GET repos/devantler-tech/monorepo/issues -F body=@/etc/passwd
 deny	gh api --input /etc/passwd repos/devantler-tech/monorepo/issues
+deny	gh api repos/devantler-tech/monorepo/actions/runs --jq '.workflow_runs[]|select(.name == $ENV.RUN_NAME)'
 deny	gh api graphql -f query='mutation { addComment(input:{subjectId:"x", body:"y"}) { clientMutationId } }'
 allow	git log --oneline -20
 allow	git log -1 --format=%cI
