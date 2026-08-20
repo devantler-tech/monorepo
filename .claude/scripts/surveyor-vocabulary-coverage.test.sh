@@ -107,11 +107,6 @@ gh search prs
 gh search issues
 gh search prs --help
 gh search prs/issues --owner devantler-tech --state open …
-gh auth login
-gh auth status
-gh auth status --active --hostname github.com
-gh api --include --hostname github.com user
-gh api graphql --hostname github.com -f query='"'"'{viewer{login}}'"'"'
 git log/status
 git push
 git fetch
@@ -135,12 +130,17 @@ extract_commands() {
   {
     grep -ohE '`[^`]+`' "$f" 2>/dev/null | sed 's/^`//; s/`$//' \
       | sed -E 's/^[[:space:]]*\$[[:space:]]+//' \
-      | grep -E '^[[:space:]]*(gh|git)[[:space:]]'
+      | grep -E '^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])'
     # Fenced blocks carry MULTI-LINE commands: a trailing backslash, or a quoted
     # operand (a GraphQL query) that runs across lines. Splitting on newlines
     # hands the guard half a command, which it rightly refuses as unbalanced
     # quoting -- an extraction artifact that would read as a real finding. Join
     # continuation lines until quotes balance and no backslash is pending.
+    #
+    # `env ...` is in the grammar because the maintenance procedure prescribes
+    # `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status ...` for credential recovery.
+    # A bare `^(gh|git)` filter DISCARDS that span, so the guard never sees it --
+    # fail-open, and the per-source floor still passes on the other candidates.
     #
     # A documented command may also be written with a shell PROMPT (`$ gh ...`).
     # That one is stripped BEFORE the verb filter, and it is the dangerous
@@ -167,7 +167,7 @@ extract_commands() {
       {
         line = $0
         sub(/^[[:space:]]*\$[[:space:]]+/, "", line)
-        if (buf == "") { if (line !~ /^[[:space:]]*(gh|git)[[:space:]]/) next; buf = line }
+        if (buf == "") { if (line !~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) next; buf = line }
         else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
         if (!unbalanced(buf) && buf !~ /\\[[:space:]]*$/) { print buf; buf = "" }
       }
@@ -268,6 +268,19 @@ printf '%s\n' 'The surveyor runs:' '' '```sh' \
   '  repository(owner: \\"devantler-tech\\", name: \\"monorepo\\") { name }' \
   '}"' '```' > "$fixdir/dquote.md"
 
+# An ENV-PREFIXED command must reach the guard. Unmatched, it is dropped before
+# classification and the per-source floor still passes on the other candidates --
+# fail-open, and the credential-recovery path is exactly where it would bite.
+printf '%s\n' 'On a rejected credential run:' '' '```sh' \
+  'env -u GH_TOKEN gh release create v1 --repo devantler-tech/monorepo' '```' > "$fixdir/env.md"
+
+# Assert EXTRACTION, not detection: every `env ...` command shares one deny reason,
+# so once that reason is classified the command is correctly "covered". What the
+# grammar buys is that the command reaches the guard AT ALL -- without it the span
+# is dropped before classification and no decision is ever prompted.
+env_extracted=$(extract_commands "$fixdir/env.md" | grep -c '^env ')
+[ "${env_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: an env-prefixed command was never extracted, so it cannot reach the guard (fail-open)"
 if check_sources "$fixdir/prompt.md" >/dev/null 2>&1; then
   die_unknown "self-test: a prompt-prefixed command was skipped instead of checked (fail-open)"
 fi

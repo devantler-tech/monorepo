@@ -26,6 +26,13 @@
 #          ALLOWED — which is the signal that the upstream fix has landed and
 #          this entry should be promoted to `allow`.
 #
+# The three credential-diagnosis rows are ORCHESTRATOR pre-flight, not surveyor
+# reads: `gh auth ...`, `gh api --hostname ...` and the `env -u GH_TOKEN ...`
+# wrapper are prescribed by the maintenance procedure for recovering a rejected
+# credential, and the surveyor never runs them. They are pinned `deny` rather
+# than skipped so the refusal is a recorded decision — a prose-exclusion list
+# hid them before, which let a real refusal pass unclassified.
+#
 # The two `gh search` gaps are pure query FILTERS — `--commenter` selects issues a
 # user commented on, `--merged-at` bounds a merge window — so both are reads the
 # guard should allow. Both are prescribed by the surveyor definition today, so
@@ -116,6 +123,9 @@ allow	git --no-optional-locks -c core.fsmonitor= status --porcelain
 deny	git status --porcelain
 deny	git push origin HEAD
 deny	git fetch origin main && git merge --ff-only origin/main
+deny	gh auth status --active --hostname github.com
+deny	gh api --include --hostname github.com user
+deny	env -u GH_TOKEN -u GITHUB_TOKEN gh auth status --active --hostname github.com
 deny	git ls-remote origin refs/heads/main
 deny	gh project item-add 5 --owner devantler-tech --url https://github.com/x/y/issues/1
 allow	gh api -X GET "repos/devantler-tech/monorepo/activity" -f per_page=100 -f "ref=refs/heads/main"
