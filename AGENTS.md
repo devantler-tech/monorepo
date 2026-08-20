@@ -2247,6 +2247,54 @@ becomes the changelog and release input. An author who edits the title after the
 (most reachable on an external PR, where the editor is the party the preflight exists to check) lands a
 non-Conventional subject through a merge that passed every other gate. So **re-validate the title
 against Conventional Commits in this final read**, not only when you set it.
+
+🔴 **The preflight field list CANNOT see review-thread resolution — and an unresolved thread is a
+REQUIRED merge rule on every repository here.** `required_review_thread_resolution: true` is set on
+**all nineteen** portfolio repositories (2026-08-20 — every repo in the Portfolio map, no
+exception), via one of the `pull_request` rules on
+`main`, so an unresolved thread blocks the merge exactly like a failing required check. Yet
+`mergeStateStatus` reports it only as a bare `BLOCKED`, and **no `gh pr view --json` field carries it
+at all** — so the seven-field read above is structurally blind to it.
+⚠️ **`reviewThreads` is NOT a valid `gh pr view --json` field** (verified against the live CLI), so
+"helpfully" adding it to the preflight would void the **whole** read — the same all-or-nothing failure
+the post-merge `merged` field causes, in the one place the merge gate cannot afford to go blind. Read
+it over GraphQL, as its own call:
+
+```sh
+unresolved=$(
+  set -o pipefail   # WITHOUT this a failed read prints the ALL-CLEAR value: `false | jq -s …` emits 0, exit 0
+  gh api graphql --paginate -f owner=devantler-tech -f name=<repo> -F number=<n> -f query='
+query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
+  repository(owner:$owner,name:$name){
+    pullRequest(number:$number){
+      reviewThreads(first:100,after:$endCursor){
+        nodes{isResolved}
+        pageInfo{hasNextPage endCursor}
+      }}}}' |
+    jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
+) || { echo "thread read FAILED — UNKNOWN, never 0" >&2; exit 1; }
+```
+
+**That must read `0` immediately before the merge — not once, earlier, from the survey.** The survey
+pentad does carry unresolved threads, but it is a **snapshot taken earlier in the run**, and this
+fresh read exists precisely for state that moves after that snapshot — the same reason `title` is
+re-validated above. Every review lane re-reviews on each push and can post at any moment: on
+monorepo#2927 the blocking review landed **93 minutes after** the PR was promoted. So a survey-time
+zero is not evidence at merge time.
+
+🔴 **A FAILED read must never satisfy this gate — that is why the command captures and checks instead
+of piping straight to `jq`.** Without `pipefail`, `gh api … | jq -s …` on an auth, network, or API
+failure leaves an empty stream, `jq -s` evaluates it as `[]`, prints **`0`**, and exits **`0`** —
+reproduced directly (`false | jq -s '[.[]]|length'` → `0`, rc `0`). The all-clear value and the
+broken-read value are the same character, so the gate would pass hardest exactly when it can see least.
+Treat a non-zero exit as **UNKNOWN, never as zero**, and merge only on a `0` a successful read produced.
+
+🔴 **`--paginate` and the `pageInfo` cursor are REQUIRED, not tidiness — a first-page-only read
+silently under-counts.** `reviewThreads(first:100)` returns at most one page, so a long-lived PR whose
+threads exceed 100 reports a **partial** count, and the one number this gate depends on reads `0` while
+unresolved threads remain. That is the same failure the rule exists to prevent, one level down: a read
+that looks authoritative and is not. Note `--slurp` is **not** usable here — `gh` rejects it together
+with `--jq` — so the pages are slurped with `jq -s` instead.
 ⚠️ **`--repo` is part of the prescription, not an optional convenience** —
 none of those fields carries the *base* repository's identity (`headRepositoryOwner`, where it exists,
 names the contributor's **fork**), so without the flag the command resolves against whatever checkout
@@ -2306,6 +2354,16 @@ it once and then let the merge API be the authority, since it enforces every rea
 cleanly if one applies; and (b) the **review provider's own quota status** — a
 `CodeRabbit / failure — Review rate limit exceeded` context — which reports service state rather
 than a verdict and is excluded per *Local review round*. Anything else non-green is a real blocker.
+
+🔴 **Exception (a) requires the unresolved-thread count above to read `0` FIRST — unresolved threads
+produce precisely the signature it tells you to dismiss.** `BLOCKED` with every check-run and status
+`success`/`skipped` is exactly what an unresolved thread looks like, because no check expresses it; so
+read as written, (a) classifies a **real blocker, never staleness** as staleness, on a rule that is
+live in every repository here. Measured on monorepo#2927 at head `cc7ac05b` (2026-08-20): `MERGEABLE`,
+`BLOCKED`, **zero** failing checks, **zero** open code-scanning alerts repo-wide (unfiltered control),
+no `CHANGES_REQUESTED` — and **two** unresolved threads. Promoted 05:59:20Z; the blocking review landed
+93 minutes later, after promotion. (a) still holds for genuine lazy recomputation — it is scoped to a
+head whose threads are already resolved, not widened.
 Otherwise `CLEAN` is authoritative for required checks: don't re-derive required
 checks from the rollup, don't re-fetch branch protection on every merge (it's confirmed **once per
 repo per session**), and don't bundle the evidence and the merge into one chained command. Driving a
@@ -2313,6 +2371,16 @@ promoted, CLEAN PR to merge is the **expected, mandated** behaviour, not a risk 
 re-weigh each time. In the rare case a merge is still refused, **don't burn the run** re-emitting
 variant evidence or retrying — leave the PR green with threads resolved and surface it to the
 maintainer as a one-click; that is the uncommon fallback, not the default.
+
+🔴 **DIAGNOSE the refusal before escalating it — a refusal is not self-explaining, and the contract
+above sends you straight past the most likely cause.** A `the base branch policy prohibits the merge`
+refusal with every check green is **most often unresolved threads**, which is ordinary agent-fixable
+hygiene rather than anything the maintainer can help with. Read the unresolved-thread count above
+first, and escalate only once you have named a cause you genuinely cannot act on. Recording an
+undiagnosed refusal as "maintainer-gated" is worse than losing the run it happened in: per *You own
+EVERY pull request in the portfolio*, no undefined permanent-sounding gate may park a PR — and once
+that label reaches durable memory it teaches every later run, in every lane, to skip the same
+completable PR.
 **Confirming the merge landed: `gh pr view <n> --repo devantler-tech/<repo> --json state,mergedAt` —
 there is NO `merged` field.** This read was unprescribed territory, and the improvisation it invited
 costs more than one value: `gh` rejects the **whole** `--json` request when any single field is unknown,
