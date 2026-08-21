@@ -1165,9 +1165,9 @@ public and private — no per-repo loop needed to enumerate):
    Drop any row whose `.user.login` / author column is an exact dependency-automation identity before
    ranking oldest-actionable (step 2 / the Drop-hits rule below) — without the author column the
    filter cannot run.
-   **Drop hits from archived repos** — this raw Search call has no archived filter (the primary sweep
-   does), so an archived repo's open issue surfaces as actionable when it is a read-only tombstone
-   (`reusable-workflows` is the live example). **Drop issues authored by the exact dependency-
+   **Residual scoping follows the bundled definition, not this overlay** — the residual inherits
+   the PRIMARY enumeration's scope, so filtering this raw sweep cannot drop an out-of-scope row.
+   **Drop issues authored by the exact dependency-
    automation identities** (`renovate[bot]` / `dependabot[bot]`; also `app/renovate` /
    `app/dependabot` on surfaces that spell them that way) — the issue-only boundary from step 2;
    they are never oldest-actionable (verified against `platform#313`).

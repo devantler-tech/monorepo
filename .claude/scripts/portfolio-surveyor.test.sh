@@ -2622,4 +2622,17 @@ case "${constitution_flat}" in
   *) fail "the merge preflight does not re-validate the title, so a late edit can corrupt the changelog" ;;
 esac
 
+# The bundled definition replaced "Drop hits from archived repos" with the residual-scope rule:
+# `residual = primary \ typed` inherits the LEFT operand's scope, so filtering the raw TYPE sweep can
+# never remove an out-of-scope row from the residual — the PRIMARY enumeration is the one at fault.
+# This overlay carried a MORE SPECIFIC copy of the superseded instruction, and the more specific local
+# rule is the one a reader follows, so advancing the pin alone left the defect live and pointed the
+# fix at the operand that cannot cause it. The positive assertion is FIRST on purpose: an absence
+# check alone passes vacuously on a truncated or clobbered overlay.
+grep -Fq 'Residual scoping follows the bundled definition, not this overlay' "${surveyor}" ||
+  fail "the surveyor overlay no longer defers residual scoping to the bundled definition"
+if grep -Fq 'Drop hits from archived repos' "${surveyor}"; then
+  fail "the surveyor overlay has reacquired the superseded archived-drop instruction, which sends the residual fix to the operand that cannot cause the defect"
+fi
+
 echo "portfolio surveyor contract: round-9 evidence-and-staleness assertions passed"
