@@ -449,8 +449,16 @@ extract_fenced() {
       function candidate(s) { return (opens(s) || opens(strip_assigns(s)) || opens(strip_subst(s))) }
       function flush(   keep) {
         keep = (!pend || has_forge(buf))
+        # A shell option stays in effect for the REST of the script, not just the next
+        # statement. The census block is the proof: `pipefail` is load-bearing for the
+        # LATER `census=$(gh api … | jq -s …)` pipeline -- the one that actually has a pipe --
+        # while the statement immediately after `set -o pipefail` has none. Attaching it to
+        # only the next statement therefore prefixes the one case it does not govern and
+        # drops it from the one it does, so the guard still never classifies the runtime
+        # form of the pipeline. Prefix every candidate the block yields instead.
+        if (optspfx != "" && buf != "" && keep) buf = optspfx "; " buf
         if (buf != "" && keep) print buf
-        buf = ""; pend = 0; optspend = 0
+        buf = ""; pend = 0
       }
       # Fences are DELIMITER- AND LENGTH-aware. `~~~` is a valid Markdown fence, and
       # a machine knowing only backticks never ENTERS such a block: the command
@@ -469,7 +477,7 @@ extract_fenced() {
         fd = substr(fline, 1, 1)
         flen = 0
         while (substr(fline, flen + 1, 1) == fd) flen++
-        if (!inb) { inb = 1; fence = fd; fencelen = flen }
+        if (!inb) { inb = 1; fence = fd; fencelen = flen; optspfx = "" }
         # A closer may carry only spaces or tabs after its run. `` ```example `` inside a
         # block is CONTENT: checking the delimiter and its length alone ends the block
         # there, and `!inb { next }` then drops every later line, so a prescription after
@@ -483,7 +491,7 @@ extract_fenced() {
         # dropping its commands -- a NEW fail-open of the exact class this file guards.
         # An over-permissive opener can only over-extract, which surfaces as a visible
         # finding rather than a silent miss.
-        else if (fd == fence && flen >= fencelen && substr(fline, flen + 1) ~ /^[[:blank:]]*$/ && length(ind) <= 3 && ind !~ /\t/) { inb = 0; fence = ""; fencelen = 0; flush() }
+        else if (fd == fence && flen >= fencelen && substr(fline, flen + 1) ~ /^[[:blank:]]*$/ && length(ind) <= 3 && ind !~ /\t/) { inb = 0; fence = ""; fencelen = 0; flush(); optspfx = "" }
         next
       }
       !inb { next }
@@ -493,13 +501,12 @@ extract_fenced() {
         if (buf == "") {
           if (candidate(line)) { buf = line; pend = 0 }
           else if (opens_subst(line) || compound_starter(line)) { buf = line; pend = 1 }
-          else if (opts_starter(line)) { buf = strip_comment(line); pend = 1; optspend = 1 }
+          else if (opts_starter(line)) { optspfx = (optspfx == "" ? strip_comment(line) : optspfx "; " strip_comment(line)); next }
           else next
         }
         # An options prefix is a COMPLETE statement, so the line after it is a NEW one. Joined
         # with a space it reads as ARGUMENTS to `set` -- measured, `a read must begin with a
         # forge command, not 'set'`, with the verb never seen at all. `; ` is what the shell runs.
-        else if (optspend) { buf = buf "; " strip_comment(line); optspend = 0 }
         else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
         # A trailing pipe or boolean is a shell CONTINUATION exactly as a backslash is,
         # and the operand it joins is often where the real verdict lives. Flushing there
@@ -508,7 +515,7 @@ extract_fenced() {
         # failure the multi-line quoted operand above already avoids. An unclosed
         # substitution is a continuation too, and the only one whose opening line
         # carries no trailing marker at all.
-        if (!optspend && !unbalanced(buf) && !subst_open(buf) && !compound_open(buf) && buf !~ /\\[[:space:]]*$/ && buf !~ /(\||&&)[[:space:]]*$/) flush()
+        if (!unbalanced(buf) && !subst_open(buf) && !compound_open(buf) && buf !~ /\\[[:space:]]*$/ && buf !~ /(\||&&)[[:space:]]*$/) flush()
       }
       END { flush() }
     ' "$f" 2>/dev/null
