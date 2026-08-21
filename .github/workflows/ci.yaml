@@ -41,6 +41,7 @@ jobs:
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
+      improver-role-disclosure: ${{ steps.filter.outputs.improver-role-disclosure }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
       merge-preflight-thread-gate: ${{ steps.filter.outputs.merge-preflight-thread-gate }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
@@ -372,6 +373,14 @@ jobs:
               - '.claude/**/*.md'
               - '.claude/**/*.json'
               - '.claude/scripts/merge-confirmation-read.test.sh'
+              - '.github/workflows/ci.yaml'
+            improver-role-disclosure:
+              - 'AGENTS.md'
+              - '.claude/scripts/improver-role-disclosure-contract.test.sh'
+              # the behavioural assertion runs the REAL guard, so a change to it can make
+              # this test pass or fail without AGENTS.md moving at all
+              - '.claude/scripts/comment-disclosure-drift.sh'
+              - '.claude/scripts/comment-disclosure-drift-go/**'
               - '.github/workflows/ci.yaml'
             merge-preflight-thread-gate:
               - 'AGENTS.md'
@@ -1301,6 +1310,29 @@ jobs:
       - name: Verify the merge-confirmation read contract
         run: bash .claude/scripts/merge-confirmation-read.test.sh
 
+  test-improver-role-disclosure:
+    name: Test Improver role disclosure contract
+    needs: changes
+    if: needs.changes.outputs.improver-role-disclosure == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Assertion 3 executes the real disclosure guard rather than asserting its behaviour
+      # from the Go source, so this job needs the same toolchain that guard is built with.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/comment-disclosure-drift-go/go.mod
+          cache: false
+      # Hermetic: the guard is network-free and every fixture is a local --input file.
+      - name: Verify the Improver role disclosure contract
+        run: bash .claude/scripts/improver-role-disclosure-contract.test.sh
+
   test-merge-preflight-thread-gate:
     name: Test merge-preflight thread gate
     needs: changes
@@ -1389,6 +1421,7 @@ jobs:
       - test-agent-role-delivery-contract
       - test-work-priority-ladder
       - test-merge-confirmation-read
+      - test-improver-role-disclosure
       - test-merge-preflight-thread-gate
       - test-portfolio-surveyor-contract
       - test-product-value-contract
@@ -1439,6 +1472,7 @@ jobs:
             ${{ needs.test-agent-role-delivery-contract.result }}
             ${{ needs.test-work-priority-ladder.result }}
             ${{ needs.test-merge-confirmation-read.result }}
+            ${{ needs.test-improver-role-disclosure.result }}
             ${{ needs.test-merge-preflight-thread-gate.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}
