@@ -6209,6 +6209,96 @@ else
   fi
 fi
 
+
+# ── 6d⁴. credential values never reach a scratch file (#2712) ─────────────────
+# The traps that remove the credential scratch run on EXIT and on HUP/INT/TERM.
+# None of them runs on SIGKILL, an OOM kill, or power loss, so anything these
+# files hold is credential material at rest the moment the process dies
+# abnormally. This is a leak DETECTOR: writing the very values it exists to find
+# to disk inverts its own intent.
+#
+# Asserted at the moment the files are LIVE, not after cleanup — the same
+# instrumentation shape the provenance-scratch row above uses. The reporting awk
+# is shimmed because it is invoked with the blob set while all three credential
+# scratches hold their final contents, so the observation window is exact rather
+# than raced.
+echo
+echo "credential scratch holds no credential values (#2712)"
+
+mkdir -p "$FIX/credtmp" "$FIX/credawk" "$FIX/credscratch"
+# Two shapes so every leg is exercised: a PLAIN occurrence (which reaches the
+# plain set) and one inside a base64 run (which reaches the blob set). A fixture
+# covering only one leg would leave the other's file unasserted.
+printf '{"type":"user","message":{"content":[{"type":"text","text":"export GITHUB_TOKEN=__GHPA__"}]}}\n' \
+  > "$FIX/credscratch/s.jsonl"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__GHPD__zz"}]}}\n' \
+  >> "$FIX/credscratch/s.jsonl"
+subst "$FIX/credscratch/s.jsonl"
+
+cat > "$FIX/credawk/awk" <<'EOF'
+#!/usr/bin/env bash
+# Fires on the reporting awk that receives the blob set. At that instant every
+# credential scratch this scan created holds its final contents.
+case " $* " in
+  *'blobfile='*)
+    printf 'fired\n' >> "$CRED_SCRATCH_TRACE"
+    for _v in $CRED_SCRATCH_VALUES; do
+      if grep -rqF "$_v" "$CRED_SCRATCH_TMPDIR"/.agtel_* 2>/dev/null; then
+        printf 'raw\n' >> "$CRED_SCRATCH_TRACE"
+      fi
+    done
+    ;;
+esac
+exec "$REAL_AWK" "$@"
+EOF
+chmod +x "$FIX/credawk/awk"
+: > "$FIX/cred-scratch-trace"
+PATH="$FIX/credawk:$PATH" REAL_AWK="$real_awk" \
+  CRED_SCRATCH_VALUES="$S_GHPA $S_GHPD" \
+  CRED_SCRATCH_TMPDIR="$FIX/credtmp" CRED_SCRATCH_TRACE="$FIX/cred-scratch-trace" \
+  TMPDIR="$FIX/credtmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/credscratch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety >/dev/null 2>&1
+
+# POSITIVE CONTROL FIRST. A shim that never matched, or a scan that never
+# reached the credential table, leaves an empty trace — and the leak assertion
+# below would then pass having observed nothing at all. Assert the observation
+# happened before believing its result.
+if grep -qFx 'fired' "$FIX/cred-scratch-trace" 2>/dev/null; then
+  ok "control: the credential-table reporting pass was observed"
+else
+  bad "control: the credential-table reporting pass was observed" \
+      "shim never fired — the leak assertion below would be VACUOUS"
+fi
+if ! grep -qFx 'raw' "$FIX/cred-scratch-trace" 2>/dev/null; then
+  ok "no credential value is written to any scan scratch file"
+else
+  bad "no credential value is written to any scan scratch file" \
+      "a fixture credential was readable in \$TMPDIR/.agtel_* during the scan"
+fi
+
+# SEAM PARITY (#2712 AC2). Moving the plain/blob sets off disk changes how the
+# two legs EXCHANGE identity, so the exchange itself is asserted rather than
+# inferred from the end-to-end rows: a value whose normalisation is non-trivial
+# — an assignment wrapper the table leg strips — must still match the blob set's
+# key. If the legs normalised differently the lookup would miss and the label
+# would silently vanish, which reads as "this credential was plainly exposed".
+mkdir -p "$FIX/credparity"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"token=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__GHPE__zz"}]}}\n' \
+  > "$FIX/credparity/s.jsonl"
+subst "$FIX/credparity/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credparity" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+# Both halves, together: the row must EXIST (so the table leg produced the
+# value) and carry the label (so the blob leg's key matched that same value).
+# Asserting only the label would pass if the row vanished entirely.
+if grep -qE '^[[:space:]]+1 github-token' <<<"$TABLE" && grep -q 'blob-embedded' <<<"$TABLE"; then
+  ok "table leg and blob leg agree on identity through the assignment wrapper"
+else
+  bad "table leg and blob leg agree on identity through the assignment wrapper" "$TABLE"
+fi
+
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
