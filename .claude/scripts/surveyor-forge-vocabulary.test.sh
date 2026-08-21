@@ -136,12 +136,12 @@ fi
 # rest on a discrimination proof that was never obtained. Note also that the
 # probe and the corpus differ in their PR number, so a guard broken only for the
 # corpus' spelling would still pass a probe that accepts any failure.
-smoke_out=$("$guard" --command 'gh pr list --repo devantler-tech/monorepo --state open' 2>&1); smoke_status=$?
+smoke_out=$(GH_TELEMETRY=0 "$guard" --command 'gh pr list --repo devantler-tech/monorepo --state open' 2>&1); smoke_status=$?
 if [ "$smoke_status" -ne 0 ]; then
   echo "surveyor-forge-vocabulary: UNKNOWN — guard returned status $smoke_status for its own smoke-test read, so no verdict it gives is trustworthy: $(printf '%s\n' "$smoke_out" | head -1)" >&2
   exit 2
 fi
-smoke_out=$("$guard" --command 'gh pr merge 1 --repo devantler-tech/monorepo --squash' 2>&1); smoke_status=$?
+smoke_out=$(GH_TELEMETRY=0 "$guard" --command 'gh pr merge 1 --repo devantler-tech/monorepo --squash' 2>&1); smoke_status=$?
 smoke_reason=$(printf '%s\n' "$smoke_out" | head -1)
 case "$smoke_status:$smoke_reason" in
   1:deny:*) : ;;
@@ -211,7 +211,7 @@ CORPUS
 pass=0; fail=0; gaps=0
 while IFS=$'\t' read -r want cmd; do
   [ -n "${want:-}" ] || continue
-  "$guard" --command "$cmd" >/dev/null 2>&1 && got=allow || got=deny
+  GH_TELEMETRY=0 "$guard" --command "$cmd" >/dev/null 2>&1 && got=allow || got=deny
   case "$want" in
     allow|deny) expect=$want ;;
     gap)        expect=deny ;;
@@ -228,7 +228,7 @@ while IFS=$'\t' read -r want cmd; do
     else
       echo "MISMATCH want=$want got=$got"
       echo "         $cmd"
-      [ "$got" = deny ] && echo "         reason: $("$guard" --command "$cmd" 2>&1)"
+      [ "$got" = deny ] && echo "         reason: $(GH_TELEMETRY=0 "$guard" --command "$cmd" 2>&1)"
     fi
   fi
 done <<< "$corpus"
