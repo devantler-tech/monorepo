@@ -389,8 +389,9 @@ injection_snapshot() {
 # is a scan skew rather than a classifier defect.
 #
 # A file that vanished or cannot be measured counts as drift for the same
-# reason. This cannot see an in-place rewrite that preserves the length, so the
-# caller states what it rules out rather than claiming the corpus was stable.
+# reason. This cannot see an in-place rewrite that leaves the file at or above the
+# pinned length — same size or longer — so the caller states what it rules out
+# rather than claiming the corpus was stable.
 injection_snapshot_drift() {
   local snap="$1" len f now drift=0
   [ -f "$snap" ] || { printf '0\n'; return 0; }
@@ -3358,7 +3359,7 @@ if want safety; then
       else
         echo "          No pinned file shrank, so both walks read equal-length prefixes. That"
         echo "          rules out a truncation skew, but the pin fixes a LENGTH and cannot rule"
-        echo "          out an in-place rewrite at the same size. If the corpus was stable,"
+        echo "          out an in-place rewrite AT OR ABOVE the pinned length. If the corpus was stable,"
         echo "          treat it as a classifier or digest/display keying defect (#2693)"
         echo "          and investigate before trusting any split below."
       fi
