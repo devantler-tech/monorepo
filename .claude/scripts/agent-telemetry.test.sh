@@ -2339,6 +2339,10 @@ check "colliding displays keep the content line's own split" "$OUT" \
 # (`cut -f1 "$INJTMP"` in the TOTAL line) and therefore immediately before the
 # class walk. A background appender would make this test timing-dependent, and
 # an unbounded one grows the corpus faster than the tool can scan it.
+# Resolve the host `cut` once, before either shim shadows it on PATH. Both cut
+# shims delegate through REAL_CUT rather than a hardcoded path, matching the
+# REAL_JQ/REAL_DATE idiom the batching fixture above already uses.
+real_cut=$(command -v cut)
 mkdir -p "$FIX/injgrow/corpus/p" "$FIX/injgrow/bin"
 cat > "$FIX/injgrow/bin/cut" <<EOS
 #!/bin/sh
@@ -2357,7 +2361,7 @@ for a in "\$@"; do
       ;;
   esac
 done
-exec /usr/bin/cut "\$@"
+exec "\${REAL_CUT:-/usr/bin/cut}" "\$@"
 EOS
 chmod +x "$FIX/injgrow/bin/cut"
 : > "$FIX/injgrow/corpus/p/s.jsonl"
@@ -2366,7 +2370,7 @@ for i in 1 2 3; do
   printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
     "$i" >> "$FIX/injgrow/corpus/p/s.jsonl"
 done
-OUT=$(PATH="$FIX/injgrow/bin:$PATH" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
+OUT=$(PATH="$FIX/injgrow/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 # NON-VACUITY FIRST: if the corpus did not actually grow, every assertion below
@@ -2419,7 +2423,7 @@ else
     printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
       "$i" >> "$FIX/injgrow/corpus/p/s.jsonl"
   done
-  OUT=$(PATH="$FIX/injgrow/bin:$PATH" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
+  OUT=$(PATH="$FIX/injgrow/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
         MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
         bash "$INJ_AB" --since-days 3650 --section safety 2>&1)
   check "ablation: an unpinned class walk is CAUGHT and named, not printed silently" "$OUT" \
@@ -2455,7 +2459,7 @@ for a in "\$@"; do
       ;;
   esac
 done
-exec /usr/bin/cut "\$@"
+exec "\${REAL_CUT:-/usr/bin/cut}" "\$@"
 EOS
 chmod +x "$FIX/injshrink/bin/cut"
 : > "$FIX/injshrink/corpus/p/s.jsonl"
@@ -2465,7 +2469,7 @@ for i in 1 2 3 4 5; do
     "$i" >> "$FIX/injshrink/corpus/p/s.jsonl"
 done
 SHRINK_BEFORE=$(wc -c < "$FIX/injshrink/corpus/p/s.jsonl" | tr -d ' ')
-OUT=$(PATH="$FIX/injshrink/bin:$PATH" CLAUDE_PROJECTS_DIR="$FIX/injshrink/corpus" CODEX_HOME="$FIX/nocodex" \
+OUT=$(PATH="$FIX/injshrink/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injshrink/corpus" CODEX_HOME="$FIX/nocodex" \
       MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section safety 2>&1)
 SHRINK_AFTER=$(wc -c < "$FIX/injshrink/corpus/p/s.jsonl" | tr -d ' ')
