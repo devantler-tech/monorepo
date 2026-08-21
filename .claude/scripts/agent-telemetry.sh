@@ -3388,7 +3388,19 @@ if want safety; then
       | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
           'awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
       | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
-      | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null)
+      | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null \
+      | tr '\000' '\n')
+    # NUL is translated to a newline BEFORE the capture, never left to the
+    # command substitution. A decoded string can legitimately carry `\u0000`,
+    # which jq emits as a real NUL byte, and `$(...)` DELETES NUL rather than
+    # preserving it — so the scratch file this replaced kept the byte while the
+    # variable would silently splice the fragments on either side into one value
+    # that never existed in the corpus. That is the JOIN direction, and it is the
+    # harmful one: a spliced string can reach a high-signal row by spanning a
+    # boundary, manufacturing a credential. Splitting is the safe asymmetry the
+    # compound-value handling below already chose for `;&|` — a fragment only
+    # ever reaches a high-signal row by passing a FULL shape regex on its own,
+    # so a split costs no true positive while a splice invents a false one.
     # Shared normaliser. BOTH the value list and the blob set run through THIS
     # function, so the two can never normalise differently — a divergence would
     # attach the label to the wrong row, which is worse than no label at all.

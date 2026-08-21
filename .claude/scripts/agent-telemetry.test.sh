@@ -6299,6 +6299,57 @@ else
   bad "table leg and blob leg agree on identity through the assignment wrapper" "$TABLE"
 fi
 
+
+# -- a NUL inside a match must not SPLICE two fragments (#2712) ----------------
+# Holding the matches in a variable rather than a file introduced one byte-level
+# difference: a decoded string can legitimately carry a JSON unicode escape for
+# the zero byte, jq emits it as a real NUL, and $(...) DELETES NUL rather than
+# preserving it. The scratch file this replaced kept the byte, so without an
+# explicit translation the fragments on either side splice into a single value
+# that never occurred in the corpus.
+#
+# The splice is the harmful direction, not merely a different one: two strings
+# that are individually too short to be credentials can join into something that
+# passes a FULL shape regex, so the table manufactures a credential -- a false
+# positive in a leak detector, which costs a rotation. Translating the zero byte
+# to a newline instead splits them, the same asymmetry the compound `;&|`
+# handling already chose, where a fragment only reaches a high-signal row on its
+# own merits.
+echo
+echo "a NUL inside a match splits rather than splices (#2712)"
+
+# CONTROL corpus -- the identical fragments with NO separator between them. This
+# proves the spliced form IS detectable and that the fixture reaches the scanner
+# at all; without it, the property assertion below would pass vacuously on any
+# corpus the harness failed to read.
+mkdir -p "$FIX/nulctl" "$FIX/nulsplit"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"export GITHUB_TOKEN=%s_AAAAAAAAAABBBBBBBBBB"}]}}\n' 'ghp' \
+  > "$FIX/nulctl/s.jsonl"
+CTL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulctl" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CTL_TABLE=$(printf '%s' "$CTL_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$CTL_TABLE"; then
+  ok "control: the spliced fragment pair IS detected as a token when adjacent"
+else
+  bad "control: the spliced fragment pair IS detected as a token when adjacent" \
+      "fixture never reached the scanner -- the assertion below would be VACUOUS: $CTL_TABLE"
+fi
+
+# THE PROPERTY -- the same two fragments separated by a real zero byte.
+# Byte-identical to the control apart from that separator, so a difference in
+# outcome can only come from how that byte is handled.
+printf '{"type":"user","message":{"content":[{"type":"text","text":"export GITHUB_TOKEN=%s_AAAAAAAAAA\\u0000BBBBBBBBBB"}]}}\n' 'ghp' \
+  > "$FIX/nulsplit/s.jsonl"
+NUL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulsplit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+NUL_TABLE=$(printf '%s' "$NUL_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$NUL_TABLE"; then
+  bad "a NUL between two fragments does not manufacture a token" \
+      "the fragments were spliced and reported as a credential: $NUL_TABLE"
+else
+  ok "a NUL between two fragments does not manufacture a token"
+fi
+
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
