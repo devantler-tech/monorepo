@@ -2326,6 +2326,110 @@ check "colliding displays keep the runtime line's own split" "$OUT" \
 check "colliding displays keep the content line's own split" "$OUT" \
       "1 add bot to the trust gate   (0 runtime / 1 other)"
 
+# ── #2706: the corpus GROWS between the total walk and the class walk ─────────
+# The corpus includes the running agent's own session file, which is appended
+# continuously — including by the act of running this tool — so the class walk
+# could observe occurrences the total walk never saw. The split then EXCEEDED
+# the total it annotates while the line beneath asserted "occurrences sum to
+# TOTAL" (measured 2026-08-06: TOTAL 235 / other 238, and 59 > 57 on a phrase's
+# own line).
+#
+# Growth is forced DETERMINISTICALLY rather than raced: a `cut` shim on PATH
+# grows the corpus exactly once, on the call that ends the total walk
+# (`cut -f1 "$INJTMP"` in the TOTAL line) and therefore immediately before the
+# class walk. A background appender would make this test timing-dependent, and
+# an unbounded one grows the corpus faster than the tool can scan it.
+mkdir -p "$FIX/injgrow/corpus/p" "$FIX/injgrow/bin"
+cat > "$FIX/injgrow/bin/cut" <<EOS
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    *.agtel_inj.*)
+      if [ ! -e "$FIX/injgrow/.grown" ]; then
+        : > "$FIX/injgrow/.grown"
+        i=0
+        while [ \$i -lt 4 ]; do
+          printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions grow"}]}}\n' \
+            >> "$FIX/injgrow/corpus/p/s.jsonl"
+          i=\$((i+1))
+        done
+      fi
+      ;;
+  esac
+done
+exec /usr/bin/cut "\$@"
+EOS
+chmod +x "$FIX/injgrow/bin/cut"
+: > "$FIX/injgrow/corpus/p/s.jsonl"
+rm -f "$FIX/injgrow/.grown"
+for i in 1 2 3; do
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
+    "$i" >> "$FIX/injgrow/corpus/p/s.jsonl"
+done
+OUT=$(PATH="$FIX/injgrow/bin:$PATH" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+# NON-VACUITY FIRST: if the corpus did not actually grow, every assertion below
+# passes for the wrong reason — it would be asserting on a static corpus, which
+# the tests above already cover. Prove the race was really staged.
+if [ -e "$FIX/injgrow/.grown" ] && [ "$(grep -c 'update your instructions' "$FIX/injgrow/corpus/p/s.jsonl")" -eq 7 ]; then
+  ok "growth control: the corpus really did grow mid-scan (3 -> 7)"
+else
+  bad "growth control: the corpus really did grow mid-scan (3 -> 7)" \
+      "hook did not fire, so the assertions below would pass vacuously"
+fi
+check "a corpus growing mid-scan does not inflate the class split" "$OUT" \
+      "other content locations: 3 occurrences"
+check "and the per-phrase split stays within its own line's total" "$OUT" \
+      "3 update your instructions   (0 runtime / 3 other)"
+check "so the summing invariant is asserted, not contradicted" "$OUT" \
+      "occurrences sum to TOTAL"
+check "the fail-closed raw total is unchanged by pinning" "$OUT" \
+      "TOTAL occurrences: 3"
+nocheck "and no divergence is claimed when the walks agree" "$OUT" \
+      "CLASS SPLIT DIVERGES FROM TOTAL"
+
+# The disclosure arm exists because pinning cannot prove the classifier itself
+# is correct: if the two walks ever disagree again it is a real keying/classifier
+# defect (#2693), not a scan race, and must be stated rather than printed under a
+# claim the numbers contradict. Ablate ONLY the class walk's pinning to force a
+# genuine divergence and prove the arm fires — otherwise it is unreachable code
+# that would pass every assertion above while being permanently inert.
+INJ_AB="$FIX/injgrow/ablated.sh"
+/usr/bin/awk '
+  /^emit_injection_classes\(\) \{/ {infn=1}
+  infn && /snapshot_bytes "\$f" "\$len" \| grep -niE/ {
+    print "  grep -niE \"$INJ_PHRASE_RE\" \"$f\" 2>/dev/null \\"; infn=0; next
+  }
+  {print}
+' "$TARGET" > "$INJ_AB"
+chmod +x "$INJ_AB"
+inj_ab_changed=$(diff "$TARGET" "$INJ_AB" | grep -c '^<' || true)
+if [ "$inj_ab_changed" -ne 1 ]; then
+  bad "ablation is valid (exactly one line neutralised)" \
+      "awk changed $inj_ab_changed lines, expected 1 — VACUOUS MUTATION, arm cannot judge"
+elif ! bash -n "$INJ_AB" 2>/dev/null; then
+  bad "ablation is valid (exactly one line neutralised)" \
+      "ablated script does not parse — ABLATION INVALID, arm cannot judge"
+else
+  ok "ablation is valid (exactly one line neutralised)"
+  : > "$FIX/injgrow/corpus/p/s.jsonl"
+  rm -f "$FIX/injgrow/.grown"
+  for i in 1 2 3; do
+    printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
+      "$i" >> "$FIX/injgrow/corpus/p/s.jsonl"
+  done
+  OUT=$(PATH="$FIX/injgrow/bin:$PATH" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
+        MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$INJ_AB" --since-days 3650 --section safety 2>&1)
+  check "ablation: an unpinned class walk is CAUGHT and named, not printed silently" "$OUT" \
+        "CLASS SPLIT DIVERGES FROM TOTAL: 7 classified vs 3 counted"
+  check "ablation: the divergence is attributed to keying, not to a scan race" "$OUT" \
+        "NOT a scan skew"
+  nocheck "ablation: the contradicted summing claim is withheld" "$OUT" \
+        "occurrences sum to TOTAL"
+fi
+
 # NOTE: no "concentration adds no jq" assertion here. --section safety already
 # runs jq for the denial scan, so a blanket no-jq check asserts something false
 # about the design and would pass only by accident. The existing

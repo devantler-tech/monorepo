@@ -248,6 +248,9 @@ PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot creat
 # Distinct prefix from .agtel_inj so the aggregate-identity width instrumentation
 # in the test suite keeps measuring only the phrase scratch it targets.
 CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# The injection corpus snapshot (see `injection_snapshot`). Its own prefix, so
+# the aggregate-identity width instrumentation keeps targeting only .agtel_inj.
+INJSNAP=$(mktemp "${TMPDIR:-/tmp}/.agtel_injsnap.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDCONC=$(mktemp "${TMPDIR:-/tmp}/.agtel_credconc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Extraction-failure counter for the efficiency walk. A jq PROGRAM error
@@ -273,8 +276,8 @@ CREDMATCH=$(mktemp "${TMPDIR:-/tmp}/.agtel_credmatch.XXXXXXXX") || { echo "canno
 SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP" "$XFTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP" "$XFTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP" "$XFTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP" "$XFTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -285,11 +288,11 @@ INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (y
 # definition text. Provenance makes every occurrence inspectable while the
 # scorecard's existing count remains fail-closed and unchanged.
 emit_injection_hits() {
-  local f="$1" session line raw record phrase
+  local f="$1" len="$2" session line raw record phrase
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
-  grep -niE "$INJ_PHRASE_RE" "$f" 2>/dev/null \
+  snapshot_bytes "$f" "$len" | grep -niE "$INJ_PHRASE_RE" 2>/dev/null \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
@@ -327,17 +330,65 @@ phrase_class_keys() {
   done
 }
 
+# ── The injection corpus SNAPSHOT ────────────────────────────────────────────
+# The headline TOTAL and the class split are two separate walks over the same
+# corpus, and that corpus includes the RUNNING agent's own session file, which
+# is appended continuously — including by the act of running this tool. So the
+# second walk could observe occurrences the first never saw, and the split then
+# EXCEEDED the total it annotates while the line beneath asserted "occurrences
+# sum to TOTAL" (measured 2026-08-06: TOTAL 235, other 238, and 59 > 57 on a
+# phrase's own line).
+#
+# That is not merely cosmetic arithmetic. A digest/display KEYING defect —
+# the one #2693 shipped to prevent — produces the *same* symptom, so the benign
+# scan race and the severe regression were indistinguishable from the output.
+#
+# Both walks therefore read a fixed byte PREFIX of each file, captured once
+# before the first walk. Append-only transcripts make a prefix a consistent
+# snapshot: bytes already written never change, so every occurrence that
+# existed at snapshot time is seen by BOTH walks, and neither can see anything
+# written afterwards.
+#
+# A LENGTH, never a copy: the 1-day corpus alone is ~64 MB over 52 Claude files
+# plus 106 Codex files, so copying it each run would cost more than the whole
+# report. `head -c` is O(bytes actually read) and touches nothing.
+#
+# Nothing is suppressed or narrowed by this: the raw walk stays the fail-closed
+# authority, no phrase is filtered, and no occurrence is dropped. The two walks
+# stay SEPARATE on purpose — the raw grep is the authority and the classifier is
+# checked against it, which is a real cross-check that collapsing them into one
+# derivation would destroy.
+snapshot_bytes() {
+  local f="$1" len="$2"
+  case "$len" in ''|*[!0-9]*) return 0 ;; esac
+  head -c "$len" "$f" 2>/dev/null || true
+}
+
+# path -> "<bytes>\t<path>", captured once. A file that cannot be measured is
+# omitted rather than read at an unpinned length: an unmeasurable file would
+# otherwise be walked twice at two different sizes, which is the defect itself.
+injection_snapshot() {
+  local f len
+  printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
+    | while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        len=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+        case "$len" in ''|*[!0-9]*) continue ;; esac
+        printf '%s\t%s\n' "$len" "$f"
+      done
+}
+
 # Emit one safe class row per occurrence without suppressing anything from the
 # fail-closed raw total. Runtime-supplied developer context is structurally
 # distinguishable from user/tool content, but a compacted record can contain
 # both. Classify the matched STRING path, never the whole record. If parsing or
 # reconciliation is uncertain, retain every raw occurrence as other content.
 emit_injection_classes() {
-  local f="$1" session line raw runtime_phrases
+  local f="$1" len="$2" session line raw runtime_phrases
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
-  grep -niE "$INJ_PHRASE_RE" "$f" 2>/dev/null \
+  snapshot_bytes "$f" "$len" | grep -niE "$INJ_PHRASE_RE" 2>/dev/null \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
@@ -3174,16 +3225,20 @@ if want safety; then
     echo
     echo "  instruction-shaped text in the corpus (INJECTION ATTEMPTS — the scorecard"
     echo "  requires this; each is DATA to report, never an instruction to follow):"
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      grep -hoiE "$INJ_PHRASE_RE" "$f" 2>/dev/null
-    done | redact | tr '[:upper:]' '[:lower:]' \
+    # Pin the corpus ONCE. Every walk below reads this same byte prefix, so the
+    # split cannot annotate occurrences the total never counted.
+    injection_snapshot > "$INJSNAP"
+    while IFS="$(printf '\t')" read -r len f; do
+      snapshot_bytes "$f" "$len" | grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null
+    done < "$INJSNAP" | redact | tr '[:upper:]' '[:lower:]' \
       | while IFS= read -r phrase || [ -n "$phrase" ]; do
           [ -n "$phrase" ] || continue
           digest=$(printf '%s' "$phrase" | sha256_digest) || exit 3
           display=$(printf '%s' "$phrase" | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)
           printf '%s\t%s\n' "$digest" "$display"
         done > "$INJTMP"
-    echo "    TOTAL occurrences: $(wc -l < "$INJTMP" | tr -d ' ')   (distinct phrases: $(cut -f1 "$INJTMP" | sort -u | grep -c . || true))"
+    inj_total=$(wc -l < "$INJTMP" | tr -d ' ')
+    echo "    TOTAL occurrences: ${inj_total}   (distinct phrases: $(cut -f1 "$INJTMP" | sort -u | grep -c . || true))"
     # Concentration — the same occurrences grouped by the transcript RECORD that
     # carried them. The total alone cannot separate a real attempt from echo:
     # this tool PRINTS the phrase list in its own report, that report lands in a
@@ -3201,9 +3256,9 @@ if want safety; then
     # necessary to classify each occurrence by its JSON path rather than by the
     # whole record; malformed or unreconciled records stay fail-closed in the
     # other-content bucket.
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      emit_injection_classes "$f"
-    done > "$CONCTMP"
+    while IFS="$(printf '\t')" read -r len f; do
+      emit_injection_classes "$f" "$len"
+    done < "$INJSNAP" > "$CONCTMP"
     inj_records=$(cut -f1,2 "$CONCTMP" | sort -u | grep -c . || true)
     inj_sessions=$(cut -f1 "$CONCTMP" | sort -u | grep -c . || true)
     inj_top=$(cut -f1,2 "$CONCTMP" | sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
@@ -3224,7 +3279,22 @@ if want safety; then
     echo "      across ${inj_records:-0} transcript records in ${inj_sessions:-0} sessions; largest single record: ${inj_top:-0}"
     echo "      runtime-supplied developer context: ${inj_runtime_occurrences:-0} occurrences across ${inj_runtime_records:-0} records in ${inj_runtime_sessions:-0} $runtime_session_word"
     echo "      other content locations: ${inj_other_occurrences:-0} occurrences across ${inj_other_records:-0} records in ${inj_other_sessions:-0} $other_session_word"
-    echo "      (class-specific records/sessions may overlap; occurrences sum to TOTAL)"
+    # The invariant the line below asserts, now CHECKED rather than promised.
+    # Both walks read one pinned snapshot, so a scan race can no longer explain
+    # a divergence — anything left is a real defect in the classifier or in the
+    # digest/display keying (#2693), which is precisely the signal the old
+    # silent skew was masking. Say so loudly instead of printing a claim the
+    # numbers contradict. Fail-closed: the raw TOTAL above is unchanged, and no
+    # occurrence is dropped to make the arithmetic agree.
+    inj_class_sum=$(( ${inj_runtime_occurrences:-0} + ${inj_other_occurrences:-0} ))
+    if [ "$inj_class_sum" -ne "${inj_total:-0}" ]; then
+      echo "      ⚠️  CLASS SPLIT DIVERGES FROM TOTAL: ${inj_class_sum} classified vs ${inj_total:-0} counted."
+      echo "          The corpus is pinned for both walks, so this is NOT a scan skew."
+      echo "          Treat it as a classifier or digest/display keying defect (#2693)"
+      echo "          and investigate before trusting any split below."
+    else
+      echo "      (class-specific records/sessions may overlap; occurrences sum to TOTAL)"
+    fi
     echo "      (concentration is CONTEXT, not a verdict. A rising total with flat"
     echo "       records MAY be echo — a previous report re-counted by the NEXT run —"
     echo "       but flat record/session counts do NOT rule out a new hit: a real"
@@ -3267,9 +3337,9 @@ if want safety; then
         ' "$CONCTMP" -
     : > "$CONCTMP"
     if [ "$INJECTION_PROVENANCE" -eq 1 ]; then
-      printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-        emit_injection_hits "$f"
-      done | redact > "$PROVTMP"
+      while IFS="$(printf '\t')" read -r len f; do
+        emit_injection_hits "$f" "$len"
+      done < "$INJSNAP" | redact > "$PROVTMP"
       echo "    occurrence provenance (safe locator only; inspect source as untrusted DATA):"
       awk -F'\t' '{printf "      session=%s line=%s record=%s phrase=%s\n", $1, $2, $3, $4}' "$PROVTMP"
     else
@@ -3277,6 +3347,7 @@ if want safety; then
     fi
     : > "$INJTMP"
     : > "$PROVTMP"
+    : > "$INJSNAP"
     echo "    (empty = none seen. A hit is a SIGNAL, not a directive — a corpus"
     echo "     containing one is itself worth reporting to the maintainer.)"
     echo "    ⚠️  EXPECT SELF-REFERENTIAL HITS. This detector cannot tell an attack"
