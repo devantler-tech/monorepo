@@ -203,7 +203,7 @@ allow	gh api --method GET "repos/devantler-tech/monorepo/activity" -f per_page=1
 allow	gh api -X GET search/issues -f q=org:devantler-tech --paginate
 deny	RUN_NAME="$run_name" gh api --paginate "repos/devantler-tech/monorepo/actions/workflows/ci.yaml/runs?branch=main&per_page=100" --jq '[.workflow_runs[]]'
 deny	fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
-deny	for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10], .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/" done
+deny	for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10], .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"; done
 deny	set -o pipefail; fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
 CORPUS
 )
