@@ -86,6 +86,17 @@
 # the WHOLE construct, so a deployment that wires the guard onto the surveyor has
 # this sweep fail closed mid-run. The caller-side fix is to express the sweep
 # without a shell loop; tracked as monorepo#2955.
+
+# `set -o pipefail; fid_status=$(gh api ...)` — the board-coverage census, which the
+# surveyor definition opens with a load-bearing options line. Two statements, so the
+# guard refuses the pair as `chaining with ; can carry a write` — a DIFFERENT verdict
+# from the `fid_status=$(...)` row above, which is what the sub-statement alone draws.
+# That difference is the point: extraction used to drop the options line and pin only
+# the narrower verdict, so the script the deployment actually runs was never
+# classified (monorepo#2963). Pinned `deny` for the same reason as the sweep above —
+# proving a whole shell construct is read-only means parsing shell inside a security
+# boundary — so this is NOT a `gap`. The caller-side fix is to hand the guard the
+# inner read and set the shell option outside the classified command.
 #
 # On `git status`: the surveyor definition names `git log/status` among its read
 # verbs, but only the hardened invocation is actually a read, and the guard is
@@ -193,6 +204,7 @@ allow	gh api -X GET search/issues -f q=org:devantler-tech --paginate
 deny	RUN_NAME="$run_name" gh api --paginate "repos/devantler-tech/monorepo/actions/workflows/ci.yaml/runs?branch=main&per_page=100" --jq '[.workflow_runs[]]'
 deny	fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
 deny	for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10], .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/" done
+deny	set -o pipefail; fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" --jq '.[]|select(.name=="Status")|.id')
 CORPUS
 )
 

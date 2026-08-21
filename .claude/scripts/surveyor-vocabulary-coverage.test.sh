@@ -411,11 +411,46 @@ extract_fenced() {
                 > (countw(t, "done") + countw(t, "fi") + countw(t, "esac")))
       }
       function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
+      # A prescription may also open with a shell OPTIONS line. `set -o pipefail` heads the
+      # board-coverage census in the surveyor definition and is load-bearing there -- the
+      # block says so in as many words. Anchored on a forge verb, the buffer starts at the
+      # NEXT line, so the guard is asked about a sub-statement while the deployment runs the
+      # options line too, and the two draw DIFFERENT verdicts: measured, the sub-statement
+      # alone draws `dollar-paren command substitution is not a read` while the script draws
+      # `chaining with ; can carry a write`. Recording the narrower verdict is the same
+      # fail-open the verb-less substitution and the compound loop above close, on the one
+      # census `board_coverage` is derived from.
+      function opts_starter(s) { return (s ~ /^[[:space:]]*set[[:space:]]+[-+][A-Za-z]/) }
+      # Joining a statement behind a line that ends in a COMMENT hands the guard a command
+      # that exists only as a join artifact: the shell discards a comment to end of line, but
+      # the join glues the next statement in behind it, drawing `an unquoted # starts a shell
+      # comment, so the words after it are discarded` -- a finding about something nobody
+      # runs, which is exactly what this file must not produce.
+      #
+      # Walks `s` ITSELF rather than reusing `unquoted()`. That helper drops a backslash and
+      # the character after it, emitting nothing for two input characters, so its output is
+      # NOT index-aligned with its input and a position found there would cut the wrong
+      # column. Only a line being JOINED behind an options prefix is stripped; every
+      # single-line candidate still reaches the guard verbatim, so no existing verdict moves.
+      function strip_comment(s,   i, c, sq, dq, n) {
+        n = length(s)
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (c == "\\" && !sq) { i++; continue }
+          else if (c == "'"'"'" && !dq) { sq = !sq; continue }
+          else if (c == "\"" && !sq) { dq = !dq; continue }
+          else if (c == "#" && !sq && !dq && (i == 1 || substr(s, i - 1, 1) ~ /[[:space:]]/)) {
+            s = substr(s, 1, i - 1); break
+          }
+        }
+        sub(/[[:space:]]+$/, "", s)
+        return s
+      }
       function candidate(s) { return (opens(s) || opens(strip_assigns(s)) || opens(strip_subst(s))) }
       function flush(   keep) {
         keep = (!pend || has_forge(buf))
         if (buf != "" && keep) print buf
-        buf = ""; pend = 0
+        buf = ""; pend = 0; optspend = 0
       }
       # Fences are DELIMITER- AND LENGTH-aware. `~~~` is a valid Markdown fence, and
       # a machine knowing only backticks never ENTERS such a block: the command
@@ -458,8 +493,13 @@ extract_fenced() {
         if (buf == "") {
           if (candidate(line)) { buf = line; pend = 0 }
           else if (opens_subst(line) || compound_starter(line)) { buf = line; pend = 1 }
+          else if (opts_starter(line)) { buf = strip_comment(line); pend = 1; optspend = 1 }
           else next
         }
+        # An options prefix is a COMPLETE statement, so the line after it is a NEW one. Joined
+        # with a space it reads as ARGUMENTS to `set` -- measured, `a read must begin with a
+        # forge command, not 'set'`, with the verb never seen at all. `; ` is what the shell runs.
+        else if (optspend) { buf = buf "; " strip_comment(line); optspend = 0 }
         else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
         # A trailing pipe or boolean is a shell CONTINUATION exactly as a backslash is,
         # and the operand it joins is often where the real verdict lives. Flushing there
@@ -468,7 +508,7 @@ extract_fenced() {
         # failure the multi-line quoted operand above already avoids. An unclosed
         # substitution is a continuation too, and the only one whose opening line
         # carries no trailing marker at all.
-        if (!unbalanced(buf) && !subst_open(buf) && !compound_open(buf) && buf !~ /\\[[:space:]]*$/ && buf !~ /(\||&&)[[:space:]]*$/) flush()
+        if (!optspend && !unbalanced(buf) && !subst_open(buf) && !compound_open(buf) && buf !~ /\\[[:space:]]*$/ && buf !~ /(\||&&)[[:space:]]*$/) flush()
       }
       END { flush() }
     ' "$f" 2>/dev/null
@@ -834,6 +874,47 @@ printf '%s\n' 'Loop over files:' '' '```sh' \
 cn_extracted=$(extract_commands "$fixdir/compound-nonforge.md" | grep -c .)
 [ "${cn_extracted:-0}" -eq 0 ] \
   || die_unknown "self-test: a construct wrapping no forge verb yielded $cn_extracted candidate(s), expected 0 (false finding)"
+
+# A shell OPTIONS line must not be DROPPED. `set -o pipefail` heads the board-coverage
+# census in the surveyor definition and is load-bearing there; anchored on a forge verb
+# the buffer used to start at the NEXT line, so the guard was asked about a sub-statement
+# while the deployment ran the options line too -- and the two draw different verdicts
+# (measured: `dollar-paren command substitution is not a read` for the sub-statement,
+# `chaining with ; can carry a write` for the script). monorepo#2963.
+#
+# Asserts extraction only, and deliberately NOT detection: the joined form's refusal is
+# `chaining with ; can carry a write`, which the compound-sweep row already acknowledges,
+# so a `check_sources` assertion here would pass whether or not the options line survived
+# -- a vacuous control. What is asserted instead is the thing that actually regressed:
+# the candidate must OPEN with the options statement.
+printf '%s\n' 'The census runs:' '' '```sh' \
+  'set -o pipefail   # REQUIRED -- a half-walked census must not report measured' \
+  'gh pr list --repo devantler-tech/monorepo --state open' '```' > "$fixdir/optsprefix.md"
+# Matched comment-AGNOSTICALLY -- opens with the options statement, and carries the read.
+# An exact-match assertion here would SUBSUME the comment assertion below (measured: with
+# `strip_comment` neutralised this fired instead of it, so that one was never proven to
+# fire at all), leaving one conjunct per fixture untested.
+op_extracted=$(extract_commands "$fixdir/optsprefix.md" | grep -c "^fenced set -o pipefail.*gh pr list --repo devantler-tech/monorepo --state open$")
+[ "${op_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a shell options line was dropped, so the guard saw a sub-statement rather than the prescribed script (fail-open)"
+
+# ...and the comment on that options line must be STRIPPED before the join. The shell
+# discards a comment to end of line, but joining glues the next statement in behind it,
+# so an unstripped comment hands the guard `an unquoted # starts a shell comment, so the
+# words after it are discarded` -- a real refusal, of a command that exists only as a
+# join artifact. Asserted on the extracted text rather than the verdict, because the
+# verdict is masked: the guard reports the `;` chaining refusal first either way.
+oc_artifacts=$(extract_commands "$fixdir/optsprefix.md" | grep -c "#")
+[ "${oc_artifacts:-0}" -eq 0 ] \
+  || die_unknown "self-test: an options line's comment survived the join, so the guard is asked about a command that exists only as a join artifact (false finding)"
+
+# ...and an options line wrapping no forge verb must not become a candidate, or every
+# `set -e` in a fenced block would reach the guard as a false finding.
+printf '%s\n' 'Strict mode:' '' '```sh' \
+  'set -o pipefail' '  echo "hello"' '```' > "$fixdir/optsprefix-nonforge.md"
+on_extracted=$(extract_commands "$fixdir/optsprefix-nonforge.md" | grep -c .)
+[ "${on_extracted:-0}" -eq 0 ] \
+  || die_unknown "self-test: an options line wrapping no forge verb yielded $on_extracted candidate(s), expected 0 (false finding)"
 
 # A LONGER fence must not be closed by a shorter one. CommonMark closes a fence
 # only on a run of the same character at least as long as the opener, which is how
