@@ -1,6 +1,6 @@
 ---
 name: portfolio-maintenance
-description: The run procedure for the Agentic Engineer (the products' primary engineer) — pre-flight, survey the whole devantler-tech portfolio, select the highest-value work (operate first, then advance), act via per-run worktrees and draft PRs (driving every actionable PR to a terminal state whoever authored it, while leaving automation-owned dependency PRs alone), and report. Use when maintaining or advancing the monorepo's products on a schedule or on request.
+description: The run procedure for the Agentic Engineer (the products' primary engineer) — pre-flight, survey the whole devantler-tech portfolio, select the highest-value work (operate first, then advance), act via per-run worktrees and draft PRs (driving every actionable PR to a terminal state whoever authored it, including dependency-bot PRs that cannot finish autonomously), and report. Use when maintaining or advancing the monorepo's products on a schedule or on request.
 ---
 
 # Portfolio engineering — the run loop
@@ -161,12 +161,14 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
 - enumerates org-wide in two calls (`gh search prs/issues --owner devantler-tech --state open …`)
   instead of looping `gh pr/issue list` per repo. This **cheap exhaustive enumeration** establishes
   the complete actionable-PR queue and its contract priority before expensive joins begin. Exact
-  `renovate[bot]`/`dependabot[bot]` search authors are **automation-owned dependency PRs** and get only
-  a compact `AUTOMATION-OWNED (NO-ACTION)` line, with no pentad deepening or agent action. It then
-  deepens that queue in deterministic priority order, one bounded shard at a time, with a targeted
-  `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid`. **The only
-  exclusion is the exact `renovate[bot]`/`dependabot[bot]` automation identity above**: since the
-  orchestrator drives every other open PR to a terminal state, a selector limited to `devantler` and
+  `renovate[bot]`/`dependabot[bot]` search authors enter a cheap liveness classification first. Emit
+  `AUTOMATION-OWNED (SELF-PROGRESSING)` only with current positive evidence that their checks, bot
+  update, auto-merge, or merge-group is actively advancing. Expired, red, missing-check, conflicted,
+  queue-evicted, or green-but-unarmed rows enter the ordinary bounded pentad shards as actionable
+  candidates. It then deepens that queue in deterministic priority order, one bounded shard at a time,
+  with a targeted
+  `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid`. Since the
+  orchestrator drives every actionable open PR to a terminal state, a selector limited to `devantler` and
   trusted bots would leave sibling-lane, maintainer-interactive and external PRs with no head, review,
   conflict or CI evidence — while the pentad line below requires exactly that evidence for them. An
   external PR is deepened from **metadata only**, which is a read of the GitHub API and never an
@@ -192,7 +194,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   invalidated when any recorded candidate head changes** (or its discovery `updatedAt` changes), so
   stale progress can delay neither a new commit nor new control/review activity. Clear the cursor on
   wrap (`next=none`) and start a fresh ordered pass. Because PRs outrank issues, **issue descent remains blocked until
-  the actionable-PR queue is completely classified** as cleared, terminal, automation-owned, or
+  the actionable-PR queue is completely classified** as cleared, terminal, positively self-progressing, or
   parked on a named candidate-scoped blocker;
 - checks the **candidate repository's current `main` health** together with each deepening shard, then
   continues the remaining portfolio-wide default-head sweep as broad health evidence. A candidate
@@ -217,8 +219,8 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   candidate signals with one-line gists (the read-only surveyor keeps no cross-run state,
   so it can't compute "new since last run" — **you** dedupe against native memory of what you've
   already acted on);
-- surfaces **the full hygiene pentad for EVERY open actionable PR whoever authored it, explicitly
-  excluding automation-owned dependency PRs — (a) failing checks, (b)
+- surfaces **the full hygiene pentad for EVERY open actionable PR whoever authored it, including every
+  dependency-automation PR that lacks positive self-progressing evidence — (a) failing checks, (b)
   every unresolved review thread regardless of author (including CodeRabbit `coderabbitai`,
   `copilot-pull-request-reviewer[bot]`, and `chatgpt-codex-connector[bot]`), (c) non-thread review
   findings, including CodeRabbit review-body findings and concrete ancillary problems it explicitly
@@ -481,7 +483,8 @@ rather than spreading thin (contract *Cadence & focus*: substance over artifact 
 sprawl, not value). **PRs come first:** driving **every actionable PR, whoever authored it,** to a
 terminal state — merged, closed with the reason recorded, or parked on a named blocker — and fixing
 their failing CI — is the **first-priority work every run, ahead of issues** (only live breakage
-outranks it). Exact Renovate/Dependabot PRs are automation-owned dependency PRs, not actionable PRs.
+outranks it). Exact Renovate/Dependabot PRs yield only while live evidence proves them self-progressing;
+once repository automation cannot finish their current head, they are actionable PRs.
 Scope: every **`devantler-tech`** repo's actionable PRs, whoever authored them; scheduled runs do not enumerate or act on
 external repositories. Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
 are the work queue**, worked in the order contract *The work-selection ladder* sets — **security
@@ -583,8 +586,10 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    and the refusal that follows gets escalated as a maintainer gate. 🔴 **Do not re-add a `trusted author` condition here** — trust gates **execution**, never the
    merge (contract *Trust gate*), so an external PR that has cleared every evaluation and review gate
    would otherwise be refused at the last step for being external, which is the whole class the
-   2026-08-08 widening exists to admit. Exact `renovate[bot]`/`dependabot[bot]` PRs stay excluded as
-   automation-owned. 🔴 **DIAGNOSE a refused merge before escalating it — a one-click is for what you
+   2026-08-08 widening exists to admit. Exact `renovate[bot]`/`dependabot[bot]` PRs follow the same
+   head-pinned merge preflight after their self-progressing evidence fails. Before pushing an adaptation
+   to an armed dependency PR, disable auto-merge and confirm it is off; re-arm only after the adapted
+   head has fresh semantic review. 🔴 **DIAGNOSE a refused merge before escalating it — a one-click is for what you
    cannot fix, never for what you did not look at.** The thread read above is taken *immediately*
    before the merge, but "immediately" is not "atomically": a lane can post a thread in the gap, and
    a ruleset condition the pentad never modelled can refuse just as easily. Both surface as a bare
@@ -628,7 +633,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    local review round** when no lane will deliver at that head — unavailable, OR rate/billing limited — reviewed with your own review skills and posted as a **real GitHub Review
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
    verdict line) so the sibling agent can see and act on it, incremental re-reviews,
-   green-while-draft as the promotion precondition, the **automation-owned dependency-PR no-action carve-out**, and the trusted programmed
+   green-while-draft as the promotion precondition, the **dependency-PR self-progressing/intervention boundary**, and the trusted programmed
    **bot carve-out** — exact-classifier-matched exit-0 agent-skills updater PRs, tap cask PRs, and
    KSail release bumps are check-gated, need NO review, and are never review-chased;
    `agent-plugins` updater PRs require semantic review when their classifier returns the trusted
@@ -744,8 +749,8 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
    automation-owned, **never actionable at all**, and is never selected, worked, or closed — match the
    author only, never the `automation` label. If it **already has an
    actionable open PR**, drive *that* to a terminal state instead of duplicating — whoever authored it,
-   draft or not (contract *You own EVERY pull request in the portfolio*); leave
-   automation-owned dependency PRs to repository automation, and never **run** an external
+   draft or not (contract *You own EVERY pull request in the portfolio*); let a dependency-bot PR
+   self-progress only while its current evidence qualifies, take over when it cannot finish, and never **run** an external
    contributor's branch locally (trust gate — execution only; driving and merging it is yours). **`type:"Spike"` is not a delivery-PR path**
    (#2267): when the selected issue is a Spike, record the decision on the Spike and file its
    follow-up issues — that pair is the floor artifact; do **not** invent a draft PR for it (same
