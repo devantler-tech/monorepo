@@ -215,6 +215,10 @@ grep -Fq 'bot-generated head keeps the repository automation' "${constitution}" 
   fail "constitution does not preserve the existing untouched-bot review path"
 grep -Fq 'adaptation commit restores the ordinary current-head semantic-review gate' "${constitution}" ||
   fail "constitution lets an adapted dependency PR bypass semantic review"
+grep -Fq 'convert the PR to draft before the first adaptation push' "${constitution}" ||
+  fail "constitution does not draft-fence adapted dependency PRs before a push"
+grep -Fq 'Draft state is the durable fence' "${constitution}" ||
+  fail "constitution relies on reversible auto-merge disarming for adaptations"
 grep -Fq 'collect complete commit provenance' "${surveyor}" ||
   fail "surveyor cannot distinguish untouched bot output from an agent adaptation"
 grep -Fq 'arm or execute the repository' "${constitution}" ||
@@ -494,6 +498,8 @@ grep -Fq 'dependency-automation PR that lacks positive self-progressing evidence
 # shellcheck disable=SC2016
 grep -Fq '`agent-plugins` updater PRs require semantic review' "${maintenance_skill}" ||
   fail "portfolio-maintenance skill can still exempt marketplace instruction updates from review"
+grep -Fq 'convert it to draft before the first adaptation push' "${maintenance_skill}" ||
+  fail "portfolio-maintenance skill does not draft-fence dependency-PR adaptations"
 grep -Fq 'Compatibility overlay' "${maintenance_skill}" ||
   fail "plugin surveyor can run without the hardened local behavior before digest parity"
 grep -Fq 'read and follow the local' "${maintenance_skill}" ||

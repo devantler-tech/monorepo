@@ -428,6 +428,10 @@ assert_prose 'An untouched bot-generated head keeps the repository automation' \
   "consumer does not preserve the existing untouched-bot automation path"
 assert_prose 'Any agent-authored adaptation commit restores the ordinary current-head semantic-review gate' \
   "consumer lets agent adaptations bypass semantic review"
+assert_prose 'convert the PR to draft before the first adaptation push' \
+  "consumer lacks a durable draft fence for dependency-PR adaptations"
+assert_prose 'Draft state is the durable fence' \
+  "consumer trusts reversible auto-merge disarming as the adaptation fence"
 assert_prose 'never select, triage-as-work, edit, or close an issue authored by one of those exact identities' \
   "consumer no longer protects dependency-automation control issues"
 refute_prose 'One bot PR being red, stale, conflicting or review-less remains none of our business' \

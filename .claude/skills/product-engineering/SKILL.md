@@ -195,7 +195,8 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    nobody else is mid-flight. Three boundaries survive that widening.
    Exact `renovate[bot]`/`dependabot[bot]` PRs stay with repository automation only while live
    evidence proves them self-progressing; when they cannot finish autonomously they return to the
-   ordinary rung-one repair and merge queue. An **external
+   ordinary rung-one repair and merge queue; any adaptation starts in draft and stays there through
+   fresh current-head semantic review. An **external
    contribution** is driven and merged but its branch is **never run locally** — static review only,
    CI is the execution surface, with extra scrutiny on workflow, permission, dependency and
    secret-touching changes; and on the maintainer's **interactive** PRs his comments are him steering
