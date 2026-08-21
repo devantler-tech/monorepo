@@ -181,6 +181,7 @@ jobs:
               - '.github/workflows/ci.yaml'
             surveyor-forge-vocabulary:
               - '.claude/scripts/surveyor-forge-vocabulary.test.sh'
+              - '.claude/scripts/surveyor-vocabulary-coverage.test.sh'
               - '.gitmodules'
               - 'libraries/agent-plugins'
               # The surveyor definition and its run loop are what DEFINE the
@@ -903,6 +904,13 @@ jobs:
       # contacts no forge. The checkout above is this job's only network use.
       - name: Verify the surveyor read vocabulary against the forge guard
         run: bash .claude/scripts/surveyor-forge-vocabulary.test.sh
+      # The step above pins CORPUS -> GUARD. This one pins SOURCES -> CORPUS, so
+      # a survey command added to the surveyor definition cannot ship
+      # unclassified while the job re-checks an unchanged list and stays green.
+      # Same guard, same submodule checkout, same path filter — so it belongs
+      # here rather than in a job that would duplicate all three.
+      - name: Verify the definitions prescribe no unclassified command
+        run: bash .claude/scripts/surveyor-vocabulary-coverage.test.sh
 
   test-pr-ownership-disclosure:
     name: Test PR ownership disclosure classifier

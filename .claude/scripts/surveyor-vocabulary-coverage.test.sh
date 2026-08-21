@@ -1,0 +1,1026 @@
+#!/usr/bin/env bash
+# Pins SOURCES -> CORPUS, the half `surveyor-forge-vocabulary.test.sh` states
+# plainly that it does not cover.
+#
+# That file pins CORPUS -> GUARD: every command in its hand-maintained list is
+# re-asserted against the read-only forge guard. What nothing checked is whether
+# the list still COVERS the commands the surveyor's own definition prescribes.
+# #2931 added those definition files to the job's path filter, so a PR touching
+# them RUNS the job -- but the job re-checks the same unchanged corpus and stays
+# green, even when the guard would refuse the newly mandated read. The failure
+# that hides is a mandated survey read failing closed mid-run, which is exactly
+# what the guard's rollout note tells deployments to rule out beforehand.
+#
+# THE DESIGN, and why it is not a Markdown command extractor.
+#
+# Extracting commands from prose is the fragile part, and the honest move is to
+# stop trying to decide what counts as a command. The GUARD is the classifier,
+# so this file asks it about every candidate and only ever fails on the answer
+# that matters:
+#
+#   guard ALLOWS it   -> covered. A mandated read that works needs no corpus row,
+#                        and a prose fragment that happens to parse as a read
+#                        (`gh api`, `gh pr view`) is silently harmless. This is
+#                        what keeps the false-positive rate at zero for the bulk
+#                        of extracted noise.
+#   guard DENIES it   -> somebody must have DECIDED that. It is covered only if
+#                        the corpus carries it verbatim (as `deny` or `gap`), or
+#                        it is a listed prose fragment. Otherwise: FAIL.
+#
+# So the only way to fail is to add a command the guard refuses and classify it
+# nowhere -- precisely the drift being closed, and nothing else.
+#
+# PROSE_FRAGMENTS is an explicit exclusion list rather than a heuristic, on the
+# repo's own lesson that when a check keeps finding another spelling, you invert
+# to a whitelist. Every entry is a fragment that reads as a command but is not
+# runnable: a bare verb, a `/`-alternation naming a family, or an ellipsis. It is
+# deliberately exact-match and deliberately small: a NEW prose fragment fails the
+# run and forces a decision, which is the intended direction.
+#
+# Membership states that a fragment is NOT RUNNABLE -- not that the guard happens
+# to refuse it. Three entries (`gh pr view`, `gh search prs`, `gh search issues`)
+# are currently allowed by the guard and so would be skipped anyway; they are kept
+# because the property being recorded is a property of the PROSE, and a later
+# guard revision that tightened a bare verb should not silently turn a sentence
+# fragment into a finding.
+#
+# The corpus is READ FROM the sibling file rather than duplicated, so the two can
+# never drift into disagreeing about what is classified.
+#
+# Exit: 0 every prescribed command is covered * 1 an unclassified command *
+#       2 UNKNOWN (guard, sources or corpus unavailable, or a self-test failed).
+# UNKNOWN is never success: an unverifiable boundary is unproven.
+set -uo pipefail
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd) || exit 2
+guard="$repo_root/libraries/agent-plugins/plugins/agentic-engineering/scripts/forge-readonly-guard.sh"
+corpus_file="$repo_root/.claude/scripts/surveyor-forge-vocabulary.test.sh"
+
+# Every file that PRESCRIBES a survey command, with a per-source candidate floor.
+#
+# The plugin's own surveyor definition is here because the run loop sources that
+# entry point and only THEN reads the local file as a compatibility overlay, so a
+# gitlink bump can introduce a command that no local file mentions. It lives in
+# the same submodule as the guard, so it adds no failure mode this script did not
+# already have: no submodule, no verdict, exit 2.
+#
+# The floor is PER SOURCE, not a combined total. A combined count hides the
+# failure it is meant to catch — the overlay alone clears any total worth
+# setting, so extraction could stop matching an entire other surface unnoticed.
+# Counts today are 38 / 23 / 4; each floor sits below its own count so ordinary
+# editing does not trip it, and a surface dropping out does.
+SOURCE_FLOORS="$repo_root/.claude/agents/portfolio-surveyor.md	25
+$repo_root/.claude/skills/portfolio-maintenance/SKILL.md	15
+$repo_root/libraries/agent-plugins/plugins/agentic-engineering/agents/portfolio-surveyor.agent.md	3"
+SOURCES="$(printf '%s\n' "$SOURCE_FLOORS" | cut -f1)"
+MIN_CORPUS_ROWS=25
+
+die_unknown() { echo "surveyor-vocabulary-coverage: UNKNOWN — $1" >&2; exit 2; }
+
+[ -f "$guard" ] || die_unknown "guard not found at $guard
+  (populate the submodule: .claude/scripts/submodule-init.sh libraries/agent-plugins)"
+[ -x "$guard" ] || die_unknown "guard is not executable: $guard"
+[ -r "$corpus_file" ] || die_unknown "corpus file unreadable: $corpus_file"
+
+# Prove the guard discriminates before trusting a single verdict. Without this a
+# guard that errored on everything would mark every candidate denied and this
+# file would report a pile of false findings.
+#
+# The guard has THREE outcomes, and "not allowed" is not the same as "denied":
+# 0 allowed, 1 denied with a `deny:` first line, 2 usage/error. A bare non-zero
+# check accepts a status 2 as a refusal, so a guard that merely ERRORED on the
+# merge probe would satisfy this gate -- and the suite would go on to report a
+# boundary whose denied-command proof was never actually obtained. The probe and
+# the corpus also differ in their PR number, so a guard broken only for the
+# corpus' spelling passes a probe that accepts any failure. Kept in a function so
+# the self-tests below can run it against a stub; the real call follows it.
+assert_guard_discriminates() {
+  local out status reason
+  out=$("$guard" --command 'gh pr list --repo devantler-tech/monorepo --state open' 2>&1); status=$?
+  [ "$status" -eq 0 ] \
+    || die_unknown "guard returned status $status for its own smoke-test read, so no verdict it gives is trustworthy: $(printf '%s\n' "$out" | head -1)"
+  out=$("$guard" --command 'gh pr merge 1 --repo devantler-tech/monorepo --squash' 2>&1); status=$?
+  reason=$(printf '%s\n' "$out" | head -1)
+  case "$status:$reason" in
+    1:deny:*) : ;;
+    0:*) die_unknown "guard allowed a merge; it is not discriminating" ;;
+    *) die_unknown "guard returned status $status for the merge probe, so its refusal is unverifiable rather than a denial: $reason" ;;
+  esac
+}
+assert_guard_discriminates
+
+PROSE_FRAGMENTS='gh ... list/view/search
+gh api
+gh api --jq
+gh api --paginate
+gh api --slurp
+gh pr merge/create/comment/edit/review
+gh pr/issue list
+gh pr create
+gh pr merge
+gh pr view
+gh pr view --json
+gh run list --json
+gh search
+gh search prs
+gh search issues
+gh search prs --help
+gh search prs/issues --owner devantler-tech --state open …
+git log/status
+git push
+git fetch
+git ls-remote
+git check-ref-format
+git worktree add
+git submodule update --init'
+
+# Collapse the placeholder vocabulary the prose uses (<o>, <repo>, <from>) to a
+# literal so the guard sees a parseable argv. Substitution is applied to BOTH
+# sides, so corpus matching stays exact under it.
+normalize() {
+  sed -E 's/<[A-Za-z][A-Za-z0-9_ .>=-]*>/PLACEHOLDER/g' \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g'
+}
+
+# Candidates: inline code spans plus fenced-block lines, kept when they open with
+# a forge verb -- or would open with one once a leading assignment or command
+# substitution is stripped. Generous on purpose: the guard does the discriminating.
+#
+# WHAT REACHES THE GUARD IS THE COMPLETE PRESCRIBED LINE, never a stripped form.
+# The stripping decides only WHETHER a line is a candidate; it never rewrites the
+# text being classified. That distinction is the whole correctness of this file:
+# the runtime hands the guard the shell command it is about to run, so a check
+# that classifies `gh api ...` while the deployment would run
+# `RUN_NAME="$run_name" gh api ...` is asserting the boundary holds for a command
+# nobody runs. Measured against the pinned guard: the bare read is ALLOWed, while
+# both prescribed wrappers are refused -- `a read must begin with a forge command`
+# and `dollar-paren command substitution is not a read`. Classifying the stripped
+# form reported those two prescriptions covered.
+#
+# The two streams are extracted SEPARATELY and tagged, because PROSE_FRAGMENTS must
+# apply to only one of them. That list holds exact runnable forms -- `git fetch`,
+# `git worktree add`, `gh api` -- so a source PRESCRIBING one of those inside a
+# fenced block would exact-match the exclusion and be skipped before the guard ever
+# saw it. That is fail-open on precisely the commands this check exists to catch:
+# measured against the pinned guard (re-measured 2026-08-20), 21 of the 24 fragments
+# are DENIED, and 17 of those carry a deny reason no corpus row acknowledges.
+# Provenance is what lets the exclusion keep serving prose without also excusing
+# a prescription.
+extract_inline() {
+  local f=$1
+  # A Markdown code span may cross newlines, so a per-LINE scan cannot see one:
+  # `grep -ohE` matched within a line and silently dropped every multi-line span.
+  # The run loop's own paginated CodeRabbit read is one (SKILL.md, five physical
+  # lines), so the check was blind to a command it is specifically meant to cover.
+  #
+  # Joining more than that is what must NOT be done. Backticks pair sequentially,
+  # so one stray backtick re-pairs every span after it, and these sources are not
+  # paragraph-shaped -- the surveyor overlay runs 478 consecutive lines with no
+  # blank line, so a paragraph bound is no bound at all. Measured: joining on that
+  # bound silently LOST the `--commenter` and `--merged-at` reads, both of which
+  # carry a corpus row.
+  #
+  # So join ONLY while a span is genuinely open (an odd backtick count), and cap
+  # it. Every line whose spans already close is left exactly where line-based
+  # pairing had it, which is what makes this add the multi-line case while moving
+  # nothing else: measured, zero candidates lost across all three sources.
+  # A fence marker is a hard reset -- ``` is itself an odd run and would otherwise
+  # start swallowing the block.
+  #
+  # The residual, stated rather than hidden: an odd count cannot tell an OPENING
+  # backtick from a CLOSING one, because the state a line starts in is exactly what
+  # per-line scanning discards. So a stray or unmatched backtick joins the lines
+  # after it and can mis-pair a span there. It is bounded by the cap and re-syncs
+  # on the next flush -- unlike a whole-file join, where one stray backtick
+  # re-pairs the entire remainder -- and the per-source floors below would catch a
+  # material loss. Measured on all three sources today it costs nothing: the
+  # extracted set is unchanged except for the multi-line span it recovers.
+  awk '
+    function bt(s,   n) { n = gsub(/`/, "`", s); return n }
+    /^[[:space:]]*(```|~~~)/ { if (buf != "") print buf; buf = ""; held = 0; next }
+    {
+      buf = (buf == "" ? $0 : buf " " $0)
+      if (bt(buf) % 2 == 1 && held < 10) { held++; next }
+      print buf; buf = ""; held = 0
+    }
+    END { if (buf != "") print buf }
+  ' "$f" 2>/dev/null \
+    | awk '
+        # Code spans with VARIABLE-LENGTH delimiters, per CommonMark: a span opens
+        # on a run of N backticks and closes on the next run of EXACTLY N. The
+        # single-backtick regex this replaces (`[^`]+`) cannot express that, and the
+        # gap is a fail-open rather than a dropped line: a prescription written as
+        #
+        #   ``result=`gh api rate_limit` ``
+        #
+        # is split at the INNER shell backticks, both fragments fail the verb filter,
+        # and NOTHING reaches the guard -- while the deployment runs a command the
+        # guard refuses (`backtick command substitution is not a read`). A run with
+        # no matching closer is literal text, so scanning resumes after it instead of
+        # pairing across it.
+        {
+          s = $0; n = length(s); i = 1
+          while (i <= n) {
+            if (substr(s, i, 1) != "`") { i++; continue }
+            j = i; while (j <= n && substr(s, j, 1) == "`") j++
+            olen = j - i
+            k = j; found = 0
+            while (k <= n) {
+              if (substr(s, k, 1) == "`") {
+                m = k; while (m <= n && substr(s, m, 1) == "`") m++
+                if (m - k == olen) { found = 1; break }
+                k = m
+              } else k++
+            }
+            if (!found) { i = j; continue }
+            content = substr(s, j, k - j)
+            # CommonMark strips one leading AND trailing space when both are present,
+            # which is how a span may end with a backtick at all.
+            if (content ~ /^ / && content ~ / $/ && content ~ /[^ ]/) \
+              content = substr(content, 2, length(content) - 2)
+            if (content != "") print content
+            i = m
+          }
+        }' \
+    | sed -E 's/^[[:space:]]*\$[[:space:]]+//' \
+    | awk '
+        function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
+        function strip_assigns(s) {
+          while (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]("'"'"']*)[[:space:]]+/)) s = substr(s, RSTART + RLENGTH)
+          return s
+        }
+        # Both substitution spellings, exactly as the fenced recogniser carries them.
+        # Recovering the multi-backtick SPAN above is only half the path: the span it
+        # yields is `result=`gh api rate_limit``, whose verb sits behind a legacy
+        # backtick substitution, so a `$(`-only test drops it here instead and the
+        # command still never reaches the guard.
+        function strip_subst(s) {
+          if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\(/)) return substr(s, RSTART + RLENGTH)
+          if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?`/)) return substr(s, RSTART + RLENGTH)
+          return ""
+        }
+        opens($0) || opens(strip_assigns($0)) || opens(strip_subst($0))
+      '
+}
+
+extract_fenced() {
+  local f=$1
+  {
+    # Fenced blocks carry MULTI-LINE commands: a trailing backslash, or a quoted
+    # operand (a GraphQL query) that runs across lines. Splitting on newlines
+    # hands the guard half a command, which it rightly refuses as unbalanced
+    # quoting -- an extraction artifact that would read as a real finding. Join
+    # continuation lines until quotes balance and no backslash is pending.
+    #
+    # `env ...` is in the grammar because the maintenance procedure prescribes
+    # `env -u GH_TOKEN -u GITHUB_TOKEN gh auth status ...` for credential recovery.
+    # A bare `^(gh|git)` filter DISCARDS that span, so the guard never sees it --
+    # fail-open, and the per-source floor still passes on the other candidates.
+    #
+    # A documented command may also be written with a shell PROMPT (`$ gh ...`).
+    # That one is stripped BEFORE the verb filter, and it is the dangerous
+    # direction: an unstripped prompt does not match `^(gh|git)`, so the command
+    # is skipped ENTIRELY and a refusal nobody classified passes unnoticed --
+    # fail-open, where the split-command case merely produces a noisy finding.
+    #
+    # The SAME fail-open reaches two more prescribed shapes, and the verb is not
+    # at the start of the line in either: a one-shot environment assignment in
+    # front of the verb (`RUN_NAME="$run_name" gh api ...`), and a verb nested in
+    # a command substitution (`fid_status=$(gh api ...)`). Both are prescribed by
+    # the surveyor overlay today, so an unmatched line dropped before
+    # classification hides a guard refusal from CI. The strip is therefore a
+    # RECOGNISER only -- it decides that the line is worth classifying, and the
+    # COMPLETE line is what the guard is then asked about, because that is what
+    # the deployment would actually run.
+    #
+    # Quote state is tracked as a MACHINE, not a count: `'"'"'` inside a double-quoted
+    # operand (and `"` inside a single-quoted one) is a literal, so counting either
+    # delimiter alone would leave an apostrophe in `--jq "won'"'"'t"` permanently
+    # unbalanced and swallow the rest of the block into one candidate.
+    awk '
+      function unbalanced(s,   i, c, sq, dq) {
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          if (c == "\\" && !sq) { i++; continue }
+          else if (c == "'"'"'" && !dq) sq = !sq
+          else if (c == "\"" && !sq) dq = !dq
+        }
+        return (sq || dq)
+      }
+      # Recognisers. Neither rewrites what gets classified: each answers only
+      # "would this line open with a forge verb once its wrapper is set aside".
+      function strip_assigns(s) {
+        while (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|[^[:space:]("'"'"']*)[[:space:]]+/)) {
+          s = substr(s, RSTART + RLENGTH)
+        }
+        return s
+      }
+      # Both substitution spellings. The guard refuses each -- `dollar-paren
+      # command substitution is not a read` and `backtick command substitution
+      # is not a read` -- so recognising only `$(` leaves the legacy form
+      # fail-OPEN in a way that is worse than being dropped: extract_inline
+      # reads the wrapper backticks as a Markdown code span and submits the
+      # INNER read, which the guard allows, so the job goes green on a line
+      # the deployment would be refused for.
+      function strip_subst(s) {
+        if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\(/)) return substr(s, RSTART + RLENGTH)
+        if (match(s, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?`/)) return substr(s, RSTART + RLENGTH)
+        return ""
+      }
+      # A substitution may also OPEN on a line carrying no verb at all -- the shape
+      # the MANDATORY merge preflight is written in:
+      #
+      #   unresolved=$(
+      #     set -o pipefail
+      #     gh api graphql ... | jq -s ...
+      #   ) || { echo "thread read FAILED" >&2; exit 1; }
+      #
+      # Anchored on the verb, the buffer starts at the bare `gh api` line, so the
+      # guard is asked about the INNER read -- which it ALLOWS -- while the
+      # deployment runs the whole substitution, which it refuses (`dollar-paren
+      # command substitution is not a read`). Same fail-open the backtick spelling
+      # above closes, on the one read this repo makes mandatory before every merge.
+      #
+      # Only the `$(` spelling is tracked, because the closing test below is
+      # paren-depth: a multi-line BACKTICK substitution has no depth to model, so
+      # claiming it here would assert coverage this cannot deliver.
+      function opens_subst(s) {
+        return (s ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\([[:space:]]*$/)
+      }
+      # Depth of substitution still OPEN -- quote-aware for exactly the reason
+      # `unbalanced` is: a `(` inside a jq filter is a literal, so a bare paren
+      # count would never close. A buffer opening no paren scores 0, which is what
+      # leaves every other candidate precisely where it was.
+      function subst_open(s,   i, c, sq, dq, d) {
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          if (c == "\\" && !sq) { i++; continue }
+          else if (c == "'"'"'" && !dq) sq = !sq
+          else if (c == "\"" && !sq) dq = !dq
+          else if (!sq && !dq) {
+            if (c == "(") d++
+            else if (c == ")" && d > 0) d--
+          }
+        }
+        return (d > 0)
+      }
+      # A verb-less opener cannot be judged until the substitution CLOSES, so such a
+      # buffer is provisional: kept only if the joined text turns out to wrap a forge
+      # verb. Without this every `x=$(date)` would reach the guard and stand as a
+      # permanent false finding.
+      function has_forge(s) { return (s ~ /(^|[[:space:]]|[;&|(])(gh|git)[[:space:]]/) }
+      # A forge read is also prescribed INSIDE a shell compound construct -- the
+      # issue-type sweep in the surveyor definition is a `for T in …; do gh api …; done` loop.
+      # Anchored on the verb, the buffer starts at the nested `gh api` line and the
+      # guard is asked about that read alone, which it ALLOWS, while the deployment
+      # submits the whole loop, which it refuses (`chaining with ; can carry a
+      # write`). Same fail-open shape as the verb-less substitution above, on the
+      # mandated type sweep.
+      function compound_starter(s) {
+        return (s ~ /^[[:space:]]*(for|while|until|if|case)[[:space:]]/)
+      }
+      # Quoted spans blanked, so a keyword inside a jq filter or a message cannot
+      # open or close a construct. Same reasoning as `unbalanced`: quote state is a
+      # machine, not a count.
+      function unquoted(s,   i, c, sq, dq, out) {
+        out = ""
+        for (i = 1; i <= length(s); i++) {
+          c = substr(s, i, 1)
+          if (c == "\\" && !sq) { i++; continue }
+          else if (c == "'"'"'" && !dq) { sq = !sq; out = out " "; continue }
+          else if (c == "\"" && !sq) { dq = !dq; out = out " "; continue }
+          out = out ((sq || dq) ? " " : c)
+        }
+        return out
+      }
+      # Exact word count via split, never gsub: gsub consumes the delimiter it
+      # matched, so two adjacent keywords would count as one.
+      function countw(t, w,   n, i, arr, c) {
+        n = split(t, arr, /[^[:alnum:]_]+/)
+        c = 0
+        for (i = 1; i <= n; i++) if (arr[i] == w) c++
+        return c
+      }
+      # Block STARTERS against TERMINATORS -- deliberately not `do`/`then`, because
+      # an `if/elif/else/fi` carries several `then` and exactly one `fi`, which
+      # would leave the construct permanently open.
+      function compound_open(s,   t) {
+        t = unquoted(s)
+        return ((countw(t, "for") + countw(t, "while") + countw(t, "until") \
+                 + countw(t, "if") + countw(t, "case")) \
+                > (countw(t, "done") + countw(t, "fi") + countw(t, "esac")))
+      }
+      function opens(s) { return (s ~ /^[[:space:]]*(env[[:space:]]|(gh|git)[[:space:]])/) }
+      # A prescription may also open with a shell OPTIONS line. `set -o pipefail` heads the
+      # board-coverage census in the surveyor definition and is load-bearing there -- the
+      # block says so in as many words. Anchored on a forge verb, the buffer starts at the
+      # NEXT line, so the guard is asked about a sub-statement while the deployment runs the
+      # options line too, and the two draw DIFFERENT verdicts: measured, the sub-statement
+      # alone draws `dollar-paren command substitution is not a read` while the script draws
+      # `chaining with ; can carry a write`. Recording the narrower verdict is the same
+      # fail-open the verb-less substitution and the compound loop above close, on the one
+      # census `board_coverage` is derived from.
+      function opts_starter(s) { return (s ~ /^[[:space:]]*set[[:space:]]+[-+][A-Za-z]/) }
+      # Joining a statement behind a line that ends in a COMMENT hands the guard a command
+      # that exists only as a join artifact: the shell discards a comment to end of line, but
+      # the join glues the next statement in behind it, drawing `an unquoted # starts a shell
+      # comment, so the words after it are discarded` -- a finding about something nobody
+      # runs, which is exactly what this file must not produce.
+      #
+      # Walks `s` ITSELF rather than reusing `unquoted()`. That helper drops a backslash and
+      # the character after it, emitting nothing for two input characters, so its output is
+      # NOT index-aligned with its input and a position found there would cut the wrong
+      # column. Only a line being JOINED behind an options prefix is stripped; every
+      # single-line candidate still reaches the guard verbatim, so no existing verdict moves.
+      function strip_comment(s,   i, c, sq, dq, n) {
+        n = length(s)
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (c == "\\" && !sq) { i++; continue }
+          else if (c == "'"'"'" && !dq) { sq = !sq; continue }
+          else if (c == "\"" && !sq) { dq = !dq; continue }
+          else if (c == "#" && !sq && !dq && (i == 1 || substr(s, i - 1, 1) ~ /[[:space:]]/)) {
+            s = substr(s, 1, i - 1); break
+          }
+        }
+        sub(/[[:space:]]+$/, "", s)
+        return s
+      }
+      function candidate(s) { return (opens(s) || opens(strip_assigns(s)) || opens(strip_subst(s))) }
+      function flush(   keep) {
+        keep = (!pend || has_forge(buf))
+        # A shell option stays in effect for the REST of the script, not just the next
+        # statement. The census block is the proof: `pipefail` is load-bearing for the
+        # LATER `census=$(gh api … | jq -s …)` pipeline -- the one that actually has a pipe --
+        # while the statement immediately after `set -o pipefail` has none. Attaching it to
+        # only the next statement therefore prefixes the one case it does not govern and
+        # drops it from the one it does, so the guard still never classifies the runtime
+        # form of the pipeline. Prefix every candidate the block yields instead.
+        if (optspfx != "" && buf != "" && keep) buf = optspfx "; " buf
+        if (buf != "" && keep) print buf
+        buf = ""; pend = 0
+      }
+      # Fences are DELIMITER- AND LENGTH-aware. `~~~` is a valid Markdown fence, and
+      # a machine knowing only backticks never ENTERS such a block: the command
+      # inside is dropped before classification and its refusal never surfaces --
+      # fail-open, with the per-source floor still passing on the other candidates.
+      #
+      # Length matters for the same reason. CommonMark closes a fence only on a run
+      # of the SAME character at least as long as the opener, which is how a block
+      # embeds a shorter fence as content -- a ````-block containing a ``` example.
+      # Recording only the character lets that inner line close the outer block, so
+      # every prescription after it is read as prose and silently dropped.
+      /^[[:space:]]*(```|~~~)/ {
+        fline = $0
+        ind = fline; sub(/[^[:space:]].*$/, "", ind)
+        sub(/^[[:space:]]*/, "", fline)
+        fd = substr(fline, 1, 1)
+        flen = 0
+        while (substr(fline, flen + 1, 1) == fd) flen++
+        if (!inb) { inb = 1; fence = fd; fencelen = flen; optspfx = "" }
+        # A closer may carry only spaces or tabs after its run. `` ```example `` inside a
+        # block is CONTENT: checking the delimiter and its length alone ends the block
+        # there, and `!inb { next }` then drops every later line, so a prescription after
+        # it never reaches the guard -- fail-open, exactly as the two cases above.
+        # ...and a closer indented FOUR or more columns is content too: CommonMark allows a
+        # fence at most three leading spaces, and line 413 strips indentation before this
+        # test, so an indented delimiter would otherwise close the block and drop every
+        # later prescription. A leading TAB is four columns, so it fails the same way.
+        # Deliberately asymmetric: this bounds the CLOSER only. Tightening the OPENER the
+        # same way would stop a fence indented inside a list item from opening at all,
+        # dropping its commands -- a NEW fail-open of the exact class this file guards.
+        # An over-permissive opener can only over-extract, which surfaces as a visible
+        # finding rather than a silent miss.
+        else if (fd == fence && flen >= fencelen && substr(fline, flen + 1) ~ /^[[:blank:]]*$/ && length(ind) <= 3 && ind !~ /\t/) { inb = 0; fence = ""; fencelen = 0; flush(); optspfx = "" }
+        next
+      }
+      !inb { next }
+      {
+        line = $0
+        sub(/^[[:space:]]*\$[[:space:]]+/, "", line)
+        if (buf == "") {
+          if (candidate(line)) { buf = line; pend = 0 }
+          else if (opens_subst(line) || compound_starter(line)) { buf = line; pend = 1 }
+          else if (opts_starter(line)) { optspfx = (optspfx == "" ? strip_comment(line) : optspfx "; " strip_comment(line)); next }
+          else next
+        }
+        # An options prefix is a COMPLETE statement, so the line after it is a NEW one. Joined
+        # with a space it reads as ARGUMENTS to `set` -- measured, `a read must begin with a
+        # forge command, not 'set'`, with the verb never seen at all. `; ` is what the shell runs.
+        else { sub(/\\[[:space:]]*$/, "", buf); buf = buf " " line }
+        # A trailing pipe or boolean is a shell CONTINUATION exactly as a backslash is,
+        # and the operand it joins is often where the real verdict lives. Flushing there
+        # hands the guard a command ending in `|`, which it rightly refuses as an empty
+        # pipeline segment -- a split artifact reading as a real finding, the same
+        # failure the multi-line quoted operand above already avoids. An unclosed
+        # substitution is a continuation too, and the only one whose opening line
+        # carries no trailing marker at all.
+        if (!unbalanced(buf) && !subst_open(buf) && !compound_open(buf) && buf !~ /\\[[:space:]]*$/ && buf !~ /(\||&&)[[:space:]]*$/) flush()
+      }
+      END { flush() }
+    ' "$f" 2>/dev/null
+  }
+}
+
+
+# Emits `<origin> <command>`, origin being `inline` or `fenced`. Each stream is
+# normalised BEFORE the tag is prefixed: normalize collapses whitespace runs, so
+# tagging first would let it eat the separator and make the two fields
+# unsplittable. One command appearing in both streams yields both rows, which is
+# intended -- the fenced one still gets classified.
+extract_commands() {
+  local f=$1
+  {
+    extract_inline "$f" | normalize | sed 's/^/inline /'
+    extract_fenced "$f" | normalize | sed 's/^/fenced /'
+  } | sort -u
+}
+
+raw_corpus() {
+  awk '/^corpus=\$\(cat <<.?CORPUS.?$/{inb=1;next} /^CORPUS$/{inb=0} inb{print}' "$corpus_file"
+}
+
+read_corpus() { raw_corpus | cut -f2- | normalize | sort -u; }
+
+# The set of refusals the corpus has already ACKNOWLEDGED. Keying coverage on the
+# guard's own reason -- rather than on command text -- is what makes this robust:
+# every refusal the guard issues names a verb, a flag, or a shell construct, so
+# the reason IS the classification. Two prose spellings of the same denied flag
+# are one decision, while a genuinely new flag produces a reason nobody has
+# acknowledged and fails. It also sidesteps matching a source's `<placeholder>`
+# prose against a corpus row's concrete values, which no text normalisation can
+# unify without discarding the flags the verdict actually turns on.
+corpus_deny_reasons() {
+  # Same three-outcome rule check_sources() applies, for the same reason -- but the
+  # failure here is a SILENT DROP rather than a false finding. A status 2 emitted no
+  # reason at all, and because other rows keep CORPUS_REASONS non-empty the emptiness
+  # check below still passed; if no source candidate happened to need the missing
+  # reason, the run exited 0 with one corpus classification never verified.
+  local want cmd r out status
+  while IFS=$'\t' read -r want cmd; do
+    [ -n "${want:-}" ] || continue
+    [ -n "${cmd:-}" ] || continue
+    out=$("$guard" --command "$cmd" 2>&1); status=$?
+    r=$(printf '%s\n' "$out" | head -1)
+    case "$status:$r" in
+      0:*) ;;
+      1:deny:*) printf '%s\n' "$r" ;;
+      *) die_unknown "guard returned status $status for corpus command, so its classification is unverifiable: $cmd :: $r" ;;
+    esac
+  done <<< "$(raw_corpus)"
+}
+
+# Computed ONCE: ~44 guard calls, and check_sources runs five times per
+# invocation (four self-tests plus the real pass).
+CORPUS_REASONS=""
+
+check_sources() {
+  local findings=0 checked=0 skipped=0 classified=0 tagged origin cand reason guard_out guard_status
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -r "$f" ] || { echo "  unreadable source: $f" >&2; return 2; }
+    while IFS= read -r tagged; do
+      [ -n "$tagged" ] || continue
+      origin=${tagged%% *}
+      cand=${tagged#* }
+      [ -n "$cand" ] || continue
+      # Prose exclusion applies to INLINE candidates only. A fenced block is a
+      # prescription, so it always reaches the guard however it is spelled.
+      if [ "$origin" = inline ] \
+         && printf '%s\n' "$PROSE_FRAGMENTS" | grep -qxF -- "$cand"; then
+        skipped=$((skipped+1)); continue
+      fi
+      checked=$((checked+1))
+      # The guard has THREE outcomes, and conflating two of them turns a broken guard into
+      # a vocabulary finding: 0 allowed, 1 denied with a `deny:` first line, 2 usage error.
+      # Treating every non-zero exit as a refusal let a status 2 become an ordinary
+      # UNCLASSIFIED row and made the script exit 1 instead of its documented UNKNOWN 2 --
+      # reporting a verdict it could not actually obtain. Capture the status ONCE (which
+      # also halves guard invocations) and accept only 1-with-deny as a refusal.
+      guard_out=$("$guard" --command "$cand" 2>&1); guard_status=$?
+      [ "$guard_status" -eq 0 ] && continue
+      reason=$(printf '%s\n' "$guard_out" | head -1)
+      case "$guard_status:$reason" in
+        1:deny:*) : ;;
+        *) die_unknown "guard returned status $guard_status for a prescribed command, so its verdict is unverifiable rather than a refusal: ${f#"$repo_root"/} :: $cand :: $reason" ;;
+      esac
+      if printf '%s\n' "$CORPUS_REASONS" | grep -qxF -- "$reason"; then
+        classified=$((classified+1)); continue
+      fi
+      findings=$((findings+1))
+      echo "UNCLASSIFIED  the guard refuses a command this source prescribes,"
+      echo "              and no corpus row acknowledges that refusal:"
+      echo "                source: ${f#"$repo_root"/}"
+      echo "                command: $cand"
+      echo "                reason: $reason"
+      echo "              Fix: teach the guard upstream and add a 'gap' row, or add a"
+      echo "              'deny' row if the refusal is correct, in ${corpus_file#"$repo_root"/}"
+    done <<< "$(extract_commands "$f")"
+  done <<< "$1"
+  CHECKED=$checked; SKIPPED=$skipped; CLASSIFIED=$classified
+  [ "$findings" -eq 0 ]
+}
+
+# die_unknown inside corpus_deny_reasons exits the COMMAND-SUBSTITUTION SUBSHELL, not this
+# script, so its status must be checked here or an unverifiable corpus row would be swallowed
+# and the run would continue on a partial reason set.
+CORPUS_REASONS=$(corpus_deny_reasons) \
+  || die_unknown "corpus classification is unverifiable — see the guard status reported above"
+[ -n "$CORPUS_REASONS" ] || die_unknown "no corpus row produced a deny reason; the corpus or the guard is not being read"
+
+# ── Self-tests: planted fixtures, before any real verdict is trusted ──────────
+fixdir=$(mktemp -d) || die_unknown "cannot create fixture dir"
+trap 'rm -rf "$fixdir"' EXIT
+
+printf '%s\n' 'Prose: run `gh api` then `gh pr view`, never `gh pr merge/create/comment/edit/review`.' \
+  '' 'Also `git log/status` and `gh search prs --help` are families, not commands.' > "$fixdir/prose.md"
+# The SAME text as a fenced PRESCRIPTION must still be classified. `git worktree add`
+# is an exact PROSE_FRAGMENTS entry, so an exclusion applied without provenance skips
+# it and no decision is ever prompted -- fail-open on a mutating command. Chosen for
+# the same two reasons bad.md's is: the refusal is NOVEL (no corpus row acknowledges
+# `git worktree is not a read verb`) and INVARIANT, because creating a working tree
+# can never become a read operation, so this fixture cannot age out.
+printf '%s\n' 'The surveyor must now also run:' '' '```sh' \
+  'git worktree add' '```' > "$fixdir/prose-fenced.md"
+# The refusal must be NOVEL (an already-acknowledged one like `gh pr merge` is
+# correctly reported as covered) and INVARIANT. An evolving read FLAG is the
+# wrong choice: `--involves` is an ordinary search filter that will plausibly join
+# `--commenter` on the allowlist, and on the day it does this fixture flips to
+# allowed and the self-test reports the detector broken — blocking CI over a
+# guard improvement. A create VERB can never become a read, so its denial cannot
+# age out, and `gh release create` carries a reason no corpus row acknowledges.
+printf '%s\n' 'The surveyor must now also run:' '' '```sh' \
+  'gh release create v1 --repo devantler-tech/monorepo' '```' > "$fixdir/bad.md"
+printf '%s\n' 'A newly mandated read:' '' '```sh' \
+  'gh pr list --repo devantler-tech/monorepo --state open --limit 50' '```' > "$fixdir/good.md"
+
+# A command written with a shell PROMPT must still be extracted. This is the
+# fail-OPEN direction: unstripped, `$ gh ...` never matches the verb filter, so
+# the command is skipped entirely and its unclassified refusal passes unnoticed.
+printf '%s\n' 'Run it like this:' '' '```sh' \
+  '$ gh release create v1 --repo devantler-tech/monorepo' '```' > "$fixdir/prompt.md"
+# A fenced command whose DOUBLE-quoted operand spans lines must be joined into one
+# candidate. Split, the guard rightly refuses half a command as unbalanced quoting
+# and it reads as a real finding -- the fail-CLOSED direction, noisy but safe.
+printf '%s\n' 'The surveyor runs:' '' '```sh' \
+  'gh api graphql -f query="query {' \
+  '  repository(owner: \\"devantler-tech\\", name: \\"monorepo\\") { name }' \
+  '}"' '```' > "$fixdir/dquote.md"
+
+# An ENV-PREFIXED command must reach the guard. Unmatched, it is dropped before
+# classification and the per-source floor still passes on the other candidates --
+# fail-open, and the credential-recovery path is exactly where it would bite.
+printf '%s\n' 'On a rejected credential run:' '' '```sh' \
+  'env -u GH_TOKEN gh release create v1 --repo devantler-tech/monorepo' '```' > "$fixdir/env.md"
+
+# Assert EXTRACTION, not detection: every `env ...` command shares one deny reason,
+# so once that reason is classified the command is correctly "covered". What the
+# grammar buys is that the command reaches the guard AT ALL -- without it the span
+# is dropped before classification and no decision is ever prompted.
+env_extracted=$(extract_commands "$fixdir/env.md" | grep -c '^fenced env ')
+[ "${env_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: an env-prefixed command was never extracted, so it cannot reach the guard (fail-open)"
+
+# An ASSIGNMENT-PREFIXED command must reach the guard. The overlay prescribes
+# `RUN_NAME="$run_name" gh api ...` for the default-branch streak walk; with the verb
+# no longer at the start of the line, an opener test anchored on the verb drops it.
+printf '%s\n' 'The streak walk runs:' '' '```sh' \
+  'RUN_NAME="$run_name" gh api --paginate "repos/devantler-tech/monorepo/actions/runs" --jq ".workflow_runs[].id"' '```' > "$fixdir/assign.md"
+
+# A command SUBSTITUTION must reach the guard too, and must arrive without the shell
+# that surrounds it: the overlay prescribes `fid_status=$(gh api ... ) || { ...; }`,
+# and handing the guard the trailing `|| { ... }` classifies something that is not
+# the command. Spans lines and carries parens inside a jq filter, which is what makes
+# a bare paren count wrong.
+printf '%s\n' 'The board census runs:' '' '```sh' \
+  'fid_status=$(gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100" \' \
+  '  --jq '"'"'.[]|select(.name=="Status")|.id'"'"') \' \
+  '  || { echo "board_coverage=unknown:field-lookup-failed"; exit 0; }' '```' > "$fixdir/subst.md"
+
+# The assignment-prefixed command must reach the guard AS PRESCRIBED. Asserting
+# `^fenced gh api ` would pass on the stripped form, which is the fail-open this
+# pair closes: the deployment runs the prefix, and the guard refuses it
+# (`a read must begin with a forge command`), so classifying the bare read
+# reports a boundary that holds for a command nobody runs.
+assign_extracted=$(extract_commands "$fixdir/assign.md" | grep -c '^fenced RUN_NAME="\$run_name" gh api ')
+[ "${assign_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: an assignment-prefixed command did not reach the guard as prescribed (fail-open)"
+
+# Same for the substitution, and here the wrapper is what the guard refuses
+# (`dollar-paren command substitution is not a read`), so the complete form is
+# the only one whose verdict describes the deployment.
+subst_extracted=$(extract_commands "$fixdir/subst.md" | grep -c '^fenced fid_status=\$(gh api ')
+[ "${subst_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a command-substitution command did not reach the guard as prescribed (fail-open)"
+
+# The LEGACY backtick substitution must reach the guard too. This form fails open
+# more sharply than being dropped would: extract_inline reads the wrapper
+# backticks as a Markdown code span and submits the INNER read, which the guard
+# ALLOWS -- so the job goes green on a line the deployment is refused for
+# (`backtick command substitution is not a read`). The fixture asserts both that
+# the complete line is extracted AND that its unclassified refusal is DETECTED,
+# so it cannot pass by extracting something harmless.
+printf '%s\n' 'The census runs:' '' '```sh' \
+  'result=`gh api "orgs/devantler-tech/projectsV2/5/fields?per_page=100"`' '```' > "$fixdir/backtick.md"
+bt_extracted=$(extract_commands "$fixdir/backtick.md" | grep -c '^fenced result=`gh api ')
+[ "${bt_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a backtick command substitution did not reach the guard as prescribed (fail-open)"
+if check_sources "$fixdir/backtick.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a backtick substitution's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# A substitution that OPENS before the verb, which is how the MANDATORY merge
+# preflight is written. Anchored on the verb, extraction starts at the bare
+# `gh api` line and submits the INNER read -- ALLOWed -- while the deployment runs
+# the whole substitution, which is refused. Measured on the real sources, this is
+# not hypothetical: the preflight in `.claude/skills/portfolio-maintenance/SKILL.md`
+# is the one and only extraction this recogniser changes.
+printf '%s\n' 'The merge preflight runs:' '' '```sh' \
+  'unresolved=$(' \
+  '  set -o pipefail' \
+  '  gh api graphql --paginate -f owner=devantler-tech -f name=monorepo' \
+  ') || { echo "thread read FAILED" >&2; exit 1; }' '```' > "$fixdir/opensubst.md"
+os_extracted=$(extract_commands "$fixdir/opensubst.md" | grep -c '^fenced unresolved=\$( set -o pipefail gh api ')
+[ "${os_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a substitution opening before the verb did not reach the guard as prescribed (fail-open)"
+
+# ...and the provisional buffer it needs must not turn every assignment into a
+# candidate. A verb-less opener wrapping no forge command is discarded, or it
+# would reach the guard and stand as a permanent false finding.
+printf '%s\n' 'Timestamp it:' '' '```sh' \
+  'stamp=$(' '  date -u +%Y' ')' '```' > "$fixdir/opensubst-nonforge.md"
+nf_extracted=$(extract_commands "$fixdir/opensubst-nonforge.md" | grep -c .)
+[ "${nf_extracted:-0}" -eq 0 ] \
+  || die_unknown "self-test: a substitution wrapping no forge verb yielded $nf_extracted candidate(s), expected 0 (false finding)"
+
+# A TILDE-fenced block must be entered. `~~~` is valid Markdown, and a fence
+# machine knowing only backticks never enters one, so the command inside is
+# dropped before classification and its refusal never surfaces -- fail-open, with
+# the per-source floor still passing on the other candidates. Asserts extraction
+# AND detection, so it cannot pass by extracting something harmless.
+printf '%s\n' 'The surveyor runs:' '' '~~~sh' \
+  'gh release create v1 --repo devantler-tech/monorepo' '~~~' > "$fixdir/tilde.md"
+tl_extracted=$(extract_commands "$fixdir/tilde.md" | grep -c '^fenced gh release create ')
+[ "${tl_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a tilde-fenced command was never extracted, so it cannot reach the guard (fail-open)"
+if check_sources "$fixdir/tilde.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a tilde-fenced command's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# A CLOSING fence may carry only spaces or tabs after its delimiter run. `` ```example ``
+# inside a block is CONTENT, not a closer -- but a parser checking only the delimiter and
+# its LENGTH ends the block there, and `!inb { next }` then drops every later line. A
+# prescription after that point never reaches the guard -- fail-open, with the per-source
+# floor still passing on the other candidates, which is the same silent shape the tilde and
+# length cases above carry. Asserts extraction AND detection, so it cannot pass by
+# extracting something harmless.
+printf '%s\n' 'The sweep runs:' '' '```sh' '```example' \
+  'gh release create v2 --repo devantler-tech/monorepo' '```' > "$fixdir/fencesuffix.md"
+fs_extracted=$(extract_commands "$fixdir/fencesuffix.md" | grep -c '^fenced gh release create v2 ')
+[ "${fs_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a command after an invalid closing-fence suffix was never extracted, so it cannot reach the guard (fail-open)"
+if check_sources "$fixdir/fencesuffix.md" >/dev/null 2>&1; then
+  die_unknown "self-test: an invalid-closing-fence-suffix command's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# A delimiter-like line indented FOUR or more columns is block content, not a closer:
+# CommonMark allows a fence at most three leading spaces. The recogniser strips indentation
+# before comparing, so without a bound the indented line closes the block and `!inb { next }`
+# drops every prescription after it -- the same silent fail-open as the suffix case above,
+# reached by indentation instead of a suffix. Asserts extraction AND detection.
+printf '%s\n' 'The sweep runs:' '' '```sh' '    ```' \
+  'gh release create v3 --repo devantler-tech/monorepo' '```' > "$fixdir/fenceindent.md"
+fi_extracted=$(extract_commands "$fixdir/fenceindent.md" | grep -c '^fenced gh release create v3 ')
+[ "${fi_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a command after a four-space-indented delimiter was never extracted, so it cannot reach the guard (fail-open)"
+if check_sources "$fixdir/fenceindent.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a four-space-indented-delimiter command's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# A corpus row whose guard status is 2 must make the run UNKNOWN, not vanish. The old
+# corpus reader emitted no reason for such a row, and because other rows keep
+# CORPUS_REASONS non-empty the emptiness check still passed -- so if no source candidate
+# needed the missing reason the suite exited 0 with one classification never verified.
+# The stub DELEGATES every other command to the real guard, so the suite's own smoke test
+# still passes and the status-2 path is reached on a genuine corpus row; a stub that
+# failed everything would be caught by that smoke test and prove nothing.
+corpus_probe_cmd=$(raw_corpus | head -1 | cut -f2-)
+[ -n "${corpus_probe_cmd:-}" ] \
+  || die_unknown "self-test: no corpus row to build the guard-status probe from"
+cat > "$fixdir/guard-status2.sh" <<STUB
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in *"${corpus_probe_cmd}"*) echo 'usage: simulated guard error' >&2; exit 2 ;; esac
+done
+exec "${guard}" "\$@"
+STUB
+chmod +x "$fixdir/guard-status2.sh"
+if ( guard="$fixdir/guard-status2.sh"; corpus_deny_reasons ) >/dev/null 2>&1; then
+  die_unknown "self-test: a corpus row whose guard status is 2 left classification verifiable (fail-open)"
+fi
+
+# The smoke test itself must obey that same three-outcome contract. A guard that
+# ERRORS on the merge probe has not denied it, and accepting status 2 there would
+# leave every later verdict resting on a discrimination proof never obtained. The
+# stub DELEGATES everything else to the real guard, so the read half of the gate
+# still passes and this isolates the merge probe alone -- a stub that failed
+# everything would trip the read half and prove nothing.
+cat > "$fixdir/guard-merge-status2.sh" <<STUB
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in *'pr merge'*) echo 'usage: simulated guard error' >&2; exit 2 ;; esac
+done
+exec "${guard}" "\$@"
+STUB
+chmod +x "$fixdir/guard-merge-status2.sh"
+if ( guard="$fixdir/guard-merge-status2.sh"; assert_guard_discriminates ) >/dev/null 2>&1; then
+  die_unknown "self-test: a guard that ERRORS on the merge probe still satisfied the discrimination gate (fail-open)"
+fi
+# ...and the gate must still PASS with the real guard, or the assertion above
+# would be satisfied by a gate that rejects everything and proves nothing.
+( assert_guard_discriminates ) >/dev/null 2>&1 \
+  || die_unknown "self-test: the discrimination gate rejected the REAL guard, so the fail-open probe above is vacuous"
+
+# A MULTI-BACKTICK inline span must be parsed by its own delimiter length. A span
+# opens on a run of N backticks and closes on the next run of exactly N, which is
+# how a prescription may contain a shell backtick substitution at all. Matched with
+# a single-backtick regex the text splits at the INNER backticks, both fragments
+# fail the verb filter, and NOTHING reaches the guard -- while the deployment runs a
+# command the guard refuses (`backtick command substitution is not a read`). Asserts
+# extraction AND detection, so it cannot pass by extracting a harmless fragment.
+printf '%s\n' 'The census runs ``result=`gh api rate_limit` `` before selecting.' > "$fixdir/multibacktick.md"
+mb_extracted=$(extract_commands "$fixdir/multibacktick.md" | grep -c '^inline result=`gh api ')
+[ "${mb_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a multi-backtick inline span did not reach the guard as prescribed (fail-open)"
+if check_sources "$fixdir/multibacktick.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a multi-backtick span's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# A shell COMPOUND CONSTRUCT must reach the guard whole. The mandated issue-type
+# sweep is a `for … do … done` loop, and anchored on the verb the buffer starts at
+# the nested read: the guard ALLOWs that, while the deployment submits the loop,
+# which it refuses. The fixture omits the semicolon so the refusal is
+# `a read must begin with a forge command, not .for.` -- a reason no corpus row
+# acknowledges, so the detection half cannot pass merely because the real sweep is
+# now classified. Asserts extraction AND detection.
+printf '%s\n' 'The type sweep runs:' '' '```sh' \
+  'for T in Epic Feature' 'do' \
+  '  gh release create "v-$T" --repo devantler-tech/monorepo' \
+  'done' '```' > "$fixdir/compound.md"
+cp_extracted=$(extract_commands "$fixdir/compound.md" | grep -c "^fenced for T in Epic Feature do gh release create ")
+[ "${cp_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a shell compound construct did not reach the guard as prescribed (fail-open)"
+if check_sources "$fixdir/compound.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a compound construct's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# ...and a construct wrapping no forge verb must not become a candidate, or every
+# `for`/`if` in a fenced block would reach the guard as a false finding.
+printf '%s\n' 'Loop over files:' '' '```sh' \
+  'for f in a b; do' '  echo "$f"' 'done' '```' > "$fixdir/compound-nonforge.md"
+cn_extracted=$(extract_commands "$fixdir/compound-nonforge.md" | grep -c .)
+[ "${cn_extracted:-0}" -eq 0 ] \
+  || die_unknown "self-test: a construct wrapping no forge verb yielded $cn_extracted candidate(s), expected 0 (false finding)"
+
+# A shell OPTIONS line must not be DROPPED. `set -o pipefail` heads the board-coverage
+# census in the surveyor definition and is load-bearing there; anchored on a forge verb
+# the buffer used to start at the NEXT line, so the guard was asked about a sub-statement
+# while the deployment ran the options line too -- and the two draw different verdicts
+# (measured: `dollar-paren command substitution is not a read` for the sub-statement,
+# `chaining with ; can carry a write` for the script). monorepo#2963.
+#
+# Asserts extraction only, and deliberately NOT detection: the joined form's refusal is
+# `chaining with ; can carry a write`, which the compound-sweep row already acknowledges,
+# so a `check_sources` assertion here would pass whether or not the options line survived
+# -- a vacuous control. What is asserted instead is the thing that actually regressed:
+# the candidate must OPEN with the options statement.
+printf '%s\n' 'The census runs:' '' '```sh' \
+  'set -o pipefail   # REQUIRED -- a half-walked census must not report measured' \
+  'gh pr list --repo devantler-tech/monorepo --state open' '```' > "$fixdir/optsprefix.md"
+# Matched comment-AGNOSTICALLY -- opens with the options statement, and carries the read.
+# An exact-match assertion here would SUBSUME the comment assertion below (measured: with
+# `strip_comment` neutralised this fired instead of it, so that one was never proven to
+# fire at all), leaving one conjunct per fixture untested.
+op_extracted=$(extract_commands "$fixdir/optsprefix.md" | grep -c "^fenced set -o pipefail.*gh pr list --repo devantler-tech/monorepo --state open$")
+[ "${op_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a shell options line was dropped, so the guard saw a sub-statement rather than the prescribed script (fail-open)"
+
+# ...and the comment on that options line must be STRIPPED before the join. The shell
+# discards a comment to end of line, but joining glues the next statement in behind it,
+# so an unstripped comment hands the guard `an unquoted # starts a shell comment, so the
+# words after it are discarded` -- a real refusal, of a command that exists only as a
+# join artifact. Asserted on the extracted text rather than the verdict, because the
+# verdict is masked: the guard reports the `;` chaining refusal first either way.
+oc_artifacts=$(extract_commands "$fixdir/optsprefix.md" | grep -c "#")
+[ "${oc_artifacts:-0}" -eq 0 ] \
+  || die_unknown "self-test: an options line's comment survived the join, so the guard is asked about a command that exists only as a join artifact (false finding)"
+
+# ...and an options line wrapping no forge verb must not become a candidate, or every
+# `set -e` in a fenced block would reach the guard as a false finding.
+printf '%s\n' 'Strict mode:' '' '```sh' \
+  'set -o pipefail' '  echo "hello"' '```' > "$fixdir/optsprefix-nonforge.md"
+on_extracted=$(extract_commands "$fixdir/optsprefix-nonforge.md" | grep -c .)
+[ "${on_extracted:-0}" -eq 0 ] \
+  || die_unknown "self-test: an options line wrapping no forge verb yielded $on_extracted candidate(s), expected 0 (false finding)"
+
+# A LONGER fence must not be closed by a shorter one. CommonMark closes a fence
+# only on a run of the same character at least as long as the opener, which is how
+# a block embeds a ``` example as content. Recording only the delimiter character
+# lets that inner line close the outer block, so every prescription after it is
+# read as prose and silently dropped -- fail-open, and the per-source floor still
+# passes on the earlier candidates.
+printf '%s\n' 'Outer block with an embedded example:' '' '````sh' \
+  'gh release create v1 --repo devantler-tech/monorepo' \
+  '```' \
+  'gh release delete v2 --repo devantler-tech/monorepo' '````' > "$fixdir/fencelen.md"
+fl_extracted=$(extract_commands "$fixdir/fencelen.md" | grep -c '^fenced gh release delete v2 ')
+[ "${fl_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a command after an embedded shorter fence was dropped, so it cannot reach the guard (fail-open)"
+
+# A MULTI-LINE inline span must be seen. A per-line scan cannot match one, so the
+# span is dropped whole and its refusal never surfaces -- fail-open, and the run
+# loop prescribes one of these today.
+printf '%s\n' 'Per PR also check' \
+  '`gh release create v1 --repo devantler-tech/monorepo' \
+  '  --title "x"`.' > "$fixdir/multiline.md"
+ml_extracted=$(extract_commands "$fixdir/multiline.md" | grep -c '^inline gh release create ')
+[ "${ml_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a multi-line inline code span was never extracted, so it cannot reach the guard (fail-open)"
+if check_sources "$fixdir/multiline.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a multi-line inline span's unclassified refusal was NOT detected"
+fi
+
+# A command split across a trailing PIPE must be joined before classification.
+# This is the fail-CLOSED direction and it is noisy rather than dangerous, but it
+# is not hypothetical: the merge preflight's own `gh api graphql … | jq -s …` read
+# is written this way, and split at the pipe the guard rightly refuses the first
+# half as an `empty pipeline segment`. Joined, the complete read is ALLOWed -- so
+# the split turned a mandated, permitted read into a standing false finding.
+# The fixture is chosen so the two halves DISAGREE: the whole is allowed, the
+# first half alone is denied, so the assertion cannot pass by accident.
+printf '%s\n' 'The preflight runs:' '' '```sh' \
+  'gh pr list --repo devantler-tech/monorepo --state open --json number |' \
+  '  jq -r '"'"'.[].number'"'"'' '```' > "$fixdir/pipe.md"
+pipe_candidates=$(extract_commands "$fixdir/pipe.md" | grep -c .)
+[ "${pipe_candidates:-0}" -eq 1 ] \
+  || die_unknown "self-test: a pipe-continued command yielded $pipe_candidates candidate(s), expected 1 joined"
+if ! check_sources "$fixdir/pipe.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a command split at a trailing pipe was reported as a finding"
+fi
+
+if check_sources "$fixdir/prompt.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a prompt-prefixed command was skipped instead of checked (fail-open)"
+fi
+if ! check_sources "$fixdir/dquote.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a multi-line double-quoted command was split and reported as a finding"
+fi
+if ! check_sources "$fixdir/prose.md" >/dev/null 2>&1; then
+  die_unknown "self-test: prose fragments were flagged as unclassified commands"
+fi
+if check_sources "$fixdir/prose-fenced.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a prose-fragment command PRESCRIBED in a fenced block was skipped
+  as prose instead of classified (fail-open). If a corpus row now acknowledges
+  'git worktree is not a read verb', this fixture is stale rather than the check broken --
+  pick another denied PROSE_FRAGMENTS entry whose refusal no corpus row covers."
+fi
+if check_sources "$fixdir/bad.md" >/dev/null 2>&1; then
+  die_unknown "self-test: an unclassified guard-denied command was NOT detected"
+fi
+if ! check_sources "$fixdir/good.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a guard-allowed mandated read was wrongly flagged"
+fi
+if check_sources "$fixdir/missing-file.md" >/dev/null 2>&1; then
+  die_unknown "self-test: an unreadable source did not fail closed"
+fi
+
+# ── Anti-vacuity: the extractor and the corpus must still see something ───────
+corpus_rows=$(read_corpus | grep -c .)
+[ "$corpus_rows" -ge "$MIN_CORPUS_ROWS" ] \
+  || die_unknown "parsed only $corpus_rows corpus row(s) from ${corpus_file#"$repo_root"/}; the heredoc markers likely moved"
+
+while IFS=$'\t' read -r f floor; do
+  [ -n "${f:-}" ] || continue
+  [ -r "$f" ] || die_unknown "source is unreadable: ${f#"$repo_root"/}
+  (populate the submodule: .claude/scripts/submodule-init.sh libraries/agent-plugins)"
+  n=$(extract_commands "$f" | grep -c .)
+  [ "$n" -ge "$floor" ] \
+    || die_unknown "extracted only $n candidate(s) from ${f#"$repo_root"/} (floor $floor); the extractor is not matching this source"
+done <<< "$SOURCE_FLOORS"
+
+# ── The real check ───────────────────────────────────────────────────────────
+CHECKED=0; SKIPPED=0; CLASSIFIED=0
+# Capture the status DIRECTLY. After `fi`, `$?` is the status of the `if`
+# compound (0 when the condition merely failed), so reading it there cannot
+# distinguish a finding from an UNKNOWN and would silently report an unreadable
+# source as a finding.
+check_sources "$SOURCES"
+status=$?
+if [ "$status" -eq 0 ]; then
+  echo "surveyor-vocabulary-coverage: $CHECKED prescribed command(s) covered" \
+       "($CLASSIFIED classified in corpus, $SKIPPED prose fragment(s) skipped," \
+       "$corpus_rows corpus row(s))"
+  exit 0
+fi
+[ "$status" -eq 2 ] && die_unknown "a source was unreadable"
+echo "surveyor-vocabulary-coverage: unclassified command(s) found — see above" >&2
+exit 1
