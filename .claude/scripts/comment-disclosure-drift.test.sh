@@ -12,6 +12,7 @@ set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 guard="$script_dir/comment-disclosure-drift.sh"
+constitution="$script_dir/../../AGENTS.md"
 
 failures=0
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/comment-disclosure-drift-test.XXXXXX")"
@@ -61,6 +62,26 @@ expect_stderr() {
   fi
 }
 
+echo "== consumer contract: legacy review-request sender attribution =="
+disambiguator="$({
+  awk '
+    /^\*\*Distinguish the human maintainer from yourself/ { in_section = 1 }
+    in_section && /^\*\*Not every `claude\/\*` PR is yours/ { exit }
+    in_section { print }
+  ' "$constitution"
+} | tr '\n' ' ' | tr -s '[:space:]' ' ')"
+legacy_shape="\`> Requested by the 🤖 Daily AI Engineer\`"
+permanent_rule='permanently own-output only when it begins the body'
+human_holdout="the surrounding \`devantler\` comment remains a human-maintainer instruction"
+if [[ "$disambiguator" == *"$legacy_shape"* ]] &&
+   [[ "$disambiguator" == *"$permanent_rule"* ]] &&
+   [[ "$disambiguator" == *"$human_holdout"* ]]; then
+  echo "ok    legacy review-request sender attribution is pinned"
+else
+  echo "FAIL  legacy review-request sender attribution is not pinned in the disambiguator"
+  failures=$((failures + 1))
+fi
+
 echo "== Go classifier suite =="
 if (cd "$script_dir/comment-disclosure-drift-go" && go test -race -cover ./...); then
   echo "ok    go test"
@@ -98,6 +119,13 @@ expect_stdout "undisclosed-trigger" "appended disclosure after trigger is named"
 printf '%s' '[{"id":4,"html_url":"https://x/4","user":{"login":"devantler"},"body":"> Requested by the 🤖 Daily AI Engineer - CI is green"}]' >"$tmpdir/sender.json"
 expect_exit 1 "sender marker exits 1" -- bash "$guard" --input "$tmpdir/sender.json"
 expect_stdout "sender-marker" "sender marker is named"
+
+# The same literal later in the body is a maintainer QUOTING the legacy artifact,
+# not the comment's own sender identity. An anywhere-match would demote his control
+# channel to agent output, the expensive direction of the asymmetric trust rule.
+printf '%s' '[{"id":41,"user":{"login":"devantler"},"body":"Do not use this old marker again:\n\n> Requested by the 🤖 Daily AI Engineer - example"}]' >"$tmpdir/quoted-sender.json"
+expect_exit 0 "mid-body legacy sender quote stays maintainer-authored" -- bash "$guard" --input "$tmpdir/quoted-sender.json"
+expect_stdout "unattributable" "mid-body legacy sender quote is not agent evidence"
 
 printf '%s' '[{"id":5,"html_url":"https://x/5","user":{"login":"devantler"},"body":"@coderabbitai review\n\nPlease review exact head abc"}]' >"$tmpdir/annotated.json"
 expect_exit 1 "undisclosed trigger exits 1" -- bash "$guard" --input "$tmpdir/annotated.json"
