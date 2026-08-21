@@ -52,6 +52,17 @@
 # UNKNOWN is never success: an unverifiable boundary is unproven.
 set -uo pipefail
 
+# The guard classifies GH_TELEMETRY as an ENVIRONMENT class, not as argv: it
+# refuses every gh segment unless a disabling value is already in the process
+# environment, and it denies an env-prefixed command (`GH_TELEMETRY=0 gh ...`,
+# `env GH_TELEMETRY=0 gh ...`) as well as any `;`/`&&` chain that would set it,
+# so there is no way to express this inside --command. Without it the positive
+# smoke probe below is denied for the telemetry reason and this whole suite
+# reports UNKNOWN. This costs nothing here: these tests classify strings and
+# never invoke gh, so the value only has to satisfy the guard's environment
+# check.
+export GH_TELEMETRY=0
+
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd) || exit 2
 guard="$repo_root/libraries/agent-plugins/plugins/agentic-engineering/scripts/forge-readonly-guard.sh"
 corpus_file="$repo_root/.claude/scripts/surveyor-forge-vocabulary.test.sh"
