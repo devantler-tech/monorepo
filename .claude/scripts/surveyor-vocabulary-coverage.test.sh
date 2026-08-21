@@ -85,11 +85,29 @@ die_unknown() { echo "surveyor-vocabulary-coverage: UNKNOWN — $1" >&2; exit 2;
 # Prove the guard discriminates before trusting a single verdict. Without this a
 # guard that errored on everything would mark every candidate denied and this
 # file would report a pile of false findings.
-"$guard" --command 'gh pr list --repo devantler-tech/monorepo --state open' >/dev/null 2>&1 \
-  || die_unknown "guard denied its own smoke-test read"
-if "$guard" --command 'gh pr merge 1 --repo devantler-tech/monorepo --squash' >/dev/null 2>&1; then
-  die_unknown "guard allowed a merge; it is not discriminating"
-fi
+#
+# The guard has THREE outcomes, and "not allowed" is not the same as "denied":
+# 0 allowed, 1 denied with a `deny:` first line, 2 usage/error. A bare non-zero
+# check accepts a status 2 as a refusal, so a guard that merely ERRORED on the
+# merge probe would satisfy this gate -- and the suite would go on to report a
+# boundary whose denied-command proof was never actually obtained. The probe and
+# the corpus also differ in their PR number, so a guard broken only for the
+# corpus' spelling passes a probe that accepts any failure. Kept in a function so
+# the self-tests below can run it against a stub; the real call follows it.
+assert_guard_discriminates() {
+  local out status reason
+  out=$("$guard" --command 'gh pr list --repo devantler-tech/monorepo --state open' 2>&1); status=$?
+  [ "$status" -eq 0 ] \
+    || die_unknown "guard returned status $status for its own smoke-test read, so no verdict it gives is trustworthy: $(printf '%s\n' "$out" | head -1)"
+  out=$("$guard" --command 'gh pr merge 1 --repo devantler-tech/monorepo --squash' 2>&1); status=$?
+  reason=$(printf '%s\n' "$out" | head -1)
+  case "$status:$reason" in
+    1:deny:*) : ;;
+    0:*) die_unknown "guard allowed a merge; it is not discriminating" ;;
+    *) die_unknown "guard returned status $status for the merge probe, so its refusal is unverifiable rather than a denial: $reason" ;;
+  esac
+}
+assert_guard_discriminates
 
 PROSE_FRAGMENTS='gh ... list/view/search
 gh api
@@ -753,6 +771,28 @@ chmod +x "$fixdir/guard-status2.sh"
 if ( guard="$fixdir/guard-status2.sh"; corpus_deny_reasons ) >/dev/null 2>&1; then
   die_unknown "self-test: a corpus row whose guard status is 2 left classification verifiable (fail-open)"
 fi
+
+# The smoke test itself must obey that same three-outcome contract. A guard that
+# ERRORS on the merge probe has not denied it, and accepting status 2 there would
+# leave every later verdict resting on a discrimination proof never obtained. The
+# stub DELEGATES everything else to the real guard, so the read half of the gate
+# still passes and this isolates the merge probe alone -- a stub that failed
+# everything would trip the read half and prove nothing.
+cat > "$fixdir/guard-merge-status2.sh" <<STUB
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in *'pr merge'*) echo 'usage: simulated guard error' >&2; exit 2 ;; esac
+done
+exec "${guard}" "\$@"
+STUB
+chmod +x "$fixdir/guard-merge-status2.sh"
+if ( guard="$fixdir/guard-merge-status2.sh"; assert_guard_discriminates ) >/dev/null 2>&1; then
+  die_unknown "self-test: a guard that ERRORS on the merge probe still satisfied the discrimination gate (fail-open)"
+fi
+# ...and the gate must still PASS with the real guard, or the assertion above
+# would be satisfied by a gate that rejects everything and proves nothing.
+( assert_guard_discriminates ) >/dev/null 2>&1 \
+  || die_unknown "self-test: the discrimination gate rejected the REAL guard, so the fail-open probe above is vacuous"
 
 # A MULTI-BACKTICK inline span must be parsed by its own delimiter length. A span
 # opens on a run of N backticks and closes on the next run of exactly N, which is

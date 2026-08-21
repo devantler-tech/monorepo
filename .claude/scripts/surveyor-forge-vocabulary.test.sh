@@ -117,14 +117,26 @@ fi
 # Prove the guard answers at all before trusting any verdict it gives. Without
 # this, a guard that errored on every input would mark the whole corpus "deny"
 # and the suite would pass vacuously on its deny entries.
-if ! "$guard" --command 'gh pr list --repo devantler-tech/monorepo --state open' >/dev/null 2>&1; then
-  echo "surveyor-forge-vocabulary: UNKNOWN — guard denied its own smoke-test read" >&2
+#
+# The guard has THREE outcomes, so "not allowed" is not the same as "denied":
+# 0 allowed, 1 denied with a `deny:` first line, 2 usage/error. A bare non-zero
+# check accepts a status 2 as a refusal, so a guard that merely ERRORED on the
+# merge probe would satisfy this gate -- and every `deny` row below would then
+# rest on a discrimination proof that was never obtained. Note also that the
+# probe and the corpus differ in their PR number, so a guard broken only for the
+# corpus' spelling would still pass a probe that accepts any failure.
+smoke_out=$("$guard" --command 'gh pr list --repo devantler-tech/monorepo --state open' 2>&1); smoke_status=$?
+if [ "$smoke_status" -ne 0 ]; then
+  echo "surveyor-forge-vocabulary: UNKNOWN — guard returned status $smoke_status for its own smoke-test read, so no verdict it gives is trustworthy: $(printf '%s\n' "$smoke_out" | head -1)" >&2
   exit 2
 fi
-if "$guard" --command 'gh pr merge 1 --repo devantler-tech/monorepo --squash' >/dev/null 2>&1; then
-  echo "surveyor-forge-vocabulary: UNKNOWN — guard allowed a merge; it is not discriminating" >&2
-  exit 2
-fi
+smoke_out=$("$guard" --command 'gh pr merge 1 --repo devantler-tech/monorepo --squash' 2>&1); smoke_status=$?
+smoke_reason=$(printf '%s\n' "$smoke_out" | head -1)
+case "$smoke_status:$smoke_reason" in
+  1:deny:*) : ;;
+  0:*) echo "surveyor-forge-vocabulary: UNKNOWN — guard allowed a merge; it is not discriminating" >&2; exit 2 ;;
+  *) echo "surveyor-forge-vocabulary: UNKNOWN — guard returned status $smoke_status for the merge probe, so its refusal is unverifiable rather than a denial: $smoke_reason" >&2; exit 2 ;;
+esac
 
 # ── Corpus ───────────────────────────────────────────────────────────────────
 # Tab-separated: <disposition>\t<command>. Tabs are safe here (no raw control
