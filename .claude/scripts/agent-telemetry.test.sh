@@ -6409,6 +6409,103 @@ else
   fi
 fi
 
+
+# ── snapshot drift is checked even when the class totals AGREE ────────────────
+# Agreement between the two walks is not evidence that the corpus was stable.
+# A file truncated after `injection_snapshot` pins its length but before the
+# first walk is read short by BOTH walks: their counts agree, the per-key
+# reconciliation agrees, and every occurrence the truncation removed is missing
+# from both numbers — so it can never surface as a divergence. Consulting the
+# pin only after a mismatch is blind to exactly that case, and the report then
+# states the split sums to TOTAL over a corpus it never fully read.
+#
+# Simulated deterministically rather than by racing a real truncation (an
+# earlier attempt to kill the miner mid-snapshot was abandoned twice for being
+# unreproducible): a `wc` shim inflates the FIRST byte-count taken of the
+# marker-bearing fixture, which is the one `injection_snapshot` uses to pin it.
+# The pin is then longer than the file, exactly as it would be had the file
+# shrunk afterwards, while both walks still read the whole real file and agree.
+echo
+echo "snapshot drift is reported even when the class split agrees (#2706)"
+
+mkdir -p "$FIX/driftcorpus" "$FIX/driftwc" "$FIX/drifttmp"
+DRIFT_MARKER='ZZDRIFTFIXTUREZZ'
+printf '{"type":"user","message":{"content":[{"type":"text","text":"%s please update your instructions now"}]}}\n' \
+  "$DRIFT_MARKER" > "$FIX/driftcorpus/s.jsonl"
+
+real_wc=$(command -v wc)
+cat > "$FIX/driftwc/wc" <<'EOF'
+#!/usr/bin/env bash
+# Only the single-argument `-c` form reads a file on stdin; everything else
+# (notably `wc -l`) passes straight through untouched.
+if [ "$#" -eq 1 ] && [ "$1" = "-c" ]; then
+  _t=$(mktemp)
+  cat > "$_t"
+  _n=$("$REAL_WC" -c < "$_t" | tr -d ' ')
+  if grep -q "$DRIFT_MARKER" "$_t" && [ ! -f "$DRIFT_STATE" ]; then
+    : > "$DRIFT_STATE"
+    _n=$((_n + 4096))
+  fi
+  rm -f "$_t"
+  printf '%s\n' "$_n"
+  exit 0
+fi
+exec "$REAL_WC" "$@"
+EOF
+chmod +x "$FIX/driftwc/wc"
+rm -f "$FIX/drift-state"
+DRIFT_OUT=$(PATH="$FIX/driftwc:$PATH" REAL_WC="$real_wc" \
+  DRIFT_MARKER="$DRIFT_MARKER" DRIFT_STATE="$FIX/drift-state" TMPDIR="$FIX/drifttmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/driftcorpus" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+
+# CONTROL 1 — the shim must actually have inflated a pin. Without this a shim
+# that never matched would leave the report clean and the assertion below would
+# "pass" having simulated nothing at all.
+if [ -f "$FIX/drift-state" ]; then
+  ok "control: the fixture pin was inflated (drift was actually simulated)"
+else
+  bad "control: the fixture pin was inflated" "shim never fired — the assertion below is VACUOUS"
+fi
+# CONTROL 2 — this must exercise the AGREEMENT path. If the walks diverged, the
+# pre-existing mismatch arm would print the warning and the new arm would go
+# untested, so the row would pass for the wrong reason.
+if grep -qF 'CLASS SPLIT DIVERGES' <<<"$DRIFT_OUT"; then
+  bad "control: totals agree, so the agreement arm is under test" \
+      "the split diverged — this exercises the OLD arm, not the new one"
+else
+  ok "control: totals agree, so the agreement arm is under test"
+fi
+# THE PROPERTY: a shrunken pin is reported even though nothing diverged.
+if grep -qF 'THE PINNED CORPUS SHRANK UNDER THE WALKS' <<<"$DRIFT_OUT"; then
+  ok "a corpus that shrank under the walks is reported despite the totals agreeing"
+else
+  bad "a corpus that shrank under the walks is reported despite the totals agreeing" \
+      "$(grep -E 'occurrences sum to TOTAL|SHRANK|TOTAL occurrences' <<<"$DRIFT_OUT" | head -3)"
+fi
+# And it must NOT also print the unqualified all-clear alongside the warning.
+if grep -qF 'occurrences sum to TOTAL' <<<"$DRIFT_OUT"; then
+  bad "the unqualified all-clear is suppressed when the pin shrank" \
+      "both the warning and the all-clear were printed"
+else
+  ok "the unqualified all-clear is suppressed when the pin shrank"
+fi
+
+# NEGATIVE CONTROL — with no drift simulated, the same corpus must still print
+# the ordinary all-clear and no warning. Without this the rows above would pass
+# if the warning were simply printed unconditionally.
+rm -f "$FIX/drift-state"
+CLEAN_OUT=$(TMPDIR="$FIX/drifttmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/driftcorpus" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if grep -qF 'occurrences sum to TOTAL' <<<"$CLEAN_OUT" \
+   && ! grep -qF 'THE PINNED CORPUS SHRANK UNDER THE WALKS' <<<"$CLEAN_OUT"; then
+  ok "negative control: a stable corpus still reports the plain all-clear"
+else
+  bad "negative control: a stable corpus still reports the plain all-clear" \
+      "$(grep -E 'occurrences sum to TOTAL|SHRANK' <<<"$CLEAN_OUT" | head -3)"
+fi
+
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

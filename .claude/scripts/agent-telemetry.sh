@@ -3341,6 +3341,17 @@ if want safety; then
         }
       ' "$CONCTMP" -)
     case "$inj_key_divergence" in ''|*[!0-9]*) inj_key_divergence=0 ;; esac
+    # Drift is measured UNCONDITIONALLY, because agreement between the two walks
+    # is NOT evidence that the corpus was stable. If a file was truncated, replaced
+    # or removed after `injection_snapshot` pinned its length but before the first
+    # walk, BOTH walks read the same shortened prefix — so their counts agree, the
+    # per-key reconciliation agrees, and every occurrence the truncation removed is
+    # omitted from a report that then states the split sums to TOTAL. Checking the
+    # pin only after a mismatch is blind to exactly that case. The check is a
+    # `wc -c` walk over the already-pinned list, so it costs nothing next to the
+    # two corpus reads it qualifies.
+    inj_snap_drift=$(injection_snapshot_drift "$INJSNAP")
+    case "$inj_snap_drift" in ''|*[!0-9]*) inj_snap_drift=0 ;; esac
     if [ "$inj_class_sum" -ne "${inj_total:-0}" ] || [ "$inj_key_divergence" -ne 0 ]; then
       if [ "$inj_class_sum" -ne "${inj_total:-0}" ]; then
         echo "      ⚠️  CLASS SPLIT DIVERGES FROM TOTAL: ${inj_class_sum} classified vs ${inj_total:-0} counted."
@@ -3349,8 +3360,6 @@ if want safety; then
         echo "      ⚠️  CLASS SPLIT DIVERGES PER PHRASE: ${inj_key_divergence} phrase key(s) whose"
         echo "          classified count differs from the raw count, even where the totals agree."
       fi
-      inj_snap_drift=$(injection_snapshot_drift "$INJSNAP")
-      case "$inj_snap_drift" in ''|*[!0-9]*) inj_snap_drift=0 ;; esac
       if [ "$inj_snap_drift" -gt 0 ]; then
         echo "          ⚠️  THE PINNED CORPUS SHRANK UNDER THE WALKS: ${inj_snap_drift} file(s) are"
         echo "          shorter than the length pinned for them (or went unreadable), so the two"
@@ -3363,6 +3372,15 @@ if want safety; then
         echo "          treat it as a classifier or digest/display keying defect (#2693)"
         echo "          and investigate before trusting any split below."
       fi
+    elif [ "$inj_snap_drift" -gt 0 ]; then
+      echo "      ⚠️  THE PINNED CORPUS SHRANK UNDER THE WALKS: ${inj_snap_drift} file(s) are"
+      echo "          shorter than the length pinned for them (or went unreadable). The class"
+      echo "          split DOES agree with TOTAL — but both walks read the same shortened"
+      echo "          corpus, so that agreement says only that they read the SAME bytes, not"
+      echo "          that those were ALL the pinned bytes. Occurrences removed by the"
+      echo "          truncation are missing from BOTH numbers and cannot show up as a"
+      echo "          divergence. Treat this as a SCAN SKEW and re-run before reading the"
+      echo "          total as complete."
     else
       echo "      (class-specific records/sessions may overlap; occurrences sum to TOTAL)"
     fi
