@@ -306,9 +306,9 @@ fi
 # behaviour still does not fire. Runtime assets are an explicit allow-list, never all of scripts/.
 reviewed="$(printf '%s
 ' "$tree" \
-  | awk -F'	' -v p="$prefix" -v runtime="$runtime_assets" '
+  | PDC_RUNTIME_ASSETS="$runtime_assets" awk -F'	' -v p="$prefix" '
       BEGIN {
-        count = split(runtime, paths, "\n")
+        count = split(ENVIRON["PDC_RUNTIME_ASSETS"], paths, "\n")
         for (i = 1; i <= count; i++) required[paths[i]] = 1
       }
       substr($3,1,1)=="\"" { print "QUOTED" ORS; next }

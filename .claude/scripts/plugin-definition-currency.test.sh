@@ -1479,4 +1479,90 @@ if [ -x "${script%/*}/plugin-definition-currency.test.sh" ]; then
 else
   fail "the test script lost its executable bit (mode must stay 100755)"
 fi
+
+# ── 7y. A MULTI-ASSET desired state must still produce a verdict ──────────────
+# monorepo#2982: the runtime-asset allow-list reached awk as a newline-separated `-v` assignment.
+# BSD awk (macOS /usr/bin/awk) rejects a newline inside a `-v` value outright, so the moment
+# `requiredRuntimeAssets` crossed 1 -> 2 entries the whole check died with
+# `awk: newline in string ...` and reported UNKNOWN on every invocation — while real drift sat
+# underneath it. Every fixture above declares exactly ONE asset, so nothing exercised that path.
+#
+# The pair below is the isolation: identical in every respect except the number of declared assets.
+multi="${tmp}/multi"
+multi_pin="${multi}/consumer/libraries/agent-plugins"
+mp="${multi_pin}/plugins/agentic-engineering"
+mkdir -p "${mp}/agents" "${mp}/skills/alpha" "${mp}/scripts" \
+         "${multi}/consumer/.claude/plugin-consumption"
+printf 'reviewed engineer definition\n' > "${mp}/agents/agentic-engineer.agent.md"
+printf 'reviewed alpha procedure\n'     > "${mp}/skills/alpha/SKILL.md"
+printf '#!/bin/sh\necho classified\n'   > "${mp}/scripts/classify-default-branch-ci-runs.sh"
+printf '#!/bin/sh\necho guarded\n'      > "${mp}/scripts/forge-readonly-guard.sh"
+chmod +x "${mp}/scripts/classify-default-branch-ci-runs.sh" "${mp}/scripts/forge-readonly-guard.sh"
+multi_sha_a="$(shasum -a 256 "${mp}/scripts/classify-default-branch-ci-runs.sh" | awk '{print $1}')"
+multi_sha_b="$(shasum -a 256 "${mp}/scripts/forge-readonly-guard.sh" | awk '{print $1}')"
+git -C "${multi_pin}" init -q
+git -C "${multi_pin}" config user.email t@example.invalid
+git -C "${multi_pin}" config user.name t
+git -C "${multi_pin}" add -A
+git -C "${multi_pin}" -c commit.gpgsign=false commit -qm pin
+multi_gitlink="$(git -C "${multi_pin}" rev-parse HEAD)"
+
+multi_install="${multi}/install"
+mkdir -p "${multi_install}"
+cp -R "${mp}/agents" "${mp}/skills" "${mp}/scripts" "${multi_install}/"
+
+# `n` declared assets, otherwise byte-identical inputs.
+write_multi_desired_state() {
+  local n="$1" entries
+  entries="        {\"path\": \"scripts/classify-default-branch-ci-runs.sh\", \"sha256\": \"${multi_sha_a}\", \"executable\": true}"
+  if [ "${n}" -ge 2 ]; then
+    entries="${entries},
+        {\"path\": \"scripts/forge-readonly-guard.sh\", \"sha256\": \"${multi_sha_b}\", \"executable\": true}"
+  fi
+  cat > "${multi}/consumer/.claude/plugin-consumption/agentic-engineering.desired-state.json" <<JSON
+{
+  "spec": {
+    "source": {
+      "requiredRuntimeAssets": [
+${entries}
+      ]
+    }
+  }
+}
+JSON
+}
+multi_run() {
+  "${script}" --repo-root "${multi}/consumer" --gitlink "${multi_gitlink}" --installed "${multi_install}" 2>&1
+}
+
+# Control: ONE asset. Establishes the fixture is otherwise sound, so a two-asset failure is
+# attributable to the asset COUNT and nothing else.
+write_multi_desired_state 1
+set +e; one_out="$(multi_run)"; one_rc=$?; set -e
+[ "${one_rc}" -eq 0 ] \
+  || fail "control: a single-asset desired state must report CURRENT (exit 0), got ${one_rc}: ${one_out}"
+ok "control — a single-asset desired state produces a verdict"
+
+# The regression itself.
+write_multi_desired_state 2
+set +e; two_out="$(multi_run)"; two_rc=$?; set -e
+case "${two_out}" in
+  *"newline in string"*)
+    fail "the asset list reached awk as a -v assignment: BSD awk rejected it, so the check produced NO verdict: ${two_out}" ;;
+esac
+[ "${two_rc}" -eq 0 ] \
+  || fail "a two-asset desired state must still report CURRENT (exit 0), got ${two_rc}: ${two_out}"
+ok "a multi-asset desired state still produces a verdict (monorepo#2982)"
+
+# The allow-list must still SELECT on the second asset, not merely survive it: drift in the
+# second-declared asset has to be caught, or the fix would be a check that runs and sees nothing.
+printf '#!/bin/sh\necho tampered\n' > "${multi_install}/scripts/forge-readonly-guard.sh"
+chmod +x "${multi_install}/scripts/forge-readonly-guard.sh"
+set +e; drift_out="$(multi_run)"; drift_rc=$?; set -e
+[ "${drift_rc}" -eq 1 ] \
+  || fail "drift in the SECOND declared runtime asset must exit 1, got ${drift_rc}: ${drift_out}"
+case "${drift_out}" in
+  *"forge-readonly-guard.sh"*) ok "drift in the second declared runtime asset is reported" ;;
+  *) fail "drift in the second declared asset was not named: ${drift_out}" ;;
+esac
 echo "plugin-definition-currency: ${pass_count} assertions passed"
