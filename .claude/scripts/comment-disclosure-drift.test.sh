@@ -12,6 +12,7 @@ set -Eeuo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 guard="$script_dir/comment-disclosure-drift.sh"
+constitution="$script_dir/../../AGENTS.md"
 
 failures=0
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/comment-disclosure-drift-test.XXXXXX")"
@@ -45,6 +46,62 @@ expect_stdout() {
     failures=$((failures + 1))
   fi
 }
+
+# expect_stderr <pattern> <label>  -- reads the last expect_exit's stderr.
+# An exit code alone cannot say WHICH rejection fired, and every usage error here
+# shares exit 2; pinning the message is what stops an assertion passing for an
+# unrelated reason.
+expect_stderr() {
+  local pattern="$1" label="$2"
+  if grep -qF -- "$pattern" "$tmpdir/err"; then
+    echo "ok    $label"
+  else
+    echo "FAIL  $label: stderr did not contain: $pattern"
+    sed 's/^/        /' "$tmpdir/err" | head -10
+    failures=$((failures + 1))
+  fi
+}
+
+echo "== consumer contract: legacy review-request sender attribution =="
+disambiguator="$({
+  awk '
+    /^\*\*Distinguish the human maintainer from yourself/ { in_section = 1 }
+    in_section && /^\*\*Not every `claude\/\*` PR is yours/ { exit }
+    in_section { print }
+  ' "$constitution"
+} | tr '\n' ' ' | tr -s '[:space:]' ' ')"
+legacy_shape="\`> Requested by the 🤖 Daily AI Engineer\`"
+permanent_rule='permanently own-output only when it begins the body'
+human_holdout="the surrounding \`devantler\` comment remains a human-maintainer instruction"
+if [[ "$disambiguator" == *"$legacy_shape"* ]] &&
+   [[ "$disambiguator" == *"$permanent_rule"* ]] &&
+   [[ "$disambiguator" == *"$human_holdout"* ]]; then
+  echo "ok    legacy review-request sender attribution is pinned"
+else
+  echo "FAIL  legacy review-request sender attribution is not pinned in the disambiguator"
+  failures=$((failures + 1))
+fi
+
+echo "== consumer contract: --since re-verification is lane-scoped =="
+sweep_rule="$({
+  awk '
+    /^  🔴 \*\*On `--since`, read the findings/ { in_section = 1 }
+    in_section && /^  It reports \*\*positive evidence of agent authorship only\*\*/ { exit }
+    in_section { print }
+  ' "$constitution"
+} | tr '\n' ' ' | tr -s '[:space:]' ' ')"
+reverify_scope='Re-verify ONLY a body that is exactly `@cursor review`'
+non_bugbot_scope='A bare `@coderabbitai review` or `@codex review` is a violation on sight'
+no_carveout_reason='`--issue` reports them violating even when a canonical disclosure comment sits immediately before them'
+if [[ -n "$sweep_rule" ]] &&
+   [[ "$sweep_rule" == *"$reverify_scope"* ]] &&
+   [[ "$sweep_rule" == *"$non_bugbot_scope"* ]] &&
+   [[ "$sweep_rule" == *"$no_carveout_reason"* ]]; then
+  echo "ok    --since re-verification is scoped to the Bugbot body, non-Bugbot triggers violate on sight"
+else
+  echo "FAIL  --since rule does not scope re-verification to the exact @cursor review body"
+  failures=$((failures + 1))
+fi
 
 echo "== Go classifier suite =="
 if (cd "$script_dir/comment-disclosure-drift-go" && go test -race -cover ./...); then
@@ -83,6 +140,13 @@ expect_stdout "undisclosed-trigger" "appended disclosure after trigger is named"
 printf '%s' '[{"id":4,"html_url":"https://x/4","user":{"login":"devantler"},"body":"> Requested by the 🤖 Daily AI Engineer - CI is green"}]' >"$tmpdir/sender.json"
 expect_exit 1 "sender marker exits 1" -- bash "$guard" --input "$tmpdir/sender.json"
 expect_stdout "sender-marker" "sender marker is named"
+
+# The same literal later in the body is a maintainer QUOTING the legacy artifact,
+# not the comment's own sender identity. An anywhere-match would demote his control
+# channel to agent output, the expensive direction of the asymmetric trust rule.
+printf '%s' '[{"id":41,"user":{"login":"devantler"},"body":"Do not use this old marker again:\n\n> Requested by the 🤖 Daily AI Engineer - example"}]' >"$tmpdir/quoted-sender.json"
+expect_exit 0 "mid-body legacy sender quote stays maintainer-authored" -- bash "$guard" --input "$tmpdir/quoted-sender.json"
+expect_stdout "unattributable" "mid-body legacy sender quote is not agent evidence"
 
 printf '%s' '[{"id":5,"html_url":"https://x/5","user":{"login":"devantler"},"body":"@coderabbitai review\n\nPlease review exact head abc"}]' >"$tmpdir/annotated.json"
 expect_exit 1 "undisclosed trigger exits 1" -- bash "$guard" --input "$tmpdir/annotated.json"
@@ -210,6 +274,184 @@ STUB
 chmod +x "$stubdir/gh"
 expect_exit 1 "gh success path classifies" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --issue 1
 expect_stdout "undisclosed-trigger" "gh success path names the shape"
+
+echo
+echo "== wrapper: --since sweeps the REPO, so regression is visible rather than found by chance =="
+# Without a repo-wide mode the check can only be aimed at an issue number somebody
+# already suspects -- which is how #2609's 18 offending comments accumulated across
+# four issues nobody thought to point it at.
+
+expect_exit 2 "--since without a value" -- bash "$guard" --repo owner/repo --since
+expect_exit 2 "--since needs --repo" -- bash "$guard" --since 2026-08-10T00:00:00Z
+expect_exit 2 "--since with --input" -- bash "$guard" --input - --since 2026-08-10T00:00:00Z
+# Scope must be unambiguous: one issue OR the repo, never a silent preference.
+expect_exit 2 "--since with --issue is ambiguous" -- bash "$guard" --repo owner/repo --issue 1 --since 2026-08-10T00:00:00Z
+# A malformed timestamp is rejected locally so the caller reads a plain message
+# rather than a 422, and so an obvious typo costs no network call. Measured
+# 2026-08-11: GitHub answers an unparseable `since` with HTTP 422 -- it does NOT
+# silently widen the window -- so this is defence in depth and a better error, not
+# the only thing between a typo and a falsely-clean sweep.
+#
+# These two MUST run against a gh that would otherwise SUCCEED. Measured while
+# ablating: without a stub, `owner/repo` does not exist, so real gh fails and the
+# assertion passes on exit 2 whether or not the local validation exists at all --
+# it pinned the fake repo, not the check. With a stub that returns a clean `[]`,
+# exit 2 can only come from the local shape check, and the stderr assertion names
+# which rejection fired.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$ARGLOG"
+printf '%s' '[]'
+STUB
+chmod +x "$stubdir/gh"
+: >"$tmpdir/args"
+expect_exit 2 "--since rejects a non-timestamp" -- env PATH="$stubdir:$PATH" ARGLOG="$tmpdir/args" bash "$guard" --repo owner/repo --since yesterday
+expect_stderr "ISO-8601" "non-timestamp is rejected by the local shape check"
+expect_exit 2 "--since rejects a date without a time" -- env PATH="$stubdir:$PATH" ARGLOG="$tmpdir/args" bash "$guard" --repo owner/repo --since 2026-08-10
+expect_stderr "ISO-8601" "date-without-time is rejected by the local shape check"
+# The check must run BEFORE the network call -- "no call spent on an obvious typo"
+# is one of its two stated justifications, and exit codes alone cannot show it. A
+# regression that validated after fetching would still exit 2 here.
+if [ ! -s "$tmpdir/args" ]; then
+  echo "ok    a malformed --since spends no gh call"
+else
+  echo "FAIL  a malformed --since invoked gh; args were:"
+  sed 's/^/        /' "$tmpdir/args"
+  failures=$((failures + 1))
+fi
+# Positive control: the SAME stub, with a well-formed timestamp, must reach the
+# classifier and exit 0 -- otherwise the two assertions above could be passing
+# because the stub itself is broken. This one MUST invoke gh, which also proves
+# the emptiness check above measured a real difference and not a broken ARGLOG.
+: >"$tmpdir/args"
+expect_exit 0 "a well-formed --since reaches the classifier through the same stub" -- env PATH="$stubdir:$PATH" ARGLOG="$tmpdir/args" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+if [ -s "$tmpdir/args" ]; then
+  echo "ok    a well-formed --since does invoke gh"
+else
+  echo "FAIL  a well-formed --since never invoked gh, so the no-call assertion above proves nothing"
+  failures=$((failures + 1))
+fi
+
+# The glob is a shape check, not a validity check: a shape-valid but impossible
+# instant passes it and reaches GitHub, which answers 422 (measured 2026-08-11).
+# That must fail closed on the gh-error path rather than reading as a clean sweep --
+# the other half of what the corrected comment in the wrapper claims.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$ARGLOG"
+echo 'gh: The since parameter needs to be in ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ (HTTP 422)' >&2
+exit 1
+STUB
+chmod +x "$stubdir/gh"
+: >"$tmpdir/args"
+expect_exit 2 "a shape-valid impossible instant fails closed on the 422" -- env PATH="$stubdir:$PATH" ARGLOG="$tmpdir/args" bash "$guard" --repo owner/repo --since 2026-19-39T29:59:69Z
+if [ -s "$tmpdir/args" ]; then
+  echo "ok    the impossible instant passed the glob and reached gh"
+else
+  echo "FAIL  the impossible instant was rejected locally, so this fixture no longer covers the 422 path"
+  failures=$((failures + 1))
+fi
+
+# THE load-bearing assertion: --since must hit the repo-wide comments endpoint.
+# A sweep that silently read one issue would classify a handful of comments and
+# report the whole repo clean.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$ARGLOG"
+printf '%s' '[{"id":40,"html_url":"https://x/40","issue_url":"https://api.github.com/repos/o/r/issues/1","user":{"login":"devantler"},"body":"@codex review\n\nhead abc"}]'
+STUB
+chmod +x "$stubdir/gh"
+: >"$tmpdir/args"
+expect_exit 1 "--since classifies and finds the violation" -- env PATH="$stubdir:$PATH" ARGLOG="$tmpdir/args" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+expect_stdout "undisclosed-trigger" "--since names the shape"
+if grep -qF 'repos/owner/repo/issues/comments' "$tmpdir/args" &&
+  grep -qF 'since=2026-08-10T00:00:00Z' "$tmpdir/args" &&
+  ! grep -qE 'repos/owner/repo/issues/[0-9]+/comments' "$tmpdir/args"; then
+  echo "ok    --since queries the repo-wide endpoint with the timestamp"
+else
+  echo "FAIL  --since did not query the repo-wide endpoint; gh args were:"
+  sed 's/^/        /' "$tmpdir/args"
+  failures=$((failures + 1))
+fi
+# The classifier needs each discussion oldest-first. The endpoint already returns
+# ascending created order, but an implicit default is not a contract, so the order
+# is requested explicitly -- and that request is what this pins.
+if grep -qF 'sort=created' "$tmpdir/args" && grep -qF 'direction=asc' "$tmpdir/args"; then
+  echo "ok    --since pins the sort order rather than inheriting a default"
+else
+  echo "FAIL  --since did not pin sort/direction; gh args were:"
+  sed 's/^/        /' "$tmpdir/args"
+  failures=$((failures + 1))
+fi
+
+# On the repo-wide path a record without issue_url is not a discussion legitimately
+# lacking one -- it collapses every discussion into the empty key and re-opens the
+# cross-discussion carve-out this mode was fixed for. It must fail closed rather
+# than classify. (--input keeps issue_url optional; that is the single-discussion
+# case, asserted by the payload-classification section above.)
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[{"id":50,"html_url":"https://x/50","issue_url":"https://api.github.com/repos/o/r/issues/1","user":{"login":"devantler"},"body":"> 🤖 Generated by the Agentic Engineer\n\ndisclosed"},
+              {"id":51,"html_url":"https://x/51","user":{"login":"devantler"},"body":"@cursor review"}]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 2 "--since fails closed when a record has no issue_url" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+expect_stderr "issue_url" "the missing discussion key is named"
+
+# A sweep must NOT grant the bare-trigger carve-out. `since` selects by UPDATED time,
+# so a discussion's history is non-contiguous: an edited old disclosure can sit next
+# to a new trigger in the payload while the comment that really follows it is absent.
+# Granting the carve-out on that adjacency clears a trigger whose predecessor was
+# never fetched. The SAME pair via --input keeps its exemption, because that path is
+# the explicitly single-discussion case where adjacency is real.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[{"id":60,"html_url":"https://x/60","issue_url":"https://api.github.com/repos/o/r/issues/1","user":{"login":"devantler"},"body":"> 🤖 Generated by the Agentic Engineer\n\nrequesting"},
+              {"id":61,"html_url":"https://x/61","issue_url":"https://api.github.com/repos/o/r/issues/1","user":{"login":"devantler"},"body":"@cursor review"}]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 1 "a sweep does not grant the bare-trigger carve-out" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+expect_stdout "undisclosed-trigger" "the unverifiable sweep trigger is named"
+
+printf '%s' '[{"id":60,"issue_url":"https://api.github.com/repos/o/r/issues/1","user":{"login":"devantler"},"body":"> 🤖 Generated by the Agentic Engineer\n\nrequesting"},
+              {"id":61,"issue_url":"https://api.github.com/repos/o/r/issues/1","user":{"login":"devantler"},"body":"@cursor review"}]' >"$tmpdir/pair.json"
+expect_exit 0 "the same pair via --input keeps its carve-out" -- bash "$guard" --input "$tmpdir/pair.json"
+
+# The fail-closed properties must hold on this path too -- they are per-endpoint,
+# not per-flag, and a sweep that reads clean on a 502 is worse than no sweep.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+echo "HTTP 502: 502 Bad Gateway" >&2
+exit 1
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 2 "--since fails closed on a gh error" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '{"message":"Not Found","documentation_url":"https://docs.github.com"}'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 2 "--since fails closed on an error object" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+
+# Multi-page is the NORMAL case repo-wide (176 comments over ~2 days, measured), so
+# the flatten must apply here or the busiest windows are exactly the unchecked ones.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[{"id":41,"html_url":"https://x/41","issue_url":"https://api.github.com/repos/o/r/issues/1","user":{"login":"devantler"},"body":"> 🤖 Generated by the Agentic Engineer\n\npage one"}]'
+printf '%s' '[{"id":42,"html_url":"https://x/42","issue_url":"https://api.github.com/repos/o/r/issues/2","user":{"login":"devantler"},"body":"> Requested by the 🤖 Daily AI Engineer - page two"}]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 1 "--since flattens multiple pages" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
+expect_stdout "sender-marker" "--since finds a violation on page TWO"
+
+# A quiet window is legitimately clean and must exit 0, not 2.
+cat >"$stubdir/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s' '[]'
+STUB
+chmod +x "$stubdir/gh"
+expect_exit 0 "--since on a quiet window exits 0" -- env PATH="$stubdir:$PATH" bash "$guard" --repo owner/repo --since 2026-08-10T00:00:00Z
 
 echo
 if [ "$failures" -ne 0 ]; then

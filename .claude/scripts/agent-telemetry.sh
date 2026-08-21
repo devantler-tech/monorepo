@@ -218,12 +218,15 @@ PORTFOLIO_DIR_RE=$(
 
 # True when the session store root is itself under an allowlisted path — then the
 # store contains only in-scope work by construction and needs no dir filtering.
+# The loop is fed by a redirect, not a pipe. Piping it into `grep -q` made grep
+# exit at the first `match` and killed the writer with SIGPIPE; `pipefail` then
+# reported the writer's death, so a store that IS in scope answered "no".
 store_root_in_scope() {
   local p
-  printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
-  | while IFS= read -r p; do
-      case "$CLAUDE_PROJECTS" in "$p"|"$p"/*) echo match ;; esac
-    done | grep -q match
+  while IFS= read -r p; do
+    case "$CLAUDE_PROJECTS" in "$p" | "$p"/*) return 0 ;; esac
+  done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
+  return 1
 }
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "MISSING-DEP: $1" >&2; return 1; }; }
@@ -245,27 +248,44 @@ PROVTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_prov.XXXXXXXX") || { echo "cannot creat
 # Distinct prefix from .agtel_inj so the aggregate-identity width instrumentation
 # in the test suite keeps measuring only the phrase scratch it targets.
 CONCTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_conc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# The injection corpus snapshot (see `injection_snapshot`). Its own prefix, so
+# the aggregate-identity width instrumentation keeps targeting only .agtel_inj.
+INJSNAP=$(mktemp "${TMPDIR:-/tmp}/.agtel_injsnap.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDCONC=$(mktemp "${TMPDIR:-/tmp}/.agtel_credconc.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
-# Blob-embedded evidence set (#2522): the subset of table values whose
-# occurrences are ALL inside a base64 run. Holds normalised credential values,
-# so it is created with mktemp's private mode and removed by the same traps as
-# every other scratch.
-CREDBLOB=$(mktemp "${TMPDIR:-/tmp}/.agtel_credblob.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
-# Plain-occurrence set: the values seen OUTSIDE any base64 run. Subtracted from
-# the blob set above so a value seen both ways keeps its plain high-signal row.
-# Same value class as $CREDBLOB, so it gets the same private mode and traps.
-CREDPLAIN=$(mktemp "${TMPDIR:-/tmp}/.agtel_credplain.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
-# Raw credential-table matches from the SINGLE decode pass, partitioned after
-# the fact into the plain and blob-embedded sets (#2522).
-CREDMATCH=$(mktemp "${TMPDIR:-/tmp}/.agtel_credmatch.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# Extraction-failure counter for the efficiency walk. A jq PROGRAM error
+# (a typo in the embedded program) makes `tagged_commands_in` emit nothing
+# for EVERY file while exiting non-zero, so the busy-wait metrics below
+# would read 0 and the run would report the agent had stopped busy-waiting.
+# The walk runs in a pipeline subshell, so the count must survive on disk.
+XFTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_xf.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# The credential-table working sets are held IN MEMORY, never in a scratch file
+# (#2712). Every other scratch here holds derived or already-redacted text; these
+# three would hold credential VALUES — the raw matches from the decode pass, and
+# the normalised plain and blob-embedded sets partitioned from them (#2522).
+#
+# A scratch file is removed by the traps below, and those traps run on EXIT and
+# on HUP/INT/TERM — never on SIGKILL, an OOM kill, or power loss. Anything these
+# sets held would therefore survive an abnormal exit as credential material at
+# rest, which inverts the purpose of a leak detector: this scan exists to find
+# values that escaped into transcripts, so it must not write them back out.
+#
+# Held as shell variables rather than passed on a command line: a variable is
+# process memory that dies with the process, whereas an `awk -v value=...`
+# argument would be world-readable in `ps` output for the life of the call. The
+# consumers below read them through process substitution, so the awk programs
+# keep their existing `getline < file` idiom and the values still never land in
+# a filesystem object or in argv.
+cred_match_data=''
+cred_plain_set=''
+cred_blob_set=''
 # Its OWN scratch, never $CONCTMP. The injection-concentration pass owns that
 # one, and sharing it would make two sections' results depend on which ran last.
 SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -276,11 +296,11 @@ INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (y
 # definition text. Provenance makes every occurrence inspectable while the
 # scorecard's existing count remains fail-closed and unchanged.
 emit_injection_hits() {
-  local f="$1" session line raw record phrase
+  local f="$1" len="$2" session line raw record phrase
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
-  grep -niE "$INJ_PHRASE_RE" "$f" 2>/dev/null \
+  snapshot_bytes "$f" "$len" | grep -niE "$INJ_PHRASE_RE" 2>/dev/null \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
@@ -318,17 +338,98 @@ phrase_class_keys() {
   done
 }
 
+# ── The injection corpus SNAPSHOT ────────────────────────────────────────────
+# The headline TOTAL and the class split are two separate walks over the same
+# corpus, and that corpus includes the RUNNING agent's own session file, which
+# is appended continuously — including by the act of running this tool. So the
+# second walk could observe occurrences the first never saw, and the split then
+# EXCEEDED the total it annotates while the line beneath asserted "occurrences
+# sum to TOTAL" (measured 2026-08-06: TOTAL 235, other 238, and 59 > 57 on a
+# phrase's own line).
+#
+# That is not merely cosmetic arithmetic. A digest/display KEYING defect —
+# the one #2693 shipped to prevent — produces the *same* symptom, so the benign
+# scan race and the severe regression were indistinguishable from the output.
+#
+# Both walks therefore read a fixed byte PREFIX of each file, captured once
+# before the first walk. Append-only transcripts make a prefix a consistent
+# snapshot: bytes already written never change, so every occurrence that
+# existed at snapshot time is seen by BOTH walks, and neither can see anything
+# written afterwards.
+#
+# A LENGTH, never a copy: the 1-day corpus alone is ~64 MB over 52 Claude files
+# plus 106 Codex files, so copying it each run would cost more than the whole
+# report. `head -c` is O(bytes actually read) and touches nothing.
+#
+# Nothing is suppressed or narrowed by this: the raw walk stays the fail-closed
+# authority, no phrase is filtered, and no occurrence is dropped. The two walks
+# stay SEPARATE on purpose — the raw grep is the authority and the classifier is
+# checked against it, which is a real cross-check that collapsing them into one
+# derivation would destroy.
+snapshot_bytes() {
+  local f="$1" len="$2"
+  case "$len" in ''|*[!0-9]*) return 0 ;; esac
+  head -c "$len" "$f" 2>/dev/null || true
+}
+
+# path -> "<bytes>\t<path>", captured once. A file that cannot be measured is
+# omitted rather than read at an unpinned length: an unmeasurable file would
+# otherwise be walked twice at two different sizes, which is the defect itself.
+injection_snapshot() {
+  local f len
+  printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
+    | while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        len=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+        case "$len" in ''|*[!0-9]*) continue ;; esac
+        printf '%s\t%s\n' "$len" "$f"
+      done
+}
+
+# Count pinned files that SHRANK while the walks ran.
+#
+# The pin fixes a LENGTH, not the bytes behind it, so `head -c "$len"` can still
+# hand the two walks different content. Growth is harmless and expected — the
+# corpus includes the running agent's own session file, so it is appended to
+# continuously, and both walks read the same pinned prefix regardless. A file
+# that got SHORTER is the case that matters: `head -c` then returns a short
+# prefix, the walks read different byte counts, and the divergence they report
+# is a scan skew rather than a classifier defect.
+#
+# A file that vanished or cannot be measured counts as drift for the same
+# reason. This cannot see an in-place rewrite that leaves the file at or above the
+# pinned length — same size or longer — so the caller states what it rules out
+# rather than claiming the corpus was stable.
+injection_snapshot_drift() {
+  local snap="$1" len f now drift=0
+  [ -f "$snap" ] || { printf '0\n'; return 0; }
+  while IFS="$(printf '\t')" read -r len f; do
+    [ -n "$f" ] || continue
+    case "$len" in ''|*[!0-9]*) continue ;; esac
+    if [ ! -f "$f" ]; then
+      drift=$((drift + 1))
+      continue
+    fi
+    now=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+    case "$now" in
+      ''|*[!0-9]*) drift=$((drift + 1)) ;;
+      *) [ "$now" -ge "$len" ] || drift=$((drift + 1)) ;;
+    esac
+  done < "$snap"
+  printf '%s\n' "$drift"
+}
+
 # Emit one safe class row per occurrence without suppressing anything from the
 # fail-closed raw total. Runtime-supplied developer context is structurally
 # distinguishable from user/tool content, but a compacted record can contain
 # both. Classify the matched STRING path, never the whole record. If parsing or
 # reconciliation is uncertain, retain every raw occurrence as other content.
 emit_injection_classes() {
-  local f="$1" session line raw runtime_phrases
+  local f="$1" len="$2" session line raw runtime_phrases
   session=$(basename "$f" | tr -cd 'A-Za-z0-9._-' | cut -c1-120)
   [ -n "$session" ] || session=unknown
 
-  grep -niE "$INJ_PHRASE_RE" "$f" 2>/dev/null \
+  snapshot_bytes "$f" "$len" | grep -niE "$INJ_PHRASE_RE" 2>/dev/null \
     | while IFS=: read -r line raw; do
         case "$line" in ''|*[!0-9]*) continue ;; esac
         line=$(printf '%s' "$line" | cut -c1-12)
@@ -643,6 +744,26 @@ function mask_line(s) {
 # wide window can push hundreds of thousands of tagged rows through here, so the
 # footprint scales with the SELECTED WINDOW, not with the report size.
 { L[NR] = $0 }
+# 🔴 A CLOSER PAIRS TO ITS OPENER LABEL, NEVER TO ANY `PRIVATE KEY` MARKER.
+# Treating every label ending in PRIVATE KEY as a closer let an UNRELATED label
+# terminate a span: `BEGIN RSA` / body / `END EC` closed at the EC marker and
+# emitted everything after it VERBATIM — the under-mask direction the governing
+# asymmetry of this file forbids. Reproduced on the shipped program (#2662).
+#
+# ⚠️ NO SINGLE QUOTES BELOW: this program is a single-quoted shell string, so an
+# apostrophe here terminates it and the rest of the file becomes shell code.
+#
+# The key is the label text alone, so BEGIN and END are comparable. Runs of
+# spaces collapse because the marker regex tolerates a repeated space before the
+# label, so `RSA  PRIVATE KEY` must still pair with `RSA PRIVATE KEY`. A label
+# that fails to pair does not close, so the span runs on and masks MORE — the
+# safe side, and why this needs no character-class widening to be correct.
+function labelkey(m) {
+  sub(/^-----(BEGIN|END) */, "", m)
+  sub(/-----$/, "", m)
+  gsub(/  +/, " ", m)
+  return m
+}
 END {
   n = NR
   # Pass A — collapse every span COMPLETE ON ONE LINE, closing each BEGIN at the
@@ -662,20 +783,27 @@ END {
   # over-masking, which is the direction the governing asymmetry above demands.
   for (i = 1; i <= n; i++) {
     s = L[i]; out = ""
-    while (match(s, /-----BEGIN ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----/)) {
+    while (match(s, /-----BEGIN ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/)) {
       bs = RSTART; bl = RLENGTH
       head = substr(s, 1, bs - 1)
+      oplbl = labelkey(substr(s, bs, bl))
       # `scan`, deliberately NOT `tail`: pass B owns a global of that name. It
       # assigns before every use today, so sharing it is not a live defect —
       # but a value from pass A surviving into pass B is the same class as the
       # U[] flag below, and this program has paid for that class enough times.
       scan = substr(s, bs + bl)
       depth = 1; closed = 0
-      while (depth > 0 && match(scan, /-----(BEGIN|END) ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----/)) {
+      while (depth > 0 && match(scan, /-----(BEGIN|END) ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/)) {
         mark = substr(scan, RSTART, RLENGTH)
         scan = substr(scan, RSTART + RLENGTH)
+        # 🔴 ANY opener DEEPENS the span, whatever its label; only a MATCHING closer
+        # may end it. Skipping a nested opener of another label was a regression:
+        # `BEGIN RSA` .. `BEGIN EC` .. `END RSA` on ONE line then closed at depth 0
+        # and the tail printed VERBATIM, where the depth-only walk had masked it.
+        # An unclosed nested block means what follows this closer is still key
+        # material, so the conservative count is the correct one.
         if (mark ~ /^-----BEGIN/) depth++
-        else if (--depth == 0) closed = 1
+        else if (labelkey(mark) == oplbl && --depth == 0) closed = 1
       }
       out = out head PH
       if (closed) {
@@ -693,6 +821,7 @@ END {
         # reached through pass A folding two openers into one line.
         s = ""
         U[i] = depth
+        ULBL[i] = oplbl
         break
       }
     }
@@ -760,14 +889,16 @@ END {
     close_at = 0; close_end = 0; bdepth = U[i]
     for (j = i + 1; j <= n && close_at == 0; j++) {
       bscan = L[j]; bdrop = 0
-      while (match(bscan, /-----END ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----/)) {
+      while (match(bscan, /-----END ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/)) {
         # Absolute end offset of this marker in L[j], accumulated as `bscan` is
         # consumed. The closing line is masked UP TO the marker that actually
         # balanced the depth, not the first one on the line — closing at the
         # first would mask LESS than the nesting requires, which is the wrong
         # side of the governing asymmetry.
+        bmark = substr(bscan, RSTART, RLENGTH)
         bdrop += RSTART + RLENGTH - 1
         bscan = substr(bscan, RSTART + RLENGTH)
+        if (labelkey(bmark) != ULBL[i]) continue
         if (--bdepth == 0) { close_at = j; close_end = bdrop; break }
       }
       if (close_at == 0) bdepth += U[j]
@@ -868,9 +999,9 @@ redact() {
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
     -e 's/(AKIA[0-9A-Z]{4})[0-9A-Z]+/\1…<redacted>/g' \
     -e 's/(xox[baprs]-[A-Za-z0-9]{4})[A-Za-z0-9-]+/\1…<redacted>/g' \
-    -e 's/-----BEGIN ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----([^-]|-[^-])*(-----END ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----)?/<redacted-private-key>/g' \
-    -e 's/-----(BEGIN|END) ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----/<redacted-private-key>/g' \
-    -e 's/(-----BEGIN ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----)[^-]*/\1<redacted-key-material>/g' \
+    -e 's/-----BEGIN ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----([^-]|-[^-])*(-----END ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----)?/<redacted-private-key>/g' \
+    -e 's/-----(BEGIN|END) ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/<redacted-private-key>/g' \
+    -e 's/(-----BEGIN ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----)[^-]*/\1<redacted-key-material>/g' \
     -e 's/(eyJ[A-Za-z0-9_-]{6})[A-Za-z0-9_.-]{20,}/\1…<redacted-jwt>/g' \
     -e 's/((secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^"'"'"'[:space:],}]{8,}/\1<redacted>/gI'
 }
@@ -899,7 +1030,7 @@ sha256_digest() {
 # form), each time reporting a real leak as "clean". The test suite asserts a
 # sample of EVERY numbered shape is both detected AND redacted; add to both
 # lists together or the test fails.
-CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN ([A-Z0-9]([A-Z0-9. ]|/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 
 # TABLE variant of CRED_RE — identical shapes, but the prefix-identified ones
 # (gh?_ / github_pat_ / AKIA / xox / eyJ) are BOUNDARY-ANCHORED: the char before
@@ -916,7 +1047,7 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # between the detector and redact() has already broken twice; a second hand-kept
 # copy of this alternation would be the third.
 CRED_PREFIX_SHAPES_RE='(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
-CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([A-Z0-9]([A-Z0-9. ]|/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 
 # BLOB-EMBEDDED EVIDENCE (#2522). The boundary anchor above rejects a token
 # preceded by [A-Za-z0-9_-]. It cannot reject one whose boundary char is `+`,
@@ -1585,35 +1716,36 @@ session_files() {
 #      and the scorecard reports one agent while claiming to cover two.
 #      Matched narrowly (basename must equal the portfolio root's) rather than
 #      allowlisting all of $CODEX_HOME/worktrees, which could hold other repos.
+# The loop is fed by a redirect, not a pipe — see store_root_in_scope: piping
+# into `grep -q` under `pipefail` reports the SIGPIPE'd writer, so an in-scope
+# cwd was classified out of scope and that instance silently dropped.
 in_scope_cwd() {
-  local cwd="$1" p
+  local cwd="$1" p url
   [ -n "$cwd" ] || return 1
-  {
-    printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$' \
-    | while IFS= read -r p; do
-        # Form 1: literally under an allowlisted path, at a component boundary.
-        case "$cwd" in "$p"|"$p"/*) echo match ;; esac
-        # Form 2: the Codex instance's own worktree of a portfolio repo. Basename
-        # alone is NOT sufficient — a professional repo checked out as
-        # `$CODEX_HOME/worktrees/<id>/monorepo` would match by name while being
-        # categorically out of scope. Confirm identity by the worktree's actual
-        # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
-        # no remote, not a repo): an unverifiable worktree is excluded.
-        case "$cwd" in
-          "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
-            [ -d "$cwd" ] || continue
-            url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || continue
-            # Anchor the HOST, not a substring: `*github.com/org/*` also matches
-            # `https://notgithub.com/org/…` and internal mirrors that merely
-            # contain the string. Only these exact remote forms count.
-            case "$url" in
-              "git@github.com:$PORTFOLIO_ORG/"*|\
-              "https://github.com/$PORTFOLIO_ORG/"*|\
-              "ssh://git@github.com/$PORTFOLIO_ORG/"*) echo match ;;
-            esac ;;
-        esac
-      done
-  } | grep -q match
+  while IFS= read -r p; do
+    # Form 1: literally under an allowlisted path, at a component boundary.
+    case "$cwd" in "$p" | "$p"/*) return 0 ;; esac
+    # Form 2: the Codex instance's own worktree of a portfolio repo. Basename
+    # alone is NOT sufficient — a professional repo checked out as
+    # `$CODEX_HOME/worktrees/<id>/monorepo` would match by name while being
+    # categorically out of scope. Confirm identity by the worktree's actual
+    # ORIGIN REMOTE, and fail closed when it cannot be read (missing dir,
+    # no remote, not a repo): an unverifiable worktree is excluded.
+    case "$cwd" in
+      "$CODEX_HOME"/worktrees/*/"$(basename "$p")"|"$CODEX_HOME"/worktrees/*/"$(basename "$p")"/*)
+        [ -d "$cwd" ] || continue
+        url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || continue
+        # Anchor the HOST, not a substring: `*github.com/org/*` also matches
+        # `https://notgithub.com/org/…` and internal mirrors that merely
+        # contain the string. Only these exact remote forms count.
+        case "$url" in
+          "git@github.com:$PORTFOLIO_ORG/"*|\
+          "https://github.com/$PORTFOLIO_ORG/"*|\
+          "ssh://git@github.com/$PORTFOLIO_ORG/"*) return 0 ;;
+        esac ;;
+    esac
+  done < <(printf '%s' "$PORTFOLIO_PATHS" | tr ':' '\n' | grep -v '^$')
+  return 1
 }
 
 codex_session_files() {
@@ -1949,8 +2081,8 @@ if want dispatch; then
       # Prose that merely quotes it is far longer, which is what keeps this
       # tool's own evidence out of its own count.
       if [ "${#lastt}" -le 200 ] \
-         && printf '%s' "$lastt" | grep -qiE "$DH_RE" \
-         && ! printf '%s' "$lastt" | grep -qiE "$DH_NOT_RE" \
+         && grep -qiE "$DH_RE" <<<"$lastt" \
+         && ! grep -qiE "$DH_NOT_RE" <<<"$lastt" \
          && { [ "$sr" = "stop_sequence" ] || [ -z "$sr" ]; }; then
         ended_on_refusal=1
       fi
@@ -2537,7 +2669,13 @@ if want efficiency; then
     # leave anything on disk to clean up.
     TAGGED=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
              | while IFS= read -r f; do
-                 tagged_commands_in "$f"
+                 # A jq PROGRAM error empties EVERY file at once, which would
+                 # read as "the agent stopped busy-waiting" rather than as a
+                 # broken instrument. Record the failure; the canary below
+                 # turns that silent zero into a stated one. Its stdout still
+                 # flows through, so a per-file malformed session degrades
+                 # exactly as before instead of aborting the walk.
+                 tagged_commands_in "$f" || printf x >> "$XFTMP"
                  # File boundary. The wait-target split below asks "did the NEXT
                  # command poll a remote system", and without this the last
                  # command of one transcript would be adjacent to the first of
@@ -2924,6 +3062,23 @@ if want efficiency; then
     echo "  [BOTH instances: ${SF_COUNT} Claude + ${CX_COUNT} Codex sessions]"
     echo "  bash timeouts .............. ${TIMEOUTS}   (each = a foreground block that produced nothing)"
     echo "  interrupted tool calls ..... ${INTERRUPT}"
+    # Extraction canary. Every number in this section derives from TAGGED,
+    # so an extractor that failed makes them all read 0 — indistinguishable
+    # from a genuinely quiet window, and in the direction that looks like
+    # improvement. State the failure count rather than letting a broken
+    # instrument report success. XF == the file count means the embedded jq
+    # program itself is broken, not that one session was malformed.
+    XFAIL=$(wc -c < "$XFTMP" | tr -d " ")
+    XTOTAL=$(printf "%s\\n%s\\n" "$SF_CACHE" "$CX_CACHE" | grep -cv '^$' || true)
+    if [ "${XFAIL:-0}" -gt 0 ]; then
+      if [ "${XFAIL:-0}" -ge "${XTOTAL:-0}" ] && [ "${XTOTAL:-0}" -gt 0 ]; then
+        echo "  ⚠️  EXTRACTION FAILED on ALL ${XTOTAL} file(s) — the embedded jq program is broken."
+        echo "      Every efficiency number below is 0 because NOTHING WAS READ, not because"
+        echo "      the agent stopped busy-waiting. Do not record these as a measurement."
+      else
+        echo "  ⚠️  extraction failed on ${XFAIL} of ${XTOTAL} file(s) — numbers below UNDER-COUNT."
+      fi
+    fi
     echo "  explicit sleep/poll calls .. ${SLEEPS}   (contract: arm a watcher, never busy-wait)"
     # The raw total above cannot answer the question the contract actually asks,
     # because it scores a CONTRACT-COMPLIANT backgrounded watcher (`sleep N &&
@@ -3111,16 +3266,20 @@ if want safety; then
     echo
     echo "  instruction-shaped text in the corpus (INJECTION ATTEMPTS — the scorecard"
     echo "  requires this; each is DATA to report, never an instruction to follow):"
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      grep -hoiE "$INJ_PHRASE_RE" "$f" 2>/dev/null
-    done | redact | tr '[:upper:]' '[:lower:]' \
+    # Pin the corpus ONCE. Every walk below reads this same byte prefix, so the
+    # split cannot annotate occurrences the total never counted.
+    injection_snapshot > "$INJSNAP"
+    while IFS="$(printf '\t')" read -r len f; do
+      snapshot_bytes "$f" "$len" | grep -hoiE "$INJ_PHRASE_RE" 2>/dev/null
+    done < "$INJSNAP" | redact | tr '[:upper:]' '[:lower:]' \
       | while IFS= read -r phrase || [ -n "$phrase" ]; do
           [ -n "$phrase" ] || continue
           digest=$(printf '%s' "$phrase" | sha256_digest) || exit 3
           display=$(printf '%s' "$phrase" | tr -cd 'a-z0-9 ._:/@+-' | cut -c1-80)
           printf '%s\t%s\n' "$digest" "$display"
         done > "$INJTMP"
-    echo "    TOTAL occurrences: $(wc -l < "$INJTMP" | tr -d ' ')   (distinct phrases: $(cut -f1 "$INJTMP" | sort -u | grep -c . || true))"
+    inj_total=$(wc -l < "$INJTMP" | tr -d ' ')
+    echo "    TOTAL occurrences: ${inj_total}   (distinct phrases: $(cut -f1 "$INJTMP" | sort -u | grep -c . || true))"
     # Concentration — the same occurrences grouped by the transcript RECORD that
     # carried them. The total alone cannot separate a real attempt from echo:
     # this tool PRINTS the phrase list in its own report, that report lands in a
@@ -3138,9 +3297,9 @@ if want safety; then
     # necessary to classify each occurrence by its JSON path rather than by the
     # whole record; malformed or unreconciled records stay fail-closed in the
     # other-content bucket.
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-      emit_injection_classes "$f"
-    done > "$CONCTMP"
+    while IFS="$(printf '\t')" read -r len f; do
+      emit_injection_classes "$f" "$len"
+    done < "$INJSNAP" > "$CONCTMP"
     inj_records=$(cut -f1,2 "$CONCTMP" | sort -u | grep -c . || true)
     inj_sessions=$(cut -f1 "$CONCTMP" | sort -u | grep -c . || true)
     inj_top=$(cut -f1,2 "$CONCTMP" | sort | uniq -c | sort -rn | head -1 | awk '{print $1+0}')
@@ -3161,7 +3320,78 @@ if want safety; then
     echo "      across ${inj_records:-0} transcript records in ${inj_sessions:-0} sessions; largest single record: ${inj_top:-0}"
     echo "      runtime-supplied developer context: ${inj_runtime_occurrences:-0} occurrences across ${inj_runtime_records:-0} records in ${inj_runtime_sessions:-0} $runtime_session_word"
     echo "      other content locations: ${inj_other_occurrences:-0} occurrences across ${inj_other_records:-0} records in ${inj_other_sessions:-0} $other_session_word"
-    echo "      (class-specific records/sessions may overlap; occurrences sum to TOTAL)"
+    # The invariant the line below asserts, now CHECKED rather than promised.
+    # Both walks read one pinned snapshot, so a scan race can no longer explain
+    # a divergence — anything left is a real defect in the classifier or in the
+    # digest/display keying (#2693), which is precisely the signal the old
+    # silent skew was masking. Say so loudly instead of printing a claim the
+    # numbers contradict. Fail-closed: the raw TOTAL above is unchanged, and no
+    # occurrence is dropped to make the arithmetic agree.
+    inj_class_sum=$(( ${inj_runtime_occurrences:-0} + ${inj_other_occurrences:-0} ))
+    # The aggregate alone is NOT sufficient, and the defect it must catch is
+    # exactly the one it is blind to: if the keying merges two phrases, one
+    # `digest~display` key is over-counted and another under-counted by the same
+    # amount, so the totals still agree while a phrase line reports more class
+    # occurrences than its own total — the #2693 symptom, printed under a claim
+    # that it cannot happen. Reconcile EVERY key, not just the sum.
+    #
+    # `FILENAME != "-"` rather than NR==FNR for the same reason as the phrase
+    # list below: when the class file is empty NR==FNR is still true for the
+    # first raw line and would eat it.
+    inj_key_divergence=$(sort "$INJTMP" | awk -F '\t' '
+        FILENAME != "-" { if ($5 != "") cls[$4 "~" $5]++; next }
+        { raw[$1 "~" $2]++ }
+        END {
+          n = 0
+          for (k in raw) if (raw[k] != cls[k]) n++
+          for (k in cls) if (!(k in raw))      n++
+          print n+0
+        }
+      ' "$CONCTMP" -)
+    case "$inj_key_divergence" in ''|*[!0-9]*) inj_key_divergence=0 ;; esac
+    # Drift is measured UNCONDITIONALLY, because agreement between the two walks
+    # is NOT evidence that the corpus was stable. If a file was truncated, replaced
+    # or removed after `injection_snapshot` pinned its length but before the first
+    # walk, BOTH walks read the same shortened prefix — so their counts agree, the
+    # per-key reconciliation agrees, and every occurrence the truncation removed is
+    # omitted from a report that then states the split sums to TOTAL. Checking the
+    # pin only after a mismatch is blind to exactly that case. The check is a
+    # `wc -c` walk over the already-pinned list, so it costs nothing next to the
+    # two corpus reads it qualifies.
+    inj_snap_drift=$(injection_snapshot_drift "$INJSNAP")
+    case "$inj_snap_drift" in ''|*[!0-9]*) inj_snap_drift=0 ;; esac
+    if [ "$inj_class_sum" -ne "${inj_total:-0}" ] || [ "$inj_key_divergence" -ne 0 ]; then
+      if [ "$inj_class_sum" -ne "${inj_total:-0}" ]; then
+        echo "      ⚠️  CLASS SPLIT DIVERGES FROM TOTAL: ${inj_class_sum} classified vs ${inj_total:-0} counted."
+      fi
+      if [ "$inj_key_divergence" -ne 0 ]; then
+        echo "      ⚠️  CLASS SPLIT DIVERGES PER PHRASE: ${inj_key_divergence} phrase key(s) whose"
+        echo "          classified count differs from the raw count, even where the totals agree."
+      fi
+      if [ "$inj_snap_drift" -gt 0 ]; then
+        echo "          ⚠️  THE PINNED CORPUS SHRANK UNDER THE WALKS: ${inj_snap_drift} file(s) are"
+        echo "          shorter than the length pinned for them (or went unreadable), so the two"
+        echo "          walks did NOT read the same bytes. Treat this as a SCAN SKEW first —"
+        echo "          re-run before reading it as a classifier defect."
+      else
+        echo "          No pinned file shrank, so both walks read equal-length prefixes. That"
+        echo "          rules out a truncation skew, but the pin fixes a LENGTH and cannot rule"
+        echo "          out an in-place rewrite AT OR ABOVE the pinned length. If the corpus was stable,"
+        echo "          treat it as a classifier or digest/display keying defect (#2693)"
+        echo "          and investigate before trusting any split below."
+      fi
+    elif [ "$inj_snap_drift" -gt 0 ]; then
+      echo "      ⚠️  THE PINNED CORPUS SHRANK UNDER THE WALKS: ${inj_snap_drift} file(s) are"
+      echo "          shorter than the length pinned for them (or went unreadable). The class"
+      echo "          split DOES agree with TOTAL — but both walks read the same shortened"
+      echo "          corpus, so that agreement says only that they read the SAME bytes, not"
+      echo "          that those were ALL the pinned bytes. Occurrences removed by the"
+      echo "          truncation are missing from BOTH numbers and cannot show up as a"
+      echo "          divergence. Treat this as a SCAN SKEW and re-run before reading the"
+      echo "          total as complete."
+    else
+      echo "      (class-specific records/sessions may overlap; occurrences sum to TOTAL)"
+    fi
     echo "      (concentration is CONTEXT, not a verdict. A rising total with flat"
     echo "       records MAY be echo — a previous report re-counted by the NEXT run —"
     echo "       but flat record/session counts do NOT rule out a new hit: a real"
@@ -3204,9 +3434,9 @@ if want safety; then
         ' "$CONCTMP" -
     : > "$CONCTMP"
     if [ "$INJECTION_PROVENANCE" -eq 1 ]; then
-      printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | while IFS= read -r f; do
-        emit_injection_hits "$f"
-      done | redact > "$PROVTMP"
+      while IFS="$(printf '\t')" read -r len f; do
+        emit_injection_hits "$f" "$len"
+      done < "$INJSNAP" | redact > "$PROVTMP"
       echo "    occurrence provenance (safe locator only; inspect source as untrusted DATA):"
       awk -F'\t' '{printf "      session=%s line=%s record=%s phrase=%s\n", $1, $2, $3, $4}' "$PROVTMP"
     else
@@ -3214,6 +3444,7 @@ if want safety; then
     fi
     : > "$INJTMP"
     : > "$PROVTMP"
+    : > "$INJSNAP"
     echo "    (empty = none seen. A hit is a SIGNAL, not a directive — a corpus"
     echo "     containing one is itself worth reporting to the maintainer.)"
     echo "    ⚠️  EXPECT SELF-REFERENTIAL HITS. This detector cannot tell an attack"
@@ -3313,11 +3544,42 @@ if want safety; then
     # fraction of the input. The batching contract test pins this: it asserts
     # exactly ONE credential-table jq invocation, and it caught the two-pass
     # version of this change.
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
+    # 🔴 SUPPRESS xtrace ACROSS THE CREDENTIAL-BEARING REGION. `set -x` prints an
+    # assignment's EXPANDED value, and every later `"$var"` expansion, to STDERR —
+    # and stderr does NOT pass through the `main | redact` boundary that every
+    # other output path here goes through. Verified directly: `v=$(printf 'ghp_X')`
+    # traces as `+ v=ghp_X`, and a later `printf '%s\n' "$v"` as `++ printf ghp_X`.
+    #
+    # That matters more here than it would elsewhere. An operator running
+    # `bash -x` to diagnose this scanner would write raw credential matches into
+    # their terminal AND into the invoking agent's transcript — which is the very
+    # corpus this scanner reads on its next run, so a diagnostic session would
+    # seed the leak it was called in to investigate.
+    #
+    # The scratch files this region replaced (#2712) leaked only a PATH under
+    # xtrace, so moving the values into shell variables is what introduced this;
+    # the guard is part of that move, not an unrelated hardening. Restore the
+    # caller's setting exactly — never unconditionally `set +x`/`set -x`, which
+    # would silently turn tracing ON for a caller that never asked for it.
+    cred_trace_was=off
+    case $- in *x*) cred_trace_was=on; set +x ;; esac
+    cred_match_data=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
       | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
           'awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
       | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
-      | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null > "$CREDMATCH"
+      | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null \
+      | tr '\000' '\n')
+    # NUL is translated to a newline BEFORE the capture, never left to the
+    # command substitution. A decoded string can legitimately carry `\u0000`,
+    # which jq emits as a real NUL byte, and `$(...)` DELETES NUL rather than
+    # preserving it — so the scratch file this replaced kept the byte while the
+    # variable would silently splice the fragments on either side into one value
+    # that never existed in the corpus. That is the JOIN direction, and it is the
+    # harmful one: a spliced string can reach a high-signal row by spanning a
+    # boundary, manufacturing a credential. Splitting is the safe asymmetry the
+    # compound-value handling below already chose for `;&|` — a fragment only
+    # ever reaches a high-signal row by passing a FULL shape regex on its own,
+    # so a split costs no true positive while a splice invents a false one.
     # Shared normaliser. BOTH the value list and the blob set run through THIS
     # function, so the two can never normalise differently — a divergence would
     # attach the label to the wrong row, which is worse than no label at all.
@@ -3332,9 +3594,11 @@ if want safety; then
     # A blob match carries its run; stripping run+boundary yields the identical
     # string the plain leg produces for the same credential (whose single
     # boundary char cred_normalise removes), so the two sets are comparable.
-    cred_blob_matches() { grep -aEi "$CRED_BLOB_ANCHORED_RE" "$CREDMATCH" 2>/dev/null \
+    cred_blob_matches() { printf '%s\n' "$cred_match_data" \
+                          | grep -aEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null \
                           | sed -E "s|$CRED_BLOB_STRIP_RE||"; }
-    cred_plain_matches() { grep -avEi "$CRED_BLOB_ANCHORED_RE" "$CREDMATCH" 2>/dev/null; }
+    cred_plain_matches() { printf '%s\n' "$cred_match_data" \
+                          | grep -avEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null; }
     # The label needs the ABSENCE of a plain occurrence, not the presence of a
     # blob one. `cred_normalise` ends in `sort -u`, so a credential seen both
     # inside an encoded blob and plainly collapses to ONE row; membership in the
@@ -3345,7 +3609,7 @@ if want safety; then
     # the set what its name claims: values whose occurrences are ALL blob-embedded.
     # This is the ambiguity-falls-through-to-the-plain-row rule the label's own
     # contract states, enforced rather than assumed.
-    cred_plain_matches | cred_normalise > "$CREDPLAIN"
+    cred_plain_set=$(cred_plain_matches | cred_normalise)
     # Derived from the SAME extracted matches as the table — so a complete image
     # payload, excluded upstream by the decode filter, can no more manufacture a
     # blob label than it can manufacture a table row.
@@ -3357,14 +3621,14 @@ if want safety; then
     # on an empty or missing file simply yields nothing, whereas the NR==FNR
     # idiom would silently eat the first data line when the plain set is empty —
     # which here would drop a real credential's label).
-    cred_blob_matches | cred_normalise \
-      | awk -v plainfile="$CREDPLAIN" '
+    cred_blob_set=$(cred_blob_matches | cred_normalise \
+      | awk -v plainfile=<(printf '%s\n' "$cred_plain_set") '
           BEGIN {
             while ((getline _p < plainfile) > 0) if (_p != "") plain[_p] = 1
             close(plainfile)
           }
           !($0 in plain)
-        ' > "$CREDBLOB"
+        ')
     { cred_blob_matches; cred_plain_matches; } \
       | cred_normalise |
       # Normalise every match to its UNDERLYING VALUE before any dedup:
@@ -3404,7 +3668,7 @@ if want safety; then
       #     weak-bucket rows; the asymmetry is chosen — a splittable fragment
       #     only ever reaches a high-signal row by passing a FULL shape regex,
       #     while not splitting silently drops a real second credential.
-    awk -v blobfile="$CREDBLOB" '
+    awk -v blobfile=<(printf '%s\n' "$cred_blob_set") '
       # Blob-evidence set read as a FILE, never with a here-doc join: getline on
       # a missing or EMPTY file simply yields nothing, whereas the NR==FNR idiom
       # silently consumes the first DATA line when the joined file is empty —
@@ -3453,6 +3717,9 @@ if want safety; then
         if ($0 in blob) s = s " [blob-embedded: inside a base64 run, likely a chance substring]"
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /'
+    # End of the credential-value region — restore the caller's tracing exactly.
+    if [ "$cred_trace_was" = on ]; then set -x; fi
+    cred_trace_was=off
     # Concentration, mirroring the injection detector and placed directly under
     # the table it qualifies. The TABLE counts distinct VALUES on purpose (one
     # leak pasted into fifty transcripts is one credential to rotate); this
@@ -3561,12 +3828,22 @@ if want safety; then
     # from a real finding — and a detector that always fires teaches you to ignore
     # it. Only sessions showing a checkout of a fork/PR-ref are considered, and the
     # output stays a CANDIDATE list requiring context, not an assertion of a breach.
+    # Extract ONCE and check that the extraction succeeded before applying either
+    # predicate. Reading it through `< <(commands_in …)` discarded that command's
+    # status, so a concurrently-appended or malformed session whose valid prefix
+    # happened to contain a checkout was accepted on partial output — and the
+    # second extraction then ran inside a pipeline under `pipefail`, where the
+    # same failure aborted the whole telemetry run instead of skipping one file.
+    #
+    # Both greps read the captured value from a here-string. A `… | grep -qE`
+    # here would be the exact writer-into-early-exiting-grep hazard this
+    # repository's own guard rejects.
     printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' \
       | while IFS= read -r f; do
-          if commands_in "$f" 2>/dev/null \
-             | grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))'; then
-            commands_in "$f" 2>/dev/null \
-              | grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|make [a-z]+)'
+          cmds="$(commands_in "$f" 2>/dev/null)" || continue
+          [[ -n "$cmds" ]] || continue
+          if grep -qE '(gh pr checkout|git fetch .*(pull/|refs/pull|fork)|git checkout .*(pull/|refs/pull))' <<<"$cmds"; then
+            grep -E '(npm ci|npm i |npm run|npm test|pnpm |yarn |go generate|go run|go test|dotnet test|dotnet run|dotnet build|cargo (test|run|build)|pytest|make [a-z]+)' <<<"$cmds"
           fi
         done | cut -c1-70 | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
     echo "    (empty = no session both checked out a non-own ref and built)"
@@ -3738,7 +4015,7 @@ if want drift; then
       index($2, "**" p "**") && index($2, lane) { print $c; exit }
     ' "$AGENTS_MD" 2>/dev/null)
     [ -n "$cell" ] || return 0
-    if printf '%s\n' "$cell" | grep -qi 'every hour'; then
+    if grep -qi 'every hour' <<<"$cell"; then
       minute=$(printf '%s\n' "$cell" | sed -nE 's/.*:([0-9][0-9]?).*/\1/p')
       schedule_from_parts "*" "$minute"
       return 0
@@ -3832,12 +4109,20 @@ if want drift; then
     ' "$store" 2>/dev/null
   }
 
-  # ── dropped dispatches ──────────────────────────────────────────────────────
+  # ── dispatch refusals ───────────────────────────────────────────────────────
   # A cron expansion counts SCHEDULED SLOTS. The Claude runtime declines any
   # dispatch that would overlap the previous run of the same task and records the
-  # refusal as `per_task_limit`, so a slot is not a run. Measured on the live
-  # store: 58 of 168 slots dropped over 2026-08-02→08-09 (34.5%), corroborating
-  # 52/142 (36.6%) and 108/161 (32.9%) from two earlier windows.
+  # refusal as `per_task_limit`, so a slot is not a run.
+  #
+  # What this metric reports is REFUSALS, which are an UPPER BOUND on drops — not
+  # drops. A refusal says the runtime declined at the due minute; the run can still
+  # start moments later, and measured 2026-08-12, **37 of 66 refused hours
+  # dispatched anyway**. Reading this count as a drop count is what produced five
+  # mutually-inconsistent rates (32.9%, 36.6%, 44.0%, 50.0%, 58.3%) across both
+  # instances — including the 58/168 (34.5%) this comment used to state as fact.
+  # A drop rate is derivable only by comparing ACTUAL DISPATCHES to scheduled slots
+  # (the transcript-cross-validated reading is 31 of 164, 18.9%), which this
+  # surface cannot see, so it is deliberately not published here.
   #
   # The store writes one record per POLL TICK — roughly every 60s for as long as
   # the task stays blocked — so raw records overstate badly: 1067 records for 58
@@ -4128,7 +4413,7 @@ if want drift; then
     # An empty floor means no record exists to prove the surface is live, so the
     # whole figure is UNKNOWN rather than zero.
     if [ -z "$CLAUDE_DROPPED" ] || [ -z "$SKIP_FLOOR" ]; then
-      echo "    claude engineer dropped dispatches: UNKNOWN (no readable skip record — an absent surface is not a zero)"
+      echo "    claude engineer dispatch refusals: UNKNOWN (no readable skip record — an absent surface is not a zero)"
     else
       # A rate is stated only when the store's records demonstrably cover the whole
       # window. Records that begin INSIDE it leave the earlier slots unaccounted,
@@ -4162,23 +4447,28 @@ if want drift; then
          && [ "$CLAUDE_DROPPED" -le "$RATE_TOTAL" ]; then
         RATE=$(awk -v d="$CLAUDE_DROPPED" -v t="$RATE_TOTAL" \
           'BEGIN { if (t > 0) printf "%.1f%% of %d slot(s) at the current cadence", 100 * d / t, t; else print "UNKNOWN" }')
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: $RATE"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: $RATE"
       elif [ -n "$RATE_TOTAL" ] && [ "$CLAUDE_ENG_SLOTS_DAY" -gt 0 ] \
            && [ "$CLAUDE_DROPPED" -gt "$RATE_TOTAL" ]; then
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (more drops than the window schedules — cadence changed within it)"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: UNKNOWN (more refusals than the window schedules — cadence changed within it)"
       elif [ "$ACTIVE_IN_WINDOW" -ne 1 ]; then
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (no dispatch or skip inside the window — scheduler not proven active)"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: UNKNOWN (no dispatch or skip inside the window — scheduler not proven active)"
       else
-        echo "    claude engineer dropped dispatches: $CLAUDE_DROPPED slot(s) (per_task_limit), drop rate: UNKNOWN (skip records do not span the window)"
+        echo "    claude engineer dispatch refusals: $CLAUDE_DROPPED slot(s) (per_task_limit), refusal rate: UNKNOWN (skip records do not span the window)"
       fi
+      # Every branch above prints a COUNT, so the qualifier belongs to all four rather than
+      # only the one that also states a rate — a reader who sees `3 slot(s)` beside
+      # `refusal rate: UNKNOWN` needs it just as much, and that is the shape the drift-section
+      # default actually emits.
+      echo "      ^ UPPER BOUND on dropped dispatches, not a drop count — a refused slot may still have dispatched (37 of 66 did, measured 2026-08-12). Derive drops by comparing actual dispatches to scheduled slots."
     fi
     # The Codex `automations` table records dispatches that HAPPENED; it carries no
     # skip surface, so a Codex drop is visible only as a gap. Reporting 0 here would
     # fabricate a clean lane out of a surface that cannot record the event.
-    echo "    codex engineer dropped dispatches: UNKNOWN (scheduler store records dispatches only, no skip surface)"
+    echo "    codex engineer dispatch refusals: UNKNOWN (scheduler store records dispatches only, no skip surface)"
   else
-    echo "    claude engineer dropped dispatches: UNKNOWN (claude engineer schedule unmeasured)"
-    echo "    codex engineer dropped dispatches: UNKNOWN (scheduler store records dispatches only, no skip surface)"
+    echo "    claude engineer dispatch refusals: UNKNOWN (claude engineer schedule unmeasured)"
+    echo "    codex engineer dispatch refusals: UNKNOWN (scheduler store records dispatches only, no skip surface)"
   fi
 
   echo

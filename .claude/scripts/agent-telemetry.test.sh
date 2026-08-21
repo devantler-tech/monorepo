@@ -342,21 +342,34 @@ check "proves hourly engineer slots"       "$OUT" "local engineer slots schedule
 # the due-minute filter ran — the assertion passed against a wrong implementation
 # and the ablation proved nothing. With hour 12 present as noise only, dropping the
 # filter counts 4 and the test fails, which is what makes it a real check.
-nocheck "never counts poll-tick records as dropped dispatches" "$OUT" "dropped dispatches: 27"
-nocheck "never counts a skip recorded under another reason"     "$OUT" "dropped dispatches: 4 slot(s)"
-check   "counts dropped dispatches by due slot, not poll tick" "$OUT" \
-  "claude engineer dropped dispatches: 3 slot(s)"
+nocheck "never counts poll-tick records as dropped dispatches" "$OUT" "dispatch refusals: 27"
+nocheck "never counts a skip recorded under another reason"     "$OUT" "dispatch refusals: 4 slot(s)"
+check   "counts refusals by due slot, not poll tick" "$OUT" \
+  "claude engineer dispatch refusals: 3 slot(s)"
+# The count is an UPPER BOUND on drops, never a drop count: a refused slot can still
+# dispatch moments later, and 37 of 66 refused hours did (measured 2026-08-12). The
+# label and the disclosure are both pinned, because the failure mode here is not a
+# wrong number — it is a correct number published under the wrong name, which is what
+# produced five mutually-inconsistent "drop rates" from this one surface.
+check   "refusals are published as an upper bound, not a drop count" "$OUT" \
+  "UPPER BOUND on dropped dispatches"
+check   "the disclosure names the only method that yields a drop rate" "$OUT" \
+  "comparing actual dispatches to scheduled slots"
+nocheck "the discredited drop-count label cannot return" "$OUT" \
+  "dropped dispatches: 3 slot(s)"
+nocheck "no drop RATE is published from the refusal surface" "$OUT" \
+  "drop rate:"
 # Codex's store has no skip surface at all — `automations` records dispatches that
 # HAPPENED, so a Codex drop is visible only as a gap. Zero on a surface that cannot
 # record the event is not zero, and reporting 0 here would invent a clean lane.
 check "codex drop is UNKNOWN, never a fabricated zero" "$OUT" \
-  "codex engineer dropped dispatches: UNKNOWN"
-nocheck "codex drop never reports a zero"  "$OUT" "codex engineer dropped dispatches: 0"
+  "codex engineer dispatch refusals: UNKNOWN"
+nocheck "codex drop never reports a zero"  "$OUT" "codex engineer dispatch refusals: 0"
 
 # A rate needs the skip records to span the whole window. Here they start well
 # after a 3650-day window opens, so the denominator is unprovable and the rate
 # must fail closed rather than dividing by a window the store cannot cover.
-check "unspanned window refuses to state a rate" "$OUT" "drop rate: UNKNOWN"
+check "unspanned window refuses to state a rate" "$OUT" "refusal rate: UNKNOWN"
 
 # The minute alone identifies a dropped slot only while the cron covers every hour.
 # Under a finite hour list the runtime still records a poll tick at every hour's :50
@@ -371,9 +384,9 @@ jq '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .cronExpression) 
   "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
 OUT=$(run --section drift)
 check   "a finite hour list excludes unscheduled hours" "$OUT" \
-  "claude engineer dropped dispatches: 1 slot(s)"
+  "claude engineer dispatch refusals: 1 slot(s)"
 nocheck "an hour-list cron never counts every hour's due minute" "$OUT" \
-  "claude engineer dropped dispatches: 3 slot(s)"
+  "claude engineer dispatch refusals: 3 slot(s)"
 mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
 # Coverage is not liveness, and the two must be tested separately.
@@ -385,10 +398,10 @@ mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tas
 # error as a fabricated zero.
 OUT=$(run --section drift --since-days 1)
 check   "an inactive scheduler refuses to state a rate" "$OUT" \
-  "drop rate: UNKNOWN (no dispatch or skip inside the window"
-nocheck "an outage is never reported as a clean 0.0%" "$OUT" "drop rate: 0.0%"
+  "refusal rate: UNKNOWN (no dispatch or skip inside the window"
+nocheck "an outage is never reported as a clean 0.0%" "$OUT" "refusal rate: 0.0%"
 check   "window bounds the dropped-slot count" "$OUT" \
-  "claude engineer dropped dispatches: 0 slot(s)"
+  "claude engineer dispatch refusals: 0 slot(s)"
 
 # ACTIVE: same window, but `lastRunAt` now falls inside it, so the scheduler is
 # proven to have dispatched and the denominator describes slots something was
@@ -398,7 +411,7 @@ jq --arg now "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" \
   '(.scheduledTasks[] | select(.id == "daily-ai-assistant") | .lastRunAt) = $now' \
   "$FIX/claude-store/scheduled-tasks.json.bak" > "$FIX/claude-store/scheduled-tasks.json"
 OUT=$(run --section drift --since-days 1)
-check "a proven-active scheduler states a rate" "$OUT" "drop rate: 0.0%"
+check "a proven-active scheduler states a rate" "$OUT" "refusal rate: 0.0%"
 mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
 # A store with NO skip surface must read UNKNOWN, never 0. The count alone cannot
@@ -410,9 +423,9 @@ jq 'del(.recordedSkips)' "$FIX/claude-store/scheduled-tasks.json.bak" \
   > "$FIX/claude-store/scheduled-tasks.json"
 OUT=$(run --section drift)
 check   "absent skip surface reads UNKNOWN" "$OUT" \
-  "claude engineer dropped dispatches: UNKNOWN"
+  "claude engineer dispatch refusals: UNKNOWN"
 nocheck "absent skip surface is never a zero" "$OUT" \
-  "claude engineer dropped dispatches: 0 slot(s)"
+  "claude engineer dispatch refusals: 0 slot(s)"
 mv "$FIX/claude-store/scheduled-tasks.json.bak" "$FIX/claude-store/scheduled-tasks.json"
 
 # Removing one pointer must fail closed rather than leaving the schedule surface
@@ -427,7 +440,7 @@ check "missing improver pointer is explicit" "$OUT" "UNKNOWN: codex improver sch
 # stored RRULE had lost BYSECOND=0, the aggregate gate went UNKNOWN, and the Claude
 # drop count — which depends on nothing Codex owns — disappeared with it.
 check "a codex pointer defect does not suppress the claude drop count" "$OUT" \
-  "claude engineer dropped dispatches: 3 slot(s)"
+  "claude engineer dispatch refusals: 3 slot(s)"
 mv "$FIX/codex/automations/agent-improver/automation.toml.missing" \
    "$FIX/codex/automations/agent-improver/automation.toml"
 
@@ -784,6 +797,21 @@ parity_case "pgp_armor" \
   "$(printf -- 'boom -----%s PGP PRIVATE KEY BLOCK----- SECRETPGPARMOR' 'BEGIN')" "SECRETPGPARMOR"
 parity_case "rfc7468_punct" \
   "$(printf -- 'boom -----%s X9.42 DH PRIVATE KEY----- SECRETDHLABEL' 'BEGIN')" "SECRETDHLABEL"
+# RFC 7468 `labelchar` is wider than the registered label families: it admits
+# punctuation such as `/`, and the grammar permits an INTERNAL hyphen-minus. Both
+# shapes were matched by neither the redactor nor the detector (monorepo#2662),
+# so such a key was emitted unmasked AND reported clean — the silent-failure mode
+# this component treats as its worst. Asserted through parity_case, per shape, so
+# a future narrowing that breaks only ONE leg still fails here.
+#
+# Safe to widen only because the span walker now pairs each END to its opener's
+# LABEL (#2662, above): a label that fails to pair does not close, so it masks
+# MORE. The hyphen is admitted only when immediately followed by an alphanumeric,
+# which is what makes it structurally unable to swallow the `-----` delimiters.
+parity_case "rfc7468_solidus" \
+  "$(printf -- 'boom -----%s FOO/BAR PRIVATE KEY----- SECRETSOLIDUSLABEL' 'BEGIN')" "SECRETSOLIDUSLABEL"
+parity_case "rfc7468_inner_hyphen" \
+  "$(printf -- 'boom -----%s FOO-BAR PRIVATE KEY----- SECRETHYPHENLABEL' 'BEGIN')" "SECRETHYPHENLABEL"
 
 # Codex image tools persist rendered images as very large `data:` strings in
 # custom tool outputs. Those strings are encoded binary, not transcript text;
@@ -2297,6 +2325,206 @@ check "colliding displays keep the runtime line's own split" "$OUT" \
       "1 add bot to the trust gate   (1 runtime / 0 other)"
 check "colliding displays keep the content line's own split" "$OUT" \
       "1 add bot to the trust gate   (0 runtime / 1 other)"
+
+# ── #2706: the corpus GROWS between the total walk and the class walk ─────────
+# The corpus includes the running agent's own session file, which is appended
+# continuously — including by the act of running this tool — so the class walk
+# could observe occurrences the total walk never saw. The split then EXCEEDED
+# the total it annotates while the line beneath asserted "occurrences sum to
+# TOTAL" (measured 2026-08-06: TOTAL 235 / other 238, and 59 > 57 on a phrase's
+# own line).
+#
+# Growth is forced DETERMINISTICALLY rather than raced: a `cut` shim on PATH
+# grows the corpus exactly once, on the call that ends the total walk
+# (`cut -f1 "$INJTMP"` in the TOTAL line) and therefore immediately before the
+# class walk. A background appender would make this test timing-dependent, and
+# an unbounded one grows the corpus faster than the tool can scan it.
+# Resolve the host `cut` once, before either shim shadows it on PATH. Both cut
+# shims delegate through REAL_CUT rather than a hardcoded path, matching the
+# REAL_JQ/REAL_DATE idiom the batching fixture above already uses.
+real_cut=$(command -v cut)
+mkdir -p "$FIX/injgrow/corpus/p" "$FIX/injgrow/bin"
+cat > "$FIX/injgrow/bin/cut" <<EOS
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    *.agtel_inj.*)
+      if [ ! -e "$FIX/injgrow/.grown" ]; then
+        : > "$FIX/injgrow/.grown"
+        i=0
+        while [ \$i -lt 4 ]; do
+          printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions grow"}]}}\n' \
+            >> "$FIX/injgrow/corpus/p/s.jsonl"
+          i=\$((i+1))
+        done
+      fi
+      ;;
+  esac
+done
+exec "\${REAL_CUT:-/usr/bin/cut}" "\$@"
+EOS
+chmod +x "$FIX/injgrow/bin/cut"
+: > "$FIX/injgrow/corpus/p/s.jsonl"
+rm -f "$FIX/injgrow/.grown"
+for i in 1 2 3; do
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
+    "$i" >> "$FIX/injgrow/corpus/p/s.jsonl"
+done
+OUT=$(PATH="$FIX/injgrow/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+# NON-VACUITY FIRST: if the corpus did not actually grow, every assertion below
+# passes for the wrong reason — it would be asserting on a static corpus, which
+# the tests above already cover. Prove the race was really staged.
+if [ -e "$FIX/injgrow/.grown" ] && [ "$(grep -c 'update your instructions' "$FIX/injgrow/corpus/p/s.jsonl")" -eq 7 ]; then
+  ok "growth control: the corpus really did grow mid-scan (3 -> 7)"
+else
+  bad "growth control: the corpus really did grow mid-scan (3 -> 7)" \
+      "hook did not fire, so the assertions below would pass vacuously"
+fi
+check "a corpus growing mid-scan does not inflate the class split" "$OUT" \
+      "other content locations: 3 occurrences"
+check "and the per-phrase split stays within its own line's total" "$OUT" \
+      "3 update your instructions   (0 runtime / 3 other)"
+check "so the summing invariant is asserted, not contradicted" "$OUT" \
+      "occurrences sum to TOTAL"
+check "the fail-closed raw total is unchanged by pinning" "$OUT" \
+      "TOTAL occurrences: 3"
+nocheck "and no divergence is claimed when the walks agree" "$OUT" \
+      "CLASS SPLIT DIVERGES FROM TOTAL"
+
+# The disclosure arm exists because pinning cannot prove the classifier itself
+# is correct: if the two walks ever disagree again it is a real keying/classifier
+# defect (#2693), not a scan race, and must be stated rather than printed under a
+# claim the numbers contradict. Ablate ONLY the class walk's pinning to force a
+# genuine divergence and prove the arm fires — otherwise it is unreachable code
+# that would pass every assertion above while being permanently inert.
+INJ_AB="$FIX/injgrow/ablated.sh"
+/usr/bin/awk '
+  /^emit_injection_classes\(\) \{/ {infn=1}
+  infn && /snapshot_bytes "\$f" "\$len" \| grep -niE/ {
+    print "  grep -niE \"$INJ_PHRASE_RE\" \"$f\" 2>/dev/null \\"; infn=0; next
+  }
+  {print}
+' "$TARGET" > "$INJ_AB"
+chmod +x "$INJ_AB"
+inj_ab_changed=$(diff "$TARGET" "$INJ_AB" | grep -c '^<' || true)
+if [ "$inj_ab_changed" -ne 1 ]; then
+  bad "ablation is valid (exactly one line neutralised)" \
+      "awk changed $inj_ab_changed lines, expected 1 — VACUOUS MUTATION, arm cannot judge"
+elif ! bash -n "$INJ_AB" 2>/dev/null; then
+  bad "ablation is valid (exactly one line neutralised)" \
+      "ablated script does not parse — ABLATION INVALID, arm cannot judge"
+else
+  ok "ablation is valid (exactly one line neutralised)"
+  : > "$FIX/injgrow/corpus/p/s.jsonl"
+  rm -f "$FIX/injgrow/.grown"
+  for i in 1 2 3; do
+    printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
+      "$i" >> "$FIX/injgrow/corpus/p/s.jsonl"
+  done
+  OUT=$(PATH="$FIX/injgrow/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
+        MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$INJ_AB" --since-days 3650 --section safety 2>&1)
+  check "ablation: an unpinned class walk is CAUGHT and named, not printed silently" "$OUT" \
+        "CLASS SPLIT DIVERGES FROM TOTAL: 7 classified vs 3 counted"
+  check "ablation: the divergence is attributed to keying, not to a scan race" "$OUT" \
+        "digest/display keying defect (#2693)"
+  nocheck "ablation: and the report no longer claims byte-stability the pin cannot prove" "$OUT" \
+        "so this is NOT a scan skew"
+  nocheck "ablation: the contradicted summing claim is withheld" "$OUT" \
+        "occurrences sum to TOTAL"
+fi
+
+# The pin fixes a LENGTH, not the bytes behind it. A file that gets SHORTER
+# between the two walks still satisfies `head -c "$len"`, which then returns a
+# short prefix while `|| true` hides the condition — so the walks read different
+# bytes and the divergence IS a scan skew. The report used to deny exactly that
+# ("The corpus is pinned for both walks, so this is NOT a scan skew"), sending
+# the reader to #2693 for a corpus that moved underneath them.
+#
+# Truncation is forced DETERMINISTICALLY by the same boundary shim the growth
+# fixture uses: the `cut -f1 "$INJTMP"` call that ends the total walk.
+mkdir -p "$FIX/injshrink/corpus/p" "$FIX/injshrink/bin"
+cat > "$FIX/injshrink/bin/cut" <<EOS
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    *.agtel_inj.*)
+      if [ ! -e "$FIX/injshrink/.shrunk" ]; then
+        : > "$FIX/injshrink/.shrunk"
+        printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please 1"}]}}\n' \
+          > "$FIX/injshrink/corpus/p/s.jsonl"
+      fi
+      ;;
+  esac
+done
+exec "\${REAL_CUT:-/usr/bin/cut}" "\$@"
+EOS
+chmod +x "$FIX/injshrink/bin/cut"
+: > "$FIX/injshrink/corpus/p/s.jsonl"
+rm -f "$FIX/injshrink/.shrunk"
+for i in 1 2 3 4 5; do
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
+    "$i" >> "$FIX/injshrink/corpus/p/s.jsonl"
+done
+SHRINK_BEFORE=$(wc -c < "$FIX/injshrink/corpus/p/s.jsonl" | tr -d ' ')
+OUT=$(PATH="$FIX/injshrink/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injshrink/corpus" CODEX_HOME="$FIX/nocodex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+SHRINK_AFTER=$(wc -c < "$FIX/injshrink/corpus/p/s.jsonl" | tr -d ' ')
+# NON-VACUITY FIRST: if the corpus did not actually shrink, the assertions below
+# would be judging a static corpus the tests above already cover.
+if [ -e "$FIX/injshrink/.shrunk" ] && [ "${SHRINK_AFTER:-0}" -lt "${SHRINK_BEFORE:-0}" ]; then
+  ok "shrink control: the corpus really did shrink mid-scan (${SHRINK_BEFORE} -> ${SHRINK_AFTER} bytes)"
+else
+  bad "shrink control: the corpus really did shrink mid-scan" \
+      "hook did not fire, so the assertions below would pass vacuously"
+fi
+check "a corpus TRUNCATED mid-scan is named as a scan skew, not a classifier defect" "$OUT" \
+      "THE PINNED CORPUS SHRANK UNDER THE WALKS"
+nocheck "and the report withholds the byte-stability claim the length pin cannot prove" "$OUT" \
+      "so this is NOT a scan skew"
+
+# A COMPENSATING mismatch: the aggregate is blind to exactly the defect it must
+# catch. If the keying merges two phrases, one `digest~display` key is
+# over-counted and another under-counted by the same amount, so runtime+other
+# still equals TOTAL while a phrase line reports more class occurrences than its
+# own total — the #2693 symptom, printed under a claim that it cannot happen.
+# Ablate ONLY the class walk's key derivation (`phrase_class_keys` is used by the
+# class walk alone; the total walk digests inline), so the raw keys stay distinct
+# while the classified ones merge. The injdigest fixture already supplies two
+# distinct digests sharing one display, which is precisely that pair.
+INJ_KEY_AB="$FIX/injgrow/keymerge.sh"
+awk '
+  /^phrase_class_keys\(\) \{/ {infn=1}
+  infn && /sha256_digest\)" \\$/ {
+    print "      \"MERGEDKEY\" \\"; infn=0; next
+  }
+  {print}
+' "$TARGET" > "$INJ_KEY_AB"
+chmod +x "$INJ_KEY_AB"
+inj_key_changed=$(diff "$TARGET" "$INJ_KEY_AB" | grep -c '^<' || true)
+if [ "$inj_key_changed" -ne 1 ]; then
+  bad "key-merge ablation is valid (exactly one line neutralised)" \
+      "awk changed $inj_key_changed lines, expected 1 — VACUOUS MUTATION, arm cannot judge"
+elif ! bash -n "$INJ_KEY_AB" 2>/dev/null; then
+  bad "key-merge ablation is valid (exactly one line neutralised)" \
+      "ablated script does not parse — ABLATION INVALID, arm cannot judge"
+else
+  ok "key-merge ablation is valid (exactly one line neutralised)"
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injdigest" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+        HOME="$FIX" bash "$INJ_KEY_AB" --since-days 3650 --section safety 2>&1)
+  # The point of the fixture: the AGGREGATE still agrees, so the sum check alone
+  # would report everything fine. If this arm ever fires, the fixture has stopped
+  # being a *compensating* mismatch and the per-key assertion below proves nothing.
+  nocheck "compensating mismatch: the aggregate check is genuinely blind to it" "$OUT" \
+        "CLASS SPLIT DIVERGES FROM TOTAL"
+  check "compensating mismatch: the per-phrase reconciliation catches it anyway" "$OUT" \
+        "CLASS SPLIT DIVERGES PER PHRASE"
+  nocheck "compensating mismatch: the summing claim is withheld" "$OUT" \
+        "occurrences sum to TOTAL"
+fi
 
 # NOTE: no "concentration adds no jq" assertion here. --section safety already
 # runs jq for the denial scan, so a blanket no-jq check asserts something false
@@ -5500,6 +5728,59 @@ nocheck "shape 9 control: a PROSE end-marker does not close a key span (no leak)
 OUT=$(printf -- 'boom -----%s  PRIVATE KEY-----\nMIISECRET_EXTRASPACE\n' 'BEGIN' | awk "$AWK_PROG")
 nocheck "shape 9 control: an extra space before the label still masks (no narrowing)" "$OUT" "SECRET_EXTRASPACE"
 
+# 🔴 REGRESSION CONTROL 4 — a closer pairs to its OPENER LABEL (#2662).
+# Every control above varies what a label may SAY. This one varies which label
+# the closer carries, which no other row constrains: the walker treated any
+# marker ending in PRIVATE KEY as a closer, so an UNRELATED label terminated a
+# live span. Reproduced on the shipped program before the fix — `BEGIN RSA`,
+# body, `END EC` closed at the EC marker and everything after it printed
+# VERBATIM. That is the UNDER-mask direction the governing asymmetry forbids.
+#
+# Both passes are covered because each owns a different shape and each was
+# independently confirmed load-bearing by neutralising it alone: pass B resolves
+# the LINE-CROSSING span (4a) and pass A the SINGLE-LINE one (4b). A suite
+# carrying only one of these reports green with the other guard removed.
+ECE=$(printf -- '-----%s EC PRIVATE KEY-----' 'END')
+OUT=$(printf 'boom %s\nMIIEvgSECRETXLABEL\n%s\nMIIEvgAFTERXLABEL\n' "$RB" "$ECE" | awk "$AWK_PROG")
+nocheck "shape 9 control 4a: an unrelated END label does not close a line-crossing span" "$OUT" "AFTERXLABEL"
+OUT=$(printf 'boom %s MIIEvgSAMELINEX %s TAILXSAMELINE\n' "$RB" "$ECE" | awk "$AWK_PROG")
+nocheck "shape 9 control 4b: an unrelated END label does not close a single-line span" "$OUT" "TAILXSAMELINE"
+
+# CONTROL, opposite direction — pairing must not make a span UNCLOSEABLE.
+# If the key were compared to the whole marker rather than its label, or the
+# space normalisation were dropped, a legitimate closer would stop matching and
+# every stream would mask to EOF — over-masking so total that rows 4a/4b above
+# would still pass. These two rows are what keep this fix from being vacuous.
+OUT=$(printf 'boom %s\nMIIEvgSECRETPAIRED\n%s\nAFTER-PAIRED-KEEP\n' "$RB" "$RE" | awk "$AWK_PROG")
+check   "shape 9 control 4c: the MATCHING closer still closes the span" "$OUT" "AFTER-PAIRED-KEEP"
+nocheck "shape 9 control 4c: and its body is still masked"              "$OUT" "SECRETPAIRED"
+OUT=$(printf -- 'boom -----%s RSA  PRIVATE KEY-----\nMIIEvgSECRETSPPAIR\n%s\nAFTER-SPPAIR-KEEP\n' 'BEGIN' "$RE" | awk "$AWK_PROG")
+check   "shape 9 control 4d: a repeated-space label still pairs with its closer" "$OUT" "AFTER-SPPAIR-KEEP"
+nocheck "shape 9 control 4d: and its body is still masked"                       "$OUT" "SECRETSPPAIR"
+
+# 🔴 REGRESSION CONTROL 4e — a NESTED opener of ANOTHER label still deepens the span.
+# Found by review on #2925 and REPRODUCED before accepting it. The first draft of
+# the pairing skipped any marker whose label differed, which silently reintroduced
+# an under-mask one shape over: `BEGIN RSA` .. `BEGIN EC` .. `END RSA` on a single
+# line closed at depth 0 and printed the tail VERBATIM, where the original
+# depth-only walk had masked it. Controls 4a/4b cannot see this — neither carries a
+# nested opener — which is exactly the "fixing one shape is not fixing the defect"
+# lesson this file already records for 5c/5d.
+#
+# The rule that resolves both directions: ANY opener deepens the span whatever its
+# label, and only a MATCHING closer may end it. An unclosed nested block means the
+# material after this closer is still key material.
+ECB=$(printf -- '-----%s EC PRIVATE KEY-----' 'BEGIN')
+OUT=$(printf 'boom %s K1 %s MIIEvgNEST1 %s TAILNESTED\n' "$RB" "$ECB" "$RE" | awk "$AWK_PROG")
+nocheck "shape 9 control 4e: a nested other-label opener keeps a single-line span open" "$OUT" "TAILNESTED"
+OUT=$(printf 'boom %s\nB1\n%s\nMIIEvgNEST2\n%s\nMIIEvgAFTERNEST\n' "$RB" "$ECB" "$RE" | awk "$AWK_PROG")
+nocheck "shape 9 control 4e: and the same holds across lines" "$OUT" "AFTERNEST"
+
+# CONTROL — nesting of the SAME label must still close normally, or 4e is satisfied
+# by the walker simply never closing anything.
+OUT=$(printf 'boom %s K1 %s K2 %s %s TAILSAMENEST\n' "$RB" "$RB" "$RE" "$RE" | awk "$AWK_PROG")
+check "shape 9 control 4e: same-label nesting still closes at depth 0" "$OUT" "TAILSAMENEST"
+
 # ── SHAPE 9 (structural) — ONE label expression, at EVERY marker site ─────────
 # The defect was never a single bad regex: the same label class was spelled out
 # at nine independent sites (four awk regexes, three marker `sed` rules, and the
@@ -5512,8 +5793,17 @@ nocheck "shape 9 control: an extra space before the label still masks (no narrow
 # lines reports 8 for the 9 real sites, so a line-based floor of 9 can only be
 # satisfied by adding a tenth site. This assertion caught exactly that mistake
 # in its own first draft.
-SITES_NEW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
-# THREE rejected spellings are pinned, not just the original: `[A-Z ]*` is the
+# The label admits `/` and an INTERNAL hyphen (one immediately followed by an
+# alphanumeric, so it can never eat the `-----` fence). That expression has TWO
+# spellings by CONTEXT, not by choice: awk regex literals and the marker `sed`
+# rules must escape the solidus, while the two detector variables are plain
+# shell strings with no delimiter to escape. BSD awk rejects a bare `/` inside a
+# bracket expression outright (`nonterminated character class`), and this suite
+# runs on macOS as well as Linux, so the escape is required rather than
+# cosmetic. Pin the fragment the two spellings SHARE, so one count still covers
+# all nine sites without forcing a single spelling on both contexts.
+SITES_NEW=$(grep -oF -- '-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
+# FOUR rejected spellings are pinned, not just the original: `[A-Z ]*` is the
 # narrow class that could not reach either real family, `[^-]*…[^-]*` is the
 # over-wide one that leaked, and the ` *`-less optional group is the one that
 # NARROWED (regression control 3). A site left on any of them is a defect, and
@@ -5521,7 +5811,11 @@ SITES_NEW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?' "$TARGET"
 SITES_OLD=$(grep -oF -- '[A-Z ]*PRIVATE KEY' "$TARGET" | grep -c '' || true)
 SITES_BAD=$(grep -oF -- '[^-]*PRIVATE KEY[^-]*' "$TARGET" | grep -c '' || true)
 SITES_NARROW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY' "$TARGET" | grep -c '' || true)
-SITES_OLD=$((SITES_OLD + SITES_BAD + SITES_NARROW))
+# FOURTH rejected spelling: the pre-#2662 class, which could reach neither a
+# solidus nor an internal hyphen — masked-but-undetected territory if a site is
+# left on it.
+SITES_PRE7468=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY' "$TARGET" | grep -c '' || true)
+SITES_OLD=$((SITES_OLD + SITES_BAD + SITES_NARROW + SITES_PRE7468))
 if [ "$SITES_NEW" -ge 9 ] && [ "$SITES_OLD" -eq 0 ]; then
   ok "shape 9 structural: every private-key marker site uses the one widened label expression"
 else
@@ -6031,7 +6325,384 @@ else
       "the fixed form matched the forbidden-shape detector"
 fi
 
+# A cwd matching MORE THAN ONE allowlist entry must still be in scope. This is
+# the ordinary case, not an exotic one: PORTFOLIO_PATHS is built as the monorepo
+# root followed by root/<submodule> for every submodule, so every path inside a
+# submodule matches two entries. Every other scope test in this file uses a
+# single-entry allowlist, where at most one entry can match — which is exactly
+# why the scope filter could drop the entire submodule corpus unobserved.
+mkdir -p "$FIX/nest/sub/deep" "$FIX/cxnest/sessions"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$FIX/nest/sub/deep\"}}" \
+  > "$FIX/cxnest/sessions/r.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 11\"}"}}' \
+  >> "$FIX/cxnest/sessions/r.jsonl"
+NEST_HITS=0
+for _ in 1 2 3 4 5; do
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/empty" CODEX_HOME="$FIX/cxnest" MONOREPO_DIR="$FIX/nest" \
+        PORTFOLIO_PATHS="$FIX/nest:$FIX/nest/sub" HOME="$FIX" \
+        bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+  grep -qE 'sleep/poll calls \.\. 1' <<<"$OUT" && NEST_HITS=$((NEST_HITS + 1))
+done
+# Repeated because the failure it guards is a RACE: the writer is only killed
+# once grep has already matched, so a single green run proves nothing.
+if [ "$NEST_HITS" -eq 5 ]; then
+  ok "a cwd matching two allowlist entries stays in scope (5/5 runs)"
+else
+  bad "a cwd matching two allowlist entries stays in scope (5/5 runs)" \
+      "in scope on only $NEST_HITS of 5 runs — the scope filter is dropping submodule sessions"
+fi
+
 echo
+echo "── extraction canary: a broken embedded jq must not read as improvement ──"
+# The efficiency section's numbers ALL derive from TAGGED. A jq PROGRAM error
+# (one `?//` typo — the exact bug that produced a silent `errors=0` over 182
+# sessions on 2026-08-19) empties every file at once, so the busy-wait metrics
+# read 0. That is indistinguishable from a quiet window and points in the
+# direction that looks like success, which is why it is guarded rather than
+# left to reviewer vigilance.
+XFX="$FIX/xfcanary"
+mkdir -p "$XFX/nest/sub/deep" "$XFX/cxnest/sessions" "$XFX/empty"
+printf '%s\n' "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"$XFX/nest/sub/deep\"}}" \
+  > "$XFX/cxnest/sessions/r.jsonl"
+printf '%s\n' '{"type":"response_item","payload":{"type":"function_call","arguments":"{\"command\":\"sleep 11\"}"}}' \
+  >> "$XFX/cxnest/sessions/r.jsonl"
+
+xf_run() { # $1 = script to run
+  CLAUDE_PROJECTS_DIR="$XFX/empty" CODEX_HOME="$XFX/cxnest" MONOREPO_DIR="$XFX/nest" \
+    PORTFOLIO_PATHS="$XFX/nest:$XFX/nest/sub" HOME="$XFX" \
+    bash "$1" --since-days 3650 --section efficiency 2>&1
+}
+
+# Baseline: the healthy extractor reads the sleep AND stays silent. Both halves
+# matter — a canary that always fires guards nothing.
+XF_BASE=$(xf_run "$TARGET")
+if grep -qE 'sleep/poll calls \.\. 1' <<<"$XF_BASE" \
+   && ! grep -qiE 'EXTRACTION FAILED|extraction failed' <<<"$XF_BASE"; then
+  ok "healthy extractor reads the sleep and raises no canary"
+else
+  bad "healthy extractor reads the sleep and raises no canary" \
+      "got: $(grep -E 'sleep/poll calls|extraction' <<<"$XF_BASE" | head -2)"
+fi
+
+# Ablation: break ONLY the embedded jq program in tagged_commands_in.
+XF_AB="$FIX/xf_ablate.sh"
+cp "$TARGET" "$XF_AB"
+sed -i.bak 's#(\.id? // "") as \$i#(.id?//"") as $i#' "$XF_AB"; rm -f "$XF_AB.bak"
+xf_changed=$(diff "$TARGET" "$XF_AB" | grep -c '^<')
+if [ "$xf_changed" -ne 1 ]; then
+  # A mutation that did not land makes the arm judge nothing. Withhold the
+  # verdict rather than report a pass the run never earned.
+  bad "ablation: a broken extractor jq raises the canary" \
+      "sed changed $xf_changed lines, expected 1 — VACUOUS MUTATION, arm cannot judge"
+else
+  XF_OUT=$(xf_run "$XF_AB")
+  # The number must still collapse to 0 (proving the arm really broke the
+  # extractor) AND the canary must say so. Asserting only the canary would pass
+  # even if the mutation had been harmless.
+  if grep -qE 'sleep/poll calls \.\. 0' <<<"$XF_OUT" \
+     && grep -qF 'EXTRACTION FAILED on ALL' <<<"$XF_OUT" \
+     && grep -qF 'Do not record these as a measurement' <<<"$XF_OUT"; then
+    ok "ablation: a broken extractor jq collapses the count AND raises the canary"
+  else
+    bad "ablation: a broken extractor jq collapses the count AND raises the canary" \
+        "got: $(grep -E 'sleep/poll calls|EXTRACTION' <<<"$XF_OUT" | head -3)"
+  fi
+fi
+
+
+# ── 6d⁴. credential values never reach a scratch file (#2712) ─────────────────
+# The traps that remove the credential scratch run on EXIT and on HUP/INT/TERM.
+# None of them runs on SIGKILL, an OOM kill, or power loss, so anything these
+# files hold is credential material at rest the moment the process dies
+# abnormally. This is a leak DETECTOR: writing the very values it exists to find
+# to disk inverts its own intent.
+#
+# Asserted at the moment the files are LIVE, not after cleanup — the same
+# instrumentation shape the provenance-scratch row above uses. The reporting awk
+# is shimmed because it is invoked with the blob set while all three credential
+# scratches hold their final contents, so the observation window is exact rather
+# than raced.
+echo
+echo "credential scratch holds no credential values (#2712)"
+
+mkdir -p "$FIX/credtmp" "$FIX/credawk" "$FIX/credscratch"
+# Two shapes so every leg is exercised: a PLAIN occurrence (which reaches the
+# plain set) and one inside a base64 run (which reaches the blob set). A fixture
+# covering only one leg would leave the other's file unasserted.
+printf '{"type":"user","message":{"content":[{"type":"text","text":"export GITHUB_TOKEN=__GHPA__"}]}}\n' \
+  > "$FIX/credscratch/s.jsonl"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__GHPD__zz"}]}}\n' \
+  >> "$FIX/credscratch/s.jsonl"
+subst "$FIX/credscratch/s.jsonl"
+
+cat > "$FIX/credawk/awk" <<'EOF'
+#!/usr/bin/env bash
+# Fires on the reporting awk that receives the blob set. At that instant every
+# credential scratch this scan created holds its final contents.
+case " $* " in
+  *'blobfile='*)
+    printf 'fired\n' >> "$CRED_SCRATCH_TRACE"
+    for _v in $CRED_SCRATCH_VALUES; do
+      if grep -rqF "$_v" "$CRED_SCRATCH_TMPDIR"/.agtel_* 2>/dev/null; then
+        printf 'raw\n' >> "$CRED_SCRATCH_TRACE"
+      fi
+    done
+    ;;
+esac
+exec "$REAL_AWK" "$@"
+EOF
+chmod +x "$FIX/credawk/awk"
+: > "$FIX/cred-scratch-trace"
+PATH="$FIX/credawk:$PATH" REAL_AWK="$real_awk" \
+  CRED_SCRATCH_VALUES="$S_GHPA $S_GHPD" \
+  CRED_SCRATCH_TMPDIR="$FIX/credtmp" CRED_SCRATCH_TRACE="$FIX/cred-scratch-trace" \
+  TMPDIR="$FIX/credtmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/credscratch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety >/dev/null 2>&1
+
+# POSITIVE CONTROL FIRST. A shim that never matched, or a scan that never
+# reached the credential table, leaves an empty trace — and the leak assertion
+# below would then pass having observed nothing at all. Assert the observation
+# happened before believing its result.
+if grep -qFx 'fired' "$FIX/cred-scratch-trace" 2>/dev/null; then
+  ok "control: the credential-table reporting pass was observed"
+else
+  bad "control: the credential-table reporting pass was observed" \
+      "shim never fired — the leak assertion below would be VACUOUS"
+fi
+if ! grep -qFx 'raw' "$FIX/cred-scratch-trace" 2>/dev/null; then
+  ok "no credential value is written to any scan scratch file"
+else
+  bad "no credential value is written to any scan scratch file" \
+      "a fixture credential was readable in \$TMPDIR/.agtel_* during the scan"
+fi
+
+# SEAM PARITY (#2712 AC2). Moving the plain/blob sets off disk changes how the
+# two legs EXCHANGE identity, so the exchange itself is asserted rather than
+# inferred from the end-to-end rows: a value whose normalisation is non-trivial
+# — an assignment wrapper the table leg strips — must still match the blob set's
+# key. If the legs normalised differently the lookup would miss and the label
+# would silently vanish, which reads as "this credential was plainly exposed".
+mkdir -p "$FIX/credparity"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"token=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__GHPE__zz"}]}}\n' \
+  > "$FIX/credparity/s.jsonl"
+subst "$FIX/credparity/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credparity" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+# Both halves, together: the row must EXIST (so the table leg produced the
+# value) and carry the label (so the blob leg's key matched that same value).
+# Asserting only the label would pass if the row vanished entirely.
+if grep -qE '^[[:space:]]+1 github-token' <<<"$TABLE" && grep -q 'blob-embedded' <<<"$TABLE"; then
+  ok "table leg and blob leg agree on identity through the assignment wrapper"
+else
+  bad "table leg and blob leg agree on identity through the assignment wrapper" "$TABLE"
+fi
+
+
+# -- a NUL inside a match must not SPLICE two fragments (#2712) ----------------
+# Holding the matches in a variable rather than a file introduced one byte-level
+# difference: a decoded string can legitimately carry a JSON unicode escape for
+# the zero byte, jq emits it as a real NUL, and $(...) DELETES NUL rather than
+# preserving it. The scratch file this replaced kept the byte, so without an
+# explicit translation the fragments on either side splice into a single value
+# that never occurred in the corpus.
+#
+# The splice is the harmful direction, not merely a different one: two strings
+# that are individually too short to be credentials can join into something that
+# passes a FULL shape regex, so the table manufactures a credential -- a false
+# positive in a leak detector, which costs a rotation. Translating the zero byte
+# to a newline instead splits them, the same asymmetry the compound `;&|`
+# handling already chose, where a fragment only reaches a high-signal row on its
+# own merits.
+echo
+echo "a NUL inside a match splits rather than splices (#2712)"
+
+# CONTROL corpus -- the identical fragments with NO separator between them. This
+# proves the spliced form IS detectable and that the fixture reaches the scanner
+# at all; without it, the property assertion below would pass vacuously on any
+# corpus the harness failed to read.
+mkdir -p "$FIX/nulctl" "$FIX/nulsplit"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"export GITHUB_TOKEN=%s_AAAAAAAAAABBBBBBBBBB"}]}}\n' 'ghp' \
+  > "$FIX/nulctl/s.jsonl"
+CTL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulctl" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CTL_TABLE=$(printf '%s' "$CTL_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$CTL_TABLE"; then
+  ok "control: the spliced fragment pair IS detected as a token when adjacent"
+else
+  bad "control: the spliced fragment pair IS detected as a token when adjacent" \
+      "fixture never reached the scanner -- the assertion below would be VACUOUS: $CTL_TABLE"
+fi
+
+# THE PROPERTY -- the same two fragments separated by a real zero byte.
+# Byte-identical to the control apart from that separator, so a difference in
+# outcome can only come from how that byte is handled.
+printf '{"type":"user","message":{"content":[{"type":"text","text":"export GITHUB_TOKEN=%s_AAAAAAAAAA\\u0000BBBBBBBBBB"}]}}\n' 'ghp' \
+  > "$FIX/nulsplit/s.jsonl"
+NUL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulsplit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+NUL_TABLE=$(printf '%s' "$NUL_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$NUL_TABLE"; then
+  bad "a NUL between two fragments does not manufacture a token" \
+      "the fragments were spliced and reported as a credential: $NUL_TABLE"
+else
+  ok "a NUL between two fragments does not manufacture a token"
+fi
+
+# --- xtrace must not carry credential VALUES to stderr (#2712, Codex P1) -----
+# `set -x` prints an assignment's expanded value, and every later `"$var"`
+# expansion, to STDERR — which does NOT pass through the `main | redact` boundary
+# that guards stdout. Moving the plain/blob sets off scratch files and into shell
+# variables is what created this path: a scratch file leaked only its PATH under
+# xtrace. So an operator running `bash -x` to diagnose the scanner would write raw
+# credentials into their terminal and into the invoking agent's transcript — the
+# corpus this scanner reads next run.
+mkdir -p "$FIX/credxtrace"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPA__"}]}}\n' \
+  > "$FIX/credxtrace/s.jsonl"
+subst "$FIX/credxtrace/s.jsonl"
+XT_OUT="$FIX/credxtrace.out"; XT_ERR="$FIX/credxtrace.err"
+CLAUDE_PROJECTS_DIR="$FIX/credxtrace" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash -x "$TARGET" --since-days 3650 --section safety >"$XT_OUT" 2>"$XT_ERR"
+
+# POSITIVE CONTROL 1 — tracing really was ON for this run. Without this, a run
+# that silently failed to enable xtrace would leak nothing and the guard
+# assertion below would pass having observed nothing at all.
+if grep -q '^+' "$XT_ERR" 2>/dev/null; then
+  ok "control: xtrace was active for the traced run"
+else
+  bad "control: xtrace was active for the traced run" \
+      "no trace lines on stderr — the leak assertion below would be VACUOUS"
+fi
+
+# POSITIVE CONTROL 2 — the credential table really was REACHED, so the guarded
+# region actually executed. A corpus that produced no table would also produce no
+# leak, for the wrong reason.
+if grep -q 'credential-shaped' "$XT_OUT" 2>/dev/null; then
+  ok "control: the credential table was reached under xtrace"
+else
+  bad "control: the credential table was reached under xtrace" \
+      "no credential table in the traced run — the leak assertion would be VACUOUS"
+fi
+
+# THE GUARD — no raw credential value on stderr.
+if ! grep -qF "$S_GHPA" "$XT_ERR" 2>/dev/null; then
+  ok "no credential value reaches stderr under xtrace"
+else
+  bad "no credential value reaches stderr under xtrace" \
+      "a fixture credential was printed by xtrace, bypassing the redact boundary"
+fi
+
+# The guard must RESTORE the caller's setting, not merely disable tracing: a run
+# that never turned xtrace back on would hide the rest of the script from
+# diagnosis, trading one defect for another. The script does substantial work
+# after the credential region, so trace lines must still be arriving at the end.
+XT_TAIL=$(tail -20 "$XT_ERR" 2>/dev/null)
+if grep -q '^+' <<<"$XT_TAIL"; then
+  ok "xtrace is restored after the credential region"
+else
+  bad "xtrace is restored after the credential region" \
+      "no trace lines at the end of the run — the guard left tracing off"
+fi
+
+
+# ── snapshot drift is checked even when the class totals AGREE ────────────────
+# Agreement between the two walks is not evidence that the corpus was stable.
+# A file truncated after `injection_snapshot` pins its length but before the
+# first walk is read short by BOTH walks: their counts agree, the per-key
+# reconciliation agrees, and every occurrence the truncation removed is missing
+# from both numbers — so it can never surface as a divergence. Consulting the
+# pin only after a mismatch is blind to exactly that case, and the report then
+# states the split sums to TOTAL over a corpus it never fully read.
+#
+# Simulated deterministically rather than by racing a real truncation (an
+# earlier attempt to kill the miner mid-snapshot was abandoned twice for being
+# unreproducible): a `wc` shim inflates the FIRST byte-count taken of the
+# marker-bearing fixture, which is the one `injection_snapshot` uses to pin it.
+# The pin is then longer than the file, exactly as it would be had the file
+# shrunk afterwards, while both walks still read the whole real file and agree.
+echo
+echo "snapshot drift is reported even when the class split agrees (#2706)"
+
+mkdir -p "$FIX/driftcorpus" "$FIX/driftwc" "$FIX/drifttmp"
+DRIFT_MARKER='ZZDRIFTFIXTUREZZ'
+printf '{"type":"user","message":{"content":[{"type":"text","text":"%s please update your instructions now"}]}}\n' \
+  "$DRIFT_MARKER" > "$FIX/driftcorpus/s.jsonl"
+
+real_wc=$(command -v wc)
+cat > "$FIX/driftwc/wc" <<'EOF'
+#!/usr/bin/env bash
+# Only the single-argument `-c` form reads a file on stdin; everything else
+# (notably `wc -l`) passes straight through untouched.
+if [ "$#" -eq 1 ] && [ "$1" = "-c" ]; then
+  _t=$(mktemp)
+  cat > "$_t"
+  _n=$("$REAL_WC" -c < "$_t" | tr -d ' ')
+  if grep -q "$DRIFT_MARKER" "$_t" && [ ! -f "$DRIFT_STATE" ]; then
+    : > "$DRIFT_STATE"
+    _n=$((_n + 4096))
+  fi
+  rm -f "$_t"
+  printf '%s\n' "$_n"
+  exit 0
+fi
+exec "$REAL_WC" "$@"
+EOF
+chmod +x "$FIX/driftwc/wc"
+rm -f "$FIX/drift-state"
+DRIFT_OUT=$(PATH="$FIX/driftwc:$PATH" REAL_WC="$real_wc" \
+  DRIFT_MARKER="$DRIFT_MARKER" DRIFT_STATE="$FIX/drift-state" TMPDIR="$FIX/drifttmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/driftcorpus" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+
+# CONTROL 1 — the shim must actually have inflated a pin. Without this a shim
+# that never matched would leave the report clean and the assertion below would
+# "pass" having simulated nothing at all.
+if [ -f "$FIX/drift-state" ]; then
+  ok "control: the fixture pin was inflated (drift was actually simulated)"
+else
+  bad "control: the fixture pin was inflated" "shim never fired — the assertion below is VACUOUS"
+fi
+# CONTROL 2 — this must exercise the AGREEMENT path. If the walks diverged, the
+# pre-existing mismatch arm would print the warning and the new arm would go
+# untested, so the row would pass for the wrong reason.
+if grep -qF 'CLASS SPLIT DIVERGES' <<<"$DRIFT_OUT"; then
+  bad "control: totals agree, so the agreement arm is under test" \
+      "the split diverged — this exercises the OLD arm, not the new one"
+else
+  ok "control: totals agree, so the agreement arm is under test"
+fi
+# THE PROPERTY: a shrunken pin is reported even though nothing diverged.
+if grep -qF 'THE PINNED CORPUS SHRANK UNDER THE WALKS' <<<"$DRIFT_OUT"; then
+  ok "a corpus that shrank under the walks is reported despite the totals agreeing"
+else
+  bad "a corpus that shrank under the walks is reported despite the totals agreeing" \
+      "$(grep -E 'occurrences sum to TOTAL|SHRANK|TOTAL occurrences' <<<"$DRIFT_OUT" | head -3)"
+fi
+# And it must NOT also print the unqualified all-clear alongside the warning.
+if grep -qF 'occurrences sum to TOTAL' <<<"$DRIFT_OUT"; then
+  bad "the unqualified all-clear is suppressed when the pin shrank" \
+      "both the warning and the all-clear were printed"
+else
+  ok "the unqualified all-clear is suppressed when the pin shrank"
+fi
+
+# NEGATIVE CONTROL — with no drift simulated, the same corpus must still print
+# the ordinary all-clear and no warning. Without this the rows above would pass
+# if the warning were simply printed unconditionally.
+rm -f "$FIX/drift-state"
+CLEAN_OUT=$(TMPDIR="$FIX/drifttmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/driftcorpus" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if grep -qF 'occurrences sum to TOTAL' <<<"$CLEAN_OUT" \
+   && ! grep -qF 'THE PINNED CORPUS SHRANK UNDER THE WALKS' <<<"$CLEAN_OUT"; then
+  ok "negative control: a stable corpus still reports the plain all-clear"
+else
+  bad "negative control: a stable corpus still reports the plain all-clear" \
+      "$(grep -E 'occurrences sum to TOTAL|SHRANK' <<<"$CLEAN_OUT" | head -3)"
+fi
+
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

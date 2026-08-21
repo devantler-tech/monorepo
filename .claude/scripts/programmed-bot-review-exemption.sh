@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-if [[ "$#" -ne 7 ]] || ! command -v jq >/dev/null 2>&1; then
+if [[ "$#" -lt 7 || "$#" -gt 8 ]] || ! command -v jq >/dev/null 2>&1; then
   exit 2
 fi
 
@@ -16,6 +16,19 @@ title="$4"
 head="$5"
 files_json="$6"
 commits_json="$7"
+# Optional map of changed installed-skill root -> that skill's `metadata.github-repo` value, read by
+# the caller at the PR head (null when the frontmatter is absent or unreadable). This is a
+# CORROBORATOR, never an authorization: the value lives inside the payload being classified, so an
+# upstream can write whatever it likes there. Supplying it can only move a root from allowed to
+# review-required — it can never grant the carve-out on its own.
+skill_owners_json="${8-}"
+
+# The authorization source is a reviewed, version-controlled list kept outside the skills, because
+# an installed root holds copies from many upstreams and the copied frontmatter is authored by the
+# upstream it is meant to identify. It may name exactly one upstream: the carve-out exists for
+# content already reviewed here, so any other value is a malformed row rather than another owner.
+allowlist_file="$(cd "$(dirname "$0")/.." && pwd)/skill-ownership-allowlist.tsv"
+suite_skill_owner="https://github.com/devantler-tech/agent-skills"
 
 commit_schema='type == "array" and length > 0 and all(.[];
   type == "object" and
@@ -41,6 +54,12 @@ if [[ ! "${head}" =~ ^[0-9a-f]{40}$ ]] ||
   ! jq -e 'type == "array" and all(.[]; type == "string")' \
     <<<"${files_json}" >/dev/null 2>&1 ||
   ! jq -e "${commit_schema}" <<<"${commits_json}" >/dev/null 2>&1; then
+  exit 2
+fi
+
+if [[ -n "${skill_owners_json}" ]] &&
+  ! jq -e 'type == "object" and all(.[]; type == "string" or type == "null")' \
+    <<<"${skill_owners_json}" >/dev/null 2>&1; then
   exit 2
 fi
 
@@ -92,6 +111,48 @@ matches_agent_plugins_review_files() {
       . == ".claude-plugin/marketplace.json" or
       . == ".github/plugin/marketplace.json")
   ' <<<"${files_json}" >/dev/null
+}
+
+# Every changed skill root must be listed for this repository in the reviewed allowlist, and — when
+# the caller supplies the corroborating map — the copied frontmatter must still agree with it. A root
+# that is absent, or whose declared owner has drifted from the reviewed one, takes the semantic-review
+# path. An unreadable allowlist fails closed for the same reason.
+matches_suite_owned_skills() {
+  [[ -r "${allowlist_file}" ]] || return 1
+  # The corroborator is REQUIRED on this arm. It is what detects an upstream handover on a root we
+  # still allowlist, and a tripwire the caller may omit is one that never fires — so an omitted map
+  # is unproven ownership, not permission. Other arms take seven arguments and never reach here.
+  [[ -n "${skill_owners_json}" ]] || return 1
+
+  # Every row is validated, not just the ones selected: a row is only ever allowed to name the one
+  # reviewed suite upstream, so an empty or drifted third field is a malformed file rather than a
+  # different owner. Without that, a stray trailing tab yields an empty owner that still compares
+  # unequal to null and would authorize the carve-out with no upstream named at all. A duplicate root
+  # is rejected for the same reason — `from_entries` would silently keep the last one.
+  local allow_json
+  allow_json="$(
+    sed 's/#.*//' "${allowlist_file}" |
+      awk -F'\t' -v repo="${repo}" -v suite="${suite_skill_owner}" '
+        { sub(/[ \t]+$/, "") }
+        $0 == "" { next }
+        NF != 3 || $2 !~ /^\.agents\/skills\/[^\/]+$/ || $3 != suite { exit 1 }
+        seen[$1 "\t" $2]++ { exit 1 }
+        $1 == repo { printf "%s\t%s\n", $2, $3 }' |
+      jq -Rn '[inputs | select(length > 0) | split("\t") | {key: .[0], value: .[1]}] | from_entries'
+  )" || return 1
+
+  jq -e \
+    --argjson allow "${allow_json}" \
+    --argjson owners "${skill_owners_json:-null}" \
+    '[.[] | capture("^(?<root>\\.agents/skills/[^/]+)/").root] | unique
+     | length > 0
+     and all(.[];
+       . as $root
+       | ($allow[$root] // null) as $reviewed
+       | $reviewed != null
+       and ($owners | type) == "object"
+       and $owners[$root] == $reviewed)' \
+    <<<"${files_json}" >/dev/null
 }
 
 matches_agent_skills_provenance() {
@@ -270,7 +331,8 @@ if [[ "${branch}" == "deps/agent-skills-update" &&
     if [[ "${repo}" != "agent-plugins" ]] &&
       matches_agent_skills_files &&
       matches_agent_skills_provenance; then
-      exit 0
+      matches_suite_owned_skills && exit 0
+      exit 3
     fi
   fi
 fi

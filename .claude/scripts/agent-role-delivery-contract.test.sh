@@ -27,12 +27,25 @@ fail() {
   exit 1
 }
 
+sha256_bytes() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    fail "sha256sum or shasum is required to verify pinned agent definition integrity"
+  fi
+}
+
+sha256_file() { sha256_bytes "$1"; }
+
 # Prose guards must survive re-wrapping: a boundary sentence that happens to break
 # across two lines is still present, so match against a whitespace-flattened copy
 # rather than letting a paragraph reflow read as a removed protection.
 flatten() { tr '\n' ' ' < "$1" | tr -s '[:space:]' ' '; }
 constitution_flat="$(flatten "${constitution}")"
 engineer_flat="$(flatten "${engineer_agent}")"
+maintenance_overlay_flat="$(flatten "${maintenance_overlay}")"
 
 assert_prose() {
   case "${constitution_flat}" in
@@ -42,6 +55,12 @@ assert_prose() {
 }
 assert_engineer_prose() {
   case "${engineer_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+assert_maintenance_prose() {
+  case "${maintenance_overlay_flat}" in
     *"$1"*) ;;
     *) fail "$2" ;;
   esac
@@ -143,6 +162,7 @@ skill_upstream="$(yq --front-matter=extract '.metadata.github-repo // ""' "${bun
 # directory was absent, which made it a no-op in CI (actions/checkout does not initialise
 # submodules), so the guard against entrypoint drift would never have run where it matters.
 plugin_agents="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/agents"
+plugin_scripts="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/scripts"
 entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
 [ -d "${plugin_agents}" ] ||
   fail "cannot resolve the entrypoint: ${plugin_agents} is missing. Initialise it with
@@ -151,6 +171,75 @@ entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
 [ -f "${plugin_agents}/${entrypoint}.agent.md" ] ||
   fail "desired state entrypoint '${entrypoint}' does not resolve to a bundled agent in ${plugin_agents}"
 canonical_engineer="${plugin_agents}/${entrypoint}.agent.md"
+canonical_surveyor="${plugin_agents}/portfolio-surveyor.agent.md"
+canonical_improver="${plugin_agents}/agent-improver.agent.md"
+canonical_ci_classifier="${plugin_scripts}/classify-default-branch-ci-runs.sh"
+canonical_forge_guard="${plugin_scripts}/forge-readonly-guard.sh"
+[ -f "${canonical_surveyor}" ] ||
+  fail "pinned plugin does not bundle portfolio-surveyor.agent.md"
+[ -f "${canonical_improver}" ] ||
+  fail "pinned plugin does not bundle agent-improver.agent.md"
+if [ ! -f "${canonical_ci_classifier}" ] \
+  || [ ! -x "${canonical_ci_classifier}" ] \
+  || [ -L "${canonical_ci_classifier}" ]; then
+  fail "pinned plugin does not bundle the regular executable default-branch classifier"
+fi
+if [ ! -f "${canonical_forge_guard}" ] \
+  || [ ! -x "${canonical_forge_guard}" ] \
+  || [ -L "${canonical_forge_guard}" ]; then
+  fail "pinned plugin does not bundle the regular executable read-only forge guard"
+fi
+grep -Fq '../scripts/classify-default-branch-ci-runs.sh' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not delegate default-branch CI to the bundled classifier"
+grep -Fq 'refuses partial or capped' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not fail closed on incomplete default-branch CI evidence"
+grep -Fq 'manual dispatch, and GitHub-managed dynamic runs' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not treat managed dynamic runs as default-branch events"
+declared_runtime_asset_sha() {
+  jq -er --arg path "$1" '
+    .spec.source.requiredRuntimeAssets
+    | select(type == "array" and length == 2)
+    | map(select(
+          type == "object"
+          and keys == ["executable", "path", "sha256"]
+          and .path == $path
+          and .executable == true
+        ))
+    | select(length == 1)
+    | .[0].sha256
+  ' "${desired_state}" 2>/dev/null
+}
+for runtime_asset in \
+  "scripts/classify-default-branch-ci-runs.sh:${canonical_ci_classifier}" \
+  "scripts/forge-readonly-guard.sh:${canonical_forge_guard}"; do
+  runtime_asset_path="${runtime_asset%%:*}"
+  canonical_runtime_asset="${runtime_asset#*:}"
+  if ! declared_runtime_asset_sha="$(declared_runtime_asset_sha "${runtime_asset_path}")"; then
+    fail "consumer desired state does not carry exactly two executable path-and-digest surveyor runtime assets including ${runtime_asset_path}"
+  fi
+  [ "${declared_runtime_asset_sha}" = "$(sha256_bytes "${canonical_runtime_asset}")" ] ||
+    fail "consumer desired-state ${runtime_asset_path} sha256 does not match the pinned executable bytes"
+done
+[ ! -e "${repo_root}/.claude/scripts/classify-main-ci-runs.sh" ] ||
+  fail "consumer still carries a local copy of the generic default-branch classifier"
+
+# The consumer copy used to omit role integrity fields while the pinned plugin resource already
+# carried them. That let the gitlink advance without proving that the machine-readable entrypoint,
+# delegated surveyor, and Improver still named the reviewed bytes. Resolve all digests from the
+# pinned files, not from a floating default branch or a copied constant.
+consumer_entrypoint_sha="$(jq -r '.spec.source.entrypointSha256 // ""' "${desired_state}")"
+consumer_surveyor_sha="$(jq -r '.spec.roles["portfolio-surveyor"].definitionSha256 // ""' "${desired_state}")"
+consumer_improver_sha="$(jq -r '.spec.roles["agent-improver"].definitionSha256 // ""' "${desired_state}")"
+consumer_improver_skill_sha="$(jq -r '.spec.roles["agent-improver"].skillSha256 // ""' "${desired_state}")"
+[ "${consumer_entrypoint_sha}" = "$(sha256_file "${canonical_engineer}")" ] ||
+  fail "consumer desired-state entrypointSha256 does not match the pinned agentic-engineer definition"
+[ "${consumer_surveyor_sha}" = "$(sha256_file "${canonical_surveyor}")" ] ||
+  fail "consumer desired-state portfolio-surveyor definitionSha256 does not match the pinned definition"
+[ "${consumer_improver_sha}" = "$(sha256_file "${canonical_improver}")" ] ||
+  fail "consumer desired-state agent-improver definitionSha256 does not match the pinned definition"
+[ "${consumer_improver_skill_sha}" = "$(sha256_file "${bundled_skill}")" ] ||
+  fail "consumer desired-state agent-improver skillSha256 does not match the pinned agent-improvement skill"
+
 canonical_engineer_flat="$(flatten "${canonical_engineer}")"
 assert_canonical_engineer_prose() {
   case "${canonical_engineer_flat}" in
@@ -235,7 +324,7 @@ grep -Fq '.claude/scripts/submodule-init.sh libraries/agent-plugins' "${cursor_l
   fail "Cursor adapter does not pass the plugin path to submodule-init"
 grep -Fq 'git -C libraries/agent-plugins fetch origin main' "${cursor_loader}" ||
   fail "Cursor adapter does not refresh the reviewed plugin default branch before loading it"
-grep -Fq 'git -C libraries/agent-plugins show origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md' \
+grep -Fq 'git -C libraries/agent-plugins show refs/remotes/origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md' \
   "${cursor_loader}" ||
   fail "Cursor adapter does not load the agent from the refreshed reviewed plugin ref"
 for cursor_overlay in \
@@ -324,6 +413,31 @@ assert_prose "for *this* engineer that edit is the maintainer's alone" \
   "the never-widen-enforcement prohibition is no longer scoped to the Agentic Engineer"
 assert_prose 'holds a different grant, and *Authority model* authorises it to loosen enforcement' \
   "consumer no longer exempts the agent-improver from the never-widen-enforcement prohibition"
+# Dependency automation gets a bounded first attempt, then the engineer owns the stalled PR. These
+# assertions pin the positive self-progressing evidence, the per-PR intervention boundary, fail-closed
+# reads, and the unchanged issue-only no-action guard independently (#2779).
+assert_prose '**Dependency-automation PRs are conditional operate work.** Dependency-automation issues remain **AUTOMATION-OWNED (NO-ACTION).**' \
+  "consumer does not split conditional dependency PR work from automation-owned issues"
+assert_prose 'self-progressing only while' \
+  "consumer does not require positive current evidence before yielding a dependency PR"
+assert_prose 'unable to reach merge without a new agent action' \
+  "consumer does not make individually stalled dependency PRs actionable"
+assert_prose 'A missing or failed join is `QUERY-UNKNOWN` for that PR, never `NO-ACTION`' \
+  "consumer fails open when dependency-PR liveness cannot be read"
+assert_prose 'An untouched bot-generated head keeps the repository automation' \
+  "consumer does not preserve the existing untouched-bot automation path"
+assert_prose 'Any agent-authored adaptation commit restores the ordinary current-head semantic-review gate' \
+  "consumer lets agent adaptations bypass semantic review"
+assert_prose 'convert the PR to draft before the first adaptation push' \
+  "consumer lacks a durable draft fence for dependency-PR adaptations"
+assert_prose 'Draft state is the durable fence' \
+  "consumer trusts reversible auto-merge disarming as the adaptation fence"
+assert_prose 'never select, triage-as-work, edit, or close an issue authored by one of those exact identities' \
+  "consumer no longer protects dependency-automation control issues"
+refute_prose 'One bot PR being red, stale, conflicting or review-less remains none of our business' \
+  "retired per-PR hands-off rule remains in the consumer"
+refute_prose 'Every prohibition above stands unchanged and absolute' \
+  "retired absolute dependency-PR mutation prohibition remains in the consumer"
 grep -Fq 'An issue, recommendation, or draft PR is not completion' "${constitution}" ||
   fail "consumer permits a write-capable role to stop before merge"
 grep -Fq '### Writer namespaces' "${constitution}" ||
@@ -376,10 +490,88 @@ assert_prose 'Codex dispatched 161/161' \
   "cadence does not state the Codex control that makes the shortfall a lane asymmetry"
 assert_prose 'never time anything off' \
   "cadence does not tell a run to stop planning against the next scheduled tick"
+
+# Same-lane schedules deliberately overlap and share one writer namespace. Mere task presence or
+# post-start activity is therefore not a global stop signal: the claim protocol must arbitrate the
+# exact artifact instead. Pin both arms so a future edit cannot restore starvation or erase the
+# scoped conflict fence while preserving progress.
+assert_prose 'same-lane task presence or post-start activity alone is never a global stand-down condition' \
+  "cadence still permits a scheduled role to no-op merely because another same-lane task is active"
+assert_prose 'a live conflicting claim, exact shared-artifact contention, or an unsafe runtime-local mutation' \
+  "cadence does not preserve the artifact-scoped conditions that still require stand-down"
+
+# A complete portfolio census is health evidence, not a global mutation lease. Measured survey runs
+# repeatedly stopped after one of 80+ unrelated PR joins failed or hit a cap, even though earlier
+# candidates already had complete head, control, claim, CI, conflict, and review evidence. Clearance
+# must therefore be candidate-scoped: preserve UNKNOWN for the failed join and for broad health/issue
+# descent, while continuing through the ordered PR queue with fully joined independent candidates.
+assert_maintenance_prose 'Clearance is per candidate, never per portfolio' \
+  "portfolio maintenance still couples all mutation to a complete portfolio-wide join"
+assert_maintenance_prose 'cheap exhaustive enumeration' \
+  "portfolio maintenance does not separate cheap ordering from candidate deepening"
+assert_maintenance_prose "candidate repository's default-head health" \
+  "candidate clearance does not preserve repository-local default-head safety evidence"
+assert_maintenance_prose 'unrelated failed or capped joins remain `QUERY-UNKNOWN`' \
+  "portfolio maintenance does not preserve uncertainty for incomplete unrelated joins"
+assert_maintenance_prose 'never block an independently fully joined candidate' \
+  "portfolio maintenance still permits unrelated query failures to freeze cleared work"
+assert_maintenance_prose 'A candidate repository query failure blocks that candidate' \
+  "portfolio maintenance can act after the candidate repository query fails"
+assert_maintenance_prose 'An attempted in-shard join failure emits `QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>`' \
+  "portfolio maintenance does not define the candidate-scoped producer row for failed joins"
+assert_maintenance_prose 'never-attempted candidates remain `NOT-DEEPENED`' \
+  "portfolio maintenance conflates failed attempted joins with candidates outside the shard"
+assert_maintenance_prose 'issue descent remains blocked until the actionable-PR queue is completely classified' \
+  "portfolio maintenance can descend into issues while higher-priority PR state is unknown"
+assert_maintenance_prose 'pass the prior digest' \
+  "portfolio maintenance does not pass continuation state when requesting the next survey shard"
+assert_maintenance_prose 'cursor is invalidated when any recorded candidate head changes' \
+  "portfolio maintenance can reuse stale shard state after a candidate head changes"
+# A `per_task_limit` record is a per-MINUTE liveness sample of "a run is currently open",
+# not a per-slot drop record — so counting those records, raw or hour-bucketed, counts a
+# slot that merely started LATE as one that never ran. Measured 2026-08-12 over 164 slots:
+# 37 of 66 refused hours dispatched anyway. Without this distinction every run re-derives
+# the rate from the skip store and gets a different answer; four measurements across both
+# instances spanned 32.9%-58.3% doing exactly that. Pin the METHOD, not only the number,
+# or the wrong method comes back the next time someone re-measures.
+assert_prose 'liveness sample' \
+  "cadence does not say what a per_task_limit record actually samples"
+assert_prose 'delayed into the next hour' \
+  "cadence does not distinguish a delayed dispatch from a dropped one"
+# The two assertions above are satisfied by the historical EXPLANATION alone, so an edit that
+# dropped the correction while keeping the story would still pass them — which would leave the
+# discredited method as the operative instruction. Pin the DIRECTIVE and the corrected reading,
+# not only the account of why the old one was wrong.
+assert_prose 'comparing actual dispatches to scheduled slots' \
+  "cadence does not name the only method that yields a drop rate"
+assert_prose '133 of 164 slots' \
+  "cadence does not state the corrected, transcript-cross-validated dispatch count"
+# A zero skip count cannot establish the Improver's health: the second failure cause carries no
+# skip record at all, and one of its two instances IS an Improver dispatch. Reading that zero as
+# a clean bill is the same absence-as-evidence error, one lane over.
+assert_prose 'zero skip count is exactly why not' \
+  "cadence still infers Improver health from an absent skip record"
+# `constitution_flat` collapses newlines to single spaces, so the superseded sentence is matched
+# in its flattened form — it was wrapped across two lines in the source.
+refute_prose 'The Agent Improver is otherwise unaffected' \
+  "cadence again declares the Improver unaffected on the strength of a zero skip count"
 # The superseded absolute. Left in place it reads as the operative rule, because it is
 # stated as a flat invariant while the correction reads as a caveat about it.
 refute_prose 'next scheduled tick is always one hour later' \
   "cadence still asserts an unconditional hourly next tick alongside its own refutation"
+
+# Shared automation is a reuse boundary, not a centralisation target. A product's own
+# action or workflow belongs beside that product until a second real repository consumes
+# the same product-neutral contract. Pin all three parts so "this might be reusable later"
+# cannot silently move product policy into an organisation-wide repository.
+assert_prose 'demonstrated consumers in at least two repositories' \
+  "shared automation does not require demonstrated multi-repository consumption"
+assert_prose 'Product-specific actions, workflows, paths, permissions, secrets, release semantics, and policy stay in the product repository they serve' \
+  "consumer contract does not keep product-specific automation close to its source"
+assert_prose 'Possible future reuse, superficial similarity, or a desire to centralise is not evidence' \
+  "consumer contract still permits speculative workflow centralisation"
+assert_prose 'World at Ruin-specific automation therefore stays in `devantler-tech/world-at-ruin`' \
+  "consumer contract does not pin the named World at Ruin locality example"
 
 # --- The merged spend mandate -------------------------------------------------
 # Spend is a dimension of the Agentic Engineer. The consumer must supply the Spend

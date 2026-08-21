@@ -30,6 +30,10 @@
 #   CAS   - every remote delete uses --force-with-lease pinned to the evidence SHA, so a branch a
 #           concurrent session moves between evidence-gathering and deletion is rejected, and the
 #           open-PR keep-set is re-fetched immediately before the delete loop.
+#   LOCK  - the whole apply pass holds the shared branch-operation lock
+#           (`.claude/scripts/branch-op-lock.sh`, monorepo#2209) so a concurrent
+#           harness `worktree-add` / `worktree-remove` cannot overlap local
+#           deletion. Dry-run (`MODE!=apply`) skips the lock — it deletes nothing.
 #
 # In apply mode every deletion is recorded (branch -> sha) to the manifest BEFORE the delete, and
 # the write is verified — no restore record, no deletion. dry-run never touches the manifest.
@@ -63,7 +67,52 @@ PREFIX="$NAMESPACE"
 DO_LOCAL=0
 [ "$NAMESPACE" = "claude" ] && DO_LOCAL=1
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=branch-op-lock.sh
+source "$SCRIPT_DIR/branch-op-lock.sh"
+
 cd "$REPO_PATH" || exit 1
+# Resolve to an absolute path so lock release still works if a later step cds.
+REPO_PATH=$(pwd)
+LOCK_HELD=0
+LOCK_RELEASE_FAILED=0
+release_branch_op_lock() {
+  if [ "$LOCK_HELD" = 1 ]; then
+    if branch_op_lock_release "$REPO_PATH"; then
+      LOCK_HELD=0
+    else
+      # A failed release leaves the lock directory in place, so every later branch or worktree
+      # operation blocks on it until the TTL expires. Clearing LOCK_HELD here would record a
+      # release that did not happen, and discarding the status let the sweep report success over a
+      # leaked lock — the one outcome nobody goes looking for.
+      LOCK_RELEASE_FAILED=1
+      echo "$SLUG: WARN — branch-op lock release FAILED; lock left in place under '$REPO_PATH'" >&2
+    fi
+  fi
+}
+
+# Runs last in every EXIT path. Only ever UPGRADES a clean exit to a failure: an abort code from
+# one of the explicit `exit 1` guards above carries a more specific reason and must survive.
+exit_with_lock_status() {
+  if [ "$1" -eq 0 ] && [ "$LOCK_RELEASE_FAILED" = 1 ]; then exit 3; fi
+  exit "$1"
+}
+
+# The two EXIT handlers are functions rather than inline trap bodies so `$?` is captured as the
+# handler's FIRST action — the script's real exit status, before any cleanup command overwrites it.
+on_exit_pre_tmpfiles() {
+  local rc=$?
+  release_branch_op_lock
+  return_to_default
+  exit_with_lock_status "$rc"
+}
+on_exit() {
+  local rc=$?
+  rm -f "$keep" "$prs" "$keep2"
+  release_branch_op_lock
+  return_to_default
+  exit_with_lock_status "$rc"
+}
 
 # --- <repo_path> and <slug> must describe the SAME repository -------------
 # The tree that gets deleted from comes from <repo_path>; the keep-set that
@@ -235,6 +284,27 @@ DEFAULT="${DEFAULT:-main}"
 # detached at its superproject pin, and checking out the default branch there
 # would silently move it off the pin (superproject drift).
 START_BRANCH=$(git branch --show-current 2>/dev/null)
+# Is the default branch checked out in some worktree? Only ever consulted after a
+# return-to-default checkout has already FAILED, and only while this checkout sits
+# on some other branch — so a hit is necessarily a DIFFERENT worktree, and no
+# fragile path comparison is needed (macOS resolves /var and /tmp through symlinks,
+# so comparing worktree paths would be the unreliable half of this test).
+#
+# monorepo#2489: every run works in a per-run worktree while the primary checkout
+# holds the default branch, and git refuses one branch in two worktrees. So the
+# return-to-default checkout can NEVER succeed from a session worktree. That is the
+# documented steady state — the scheduled worktree sweep reaps the session worktree
+# and frees its branch — not a fault, so it must not poison the exit code. A
+# checkout that fails for any OTHER reason still must.
+#
+# Fails closed: a failed enumeration (pipefail is on) returns non-zero, so the
+# caller reports the error rather than silently suppressing it.
+default_checked_out_somewhere() {
+  git worktree list --porcelain 2>/dev/null | awk -v want="refs/heads/$DEFAULT" '
+    /^branch / { if (substr($0, 8) == want) found = 1 }
+    END { exit found ? 0 : 1 }
+  '
+}
 return_to_default() {
   local cur
   cur=$(git branch --show-current 2>/dev/null)
@@ -247,6 +317,8 @@ return_to_default() {
     local now
     now=$(git branch --show-current 2>/dev/null)
     if [ "$now" = "$DEFAULT" ]; then sw="-> $DEFAULT";
+    elif default_checked_out_somewhere; then
+      sw="$DEFAULT held by another worktree — left on '${now:-detached}'"
     else sw="FAILED to reach $DEFAULT (on '${now:-detached}')"; errors=$((errors+1)); fi
   else sw="already on $DEFAULT"; fi
 }
@@ -254,8 +326,9 @@ sw=""
 # Arm restoration BEFORE the fetch (superseded by the tmpfile trap below once it
 # is installed): an attached claude/* checkout whose fetch then fails must still
 # be returned to the default branch, or it stays worktree-protected on the next
-# sweep and defeats the end-of-tick return-and-reap guarantee.
-trap 'return_to_default' EXIT
+# sweep and defeats the end-of-tick return-and-reap guarantee. Always release
+# the branch-op lock on the way out when we hold it.
+trap on_exit_pre_tmpfiles EXIT
 return_to_default
 
 # Stale refs make every later judgement wrong — abort the whole run on fetch
@@ -263,6 +336,16 @@ return_to_default
 if ! git fetch origin --prune -q 2>/dev/null; then
   echo "$SLUG: ABORT — git fetch failed; refusing to act on stale refs" >&2
   exit 1
+fi
+
+# Serialise against harness worktree create/remove (monorepo#2209). Dry-run
+# skips the lock so a stuck holder cannot block a report-only sweep.
+if [ "$MODE" = "apply" ]; then
+  if ! branch_op_lock_acquire "$REPO_PATH" >/dev/null; then
+    echo "$SLUG: ABORT — branch-operation lock unavailable; refusing local deletion without serialisation" >&2
+    exit 1
+  fi
+  LOCK_HELD=1
 fi
 
 # Verified manifest write: no restore record, no deletion.
@@ -287,7 +370,7 @@ fetch_open_heads() {
 
 # --- KEEP set -------------------------------------------------------------
 keep=$(mktemp); prs=$(mktemp); keep2=$(mktemp)
-trap 'rm -f "$keep" "$prs" "$keep2"; return_to_default' EXIT
+trap on_exit EXIT
 # Capture the worktree enumeration SEPARATELY and ABORT on failure: the REMOTE
 # delete loop trusts this one snapshot for its worktree KEEP rule (the local loop
 # re-checks per branch, the remote loop does not), so a silently-empty list here
