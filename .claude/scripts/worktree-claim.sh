@@ -16,7 +16,9 @@
 #
 # USAGE
 #   .claude/scripts/worktree-claim.sh add  <repo_path> <worktree_path> <branch> <owner-token>
-#       Create the worktree (git worktree add -b <branch>) and write the marker.
+#       Create the worktree and write the marker. <branch> is created when it does not exist;
+#       when it already exists — locally, or only on origin, as an open PR's branch does — the
+#       worktree attaches to it at that branch's tip instead of forking a new one.
 #       A relative worktree_path is resolved from repo_path.
 #   .claude/scripts/worktree-claim.sh check <worktree_path> <my-owner-token>
 #       Read-only diagnostic: exit 0 if free / mine / expired; exit 3 if a live
@@ -46,6 +48,15 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 # shellcheck source=worktree-claim-lib.sh
 . "$SCRIPT_DIR/worktree-claim-lib.sh" || {
   echo "worktree-claim: cannot load shared claim protocol" >&2
+  exit 2
+}
+# The shared branch-operation lock (monorepo#2209) is what serialises worktree creation against
+# local branch cleanup. `add` is the MANDATED creation path, so it has to take that lock itself —
+# a wrapper only the unmandated callers use leaves the race open on the path everything actually
+# takes, which is where cleanup's occupancy check can pass and delete the ref mid-checkout.
+# shellcheck source=branch-op-lock.sh
+. "$SCRIPT_DIR/branch-op-lock.sh" || {
+  echo "worktree-claim: cannot load the branch-operation lock" >&2
   exit 2
 }
 
@@ -164,6 +175,254 @@ cmd_mark() {
   cmd_acquire "$1" "$2"
 }
 
+# add_worktree_on places the worktree on <branch>, creating that branch only when it does not already
+# exist. Rung 1 of the work-selection ladder is "finish an open PR", whose branch necessarily predates
+# the worktree, so a hardcoded `-b` made the mandated claim helper unusable for the single most common
+# case: it exited 2 with `a branch named '<x>' already exists`, and the caller then improvised a bare
+# `git worktree add` that writes NO ownership marker (monorepo#2776).
+#
+# The remote arm is the one that has to be right rather than merely working. On a fresh checkout an
+# open PR's branch has no local ref, so `-b` SUCCEEDS and silently forks the PR from local HEAD — a
+# worktree that looks correct, carries none of the PR's commits, and would revert it under a plausible
+# diff. Attaching to the fetched remote tip is what makes "resume the PR" mean the PR.
+# warn_if_local_branch_is_behind reports that an existing local branch trails origin, so attaching to
+# it does not silently target an obsolete head. Advisory like every other remote call here: it never
+# decides whether `add` succeeds, and it stays SILENT unless it can positively show the branch is
+# behind — a warning that fires on every ordinary attach is trained away as noise.
+warn_if_local_branch_is_behind() {
+  local repo="$1" branch="$2" wt="$3" behind="" fetch_rc=0
+
+  git -C "$repo" remote get-url origin >/dev/null 2>&1 || return 0
+  # KEEP the fetch's status. Discarding it with `|| true` is what made the silent case unsafe: on a
+  # failed or timed-out refresh the comparison below runs against whatever the last successful fetch
+  # left behind, so a local ref equal to that obsolete cache counts 0 and the function reports
+  # nothing — indistinguishable from a genuinely current branch. `behind=0` is only meaningful when
+  # the ref it was measured against was actually refreshed.
+  bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+    git -C "$repo" fetch --quiet origin \
+    "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || fetch_rc=$?
+  # Same reasoning as the zero-answer arm below, which is why it cannot be a bare `return 0`: with no
+  # tracking ref at all there is nothing to measure, and silence is the output that MEANS "current".
+  # A failed refresh is the case where that silence is a lie — and it is the common one here, since
+  # resuming an open PR on a fresh checkout is exactly "no cached ref".
+  if ! git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    if [ "$fetch_rc" -ne 0 ]; then
+      base_freshness_unknown "origin/$branch (refresh failed)"
+    fi
+    return 0
+  fi
+
+  # Count only commits origin has that the local ref lacks. A branch that is merely AHEAD is ordinary
+  # unpushed work and says nothing about staleness.
+  behind="$(git -C "$repo" rev-list --count "refs/heads/$branch..refs/remotes/origin/$branch" 2>/dev/null)" || return 0
+  case "$behind" in
+    '' | 0)
+      # Only the ZERO answer is uninformative here, and only when the refresh failed; say so instead
+      # of returning the silence that means "current". (The non-zero answer has its own failed-refresh
+      # arm below — it is reportable, but not as verified origin state.)
+      #
+      # Spelled as an `if`, not `[ ... ] && cmd`: under `set -e` that AND-list exits non-zero whenever
+      # the test is FALSE, and a standalone list in statement position is not an exempt context — so
+      # the common case (refresh succeeded) would abort the claim.
+      if [ "$fetch_rc" -ne 0 ]; then
+        base_freshness_unknown "origin/$branch (refresh failed)"
+      fi
+      return 0
+      ;;
+  esac
+
+  # A count is only origin's state when the ref it was measured against was actually refreshed. On a
+  # FAILED refresh the cached ref is whatever the last successful fetch wrote, so those commits may
+  # have been force-pushed away or the branch deleted outright — in which case origin does not carry
+  # them at all. Report the count (it is still the best available signal) but never as origin's
+  # current state, and withhold the fast-forward hint: `merge --ff-only origin/<branch>` against a
+  # dropped branch resurrects work that no longer exists there, which is worse than no hint.
+  if [ "$fetch_rc" -ne 0 ]; then
+    # The caveat rides on the SAME line as the count, not a continuation line: an operator who reads
+    # only the headline must not carry away a number that reads as origin's verified state.
+    echo "worktree-claim: NOTE local '$branch' is $behind commit(s) behind the CACHED origin/$branch — UNVERIFIED" >&2
+    echo "worktree-claim:      (the refresh FAILED). Origin may have moved past it, force-pushed over" >&2
+    echo "worktree-claim:      it, or dropped the branch. Re-fetch and confirm origin still has these" >&2
+    echo "worktree-claim:      commits before reconciling." >&2
+    return 0
+  fi
+
+  echo "worktree-claim: NOTE local '$branch' is $behind commit(s) behind origin — attaching to the" >&2
+  echo "worktree-claim:      LOCAL ref, so this worktree does not carry origin's newer commits." >&2
+  # The remediation must MOVE something. `fetch` was already run above and only updates
+  # refs/remotes/origin/<branch>, so printing it advertises a command this function has just
+  # executed and which leaves the worktree exactly as stale — the operator follows the hint,
+  # observes nothing change, and learns to distrust the warning. Name the fast-forward in the
+  # WORKTREE, which is where the branch is now checked out and the only place HEAD can advance.
+  # `--ff-only` is deliberate: it advances the clean case and REFUSES a diverged branch rather than
+  # writing a merge commit nobody asked for, which is the same reason `add` never moves the ref
+  # itself.
+  echo "worktree-claim:      Reconcile before working:  git -C $(shquote "$wt") merge --ff-only $(shquote "origin/$branch")" >&2
+  return 0
+}
+
+add_worktree_on() {
+  local repo="$1" wt="$2" branch="$3" pinned_tip=""
+
+  if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
+    # Local branch exists: attach to it. git still refuses if it is checked out in another worktree,
+    # which is the single-checkout rule doing its job — never bypass it.
+    #
+    # But a local ref left by an earlier run can sit far behind origin, and attaching silently is how
+    # a worktree once came up 56 commits behind its own PR — work targets an obsolete head and only
+    # the push reveals it, by which time the build is spent. Say so. The branch is NOT moved: a
+    # fast-forward here would be a mutation of existing local state, and a diverged branch could be
+    # carrying commits that exist nowhere else.
+    warn_if_local_branch_is_behind "$repo" "$branch" "$wt"
+    git -C "$repo" worktree add "$wt" "$branch"
+    return
+  fi
+
+  # No local branch. `no tracking ref` is NOT proof the branch is new — it equally means the fetch
+  # never answered, and a failed fetch leaves refs/remotes/origin/<branch> untouched. Creating from
+  # HEAD on that reading is the silent fork this function exists to prevent, and it is reachable on a
+  # mere TIMEOUT of the bounded call, where the network is fine again seconds later and the run does
+  # go on to push. So classify the remote before deciding, rather than inferring from absence.
+  #
+  # A repo with no origin is checked first and separately: nothing can host the branch there, so
+  # creating it is correct — and `ls-remote` cannot distinguish that from an unreachable remote,
+  # since both exit 128.
+  if ! git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+    git -C "$repo" worktree add -b "$branch" "$wt"
+    return
+  fi
+
+  # `--exit-code` is the discriminator: 0 = the branch exists on origin, 2 = origin answered and does
+  # not have it, anything else = we could not ask (transport, auth, timeout).
+  # Keep the OUTPUT, not just the exit code: `ls-remote` prints `<sha>\t<ref>`, so the answer that
+  # tells us the branch exists also tells us origin's true tip. That is the only freshness reference
+  # available when the fetch below fails, and discarding it is what let a stale cached ref attach
+  # silently.
+  local ls_rc=0 ls_out="" remote_tip=""
+  ls_out="$(bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+    git -C "$repo" ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)" || ls_rc=$?
+  remote_tip="${ls_out%%[![:xdigit:]]*}"
+
+  case "$ls_rc" in
+    0)
+      # Exists on origin. Refresh the tracking ref so we attach to the CURRENT tip rather than a
+      # stale one, then attach. A fetch failure here still leaves a usable lineage below.
+      #
+      # KEEP the status. A SUCCESSFUL fetch is itself the freshness proof — it wrote the ref from
+      # origin just now — so it must outrank the `ls-remote` snapshot taken moments earlier. Judging
+      # freshness by comparing the two instead reports a false "could not refresh / STALE" whenever
+      # origin advanced between the two calls: the fetch retrieved the NEWER tip, the worktree
+      # attached to it, and the operator was told to re-fetch something already current.
+      local fetch_rc=0
+      bounded_remote "$WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS" \
+        git -C "$repo" fetch --quiet origin \
+        "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || fetch_rc=$?
+      # The fetch is advisory, but the attach below is NOT: it names `origin/$branch`, so if the
+      # fetch failed and nothing cached that ref, `worktree add --track` dies on
+      # `invalid reference` and `add` FAILS — remote state deciding whether `add` succeeds, which
+      # is the property the `*)` arm below is written to preserve. `ls-remote` succeeding and the
+      # fetch failing is not exotic: `bounded_remote` gives the fetch a short timeout, so a merely
+      # SLOW remote trips it while the network is fine, and a branch this checkout has never
+      # fetched has no cached ref to fall back on — exactly the resume-an-open-PR case `add` gained
+      # this arm for.
+      if ! git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        # We KNOW the branch exists on origin (ls-remote said so) and we could not retrieve it, so
+        # creating it locally forks a real PR branch. Say that precisely rather than reusing the
+        # `*)` wording, which reports the opposite situation (origin unreachable, existence
+        # unknown). The claim protocol compares the remote tip by SHA before pushing, so the fork
+        # is caught there — the same safety net the `*)` arm relies on.
+        echo "worktree-claim: NOTE '$branch' EXISTS on origin but could not be fetched; creating it" >&2
+        echo "worktree-claim:      locally from HEAD — this is a FORK, not a resume. Re-fetch and" >&2
+        echo "worktree-claim:      reset onto origin/$branch before committing or pushing." >&2
+        git -C "$repo" worktree add -b "$branch" "$wt"
+        return
+      fi
+      # A cached ref EXISTS — but existence is not freshness. Only a FAILED fetch leaves that in
+      # doubt: the ref is then whatever the last successful fetch wrote, and attaching to it resumes
+      # the PR at an obsolete head. `ls-remote` already told us origin's tip, so compare and say so
+      # when they differ. Advisory like everything else here: it never decides whether `add`
+      # succeeds. After a successful fetch there is nothing to compare — the ref IS origin's tip.
+      local cached_tip=""
+      cached_tip="$(git -C "$repo" rev-parse --verify --quiet "refs/remotes/origin/$branch")" || cached_tip=""
+      if [ "$fetch_rc" -ne 0 ] && [ -n "$remote_tip" ] && [ -n "$cached_tip" ] && [ "$remote_tip" != "$cached_tip" ]; then
+        echo "worktree-claim: NOTE could not refresh '$branch'; the cached origin/$branch is STALE" >&2
+        echo "worktree-claim:      (cached ${cached_tip%"${cached_tip#??????????}"} vs origin ${remote_tip%"${remote_tip#??????????}"}). Attaching to the cached tip —" >&2
+        echo "worktree-claim:      re-fetch and reset before committing, or this resumes an old head." >&2
+      fi
+      # PIN the starting point to the immutable SHA we just verified, and create the worktree from
+      # THAT rather than from the symbolic `origin/$branch`.
+      #
+      # Two defects close together here. Git resolves a symbolic starting point when `worktree add`
+      # runs, not when the comparison above completed, so a sibling fetch landing in that gap moves
+      # the ref and the worktree is silently created at a commit nothing verified. And `--track`
+      # requires the starting point to be a ref git considers a trackable remote branch, which it is
+      # not in a single-branch clone or any checkout whose `remote.origin.fetch` does not map this
+      # branch — the explicit fetch above still creates the ref, but the add is refused with
+      # `cannot set up tracking information` and no worktree exists.
+      #
+      # A SHA answers both: it cannot move, and it needs no tracking metadata to be a valid base.
+      pinned_tip="$cached_tip"
+      ;;
+    2)
+      # origin answered and does not have this branch — genuinely new work.
+      git -C "$repo" worktree add -b "$branch" "$wt"
+      return
+      ;;
+    *)
+      # Could not ask. A stale tracking ref is still this branch's own lineage, so prefer it over a
+      # fork and say plainly that its freshness is unverified.
+      if git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        base_freshness_unknown "origin/$branch (remote lookup failed)"
+        # Pin here too. This arm attaches to the cached ref, so it carries the same re-resolution
+        # race and the same `--track` refspec constraint as the arm above.
+        pinned_tip="$(git -C "$repo" rev-parse --verify --quiet "refs/remotes/origin/$branch")" || pinned_tip=""
+      else
+        # Nothing to attach to and no way to ask. Creating the branch stays the behaviour here
+        # BECAUSE remote state must never decide whether `add` succeeds — that is a pinned property
+        # of this helper (four "advisory, not fatal" assertions), and failing would block ordinary
+        # new-branch work during any network hiccup. Announce the ambiguity instead of hiding it: the
+        # claim protocol independently compares the remote tip by SHA before pushing, so a fork is
+        # caught there rather than silently kept.
+        echo "worktree-claim: NOTE could not reach origin to check whether '$branch' already exists;" >&2
+        echo "worktree-claim:      creating it locally — VERIFY the remote tip before pushing, because" >&2
+        echo "worktree-claim:      an existing remote branch would be forked, not resumed." >&2
+        git -C "$repo" worktree add -b "$branch" "$wt"
+        return
+      fi
+      ;;
+  esac
+
+  # Both surviving arms resolved the tip to an immutable SHA. Fall back to the symbolic ref only if
+  # neither could — that is the pre-existing behaviour, not a new path, and it stays reachable rather
+  # than turning an unresolvable ref into a hard failure of `add`.
+  if [ -n "$pinned_tip" ]; then
+    # KEEP this status explicitly. `add_worktree_on` is called as `if ! add_worktree_on ...`, which
+    # suppresses errexit for its entire body, so a refused creation does not abort here — and the
+    # advisory `|| true` tracking call below would then supply the function's exit status, reporting
+    # a worktree git refused as successfully claimed. Every other arm ends in `return` immediately
+    # after its `worktree add`, so this is the one path where a later command can mask the failure.
+    local add_rc=0
+    git -C "$repo" worktree add -b "$branch" "$wt" "$pinned_tip" || add_rc=$?
+    [ "$add_rc" -eq 0 ] || return "$add_rc"
+    # Tracking is a convenience, restored separately and advisorily. `worktree add --track` couples it
+    # to branch creation, so its refusal takes the whole add down with it; a separate call cannot.
+    # `|| true` is what keeps that true — the worktree is already correctly created at the verified
+    # SHA, and a missing upstream must never undo it.
+    #
+    # In an ordinary clone this writes exactly what `--track` wrote (`branch.<b>.remote=origin`,
+    # `branch.<b>.merge=refs/heads/<b>`), so tracking behaviour is unchanged. In a narrow-refspec
+    # clone it also refuses, for the same root reason the add did: git decides "is this a remote
+    # branch" from `remote.origin.fetch`, not from the ref existing. That residual is deliberate and
+    # bounded — the worktree is created on the right commit and simply carries no upstream, where
+    # before it did not exist at all. The two config keys are NOT written by hand to force it: git
+    # refuses because `git fetch` under that refspec would never update the ref, so the tracking it
+    # declined to set up would be misleading rather than merely absent.
+    git -C "$repo" branch --set-upstream-to="origin/$branch" "$branch" >/dev/null 2>&1 || true
+  else
+    git -C "$repo" worktree add --track -b "$branch" "$wt" "origin/$branch"
+  fi
+}
+
 cmd_add() {
   local repo="$1" wt="$2" branch="$3" owner="$4"
   [ -d "$repo" ] || fail "repo path is not a directory: $repo"
@@ -179,7 +438,16 @@ cmd_add() {
   fi
   # Create parent so git worktree add can place the tree.
   mkdir -p "$(dirname "$wt")"
-  if ! git -C "$repo" worktree add -b "$branch" "$wt"; then
+  # Hold the shared lock across the WHOLE creation, not around each `git worktree add`.
+  # add_worktree_on has several branch-shape paths, and the ones that create a ref do it in more
+  # than one step (resolve a pinned tip, then add), so a per-command lock would still leave a gap
+  # between them. branch_op_lock_run runs its command in a SUBSHELL, which is safe here because
+  # add_worktree_on needs no caller-visible shell state — it works through its own locals, the
+  # repository's on-disk worktree state, diagnostics on stderr, and its exit status. Wrapping the
+  # whole function means every internal add inherits the one lock.
+  if ! branch_op_lock_run "$repo" \
+    --timeout-sec "${BRANCH_OP_LOCK_TIMEOUT_SEC:-120}" \
+    -- add_worktree_on "$repo" "$wt" "$branch"; then
     fail "git worktree add failed for $wt (branch $branch)"
   fi
   # Claim BEFORE the advisory freshness check, not after. That check makes up to two bounded remote

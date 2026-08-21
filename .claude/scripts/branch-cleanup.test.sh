@@ -485,6 +485,65 @@ report "control: an unclaimed branch is still deleted at the same list size (#26
 unset WT_SHIM_STATE WT_SHIM_INJECT
 rm -f "$tmp/bin/git"
 
+
+# --- 8. The default branch held by ANOTHER worktree is not an error (#2489) --
+# Every run works in a per-run worktree, and the primary checkout holds the
+# default branch, so `git checkout <default>` inside that worktree can never
+# succeed — git refuses one branch in two worktrees. The sweep itself is
+# unaffected (keep-sets computed, deletions correct), but the unreachable
+# checkout used to set FAILED and increment `errors`, so the helper exited 3 on
+# EVERY per-run-worktree invocation and its exit code carried no signal.
+git -C "$work" checkout -q main >/dev/null 2>&1
+: >"$OPEN_HEADS_FILE"; : >"$PR_EVIDENCE_FILE"
+
+sess="$tmp/session-2489"
+git -C "$work" worktree add -q "$sess" -b claude/session-2489 >/dev/null 2>&1
+
+# ARM 1 — the guard: run from the linked worktree, whose default branch is held
+# by the primary checkout. The sweep must succeed and the exit code must be 0.
+manifest="$tmp/manifest-2489a"; : >"$manifest"
+out="$("$helper" "$sess" "monorepo" "$manifest" dry-run 2>&1)" && rc=0 || rc=$?
+report "default branch held by another worktree is not an error (#2489)" \
+  "$([ "$rc" -eq 0 ] && echo yes || echo no)" "rc=$rc out=$out"
+report "…and the run says so instead of reporting FAILED (#2489)" \
+  "$(printf '%s' "$out" | grep -q 'held by another worktree' && \
+     ! printf '%s' "$out" | grep -q 'FAILED to reach' && echo yes || echo no)" \
+  "out=$out"
+
+git -C "$work" worktree remove --force "$sess" >/dev/null 2>&1 || true
+
+# ARM 2 — control: from the PRIMARY checkout the default IS reachable, so the
+# ordinary return-to-default path must still run and still move the checkout.
+# Without this the fix could have simply stopped returning the checkout at all.
+git -C "$work" checkout -q -B claude/reachable-2489 main >/dev/null 2>&1
+manifest="$tmp/manifest-2489b"; : >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" dry-run 2>&1)" && rc=0 || rc=$?
+report "control: a reachable default is still returned to (#2489)" \
+  "$([ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q -- "-> main" && echo yes || echo no)" \
+  "rc=$rc out=$out"
+report "control: the primary checkout really did move back to main (#2489)" \
+  "$([ "$(git -C "$work" branch --show-current)" = "main" ] && echo yes || echo no)" \
+  "on=$(git -C "$work" branch --show-current)"
+
+# ARM 3 — negative control: a checkout that fails for a reason OTHER than another
+# worktree holding the branch must STILL be an error. This is what stops the fix
+# from being a blanket suppression of the failure path. Staged so the checkout is
+# refused by an untracked file that the default branch would overwrite.
+blocked_base=$(git -C "$work" rev-parse main)
+git -C "$work" checkout -q main >/dev/null 2>&1
+printf 'tracked-on-default\n' >"$work/blocker-2489.txt"
+git -C "$work" add blocker-2489.txt >/dev/null 2>&1
+git -C "$work" commit -q -m "main tracks the blocker" >/dev/null 2>&1
+git -C "$work" checkout -q -B claude/blocked-2489 "$blocked_base" >/dev/null 2>&1
+printf 'untracked-would-be-overwritten\n' >"$work/blocker-2489.txt"
+manifest="$tmp/manifest-2489c"; : >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" dry-run 2>&1)" && rc=0 || rc=$?
+report "negative control: a genuinely failed return to default is still an error (#2489)" \
+  "$([ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'FAILED to reach' && echo yes || echo no)" \
+  "rc=$rc out=$out"
+
+rm -f "$work/blocker-2489.txt"
+git -C "$work" checkout -q -f main >/dev/null 2>&1
 if [[ "$fail" -ne 0 ]]; then
   echo "branch-cleanup contract: FAILED"
   exit 1

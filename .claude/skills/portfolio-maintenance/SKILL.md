@@ -1,6 +1,6 @@
 ---
 name: portfolio-maintenance
-description: The run procedure for the Agentic Engineer (the products' primary engineer) — pre-flight, survey the whole devantler-tech portfolio, select the highest-value work (operate first, then advance), act via per-run worktrees and draft PRs (driving actionable trusted-author PRs to merge while leaving automation-owned dependency PRs alone), and report. Use when maintaining or advancing the monorepo's products on a schedule or on request.
+description: The run procedure for the Agentic Engineer (the products' primary engineer) — pre-flight, survey the whole devantler-tech portfolio, select the highest-value work (operate first, then advance), act via per-run worktrees and draft PRs (driving every actionable PR to a terminal state whoever authored it, including dependency-bot PRs that cannot finish autonomously), and report. Use when maintaining or advancing the monorepo's products on a schedule or on request.
 ---
 
 # Portfolio engineering — the run loop
@@ -62,14 +62,38 @@ card.
    If only the host-level saved-login check succeeds, run every subsequent `gh` command through that
    approved host-level execution path.
    Clearing the injected tokens does not make a sandboxed macOS Keychain readable.
-   Only an explicit credential rejection from that host-level check proves the saved login invalid.
-   If the host-level check instead authenticates a different account, hard-block as `wrong GitHub identity`
-   without describing the credential as invalid.
-   If the host-level check cannot run or fails
-   for a transport reason, hard-block as `authentication verification unavailable` instead of instructing
-   the maintainer to replace a credential that was never tested. Keep the injected-token result, saved-login
-   result, and `git fetch` result as separate gates, because repository reachability cannot prove GitHub API
-   identity (and vice versa); record only these gate classifications in durable memory, never credential output.
+   **Distinguish authentication rejection from GitHub service degradation** (monorepo#2206).
+   Before assigning any credential verdict, obtain an observable REST status line and headers with
+   `gh api --include --hostname github.com user`, using the same credential context as the original
+   probe. The generic `gh auth status` invalid-token message is not conclusive: the CLI can collapse
+   a REST 5xx into that wording while exposing no HTTP status. Never recommend replacing a credential
+   from that message alone.
+   Reject explicit authentication failures before inspecting the response body or format.
+   Only an explicit credential rejection proves the login invalid: HTTP **401**, a confirmed **non-rate-limit**
+   403 that the observable REST probe clearly identifies as a credential or permission rejection.
+   This remains an authentication failure even when its body is HTML or non-JSON,
+   and **only then** recommend `gh auth login`.
+   For every other result, an observable REST probe that returns HTTP 5xx, HTML, other non-JSON
+   service noise, **or a rate-limited 403/429** (GitHub may return either status
+   when the limit is exceeded — check `x-ratelimit-*` headers or a rate-limit message body) is **not**
+   proof the credential is bad. Classify that outcome as `GitHub service degraded` and run a bounded
+   authenticated GraphQL fallback against the **same host and credential context** as the failing probe:
+   `gh api graphql --hostname github.com -f query='{viewer{login}}'`. Prefix with
+   `env -u GH_TOKEN -u GITHUB_TOKEN` **only when the failing probe itself was the cleared-env
+   saved-login check**; otherwise keep the injected `GH_TOKEN`/`GITHUB_TOKEN` so a transient REST
+   failure cannot be misread as a bad keychain login. Always pass `--hostname github.com` so
+   `GH_HOST` cannot redirect the fallback to an unrelated enterprise host.
+   Compare `viewer.login` with this deployment's exact expected identity on the API surface:
+   `devantler` for a machine-local lane. For the Cursor cloud lane, the GraphQL API identity is `cursor[bot]`.
+   Its `gh auth status`, PR-author, and search identity remains `app/cursor`.
+   A mismatch is `wrong GitHub identity` and must not be described as an invalid credential.
+   A REST 5xx (or rate-limit) followed by a successful, expected-identity GraphQL
+   `viewer.login` proves the login valid. Never report that saved login as invalid.
+   If the host-level check cannot run or fails for a transport reason (and the GraphQL fallback is
+   likewise unreachable), hard-block as `authentication verification unavailable` instead of
+   instructing the maintainer to replace a credential that was never tested. Keep the injected-token
+   result, saved-login result, and `git fetch` result as separate gates, because repository
+   reachability cannot prove GitHub API identity (and vice versa); record only these gate classifications in durable memory, never credential output.
 3. **Check the boot memory surface fits in one read — BEFORE you read it.** A boot-loaded file past the Read cap is
    **truncated silently**: the run continues on a partial cursor with no signal that carry-forwards,
    stand-down notes, or `HANDS-OFF` records beyond the cut are missing (the 2026-06-05 blinding;
@@ -103,6 +127,10 @@ card.
    through the runtime's supported path when needed and **restart the run** because this session did
    not start with the projection the guard checked;
    other exit-2 causes may rerun the guard in this session after resolution.
+   **Before any destructive rewrite of an author-managed (legacy) file**, take a timestamped copy:
+   `.claude/scripts/memory-backup.sh <file>` (or `--all <memory-dir>` for a whole-store snapshot).
+   Restore with `cp '<backup>' '<file>'`. The store is un-versioned; a trim without a backup is
+   unrecoverable (monorepo#2304). Prefer append; rewrite only after that backup.
    **Memory is a MULTI-WRITER surface** — several instances append per hour. Re-read immediately
    before writing, prefer a **non-clobbering append** (`>>`) over a whole-file rewrite, and if a
    rewrite is rejected because the file moved under you, **stand down rather than clobber** a sibling's
@@ -131,22 +159,58 @@ after a side-by-side run proves parity against the checklist in
 Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*Portfolio map*,
 *Trust gate*, *Cadence*, *Memory*, *Maintainer channels*). The surveyor:
 - enumerates org-wide in two calls (`gh search prs/issues --owner devantler-tech --state open …`)
-  instead of looping `gh pr/issue list` per repo; exact `renovate[bot]`/`dependabot[bot]` search authors
-  are **automation-owned dependency PRs** and get only a compact `AUTOMATION-OWNED (NO-ACTION)` line,
-  with no pentad deepening or agent action; then it **deepens every remaining open `devantler`
-  candidate/actionable trusted-bot PR — drafts and promoted PRs —** with a targeted
-  `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid` (heavy fields
-  pulled for those few candidates, not for every PR in every repo); the read-only surveyor always
-  reports `devantler` PRs as ownership-unverified, and the orchestrator's creation record decides
-  which are actually its own before any action;
-- checks **CI red on `main`** per repo with one bounded `gh run list --branch main --status failure
-  --limit 3` each;
+  instead of looping `gh pr/issue list` per repo. This **cheap exhaustive enumeration** establishes
+  the complete actionable-PR queue and its contract priority before expensive joins begin. Exact
+  `renovate[bot]`/`dependabot[bot]` search authors enter a cheap liveness classification first. Emit
+  `AUTOMATION-OWNED (SELF-PROGRESSING)` only with current positive evidence that their checks, bot
+  update, auto-merge, or merge-group is actively advancing. Expired, red, missing-check, conflicted,
+  queue-evicted, or green-but-unarmed rows enter the ordinary bounded pentad shards as actionable
+  candidates. It then deepens that queue in deterministic priority order, one bounded shard at a time,
+  with a targeted
+  `gh pr view <n> --json …mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid`. Since the
+  orchestrator drives every actionable open PR to a terminal state, a selector limited to `devantler` and
+  trusted bots would leave sibling-lane, maintainer-interactive and external PRs with no head, review,
+  conflict or CI evidence — while the pentad line below requires exactly that evidence for them. An
+  external PR is deepened from **metadata only**, which is a read of the GitHub API and never an
+  execution of its branch, so the never-run-locally rule is untouched; the surveyor marks those rows
+  `never-run-locally` for the orchestrator. For a `devantler` PR the surveyor reports its branch name
+  and `disclosure` and emits **no ownership verdict**: that field tells the orchestrator whose control
+  channel a `devantler` comment on the PR is, and is never a gate on whether it may drive the PR —
+  which the data-only active-work signals decide;
+- applies this non-negotiable query boundary: **Clearance is per candidate, never per portfolio.** A
+  candidate is action-clear only when its own exact head, hygiene pentad, control/claim facts, and the
+  **candidate repository's default-head health** are complete. Any unrelated failed or capped joins
+  remain `QUERY-UNKNOWN` in the digest and keep broad portfolio health unknown, but they **never block
+  an independently fully joined candidate**. A failed candidate join blocks that candidate only; move
+  to the next item in the already-established queue and return every cleared row plus each scoped
+  unknown. **An attempted in-shard join failure emits `QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>`;
+  never-attempted candidates remain `NOT-DEEPENED`** with the budget or next-shard reason. The scoped
+  row identifies the blocked candidate and failed component without converting repository-wide state
+  into a mutation verdict. When the orchestrator exhausts the returned cleared rows, deepen the next bounded shard
+  rather than restarting the census: **pass the prior digest's `SHARD-CURSOR` and explicit
+  `repo#PR@head@updatedAt` classified set into the next surveyor prompt**. Persist only the cursor and
+  unchanged named-blocker tuples in native memory across scheduled sessions; candidate-scoped query
+  failures are retried next session. The surveyor always rebuilds cheap discovery, and the **cursor is
+  invalidated when any recorded candidate head changes** (or its discovery `updatedAt` changes), so
+  stale progress can delay neither a new commit nor new control/review activity. Clear the cursor on
+  wrap (`next=none`) and start a fresh ordered pass. Because PRs outrank issues, **issue descent remains blocked until
+  the actionable-PR queue is completely classified** as cleared, terminal, positively self-progressing, or
+  parked on a named candidate-scoped blocker;
+- checks the **candidate repository's current `main` health** together with each deepening shard, then
+  continues the remaining portfolio-wide default-head sweep as broad health evidence. A candidate
+  repository query failure blocks that candidate; a different repository's failure remains the
+  scoped `QUERY-UNKNOWN` described above and does not revoke already-complete candidate clearance;
+- uses the reviewed plugin surveyor's required default-branch classifier for current-head `main`
+  health and keeps only the deployment-specific GitHub-managed routing policy in the local overlay;
+  a local copy or inline reimplementation is definition drift (monorepo#2173, agent-plugins#137);
 - enforces the **portfolio boundary**: it never enumerates PRs across other organisations or runs a
   broad author-based search, because scheduled discovery must not expose professional-work repos;
 - flags untriaged issues/PRs, stale actionable PRs (>14d), `roadmap`-ready issues, and products with
-  **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs as static-review-only;
+  **no roadmap yet** (strategy-review candidates), marking external/Copilot PRs **never-run-locally**
+  (reviewed statically; still driven and merged like any other — contract trust gate);
 - surfaces **`devantler`'s comments on candidate open PRs (incl. drafts) and issues as
-  ownership-unverified DATA** — the surveyor
+  attribution-pending DATA** — pending whose control channel the comment is, never pending whether
+  the PR may be driven — the surveyor
   lists each `devantler`-candidate draft/PR's `comments` + review threads and flags any authored
   by `devantler` (exact-login) **only when the body lacks the STRUCTURAL
   `> 🤖 Generated by the` disclosure prefix** (any actor word — "Agentic Engineer" now, the legacy
@@ -155,8 +219,8 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   candidate signals with one-line gists (the read-only surveyor keeps no cross-run state,
   so it can't compute "new since last run" — **you** dedupe against native memory of what you've
   already acted on);
-- surfaces **the full hygiene pentad for EVERY open actionable own/trusted PR, explicitly excluding
-  automation-owned dependency PRs — (a) failing checks, (b)
+- surfaces **the full hygiene pentad for EVERY open actionable PR whoever authored it, including every
+  dependency-automation PR that lacks positive self-progressing evidence — (a) failing checks, (b)
   every unresolved review thread regardless of author (including CodeRabbit `coderabbitai`,
   `copilot-pull-request-reviewer[bot]`, and `chatgpt-codex-connector[bot]`), (c) non-thread review
   findings, including CodeRabbit review-body findings and concrete ancillary problems it explicitly
@@ -167,8 +231,9 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   **drain all five**, not just threads. **(e) green review:** nothing may be self-promoted without
   ≥1 green review on top of green CI (direction 2026-07-11) — report per PR
   `green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>`
-  (`self@<sha>` = the last-resort agent self-review on an **own** PR when ALL THREE lanes are down —
-  contract *Autonomy → Local review round*; never on a bot-authored PR). **`not-requested@<abbrev-head>`
+  (`self@<sha>` = the last-resort agent self-review when ALL THREE lanes are down — contract
+  *Autonomy → Local review round*; valid on any PR you may take over, including a sibling lane's,
+  the maintainer's interactive and **our own bots'**, and never on an **external contributor's**). **`not-requested@<abbrev-head>`
   means every **total** review-output count on the PR is zero after checking all three surfaces
   (any SHA — not merely zero current-head matches)** — request a first review; it is ordinary
   post-auto-review-disabled state, not an outage. **`none` carries its evidence** — the **total**
@@ -179,7 +244,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   `rd=none`, which is GitHub's unrelated `reviewDecision`). Non-zero counts beside `none` are
   normal when the artifacts are **stale** (at a non-head SHA) — that is a re-request signal, not a
   contradiction.
-  Fetch `headRefOid` while deepening every actionable own/trusted PR. A finding-free CodeRabbit
+  Fetch `headRefOid` while deepening every actionable PR. A finding-free CodeRabbit
   review completion counts as `cr@<sha>` even without `APPROVED`: bind a review object by REST
   `commit_id` **and require `submitted_at` after the latest authenticated request for that head**, or
   bind its substantive auto-generated summary comment to the authenticated
@@ -289,8 +354,37 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   the hygiene (maintainer direction 2026-07-01) — and so are **`coderabbitai[bot]`-authored PRs**
   (e.g. "CodeRabbit Generated Unit Tests": drive their red CI like any org-installed bot's, or close
   with reasoning).
-- for **merge-queue repos**, reports each queued trusted/own PR's latest `merge_group` run conclusion
-  (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still queued").
+- for **merge-queue repos**, reports **every queued PR's** latest `merge_group` run conclusion,
+  whoever authored it (so a kicked-out PR is visible as a *failed* `merge_group`, not silently "still
+  queued"). 🔴 **Not just trusted/own** — an in-flight `merge_group` run is one of the four
+  active-work signals, so restricting it to that subset reports `active=none` on an external or
+  Copilot-authored PR that is *already merging*, and the orchestrator may then promote, close, or
+  fire a second merge against it. **That state comes from the surveyor's own merge-queue read** (its
+  `merge-group:` signal) — neither `statusCheckRollup` nor `autoMergeRequest` can supply it, since the
+  queue's checks run on a synthetic ref and `autoMergeRequest` stays `null` while queued.
+  🔴 **A COMPLETED failed `merge_group` run needs its OWN field, because `active=` structurally cannot
+  carry it.** `merge-group:` is an **ownership** signal, emitted only while a PR is queued or its run
+  is in progress — both meaning *leave it alone*. An **evicted** PR is the opposite state: nothing
+  owns it, its run finished red, and repairing it is this run's job. Carried only on the ownership
+  signal the eviction is invisible — the queue's checks run on a synthetic ref, so the head's
+  `statusCheckRollup` cannot show them either — and the PR reads simply idle, which is precisely the
+  state that invites the blind re-queue *Merge policy* records against platform#2337. So report the
+  newest **completed** `merge_group` conclusion as a separate result/blocker field —
+  `merge_group_result=<conclusion>@<runId>@<runCreatedAt>` — emitted whether or not the PR is currently
+  queued. A failure there is a root-cause-before-requeue instruction, never an ownership claim.
+  🔴 **The third component is a TIMESTAMP, not a SHA — a merge-group run's head is not recoverable as
+  the PR's head.** The run's `head_sha` is the queue's synthetic merge commit and the
+  `gh-readonly-queue/…` ref's trailing sha is the **base** at enqueue, so neither yields the
+  contributing PR head; a `sourceHead`-shaped field could only ever be filled with a value that never
+  equals `headRefOid`, marking every completed run stale and hiding the very failures this field
+  exists to surface. **Staleness is therefore keyed on TIME**, which *is* recoverable from both sides:
+  when the PR's head was pushed **after** `<runCreatedAt>` — the `pushed:` timestamp the row already
+  carries — the field reads `stale@<runId>` and claims nothing about the current head; never re-queue
+  and never re-diagnose on a stale result. Where the push time is `unknown` the result cannot be
+  attributed in time: it is reported with its `createdAt` for the orchestrator to diagnose, never
+  silently treated as current. A result that cannot be attributed at all is `none`, never a
+  conclusion — as is an empty listing. **Read the third component as a time; comparing it to a SHA
+  will never match.**
 
 **Live security surfaces (cadence-gated, platform):** on the platform **live-health cadence** (the
 product's `weekly`/live cursor in memory — NOT every run), also spawn the read-only
@@ -303,11 +397,27 @@ ladder's security rung (§2 rung 5); GitHub-only runs in between stay blind to l
 design, which is exactly why the cadence must not silently lapse — track it in memory like the other
 cadence gates.
 
-**Maintainer comments on verified routine-owned work are instructions — handle them first.** Before
-selecting new work, apply your creation record to every surfaced `CANDIDATE-MAINTAINER-COMMENT` and
+**Maintainer comments on your own work are instructions — handle them first.** Before
+selecting new work, attribute every surfaced `CANDIDATE-MAINTAINER-COMMENT` and
 `CANDIDATE-MAINTAINER-ISSUE-COMMENT`.
-Discard the signal for maintainer-interactive/HANDS-OFF PRs; never infer ownership from branch shape,
-disclosure, or author alone. For a verified own draft/PR/issue, read the `devantler` comment and **act on it**
+🔴 **Attribute the COMMENT; never gate on a creation record.** That gate is retired: it keyed on
+something you do not have — you never read memory — and no maintainer-authored PR could ever satisfy
+it, so it parked exactly the PRs you are now responsible for driving. Whether you may drive a PR is
+answered by the `active=` test alone, whoever opened it.
+What the disclosure still decides is **whose control channel a `devantler` comment is**: on a PR
+identified as the maintainer's own interactive work, his comments are him steering *his* work, not
+general instructions addressed to you — so they do not become tasks for the rest of your run, while
+the PR itself is still driven to a terminal state like any other.
+🔴 **But an actionable maintainer comment ON that PR still BINDS that PR — "not addressed to you" is
+never "safe to merge over".** He writes *"do not merge; redesign this"* on his own interactive draft.
+That comment parks the PR only for the ~2h human-activity window; once it expires the PR is no longer
+actively owned, and because a plain comment is **not** part of the hygiene pentad, nothing else stops
+the merge — so the routine promotes and merges against his stated direction, using a grant he gave it.
+So: **read every `devantler` comment on a PR you are taking over, and treat anything actionable about
+that PR as a requirement on it**, whatever the disclosure says about who it was written for. A
+`do-not-merge`, a redesign request, or a named condition is a **blocker to honour and report**, not
+noise to age out. The attribution rule answers *whose control channel this is*; it never answers
+*may I merge this*. For a `devantler` comment on your own draft/PR/issue, read it and **act on it**
 that run (implement / change approach / close / redirect), or respond + surface it in the report if it
 needs discussion. The maintainer uses draft-PR comments as a deliberate control channel (see the
 contract's *Untrusted input* carve-out); a maintainer comment on a draft is authoritative even before
@@ -350,27 +460,32 @@ submodule. Split its work in two, because only one half is path-less:
 - **Board/API mutations** (types, statuses, hierarchy links, item backfills, a browser pass for a
   *view* edit) touch no files, so **skip worktree/submodule-init/validate** — there is nothing to
   check out and no build to validate. Don't let the repo-shaped Act step below cause the board to be
-  skipped for want of a `<path>`. ⚠️ **But you still need a CLAIM**: with no branch to push, a bare
-  assignment is not a claim, so two instances can pick the same board issue and mutate the board
-  concurrently. Before mutating, **comment the claim on the issue** (disclosure line + what you are
-  about to change) and **re-read the issue immediately before acting** — if a sibling's disclosed
-  claim is already there, that lane is owned; pick something else. **The claim MUST expire and MUST be
-  closed out**, or a crashed run blocks the issue forever: treat a disclosed claim as **live for ~2
-  hours** (matching the branch-claim lease) and **stale after that — take it over and say so in a
-  reply**. On finishing, **reply to your own claim** stating what changed; an un-replied claim older
-  than the lease is abandoned, not owned.
+  skipped for want of a `<path>`. ⚠️ **But you still need the shared claim.** Board roadmap issues
+  live in `devantler-tech/monorepo`, so the issue-owning repository is the monorepo even though the
+  mutation itself is path-less. Acquire it explicitly and retain the ownership token:
+  `claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <monorepo-root>)"`.
+  Immediately recheck for an open `#<issue>` PR and stand down (retiring only that SHA) if one
+  appeared. **Atomically renew the retained SHA immediately before the board mutation** with
+  `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir <monorepo-root>)"`
+  and stand down without mutating if renewal fails. After the mutation, read the board state back; **retire the acquired SHA after the
+  board/API mutation is verified** and before closing the issue or recording completion. On a
+  controlled failure before mutation, retire before surfacing the failure. Only a crashed process
+  leaves a tip, and the ordinary ~2h lease plus evidence-gated takeover recovers it.
 - **Any accompanying file change** (an `add-to-project` workflow, an agent-definition or card update)
   is **ordinary monorepo work and keeps the FULL discipline** — per-run worktree, validate, draft PR.
   **Never skip isolation for it:** several instances run concurrently, and editing the shared checkout
-  is exactly the collision this loop's worktree rule exists to prevent.
+  is exactly the collision this loop's worktree rule exists to prevent. Retire the board issue's
+  acquired SHA when that draft PR opens, using the same monorepo root.
 
 ## 2. Select (the heart of it)
 Pick the **highest-value work across the whole portfolio**, then **go deep where depth is needed**
 rather than spreading thin (contract *Cadence & focus*: substance over artifact count; bound noise and
-sprawl, not value). **PRs come first:** driving **actionable trusted-author PRs** to merge — and fixing
+sprawl, not value). **PRs come first:** driving **every actionable PR, whoever authored it,** to a
+terminal state — merged, closed with the reason recorded, or parked on a named blocker — and fixing
 their failing CI — is the **first-priority work every run, ahead of issues** (only live breakage
-outranks it). Exact Renovate/Dependabot PRs are automation-owned dependency PRs, not actionable PRs.
-Scope: every **`devantler-tech`** repo's actionable trusted-author PRs; scheduled runs do not enumerate or act on
+outranks it). Exact Renovate/Dependabot PRs yield only while live evidence proves them self-progressing;
+once repository automation cannot finish their current head, they are actionable PRs.
+Scope: every **`devantler-tech`** repo's actionable PRs, whoever authored them; scheduled runs do not enumerate or act on
 external repositories. Then work is **issue-driven** (contract *Issue-driven*): **GitHub Issues
 are the work queue**, worked in the order contract *The work-selection ladder* sets — **security
 issues, then bugs, then the oldest actionable issue** — and new non-trivial finds are
@@ -401,27 +516,98 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
 
 **Operate (keep it healthy) — always handled before advancing:**
 1. **Breakage** — CI red on `main`, broken site/docs build, your own PR gone red → root-cause fix.
-2. **Drive actionable trusted-author PRs to merge — the first-priority sweep, ahead of issues, every
-   run.** Across all `devantler-tech` repos, drive every **actionable trusted-author** PR to merge per
+2. **Drive actionable PRs to merge — the first-priority sweep, ahead of issues, every
+   run.** Across all `devantler-tech` repos, drive every **actionable** PR, whoever authored it, to merge per
    the contract (clear the current-head pentad, then merge with the **command that matches the author**:
-   actionable bots may arm `--auto`
-   once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
-   with bare `gh pr merge <n> --squash` once CLEAN and self-promoted on genuine readiness; incl. majors;
-   definition PRs on that same path). External repos are outside scheduled scope;
+   the **`--auto`-eligible authors are exactly three, and every one of them is eligible
+   unconditionally** — `github-actions`, `ksail-bot`, and `app/cursor` — may arm
+   `--auto` once review-finding surfaces are clear, while your own/`devantler` PRs merge directly
+   with `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <the head you
+   evaluated>` once CLEAN and self-promoted on genuine readiness; incl. majors;
+   definition PRs on that same path). **`--auto` is for those three authors only** — it merges at whatever
+   head passes checks later, so arming it on anyone else (`copilot-swe-agent[bot]`, any external
+   contributor, or **`app/botantler-1` on ANY classifier result, exit 0 included**) would merge a
+   commit nobody evaluated.
+   Those merge directly, after the current-head checks below.
+   🔴 **`app/botantler-1` is never `--auto`-eligible, not even on exit 0.** Exit 0 waives the
+   **review** requirement for the head it ran on; it never waives merging **directly at that same
+   head**, because the permission is scoped to one commit and `--auto` re-evaluates nothing — an
+   updater push during the wait would land a head the classifier never ran on, possibly an exit-1/3
+   head needing the very review exit 0 waived. **Re-run the classifier at the current head
+   immediately before the merge** (an earlier head's result describes a commit you are no longer
+   merging), then merge head-pinned with
+   `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`.
+
+   External repos are outside scheduled scope;
    an interactive task must first clear the professional-work boundary for the specifically named repo.
-   Never run or merge **external-author** PRs anywhere (trust gate). The merge is **low-ceremony**:
-   combine the already-collected current-head pentad with one fresh `gh pr view <n>` showing the same
-   `headRefOid`, `isDraft:false`, trusted author, and `CLEAN`; merge only when the pentad also has zero
+   Never *run* an **external-author** branch on this machine (trust gate) — CI is the sandbox for that,
+   and extra scrutiny goes on workflow, permission, dependency and secret-touching changes. You still
+   review, promote and merge it like any other PR (maintainer direction 2026-08-08) — and an external
+   PR additionally needs the **current-head evaluation record** the contract requires before merge: a
+   `devantler`-authored comment naming the CI run you read and what behaviour it demonstrated, whose
+   SHA equals `headRefOid`, with that run verified via the API as `success` at that same commit.
+   ⚠️ **Where the change has genuinely no exercisable runtime surface** — docs or config consumed
+   elsewhere — no such run can exist, so the record instead names the **static** trace: what consumes
+   the change and why there is nothing to run. Requiring a CI run unconditionally would park that
+   class forever (contract *You own EVERY pull request*). Anything with a reachable code path still
+   owes the CI reading. The merge is **low-ceremony**:
+   combine the already-collected current-head pentad with one fresh
+   `gh pr view <n> --repo devantler-tech/<repo> --json number,isDraft,author,title,headRefOid,mergeStateStatus,statusCheckRollup`
+   showing the same
+   `headRefOid`, `isDraft:false`, owner `devantler-tech`, and `CLEAN`; merge only when the pentad also has zero
    findings and a green review at that
-   head. A refused
+   head.
+   🔴 **That field list CANNOT see unresolved review threads, and thread resolution is a REQUIRED
+   merge rule on every repository here** (contract *Merge policy*, `required_review_thread_resolution`
+   on all nineteen). `reviewThreads` is **not** a valid `gh pr view --json` field, so adding it would
+   void the whole read. Take it over GraphQL as its own call, **immediately before the merge** — the
+   survey pentad carries a thread count, but it is a snapshot from earlier in the run and every lane
+   can post at any moment (on monorepo#2927 the blocking review landed 93 minutes after promotion):
+
+   ```sh
+   unresolved=$(
+     set -o pipefail   # WITHOUT this a FAILED read prints the ALL-CLEAR value: `false | jq -s …` → 0, exit 0
+     gh api graphql --paginate -f owner=devantler-tech -f name=<repo> -F number=<n> -f query='
+   query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
+     repository(owner:$owner,name:$name){
+       pullRequest(number:$number){
+         reviewThreads(first:100,after:$endCursor){
+           nodes{isResolved}
+           pageInfo{hasNextPage endCursor}
+         }}}}' |
+       jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
+   ) || { echo "thread read FAILED — UNKNOWN, never 0" >&2; exit 1; }
+   ```
+
+   Merge only on a `0` a **successful** read produced; treat any non-zero exit as UNKNOWN, never as
+   zero. `--paginate` and the cursor are required — a first-page-only read silently under-counts on a
+   PR with more than 100 threads. Without this, a bare `BLOCKED` from an unresolved thread is
+   indistinguishable from the stale `mergeStateStatus` that exception (a) tells you to merge through,
+   and the refusal that follows gets escalated as a maintainer gate. 🔴 **Do not re-add a `trusted author` condition here** — trust gates **execution**, never the
+   merge (contract *Trust gate*), so an external PR that has cleared every evaluation and review gate
+   would otherwise be refused at the last step for being external, which is the whole class the
+   2026-08-08 widening exists to admit. Exact `renovate[bot]`/`dependabot[bot]` PRs follow the same
+   head-pinned merge preflight after their self-progressing evidence fails. Before adapting one,
+   convert it to draft before the first adaptation push, disable auto-merge, and confirm both; draft
+   is the durable fence against repository automation re-arming after the push. Promote and re-arm
+   only after the adapted head has fresh semantic review. 🔴 **DIAGNOSE a refused merge before escalating it — a one-click is for what you
+   cannot fix, never for what you did not look at.** The thread read above is taken *immediately*
+   before the merge, but "immediately" is not "atomically": a lane can post a thread in the gap, and
+   a ruleset condition the pentad never modelled can refuse just as easily. Both surface as a bare
+   refusal, and both are agent-fixable. So on a refusal, **re-read the unresolved-thread count and
+   the head's check state, then name the cause** — a thread that landed in the gap gets fixed and
+   resolved, a newly-red check gets root-caused, and only a cause that is genuinely outside agent
+   authority is escalated. Escalating an undiagnosed refusal converts your own unfinished hygiene
+   into a maintainer gate, which is the passive self-blocking the contract forbids everywhere else.
+   Once diagnosed and genuinely not agent-fixable, a refused
    merge is a **rare fallback** — surface the PR for a one-click instead of burning the run on
    variant-evidence retries. **On merge-queue repos, root-cause a stall/kick-out before re-queuing**
    (contract *Merge policy → Merge-queue repos*): a PR that "was queued" but didn't merge has usually been
    **evicted by a failed `merge_group` run** — pull that run (`gh run list --event merge_group` → `pr-<n>`
    → `--log-failed`) and diagnose before re-`--auto`-ing; if it's a known systemic flake, fix the root
-   cause first rather than looping the PR through the queue. **Keep EVERY open actionable own/trusted
+   cause first rather than looping the PR through the queue. **Keep EVERY open actionable
    PR hygienic while it waits — the full pentad, on EVERY run, sweeping ALL open actionable
-   own/trusted PRs, not
+   PRs whoever authored them, not
    just the one you
    just opened:** root-cause-fix failing CI, **resolve bot-reviewer threads (CodeRabbit etc.)**,
    **clear merge conflicts** (update-branch / local base-merge on a DIRTY/CONFLICTING branch — no
@@ -448,7 +634,7 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    local review round** when no lane will deliver at that head — unavailable, OR rate/billing limited — reviewed with your own review skills and posted as a **real GitHub Review
    with inline comments** (`event: COMMENT`, disclosure line, `## Self-review (fallback` heading,
    verdict line) so the sibling agent can see and act on it, incremental re-reviews,
-   green-while-draft as the promotion precondition, the **automation-owned dependency-PR no-action carve-out**, and the trusted programmed
+   green-while-draft as the promotion precondition, the **dependency-PR self-progressing/intervention boundary**, and the trusted programmed
    **bot carve-out** — exact-classifier-matched exit-0 agent-skills updater PRs, tap cask PRs, and
    KSail release bumps are check-gated, need NO review, and are never review-chased;
    `agent-plugins` updater PRs require semantic review when their classifier returns the trusted
@@ -464,7 +650,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    review findings — those
    rot on the dashboard. **`coderabbitai[bot]`-authored
    PRs are in this sweep** (fix their CI or close with reasoning — never leave them red for days).
-   Never auto-drive or merge external PRs.
+   **External-author PRs are in this sweep too** (maintainer direction 2026-08-08) — same pentad, same
+   review gate; only their branches are never checked out or run locally, and a conflict or red check
+   there is named on the PR for its author rather than fixed by hand.
    - **Confirm by `state`/`mergedAt`, never by `mergeStateStatus`, in Enable-Auto-Merge repos.** Repos
      with a `🔀 Enable Auto-Merge` workflow (monorepo, actions, reusable-workflows, go-template,
      dotnet-template, skills, plugins, …) arm the `app/botantler` App on **promotion**, so it merges a
@@ -475,6 +663,15 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
      **not** fire a manual `gh pr merge` — a merged PR reports those as `UNKNOWN` for minutes while the
      merge completes, so polling them (or firing a now-moot manual merge) only burns the run. Credit
      the auto-merge workflow, not a `gh pr merge` call.
+     🔴 **That no-manual-merge rule is scoped to the PRs this workflow actually ARMS — trusted/own —
+     and an EXTERNAL-author PR is not one of them.** The App arms on promotion for trusted/own PRs
+     only, so applying the rule to every PR in these repos leaves an outside contribution with **no
+     merge path at all**: the workflow will not merge it, and the procedure would forbid the direct
+     merge that otherwise would. Since 2026-08-08 you own those PRs through to a terminal state, so
+     for an external author use the ordinary head-pinned direct merge from *Merge policy* —
+     `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>` — once its
+     gates are clear, including the recorded CI-based behaviour evaluation that PR class requires.
+     Wait for the workflow only where the workflow is the thing that merges.
 3. **Contributor-facing** — triage/label new issues+PRs; one insightful comment on the oldest
    un-commented open item.
 4. **Confident fixes** — a *trivial, obvious* fix (broken link, missing alt text, typo, manifest
@@ -503,33 +700,66 @@ backlog. Use the [`product-engineering`](../product-engineering/SKILL.md) skill;
 7. **Resolve the next issue by the ladder** *(the default advance action)* — take the highest rung
    with actionable work: open `type:"Security"` issues first, then `type:"Bug"`, then the **oldest**
    startable issue (contract *The work-selection ladder*). Within a rung, oldest first.
-   Skip one only if it's blocked, too under-specified to begin, or
-   it already has an open PR. A **bare `devantler` assignee does *not* reserve** an issue
-   **indefinitely** — a `devantler` assignment plus a **pushed branch** is a live claim for ~2h
-   (contract *Claim protocol*), and with no branch, or once that lapses with no PR, you may pick it up
-   (timed from the issue's newest `devantler` `assigned` timeline event, never a branch commit date).
+   Skip one only if it already has an open PR, is too under-specified to begin, is blocked on a
+   named external dependency that satisfies the consumer contract, or is a delivered experiment
+   awaiting its **named, future measurement date** recorded on the issue and not yet elapsed (contract
+   skip clause (d) — once that date arrives, measuring and recording the decision *is* the actionable
+   work). A `blocked` label or blocker prose
+   is never sufficient: apply the contract's *External-blocker verification* rule before every
+   external-blocker skip, including its structured record and fresh per-run non-repository check. A
+   missing, malformed, or inherited blocker record is not a skip. A **bare `devantler` assignee does
+   *not* reserve** an issue
+   **indefinitely** — an `agent-claim/<issue>` tip inside its lease, or a `devantler` assignment plus
+   a **pushed lane branch**, is a live claim for ~2h (contract *Claim protocol*), and with neither
+   signal, or once that lapses with no PR, you may pick it up (the assignee lease is timed from the
+   issue's newest `devantler` `assigned` timeline event, never a branch commit date).
    **Only the agent account's assignment is a claim, and only it expires:** an issue assigned to a
    **human collaborator** (or `Copilot`) is someone else's work-in-progress — respect it and pick a
    different issue, never take it over on this window. **Claim
-   before you build:** self-assign + push the branch **with the issue number in its name** the moment
-   you select — and if `devantler` is ALREADY assigned (a stale bare assignment from an abandoned run),
-   **remove then re-add**, since adding an existing assignee is a no-op that would leave your lease
-   carrying the old timestamp. **The push decides the race:** put a real commit on the claim branch
-   (never a bare base pointer), push without force, then confirm `git ls-remote` shows YOUR sha — two
-   instances derive the same branch name, so a rejected push or someone else's tip means you lost;
-   stand down rather than force over them. Check open PRs, remote
-   `claude/*` branches AND assignees by **issue number, never literal branch name**. A live claim
-   (assigned + branched, in-window, no PR) is skip reason **(e)** — the only one that expires by
+   before you build — lane-neutral tip FIRST:** acquire `agent-claim/<issue>` and retain its SHA via
+   `claim_sha="$(.claude/scripts/agent-claim.sh acquire <issue> --repo-dir <product-path>)"`
+   (cross-lane race; LOST/exit 1 → stand down; exit 2 with no competing tip → record a
+   capability/service gap) — **`--repo-dir` is required for a submodule's issue**: numbers are
+   repository-scoped, so a bare call from the monorepo checkout locks the same-numbered *monorepo*
+   issue and leaves the one you selected unclaimed. Populate the submodule first
+   (`submodule-init.sh`), and call the **root** helper with `--repo-dir` rather than `cd`-ing into
+   the product (the relative script path does not resolve from there). **Immediately after winning,
+   recheck for an open PR whose body references `#<issue>`**; if one appeared during the
+   claim-to-draft handoff, retire only `"$claim_sha"` in that same repository and stand down. Then
+   self-assign when your identity can (and if `devantler` is ALREADY assigned, **remove then
+   re-add**, since adding an existing assignee is a no-op that would leave your lease carrying the
+   old timestamp). **Immediately before pushing the lane branch or opening its draft PR**, and
+   **again after any resumed pause**, **atomically renew the retained SHA** with
+   `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha" --repo-dir <product-path>)"`;
+   a failed renew means a takeover won or ownership is unknown, so abandon without pushing or opening
+   a competing PR. Then push the
+   lane work branch **with the issue number in its name**. **The
+   shared tip decides the race:** the helper writes a nonced commit, pushes without force, and
+   verifies `git ls-remote` shows YOUR sha — never judge by the push's exit status or through a
+   pipe (`push | tail` reports `tail`'s 0 on a rejection). Retire the tip when the draft PR opens
+   (`.claude/scripts/agent-claim.sh retire <issue> "$claim_sha" --repo-dir <product-path>` — same repository and
+   exact acquired SHA as the acquire);
+   a tip with no open PR past the ~2h lease may be taken over
+   with `--takeover` only after confirming no open `#<issue>` PR. Check open PRs (same-repo body refs
+   only — drop hits whose only `#<issue>` is a foreign `owner/repo#<issue>`), remote
+   `agent-claim/<issue>` tips, lane work branches (`claude/*`/`codex/*`/`cursor/*`) AND assignees by
+   **issue number, never literal branch name**. A live claim (shared tip in-window, or assigned +
+   branched in-window, no PR) is skip reason **(e)** — the only one that expires by
    itself. An issue **authored by an exact dependency-automation identity** (`renovate[bot]` /
    `dependabot[bot]`, `app/renovate` / `app/dependabot`) is skip reason **(f)**: it is
    automation-owned, **never actionable at all**, and is never selected, worked, or closed — match the
    author only, never the `automation` label. If it **already has an
-   actionable trusted-author, non-draft PR**, drive *that* to merge instead of duplicating; leave
-   automation-owned dependency PRs to repository automation, **draft** PRs for the maintainer, and
-   **external** PRs static-review-only (trust gate). **`type:"Spike"` is not a delivery-PR path**
+   actionable open PR**, drive *that* to a terminal state instead of duplicating — whoever authored it,
+   draft or not (contract *You own EVERY pull request in the portfolio*); let a dependency-bot PR
+   self-progress only while its current evidence qualifies, take over when it cannot finish, and never **run** an external
+   contributor's branch locally (trust gate — execution only; driving and merging it is yours). **`type:"Spike"` is not a delivery-PR path**
    (#2267): when the selected issue is a Spike, record the decision on the Spike and file its
    follow-up issues — that pair is the floor artifact; do **not** invent a draft PR for it (same
-   rule as [`product-engineering`](../product-engineering/SKILL.md) §3). Otherwise ship it: tests +
+   rule as [`product-engineering`](../product-engineering/SKILL.md) §3). Since no PR opens to perform
+   normal cleanup, **atomically renew the retained SHA** immediately before publishing the decision
+   or follow-up issues with `claim_sha="$(.claude/scripts/agent-claim.sh renew <issue> "$claim_sha"
+   --repo-dir <product-path>)"`, then **retire the acquired SHA after the decision and follow-up issue artifacts are recorded**
+   and before closing the Spike. Otherwise ship it: tests +
    validate + **draft PR**; use `Fixes #delivery` and, when later measurement keeps the experiment
    open, `Part of #experiment`.
 8. **Capture new finds as issues** — a coverage hole, perf hotspot, refactor target, docs gap, security
@@ -608,9 +838,14 @@ For each selected product:
    The `<session-owner-token>` is **unique to one runtime invocation** and stable only for renewals
    within that run: derive it as `<lane>-<trusted-runtime-run-or-thread-id>`. Never use a stable
    agent, schedule, or lane slug, because overlapping ticks would then impersonate the same owner.
-   **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*`. Never write
-   a sibling's lane: it breaks draft ownership, and a `claude/*` branch from another instance would
-   be swept by the Claude tick's cleanup. (Issue-less hotfixes and trivial obvious fixes keep plain
+   **`<lane>` is YOUR instance's namespace** — `claude/*`, `codex/*` or `cursor/*`. Never open NEW
+   work in a sibling's lane: it breaks draft ownership, and a `claude/*` branch from another instance
+   would be swept by the Claude tick's cleanup. ⚠️ **REPAIR is the exception** (contract *Autonomy*):
+   you may push into a sibling lane's branch to *repair* a PR the active-work test shows is unowned —
+   resolve its conflict, fix its failing check, address a finding its own lane left sitting — fetching
+   immediately before and integrating with a merge, never a force-push. What stays forbidden is
+   routine parallel work on a branch whose lane is live. **An external contributor's branch is never
+   repaired this way at all** — it is never checked out locally, so name the blocker and hand it back. (Issue-less hotfixes and trivial obvious fixes keep plain
    `<lane>/<area>-<desc>` — they go straight to a PR, so no claim window applies.) **Immediately
    before editing a worktree this session did not create**, atomically reserve it with
    `.claude/scripts/worktree-claim.sh acquire <wt> <session-owner-token>`. **Only exit 0 authorizes
@@ -648,7 +883,7 @@ For each selected product:
    Strategy/roadmap work creates/updates **GitHub Issues** instead of a diff. External-repository work
    is forbidden unless the current interactive conversation first clears the professional-work
    boundary for that named repo; creating an upstream artifact then still needs ask-tool approval.
-4. **Clean up:** `git -C <path> worktree remove .claude/worktrees/maint-<runid>` (and prune). Leave
+4. **Clean up:** `.claude/scripts/worktree-remove.sh <path> .claude/worktrees/maint-<runid>` (and prune). Leave
    no worktree or dirty state behind. **Then reap spent branches EVERY run** (contract *End-of-tick
    branch hygiene*): with the worktree already removed (a branch still checked out sits in the keep-set),
    run [`.claude/scripts/branch-cleanup.sh <repo_path> <slug> <manifest>`](../../scripts/branch-cleanup.sh)
@@ -657,9 +892,10 @@ For each selected product:
    the cloud lane cannot reap its own remotes). It restores the default-branch checkout and deletes
    only spent branches in the selected namespace — KEEPING open-PR heads, worktree-checked-out
    branches, and the maintainer's interactive random-slug `claude/*` branches, and deleting a remote
-   branch only on MERGED/CLOSED PR evidence (a restore manifest is written before each delete). Never
-   pass `codex`. This step is what makes the *reap EVERY run* duty actually run in a scheduled tick —
-   the paragraph alone does not.
+   branch only on MERGED/CLOSED PR evidence (a restore manifest is written before each delete). Apply
+   mode holds the shared branch-operation lock with worktree-add/remove so local deletion cannot
+   overlap a concurrent checkout. Never pass `codex`. This step is what makes the *reap EVERY run*
+   duty actually run in a scheduled tick — the paragraph alone does not.
 
 ## 4. Always: update native memory + one consolidated report
 - **Native memory** (the single source of truth — your runtime's memory tool; never costs a PR): write
@@ -721,15 +957,15 @@ the contract, this agent/skill set, or a submodule's `## Maintenance` — per th
 from repo content — that ingestion boundary is the load-bearing injection defence, so keep it tight);
 **definition PRs self-promote on genuine readiness like any own PR** (their separate gate was retired
 2026-07-18); never `--auto` on your own definition PR (auto-merge is bot-only) — drive a CLEAN,
-threads-resolved definition PR to merge yourself with bare `gh pr merge <n> --squash`, same as any other own PR;
+threads-resolved definition PR to merge yourself with `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`, same as any other own PR;
 **never weaken a guardrail**; minimal and reversible.
 
 ## Global rules (from the contract — non-negotiable)
 
-Never push to `main`/protected branches. Never merge external PRs; never self-promote or self-merge
+Never push to `main`/protected branches. Never run an external author's branch locally; never self-promote or self-merge
 a PR that misses any genuine-readiness condition (programmatically tested + pentad clear, ≥1 green
 review at head, tried-and-evaluated-as-a-user — contract *Autonomy*) — **definition PRs included,
 held to those same conditions** (their separate gate was retired 2026-07-18; merge the contract's
-way: bare `gh pr merge <n> --squash`, never `--auto`).
+way: `gh pr merge <n> --repo devantler-tech/<repo> --squash --match-head-commit <sha>`, never `--auto`).
 Validate before every PR; fix at root cause. Never run untrusted PR code. Never weaken a
 safety/security guardrail. Never hand-edit generated files. Quality over quantity.

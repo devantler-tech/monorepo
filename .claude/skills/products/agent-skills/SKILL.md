@@ -32,7 +32,7 @@ put product-specific logic here.
 **Advance them via the holistic review** (contract *Holistic review*; [`product-engineering`](../../product-engineering/SKILL.md)
 §7): when a generic skill/convention has emerged across 2+ products, extract it here so every product
 inherits it, then migrate consumers. Triage/label issues, drive actionable trusted-author PRs to merge,
-leave automation-owned dependency PRs alone, and keep dependency automation & docs current.
+intervene when dependency automation cannot finish its PR, and keep dependency automation & docs current.
 Programmed `chore(deps): update agent skills` PRs are the no-review exception defined in the root
 contract only when `.claude/scripts/programmed-bot-review-exemption.sh` exits 0: let required CI and
 auto-merge decide accepted exemptions, and never spend a review lane on exit-0 exemptions. Installed

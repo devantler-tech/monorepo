@@ -822,5 +822,550 @@ check "failed default discovery still claims successfully" 0 "$symref_rc" \
 check "failed default discovery reports UNKNOWN, not a stale-pointer comparison" 0 "$symref_rc" \
   "$symref_out" "base freshness UNKNOWN"
 
+# ── add attaches to a branch that already exists (monorepo#2776) ───────────────────
+# Rung 1 of the work-selection ladder is "finish an open PR", and that branch exists before the
+# worktree does. `add` hardcoded `-b`, so the mandated helper could only ever create a NEW branch:
+# resuming an open PR fell out of the claim protocol entirely, because the one command that writes
+# the ownership marker refused to run.
+existing_repo="$tmp/existing-repo"
+mkdir -p "$existing_repo"
+git -C "$existing_repo" init -q -b main
+git -C "$existing_repo" config user.name "worktree-claim-test"
+git -C "$existing_repo" config user.email "worktree-claim-test@example.com"
+git -C "$existing_repo" commit --allow-empty -qm "init"
+git -C "$existing_repo" branch "claim-existing-local"
+git -C "$existing_repo" commit --allow-empty -qm "main moves on"
+existing_tip="$(git -C "$existing_repo" rev-parse "claim-existing-local")"
+
+local_rc=0
+local_out="$("$script" add \
+  "$existing_repo" "$tmp/wt-existing-local" "claim-existing-local" "session-existing" 2>&1)" || local_rc=$?
+check "add attaches to an existing local branch" 0 "$local_rc" "$local_out" "owner=session-existing"
+check "existing-branch add writes the marker" 0 \
+  "$([ -f "$tmp/wt-existing-local/.claude-worktree-owner" ] && echo 0 || echo 1)"
+# The point of attaching is landing on THAT branch's commit. Creating a fresh branch from HEAD would
+# also exit 0 and also write a marker, so the exit code alone cannot tell the two apart — assert the
+# checked-out commit, which is the only thing that distinguishes a resumed PR from a silent fork.
+check "existing-branch add lands on that branch's tip, not the repo HEAD" 0 0 \
+  "$(git -C "$tmp/wt-existing-local" rev-parse HEAD)" "$existing_tip"
+check "existing-branch add checks out the branch itself" 0 0 \
+  "$(git -C "$tmp/wt-existing-local" rev-parse --abbrev-ref HEAD)" "claim-existing-local"
+
+# A branch that exists only on the REMOTE is the actual open-PR case: a fresh checkout has no local
+# ref for it. Creating it from the consumer's HEAD would silently fork the PR — the worktree would
+# look plausible and carry none of the PR's commits.
+remote_seed="$tmp/remote-seed"
+mkdir -p "$remote_seed"
+git -C "$remote_seed" init -q -b main
+git -C "$remote_seed" config user.name "worktree-claim-test"
+git -C "$remote_seed" config user.email "worktree-claim-test@example.com"
+git -C "$remote_seed" commit --allow-empty -qm "init"
+git -C "$remote_seed" checkout -q -b "claim-existing-remote"
+git -C "$remote_seed" commit --allow-empty -qm "work that only exists on the PR branch"
+remote_tip="$(git -C "$remote_seed" rev-parse "claim-existing-remote")"
+git -C "$remote_seed" checkout -q main
+remote_origin="$tmp/remote-origin.git"
+git clone -q --bare "$remote_seed" "$remote_origin"
+remote_consumer="$tmp/remote-consumer"
+git clone -q "$remote_origin" "$remote_consumer"
+git -C "$remote_consumer" branch -D "claim-existing-remote" >/dev/null 2>&1 || true
+# Drop the tracking ref too. `git clone` creates one for every remote branch, so leaving it would let
+# this case pass without the fetch ever running — the assertion would hold while the code path it is
+# meant to cover was dead. Clearing it is what makes the fetch load-bearing: ablate the fetch and this
+# block goes RED.
+git -C "$remote_consumer" update-ref -d "refs/remotes/origin/claim-existing-remote"
+check "remote-branch fixture starts with no local and no tracking ref" 0 0 \
+  "$(git -C "$remote_consumer" for-each-ref --format='%(refname)' \
+      'refs/heads/claim-existing-remote' 'refs/remotes/origin/claim-existing-remote' | wc -l | tr -d ' ')" "0"
+
+remote_rc=0
+remote_out="$("$script" add \
+  "$remote_consumer" "$tmp/wt-existing-remote" "claim-existing-remote" "session-remote-existing" 2>&1)" || remote_rc=$?
+check "add attaches to a branch that exists only on the remote" 0 "$remote_rc" \
+  "$remote_out" "owner=session-remote-existing"
+check "remote-branch add lands on the remote tip, not the consumer HEAD" 0 0 \
+  "$(git -C "$tmp/wt-existing-remote" rev-parse HEAD)" "$remote_tip"
+
+# Fail-closed regression: attaching must not defeat git's own single-checkout rule. A branch already
+# checked out elsewhere stays refused, so two worktrees can never share one branch.
+dup_rc=0
+dup_out="$("$script" add \
+  "$existing_repo" "$tmp/wt-existing-dup" "claim-existing-local" "session-dup" 2>&1)" || dup_rc=$?
+check "a branch already checked out elsewhere is still refused" 2 "$dup_rc" \
+  "$dup_out" "git worktree add failed"
+
+# ── an unresolvable remote must not become a silent fork (CodeRabbit, #2810) ────────
+# A fetch failure leaves refs/remotes/origin/<branch> untouched, so "no tracking ref" cannot be read
+# as "the branch does not exist on origin" — it also means "we could not ask". Creating the branch
+# from HEAD there reintroduces exactly the silent fork the remote arm exists to prevent, and the
+# bounded remote call makes it reachable on a mere TIMEOUT, where the network is fine seconds later
+# and the run does go on to push.
+unreach_seed="$tmp/unreach-repo"
+mkdir -p "$unreach_seed"
+git -C "$unreach_seed" init -q -b main
+git -C "$unreach_seed" config user.name "worktree-claim-test"
+git -C "$unreach_seed" config user.email "worktree-claim-test@example.com"
+git -C "$unreach_seed" commit --allow-empty -qm "init"
+git -C "$unreach_seed" remote add origin "$tmp/definitely-not-a-repo.git"
+# Remote state must never decide whether `add` succeeds — a pinned property of this helper, with
+# four "advisory, not fatal" assertions behind it — so this still claims. What it must NOT do is stay
+# silent: the ambiguity is announced, and the claim protocol's own remote-tip SHA comparison before
+# pushing is what actually catches a fork.
+unreach_rc=0
+unreach_out="$(WORKTREE_CLAIM_REMOTE_TIMEOUT_SECS=5 "$script" add \
+  "$unreach_seed" "$tmp/wt-unreach" "claim-unreachable" "session-unreach" 2>&1)" || unreach_rc=$?
+check "an unresolvable remote still claims (advisory, not fatal)" 0 "$unreach_rc" \
+  "$unreach_out" "owner=session-unreach"
+check "an unresolvable remote ANNOUNCES that it could not check for an existing branch" 0 \
+  "$unreach_rc" "$unreach_out" "could not reach origin to check whether"
+check "the announcement names the verification the caller must do" 0 \
+  "$unreach_rc" "$unreach_out" "VERIFY the remote tip before pushing"
+
+# The reachable-remote counterpart MUST still create: `ls-remote --exit-code` answers 2 for "branch
+# absent" and 128 for "could not ask", and only the first is proof the branch is new. Without this
+# the fix above would block every genuinely-new branch.
+absent_seed="$tmp/absent-repo"
+mkdir -p "$absent_seed"
+git -C "$absent_seed" init -q -b main
+git -C "$absent_seed" config user.name "worktree-claim-test"
+git -C "$absent_seed" config user.email "worktree-claim-test@example.com"
+git -C "$absent_seed" commit --allow-empty -qm "init"
+git init -q --bare "$tmp/absent-origin.git"
+git -C "$absent_seed" remote add origin "$tmp/absent-origin.git"
+absent_rc=0
+absent_out="$("$script" add \
+  "$absent_seed" "$tmp/wt-absent" "claim-genuinely-new" "session-absent" 2>&1)" || absent_rc=$?
+check "a branch absent from a REACHABLE remote is still created" 0 "$absent_rc" \
+  "$absent_out" "owner=session-absent"
+
+# A repo with no origin at all is not an unreachable remote — nothing can host the branch, so
+# creating it is correct. `ls-remote` cannot tell these apart (both exit 128), which is why origin's
+# presence is checked separately rather than inferred from the exit code.
+noremote_rc=0
+noremote_out="$("$script" add \
+  "$repo" "$tmp/wt-noremote" "claim-no-remote" "session-noremote" 2>&1)" || noremote_rc=$?
+check "a repo with no origin still creates the branch" 0 "$noremote_rc" \
+  "$noremote_out" "owner=session-noremote"
+
+# ── a STALE local branch must not attach silently (Codex P2, #2810) ────────────────
+# The local arm returned before any remote check, so a local ref left behind by an earlier run
+# attached at its old SHA while origin had moved on. Work then targets an obsolete head and only the
+# eventual push reveals it — the same shape that once produced a worktree 56 commits behind its PR,
+# where a plausible-looking diff would have reverted the PR's own commits.
+stale_seed="$tmp/stale-seed"
+mkdir -p "$stale_seed"
+git -C "$stale_seed" init -q -b main
+git -C "$stale_seed" config user.name "worktree-claim-test"
+git -C "$stale_seed" config user.email "worktree-claim-test@example.com"
+git -C "$stale_seed" commit --allow-empty -qm "init"
+git -C "$stale_seed" checkout -q -b "claim-stale-local"
+git -C "$stale_seed" commit --allow-empty -qm "the commit the local ref will sit at"
+stale_old="$(git -C "$stale_seed" rev-parse HEAD)"
+git -C "$stale_seed" checkout -q main
+stale_origin="$tmp/stale-origin.git"
+git clone -q --bare "$stale_seed" "$stale_origin"
+stale_consumer="$tmp/stale-consumer"
+git clone -q "$stale_origin" "$stale_consumer"
+git -C "$stale_consumer" branch -f "claim-stale-local" "$stale_old"
+# origin advances past the local ref, exactly as a sibling push or review follow-up would.
+git -C "$stale_seed" checkout -q "claim-stale-local"
+git -C "$stale_seed" commit --allow-empty -qm "origin moves ahead"
+git -C "$stale_seed" push -q "$stale_origin" "claim-stale-local"
+git -C "$stale_seed" checkout -q main
+
+stalelocal_rc=0
+stalelocal_out="$("$script" add \
+  "$stale_consumer" "$tmp/wt-stale-local" "claim-stale-local" "session-stalelocal" 2>&1)" || stalelocal_rc=$?
+check "a stale local branch still claims (advisory, not fatal)" 0 "$stalelocal_rc" \
+  "$stalelocal_out" "owner=session-stalelocal"
+check "a stale local branch is ANNOUNCED rather than attached silently" 0 "$stalelocal_rc" \
+  "$stalelocal_out" "behind origin"
+check "the staleness announcement names the branch" 0 "$stalelocal_rc" \
+  "$stalelocal_out" "claim-stale-local"
+
+# A local branch that is already current must stay quiet — otherwise the warning fires on every
+# ordinary attach and is trained away as noise.
+current_consumer="$tmp/current-consumer"
+git clone -q "$stale_origin" "$current_consumer"
+git -C "$current_consumer" branch -f "claim-current-local" "$(git -C "$current_consumer" rev-parse origin/main)"
+currentlocal_rc=0
+currentlocal_out="$("$script" add \
+  "$current_consumer" "$tmp/wt-current-local" "claim-current-local" "session-currentlocal" 2>&1)" || currentlocal_rc=$?
+check "a current local branch claims without a staleness warning" 0 "$currentlocal_rc" \
+  "$currentlocal_out" "owner=session-currentlocal"
+check "no false staleness warning on a branch origin does not have" 0 \
+  "$(grep -qF 'behind origin' <<<"$currentlocal_out" && echo 1 || echo 0)"
+
+# ── ls-remote SUCCEEDS but the fetch fails, with no cached tracking ref ────────────────────────
+# The remote arm attaches with `--track … origin/$branch`. That ref only exists if the fetch landed,
+# so when `ls-remote` says the branch exists and the fetch then fails on a checkout that has never
+# fetched it, `worktree add` dies on `invalid reference` and `add` FAILS — remote state deciding
+# whether `add` succeeds, which every "advisory, not fatal" assertion above exists to prevent. The
+# combination is not exotic: `bounded_remote` gives the fetch a short timeout, so a merely SLOW
+# remote trips it while `ls-remote` already succeeded, and resuming an open PR is exactly the case
+# with no cached ref. The stub fails ONLY `fetch`, so `ls-remote` still answers 0 — without that
+# asymmetry the run would take the `*)` arm and this case would never be exercised.
+fetchfail_origin="$tmp/fetchfail-origin.git"
+git init -q --bare "$fetchfail_origin"
+fetchfail_seed="$tmp/fetchfail-seed"
+# Initialize directly rather than clone-or-init: the fallback made the seed's layout depend on which
+# arm ran, and both suppressions hid a real setup failure — a fixture that fails to build is
+# indistinguishable from one that built, so the checks below would pass for the wrong reason.
+git init -q -b main "$fetchfail_seed"
+git -C "$fetchfail_seed" config user.name "worktree-claim-test"
+git -C "$fetchfail_seed" config user.email "worktree-claim-test@example.com"
+git -C "$fetchfail_seed" commit --allow-empty -qm "init"
+git -C "$fetchfail_seed" checkout -qb "claim-fetchfail"
+git -C "$fetchfail_seed" commit --allow-empty -qm "work that only exists on origin"
+git -C "$fetchfail_seed" remote add origin "$fetchfail_origin"
+git -C "$fetchfail_seed" push -q origin main claim-fetchfail
+
+# Clone WITHOUT the branch's tracking ref, but keep the normal wildcard refspec — a narrowed
+# refspec would fail `--track` for an unrelated reason and mask what this fixture measures.
+fetchfail_consumer="$tmp/fetchfail-consumer"
+git clone -q --single-branch --branch main "$fetchfail_origin" "$fetchfail_consumer"
+git -C "$fetchfail_consumer" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+check "precondition: the branch has NO cached tracking ref" 0 \
+  "$(git -C "$fetchfail_consumer" show-ref --verify --quiet refs/remotes/origin/claim-fetchfail && echo 1 || echo 0)"
+
+fetchfail_stub="$tmp/fetchfail-stub"
+mkdir -p "$fetchfail_stub"
+cat >"$fetchfail_stub/git" <<STUB
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  [ "\$arg" = "fetch" ] && exit 1
+done
+exec "$real_git" "\$@"
+STUB
+chmod +x "$fetchfail_stub/git"
+
+fetchfail_rc=0
+fetchfail_out="$(PATH="$fetchfail_stub:$PATH" "$script" add \
+  "$fetchfail_consumer" "$tmp/wt-fetchfail" "claim-fetchfail" "session-fetchfail" 2>&1)" || fetchfail_rc=$?
+check "an unfetchable existing branch still claims (advisory, not fatal)" 0 "$fetchfail_rc" \
+  "$fetchfail_out" "owner=session-fetchfail"
+check "the unfetchable-branch claim actually creates the worktree" 0 \
+  "$([ -d "$tmp/wt-fetchfail" ] && echo 0 || echo 1)"
+# Silence here would be the dangerous outcome: origin POSITIVELY has this branch, so creating it
+# locally forks a real PR rather than resuming it. The warning is what sends the operator to
+# re-fetch before pushing, and it must say which of the two situations this is.
+check "an unfetchable existing branch is announced as a FORK, not a resume" 0 "$fetchfail_rc" \
+  "$fetchfail_out" "FORK, not a resume"
+check "the fork warning states the branch exists on origin" 0 "$fetchfail_rc" \
+  "$fetchfail_out" "EXISTS on origin"
+
+# ── a CACHED tracking ref that is STALE, when the refresh fails ────────────────────────────────
+# The guard above proves a cached ref EXISTS; existence is not freshness. With the fetch failing,
+# that ref is whatever the last successful fetch left, so attaching resumes the PR at an obsolete
+# head — the same silent staleness the fork branch warns about, arriving through the fallback
+# instead. `ls-remote` already returned origin's tip, so this is checkable rather than unknowable.
+stalecache_origin="$tmp/stalecache-origin.git"
+git init -q --bare "$stalecache_origin"
+stalecache_seed="$tmp/stalecache-seed"
+git init -q "$stalecache_seed"
+git -C "$stalecache_seed" config user.name "worktree-claim-test"
+git -C "$stalecache_seed" config user.email "worktree-claim-test@example.com"
+git -C "$stalecache_seed" commit --allow-empty -qm "init"
+git -C "$stalecache_seed" branch -M main
+git -C "$stalecache_seed" checkout -qb "claim-stalecache"
+git -C "$stalecache_seed" commit --allow-empty -qm "v1"
+git -C "$stalecache_seed" remote add origin "$stalecache_origin"
+git -C "$stalecache_seed" push -q origin main claim-stalecache
+
+# Clone WHILE the branch is at v1, so the tracking ref is cached and genuinely current...
+stalecache_consumer="$tmp/stalecache-consumer"
+git clone -q "$stalecache_origin" "$stalecache_consumer"
+stalecache_cached="$(git -C "$stalecache_consumer" rev-parse refs/remotes/origin/claim-stalecache)"
+# ...then advance origin, which is what makes the cache stale without touching the consumer.
+git -C "$stalecache_seed" commit --allow-empty -qm "v2"
+git -C "$stalecache_seed" push -q origin claim-stalecache
+stalecache_tip="$(git -C "$stalecache_origin" rev-parse claim-stalecache)"
+check "precondition: the cached ref and origin's tip actually differ" 0 \
+  "$([ "$stalecache_cached" != "$stalecache_tip" ] && echo 0 || echo 1)"
+
+stalecache_rc=0
+stalecache_out="$(PATH="$fetchfail_stub:$PATH" "$script" add \
+  "$stalecache_consumer" "$tmp/wt-stalecache" "claim-stalecache" "session-stalecache" 2>&1)" || stalecache_rc=$?
+check "a stale cached ref still claims (advisory, not fatal)" 0 "$stalecache_rc" \
+  "$stalecache_out" "owner=session-stalecache"
+check "an unrefreshable cached ref is announced as STALE" 0 "$stalecache_rc" \
+  "$stalecache_out" "is STALE"
+# Naming both SHAs is what makes the warning actionable rather than vague: the operator can see
+# which head they are on and which one they wanted.
+check "the stale-cache warning names the cached AND the origin sha" 0 "$stalecache_rc" \
+  "$stalecache_out" "${stalecache_cached:0:10}"
+# BOTH halves, or the check does not test what its name claims: with only the cached prefix asserted,
+# dropping the origin prefix from the message leaves this green — and the origin sha is the half that
+# tells the operator which head they wanted.
+check "the stale-cache warning names the ORIGIN sha too" 0 "$stalecache_rc" \
+  "$stalecache_out" "${stalecache_tip:0:10}"
+
+# The complement, and the reason this cannot just always warn: when the fetch SUCCEEDS the cached
+# ref is current, so the warning must stay silent or it fires on every ordinary attach.
+freshcache_consumer="$tmp/freshcache-consumer"
+git clone -q "$stalecache_origin" "$freshcache_consumer"
+freshcache_rc=0
+freshcache_out="$("$script" add \
+  "$freshcache_consumer" "$tmp/wt-freshcache" "claim-stalecache" "session-freshcache" 2>&1)" || freshcache_rc=$?
+# Assert the claim SUCCEEDED first. Absence-of-warning is satisfied by a fixture that never got far
+# enough to warn, so without this the check passes precisely when `add` is broken.
+check "the fresh-cache claim succeeds" 0 "$freshcache_rc" \
+  "$freshcache_out" "owner=session-freshcache"
+check "no false STALE warning when the refresh succeeds" 0 \
+  "$(grep -qF 'is STALE' <<<"$freshcache_out" && echo 1 || echo 0)"
+
+# ── the stale-LOCAL remediation must move something ────────────────────────────────────────────
+# It used to print `git fetch origin <branch>` — a command this function has already run, and which
+# only updates refs/remotes/origin/<branch>. Following it leaves the worktree exactly as stale, so
+# the operator learns the warning is noise. The hint must name the fast-forward in the WORKTREE.
+check "the stale-local hint names a merge, not another fetch" 0 "$stalelocal_rc" \
+  "$stalelocal_out" "merge --ff-only"
+# Assert against the HINT LINE, not the whole transcript. `git worktree add` echoes the worktree path
+# itself ("Preparing worktree ..."), so a whole-output match for that path passes no matter what the
+# hint targets — verified: repointing the hint at $repo left the suite fully green. Isolating the line
+# is what makes this assertion capable of failing for the reason it exists.
+stalelocal_hint="$(grep 'Reconcile before working' <<<"$stalelocal_out" || true)"
+check "a reconcile hint was actually emitted (guards the two checks below)" 0 \
+  "$([ -n "$stalelocal_hint" ] && echo 0 || echo 1)"
+check "the stale-local hint targets the WORKTREE" 0 0 \
+  "$stalelocal_hint" "wt-stale-local"
+check "the stale-local hint does NOT target the repo checkout" 0 \
+  "$(grep -qF 'stale-consumer' <<<"$stalelocal_hint" && echo 1 || echo 0)"
+
+# ── resuming a remote branch in a NARROW-REFSPEC clone ─────────────────────────────────────────
+# `worktree add --track <start>` does not ask whether the ref EXISTS; it asks whether git considers
+# it a trackable remote branch, and that answer comes from `remote.origin.fetch`. In a single-branch
+# clone the explicit refspec fetch above still creates refs/remotes/origin/<branch>, and the add is
+# still refused with `cannot set up tracking information` — leaving NO worktree at all. Resuming an
+# open PR is rung-1 work, so this arm failing is the helper being unusable for its commonest case.
+narrowfetch_origin="$tmp/narrowfetch-origin.git"
+git init -q --bare -b main "$narrowfetch_origin"
+narrowfetch_seed="$tmp/narrowfetch-seed"
+git init -q -b main "$narrowfetch_seed"
+git -C "$narrowfetch_seed" config user.name "worktree-claim-test"
+git -C "$narrowfetch_seed" config user.email "worktree-claim-test@example.com"
+git -C "$narrowfetch_seed" commit --allow-empty -qm "base"
+git -C "$narrowfetch_seed" remote add origin "$narrowfetch_origin"
+git -C "$narrowfetch_seed" push -q origin main
+git -C "$narrowfetch_seed" checkout -qb "claim-narrowfetch"
+git -C "$narrowfetch_seed" commit --allow-empty -qm "pr-work"
+git -C "$narrowfetch_seed" push -q origin "claim-narrowfetch"
+narrowfetch_tip="$(git -C "$narrowfetch_origin" rev-parse "claim-narrowfetch")"
+
+# --single-branch is what a shallow CI checkout and `gh repo clone -- --depth` both produce.
+narrowfetch_consumer="$tmp/narrowfetch-consumer"
+git clone -q --single-branch --branch main "$narrowfetch_origin" "$narrowfetch_consumer"
+# Guards the arm below: without a narrowed refspec this fixture proves nothing, and a later "tidy-up"
+# of the clone flags would silently make every assertion here vacuous.
+# Here-string, not a pipe: `grep -q` exits at the first match, the writer dies with EPIPE, and under
+# `pipefail` the pipeline reports non-zero — so the guard would print 0 and the precondition would
+# pass even when the refspec DOES map the PR branch, i.e. vacuous in the one direction it must catch.
+check "precondition: the consumer's refspec does NOT map the PR branch" 0 \
+  "$(grep -qF 'refs/heads/*' \
+     <<<"$(git -C "$narrowfetch_consumer" config remote.origin.fetch)" && echo 1 || echo 0)"
+
+narrowfetch_rc=0
+narrowfetch_out="$("$script" add \
+  "$narrowfetch_consumer" "$tmp/wt-narrowfetch" "claim-narrowfetch" "session-narrowfetch" 2>&1)" || narrowfetch_rc=$?
+check "a narrow-refspec clone still resumes an existing remote branch" 0 "$narrowfetch_rc" \
+  "$narrowfetch_out" "owner=session-narrowfetch"
+check "the narrow-refspec claim actually creates the worktree" 0 \
+  "$([ -d "$tmp/wt-narrowfetch" ] && echo 0 || echo 1)"
+# The whole point of resuming: land on the PR's commit, not a fork from local HEAD.
+check "the narrow-refspec worktree lands on the remote tip" 0 0 \
+  "$(git -C "$tmp/wt-narrowfetch" rev-parse HEAD 2>/dev/null || echo none)" "$narrowfetch_tip"
+
+# ── a failed refresh must not let behind=0 read as "current" ────────────────────────────────────
+# The local-branch arm counts `behind` against refs/remotes/origin/<branch>. When the fetch fails,
+# that ref is whatever the last successful fetch left — so a local branch equal to that obsolete
+# cache counts 0 and the arm stays silent, which is indistinguishable from a genuinely current
+# branch. A zero measured against an unrefreshed ref is not evidence; it is the absence of evidence.
+behindfail_origin="$tmp/behindfail-origin.git"
+git init -q --bare -b main "$behindfail_origin"
+behindfail_seed="$tmp/behindfail-seed"
+git init -q -b main "$behindfail_seed"
+git -C "$behindfail_seed" config user.name "worktree-claim-test"
+git -C "$behindfail_seed" config user.email "worktree-claim-test@example.com"
+git -C "$behindfail_seed" commit --allow-empty -qm "init"
+git -C "$behindfail_seed" remote add origin "$behindfail_origin"
+git -C "$behindfail_seed" push -q origin main
+git -C "$behindfail_seed" checkout -qb "claim-behindfail"
+git -C "$behindfail_seed" commit --allow-empty -qm "v1"
+git -C "$behindfail_seed" push -q origin "claim-behindfail"
+
+# Clone at v1 so the LOCAL branch and the CACHED tracking ref agree...
+behindfail_consumer="$tmp/behindfail-consumer"
+git clone -q "$behindfail_origin" "$behindfail_consumer"
+git -C "$behindfail_consumer" branch "claim-behindfail" "origin/claim-behindfail"
+# ...then advance origin. The consumer is never told, so a failed fetch leaves behind=0 against a
+# ref that is now one commit stale.
+git -C "$behindfail_seed" commit --allow-empty -qm "v2"
+git -C "$behindfail_seed" push -q origin "claim-behindfail"
+check "precondition: local and cached agree while origin has moved on" 0 \
+  "$([ "$(git -C "$behindfail_consumer" rev-parse claim-behindfail)" \
+     = "$(git -C "$behindfail_consumer" rev-parse refs/remotes/origin/claim-behindfail)" ] &&
+     [ "$(git -C "$behindfail_consumer" rev-parse claim-behindfail)" \
+     != "$(git -C "$behindfail_origin" rev-parse claim-behindfail)" ] && echo 0 || echo 1)"
+
+behindfail_rc=0
+behindfail_out="$(PATH="$fetchfail_stub:$PATH" "$script" add \
+  "$behindfail_consumer" "$tmp/wt-behindfail" "claim-behindfail" "session-behindfail" 2>&1)" || behindfail_rc=$?
+check "an unrefreshable local branch still claims (advisory, not fatal)" 0 "$behindfail_rc" \
+  "$behindfail_out" "owner=session-behindfail"
+# Assert on the branch-specific line. `warn_if_base_is_stale` also emits an UNKNOWN for origin/HEAD
+# under the same stub, so a whole-transcript match for "UNKNOWN" passes even with this fix reverted —
+# verified by reverting it and watching the unisolated form stay green.
+behindfail_line="$(grep 'origin/claim-behindfail' <<<"$behindfail_out" || true)"
+check "a behind=0 measured against an unrefreshed ref reports UNKNOWN, not silence" 0 \
+  "$([ -n "$behindfail_line" ] && echo 0 || echo 1)"
+check "the UNKNOWN names the failed refresh as the reason" 0 0 \
+  "$behindfail_line" "refresh failed"
+
+# ── a local branch with NO tracking ref at all, when the refresh fails ─────────────────────────
+# The case above has a cached ref, so `behind` is measurable and the zero answer is what needed
+# reporting. Here there is no `refs/remotes/origin/<branch>` to measure against — the state a fresh
+# `--single-branch` checkout is in for exactly the branch an open PR lives on. A failed refresh then
+# leaves nothing to compare, and returning silently is indistinguishable from "verified current",
+# which is the very condition the cached-ref arm rejects. Same reasoning, the other branch of the
+# same function; it went untested, so the silent return survived a fix that named it.
+nocache_origin="$tmp/nocache-origin.git"
+git init -q --bare -b main "$nocache_origin"
+nocache_seed="$tmp/nocache-seed"
+git init -q -b main "$nocache_seed"
+git -C "$nocache_seed" config user.name "worktree-claim-test"
+git -C "$nocache_seed" config user.email "worktree-claim-test@example.com"
+git -C "$nocache_seed" commit --allow-empty -qm "init"
+git -C "$nocache_seed" remote add origin "$nocache_origin"
+git -C "$nocache_seed" push -q origin main
+git -C "$nocache_seed" checkout -qb "claim-nocache"
+git -C "$nocache_seed" commit --allow-empty -qm "pr work"
+git -C "$nocache_seed" push -q origin "claim-nocache"
+
+# --single-branch leaves no tracking ref for the PR branch; the wildcard refspec is restored so the
+# absent ref is what this measures rather than a narrowed fetch config.
+nocache_consumer="$tmp/nocache-consumer"
+git clone -q --single-branch --branch main "$nocache_origin" "$nocache_consumer"
+git -C "$nocache_consumer" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+# A LOCAL branch of that name, so the attach path runs the freshness check at all.
+git -C "$nocache_consumer" branch "claim-nocache" main
+check "precondition: a local branch exists with no tracking ref" 0 \
+  "$(git -C "$nocache_consumer" show-ref --verify --quiet refs/heads/claim-nocache &&
+     ! git -C "$nocache_consumer" show-ref --verify --quiet refs/remotes/origin/claim-nocache &&
+     echo 0 || echo 1)"
+
+nocache_rc=0
+nocache_out="$(PATH="$fetchfail_stub:$PATH" "$script" add \
+  "$nocache_consumer" "$tmp/wt-nocache" "claim-nocache" "session-nocache" 2>&1)" || nocache_rc=$?
+check "a missing tracking ref still claims (advisory, not fatal)" 0 "$nocache_rc" \
+  "$nocache_out" "owner=session-nocache"
+# Branch-specific line for the same reason the case above needs one: `warn_if_base_is_stale` emits
+# its own UNKNOWN for origin/HEAD under this stub, so a whole-transcript "UNKNOWN" match stays green
+# with the fix reverted.
+nocache_line="$(grep 'origin/claim-nocache' <<<"$nocache_out" || true)"
+check "an absent tracking ref after a failed refresh reports UNKNOWN, not silence" 0 \
+  "$([ -n "$nocache_line" ] && echo 0 || echo 1)"
+check "that UNKNOWN also names the failed refresh as the reason" 0 0 \
+  "$nocache_line" "refresh failed"
+
+# ── a NON-ZERO behind measured against an unrefreshed ref is not origin's state ────────────────
+# The behind=0 case above is handled. The non-zero one was argued safe because "origin demonstrably
+# has those commits" — but the count is measured against the CACHED ref, which a failed fetch leaves
+# at whatever the last successful fetch wrote. If the branch was since deleted or force-pushed on
+# origin, those commits are not on origin at all, and the emitted hint tells the operator to
+# `merge --ff-only origin/<branch>` — resurrecting work that no longer exists there. A count is only
+# origin's state when the ref it was measured against was actually refreshed.
+behindstale_origin="$tmp/behindstale-origin.git"
+git init -q --bare -b main "$behindstale_origin"
+behindstale_seed="$tmp/behindstale-seed"
+git init -q -b main "$behindstale_seed"
+git -C "$behindstale_seed" config user.name "worktree-claim-test"
+git -C "$behindstale_seed" config user.email "worktree-claim-test@example.com"
+git -C "$behindstale_seed" commit --allow-empty -qm "init"
+git -C "$behindstale_seed" remote add origin "$behindstale_origin"
+git -C "$behindstale_seed" push -q origin main
+git -C "$behindstale_seed" checkout -qb "claim-behindstale"
+git -C "$behindstale_seed" commit --allow-empty -qm "v1"
+behindstale_v1="$(git -C "$behindstale_seed" rev-parse HEAD)"
+git -C "$behindstale_seed" commit --allow-empty -qm "v2"
+git -C "$behindstale_seed" push -q origin "claim-behindstale"
+
+# The consumer caches origin at v2 while its local branch stays at v1, so behind=1 is measurable...
+behindstale_consumer="$tmp/behindstale-consumer"
+git clone -q "$behindstale_origin" "$behindstale_consumer"
+git -C "$behindstale_consumer" branch "claim-behindstale" "$behindstale_v1"
+# ...and then the branch is DELETED on origin. The cached ref survives that, which is exactly why
+# the count keeps reading 1 while origin no longer carries the branch at all.
+git -C "$behindstale_origin" update-ref -d refs/heads/claim-behindstale
+check "precondition: behind is measurable while origin no longer has the branch" 0 \
+  "$([ "$(git -C "$behindstale_consumer" rev-list --count \
+       claim-behindstale..refs/remotes/origin/claim-behindstale)" = "1" ] &&
+     ! git -C "$behindstale_origin" show-ref --verify --quiet refs/heads/claim-behindstale &&
+     echo 0 || echo 1)"
+
+behindstale_rc=0
+behindstale_out="$(PATH="$fetchfail_stub:$PATH" "$script" add \
+  "$behindstale_consumer" "$tmp/wt-behindstale" "claim-behindstale" "session-behindstale" 2>&1)" ||
+  behindstale_rc=$?
+check "an unverifiable behind-count still claims (advisory, not fatal)" 0 "$behindstale_rc" \
+  "$behindstale_out" "owner=session-behindstale"
+# Isolate the branch's own NOTE line. `warn_if_base_is_stale` emits its own UNKNOWN for origin/HEAD
+# under this stub, so a whole-transcript match for "UNVERIFIED" would pass with the fix reverted.
+behindstale_line="$(grep 'behind the CACHED' <<<"$behindstale_out" || true)"
+check "a behind-count from a failed refresh is announced against the CACHED ref" 0 \
+  "$([ -n "$behindstale_line" ] && echo 0 || echo 1)"
+check "that announcement marks the count UNVERIFIED" 0 0 \
+  "$behindstale_line" "UNVERIFIED"
+# The hint is the actionable half, and the ff-merge is what would resurrect deleted work. It must not
+# be offered when the refresh that would have proven origin's state failed.
+check "no authoritative ff-merge hint is offered on an unverified count" 0 \
+  "$(grep -qF 'merge --ff-only' <<<"$behindstale_out" && echo 1 || echo 0)"
+
+# ── a FAILED pinned worktree creation must not report success ──────────────────────────────────
+# `add_worktree_on` is invoked as `if ! add_worktree_on ...`, which suppresses errexit for its whole
+# body. On the pinned path the creation's status is therefore not fatal, and the advisory
+# `branch --set-upstream-to ... || true` that follows it returns 0 — so the function's status is the
+# TRACKING call's, and a worktree git refused is announced as claimed. A post-checkout hook that
+# rejects the checkout is the real, unstubbed shape of this: git exits non-zero having already
+# created the directory, so the directory's existence proves nothing about success.
+pinfail_origin="$tmp/pinfail-origin.git"
+git init -q --bare -b main "$pinfail_origin"
+pinfail_seed="$tmp/pinfail-seed"
+git init -q -b main "$pinfail_seed"
+git -C "$pinfail_seed" config user.name "worktree-claim-test"
+git -C "$pinfail_seed" config user.email "worktree-claim-test@example.com"
+git -C "$pinfail_seed" commit --allow-empty -qm "init"
+git -C "$pinfail_seed" remote add origin "$pinfail_origin"
+git -C "$pinfail_seed" push -q origin main
+git -C "$pinfail_seed" checkout -qb "claim-pinfail"
+git -C "$pinfail_seed" commit --allow-empty -qm "work that lives on origin"
+git -C "$pinfail_seed" push -q origin "claim-pinfail"
+
+# A plain clone caches origin/claim-pinfail with no local branch — the state that takes the remote
+# arm, resolves a pinned tip, and reaches the pinned creation.
+pinfail_consumer="$tmp/pinfail-consumer"
+git clone -q "$pinfail_origin" "$pinfail_consumer"
+check "precondition: cached tracking ref present and no local branch (pinned path)" 0 \
+  "$(git -C "$pinfail_consumer" show-ref --verify --quiet refs/remotes/origin/claim-pinfail &&
+     ! git -C "$pinfail_consumer" show-ref --verify --quiet refs/heads/claim-pinfail &&
+     echo 0 || echo 1)"
+cat >"$pinfail_consumer/.git/hooks/post-checkout" <<'HOOK'
+#!/bin/sh
+echo "post-checkout refuses this checkout" >&2
+exit 7
+HOOK
+chmod +x "$pinfail_consumer/.git/hooks/post-checkout"
+
+pinfail_rc=0
+pinfail_out="$("$script" add \
+  "$pinfail_consumer" "$tmp/wt-pinfail" "claim-pinfail" "session-pinfail" 2>&1)" || pinfail_rc=$?
+check "a refused pinned creation does NOT exit 0" 1 \
+  "$([ "$pinfail_rc" -ne 0 ] && echo 1 || echo 0)"
+# The success line is what a caller and the run report read as "the lane is mine". Emitting it over a
+# refused checkout is the actual harm — the exit code alone could be lost in a pipeline.
+check "a refused pinned creation does not announce ownership" 0 \
+  "$(grep -qF 'owner=session-pinfail' <<<"$pinfail_out" && echo 1 || echo 0)"
+check "a refused pinned creation says the worktree add failed" 0 0 \
+  "$pinfail_out" "git worktree add failed"
+
 printf '\nworktree-claim: %s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

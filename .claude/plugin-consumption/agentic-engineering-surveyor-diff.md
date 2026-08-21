@@ -37,8 +37,14 @@ plugin carries them (or an explicit, tested subset):
 
 1. **Automation-owned short-circuit** — exact `renovate[bot]` / `dependabot[bot]` → one
    `AUTOMATION-OWNED (NO-ACTION)` line; no pentad deepen.
-2. **`OWNERSHIP-UNVERIFIED` framing** for every `devantler`-authored PR (routine vs interactive
-   ambiguity; branch + disclosure hints only).
+2. **All-author active-work signals as the action gate, with disclosure reduced to attribution.**
+   Every PR carries `active=` — one or more `+`-joined signals, `none` only alone — and that is what
+   says whether someone else is mid-flight. `branch` and `disclosure` are reported for a
+   `devantler`-authored PR as **attribution hints only**: they tell the orchestrator whose control
+   channel a comment on that PR is, never whether it may be driven. The surveyor emits **no ownership
+   verdict**. A plugin that still gates driving on an ownership classification, or that omits `active=`
+   for any author, has not reached parity — the `OWNERSHIP-UNVERIFIED` framing this item used to
+   require was retired with the 2026-08-08 all-author ownership grant.
 3. **Full hygiene pentad** including threaded and non-thread findings; CodeRabbit's ancillary
    evaluator contributes only concrete problems it explicitly reports during its selected review,
    never a separate readiness state.
@@ -56,12 +62,15 @@ plugin carries them (or an explicit, tested subset):
    is the default state of every head: the status corroborates run-completion only when its
    `description` begins `Review completed`, and never satisfies the gate on its own. Without this a
    state-only check reports every never-reviewed PR as green.
-4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713) — a review object
-   counts only when its body begins `**Actionable comments posted:`; an empty object is a reply
+4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713 / #2819) — a review
+   object counts only when its body begins `**Actionable comments posted:` **after stripping any
+   leading HTML comments and the whitespace around them**; an empty object is a reply
    container, never a review, whatever its `commit_id`. Measured over the 60 most recently merged
    monorepo PRs: 16 of 19 objects at a merged head were empty, and two PRs merged with no substantive
    review at the merged commit. Without this a bare `commit_id == head` match reports a non-review as
-   a green.
+   a green. The strip is required rather than permissive: CodeRabbit fronts every real body with an
+   agent-hint block, so without it the identification matches no genuine review and reports
+   `green_review=none` over a real green — burning the metered lanes on an already-reviewed head.
 4e. **CodeRabbit verdict-bearing command reply** (monorepo#2758) — a command-invocation reply counts
    when it states `Reviewed pull request #<n> at <sha>` with `<sha>` prefix-matching `headRefOid`,
    **and** `I found no actionable issues`, **and** is updated after the latest authenticated
@@ -87,6 +96,10 @@ plugin carries them (or an explicit, tested subset):
    and release PRs without weakening the normal bot review gate.
 10. **Lane-signal** reporting for provider quota (e.g. Bugbot usage-limit) without treating it as a
    code verdict.
+11. **Repository-scoped untyped residual parity** — primary and per-type issue sweeps are scoped at
+    retrieval to each Portfolio-map repository; every operand is checked for truncation before
+    subtraction; a capped operand withholds only that repository's residual and emits the named
+    mandatory-query failure instead of contaminating or suppressing other repositories.
 
 ## Equivalence status (this slice)
 

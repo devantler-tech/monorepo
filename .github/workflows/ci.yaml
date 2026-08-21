@@ -23,23 +23,43 @@ jobs:
       branch-cleanup: ${{ steps.filter.outputs.branch-cleanup }}
       worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
+      submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
       agent-role-delivery-contract: ${{ steps.filter.outputs.agent-role-delivery-contract }}
       work-priority-ladder: ${{ steps.filter.outputs.work-priority-ladder }}
       latency-discipline-contract: ${{ steps.filter.outputs.latency-discipline-contract }}
+      control-character-command-contract: ${{ steps.filter.outputs.control-character-command-contract }}
+      one-verb-per-bash-call-contract: ${{ steps.filter.outputs.one-verb-per-bash-call-contract }}
+      bash-call-timeout-budget-contract: ${{ steps.filter.outputs.bash-call-timeout-budget-contract }}
+      codex-dispatch-supersession-contract: ${{ steps.filter.outputs.codex-dispatch-supersession-contract }}
+      lane-outage-disclosure-contract: ${{ steps.filter.outputs.lane-outage-disclosure-contract }}
+      git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
+      rung-type-filter-contract: ${{ steps.filter.outputs.rung-type-filter-contract }}
+      definition-load-budget-contract: ${{ steps.filter.outputs.definition-load-budget-contract }}
+      plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
+      plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
+      codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
+      improver-role-disclosure: ${{ steps.filter.outputs.improver-role-disclosure }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
+      merge-preflight-thread-gate: ${{ steps.filter.outputs.merge-preflight-thread-gate }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
       agent-telemetry: ${{ steps.filter.outputs.agent-telemetry }}
       board-add: ${{ steps.filter.outputs.board-add }}
       flow-scorecard: ${{ steps.filter.outputs.flow-scorecard }}
       memory-hygiene: ${{ steps.filter.outputs.memory-hygiene }}
+      memory-rewrite: ${{ steps.filter.outputs.memory-rewrite }}
+      branch-op-lock: ${{ steps.filter.outputs.branch-op-lock }}
+      agent-claim: ${{ steps.filter.outputs.agent-claim }}
+      memory-backup: ${{ steps.filter.outputs.memory-backup }}
       worktree-claim: ${{ steps.filter.outputs.worktree-claim }}
       renovate-dashboard: ${{ steps.filter.outputs.renovate-dashboard }}
       comment-disclosure-drift: ${{ steps.filter.outputs.comment-disclosure-drift }}
       pr-ownership-disclosure: ${{ steps.filter.outputs.pr-ownership-disclosure }}
+      pipefail-grep-guard: ${{ steps.filter.outputs.pipefail-grep-guard }}
+      surveyor-forge-vocabulary: ${{ steps.filter.outputs.surveyor-forge-vocabulary }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,7 +67,7 @@ jobs:
           persist-credentials: false
       - name: Detect changes
         id: filter
-        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
             docs:
@@ -114,11 +134,61 @@ jobs:
             submodule-init:
               - '.claude/scripts/submodule-init.sh'
               - '.claude/scripts/submodule-init.test.sh'
+            submodule-pin-currency:
+              - 'AGENTS.md'
+              - '.claude/scripts/submodule-pin-currency.sh'
+              - '.claude/scripts/submodule-pin-currency.test.sh'
+              - '.github/workflows/ci.yaml'
             memory-hygiene:
               - 'AGENTS.md'
               - '.claude/scripts/memory-hygiene.sh'
               - '.claude/scripts/memory-hygiene.test.sh'
               - '.claude/scripts/memory-hygiene-go/**'
+              - '.claude/skills/portfolio-maintenance/SKILL.md'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            memory-rewrite:
+              - '.claude/scripts/memory-rewrite.sh'
+              - '.claude/scripts/memory-rewrite.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            branch-op-lock:
+              - '.claude/scripts/branch-op-lock.sh'
+              - '.claude/scripts/branch-op-lock.test.sh'
+              - '.claude/scripts/worktree-add.sh'
+              - '.claude/scripts/worktree-remove.sh'
+              # worktree-claim.sh `add` holds the same lock across its whole creation path, so a
+              # change there can break serialisation without touching any file listed above.
+              - '.claude/scripts/worktree-claim.sh'
+              - '.claude/scripts/branch-cleanup.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            agent-claim:
+              - '.claude/scripts/agent-claim.sh'
+              - '.claude/scripts/agent-claim.test.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            memory-backup:
+              - '.claude/scripts/memory-backup.sh'
+              - '.claude/scripts/memory-backup.test.sh'
+              - '.claude/scripts/memory-backup-go/**'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
+              - '.github/workflows/ci.yaml'
+            surveyor-forge-vocabulary:
+              - '.claude/scripts/surveyor-forge-vocabulary.test.sh'
+              - '.claude/scripts/surveyor-vocabulary-coverage.test.sh'
+              - '.gitmodules'
+              - 'libraries/agent-plugins'
+              # The surveyor definition and its run loop are what DEFINE the
+              # vocabulary this job pins. A PR that adds or changes a survey
+              # command in either of them must run the conformance test, or the
+              # guard can start refusing a newly mandated read with CI silent.
+              - '.claude/agents/portfolio-surveyor.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               # Self-gate on the workflow too, so a change that breaks this
               # job's own wiring still runs the test it gates.
@@ -192,6 +262,60 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/latency-discipline-contract.test.sh'
               - '.github/workflows/ci.yaml'
+            control-character-command-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/control-character-command-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            one-verb-per-bash-call-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/one-verb-per-bash-call-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            bash-call-timeout-budget-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/bash-call-timeout-budget-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            codex-dispatch-supersession-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/codex-dispatch-supersession-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            lane-outage-disclosure-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/lane-outage-disclosure-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            git-safety-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/git-safety-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            rung-type-filter-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/rung-type-filter-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            definition-load-budget-contract:
+              - 'AGENTS.md'
+              # The overlay itself MUST be here: a pull request that grows it without
+              # touching AGENTS.md is precisely the case this guard exists to catch, and
+              # would otherwise skip the job entirely.
+              - '.claude/agents/portfolio-surveyor.md'
+              - '.claude/scripts/definition-load-budget-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            plugin-definition-currency:
+              - 'AGENTS.md'
+              - '.claude/scripts/plugin-definition-currency.sh'
+              - '.claude/scripts/plugin-definition-currency.test.sh'
+              - '.github/workflows/ci.yaml'
+            plugin-definition-refresh:
+              - 'AGENTS.md'
+              - '.claude/scripts/plugin-definition-refresh.sh'
+              - '.claude/scripts/plugin-definition-refresh.test.sh'
+              # The refresh script's DEFAULT post-apply verifier. Its exit codes are the verdict, so
+              # a change there changes this script's behaviour without touching either file above.
+              - '.claude/scripts/plugin-definition-currency.sh'
+              - '.github/workflows/ci.yaml'
+            codex-lane-liveness:
+              - 'AGENTS.md'
+              - '.claude/scripts/codex-lane-liveness.sh'
+              - '.claude/scripts/codex-lane-liveness.test.sh'
+              - '.github/workflows/ci.yaml'
             self-review-contract:
               - 'AGENTS.md'
               - '.coderabbit.yaml'
@@ -206,6 +330,11 @@ jobs:
               - '.claude/plugin-consumption/agentic-engineering-surveyor-diff.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/scripts/review-provider-loop-contract.test.sh'
+              # The captured review bodies the contract test asserts against. A
+              # fixture is an input to that test, so editing one can invalidate a
+              # regression case — without this the job is skipped and CI stays
+              # green while the case it pins no longer reproduces.
+              - '.claude/scripts/fixtures/**'
               - '.github/workflows/ci.yaml'
             agent-role-delivery-contract:
               - 'AGENTS.md'
@@ -234,6 +363,8 @@ jobs:
             work-priority-ladder:
               - 'AGENTS.md'
               - '.claude/skills/portfolio-maintenance/SKILL.md'
+              - '.claude/skills/product-engineering/SKILL.md'
+              - '.claude/agents/portfolio-surveyor.md'
               - '.claude/scripts/work-priority-ladder.test.sh'
               - '.github/workflows/ci.yaml'
             merge-confirmation-read:
@@ -243,6 +374,28 @@ jobs:
               - '.claude/**/*.md'
               - '.claude/**/*.json'
               - '.claude/scripts/merge-confirmation-read.test.sh'
+              - '.github/workflows/ci.yaml'
+            improver-role-disclosure:
+              - 'AGENTS.md'
+              - '.claude/scripts/improver-role-disclosure-contract.test.sh'
+              # the behavioural assertion runs the REAL guard, so a change to it can make
+              # this test pass or fail without AGENTS.md moving at all
+              - '.claude/scripts/comment-disclosure-drift.sh'
+              - '.claude/scripts/comment-disclosure-drift-go/**'
+              - '.github/workflows/ci.yaml'
+            merge-preflight-thread-gate:
+              - 'AGENTS.md'
+              # every Markdown/JSON definition surface, matching the test's own discovery — an
+              # enumerated subset would let a change to an unlisted surface skip the negative control
+              - '.claude/**/*.md'
+              - '.claude/**/*.json'
+              # the enforcement SCRIPTS are scanned too: a prescription can live in a sibling
+              # guard's comments or failure messages, so an edit there must run this control
+              - '.claude/**/*.sh'
+              # the PINNED plugin definitions are scanned too, so a gitlink advance that
+              # reintroduces a thread field must run this guard rather than sail past it
+              - 'libraries/agent-plugins'
+              - '.gitmodules'
               - '.github/workflows/ci.yaml'
             portfolio-surveyor:
               - 'AGENTS.md'
@@ -265,6 +418,18 @@ jobs:
               - '.claude/scripts/pr-ownership-disclosure.sh'
               - '.claude/scripts/pr-ownership-disclosure-go/**'
               - '.github/workflows/ci.yaml'
+            pipefail-grep-guard:
+              # The guard scans EVERY tracked shell script, so any shell change
+              # can introduce the shape it rejects — an enumerated subset would
+              # let a new script land unchecked.
+              # ANY path. A shell script need not be named `*.sh` — the guard
+              # identifies one by shebang, anywhere in the tree — so any narrower
+              # filter contradicts its stated scope and lets an extensionless
+              # `tools/check` or a repository-root `check` land unscanned. An
+              # enumerated set of "script-ish" directories only moves the gap
+              # rather than closing it. The sweep is ~9s over the whole
+              # repository, so running it unconditionally is the cheaper error.
+              - '**'
             product-value:
               - 'AGENTS.md'
               - '**/[Aa][Dd][Rr]/**'
@@ -301,6 +466,9 @@ jobs:
         working-directory: docs
         run: npm run build
 
+  # The Audit step below is mirrored by .github/workflows/audit-docs.yaml, which runs it
+  # on a cadence so advisories surface before they can block an automated dependency PR.
+  # Keep the two in lockstep: a change to the Audit step here needs the same change there.
   audit-docs:
     needs: changes
     if: needs.changes.outputs.docs-deps == 'true'
@@ -540,6 +708,72 @@ jobs:
       - name: Self-test the submodule-init isolation guard
         run: bash .claude/scripts/submodule-init.test.sh
 
+  test-submodule-pin-currency:
+    name: Test submodule pin currency
+    needs: changes
+    if: needs.changes.outputs.submodule-pin-currency == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Throwaway git fixtures only (file:// remotes, hermetic config) — no network and no real
+      # submodule touched. Both OSes because the check compares resolved worktree paths with
+      # `pwd -P`, which differs under macOS /private/tmp symlinks.
+      - name: Verify the submodule pin currency check
+        run: bash .claude/scripts/submodule-pin-currency.test.sh
+
+  test-pipefail-grep-guard:
+    name: Test pipefail grep guard
+    needs: changes
+    if: needs.changes.outputs.pipefail-grep-guard == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The self-test proves the class is real by executing it, then covers each
+      # spelling the guard must catch and each safe shape it must leave alone.
+      - name: Self-test the guard
+        run: bash .claude/scripts/pipefail-grep-guard.test.sh
+      # ENFORCEMENT IS LATENT, per feature-flag-first delivery. This guard
+      # approximates a shell parser in ~1100 lines of bash, so it can err in both
+      # directions: a silent miss on a hazardous line, or a false positive that
+      # blocks a valid script. Gating every PR in the repository on that judgement
+      # is the risk the flag holds back.
+      #
+      # The repository-wide sweep therefore runs only when the
+      # `ENFORCE_PIPEFAIL_GREP_GUARD` repository variable is `true`. Activation is a
+      # separate, reversible step, taken once the guard has run clean against real
+      # traffic. The self-test above is NOT gated — it is an ordinary unit test of a
+      # tracked script, and keeping it running is what makes the latent code
+      # trustworthy at the moment the flag is flipped.
+      #
+      # This is a RELEASE flag, so it is short-lived by contract: #2821 owns
+      # activation and removal, and expires 2026-09-30. From that date
+      # `pipefail-grep-guard.test.sh` fails, so the flag cannot become permanent
+      # debt without someone deciding to keep it.
+      - name: Reject writers piped into an early-exiting grep
+        if: vars.ENFORCE_PIPEFAIL_GREP_GUARD == 'true'
+        run: bash .claude/scripts/pipefail-grep-guard.sh
+      # The OFF state is a real state, so it reports rather than silently doing
+      # nothing: a run in which the sweep did not execute says so.
+      - name: Report that enforcement is latent
+        if: vars.ENFORCE_PIPEFAIL_GREP_GUARD != 'true'
+        run: |
+          echo "pipefail-grep-guard: enforcement is LATENT (ENFORCE_PIPEFAIL_GREP_GUARD is not 'true')."
+          echo "The self-test ran; the repository-wide sweep did not gate this PR."
+
   test-maintainer-preflight:
     name: Test maintainer preflight contract
     needs: changes
@@ -630,6 +864,54 @@ jobs:
       - name: Verify the comment disclosure drift guard
         run: bash .claude/scripts/comment-disclosure-drift.test.sh
 
+  test-surveyor-forge-vocabulary:
+    name: Test surveyor forge vocabulary conformance
+    needs: changes
+    # The guard this job EXECUTES is checked out at a gitlink read from the
+    # PR's own tree, so a fork could repoint it at any commit in agent-plugins
+    # and run that code here. Restrict the job to branches in this repository,
+    # which is the same trust boundary AGENTS.md sets for external branches:
+    # review them statically, never execute them. merge_group carries no
+    # pull_request payload and is already past that gate.
+    if: >-
+      needs.changes.outputs.surveyor-forge-vocabulary == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The guard under test lives in the pinned plugin submodule, whose .gitmodules
+      # URL is SSH — unusable on a runner. Check the pinned revision out over HTTPS
+      # instead, so the test runs against exactly the reviewed commit this repo pins.
+      - name: Resolve the pinned agent-plugins revision
+        id: pin
+        # --no-replace-objects: a refs/replace entry would otherwise resolve the
+        # gitlink through a replacement commit while HEAD still looks correct.
+        run: echo "sha=$(git --no-replace-objects rev-parse HEAD:libraries/agent-plugins)" >> "$GITHUB_OUTPUT"
+      - name: Check out the guard at that revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: devantler-tech/agent-plugins
+          ref: ${{ steps.pin.outputs.sha }}
+          path: libraries/agent-plugins
+          persist-credentials: false
+      # The guard is a pure argv classifier: the test makes no API call and
+      # contacts no forge. The checkout above is this job's only network use.
+      - name: Verify the surveyor read vocabulary against the forge guard
+        run: bash .claude/scripts/surveyor-forge-vocabulary.test.sh
+      # The step above pins CORPUS -> GUARD. This one pins SOURCES -> CORPUS, so
+      # a survey command added to the surveyor definition cannot ship
+      # unclassified while the job re-checks an unchanged list and stays green.
+      # Same guard, same submodule checkout, same path filter — so it belongs
+      # here rather than in a job that would duplicate all three.
+      - name: Verify the definitions prescribe no unclassified command
+        run: bash .claude/scripts/surveyor-vocabulary-coverage.test.sh
+
   test-pr-ownership-disclosure:
     name: Test PR ownership disclosure classifier
     needs: changes
@@ -670,6 +952,85 @@ jobs:
       - name: Verify the memory hygiene guard
         run: bash .claude/scripts/memory-hygiene.test.sh
 
+  test-memory-rewrite:
+    name: Test memory rewrite guard
+    needs: changes
+    if: needs.changes.outputs.memory-rewrite == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the memory rewrite guard
+        run: bash .claude/scripts/memory-rewrite.test.sh
+
+  test-branch-op-lock:
+    name: Test branch-operation lock
+    needs: changes
+    if: needs.changes.outputs.branch-op-lock == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the branch-operation lock
+        run: bash .claude/scripts/branch-op-lock.test.sh
+
+  test-agent-claim:
+    name: Test agent-claim arbitration
+    needs: changes
+    if: needs.changes.outputs.agent-claim == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hermetic bare-origin fixture — no network, no token. Pins seven
+      # cross-lane claim traps (monorepo#2302): arbitration, tip-based verdicts,
+      # nonce uniqueness, takeover/retire ownership, remote-parent fetch, and
+      # capability-failure classification.
+      - name: Self-test agent-claim traps
+        run: bash .claude/scripts/agent-claim.test.sh
+
+  test-memory-backup:
+    name: Test memory backup helper (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.memory-backup == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/memory-backup-go/go.mod
+          cache: false
+      - name: Verify the memory backup helper
+        run: |
+          go -C .claude/scripts/memory-backup-go test ./...
+          bash .claude/scripts/memory-backup.test.sh
+
   test-product-value-contract:
     name: Test product value contract
     needs: changes
@@ -699,6 +1060,171 @@ jobs:
           persist-credentials: false
       - name: Verify the latency discipline contract
         run: bash .claude/scripts/latency-discipline-contract.test.sh
+
+  test-control-character-command-contract:
+    name: Test control character command contract
+    needs: changes
+    if: needs.changes.outputs.control-character-command-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the control character command contract
+        run: bash .claude/scripts/control-character-command-contract.test.sh
+
+  test-rung-type-filter-contract:
+    name: Test rung type filter contract
+    needs: changes
+    if: needs.changes.outputs.rung-type-filter-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the rung type filter contract
+        run: bash .claude/scripts/rung-type-filter-contract.test.sh
+
+  test-definition-load-budget-contract:
+    name: Test definition load budget contract
+    needs: changes
+    if: needs.changes.outputs.definition-load-budget-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the definition load budget contract
+        run: bash .claude/scripts/definition-load-budget-contract.test.sh
+
+  test-one-verb-per-bash-call-contract:
+    name: Test one verb per bash call contract
+    needs: changes
+    if: needs.changes.outputs.one-verb-per-bash-call-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the one verb per bash call contract
+        run: bash .claude/scripts/one-verb-per-bash-call-contract.test.sh
+
+  test-bash-call-timeout-budget-contract:
+    name: Test bash call timeout budget contract
+    needs: changes
+    if: needs.changes.outputs.bash-call-timeout-budget-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the bash call timeout budget contract
+        run: bash .claude/scripts/bash-call-timeout-budget-contract.test.sh
+
+  test-codex-dispatch-supersession-contract:
+    name: Test codex dispatch supersession contract
+    needs: changes
+    if: needs.changes.outputs.codex-dispatch-supersession-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the codex dispatch supersession contract
+        run: bash .claude/scripts/codex-dispatch-supersession-contract.test.sh
+
+  test-lane-outage-disclosure-contract:
+    name: Test lane outage disclosure contract
+    needs: changes
+    if: needs.changes.outputs.lane-outage-disclosure-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the lane outage disclosure contract
+        run: bash .claude/scripts/lane-outage-disclosure-contract.test.sh
+
+  test-git-safety-contract:
+    name: Test git safety contract
+    needs: changes
+    if: needs.changes.outputs.git-safety-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the git safety contract
+        run: bash .claude/scripts/git-safety-contract.test.sh
+
+  test-plugin-definition-currency:
+    name: Test plugin definition currency
+    needs: changes
+    if: needs.changes.outputs.plugin-definition-currency == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the plugin definition currency check
+        run: bash .claude/scripts/plugin-definition-currency.test.sh
+
+  test-codex-lane-liveness:
+    name: Test codex lane liveness
+    needs: changes
+    if: needs.changes.outputs.codex-lane-liveness == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the codex lane liveness check
+        run: bash .claude/scripts/codex-lane-liveness.test.sh
+
+  test-plugin-definition-refresh:
+    name: Test plugin definition refresh
+    needs: changes
+    if: needs.changes.outputs.plugin-definition-refresh == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the gated plugin definition refresh
+        run: bash .claude/scripts/plugin-definition-refresh.test.sh
 
   test-self-review-contract:
     name: Test self-review contract
@@ -792,6 +1318,56 @@ jobs:
       - name: Verify the merge-confirmation read contract
         run: bash .claude/scripts/merge-confirmation-read.test.sh
 
+  test-improver-role-disclosure:
+    name: Test Improver role disclosure contract
+    needs: changes
+    if: needs.changes.outputs.improver-role-disclosure == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Assertion 3 executes the real disclosure guard rather than asserting its behaviour
+      # from the Go source, so this job needs the same toolchain that guard is built with.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .claude/scripts/comment-disclosure-drift-go/go.mod
+          cache: false
+      # Hermetic: the guard is network-free and every fixture is a local --input file.
+      - name: Verify the Improver role disclosure contract
+        run: bash .claude/scripts/improver-role-disclosure-contract.test.sh
+
+  test-merge-preflight-thread-gate:
+    name: Test merge-preflight thread gate
+    needs: changes
+    if: needs.changes.outputs.merge-preflight-thread-gate == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The negative control scans the PINNED plugin definitions as well, so that one submodule
+      # must be present — without it the test fails closed rather than skipping, because `find` on a
+      # missing directory prints nothing and the added surfaces would be a silent no-op. Only this
+      # submodule is initialised (not `submodules: true`, which would also try the private ones), over
+      # HTTPS because .gitmodules uses SSH and no deploy key exists in CI. The rewrite is
+      # command-scoped and carries no credential: agent-plugins is public and this is an anonymous
+      # read. NOT shallow — `--depth 1` resolves the pin only while it equals the branch tip, so every
+      # upstream merge past the pin would turn an unrelated PR red.
+      - name: Initialise the agent-plugins submodule
+        run: |
+          git -c 'url.https://github.com/.insteadOf=git@github.com:' \
+            submodule update --init libraries/agent-plugins
+      - name: Verify the merge-preflight thread gate
+        run: bash .claude/scripts/merge-preflight-thread-gate.test.sh
+
   test-portfolio-surveyor-contract:
     name: Test portfolio surveyor contract
     needs: changes
@@ -820,6 +1396,7 @@ jobs:
       - test-agent-telemetry
       - test-board-add
       - test-comment-disclosure-drift
+      - test-surveyor-forge-vocabulary
       - test-pr-ownership-disclosure
       - test-worktree-claim
       - test-flow-scorecard
@@ -827,20 +1404,39 @@ jobs:
       - test-branch-cleanup
       - test-worktree-cleanup
       - test-submodule-init
+      - test-submodule-pin-currency
+      - test-pipefail-grep-guard
       - test-maintainer-preflight
       - test-memory-hygiene
+      - test-memory-rewrite
+      - test-branch-op-lock
+      - test-agent-claim
+      - test-memory-backup
       - test-latency-discipline-contract
+      - test-control-character-command-contract
+      - test-one-verb-per-bash-call-contract
+      - test-bash-call-timeout-budget-contract
+      - test-codex-dispatch-supersession-contract
+      - test-lane-outage-disclosure-contract
+      - test-git-safety-contract
+      - test-rung-type-filter-contract
+      - test-definition-load-budget-contract
+      - test-plugin-definition-currency
+      - test-plugin-definition-refresh
+      - test-codex-lane-liveness
       - test-self-review-contract
       - test-review-provider-loop-contract
       - test-agent-role-delivery-contract
       - test-work-priority-ladder
       - test-merge-confirmation-read
+      - test-improver-role-disclosure
+      - test-merge-preflight-thread-gate
       - test-portfolio-surveyor-contract
       - test-product-value-contract
     permissions: {}
     steps:
       - name: Check job results
-        uses: devantler-tech/actions/aggregate-job-checks@61d9c87b302523778789c7cf09655b87b6716e87 # v13.0.4
+        uses: devantler-tech/actions/aggregate-job-checks@b089a1b041cb86af22cdc57de58a4d7d258dcc32 # v13.1.1
         with:
           job-results: >-
             ${{ needs.changes.result }}
@@ -851,6 +1447,7 @@ jobs:
             ${{ needs.test-agent-telemetry.result }}
             ${{ needs.test-board-add.result }}
             ${{ needs.test-comment-disclosure-drift.result }}
+            ${{ needs.test-surveyor-forge-vocabulary.result }}
             ${{ needs.test-pr-ownership-disclosure.result }}
             ${{ needs.test-worktree-claim.result }}
             ${{ needs.test-flow-scorecard.result }}
@@ -858,13 +1455,32 @@ jobs:
             ${{ needs.test-branch-cleanup.result }}
             ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-submodule-init.result }}
+            ${{ needs.test-submodule-pin-currency.result }}
+            ${{ needs.test-pipefail-grep-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
+            ${{ needs.test-memory-rewrite.result }}
+            ${{ needs.test-branch-op-lock.result }}
+            ${{ needs.test-agent-claim.result }}
+            ${{ needs.test-memory-backup.result }}
             ${{ needs.test-latency-discipline-contract.result }}
+            ${{ needs.test-control-character-command-contract.result }}
+            ${{ needs.test-one-verb-per-bash-call-contract.result }}
+            ${{ needs.test-bash-call-timeout-budget-contract.result }}
+            ${{ needs.test-codex-dispatch-supersession-contract.result }}
+            ${{ needs.test-lane-outage-disclosure-contract.result }}
+            ${{ needs.test-git-safety-contract.result }}
+            ${{ needs.test-rung-type-filter-contract.result }}
+            ${{ needs.test-definition-load-budget-contract.result }}
+            ${{ needs.test-plugin-definition-currency.result }}
+            ${{ needs.test-plugin-definition-refresh.result }}
+            ${{ needs.test-codex-lane-liveness.result }}
             ${{ needs.test-self-review-contract.result }}
             ${{ needs.test-review-provider-loop-contract.result }}
             ${{ needs.test-agent-role-delivery-contract.result }}
             ${{ needs.test-work-priority-ladder.result }}
             ${{ needs.test-merge-confirmation-read.result }}
+            ${{ needs.test-improver-role-disclosure.result }}
+            ${{ needs.test-merge-preflight-thread-gate.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}
             ${{ needs.test-product-value-contract.result }}

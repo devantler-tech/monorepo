@@ -27,12 +27,25 @@ fail() {
   exit 1
 }
 
+sha256_bytes() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    fail "sha256sum or shasum is required to verify pinned agent definition integrity"
+  fi
+}
+
+sha256_file() { sha256_bytes "$1"; }
+
 # Prose guards must survive re-wrapping: a boundary sentence that happens to break
 # across two lines is still present, so match against a whitespace-flattened copy
 # rather than letting a paragraph reflow read as a removed protection.
 flatten() { tr '\n' ' ' < "$1" | tr -s '[:space:]' ' '; }
 constitution_flat="$(flatten "${constitution}")"
 engineer_flat="$(flatten "${engineer_agent}")"
+maintenance_overlay_flat="$(flatten "${maintenance_overlay}")"
 
 assert_prose() {
   case "${constitution_flat}" in
@@ -42,6 +55,12 @@ assert_prose() {
 }
 assert_engineer_prose() {
   case "${engineer_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+assert_maintenance_prose() {
+  case "${maintenance_overlay_flat}" in
     *"$1"*) ;;
     *) fail "$2" ;;
   esac
@@ -143,6 +162,7 @@ skill_upstream="$(yq --front-matter=extract '.metadata.github-repo // ""' "${bun
 # directory was absent, which made it a no-op in CI (actions/checkout does not initialise
 # submodules), so the guard against entrypoint drift would never have run where it matters.
 plugin_agents="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/agents"
+plugin_scripts="${repo_root}/libraries/agent-plugins/plugins/agentic-engineering/scripts"
 entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
 [ -d "${plugin_agents}" ] ||
   fail "cannot resolve the entrypoint: ${plugin_agents} is missing. Initialise it with
@@ -151,6 +171,75 @@ entrypoint="$(jq -r '.spec.source.entrypoint' "${desired_state}")"
 [ -f "${plugin_agents}/${entrypoint}.agent.md" ] ||
   fail "desired state entrypoint '${entrypoint}' does not resolve to a bundled agent in ${plugin_agents}"
 canonical_engineer="${plugin_agents}/${entrypoint}.agent.md"
+canonical_surveyor="${plugin_agents}/portfolio-surveyor.agent.md"
+canonical_improver="${plugin_agents}/agent-improver.agent.md"
+canonical_ci_classifier="${plugin_scripts}/classify-default-branch-ci-runs.sh"
+canonical_forge_guard="${plugin_scripts}/forge-readonly-guard.sh"
+[ -f "${canonical_surveyor}" ] ||
+  fail "pinned plugin does not bundle portfolio-surveyor.agent.md"
+[ -f "${canonical_improver}" ] ||
+  fail "pinned plugin does not bundle agent-improver.agent.md"
+if [ ! -f "${canonical_ci_classifier}" ] \
+  || [ ! -x "${canonical_ci_classifier}" ] \
+  || [ -L "${canonical_ci_classifier}" ]; then
+  fail "pinned plugin does not bundle the regular executable default-branch classifier"
+fi
+if [ ! -f "${canonical_forge_guard}" ] \
+  || [ ! -x "${canonical_forge_guard}" ] \
+  || [ -L "${canonical_forge_guard}" ]; then
+  fail "pinned plugin does not bundle the regular executable read-only forge guard"
+fi
+grep -Fq '../scripts/classify-default-branch-ci-runs.sh' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not delegate default-branch CI to the bundled classifier"
+grep -Fq 'refuses partial or capped' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not fail closed on incomplete default-branch CI evidence"
+grep -Fq 'manual dispatch, and GitHub-managed dynamic runs' "${canonical_surveyor}" ||
+  fail "pinned portfolio surveyor does not treat managed dynamic runs as default-branch events"
+declared_runtime_asset_sha() {
+  jq -er --arg path "$1" '
+    .spec.source.requiredRuntimeAssets
+    | select(type == "array" and length == 2)
+    | map(select(
+          type == "object"
+          and keys == ["executable", "path", "sha256"]
+          and .path == $path
+          and .executable == true
+        ))
+    | select(length == 1)
+    | .[0].sha256
+  ' "${desired_state}" 2>/dev/null
+}
+for runtime_asset in \
+  "scripts/classify-default-branch-ci-runs.sh:${canonical_ci_classifier}" \
+  "scripts/forge-readonly-guard.sh:${canonical_forge_guard}"; do
+  runtime_asset_path="${runtime_asset%%:*}"
+  canonical_runtime_asset="${runtime_asset#*:}"
+  if ! declared_runtime_asset_sha="$(declared_runtime_asset_sha "${runtime_asset_path}")"; then
+    fail "consumer desired state does not carry exactly two executable path-and-digest surveyor runtime assets including ${runtime_asset_path}"
+  fi
+  [ "${declared_runtime_asset_sha}" = "$(sha256_bytes "${canonical_runtime_asset}")" ] ||
+    fail "consumer desired-state ${runtime_asset_path} sha256 does not match the pinned executable bytes"
+done
+[ ! -e "${repo_root}/.claude/scripts/classify-main-ci-runs.sh" ] ||
+  fail "consumer still carries a local copy of the generic default-branch classifier"
+
+# The consumer copy used to omit role integrity fields while the pinned plugin resource already
+# carried them. That let the gitlink advance without proving that the machine-readable entrypoint,
+# delegated surveyor, and Improver still named the reviewed bytes. Resolve all digests from the
+# pinned files, not from a floating default branch or a copied constant.
+consumer_entrypoint_sha="$(jq -r '.spec.source.entrypointSha256 // ""' "${desired_state}")"
+consumer_surveyor_sha="$(jq -r '.spec.roles["portfolio-surveyor"].definitionSha256 // ""' "${desired_state}")"
+consumer_improver_sha="$(jq -r '.spec.roles["agent-improver"].definitionSha256 // ""' "${desired_state}")"
+consumer_improver_skill_sha="$(jq -r '.spec.roles["agent-improver"].skillSha256 // ""' "${desired_state}")"
+[ "${consumer_entrypoint_sha}" = "$(sha256_file "${canonical_engineer}")" ] ||
+  fail "consumer desired-state entrypointSha256 does not match the pinned agentic-engineer definition"
+[ "${consumer_surveyor_sha}" = "$(sha256_file "${canonical_surveyor}")" ] ||
+  fail "consumer desired-state portfolio-surveyor definitionSha256 does not match the pinned definition"
+[ "${consumer_improver_sha}" = "$(sha256_file "${canonical_improver}")" ] ||
+  fail "consumer desired-state agent-improver definitionSha256 does not match the pinned definition"
+[ "${consumer_improver_skill_sha}" = "$(sha256_file "${bundled_skill}")" ] ||
+  fail "consumer desired-state agent-improver skillSha256 does not match the pinned agent-improvement skill"
+
 canonical_engineer_flat="$(flatten "${canonical_engineer}")"
 assert_canonical_engineer_prose() {
   case "${canonical_engineer_flat}" in
@@ -235,7 +324,7 @@ grep -Fq '.claude/scripts/submodule-init.sh libraries/agent-plugins' "${cursor_l
   fail "Cursor adapter does not pass the plugin path to submodule-init"
 grep -Fq 'git -C libraries/agent-plugins fetch origin main' "${cursor_loader}" ||
   fail "Cursor adapter does not refresh the reviewed plugin default branch before loading it"
-grep -Fq 'git -C libraries/agent-plugins show origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md' \
+grep -Fq 'git -C libraries/agent-plugins show refs/remotes/origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md' \
   "${cursor_loader}" ||
   fail "Cursor adapter does not load the agent from the refreshed reviewed plugin ref"
 for cursor_overlay in \
@@ -324,98 +413,31 @@ assert_prose "for *this* engineer that edit is the maintainer's alone" \
   "the never-widen-enforcement prohibition is no longer scoped to the Agentic Engineer"
 assert_prose 'holds a different grant, and *Authority model* authorises it to loosen enforcement' \
   "consumer no longer exempts the agent-improver from the never-widen-enforcement prohibition"
-# The automation-owned carve-out answers "whose job is it to MUTATE these PRs" correctly, and used to
-# answer "is that automation still alive" by accident, with "never look". A six-day total stall of the
-# gitsubmodule ecosystem went unreported that way, freezing every submodule pin including the one that
-# carries the agent definitions (#2779/#2780). Four separate protections, four separate assertions:
-# the scoping, the aggregate keying, the both-halves window, and the restated prohibitions. Deleting
-# any one alone must fail on its own message — the others stay green without it, which is exactly why
-# they are not one compound check.
-assert_prose 'This carve-out bounds action on INDIVIDUAL PRs; it never licenses ignoring whether the automation still runs' \
-  "the automation-owned carve-out no longer separates per-PR hands-off from the automation's own liveness"
-# Without this the signal collapses back into a per-PR judgement, which is precisely the thing the
-# carve-out forbids reasoning about — reintroducing the hands-off pressure it was meant to sidestep.
-assert_prose 'Key that signal on the AGGREGATE, never on a PR' \
-  "queue liveness is no longer keyed on the aggregate, so it could be read as a per-PR hygiene state"
-assert_prose 'nothing created *and* nothing merged over a window materially longer than its configured schedule' \
-  "the dead-queue condition no longer requires BOTH nothing-created and nothing-merged over a window"
-# The addition must never read as a partial re-opening of the hands-off rule. If this restatement goes,
-# an observation duty sits next to the prohibitions with nothing saying they still bind absolutely.
-assert_prose 'Every prohibition above stands unchanged and absolute' \
-  "the queue-liveness clause no longer restates the mutation prohibitions as unchanged"
-# Found by ablation while writing the four above: deleting "One bot PR being red, stale, conflicting or
-# review-less remains none of our business" left all four GREEN. That sentence is what keeps the
-# per-PR case explicitly OUT of the new duty, so without it a run could start treating one red bot PR
-# as the liveness signal — the exact hands-off pressure this clause exists to avoid.
-assert_prose 'One bot PR being red, stale, conflicting or review-less remains none of our business' \
-  "the queue-liveness clause no longer keeps a single red/stale/conflicting bot PR out of scope"
-# Without the positive-evidence requirement the aggregate fires on a HEALTHY ecosystem that simply has
-# nothing to update — zero created and zero merged is the correct output then — and sends a run to
-# "repair" working automation. Raised as a P2 by Codex on #2782.
-assert_prose 'Report it only with positive evidence that the automation was **prevented** from delivering' \
-  "the dead-queue signal no longer requires positive evidence, so a quiet healthy ecosystem would fire it"
-# WHITELIST, not a fifth named clause chased by a sixth. The two preceding definition PRs converged
-# only after inverting a blacklist, because each review round merely named the next unpinned clause.
-# The named assertions above stay for their specific failure messages; this pins the whole block so a
-# clause nobody thought to name cannot be weakened silently. Extracted by ANCHOR, never line number.
-# BOTH anchor lines are READ FROM THE FILE — an extractor that prints a terminating line it invented
-# cannot detect a change to the thing it invents, which is a fail-open of exactly this check's shape.
-#
-# The expected text is INLINE rather than a fixture file. The Agent Improver's grant names AGENTS.md,
-# `.claude/scripts/*.test.sh` and `.github/workflows/ci.yaml`; a new `.claude/scripts/fixtures/*.txt`
-# is not obviously inside it, and an ambiguous authority question fails closed. Inlining is equally
-# strong — this is a committed verbatim copy, not a synthesised expectation — and it removes the
-# question entirely.
-#
-# Written to a temp file by a PLAIN heredoc redirect, never `$(cat <<'EOF' … )`. bash 3.2 — the
-# /bin/bash macOS still ships, and what a local pre-push run uses — scans a command substitution for
-# its closing paren while tracking quotes, so a lone apostrophe in the heredoc body (this text has
-# one, in "ecosystem's") swallows the `)` and the whole file fails to parse. CI's bash 5 parses it
-# fine, so the nested form would be green in CI and broken on every developer machine.
-queue_expected_file="$(mktemp "${TMPDIR:-/tmp}/queue-block.XXXXXX")"
-trap 'rm -f "${queue_expected_file}"' EXIT
-cat > "${queue_expected_file}" <<'QUEUE_BLOCK_EOF'
-🔴 **This carve-out bounds action on INDIVIDUAL PRs; it never licenses ignoring whether the automation
-still runs.** Every prohibition above stands unchanged and absolute — no review request, no comment, no
-rebase/recreate, no rerun, no adaptation commit, no arming auto-merge, no merge, no closing an
-automation-authored issue — whatever state the PR is in. But *whose job is it to mutate these PRs* and
-*is the automation that owns them still alive* are *different questions*, and answering only the first
-silently answered the second with "never look". Measured 2026-08-11: the `gitsubmodule` ecosystem had
-merged nothing since 2026-08-05T20:15Z and created nothing since 2026-08-06T20:14Z, jammed at its
-five-PR limit by five PRs that cannot drain — four never received a CI run at all, the fifth is red —
-while the same daily job kept creating npm PRs under that ecosystem's own limit. Every submodule pin in the portfolio froze for six days,
-including `libraries/agent-plugins`, the source of the agent definitions every run loads
-([monorepo#2779](https://github.com/devantler-tech/monorepo/issues/2779)).
-**Key that signal on the AGGREGATE, never on a PR.** One bot PR being red, stale, conflicting or
-review-less remains none of our business, exactly as the paragraph above says. The reportable condition
-is that the **whole ecosystem produced nothing** — nothing created *and* nothing merged over a window
-materially longer than its configured schedule — which no per-PR state can express.
-🔴 **Silence alone is NOT the signal — a quiet ecosystem is usually just quiet.** When nothing needs
-updating, zero creations and zero merges are the *correct* output, so the aggregate on its own would
-send a run to "repair" healthy automation. Report it only with positive evidence that the automation was
-**prevented** from delivering: it sits at its configured open-PR limit, or an update is demonstrably
-available and has gone unproposed, or its own most recent run is failing or absent. No such evidence,
-no signal. Derive that evidence by querying the forge directly — the survey digest is a per-PR
-`AUTOMATION-OWNED (NO-ACTION)` line and carries no aggregate history, so it cannot answer this
-([monorepo#2783](https://github.com/devantler-tech/monorepo/issues/2783)). Then treat it as a **currency
-signal**: report it, and fix its cause on an **agent-owned** branch, exactly as a merged bump that
-breaks `main` is repaired without ever touching the bot PR branch.
-QUEUE_BLOCK_EOF
-# Exit ON the terminating line, not one line after it. A deferred-exit form captures the blank line
-# that follows the paragraph, and the two capture paths then disagree: a file redirect keeps that
-# blank while `$(…)` strips it, so the pinned copy and the live block can never compare equal.
-# Anchor on the TAIL of the terminating sentence only. An anchor carrying the words that precede it
-# on the same line breaks whenever an unrelated edit re-wraps the paragraph — which happened during
-# this very PR — and the extractor then runs to EOF instead of failing cleanly.
-queue_block="$(awk '
-  /^🔴 \*\*This carve-out bounds action on INDIVIDUAL PRs/ { f = 1 }
-  f { print }
-  f && /without ever touching the bot PR branch\.$/ { exit }
-' "${constitution}")"
-[ -n "${queue_block}" ] ||
-  fail "automation-owned queue-liveness block not found in ${constitution} (anchors moved or removed)"
-printf '%s\n' "${queue_block}" | diff -u "${queue_expected_file}" - > /dev/null ||
-  fail "automation-owned queue-liveness block differs from the copy pinned in this test; update both deliberately in one commit"
+# Dependency automation gets a bounded first attempt, then the engineer owns the stalled PR. These
+# assertions pin the positive self-progressing evidence, the per-PR intervention boundary, fail-closed
+# reads, and the unchanged issue-only no-action guard independently (#2779).
+assert_prose '**Dependency-automation PRs are conditional operate work.** Dependency-automation issues remain **AUTOMATION-OWNED (NO-ACTION).**' \
+  "consumer does not split conditional dependency PR work from automation-owned issues"
+assert_prose 'self-progressing only while' \
+  "consumer does not require positive current evidence before yielding a dependency PR"
+assert_prose 'unable to reach merge without a new agent action' \
+  "consumer does not make individually stalled dependency PRs actionable"
+assert_prose 'A missing or failed join is `QUERY-UNKNOWN` for that PR, never `NO-ACTION`' \
+  "consumer fails open when dependency-PR liveness cannot be read"
+assert_prose 'An untouched bot-generated head keeps the repository automation' \
+  "consumer does not preserve the existing untouched-bot automation path"
+assert_prose 'Any agent-authored adaptation commit restores the ordinary current-head semantic-review gate' \
+  "consumer lets agent adaptations bypass semantic review"
+assert_prose 'convert the PR to draft before the first adaptation push' \
+  "consumer lacks a durable draft fence for dependency-PR adaptations"
+assert_prose 'Draft state is the durable fence' \
+  "consumer trusts reversible auto-merge disarming as the adaptation fence"
+assert_prose 'never select, triage-as-work, edit, or close an issue authored by one of those exact identities' \
+  "consumer no longer protects dependency-automation control issues"
+refute_prose 'One bot PR being red, stale, conflicting or review-less remains none of our business' \
+  "retired per-PR hands-off rule remains in the consumer"
+refute_prose 'Every prohibition above stands unchanged and absolute' \
+  "retired absolute dependency-PR mutation prohibition remains in the consumer"
 grep -Fq 'An issue, recommendation, or draft PR is not completion' "${constitution}" ||
   fail "consumer permits a write-capable role to stop before merge"
 grep -Fq '### Writer namespaces' "${constitution}" ||
@@ -468,6 +490,43 @@ assert_prose 'Codex dispatched 161/161' \
   "cadence does not state the Codex control that makes the shortfall a lane asymmetry"
 assert_prose 'never time anything off' \
   "cadence does not tell a run to stop planning against the next scheduled tick"
+
+# Same-lane schedules deliberately overlap and share one writer namespace. Mere task presence or
+# post-start activity is therefore not a global stop signal: the claim protocol must arbitrate the
+# exact artifact instead. Pin both arms so a future edit cannot restore starvation or erase the
+# scoped conflict fence while preserving progress.
+assert_prose 'same-lane task presence or post-start activity alone is never a global stand-down condition' \
+  "cadence still permits a scheduled role to no-op merely because another same-lane task is active"
+assert_prose 'a live conflicting claim, exact shared-artifact contention, or an unsafe runtime-local mutation' \
+  "cadence does not preserve the artifact-scoped conditions that still require stand-down"
+
+# A complete portfolio census is health evidence, not a global mutation lease. Measured survey runs
+# repeatedly stopped after one of 80+ unrelated PR joins failed or hit a cap, even though earlier
+# candidates already had complete head, control, claim, CI, conflict, and review evidence. Clearance
+# must therefore be candidate-scoped: preserve UNKNOWN for the failed join and for broad health/issue
+# descent, while continuing through the ordered PR queue with fully joined independent candidates.
+assert_maintenance_prose 'Clearance is per candidate, never per portfolio' \
+  "portfolio maintenance still couples all mutation to a complete portfolio-wide join"
+assert_maintenance_prose 'cheap exhaustive enumeration' \
+  "portfolio maintenance does not separate cheap ordering from candidate deepening"
+assert_maintenance_prose "candidate repository's default-head health" \
+  "candidate clearance does not preserve repository-local default-head safety evidence"
+assert_maintenance_prose 'unrelated failed or capped joins remain `QUERY-UNKNOWN`' \
+  "portfolio maintenance does not preserve uncertainty for incomplete unrelated joins"
+assert_maintenance_prose 'never block an independently fully joined candidate' \
+  "portfolio maintenance still permits unrelated query failures to freeze cleared work"
+assert_maintenance_prose 'A candidate repository query failure blocks that candidate' \
+  "portfolio maintenance can act after the candidate repository query fails"
+assert_maintenance_prose 'An attempted in-shard join failure emits `QUERY-UNKNOWN <repo> #<n> — failed=<component>:<reason>`' \
+  "portfolio maintenance does not define the candidate-scoped producer row for failed joins"
+assert_maintenance_prose 'never-attempted candidates remain `NOT-DEEPENED`' \
+  "portfolio maintenance conflates failed attempted joins with candidates outside the shard"
+assert_maintenance_prose 'issue descent remains blocked until the actionable-PR queue is completely classified' \
+  "portfolio maintenance can descend into issues while higher-priority PR state is unknown"
+assert_maintenance_prose 'pass the prior digest' \
+  "portfolio maintenance does not pass continuation state when requesting the next survey shard"
+assert_maintenance_prose 'cursor is invalidated when any recorded candidate head changes' \
+  "portfolio maintenance can reuse stale shard state after a candidate head changes"
 # A `per_task_limit` record is a per-MINUTE liveness sample of "a run is currently open",
 # not a per-slot drop record — so counting those records, raw or hour-bucketed, counts a
 # slot that merely started LATE as one that never ran. Measured 2026-08-12 over 164 slots:
@@ -500,6 +559,19 @@ refute_prose 'The Agent Improver is otherwise unaffected' \
 # stated as a flat invariant while the correction reads as a caveat about it.
 refute_prose 'next scheduled tick is always one hour later' \
   "cadence still asserts an unconditional hourly next tick alongside its own refutation"
+
+# Shared automation is a reuse boundary, not a centralisation target. A product's own
+# action or workflow belongs beside that product until a second real repository consumes
+# the same product-neutral contract. Pin all three parts so "this might be reusable later"
+# cannot silently move product policy into an organisation-wide repository.
+assert_prose 'demonstrated consumers in at least two repositories' \
+  "shared automation does not require demonstrated multi-repository consumption"
+assert_prose 'Product-specific actions, workflows, paths, permissions, secrets, release semantics, and policy stay in the product repository they serve' \
+  "consumer contract does not keep product-specific automation close to its source"
+assert_prose 'Possible future reuse, superficial similarity, or a desire to centralise is not evidence' \
+  "consumer contract still permits speculative workflow centralisation"
+assert_prose 'World at Ruin-specific automation therefore stays in `devantler-tech/world-at-ruin`' \
+  "consumer contract does not pin the named World at Ruin locality example"
 
 # --- The merged spend mandate -------------------------------------------------
 # Spend is a dimension of the Agentic Engineer. The consumer must supply the Spend
