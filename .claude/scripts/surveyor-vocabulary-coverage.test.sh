@@ -96,10 +96,10 @@ die_unknown() { echo "surveyor-vocabulary-coverage: UNKNOWN — $1" >&2; exit 2;
 # the self-tests below can run it against a stub; the real call follows it.
 assert_guard_discriminates() {
   local out status reason
-  out=$("$guard" --command 'gh pr list --repo devantler-tech/monorepo --state open' 2>&1); status=$?
+  out=$(GH_TELEMETRY=0 "$guard" --command 'gh pr list --repo devantler-tech/monorepo --state open' 2>&1); status=$?
   [ "$status" -eq 0 ] \
     || die_unknown "guard returned status $status for its own smoke-test read, so no verdict it gives is trustworthy: $(printf '%s\n' "$out" | head -1)"
-  out=$("$guard" --command 'gh pr merge 1 --repo devantler-tech/monorepo --squash' 2>&1); status=$?
+  out=$(GH_TELEMETRY=0 "$guard" --command 'gh pr merge 1 --repo devantler-tech/monorepo --squash' 2>&1); status=$?
   reason=$(printf '%s\n' "$out" | head -1)
   case "$status:$reason" in
     1:deny:*) : ;;
@@ -560,7 +560,7 @@ corpus_deny_reasons() {
   while IFS=$'\t' read -r want cmd; do
     [ -n "${want:-}" ] || continue
     [ -n "${cmd:-}" ] || continue
-    out=$("$guard" --command "$cmd" 2>&1); status=$?
+    out=$(GH_TELEMETRY=0 "$guard" --command "$cmd" 2>&1); status=$?
     r=$(printf '%s\n' "$out" | head -1)
     case "$status:$r" in
       0:*) ;;
@@ -597,7 +597,7 @@ check_sources() {
       # UNCLASSIFIED row and made the script exit 1 instead of its documented UNKNOWN 2 --
       # reporting a verdict it could not actually obtain. Capture the status ONCE (which
       # also halves guard invocations) and accept only 1-with-deny as a refusal.
-      guard_out=$("$guard" --command "$cand" 2>&1); guard_status=$?
+      guard_out=$(GH_TELEMETRY=0 "$guard" --command "$cand" 2>&1); guard_status=$?
       [ "$guard_status" -eq 0 ] && continue
       reason=$(printf '%s\n' "$guard_out" | head -1)
       case "$guard_status:$reason" in

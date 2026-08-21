@@ -96,6 +96,10 @@ plugin carries them (or an explicit, tested subset):
    and release PRs without weakening the normal bot review gate.
 10. **Lane-signal** reporting for provider quota (e.g. Bugbot usage-limit) without treating it as a
    code verdict.
+11. **Repository-scoped untyped residual parity** — primary and per-type issue sweeps are scoped at
+    retrieval to each Portfolio-map repository; every operand is checked for truncation before
+    subtraction; a capped operand withholds only that repository's residual and emits the named
+    mandatory-query failure instead of contaminating or suppressing other repositories.
 
 ## Equivalence status (this slice)
 

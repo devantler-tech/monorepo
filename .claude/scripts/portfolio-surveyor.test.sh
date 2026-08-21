@@ -5,6 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 classifier="${repo_root}/.claude/scripts/programmed-bot-review-exemption.sh"
 surveyor="${repo_root}/.claude/agents/portfolio-surveyor.md"
+surveyor_diff="${repo_root}/.claude/plugin-consumption/agentic-engineering-surveyor-diff.md"
 constitution="${repo_root}/AGENTS.md"
 maintenance_skill="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 monorepo_skill="${repo_root}/.claude/skills/products/monorepo/SKILL.md"
@@ -322,8 +323,18 @@ grep -Fq 'author,labels,updatedAt,url,assignees' "${surveyor}" ||
   fail "surveyor open-issue search omits author, so the issue-side filter cannot run"
 grep -Fq 'Drop issues authored by the exact dependency-' "${surveyor}" ||
   fail "surveyor type sweeps may still rank automation-authored issues"
-grep -Fq '.user.login, .title,' "${surveyor}" ||
-  fail "surveyor type-sweep jq omits the author column the issue-side filter needs"
+grep -Fq 'Drop any row whose `.user.login`' "${surveyor}" ||
+  fail "surveyor repository-scoped residual omits the author field the issue-side filter needs"
+grep -Fq 'Scope every sweep AT RETRIEVAL' "${surveyor}" ||
+  fail "surveyor compatibility overlay can enumerate out-of-scope repositories before filtering"
+grep -Fq 'AN UNRECOVERABLY TRUNCATED OPERAND IS A MANDATORY-QUERY FAILURE' "${surveyor}" ||
+  fail "surveyor compatibility overlay can derive an untyped residual from a capped operand"
+grep -Fq 'Withhold only the AFFECTED repository' "${surveyor}" ||
+  fail "surveyor compatibility overlay can suppress every repository over one capped residual"
+grep -Fq 'UNTYPED-RESIDUAL-UNAVAILABLE — <repo>' "${surveyor}" ||
+  fail "surveyor digest cannot name the repository-scoped unavailable residual"
+grep -Fq 'Repository-scoped untyped residual parity' "${surveyor_diff}" ||
+  fail "surveyor parity checklist omits scoped residual and truncation parity"
 # Pin every spelling of the identity on BOTH surfaces, and pin the author-only prohibition itself:
 # without these a later edit could drop one identity, or re-admit title/label/age matching, while
 # the descriptive prose still reads correct and every other assertion still passes.
