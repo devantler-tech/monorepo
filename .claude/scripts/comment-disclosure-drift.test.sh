@@ -91,11 +91,11 @@ sweep_rule="$({
   ' "$constitution"
 } | tr '\n' ' ' | tr -s '[:space:]' ' ')"
 reverify_scope='Re-verify ONLY a body that is exactly `@cursor review`'
-violation_on_sight='a violation on sight'
+non_bugbot_scope='A bare `@coderabbitai review` or `@codex review` is a violation on sight'
 no_carveout_reason='`--issue` reports them violating even when a canonical disclosure comment sits immediately before them'
 if [[ -n "$sweep_rule" ]] &&
    [[ "$sweep_rule" == *"$reverify_scope"* ]] &&
-   [[ "$sweep_rule" == *"$violation_on_sight"* ]] &&
+   [[ "$sweep_rule" == *"$non_bugbot_scope"* ]] &&
    [[ "$sweep_rule" == *"$no_carveout_reason"* ]]; then
   echo "ok    --since re-verification is scoped to the Bugbot body, non-Bugbot triggers violate on sight"
 else
