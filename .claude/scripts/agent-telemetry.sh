@@ -3384,6 +3384,25 @@ if want safety; then
     # fraction of the input. The batching contract test pins this: it asserts
     # exactly ONE credential-table jq invocation, and it caught the two-pass
     # version of this change.
+    # 🔴 SUPPRESS xtrace ACROSS THE CREDENTIAL-BEARING REGION. `set -x` prints an
+    # assignment's EXPANDED value, and every later `"$var"` expansion, to STDERR —
+    # and stderr does NOT pass through the `main | redact` boundary that every
+    # other output path here goes through. Verified directly: `v=$(printf 'ghp_X')`
+    # traces as `+ v=ghp_X`, and a later `printf '%s\n' "$v"` as `++ printf ghp_X`.
+    #
+    # That matters more here than it would elsewhere. An operator running
+    # `bash -x` to diagnose this scanner would write raw credential matches into
+    # their terminal AND into the invoking agent's transcript — which is the very
+    # corpus this scanner reads on its next run, so a diagnostic session would
+    # seed the leak it was called in to investigate.
+    #
+    # The scratch files this region replaced (#2712) leaked only a PATH under
+    # xtrace, so moving the values into shell variables is what introduced this;
+    # the guard is part of that move, not an unrelated hardening. Restore the
+    # caller's setting exactly — never unconditionally `set +x`/`set -x`, which
+    # would silently turn tracing ON for a caller that never asked for it.
+    cred_trace_was=off
+    case $- in *x*) cred_trace_was=on; set +x ;; esac
     cred_match_data=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
       | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
           'awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
@@ -3538,6 +3557,9 @@ if want safety; then
         if ($0 in blob) s = s " [blob-embedded: inside a base64 run, likely a chance substring]"
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /'
+    # End of the credential-value region — restore the caller's tracing exactly.
+    if [ "$cred_trace_was" = on ]; then set -x; fi
+    cred_trace_was=off
     # Concentration, mirroring the injection detector and placed directly under
     # the table it qualifies. The TABLE counts distinct VALUES on purpose (one
     # leak pasted into fifty transcripts is one credential to rotate); this

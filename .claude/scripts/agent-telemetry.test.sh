@@ -6350,6 +6350,63 @@ else
   ok "a NUL between two fragments does not manufacture a token"
 fi
 
+# --- xtrace must not carry credential VALUES to stderr (#2712, Codex P1) -----
+# `set -x` prints an assignment's expanded value, and every later `"$var"`
+# expansion, to STDERR — which does NOT pass through the `main | redact` boundary
+# that guards stdout. Moving the plain/blob sets off scratch files and into shell
+# variables is what created this path: a scratch file leaked only its PATH under
+# xtrace. So an operator running `bash -x` to diagnose the scanner would write raw
+# credentials into their terminal and into the invoking agent's transcript — the
+# corpus this scanner reads next run.
+mkdir -p "$FIX/credxtrace"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPA__"}]}}\n' \
+  > "$FIX/credxtrace/s.jsonl"
+subst "$FIX/credxtrace/s.jsonl"
+XT_OUT="$FIX/credxtrace.out"; XT_ERR="$FIX/credxtrace.err"
+CLAUDE_PROJECTS_DIR="$FIX/credxtrace" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash -x "$TARGET" --since-days 3650 --section safety >"$XT_OUT" 2>"$XT_ERR"
+
+# POSITIVE CONTROL 1 — tracing really was ON for this run. Without this, a run
+# that silently failed to enable xtrace would leak nothing and the guard
+# assertion below would pass having observed nothing at all.
+if grep -q '^+' "$XT_ERR" 2>/dev/null; then
+  ok "control: xtrace was active for the traced run"
+else
+  bad "control: xtrace was active for the traced run" \
+      "no trace lines on stderr — the leak assertion below would be VACUOUS"
+fi
+
+# POSITIVE CONTROL 2 — the credential table really was REACHED, so the guarded
+# region actually executed. A corpus that produced no table would also produce no
+# leak, for the wrong reason.
+if grep -q 'credential-shaped' "$XT_OUT" 2>/dev/null; then
+  ok "control: the credential table was reached under xtrace"
+else
+  bad "control: the credential table was reached under xtrace" \
+      "no credential table in the traced run — the leak assertion would be VACUOUS"
+fi
+
+# THE GUARD — no raw credential value on stderr.
+if ! grep -qF "$S_GHPA" "$XT_ERR" 2>/dev/null; then
+  ok "no credential value reaches stderr under xtrace"
+else
+  bad "no credential value reaches stderr under xtrace" \
+      "a fixture credential was printed by xtrace, bypassing the redact boundary"
+fi
+
+# The guard must RESTORE the caller's setting, not merely disable tracing: a run
+# that never turned xtrace back on would hide the rest of the script from
+# diagnosis, trading one defect for another. The script does substantial work
+# after the credential region, so trace lines must still be arriving at the end.
+XT_TAIL=$(tail -20 "$XT_ERR" 2>/dev/null)
+if grep -q '^+' <<<"$XT_TAIL"; then
+  ok "xtrace is restored after the credential region"
+else
+  bad "xtrace is restored after the credential region" \
+      "no trace lines at the end of the run — the guard left tracing off"
+fi
+
+
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
