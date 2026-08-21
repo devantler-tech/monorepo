@@ -344,10 +344,21 @@ assert_prose 'is decided from data, never by asking' \
 assert_prose 'or otherwise run its branch locally' \
   "${constitution_flat}" "external-PR ownership no longer forbids running a contributor branch locally"
 
-# Renovate/Dependabot stay out: their carve-out is an ownership boundary the 2026-08-08 direction did
-# not revisit, and folding them into "all PRs" would have an agent driving the bots' own lifecycle.
-assert_prose '**Automation-owned Renovate/Dependabot PRs stay excluded**' \
-  "${constitution_flat}" "the automation-owned carve-out was swallowed by the all-PRs grant"
+# Dependency automation gets the first attempt, not permanent immunity. The maintainer's 2026-08-21
+# correction makes an exact Renovate/Dependabot PR ordinary rung-one work as soon as live evidence
+# shows that repository automation cannot carry its current head to merge. Pin both the healthy
+# self-progressing state and the intervention boundary so neither "always touch" nor "never touch"
+# can creep back in.
+assert_prose '**Dependency-automation PRs are conditional operate work.**' \
+  "${constitution_flat}" "contract does not make stalled dependency PRs the engineer's responsibility"
+assert_prose 'self-progressing only while' \
+  "${constitution_flat}" "contract cannot distinguish healthy dependency automation from a stalled PR"
+assert_prose 'unable to reach merge without a new agent action' \
+  "${constitution_flat}" "contract does not define the dependency-PR intervention boundary"
+assert_absent '**Automation-owned Renovate/Dependabot PRs stay excluded**' \
+  "${constitution_flat}" "retired unconditional dependency-PR exclusion is still present"
+assert_absent '**Dependency automation is hands-off.**' \
+  "${constitution_flat}" "retired dependency-automation hands-off rule is still present"
 
 # ── the retired wording must STAY retired ────────────────────────────────────
 # One negative assertion per sentence the 2026-08-08 widening replaced. Each of these was PRESENT in

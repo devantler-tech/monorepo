@@ -193,8 +193,9 @@ Issues are the unit of work (contract *Issue-driven*) — this is where new work
    never work to hand back to its author. A non-draft goes to merge; a draft goes to genuine
    readiness → promotion → merge (contract *Autonomy*), once the data-only active-work test shows
    nobody else is mid-flight. Three boundaries survive that widening.
-   The **automation-owned dependency PRs** (exact `renovate[bot]`/`dependabot[bot]`)
-   stay with repository automation; an **external
+   Exact `renovate[bot]`/`dependabot[bot]` PRs stay with repository automation only while live
+   evidence proves them self-progressing; when they cannot finish autonomously they return to the
+   ordinary rung-one repair and merge queue. An **external
    contribution** is driven and merged but its branch is **never run locally** — static review only,
    CI is the execution surface, with extra scrutiny on workflow, permission, dependency and
    secret-touching changes; and on the maintainer's **interactive** PRs his comments are him steering

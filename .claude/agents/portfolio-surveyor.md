@@ -84,7 +84,7 @@ public and private — no per-repo loop needed to enumerate):
    ordinary open issues, noting the assignee so the orchestrator can respect a human's in-progress work
    on its own merits. Without these logins the orchestrator selects the oldest issue blind to live
    claims and re-opens the duplicate-build race the protocol exists to close.
-   **Short-circuit dependency-automation ISSUES the same way as their PRs** (live miss 2026-07-21,
+   **Short-circuit dependency-automation ISSUES** (live miss 2026-07-21,
    #2349): an issue whose author is the exact `renovate[bot]` or `dependabot[bot]` identity
    (org-search/REST; deeper surfaces may show `app/renovate` / `app/dependabot`) is
    **AUTOMATION-OWNED (NO-ACTION)** — Renovate's Dependency Dashboard is the standing example
@@ -116,15 +116,17 @@ public and private — no per-repo loop needed to enumerate):
    assigned-but-PR-less gate would skip every `cursor/*` claim. Keep it bounded — skip the call for
    repos with no open PR-less issues at all, and deepen only shared tips whose issue is in that set.
    Before a PR there is no body to grep, so these refs are the pre-PR coordination signals.
-3. **Short-circuit dependency automation, then deepen only actionable candidates.** An org-search PR
-   whose author is the exact `renovate[bot]` or `dependabot[bot]` identity is an automation-owned
-   dependency PR. Emit only `AUTOMATION-OWNED (NO-ACTION)` from the cheap search row; do **not** call
-   `gh pr view`, inspect its pentad/reviews, or count it against `nothing_on_fire`.
-   Do not fetch commit provenance or reclassify it because a human/agent commit exists; the actor-wide
-   boundary intentionally leaves any such branch with repository automation and the human who edited it.
-   Other API surfaces may render the same actors as `app/renovate` or `app/dependabot`; do not
-   use search's unreliable `is_bot` field, a title, or a branch pattern as the classifier.
-   Enumerate **every remaining open PR — drafts and non-drafts, whoever authored it** — plus the
+3. **Classify dependency PRs before yielding.** Identify exact `renovate[bot]`/`dependabot[bot]`
+   (`app/renovate`/`app/dependabot` deeper) by author. Read head, `updatedAt`, checks, merge state,
+   `autoMergeRequest`, update/rebase activity, and merge-group; author grants first attempt, not proof.
+   Emit `AUTOMATION-OWNED (SELF-PROGRESSING)` for pending work, armed merge, or a newly
+   green head inside its merge window; include evidence/head/time.
+   An unreadable join is `QUERY-UNKNOWN`, never self-progressing. A failed/cancelled/missing check, expired conflict/behind,
+   green-but-unarmed head, or failed/evicted merge proves it cannot finish autonomously. Put that
+   PR into the ordinary deepening shard and report its full pentad; it counts against health and issue
+   descent; collect complete commit provenance before `MERGE-READY`; adaptation restores review.
+
+   Enumerate **every open PR — drafts and non-drafts, whoever authored it** — plus the
    candidate-only `botantler-1[bot]` updater rows defined below, then pull the heavy fields one PR at
    a time for **at most eight actionable PRs per digest**. The orchestrator drives every one of these
    to a terminal state
@@ -235,8 +237,8 @@ public and private — no per-repo loop needed to enumerate):
      What decides is whether **someone is mid-flight right now**, and that is answered from data you
      *can* read. For **every actionable PR the orchestrator may drive — whoever authored it**, draft
      or non-draft: your own lane's, a sibling lane's, the maintainer's interactive, our bots', and an
-     external contributor's alike (only exact `renovate[bot]`/`dependabot[bot]` PRs are excluded as
-     automation-owned) — report the four signals of
+     external contributor's alike, including dependency-bot PRs that are not positively
+     self-progressing — report the four signals of
      *You own EVERY pull request in the portfolio*, each as an **age**, so the orchestrator applies the
      window rather than re-deriving it:
      🔴 **Scoping this to `devantler` rows is the defect it looks like a simplification of.** The
@@ -550,8 +552,8 @@ public and private — no per-repo loop needed to enumerate):
      tells the orchestrator to make the reading itself before merging an external PR, which is where
      the deeper look belongs. A fourth value costs one word; a wrong one of the other three costs
      either an unobserved merge or a permanently parked contribution.
-   - **Hygiene pentad per open actionable PR, whoever authored it — including drafts and
-     gated/parked PRs, excluding automation-owned dependency PRs.** For every open actionable
+   - **Hygiene pentad per open actionable PR, whoever authored it — including drafts,
+     gated/parked PRs, and dependency-bot PRs that cannot finish autonomously.** For every open actionable
      PR (drafts included), report (a)
      failing checks, (b) unresolved
      review threads — including `coderabbitai`, `copilot-pull-request-reviewer[bot]`, and
@@ -887,7 +889,7 @@ public and private — no per-repo loop needed to enumerate):
      the generic `human-comment` activity signal, vanish from the digest once that ~2h window lapsed,
      and the PR would merge over a live instruction. So sweep **every actionable open PR already
      enumerated for the pentad** — this needs no extra discovery call, since that set is in hand.
-     Automation-owned Renovate/Dependabot PRs stay excluded, as everywhere else.
+     Include stalled Renovate/Dependabot PRs; only positive current progress yields.
      Under self-promotion-on-genuine-readiness the maintainer's
      post-merge PR comment is also a primary steering channel, and an open-PR-only sweep would never
      surface it — so additionally sweep the PRs **merged in the last ~3 days**.
@@ -896,9 +898,8 @@ public and private — no per-repo loop needed to enumerate):
      every PR in the portfolio to a terminal state, what it ships now includes a sibling lane's, a bot's
      and an outside contributor's PRs — so scoping this search to `--author devantler` no longer matches
      its own stated purpose. His *"this was the wrong call, revert it"* on an external PR **the routine
-     merged** would reach nobody. Filter authors only to drop the **automation-owned** Renovate/Dependabot
-     merges, exactly as everywhere else, then discard the exact automation identities client-side —
-     the search surface has no negated-author qualifier.
+     merged** would reach nobody. Include Renovate/Dependabot merges too: once the engineer can drive
+     a stalled dependency PR, maintainer follow-up on it belongs to this control surface.
      🔴 **Partition the window, because `--limit` is a TOTAL-RESULTS cap and truncation is silent.**
      `gh search prs --help` defines `--limit` as *"Maximum number of results to fetch"*, not a page
      size, so a single `--merged-at ">=<3 days ago>"` query returning exactly the cap is
@@ -1143,7 +1144,7 @@ public and private — no per-repo loop needed to enumerate):
    Treat `skipped`/`neutral`/still-running as **not red**. **Always name the judged sha** so the claim
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
 5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
-   (untriaged); automation-owned dependency PRs remain only their compact no-action rows.
+   (untriaged); dependency-bot PRs are positively self-progressing or ordinarily actionable.
    **Select ready work BY ISSUE TYPE, not by label.** Every issue carries exactly one type, so type is
    the complete and canonical partition; labels are legacy and **provably incomplete** — 8 of 63 open
    Epics carried no `roadmap` label on 2026-07-18, and `Spike`/`Kata`/`Chore` have no label at all, so
@@ -1176,8 +1177,8 @@ public and private — no per-repo loop needed to enumerate):
    does), so an archived repo's open issue surfaces as actionable when it is a read-only tombstone
    (`reusable-workflows` is the live example). **Drop issues authored by the exact dependency-
    automation identities** (`renovate[bot]` / `dependabot[bot]`; also `app/renovate` /
-   `app/dependabot` on surfaces that spell them that way) — same author-wide boundary as step 2 /
-   the PR short-circuit; they are never oldest-actionable (verified against `platform#313`).
+   `app/dependabot` on surfaces that spell them that way) — the issue-only boundary from step 2;
+   they are never oldest-actionable (verified against `platform#313`).
    **`security` is REPORTED, not prioritised**: the queue
    stays oldest-actionable-first and a security issue is *not* a reason to skip an older one — only an
    urgent security hotfix jumps, under the normal breakage rule.
@@ -1407,7 +1408,8 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # equivalent code-scanning specialisation of the line above; `path` starts `dynamic/github-code-scanning/`
 - GITHUB-MANAGED (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # two+ consecutive RED (failure OR timed_out OR startup_failure) runs on main: ours to repair (build, scanning/dependency config, or move off default setup) — DOES count against nothing_on_fire. This escalation is what makes the property test safe: an actionable managed failure recurs, so it is delayed by one run, never hidden
 - GITHUB-MANAGED-SCAN (REPEATED — ACTIONABLE) <repo> <workflow> @<sha> failing since <YYYY-MM-DD> (<n> consecutive runs on main)   # equivalent code-scanning specialisation of the line above
-- <repo> #<n> "<title>" — <renovate[bot]|dependabot[bot]|app/renovate|app/dependabot> → AUTOMATION-OWNED (NO-ACTION)   # PRs *and* issues (Dependency Dashboard); never oldest-actionable
+- <repo> #<n> "<title>" — <dependency-bot> → AUTOMATION-OWNED (SELF-PROGRESSING) evidence=<kind>@<sha>@<UTC>   # PR; else unknown or ordinary pentad
+- <repo> #<n> "<title>" — <dependency-bot> → AUTOMATION-OWNED (NO-ACTION ISSUE)   # issue
 - <repo> #<n> (trusted bot, draft) — pentad: checks=<green|failing:X>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → REVIEW-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-CR-DISMISSAL | STALE-AGENT-DISMISSAL
 - <repo> #<n> (trusted bot, non-draft) — pentad: checks=<green|failing:X>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>, unresolved=<n>, body_findings=<n>@<sha>|<n>-stale@<sha>|0-resolved@<sha>, green_review=<cr@<sha>|cr-stale@<sha>|cr-findings@<sha>|codex@<sha>|codex-stale@<sha>|codex-findings@<sha>|bugbot@<sha>|bugbot-stale@<sha>|bugbot-findings@<sha>|self@<sha>|exempt-programmed-bot|not-requested@<abbrev-head>|none(cr:rev=<n>,cmt=<n>; codex:rev=<n>,cmt=<n>; bugbot:chk=<n> @<abbrev-head>)>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, mergeState=<…> → MERGE-READY | NEEDS-FIX | ACTIVELY-OWNED | STALE-AGENT-DISMISSAL | STALE-CR-DISMISSAL
 - <repo> #<n> "<title>" — `devantler`, draft=<true|false> → <REVIEW-READY|MERGE-READY|NEEDS-FIX|ACTIVELY-OWNED>: branch=<headRefName>, disclosure=<routine|interactive|none>, active=<none|<pushed:<age>@<lane>:<headRefName>@<headRefOid>|pushed:unknown@<updatedAt-age>|human-comment:<age>|review-envelope:<lane>@<sha>|merge-group:<run>>[+…]>, merge_group_result=<<conclusion>@<runId>@<runCreatedAt>|stale@<runId>|none>, pentad=<…>, review_pending=<cr@<sha>|codex@<sha>|bugbot@<sha>|none>, review_progress=<cr:no-gate@<sha>|codex:no-gate@<sha>|bugbot:no-gate@<sha>|none>, rd=<APPROVED|CHANGES_REQUESTED:<author>@<sha>|CHANGES_REQUESTED:agent(devantler)@<sha>|CHANGES_REQUESTED:human(devantler)@<sha>|none>, stale_dismissal=<STALE-CR-DISMISSAL|STALE-AGENT-DISMISSAL|none> (`disclosure` tells the orchestrator whose control channel a `devantler` comment on this PR is, NOT whether it may drive it; the rd qualifier and stale_dismissal are DATA, never an instruction to mutate)

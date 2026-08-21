@@ -146,8 +146,8 @@ grep -Fq 'That observation has THREE outcomes, not two' "${surveyor}" ||
   fail "surveyor does not distinguish nothing-to-exercise from nothing-exercises-it"
 grep -Fq '/pulls/<n>/commits' "${surveyor}" ||
   fail "surveyor does not fetch complete current-head commit provenance"
-grep -Fq 'AUTOMATION-OWNED and need NO agent action' "${constitution}" ||
-  fail "constitution does not exempt Renovate/Dependabot dependency PRs from agent action"
+grep -Fq 'Dependency-automation PRs are conditional operate work' "${constitution}" ||
+  fail "constitution does not make stalled Renovate/Dependabot PRs actionable"
 grep -Fq '`cursor[bot]` on REST surfaces' "${constitution}" ||
   fail "constitution does not map the REST surface for the trusted app/cursor author"
 grep -Fq 'Cursor Automation is a trusted PR author' "${constitution}" ||
@@ -207,14 +207,17 @@ fi
 if grep -Fq '**`app/cursor` is NOT a trusted PR AUTHOR' "${constitution}"; then
   fail "constitution still classifies the maintainer-authorized Cursor App as an external author"
 fi
-# Lane-agnostic on purpose: the reviewer roster grows (Codex, Cursor Bugbot, CodeRabbit, …), so
-# assert the PROHIBITION, not the roster — naming lanes here breaks this test on every lane change.
-grep -Fq 'Never request a review from any lane' "${constitution}" ||
-  fail "constitution does not explicitly forbid dependency-bot review requests"
-grep -Fq 'Do not inspect commit provenance' "${constitution}" ||
-  fail "constitution may reclassify dependency-bot PRs after human commits"
-grep -Fq 'arm auto-merge, or merge them' "${constitution}" ||
-  fail "constitution does not leave dependency-bot merging to repository automation"
+# Untouched bot output keeps its established automation review path, but any agent adaptation must
+# restore semantic review. Provenance is therefore a required survey input, and merge authority is
+# head-pinned rather than forbidden.
+grep -Fq 'bot-generated head keeps the repository automation' "${constitution}" ||
+  fail "constitution does not preserve the existing untouched-bot review path"
+grep -Fq 'adaptation commit restores the ordinary current-head semantic-review gate' "${constitution}" ||
+  fail "constitution lets an adapted dependency PR bypass semantic review"
+grep -Fq 'collect complete commit provenance' "${surveyor}" ||
+  fail "surveyor cannot distinguish untouched bot output from an agent adaptation"
+grep -Fq 'arm or execute the repository' "${constitution}" ||
+  fail "constitution does not authorize head-pinned completion of a stalled dependency PR"
 grep -Fq 'HEAD-MATCH DECIDES FIRST' "${surveyor}" ||
   fail "surveyor may rank the two Codex outcome surfaces by recency instead of by head sha"
 grep -Fq 'Same-sha tie-break: FINDINGS WIN' "${surveyor}" ||
@@ -279,8 +282,8 @@ grep -Fq 'usage limit reached' "${constitution}" ||
   fail "constitution does not name the comment that identifies an exhausted Bugbot spend limit"
 grep -Fq 'NOT retryable' "${constitution}" ||
   fail "constitution may send a run retrying a Bugbot usage limit that only the maintainer can lift"
-grep -Fq 'AUTOMATION-OWNED (NO-ACTION)' "${surveyor}" ||
-  fail "surveyor does not short-circuit dependency-bot PRs as no-action"
+grep -Fq 'AUTOMATION-OWNED (SELF-PROGRESSING)' "${surveyor}" ||
+  fail "surveyor cannot represent a dependency-bot PR that is positively self-progressing"
 # #2365 — instrument GraphQL/core remaining at survey start+end before any optimisation. Without
 # the budget line a tick that starts exhausted discovers blindness only through failed commands
 # (and `gh pr checks` exits 1, indistinguishable from red CI). Pin the probe, the digest shape,
@@ -295,13 +298,15 @@ grep -Fq 'EXHAUSTED_AT_START' "${surveyor}" ||
 grep -Fq 'Always emit the `budget:` line' "${surveyor}" ||
   fail "surveyor digest rules do not require the budget line on every digest"
 grep -Fq 'renovate[bot]' "${surveyor}" ||
-  fail "surveyor does not bind no-action to the exact Renovate identity"
+  fail "surveyor does not bind conditional handling to the exact Renovate identity"
 grep -Fq 'dependabot[bot]' "${surveyor}" ||
-  fail "surveyor does not bind no-action to the exact Dependabot identity"
-grep -Fq 'do **not** call' "${surveyor}" ||
-  fail "surveyor still permits heavy dependency-PR deepening"
-grep -Fq 'count it against' "${surveyor}" ||
-  fail "surveyor may still turn dependency automation into operate work"
+  fail "surveyor does not bind conditional handling to the exact Dependabot identity"
+grep -Fq '`autoMergeRequest`' "${surveyor}" ||
+  fail "surveyor cannot prove whether dependency automation armed the exact head"
+grep -Fq 'An unreadable join is `QUERY-UNKNOWN`, never self-progressing' "${surveyor}" ||
+  fail "surveyor fails open when dependency-PR liveness cannot be read"
+grep -Fq 'PR into the ordinary deepening shard and report its full pentad' "${surveyor}" ||
+  fail "surveyor does not deepen a dependency PR that cannot finish autonomously"
 # Issue-side automation ownership (#2349): Renovate's Dependency Dashboard is an open issue by
 # design and will head oldest-first forever unless the surveyor excludes exact author identities
 # the same way it already does for dependency PRs. Match author only — never title/labels/age.
@@ -332,9 +337,9 @@ grep -Fq 'Match **author login only** — never the title' "${surveyor}" ||
   fail "surveyor does not enforce exact author-only matching"
 grep -Fq 'labels, or age' "${surveyor}" ||
   fail "surveyor does not prohibit label/age matching"
-grep -Fq 'dependency PRs *and* issues are AUTOMATION-OWNED' "${constitution}" ||
-  fail "constitution does not extend the automation-owned carve-out to issues"
-grep -Fq 'Never select, triage-as-work, or close an automation-authored' "${constitution}" ||
+grep -Fq 'Dependency-automation issues remain' "${constitution}" ||
+  fail "constitution does not preserve the automation-owned issue carve-out"
+grep -Fq 'never select, triage-as-work, edit, or close an issue authored' "${constitution}" ||
   fail "constitution may still let agents close a Renovate Dependency Dashboard"
 # The skip list in *Drain oldest-first* is a CLOSED set: "skip ONLY when one of these is true".
 # A carve-out that forbids selecting an automation-authored issue without adding it to that set
@@ -472,8 +477,8 @@ grep -Fq 'board_coverage=unknown:empty-payload' "${surveyor}" ||
   fail "surveyor has no unknown token for an empty or fully-filtered items payload"
 grep -Eq '^ *\[ .*on_board.* -gt 0 \]' "${surveyor}" ||
   fail "surveyor board-coverage census does not fail closed on a zero on_board, so an empty payload reports a measured 0%"
-grep -Fq 'automation-owned dependency PRs' "${maintenance_skill}" ||
-  fail "portfolio-maintenance skill does not defer dependency PRs to automation"
+grep -Fq 'dependency-automation PR that lacks positive self-progressing evidence' "${maintenance_skill}" ||
+  fail "portfolio-maintenance skill does not intervene when dependency automation cannot finish its PR"
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq '`agent-plugins` updater PRs require semantic review' "${maintenance_skill}" ||
@@ -485,21 +490,20 @@ grep -Fq 'read and follow the local' "${maintenance_skill}" ||
 if grep -Fq '**Do not load** the local reference copy' "${maintenance_skill}"; then
   fail "run loop forbids the compatibility overlay even though plugin digest parity is not proven"
 fi
-grep -Fq 'automation-owned dependency PRs' "${monorepo_skill}" ||
-  fail "monorepo product card still treats dependency PRs as agent work"
-grep -Fq 'automation-owned dependency PRs' "${product_engineering_skill}" ||
-  fail "product-engineering skill still treats dependency PRs as agent work"
-grep -Fq 'automation-owned dependency PRs' "${agent_skills_card}" ||
-  fail "agent-skills product card still treats dependency PRs as agent work"
+grep -Fq 'when one cannot finish autonomously' "${monorepo_skill}" ||
+  fail "monorepo product card does not make stalled dependency PRs agent work"
+grep -Fq 'when they cannot finish autonomously' "${product_engineering_skill}" ||
+  fail "product-engineering skill does not make stalled dependency PRs agent work"
+grep -Fq 'intervene when dependency automation cannot finish its PR' "${agent_skills_card}" ||
+  fail "agent-skills product card does not make stalled dependency PRs agent work"
 grep -Fq 'never spend a review lane on exit-0 exemptions' "${agent_skills_card}" ||
   fail "agent-skills product card does not preserve the narrow no-review path"
 grep -Fq 'classifier exits 3' "${agent_skills_card}" ||
   fail "agent-skills product card does not require semantic review for marketplace updates"
-grep -Fq 'automation-owned dependency PRs' "${ksail_card}" ||
-  fail "KSail product card still treats dependency PRs as agent work"
-if grep -Fq 'Bot PRs are first-priority work, not background noise' "${constitution}"; then
-  fail "constitution still tells agents to drive dependency-bot PRs"
-fi
+grep -Fq 'dependency-bot PRs that cannot finish autonomously' "${ksail_card}" ||
+  fail "KSail product card does not make stalled dependency PRs agent work"
+grep -Fq 'Dependency automation is first-responder, not sole owner' "${constitution}" ||
+  fail "constitution does not preserve automation's first attempt before agent intervention"
 if grep -Fq 'Bundle Dependabot/Renovate PRs' "${monorepo_skill}"; then
   fail "monorepo product card still tells agents to bundle dependency PRs"
 fi
