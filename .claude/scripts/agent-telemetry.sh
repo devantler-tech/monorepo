@@ -259,25 +259,33 @@ CREDPROV=$(mktemp "${TMPDIR:-/tmp}/.agtel_credprov.XXXXXXXX") || { echo "cannot 
 # would read 0 and the run would report the agent had stopped busy-waiting.
 # The walk runs in a pipeline subshell, so the count must survive on disk.
 XFTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_xf.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
-# Blob-embedded evidence set (#2522): the subset of table values whose
-# occurrences are ALL inside a base64 run. Holds normalised credential values,
-# so it is created with mktemp's private mode and removed by the same traps as
-# every other scratch.
-CREDBLOB=$(mktemp "${TMPDIR:-/tmp}/.agtel_credblob.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
-# Plain-occurrence set: the values seen OUTSIDE any base64 run. Subtracted from
-# the blob set above so a value seen both ways keeps its plain high-signal row.
-# Same value class as $CREDBLOB, so it gets the same private mode and traps.
-CREDPLAIN=$(mktemp "${TMPDIR:-/tmp}/.agtel_credplain.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
-# Raw credential-table matches from the SINGLE decode pass, partitioned after
-# the fact into the plain and blob-embedded sets (#2522).
-CREDMATCH=$(mktemp "${TMPDIR:-/tmp}/.agtel_credmatch.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
+# The credential-table working sets are held IN MEMORY, never in a scratch file
+# (#2712). Every other scratch here holds derived or already-redacted text; these
+# three would hold credential VALUES — the raw matches from the decode pass, and
+# the normalised plain and blob-embedded sets partitioned from them (#2522).
+#
+# A scratch file is removed by the traps below, and those traps run on EXIT and
+# on HUP/INT/TERM — never on SIGKILL, an OOM kill, or power loss. Anything these
+# sets held would therefore survive an abnormal exit as credential material at
+# rest, which inverts the purpose of a leak detector: this scan exists to find
+# values that escaped into transcripts, so it must not write them back out.
+#
+# Held as shell variables rather than passed on a command line: a variable is
+# process memory that dies with the process, whereas an `awk -v value=...`
+# argument would be world-readable in `ps` output for the life of the call. The
+# consumers below read them through process substitution, so the awk programs
+# keep their existing `getline < file` idiom and the values still never land in
+# a filesystem object or in argv.
+cred_match_data=''
+cred_plain_set=''
+cred_blob_set=''
 # Its OWN scratch, never $CONCTMP. The injection-concentration pass owns that
 # one, and sharing it would make two sections' results depend on which ran last.
 SIGTMP=$(mktemp "${TMPDIR:-/tmp}/.agtel_sig.XXXXXXXX") || { echo "cannot create temp file" >&2; exit 3; }
 # Remove on normal exit; on a SIGNAL also terminate, since a trap that only
 # cleans up leaves the script running after the scheduler asked it to stop.
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP" "$XFTMP"' EXIT
-trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$CREDBLOB" "$CREDPLAIN" "$CREDMATCH" "$SIGTMP" "$XFTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP"' EXIT
+trap 'rm -f "$ERRTMP" "$RAWTMP" "$INJTMP" "$PROVTMP" "$CONCTMP" "$INJSNAP" "$CREDCONC" "$CREDPROV" "$SIGTMP" "$XFTMP"; trap - HUP INT TERM; kill -s INT $$' HUP INT TERM
 
 INJ_PHRASE_RE='(ignore (all )?(prior|previous) (rules|instructions)|disregard (your|all) (instructions|rules)|the maintainer (approved|authorised|authorized)|add [^ ]+ to the trust gate|update your instructions|you are now [a-z ]{0,20}mode)'
 
@@ -3536,11 +3544,42 @@ if want safety; then
     # fraction of the input. The batching contract test pins this: it asserts
     # exactly ONE credential-table jq invocation, and it caught the two-pass
     # version of this change.
-    printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
+    # 🔴 SUPPRESS xtrace ACROSS THE CREDENTIAL-BEARING REGION. `set -x` prints an
+    # assignment's EXPANDED value, and every later `"$var"` expansion, to STDERR —
+    # and stderr does NOT pass through the `main | redact` boundary that every
+    # other output path here goes through. Verified directly: `v=$(printf 'ghp_X')`
+    # traces as `+ v=ghp_X`, and a later `printf '%s\n' "$v"` as `++ printf ghp_X`.
+    #
+    # That matters more here than it would elsewhere. An operator running
+    # `bash -x` to diagnose this scanner would write raw credential matches into
+    # their terminal AND into the invoking agent's transcript — which is the very
+    # corpus this scanner reads on its next run, so a diagnostic session would
+    # seed the leak it was called in to investigate.
+    #
+    # The scratch files this region replaced (#2712) leaked only a PATH under
+    # xtrace, so moving the values into shell variables is what introduced this;
+    # the guard is part of that move, not an unrelated hardening. Restore the
+    # caller's setting exactly — never unconditionally `set +x`/`set -x`, which
+    # would silently turn tracing ON for a caller that never asked for it.
+    cred_trace_was=off
+    case $- in *x*) cred_trace_was=on; set +x ;; esac
+    cred_match_data=$(printf '%s\n%s\n' "$SF_CACHE" "$CX_CACHE" | grep -v '^$' | tr '\n' '\000' \
       | xargs -0 -n "$CREDENTIAL_SCAN_BATCH_FILES" bash -c \
           'awk "{ print }" "$@" | jq -Rr "$CRED_DECODE_FILTER" --' _ 2>/dev/null \
       | sed -E "s/$(printf '\033')\[[0-9;:]*[A-Za-z]//g" \
-      | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null > "$CREDMATCH"
+      | grep -ahoEi "$CRED_TABLE_SCAN_RE" 2>/dev/null \
+      | tr '\000' '\n')
+    # NUL is translated to a newline BEFORE the capture, never left to the
+    # command substitution. A decoded string can legitimately carry `\u0000`,
+    # which jq emits as a real NUL byte, and `$(...)` DELETES NUL rather than
+    # preserving it — so the scratch file this replaced kept the byte while the
+    # variable would silently splice the fragments on either side into one value
+    # that never existed in the corpus. That is the JOIN direction, and it is the
+    # harmful one: a spliced string can reach a high-signal row by spanning a
+    # boundary, manufacturing a credential. Splitting is the safe asymmetry the
+    # compound-value handling below already chose for `;&|` — a fragment only
+    # ever reaches a high-signal row by passing a FULL shape regex on its own,
+    # so a split costs no true positive while a splice invents a false one.
     # Shared normaliser. BOTH the value list and the blob set run through THIS
     # function, so the two can never normalise differently — a divergence would
     # attach the label to the wrong row, which is worse than no label at all.
@@ -3555,9 +3594,11 @@ if want safety; then
     # A blob match carries its run; stripping run+boundary yields the identical
     # string the plain leg produces for the same credential (whose single
     # boundary char cred_normalise removes), so the two sets are comparable.
-    cred_blob_matches() { grep -aEi "$CRED_BLOB_ANCHORED_RE" "$CREDMATCH" 2>/dev/null \
+    cred_blob_matches() { printf '%s\n' "$cred_match_data" \
+                          | grep -aEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null \
                           | sed -E "s|$CRED_BLOB_STRIP_RE||"; }
-    cred_plain_matches() { grep -avEi "$CRED_BLOB_ANCHORED_RE" "$CREDMATCH" 2>/dev/null; }
+    cred_plain_matches() { printf '%s\n' "$cred_match_data" \
+                          | grep -avEi "$CRED_BLOB_ANCHORED_RE" 2>/dev/null; }
     # The label needs the ABSENCE of a plain occurrence, not the presence of a
     # blob one. `cred_normalise` ends in `sort -u`, so a credential seen both
     # inside an encoded blob and plainly collapses to ONE row; membership in the
@@ -3568,7 +3609,7 @@ if want safety; then
     # the set what its name claims: values whose occurrences are ALL blob-embedded.
     # This is the ambiguity-falls-through-to-the-plain-row rule the label's own
     # contract states, enforced rather than assumed.
-    cred_plain_matches | cred_normalise > "$CREDPLAIN"
+    cred_plain_set=$(cred_plain_matches | cred_normalise)
     # Derived from the SAME extracted matches as the table — so a complete image
     # payload, excluded upstream by the decode filter, can no more manufacture a
     # blob label than it can manufacture a table row.
@@ -3580,14 +3621,14 @@ if want safety; then
     # on an empty or missing file simply yields nothing, whereas the NR==FNR
     # idiom would silently eat the first data line when the plain set is empty —
     # which here would drop a real credential's label).
-    cred_blob_matches | cred_normalise \
-      | awk -v plainfile="$CREDPLAIN" '
+    cred_blob_set=$(cred_blob_matches | cred_normalise \
+      | awk -v plainfile=<(printf '%s\n' "$cred_plain_set") '
           BEGIN {
             while ((getline _p < plainfile) > 0) if (_p != "") plain[_p] = 1
             close(plainfile)
           }
           !($0 in plain)
-        ' > "$CREDBLOB"
+        ')
     { cred_blob_matches; cred_plain_matches; } \
       | cred_normalise |
       # Normalise every match to its UNDERLYING VALUE before any dedup:
@@ -3627,7 +3668,7 @@ if want safety; then
       #     weak-bucket rows; the asymmetry is chosen — a splittable fragment
       #     only ever reaches a high-signal row by passing a FULL shape regex,
       #     while not splitting silently drops a real second credential.
-    awk -v blobfile="$CREDBLOB" '
+    awk -v blobfile=<(printf '%s\n' "$cred_blob_set") '
       # Blob-evidence set read as a FILE, never with a here-doc join: getline on
       # a missing or EMPTY file simply yields nothing, whereas the NR==FNR idiom
       # silently consumes the first DATA line when the joined file is empty —
@@ -3676,6 +3717,9 @@ if want safety; then
         if ($0 in blob) s = s " [blob-embedded: inside a base64 run, likely a chance substring]"
         print s
       }' | sort | uniq -c | sort -rn | sed 's/^/    /'
+    # End of the credential-value region — restore the caller's tracing exactly.
+    if [ "$cred_trace_was" = on ]; then set -x; fi
+    cred_trace_was=off
     # Concentration, mirroring the injection detector and placed directly under
     # the table it qualifies. The TABLE counts distinct VALUES on purpose (one
     # leak pasted into fifty transcripts is one credential to rotate); this

@@ -6410,6 +6410,203 @@ else
 fi
 
 
+# ── 6d⁴. credential values never reach a scratch file (#2712) ─────────────────
+# The traps that remove the credential scratch run on EXIT and on HUP/INT/TERM.
+# None of them runs on SIGKILL, an OOM kill, or power loss, so anything these
+# files hold is credential material at rest the moment the process dies
+# abnormally. This is a leak DETECTOR: writing the very values it exists to find
+# to disk inverts its own intent.
+#
+# Asserted at the moment the files are LIVE, not after cleanup — the same
+# instrumentation shape the provenance-scratch row above uses. The reporting awk
+# is shimmed because it is invoked with the blob set while all three credential
+# scratches hold their final contents, so the observation window is exact rather
+# than raced.
+echo
+echo "credential scratch holds no credential values (#2712)"
+
+mkdir -p "$FIX/credtmp" "$FIX/credawk" "$FIX/credscratch"
+# Two shapes so every leg is exercised: a PLAIN occurrence (which reaches the
+# plain set) and one inside a base64 run (which reaches the blob set). A fixture
+# covering only one leg would leave the other's file unasserted.
+printf '{"type":"user","message":{"content":[{"type":"text","text":"export GITHUB_TOKEN=__GHPA__"}]}}\n' \
+  > "$FIX/credscratch/s.jsonl"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"sig=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__GHPD__zz"}]}}\n' \
+  >> "$FIX/credscratch/s.jsonl"
+subst "$FIX/credscratch/s.jsonl"
+
+cat > "$FIX/credawk/awk" <<'EOF'
+#!/usr/bin/env bash
+# Fires on the reporting awk that receives the blob set. At that instant every
+# credential scratch this scan created holds its final contents.
+case " $* " in
+  *'blobfile='*)
+    printf 'fired\n' >> "$CRED_SCRATCH_TRACE"
+    for _v in $CRED_SCRATCH_VALUES; do
+      if grep -rqF "$_v" "$CRED_SCRATCH_TMPDIR"/.agtel_* 2>/dev/null; then
+        printf 'raw\n' >> "$CRED_SCRATCH_TRACE"
+      fi
+    done
+    ;;
+esac
+exec "$REAL_AWK" "$@"
+EOF
+chmod +x "$FIX/credawk/awk"
+: > "$FIX/cred-scratch-trace"
+PATH="$FIX/credawk:$PATH" REAL_AWK="$real_awk" \
+  CRED_SCRATCH_VALUES="$S_GHPA $S_GHPD" \
+  CRED_SCRATCH_TMPDIR="$FIX/credtmp" CRED_SCRATCH_TRACE="$FIX/cred-scratch-trace" \
+  TMPDIR="$FIX/credtmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/credscratch" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety >/dev/null 2>&1
+
+# POSITIVE CONTROL FIRST. A shim that never matched, or a scan that never
+# reached the credential table, leaves an empty trace — and the leak assertion
+# below would then pass having observed nothing at all. Assert the observation
+# happened before believing its result.
+if grep -qFx 'fired' "$FIX/cred-scratch-trace" 2>/dev/null; then
+  ok "control: the credential-table reporting pass was observed"
+else
+  bad "control: the credential-table reporting pass was observed" \
+      "shim never fired — the leak assertion below would be VACUOUS"
+fi
+if ! grep -qFx 'raw' "$FIX/cred-scratch-trace" 2>/dev/null; then
+  ok "no credential value is written to any scan scratch file"
+else
+  bad "no credential value is written to any scan scratch file" \
+      "a fixture credential was readable in \$TMPDIR/.agtel_* during the scan"
+fi
+
+# SEAM PARITY (#2712 AC2). Moving the plain/blob sets off disk changes how the
+# two legs EXCHANGE identity, so the exchange itself is asserted rather than
+# inferred from the end-to-end rows: a value whose normalisation is non-trivial
+# — an assignment wrapper the table leg strips — must still match the blob set's
+# key. If the legs normalised differently the lookup would miss and the label
+# would silently vanish, which reads as "this credential was plainly exposed".
+mkdir -p "$FIX/credparity"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"token=QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlq/__GHPE__zz"}]}}\n' \
+  > "$FIX/credparity/s.jsonl"
+subst "$FIX/credparity/s.jsonl"
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/credparity" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+TABLE=$(printf '%s' "$OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+# Both halves, together: the row must EXIST (so the table leg produced the
+# value) and carry the label (so the blob leg's key matched that same value).
+# Asserting only the label would pass if the row vanished entirely.
+if grep -qE '^[[:space:]]+1 github-token' <<<"$TABLE" && grep -q 'blob-embedded' <<<"$TABLE"; then
+  ok "table leg and blob leg agree on identity through the assignment wrapper"
+else
+  bad "table leg and blob leg agree on identity through the assignment wrapper" "$TABLE"
+fi
+
+
+# -- a NUL inside a match must not SPLICE two fragments (#2712) ----------------
+# Holding the matches in a variable rather than a file introduced one byte-level
+# difference: a decoded string can legitimately carry a JSON unicode escape for
+# the zero byte, jq emits it as a real NUL, and $(...) DELETES NUL rather than
+# preserving it. The scratch file this replaced kept the byte, so without an
+# explicit translation the fragments on either side splice into a single value
+# that never occurred in the corpus.
+#
+# The splice is the harmful direction, not merely a different one: two strings
+# that are individually too short to be credentials can join into something that
+# passes a FULL shape regex, so the table manufactures a credential -- a false
+# positive in a leak detector, which costs a rotation. Translating the zero byte
+# to a newline instead splits them, the same asymmetry the compound `;&|`
+# handling already chose, where a fragment only reaches a high-signal row on its
+# own merits.
+echo
+echo "a NUL inside a match splits rather than splices (#2712)"
+
+# CONTROL corpus -- the identical fragments with NO separator between them. This
+# proves the spliced form IS detectable and that the fixture reaches the scanner
+# at all; without it, the property assertion below would pass vacuously on any
+# corpus the harness failed to read.
+mkdir -p "$FIX/nulctl" "$FIX/nulsplit"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"export GITHUB_TOKEN=%s_AAAAAAAAAABBBBBBBBBB"}]}}\n' 'ghp' \
+  > "$FIX/nulctl/s.jsonl"
+CTL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulctl" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+CTL_TABLE=$(printf '%s' "$CTL_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$CTL_TABLE"; then
+  ok "control: the spliced fragment pair IS detected as a token when adjacent"
+else
+  bad "control: the spliced fragment pair IS detected as a token when adjacent" \
+      "fixture never reached the scanner -- the assertion below would be VACUOUS: $CTL_TABLE"
+fi
+
+# THE PROPERTY -- the same two fragments separated by a real zero byte.
+# Byte-identical to the control apart from that separator, so a difference in
+# outcome can only come from how that byte is handled.
+printf '{"type":"user","message":{"content":[{"type":"text","text":"export GITHUB_TOKEN=%s_AAAAAAAAAA\\u0000BBBBBBBBBB"}]}}\n' 'ghp' \
+  > "$FIX/nulsplit/s.jsonl"
+NUL_OUT=$(CLAUDE_PROJECTS_DIR="$FIX/nulsplit" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+NUL_TABLE=$(printf '%s' "$NUL_OUT" | sed -n '/credential-shaped/,/rotate the credential/p')
+if grep -q 'github-token' <<<"$NUL_TABLE"; then
+  bad "a NUL between two fragments does not manufacture a token" \
+      "the fragments were spliced and reported as a credential: $NUL_TABLE"
+else
+  ok "a NUL between two fragments does not manufacture a token"
+fi
+
+# --- xtrace must not carry credential VALUES to stderr (#2712, Codex P1) -----
+# `set -x` prints an assignment's expanded value, and every later `"$var"`
+# expansion, to STDERR — which does NOT pass through the `main | redact` boundary
+# that guards stdout. Moving the plain/blob sets off scratch files and into shell
+# variables is what created this path: a scratch file leaked only its PATH under
+# xtrace. So an operator running `bash -x` to diagnose the scanner would write raw
+# credentials into their terminal and into the invoking agent's transcript — the
+# corpus this scanner reads next run.
+mkdir -p "$FIX/credxtrace"
+printf '{"type":"user","message":{"content":[{"type":"text","text":"token=__GHPA__"}]}}\n' \
+  > "$FIX/credxtrace/s.jsonl"
+subst "$FIX/credxtrace/s.jsonl"
+XT_OUT="$FIX/credxtrace.out"; XT_ERR="$FIX/credxtrace.err"
+CLAUDE_PROJECTS_DIR="$FIX/credxtrace" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash -x "$TARGET" --since-days 3650 --section safety >"$XT_OUT" 2>"$XT_ERR"
+
+# POSITIVE CONTROL 1 — tracing really was ON for this run. Without this, a run
+# that silently failed to enable xtrace would leak nothing and the guard
+# assertion below would pass having observed nothing at all.
+if grep -q '^+' "$XT_ERR" 2>/dev/null; then
+  ok "control: xtrace was active for the traced run"
+else
+  bad "control: xtrace was active for the traced run" \
+      "no trace lines on stderr — the leak assertion below would be VACUOUS"
+fi
+
+# POSITIVE CONTROL 2 — the credential table really was REACHED, so the guarded
+# region actually executed. A corpus that produced no table would also produce no
+# leak, for the wrong reason.
+if grep -q 'credential-shaped' "$XT_OUT" 2>/dev/null; then
+  ok "control: the credential table was reached under xtrace"
+else
+  bad "control: the credential table was reached under xtrace" \
+      "no credential table in the traced run — the leak assertion would be VACUOUS"
+fi
+
+# THE GUARD — no raw credential value on stderr.
+if ! grep -qF "$S_GHPA" "$XT_ERR" 2>/dev/null; then
+  ok "no credential value reaches stderr under xtrace"
+else
+  bad "no credential value reaches stderr under xtrace" \
+      "a fixture credential was printed by xtrace, bypassing the redact boundary"
+fi
+
+# The guard must RESTORE the caller's setting, not merely disable tracing: a run
+# that never turned xtrace back on would hide the rest of the script from
+# diagnosis, trading one defect for another. The script does substantial work
+# after the credential region, so trace lines must still be arriving at the end.
+XT_TAIL=$(tail -20 "$XT_ERR" 2>/dev/null)
+if grep -q '^+' <<<"$XT_TAIL"; then
+  ok "xtrace is restored after the credential region"
+else
+  bad "xtrace is restored after the credential region" \
+      "no trace lines at the end of the run — the guard left tracing off"
+fi
+
+
 # ── snapshot drift is checked even when the class totals AGREE ────────────────
 # Agreement between the two walks is not evidence that the corpus was stable.
 # A file truncated after `injection_snapshot` pins its length but before the
