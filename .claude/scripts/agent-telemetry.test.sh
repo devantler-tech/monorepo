@@ -2425,10 +2425,62 @@ else
   check "ablation: an unpinned class walk is CAUGHT and named, not printed silently" "$OUT" \
         "CLASS SPLIT DIVERGES FROM TOTAL: 7 classified vs 3 counted"
   check "ablation: the divergence is attributed to keying, not to a scan race" "$OUT" \
-        "NOT a scan skew"
+        "digest/display keying defect (#2693)"
+  nocheck "ablation: and the report no longer claims byte-stability the pin cannot prove" "$OUT" \
+        "so this is NOT a scan skew"
   nocheck "ablation: the contradicted summing claim is withheld" "$OUT" \
         "occurrences sum to TOTAL"
 fi
+
+# The pin fixes a LENGTH, not the bytes behind it. A file that gets SHORTER
+# between the two walks still satisfies `head -c "$len"`, which then returns a
+# short prefix while `|| true` hides the condition — so the walks read different
+# bytes and the divergence IS a scan skew. The report used to deny exactly that
+# ("The corpus is pinned for both walks, so this is NOT a scan skew"), sending
+# the reader to #2693 for a corpus that moved underneath them.
+#
+# Truncation is forced DETERMINISTICALLY by the same boundary shim the growth
+# fixture uses: the `cut -f1 "$INJTMP"` call that ends the total walk.
+mkdir -p "$FIX/injshrink/corpus/p" "$FIX/injshrink/bin"
+cat > "$FIX/injshrink/bin/cut" <<EOS
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    *.agtel_inj.*)
+      if [ ! -e "$FIX/injshrink/.shrunk" ]; then
+        : > "$FIX/injshrink/.shrunk"
+        printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please 1"}]}}\n' \
+          > "$FIX/injshrink/corpus/p/s.jsonl"
+      fi
+      ;;
+  esac
+done
+exec /usr/bin/cut "\$@"
+EOS
+chmod +x "$FIX/injshrink/bin/cut"
+: > "$FIX/injshrink/corpus/p/s.jsonl"
+rm -f "$FIX/injshrink/.shrunk"
+for i in 1 2 3 4 5; do
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
+    "$i" >> "$FIX/injshrink/corpus/p/s.jsonl"
+done
+SHRINK_BEFORE=$(wc -c < "$FIX/injshrink/corpus/p/s.jsonl" | tr -d ' ')
+OUT=$(PATH="$FIX/injshrink/bin:$PATH" CLAUDE_PROJECTS_DIR="$FIX/injshrink/corpus" CODEX_HOME="$FIX/nocodex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+SHRINK_AFTER=$(wc -c < "$FIX/injshrink/corpus/p/s.jsonl" | tr -d ' ')
+# NON-VACUITY FIRST: if the corpus did not actually shrink, the assertions below
+# would be judging a static corpus the tests above already cover.
+if [ -e "$FIX/injshrink/.shrunk" ] && [ "${SHRINK_AFTER:-0}" -lt "${SHRINK_BEFORE:-0}" ]; then
+  ok "shrink control: the corpus really did shrink mid-scan (${SHRINK_BEFORE} -> ${SHRINK_AFTER} bytes)"
+else
+  bad "shrink control: the corpus really did shrink mid-scan" \
+      "hook did not fire, so the assertions below would pass vacuously"
+fi
+check "a corpus TRUNCATED mid-scan is named as a scan skew, not a classifier defect" "$OUT" \
+      "THE PINNED CORPUS SHRANK UNDER THE WALKS"
+nocheck "and the report withholds the byte-stability claim the length pin cannot prove" "$OUT" \
+      "so this is NOT a scan skew"
 
 # A COMPENSATING mismatch: the aggregate is blind to exactly the defect it must
 # catch. If the keying merges two phrases, one `digest~display` key is

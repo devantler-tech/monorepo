@@ -378,6 +378,38 @@ injection_snapshot() {
       done
 }
 
+# Count pinned files that SHRANK while the walks ran.
+#
+# The pin fixes a LENGTH, not the bytes behind it, so `head -c "$len"` can still
+# hand the two walks different content. Growth is harmless and expected — the
+# corpus includes the running agent's own session file, so it is appended to
+# continuously, and both walks read the same pinned prefix regardless. A file
+# that got SHORTER is the case that matters: `head -c` then returns a short
+# prefix, the walks read different byte counts, and the divergence they report
+# is a scan skew rather than a classifier defect.
+#
+# A file that vanished or cannot be measured counts as drift for the same
+# reason. This cannot see an in-place rewrite that preserves the length, so the
+# caller states what it rules out rather than claiming the corpus was stable.
+injection_snapshot_drift() {
+  local snap="$1" len f now drift=0
+  [ -f "$snap" ] || { printf '0\n'; return 0; }
+  while IFS="$(printf '\t')" read -r len f; do
+    [ -n "$f" ] || continue
+    case "$len" in ''|*[!0-9]*) continue ;; esac
+    if [ ! -f "$f" ]; then
+      drift=$((drift + 1))
+      continue
+    fi
+    now=$(wc -c < "$f" 2>/dev/null | tr -d ' ')
+    case "$now" in
+      ''|*[!0-9]*) drift=$((drift + 1)) ;;
+      *) [ "$now" -ge "$len" ] || drift=$((drift + 1)) ;;
+    esac
+  done < "$snap"
+  printf '%s\n' "$drift"
+}
+
 # Emit one safe class row per occurrence without suppressing anything from the
 # fail-closed raw total. Runtime-supplied developer context is structurally
 # distinguishable from user/tool content, but a compacted record can contain
@@ -3316,9 +3348,20 @@ if want safety; then
         echo "      ⚠️  CLASS SPLIT DIVERGES PER PHRASE: ${inj_key_divergence} phrase key(s) whose"
         echo "          classified count differs from the raw count, even where the totals agree."
       fi
-      echo "          The corpus is pinned for both walks, so this is NOT a scan skew."
-      echo "          Treat it as a classifier or digest/display keying defect (#2693)"
-      echo "          and investigate before trusting any split below."
+      inj_snap_drift=$(injection_snapshot_drift "$INJSNAP")
+      case "$inj_snap_drift" in ''|*[!0-9]*) inj_snap_drift=0 ;; esac
+      if [ "$inj_snap_drift" -gt 0 ]; then
+        echo "          ⚠️  THE PINNED CORPUS SHRANK UNDER THE WALKS: ${inj_snap_drift} file(s) are"
+        echo "          shorter than the length pinned for them (or went unreadable), so the two"
+        echo "          walks did NOT read the same bytes. Treat this as a SCAN SKEW first —"
+        echo "          re-run before reading it as a classifier defect."
+      else
+        echo "          No pinned file shrank, so both walks read equal-length prefixes. That"
+        echo "          rules out a truncation skew, but the pin fixes a LENGTH and cannot rule"
+        echo "          out an in-place rewrite at the same size. If the corpus was stable,"
+        echo "          treat it as a classifier or digest/display keying defect (#2693)"
+        echo "          and investigate before trusting any split below."
+      fi
     else
       echo "      (class-specific records/sessions may overlap; occurrences sum to TOTAL)"
     fi
