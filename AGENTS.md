@@ -1539,10 +1539,11 @@ retrying; rerun only a demonstrated transient once; request the bot's update/reb
 succeed; push a minimal adaptation commit to the trusted bot branch when the dependency change itself
 needs it; and arm or execute the repository's head-pinned merge path when readiness holds. An untouched
 bot-generated head keeps the repository automation's existing no-agent-review path. Any agent-authored
-adaptation commit restores the ordinary current-head semantic-review gate before merge. If the PR is
-already armed, disarm any existing auto-merge request before the adaptation push and confirm it is off;
-otherwise fresh green CI can merge the adapted head before that review exists. Re-arm only after the
-adapted head satisfies that review gate. Major-version
+adaptation commit restores the ordinary current-head semantic-review gate before merge. Always
+convert the PR to draft before the first adaptation push, disable any existing auto-merge request,
+and confirm both states. Draft state is the durable fence: repository automation can re-arm
+auto-merge after a push. Promote from draft and re-arm only after the adapted head satisfies that
+review gate. Major-version
 bumps are included; difficulty changes the work, not ownership. If a merged dependency bump breaks
 `main`, repair that resulting breakage normally as well.
 
