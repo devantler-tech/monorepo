@@ -82,6 +82,27 @@ else
   failures=$((failures + 1))
 fi
 
+echo "== consumer contract: --since re-verification is lane-scoped =="
+sweep_rule="$({
+  awk '
+    /^  🔴 \*\*On `--since`, read the findings/ { in_section = 1 }
+    in_section && /^  It reports \*\*positive evidence of agent authorship only\*\*/ { exit }
+    in_section { print }
+  ' "$constitution"
+} | tr '\n' ' ' | tr -s '[:space:]' ' ')"
+reverify_scope='Re-verify ONLY a body that is exactly `@cursor review`'
+violation_on_sight='a violation on sight'
+no_carveout_reason='`--issue` reports them violating even when a canonical disclosure comment sits immediately before them'
+if [[ -n "$sweep_rule" ]] &&
+   [[ "$sweep_rule" == *"$reverify_scope"* ]] &&
+   [[ "$sweep_rule" == *"$violation_on_sight"* ]] &&
+   [[ "$sweep_rule" == *"$no_carveout_reason"* ]]; then
+  echo "ok    --since re-verification is scoped to the Bugbot body, non-Bugbot triggers violate on sight"
+else
+  echo "FAIL  --since rule does not scope re-verification to the exact @cursor review body"
+  failures=$((failures + 1))
+fi
+
 echo "== Go classifier suite =="
 if (cd "$script_dir/comment-disclosure-drift-go" && go test -race -cover ./...); then
   echo "ok    go test"
