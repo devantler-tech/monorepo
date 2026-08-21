@@ -284,6 +284,27 @@ DEFAULT="${DEFAULT:-main}"
 # detached at its superproject pin, and checking out the default branch there
 # would silently move it off the pin (superproject drift).
 START_BRANCH=$(git branch --show-current 2>/dev/null)
+# Is the default branch checked out in some worktree? Only ever consulted after a
+# return-to-default checkout has already FAILED, and only while this checkout sits
+# on some other branch — so a hit is necessarily a DIFFERENT worktree, and no
+# fragile path comparison is needed (macOS resolves /var and /tmp through symlinks,
+# so comparing worktree paths would be the unreliable half of this test).
+#
+# monorepo#2489: every run works in a per-run worktree while the primary checkout
+# holds the default branch, and git refuses one branch in two worktrees. So the
+# return-to-default checkout can NEVER succeed from a session worktree. That is the
+# documented steady state — the scheduled worktree sweep reaps the session worktree
+# and frees its branch — not a fault, so it must not poison the exit code. A
+# checkout that fails for any OTHER reason still must.
+#
+# Fails closed: a failed enumeration (pipefail is on) returns non-zero, so the
+# caller reports the error rather than silently suppressing it.
+default_checked_out_somewhere() {
+  git worktree list --porcelain 2>/dev/null | awk -v want="refs/heads/$DEFAULT" '
+    /^branch / { if (substr($0, 8) == want) found = 1 }
+    END { exit found ? 0 : 1 }
+  '
+}
 return_to_default() {
   local cur
   cur=$(git branch --show-current 2>/dev/null)
@@ -296,6 +317,8 @@ return_to_default() {
     local now
     now=$(git branch --show-current 2>/dev/null)
     if [ "$now" = "$DEFAULT" ]; then sw="-> $DEFAULT";
+    elif default_checked_out_somewhere; then
+      sw="$DEFAULT held by another worktree — left on '${now:-detached}'"
     else sw="FAILED to reach $DEFAULT (on '${now:-detached}')"; errors=$((errors+1)); fi
   else sw="already on $DEFAULT"; fi
 }
