@@ -355,6 +355,10 @@ assert_prose 'self-progressing only while' \
   "${constitution_flat}" "contract cannot distinguish healthy dependency automation from a stalled PR"
 assert_prose 'unable to reach merge without a new agent action' \
   "${constitution_flat}" "contract does not define the dependency-PR intervention boundary"
+assert_prose 'disarm any existing auto-merge request before the adaptation push' \
+  "${constitution_flat}" "contract lets an adapted bot head merge before semantic review"
+assert_prose 'Re-arm only after the adapted head satisfies that review gate' \
+  "${constitution_flat}" "contract can re-arm an adapted bot PR before semantic review"
 assert_absent '**Automation-owned Renovate/Dependabot PRs stay excluded**' \
   "${constitution_flat}" "retired unconditional dependency-PR exclusion is still present"
 assert_absent '**Dependency automation is hands-off.**' \

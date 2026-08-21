@@ -587,7 +587,9 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    merge (contract *Trust gate*), so an external PR that has cleared every evaluation and review gate
    would otherwise be refused at the last step for being external, which is the whole class the
    2026-08-08 widening exists to admit. Exact `renovate[bot]`/`dependabot[bot]` PRs follow the same
-   head-pinned merge preflight after their self-progressing evidence fails. 🔴 **DIAGNOSE a refused merge before escalating it — a one-click is for what you
+   head-pinned merge preflight after their self-progressing evidence fails. Before pushing an adaptation
+   to an armed dependency PR, disable auto-merge and confirm it is off; re-arm only after the adapted
+   head has fresh semantic review. 🔴 **DIAGNOSE a refused merge before escalating it — a one-click is for what you
    cannot fix, never for what you did not look at.** The thread read above is taken *immediately*
    before the merge, but "immediately" is not "atomically": a lane can post a thread in the gap, and
    a ruleset condition the pentad never modelled can refuse just as easily. Both surface as a bare
