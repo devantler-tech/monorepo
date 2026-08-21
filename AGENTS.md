@@ -4093,8 +4093,19 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   🔴 **On `--since`, read the findings, not the exit code.** A sweep's per-discussion history is
   incomplete (`since` selects by *updated* time), so it never grants Bugbot's bare-trigger carve-out and
   reports **every** bare `@cursor review` — exit 1 is therefore routine on a repo that uses Bugbot and
-  does not by itself mean drift. Verify each reported bare trigger with `--repo <owner>/<repo> --issue
-  <n>`, where the full comment list is present and a legitimate pairing resolves clean. Every other
+  does not by itself mean drift. **Re-verify ONLY a body that is exactly `@cursor review`**, with
+  `--repo <owner>/<repo> --issue <n>`, where the full comment list is present and a legitimate pairing
+  resolves clean.
+  🔴 **A bare `@coderabbitai review` or `@codex review` is a violation on sight — never bare-trigger
+  noise to re-check.** Those lanes have no carve-out, so `--issue` reports them violating even when a
+  canonical disclosure comment sits immediately before them. Scoping the re-check by the *shape*
+  ("a bare trigger") instead of the *lane* therefore costs a round-trip that cannot change the verdict —
+  and, far worse, files the real violations inside the Bugbot pile where they read as known noise — a
+  misread [#2965](https://github.com/devantler-tech/monorepo/issues/2965) records making. Measured
+  2026-08-21 across six repositories and 1,745 `devantler` comments in a 7-day window: **67 findings —
+  56 re-verifiable `@cursor review`, 11 violations on sight**, spread over three repositories and two
+  separate episodes, and **5 of the 11 had posted the disclosure as its own preceding comment** — the
+  Bugbot two-comment shape applied to a lane that has none. Every other
   shape it reports is a real finding. [#2781](https://github.com/devantler-tech/monorepo/issues/2781)
   restores the precision.
   It reports **positive evidence of agent authorship only** — a `devantler`
