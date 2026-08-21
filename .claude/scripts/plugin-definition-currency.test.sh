@@ -1479,4 +1479,61 @@ if [ -x "${script%/*}/plugin-definition-currency.test.sh" ]; then
 else
   fail "the test script lost its executable bit (mode must stay 100755)"
 fi
+# ── 7y. TWO declared runtime assets still produce a verdict (monorepo#2984) ───
+# The declaration carried exactly one runtime asset until the pin advanced, so the list the selector
+# receives had no newline in it and this path was unreachable. `main` now declares two, and on BSD
+# awk a literal newline inside a `-v` assignment is a parse error — so the control that tells a run
+# whether it loaded the pinned definition returned exit 2 (UNKNOWN) on the agent host, printing only
+# `awk: newline in string ...`. UNKNOWN is never CURRENT, so this is a dead control rather than a
+# wrong answer, and nothing about it recovers on its own.
+#
+# The fixture is SEPARATE from the single-asset pin above on purpose: adding a second asset to that
+# one would change the input of every case in this file, and a firing would stop being attributable.
+# It is also a stronger claim than "the script does not crash" — a matching install must still be
+# reported CURRENT, so a fix that merely stopped reading the list would fail here.
+multi_pin="${tmp}/multi/libraries/agent-plugins"
+mp="${multi_pin}/plugins/agentic-engineering"
+mkdir -p "${mp}/agents" "${mp}/skills/alpha" "${mp}/scripts" \
+         "${tmp}/multi/.claude/plugin-consumption"
+printf 'reviewed engineer definition\n' > "${mp}/agents/agentic-engineer.agent.md"
+printf 'reviewed alpha procedure\n'     > "${mp}/skills/alpha/SKILL.md"
+printf '#!/bin/sh\necho classified\n'   > "${mp}/scripts/classify-default-branch-ci-runs.sh"
+printf '#!/bin/sh\necho guarded\n'      > "${mp}/scripts/forge-readonly-guard.sh"
+chmod +x "${mp}/scripts/classify-default-branch-ci-runs.sh" "${mp}/scripts/forge-readonly-guard.sh"
+multi_sha_a="$(shasum -a 256 "${mp}/scripts/classify-default-branch-ci-runs.sh" | awk '{print $1}')"
+multi_sha_b="$(shasum -a 256 "${mp}/scripts/forge-readonly-guard.sh" | awk '{print $1}')"
+cat > "${tmp}/multi/.claude/plugin-consumption/agentic-engineering.desired-state.json" <<JSON
+{
+  "spec": {
+    "source": {
+      "requiredRuntimeAssets": [
+        { "path": "scripts/classify-default-branch-ci-runs.sh", "sha256": "${multi_sha_a}", "executable": true },
+        { "path": "scripts/forge-readonly-guard.sh", "sha256": "${multi_sha_b}", "executable": true }
+      ]
+    }
+  }
+}
+JSON
+git -C "${multi_pin}" init -q
+git -C "${multi_pin}" config user.email t@example.invalid
+git -C "${multi_pin}" config user.name t
+git -C "${multi_pin}" add -A
+git -C "${multi_pin}" -c commit.gpgsign=false commit -qm pin
+multi_gitlink="$(git -C "${multi_pin}" rev-parse HEAD)"
+multi_install="${tmp}/install-multi"
+mkdir -p "${multi_install}"
+cp -R "${mp}/agents" "${mp}/skills" "${mp}/scripts" "${multi_install}/"
+set +e
+out="$("${script}" --repo-root "${tmp}/multi" --gitlink "${multi_gitlink}" \
+                   --installed "${multi_install}" 2>&1)"; rc=$?
+set -e
+case "${rc}:${out}" in
+  0:*CURRENT*)
+    ok "a two-runtime-asset declaration still yields a verdict, not UNKNOWN" ;;
+  2:*)
+    fail "two declared runtime assets produced UNKNOWN (exit 2) — the asset list is reaching a \`-v\` assignment that cannot hold a newline: ${out}" ;;
+  *)
+    fail "two declared runtime assets on a matching install must exit 0 and report CURRENT, got ${rc}: ${out}" ;;
+esac
+
 echo "plugin-definition-currency: ${pass_count} assertions passed"
