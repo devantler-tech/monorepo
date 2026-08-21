@@ -797,6 +797,21 @@ parity_case "pgp_armor" \
   "$(printf -- 'boom -----%s PGP PRIVATE KEY BLOCK----- SECRETPGPARMOR' 'BEGIN')" "SECRETPGPARMOR"
 parity_case "rfc7468_punct" \
   "$(printf -- 'boom -----%s X9.42 DH PRIVATE KEY----- SECRETDHLABEL' 'BEGIN')" "SECRETDHLABEL"
+# RFC 7468 `labelchar` is wider than the registered label families: it admits
+# punctuation such as `/`, and the grammar permits an INTERNAL hyphen-minus. Both
+# shapes were matched by neither the redactor nor the detector (monorepo#2662),
+# so such a key was emitted unmasked AND reported clean — the silent-failure mode
+# this component treats as its worst. Asserted through parity_case, per shape, so
+# a future narrowing that breaks only ONE leg still fails here.
+#
+# Safe to widen only because the span walker now pairs each END to its opener's
+# LABEL (#2662, above): a label that fails to pair does not close, so it masks
+# MORE. The hyphen is admitted only when immediately followed by an alphanumeric,
+# which is what makes it structurally unable to swallow the `-----` delimiters.
+parity_case "rfc7468_solidus" \
+  "$(printf -- 'boom -----%s FOO/BAR PRIVATE KEY----- SECRETSOLIDUSLABEL' 'BEGIN')" "SECRETSOLIDUSLABEL"
+parity_case "rfc7468_inner_hyphen" \
+  "$(printf -- 'boom -----%s FOO-BAR PRIVATE KEY----- SECRETHYPHENLABEL' 'BEGIN')" "SECRETHYPHENLABEL"
 
 # Codex image tools persist rendered images as very large `data:` strings in
 # custom tool outputs. Those strings are encoded binary, not transcript text;
@@ -5578,8 +5593,17 @@ check "shape 9 control 4e: same-label nesting still closes at depth 0" "$OUT" "T
 # lines reports 8 for the 9 real sites, so a line-based floor of 9 can only be
 # satisfied by adding a tenth site. This assertion caught exactly that mistake
 # in its own first draft.
-SITES_NEW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
-# THREE rejected spellings are pinned, not just the original: `[A-Z ]*` is the
+# The label admits `/` and an INTERNAL hyphen (one immediately followed by an
+# alphanumeric, so it can never eat the `-----` fence). That expression has TWO
+# spellings by CONTEXT, not by choice: awk regex literals and the marker `sed`
+# rules must escape the solidus, while the two detector variables are plain
+# shell strings with no delimiter to escape. BSD awk rejects a bare `/` inside a
+# bracket expression outright (`nonterminated character class`), and this suite
+# runs on macOS as well as Linux, so the escape is required rather than
+# cosmetic. Pin the fragment the two spellings SHARE, so one count still covers
+# all nine sites without forcing a single spelling on both contexts.
+SITES_NEW=$(grep -oF -- '-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
+# FOUR rejected spellings are pinned, not just the original: `[A-Z ]*` is the
 # narrow class that could not reach either real family, `[^-]*…[^-]*` is the
 # over-wide one that leaked, and the ` *`-less optional group is the one that
 # NARROWED (regression control 3). A site left on any of them is a defect, and
@@ -5587,7 +5611,11 @@ SITES_NEW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY( BLOCK)?' "$TARGET"
 SITES_OLD=$(grep -oF -- '[A-Z ]*PRIVATE KEY' "$TARGET" | grep -c '' || true)
 SITES_BAD=$(grep -oF -- '[^-]*PRIVATE KEY[^-]*' "$TARGET" | grep -c '' || true)
 SITES_NARROW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY' "$TARGET" | grep -c '' || true)
-SITES_OLD=$((SITES_OLD + SITES_BAD + SITES_NARROW))
+# FOURTH rejected spelling: the pre-#2662 class, which could reach neither a
+# solidus nor an internal hyphen — masked-but-undetected territory if a site is
+# left on it.
+SITES_PRE7468=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY' "$TARGET" | grep -c '' || true)
+SITES_OLD=$((SITES_OLD + SITES_BAD + SITES_NARROW + SITES_PRE7468))
 if [ "$SITES_NEW" -ge 9 ] && [ "$SITES_OLD" -eq 0 ]; then
   ok "shape 9 structural: every private-key marker site uses the one widened label expression"
 else
