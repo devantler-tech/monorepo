@@ -1565,4 +1565,21 @@ case "${drift_out}" in
   *"forge-readonly-guard.sh"*) ok "drift in the second declared runtime asset is reported" ;;
   *) fail "drift in the second declared asset was not named: ${drift_out}" ;;
 esac
+
+# ── 7z. The asset list must not reach awk as a `-v` assignment, on ANY host ───
+# The behavioural case above is host-sensitive: BSD awk (the agent host) rejects a newline inside a
+# `-v` value, while the GNU awk on CI's ubuntu runner tolerates it. A guard that can only fire on
+# macOS would let this regression land green from CI, which is how it reached production in the first
+# place. So pin the invariant structurally as well — this assertion fires on every runner.
+currency_src="$(cat "${script}")"
+case "${currency_src}" in
+  *'-v runtime="$runtime_assets"'*)
+    fail "the asset list is passed to awk as a -v assignment again — BSD awk rejects the newline, so the check reports UNKNOWN on the agent host (monorepo#2982)" ;;
+esac
+ok "the asset list does not reach awk as a -v assignment (host-independent)"
+case "${currency_src}" in
+  *'ENVIRON["PDC_RUNTIME_ASSETS"]'*)
+    ok "the asset list is read from the environment, which is newline-safe on BSD and GNU awk" ;;
+  *) fail "the asset list is no longer read via ENVIRON — the newline-safe path is gone (monorepo#2982)" ;;
+esac
 echo "plugin-definition-currency: ${pass_count} assertions passed"
