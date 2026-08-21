@@ -410,7 +410,9 @@ extract_fenced() {
       # Recording only the character lets that inner line close the outer block, so
       # every prescription after it is read as prose and silently dropped.
       /^[[:space:]]*(```|~~~)/ {
-        fline = $0; sub(/^[[:space:]]*/, "", fline)
+        fline = $0
+        ind = fline; sub(/[^[:space:]].*$/, "", ind)
+        sub(/^[[:space:]]*/, "", fline)
         fd = substr(fline, 1, 1)
         flen = 0
         while (substr(fline, flen + 1, 1) == fd) flen++
@@ -419,7 +421,16 @@ extract_fenced() {
         # block is CONTENT: checking the delimiter and its length alone ends the block
         # there, and `!inb { next }` then drops every later line, so a prescription after
         # it never reaches the guard -- fail-open, exactly as the two cases above.
-        else if (fd == fence && flen >= fencelen && substr(fline, flen + 1) ~ /^[[:blank:]]*$/) { inb = 0; fence = ""; fencelen = 0; flush() }
+        # ...and a closer indented FOUR or more columns is content too: CommonMark allows a
+        # fence at most three leading spaces, and line 413 strips indentation before this
+        # test, so an indented delimiter would otherwise close the block and drop every
+        # later prescription. A leading TAB is four columns, so it fails the same way.
+        # Deliberately asymmetric: this bounds the CLOSER only. Tightening the OPENER the
+        # same way would stop a fence indented inside a list item from opening at all,
+        # dropping its commands -- a NEW fail-open of the exact class this file guards.
+        # An over-permissive opener can only over-extract, which surfaces as a visible
+        # finding rather than a silent miss.
+        else if (fd == fence && flen >= fencelen && substr(fline, flen + 1) ~ /^[[:blank:]]*$/ && length(ind) <= 3 && ind !~ /\t/) { inb = 0; fence = ""; fencelen = 0; flush() }
         next
       }
       !inb { next }
@@ -680,6 +691,20 @@ fs_extracted=$(extract_commands "$fixdir/fencesuffix.md" | grep -c '^fenced gh r
   || die_unknown "self-test: a command after an invalid closing-fence suffix was never extracted, so it cannot reach the guard (fail-open)"
 if check_sources "$fixdir/fencesuffix.md" >/dev/null 2>&1; then
   die_unknown "self-test: an invalid-closing-fence-suffix command's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# A delimiter-like line indented FOUR or more columns is block content, not a closer:
+# CommonMark allows a fence at most three leading spaces. The recogniser strips indentation
+# before comparing, so without a bound the indented line closes the block and `!inb { next }`
+# drops every prescription after it -- the same silent fail-open as the suffix case above,
+# reached by indentation instead of a suffix. Asserts extraction AND detection.
+printf '%s\n' 'The sweep runs:' '' '```sh' '    ```' \
+  'gh release create v3 --repo devantler-tech/monorepo' '```' > "$fixdir/fenceindent.md"
+fi_extracted=$(extract_commands "$fixdir/fenceindent.md" | grep -c '^fenced gh release create v3 ')
+[ "${fi_extracted:-0}" -ge 1 ] \
+  || die_unknown "self-test: a command after a four-space-indented delimiter was never extracted, so it cannot reach the guard (fail-open)"
+if check_sources "$fixdir/fenceindent.md" >/dev/null 2>&1; then
+  die_unknown "self-test: a four-space-indented-delimiter command's unclassified refusal was NOT detected (fail-open)"
 fi
 
 # A MULTI-BACKTICK inline span must be parsed by its own delimiter length. A span
