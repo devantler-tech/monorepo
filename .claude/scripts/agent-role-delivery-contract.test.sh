@@ -174,6 +174,7 @@ canonical_engineer="${plugin_agents}/${entrypoint}.agent.md"
 canonical_surveyor="${plugin_agents}/portfolio-surveyor.agent.md"
 canonical_improver="${plugin_agents}/agent-improver.agent.md"
 canonical_ci_classifier="${plugin_scripts}/classify-default-branch-ci-runs.sh"
+canonical_forge_guard="${plugin_scripts}/forge-readonly-guard.sh"
 [ -f "${canonical_surveyor}" ] ||
   fail "pinned plugin does not bundle portfolio-surveyor.agent.md"
 [ -f "${canonical_improver}" ] ||
@@ -183,28 +184,42 @@ if [ ! -f "${canonical_ci_classifier}" ] \
   || [ -L "${canonical_ci_classifier}" ]; then
   fail "pinned plugin does not bundle the regular executable default-branch classifier"
 fi
+if [ ! -f "${canonical_forge_guard}" ] \
+  || [ ! -x "${canonical_forge_guard}" ] \
+  || [ -L "${canonical_forge_guard}" ]; then
+  fail "pinned plugin does not bundle the regular executable read-only forge guard"
+fi
 grep -Fq '../scripts/classify-default-branch-ci-runs.sh' "${canonical_surveyor}" ||
   fail "pinned portfolio surveyor does not delegate default-branch CI to the bundled classifier"
 grep -Fq 'refuses partial or capped' "${canonical_surveyor}" ||
   fail "pinned portfolio surveyor does not fail closed on incomplete default-branch CI evidence"
 grep -Fq 'manual dispatch, and GitHub-managed dynamic runs' "${canonical_surveyor}" ||
   fail "pinned portfolio surveyor does not treat managed dynamic runs as default-branch events"
-if ! declared_ci_classifier_sha="$(jq -er '
+declared_runtime_asset_sha() {
+  jq -er --arg path "$1" '
     .spec.source.requiredRuntimeAssets
-    | select(type == "array" and length == 1)
-    | .[0]
-    | select(
-        type == "object"
-        and keys == ["executable", "path", "sha256"]
-        and .path == "scripts/classify-default-branch-ci-runs.sh"
-        and .executable == true
-      )
-    | .sha256
-  ' "${desired_state}" 2>/dev/null)"; then
-  fail "consumer desired state does not carry exactly one executable path-and-digest classifier runtime asset"
-fi
-[ "${declared_ci_classifier_sha}" = "$(sha256_bytes "${canonical_ci_classifier}")" ] ||
-  fail "consumer desired-state classifier sha256 does not match the pinned executable bytes"
+    | select(type == "array" and length == 2)
+    | map(select(
+          type == "object"
+          and keys == ["executable", "path", "sha256"]
+          and .path == $path
+          and .executable == true
+        ))
+    | select(length == 1)
+    | .[0].sha256
+  ' "${desired_state}" 2>/dev/null
+}
+for runtime_asset in \
+  "scripts/classify-default-branch-ci-runs.sh:${canonical_ci_classifier}" \
+  "scripts/forge-readonly-guard.sh:${canonical_forge_guard}"; do
+  runtime_asset_path="${runtime_asset%%:*}"
+  canonical_runtime_asset="${runtime_asset#*:}"
+  if ! declared_runtime_asset_sha="$(declared_runtime_asset_sha "${runtime_asset_path}")"; then
+    fail "consumer desired state does not carry exactly two executable path-and-digest surveyor runtime assets including ${runtime_asset_path}"
+  fi
+  [ "${declared_runtime_asset_sha}" = "$(sha256_bytes "${canonical_runtime_asset}")" ] ||
+    fail "consumer desired-state ${runtime_asset_path} sha256 does not match the pinned executable bytes"
+done
 [ ! -e "${repo_root}/.claude/scripts/classify-main-ci-runs.sh" ] ||
   fail "consumer still carries a local copy of the generic default-branch classifier"
 

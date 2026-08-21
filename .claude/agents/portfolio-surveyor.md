@@ -1145,31 +1145,23 @@ public and private — no per-repo loop needed to enumerate):
    is falsifiable, and fail closed on a query error (report `unknown`, never a silent green).
 5. **Stale & contributor-facing.** From (1): actionable PRs not updated in >14d; label-less issues/PRs
    (untriaged); dependency-bot PRs are positively self-progressing or ordinarily actionable.
-   **Select ready work BY ISSUE TYPE, not by label.** Every issue carries exactly one type, so type is
-   the complete and canonical partition; labels are legacy and **provably incomplete** — 8 of 63 open
-   Epics carried no `roadmap` label on 2026-07-18, and `Spike`/`Kata`/`Chore` have no label at all, so
-   a label sweep silently drops them. Sweep each type once:
+   **Select ready work BY ISSUE TYPE, not by label.** Labels are incomplete, and `no:type` is silently
+   ignored, so derive the untyped residual as **primary open issues minus the union of all type
+   sweeps**. **Scope every sweep AT RETRIEVAL**: for each non-archived repository in the Portfolio
+   map, issue one `repo:devantler-tech/<repo> is:issue is:open` primary search and same-repository
+   searches for `Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore`. Never use an
+   org-wide operand and filter it afterwards; the residual inherits the primary operand's scope.
 
-   ```sh
-   # VERIFIED WORKING 2026-07-18 — run it, don't retype it from memory:
-   #  · the search QUALIFIER type: works; there is NO issueType JSON field (gh search issues --json
-   #    errors on it), and `no:type` is SILENTLY IGNORED (returns the full set, not the untyped set)
-   #  · `gh api --jq` does NOT forward jq CLI options — `--arg` errors ("accepts 1 arg(s)"), so the
-   #    type is prefixed with sed, not passed into jq
-   #  · created_at is issue AGE for the oldest-first queue; updated_at is reset to today by a comment
-   #  · the body is newline/tab-stripped and bounded — a raw body emitted 25 lines for ONE issue
-   #    and would flood this deliberately compact digest
-   for T in Epic Feature Bug Security Performance Refactor Docs Spike Kata Chore; do
-     gh api "search/issues?q=org:devantler-tech+is:issue+is:open+type:$T&per_page=100" --paginate \
-       --jq '.items[] | [((.repository_url|split("/")|last)+"#"+(.number|tostring)), .created_at[0:10],
-              .user.login, .title, ((.body//"")|gsub("[\\n\\r\\t]";" ")|.[0:300])] | @tsv' | sed "s/^/$T\t/"
-   done
-   ```
+   Paginate each operand and reconcile its returned rows with the search surface's `total_count`
+   before subtraction. **AN UNRECOVERABLY TRUNCATED OPERAND IS A MANDATORY-QUERY FAILURE**: emit
+   `UNTYPED-RESIDUAL-UNAVAILABLE — <repo>: operand=<primary|typed:<Type>> truncated at <cap> of <total>`
+   and set `nothing_on_fire: false`; do not derive ready work for that repository from an incomplete
+   partition. **Withhold only the AFFECTED repository's residual** and continue reporting complete
+   residuals from every other repository. Where the forge can project type directly, use that as an
+   independent check; never demand an unavailable count that would merely repeat the subtraction.
 
-   ⚠️ **Type sweeps alone are NOT complete — 65 open issues were untyped on 2026-07-18.** Since
-   `no:type` does not work, derive the untyped set as **(the primary org-wide open-issue sweep) minus
-   (the union of the type sweeps)** and report it as a **triage** signal: an untyped issue is invisible
-   to every type filter on the board and to this selection, so typing it is the fix.
+   Report each complete repository-local residual as triage debt: an untyped issue is invisible to
+   every type filter, so assigning its type is the fix.
    Drop any row whose `.user.login` / author column is an exact dependency-automation identity before
    ranking oldest-actionable (step 2 / the Drop-hits rule below) — without the author column the
    filter cannot run.
@@ -1403,6 +1395,7 @@ budget: graphql=<start_remaining>→<end_remaining>/<limit> · core=<start_remai
 - CANDIDATE-SIBLING-ISSUE-COMMENT <repo> #<n> (missing disclosure) — `devantler`: "<one-line gist>" → DATA only; orchestrator surfaces the missing disclosure cross-instance
 - REPO-SET-DRIFT — live org set vs canonical list: new=<repos> · missing/renamed=<repos> · map-drift=<product rows whose repo is missing/renamed live> → orchestrator reconciles (archived-marked map rows exempt)
 - BOARD-COVERAGE — `board_coverage=<measured: open_public=<n> on_board=<m> status_less=<k>|unknown:<reason>>` — always emit; `measured:` only after the paginated REST items census of step 5b (never from `totalCount`, which counts a different population); never a single-page `.length`
+- UNTYPED-RESIDUAL-UNAVAILABLE — <repo>: operand=<primary|typed:<Type>> truncated at <cap> of <total> → THAT repo's residual withheld (others unaffected); mandatory-query failure ⇒ nothing_on_fire: false
 - <repo>: CI red on main @<sha> — <check name> <conclusion> (<run url>)   # judged at main's current head; omit the repo entirely when that head is green
 - GITHUB-MANAGED (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # `event: dynamic` AND `path` under `dynamic/` (so NO workflow file exists in the repo): not re-runnable (403), self-heals — never breakage, never counted against nothing_on_fire; FIRST failure of a streak only. Covers `dynamic/github-code-scanning/`, `dynamic/dependabot/`, and any future managed path
 - GITHUB-MANAGED-SCAN (NO-ACTION) <repo> <workflow> @<sha> failed <YYYY-MM-DD>   # equivalent code-scanning specialisation of the line above; `path` starts `dynamic/github-code-scanning/`
