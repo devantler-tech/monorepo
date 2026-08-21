@@ -500,7 +500,7 @@ corpus_deny_reasons() {
 CORPUS_REASONS=""
 
 check_sources() {
-  local findings=0 checked=0 skipped=0 classified=0 tagged origin cand reason
+  local findings=0 checked=0 skipped=0 classified=0 tagged origin cand reason guard_out guard_status
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     [ -r "$f" ] || { echo "  unreadable source: $f" >&2; return 2; }
@@ -516,8 +516,19 @@ check_sources() {
         skipped=$((skipped+1)); continue
       fi
       checked=$((checked+1))
-      if "$guard" --command "$cand" >/dev/null 2>&1; then continue; fi
-      reason=$("$guard" --command "$cand" 2>&1 | head -1)
+      # The guard has THREE outcomes, and conflating two of them turns a broken guard into
+      # a vocabulary finding: 0 allowed, 1 denied with a `deny:` first line, 2 usage error.
+      # Treating every non-zero exit as a refusal let a status 2 become an ordinary
+      # UNCLASSIFIED row and made the script exit 1 instead of its documented UNKNOWN 2 --
+      # reporting a verdict it could not actually obtain. Capture the status ONCE (which
+      # also halves guard invocations) and accept only 1-with-deny as a refusal.
+      guard_out=$("$guard" --command "$cand" 2>&1); guard_status=$?
+      [ "$guard_status" -eq 0 ] && continue
+      reason=$(printf '%s\n' "$guard_out" | head -1)
+      case "$guard_status:$reason" in
+        1:deny:*) : ;;
+        *) die_unknown "guard returned status $guard_status for a prescribed command, so its verdict is unverifiable rather than a refusal: ${f#"$repo_root"/} :: $cand :: $reason" ;;
+      esac
       if printf '%s\n' "$CORPUS_REASONS" | grep -qxF -- "$reason"; then
         classified=$((classified+1)); continue
       fi
