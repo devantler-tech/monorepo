@@ -2430,6 +2430,46 @@ else
         "occurrences sum to TOTAL"
 fi
 
+# A COMPENSATING mismatch: the aggregate is blind to exactly the defect it must
+# catch. If the keying merges two phrases, one `digest~display` key is
+# over-counted and another under-counted by the same amount, so runtime+other
+# still equals TOTAL while a phrase line reports more class occurrences than its
+# own total — the #2693 symptom, printed under a claim that it cannot happen.
+# Ablate ONLY the class walk's key derivation (`phrase_class_keys` is used by the
+# class walk alone; the total walk digests inline), so the raw keys stay distinct
+# while the classified ones merge. The injdigest fixture already supplies two
+# distinct digests sharing one display, which is precisely that pair.
+INJ_KEY_AB="$FIX/injgrow/keymerge.sh"
+awk '
+  /^phrase_class_keys\(\) \{/ {infn=1}
+  infn && /sha256_digest\)" \\$/ {
+    print "      \"MERGEDKEY\" \\"; infn=0; next
+  }
+  {print}
+' "$TARGET" > "$INJ_KEY_AB"
+chmod +x "$INJ_KEY_AB"
+inj_key_changed=$(diff "$TARGET" "$INJ_KEY_AB" | grep -c '^<' || true)
+if [ "$inj_key_changed" -ne 1 ]; then
+  bad "key-merge ablation is valid (exactly one line neutralised)" \
+      "awk changed $inj_key_changed lines, expected 1 — VACUOUS MUTATION, arm cannot judge"
+elif ! bash -n "$INJ_KEY_AB" 2>/dev/null; then
+  bad "key-merge ablation is valid (exactly one line neutralised)" \
+      "ablated script does not parse — ABLATION INVALID, arm cannot judge"
+else
+  ok "key-merge ablation is valid (exactly one line neutralised)"
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injdigest" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+        HOME="$FIX" bash "$INJ_KEY_AB" --since-days 3650 --section safety 2>&1)
+  # The point of the fixture: the AGGREGATE still agrees, so the sum check alone
+  # would report everything fine. If this arm ever fires, the fixture has stopped
+  # being a *compensating* mismatch and the per-key assertion below proves nothing.
+  nocheck "compensating mismatch: the aggregate check is genuinely blind to it" "$OUT" \
+        "CLASS SPLIT DIVERGES FROM TOTAL"
+  check "compensating mismatch: the per-phrase reconciliation catches it anyway" "$OUT" \
+        "CLASS SPLIT DIVERGES PER PHRASE"
+  nocheck "compensating mismatch: the summing claim is withheld" "$OUT" \
+        "occurrences sum to TOTAL"
+fi
+
 # NOTE: no "concentration adds no jq" assertion here. --section safety already
 # runs jq for the denial scan, so a blanket no-jq check asserts something false
 # about the design and would pass only by accident. The existing

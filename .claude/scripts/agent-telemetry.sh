@@ -3287,8 +3287,35 @@ if want safety; then
     # numbers contradict. Fail-closed: the raw TOTAL above is unchanged, and no
     # occurrence is dropped to make the arithmetic agree.
     inj_class_sum=$(( ${inj_runtime_occurrences:-0} + ${inj_other_occurrences:-0} ))
-    if [ "$inj_class_sum" -ne "${inj_total:-0}" ]; then
-      echo "      ⚠️  CLASS SPLIT DIVERGES FROM TOTAL: ${inj_class_sum} classified vs ${inj_total:-0} counted."
+    # The aggregate alone is NOT sufficient, and the defect it must catch is
+    # exactly the one it is blind to: if the keying merges two phrases, one
+    # `digest~display` key is over-counted and another under-counted by the same
+    # amount, so the totals still agree while a phrase line reports more class
+    # occurrences than its own total — the #2693 symptom, printed under a claim
+    # that it cannot happen. Reconcile EVERY key, not just the sum.
+    #
+    # `FILENAME != "-"` rather than NR==FNR for the same reason as the phrase
+    # list below: when the class file is empty NR==FNR is still true for the
+    # first raw line and would eat it.
+    inj_key_divergence=$(sort "$INJTMP" | awk -F '\t' '
+        FILENAME != "-" { if ($5 != "") cls[$4 "~" $5]++; next }
+        { raw[$1 "~" $2]++ }
+        END {
+          n = 0
+          for (k in raw) if (raw[k] != cls[k]) n++
+          for (k in cls) if (!(k in raw))      n++
+          print n+0
+        }
+      ' "$CONCTMP" -)
+    case "$inj_key_divergence" in ''|*[!0-9]*) inj_key_divergence=0 ;; esac
+    if [ "$inj_class_sum" -ne "${inj_total:-0}" ] || [ "$inj_key_divergence" -ne 0 ]; then
+      if [ "$inj_class_sum" -ne "${inj_total:-0}" ]; then
+        echo "      ⚠️  CLASS SPLIT DIVERGES FROM TOTAL: ${inj_class_sum} classified vs ${inj_total:-0} counted."
+      fi
+      if [ "$inj_key_divergence" -ne 0 ]; then
+        echo "      ⚠️  CLASS SPLIT DIVERGES PER PHRASE: ${inj_key_divergence} phrase key(s) whose"
+        echo "          classified count differs from the raw count, even where the totals agree."
+      fi
       echo "          The corpus is pinned for both walks, so this is NOT a scan skew."
       echo "          Treat it as a classifier or digest/display keying defect (#2693)"
       echo "          and investigate before trusting any split below."
