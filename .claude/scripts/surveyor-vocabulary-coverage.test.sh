@@ -486,12 +486,22 @@ read_corpus() { raw_corpus | cut -f2- | normalize | sort -u; }
 # prose against a corpus row's concrete values, which no text normalisation can
 # unify without discarding the flags the verdict actually turns on.
 corpus_deny_reasons() {
-  local want cmd r
+  # Same three-outcome rule check_sources() applies, for the same reason -- but the
+  # failure here is a SILENT DROP rather than a false finding. A status 2 emitted no
+  # reason at all, and because other rows keep CORPUS_REASONS non-empty the emptiness
+  # check below still passed; if no source candidate happened to need the missing
+  # reason, the run exited 0 with one corpus classification never verified.
+  local want cmd r out status
   while IFS=$'\t' read -r want cmd; do
     [ -n "${want:-}" ] || continue
     [ -n "${cmd:-}" ] || continue
-    r=$("$guard" --command "$cmd" 2>&1 | head -1)
-    case "$r" in deny:*) printf '%s\n' "$r" ;; esac
+    out=$("$guard" --command "$cmd" 2>&1); status=$?
+    r=$(printf '%s\n' "$out" | head -1)
+    case "$status:$r" in
+      0:*) ;;
+      1:deny:*) printf '%s\n' "$r" ;;
+      *) die_unknown "guard returned status $status for corpus command, so its classification is unverifiable: $cmd :: $r" ;;
+    esac
   done <<< "$(raw_corpus)"
 }
 
@@ -546,7 +556,11 @@ check_sources() {
   [ "$findings" -eq 0 ]
 }
 
-CORPUS_REASONS=$(corpus_deny_reasons)
+# die_unknown inside corpus_deny_reasons exits the COMMAND-SUBSTITUTION SUBSHELL, not this
+# script, so its status must be checked here or an unverifiable corpus row would be swallowed
+# and the run would continue on a partial reason set.
+CORPUS_REASONS=$(corpus_deny_reasons) \
+  || die_unknown "corpus classification is unverifiable — see the guard status reported above"
 [ -n "$CORPUS_REASONS" ] || die_unknown "no corpus row produced a deny reason; the corpus or the guard is not being read"
 
 # ── Self-tests: planted fixtures, before any real verdict is trusted ──────────
@@ -716,6 +730,28 @@ fi_extracted=$(extract_commands "$fixdir/fenceindent.md" | grep -c '^fenced gh r
   || die_unknown "self-test: a command after a four-space-indented delimiter was never extracted, so it cannot reach the guard (fail-open)"
 if check_sources "$fixdir/fenceindent.md" >/dev/null 2>&1; then
   die_unknown "self-test: a four-space-indented-delimiter command's unclassified refusal was NOT detected (fail-open)"
+fi
+
+# A corpus row whose guard status is 2 must make the run UNKNOWN, not vanish. The old
+# corpus reader emitted no reason for such a row, and because other rows keep
+# CORPUS_REASONS non-empty the emptiness check still passed -- so if no source candidate
+# needed the missing reason the suite exited 0 with one classification never verified.
+# The stub DELEGATES every other command to the real guard, so the suite's own smoke test
+# still passes and the status-2 path is reached on a genuine corpus row; a stub that
+# failed everything would be caught by that smoke test and prove nothing.
+corpus_probe_cmd=$(raw_corpus | head -1 | cut -f2-)
+[ -n "${corpus_probe_cmd:-}" ] \
+  || die_unknown "self-test: no corpus row to build the guard-status probe from"
+cat > "$fixdir/guard-status2.sh" <<STUB
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in *"${corpus_probe_cmd}"*) echo 'usage: simulated guard error' >&2; exit 2 ;; esac
+done
+exec "${guard}" "\$@"
+STUB
+chmod +x "$fixdir/guard-status2.sh"
+if ( guard="$fixdir/guard-status2.sh"; corpus_deny_reasons ) >/dev/null 2>&1; then
+  die_unknown "self-test: a corpus row whose guard status is 2 left classification verifiable (fail-open)"
 fi
 
 # A MULTI-BACKTICK inline span must be parsed by its own delimiter length. A span
