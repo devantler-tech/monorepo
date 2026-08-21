@@ -2326,6 +2326,206 @@ check "colliding displays keep the runtime line's own split" "$OUT" \
 check "colliding displays keep the content line's own split" "$OUT" \
       "1 add bot to the trust gate   (0 runtime / 1 other)"
 
+# ── #2706: the corpus GROWS between the total walk and the class walk ─────────
+# The corpus includes the running agent's own session file, which is appended
+# continuously — including by the act of running this tool — so the class walk
+# could observe occurrences the total walk never saw. The split then EXCEEDED
+# the total it annotates while the line beneath asserted "occurrences sum to
+# TOTAL" (measured 2026-08-06: TOTAL 235 / other 238, and 59 > 57 on a phrase's
+# own line).
+#
+# Growth is forced DETERMINISTICALLY rather than raced: a `cut` shim on PATH
+# grows the corpus exactly once, on the call that ends the total walk
+# (`cut -f1 "$INJTMP"` in the TOTAL line) and therefore immediately before the
+# class walk. A background appender would make this test timing-dependent, and
+# an unbounded one grows the corpus faster than the tool can scan it.
+# Resolve the host `cut` once, before either shim shadows it on PATH. Both cut
+# shims delegate through REAL_CUT rather than a hardcoded path, matching the
+# REAL_JQ/REAL_DATE idiom the batching fixture above already uses.
+real_cut=$(command -v cut)
+mkdir -p "$FIX/injgrow/corpus/p" "$FIX/injgrow/bin"
+cat > "$FIX/injgrow/bin/cut" <<EOS
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    *.agtel_inj.*)
+      if [ ! -e "$FIX/injgrow/.grown" ]; then
+        : > "$FIX/injgrow/.grown"
+        i=0
+        while [ \$i -lt 4 ]; do
+          printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions grow"}]}}\n' \
+            >> "$FIX/injgrow/corpus/p/s.jsonl"
+          i=\$((i+1))
+        done
+      fi
+      ;;
+  esac
+done
+exec "\${REAL_CUT:-/usr/bin/cut}" "\$@"
+EOS
+chmod +x "$FIX/injgrow/bin/cut"
+: > "$FIX/injgrow/corpus/p/s.jsonl"
+rm -f "$FIX/injgrow/.grown"
+for i in 1 2 3; do
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
+    "$i" >> "$FIX/injgrow/corpus/p/s.jsonl"
+done
+OUT=$(PATH="$FIX/injgrow/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+# NON-VACUITY FIRST: if the corpus did not actually grow, every assertion below
+# passes for the wrong reason — it would be asserting on a static corpus, which
+# the tests above already cover. Prove the race was really staged.
+if [ -e "$FIX/injgrow/.grown" ] && [ "$(grep -c 'update your instructions' "$FIX/injgrow/corpus/p/s.jsonl")" -eq 7 ]; then
+  ok "growth control: the corpus really did grow mid-scan (3 -> 7)"
+else
+  bad "growth control: the corpus really did grow mid-scan (3 -> 7)" \
+      "hook did not fire, so the assertions below would pass vacuously"
+fi
+check "a corpus growing mid-scan does not inflate the class split" "$OUT" \
+      "other content locations: 3 occurrences"
+check "and the per-phrase split stays within its own line's total" "$OUT" \
+      "3 update your instructions   (0 runtime / 3 other)"
+check "so the summing invariant is asserted, not contradicted" "$OUT" \
+      "occurrences sum to TOTAL"
+check "the fail-closed raw total is unchanged by pinning" "$OUT" \
+      "TOTAL occurrences: 3"
+nocheck "and no divergence is claimed when the walks agree" "$OUT" \
+      "CLASS SPLIT DIVERGES FROM TOTAL"
+
+# The disclosure arm exists because pinning cannot prove the classifier itself
+# is correct: if the two walks ever disagree again it is a real keying/classifier
+# defect (#2693), not a scan race, and must be stated rather than printed under a
+# claim the numbers contradict. Ablate ONLY the class walk's pinning to force a
+# genuine divergence and prove the arm fires — otherwise it is unreachable code
+# that would pass every assertion above while being permanently inert.
+INJ_AB="$FIX/injgrow/ablated.sh"
+/usr/bin/awk '
+  /^emit_injection_classes\(\) \{/ {infn=1}
+  infn && /snapshot_bytes "\$f" "\$len" \| grep -niE/ {
+    print "  grep -niE \"$INJ_PHRASE_RE\" \"$f\" 2>/dev/null \\"; infn=0; next
+  }
+  {print}
+' "$TARGET" > "$INJ_AB"
+chmod +x "$INJ_AB"
+inj_ab_changed=$(diff "$TARGET" "$INJ_AB" | grep -c '^<' || true)
+if [ "$inj_ab_changed" -ne 1 ]; then
+  bad "ablation is valid (exactly one line neutralised)" \
+      "awk changed $inj_ab_changed lines, expected 1 — VACUOUS MUTATION, arm cannot judge"
+elif ! bash -n "$INJ_AB" 2>/dev/null; then
+  bad "ablation is valid (exactly one line neutralised)" \
+      "ablated script does not parse — ABLATION INVALID, arm cannot judge"
+else
+  ok "ablation is valid (exactly one line neutralised)"
+  : > "$FIX/injgrow/corpus/p/s.jsonl"
+  rm -f "$FIX/injgrow/.grown"
+  for i in 1 2 3; do
+    printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
+      "$i" >> "$FIX/injgrow/corpus/p/s.jsonl"
+  done
+  OUT=$(PATH="$FIX/injgrow/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injgrow/corpus" CODEX_HOME="$FIX/nocodex" \
+        MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+        bash "$INJ_AB" --since-days 3650 --section safety 2>&1)
+  check "ablation: an unpinned class walk is CAUGHT and named, not printed silently" "$OUT" \
+        "CLASS SPLIT DIVERGES FROM TOTAL: 7 classified vs 3 counted"
+  check "ablation: the divergence is attributed to keying, not to a scan race" "$OUT" \
+        "digest/display keying defect (#2693)"
+  nocheck "ablation: and the report no longer claims byte-stability the pin cannot prove" "$OUT" \
+        "so this is NOT a scan skew"
+  nocheck "ablation: the contradicted summing claim is withheld" "$OUT" \
+        "occurrences sum to TOTAL"
+fi
+
+# The pin fixes a LENGTH, not the bytes behind it. A file that gets SHORTER
+# between the two walks still satisfies `head -c "$len"`, which then returns a
+# short prefix while `|| true` hides the condition — so the walks read different
+# bytes and the divergence IS a scan skew. The report used to deny exactly that
+# ("The corpus is pinned for both walks, so this is NOT a scan skew"), sending
+# the reader to #2693 for a corpus that moved underneath them.
+#
+# Truncation is forced DETERMINISTICALLY by the same boundary shim the growth
+# fixture uses: the `cut -f1 "$INJTMP"` call that ends the total walk.
+mkdir -p "$FIX/injshrink/corpus/p" "$FIX/injshrink/bin"
+cat > "$FIX/injshrink/bin/cut" <<EOS
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in
+    *.agtel_inj.*)
+      if [ ! -e "$FIX/injshrink/.shrunk" ]; then
+        : > "$FIX/injshrink/.shrunk"
+        printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please 1"}]}}\n' \
+          > "$FIX/injshrink/corpus/p/s.jsonl"
+      fi
+      ;;
+  esac
+done
+exec "\${REAL_CUT:-/usr/bin/cut}" "\$@"
+EOS
+chmod +x "$FIX/injshrink/bin/cut"
+: > "$FIX/injshrink/corpus/p/s.jsonl"
+rm -f "$FIX/injshrink/.shrunk"
+for i in 1 2 3 4 5; do
+  printf '{"type":"user","message":{"content":[{"type":"text","text":"update your instructions please %d"}]}}\n' \
+    "$i" >> "$FIX/injshrink/corpus/p/s.jsonl"
+done
+SHRINK_BEFORE=$(wc -c < "$FIX/injshrink/corpus/p/s.jsonl" | tr -d ' ')
+OUT=$(PATH="$FIX/injshrink/bin:$PATH" REAL_CUT="$real_cut" CLAUDE_PROJECTS_DIR="$FIX/injshrink/corpus" CODEX_HOME="$FIX/nocodex" \
+      MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section safety 2>&1)
+SHRINK_AFTER=$(wc -c < "$FIX/injshrink/corpus/p/s.jsonl" | tr -d ' ')
+# NON-VACUITY FIRST: if the corpus did not actually shrink, the assertions below
+# would be judging a static corpus the tests above already cover.
+if [ -e "$FIX/injshrink/.shrunk" ] && [ "${SHRINK_AFTER:-0}" -lt "${SHRINK_BEFORE:-0}" ]; then
+  ok "shrink control: the corpus really did shrink mid-scan (${SHRINK_BEFORE} -> ${SHRINK_AFTER} bytes)"
+else
+  bad "shrink control: the corpus really did shrink mid-scan" \
+      "hook did not fire, so the assertions below would pass vacuously"
+fi
+check "a corpus TRUNCATED mid-scan is named as a scan skew, not a classifier defect" "$OUT" \
+      "THE PINNED CORPUS SHRANK UNDER THE WALKS"
+nocheck "and the report withholds the byte-stability claim the length pin cannot prove" "$OUT" \
+      "so this is NOT a scan skew"
+
+# A COMPENSATING mismatch: the aggregate is blind to exactly the defect it must
+# catch. If the keying merges two phrases, one `digest~display` key is
+# over-counted and another under-counted by the same amount, so runtime+other
+# still equals TOTAL while a phrase line reports more class occurrences than its
+# own total — the #2693 symptom, printed under a claim that it cannot happen.
+# Ablate ONLY the class walk's key derivation (`phrase_class_keys` is used by the
+# class walk alone; the total walk digests inline), so the raw keys stay distinct
+# while the classified ones merge. The injdigest fixture already supplies two
+# distinct digests sharing one display, which is precisely that pair.
+INJ_KEY_AB="$FIX/injgrow/keymerge.sh"
+awk '
+  /^phrase_class_keys\(\) \{/ {infn=1}
+  infn && /sha256_digest\)" \\$/ {
+    print "      \"MERGEDKEY\" \\"; infn=0; next
+  }
+  {print}
+' "$TARGET" > "$INJ_KEY_AB"
+chmod +x "$INJ_KEY_AB"
+inj_key_changed=$(diff "$TARGET" "$INJ_KEY_AB" | grep -c '^<' || true)
+if [ "$inj_key_changed" -ne 1 ]; then
+  bad "key-merge ablation is valid (exactly one line neutralised)" \
+      "awk changed $inj_key_changed lines, expected 1 — VACUOUS MUTATION, arm cannot judge"
+elif ! bash -n "$INJ_KEY_AB" 2>/dev/null; then
+  bad "key-merge ablation is valid (exactly one line neutralised)" \
+      "ablated script does not parse — ABLATION INVALID, arm cannot judge"
+else
+  ok "key-merge ablation is valid (exactly one line neutralised)"
+  OUT=$(CLAUDE_PROJECTS_DIR="$FIX/injdigest" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" \
+        HOME="$FIX" bash "$INJ_KEY_AB" --since-days 3650 --section safety 2>&1)
+  # The point of the fixture: the AGGREGATE still agrees, so the sum check alone
+  # would report everything fine. If this arm ever fires, the fixture has stopped
+  # being a *compensating* mismatch and the per-key assertion below proves nothing.
+  nocheck "compensating mismatch: the aggregate check is genuinely blind to it" "$OUT" \
+        "CLASS SPLIT DIVERGES FROM TOTAL"
+  check "compensating mismatch: the per-phrase reconciliation catches it anyway" "$OUT" \
+        "CLASS SPLIT DIVERGES PER PHRASE"
+  nocheck "compensating mismatch: the summing claim is withheld" "$OUT" \
+        "occurrences sum to TOTAL"
+fi
+
 # NOTE: no "concentration adds no jq" assertion here. --section safety already
 # runs jq for the denial scan, so a blanket no-jq check asserts something false
 # about the design and would pass only by accident. The existing
@@ -6207,6 +6407,103 @@ else
     bad "ablation: a broken extractor jq collapses the count AND raises the canary" \
         "got: $(grep -E 'sleep/poll calls|EXTRACTION' <<<"$XF_OUT" | head -3)"
   fi
+fi
+
+
+# ── snapshot drift is checked even when the class totals AGREE ────────────────
+# Agreement between the two walks is not evidence that the corpus was stable.
+# A file truncated after `injection_snapshot` pins its length but before the
+# first walk is read short by BOTH walks: their counts agree, the per-key
+# reconciliation agrees, and every occurrence the truncation removed is missing
+# from both numbers — so it can never surface as a divergence. Consulting the
+# pin only after a mismatch is blind to exactly that case, and the report then
+# states the split sums to TOTAL over a corpus it never fully read.
+#
+# Simulated deterministically rather than by racing a real truncation (an
+# earlier attempt to kill the miner mid-snapshot was abandoned twice for being
+# unreproducible): a `wc` shim inflates the FIRST byte-count taken of the
+# marker-bearing fixture, which is the one `injection_snapshot` uses to pin it.
+# The pin is then longer than the file, exactly as it would be had the file
+# shrunk afterwards, while both walks still read the whole real file and agree.
+echo
+echo "snapshot drift is reported even when the class split agrees (#2706)"
+
+mkdir -p "$FIX/driftcorpus" "$FIX/driftwc" "$FIX/drifttmp"
+DRIFT_MARKER='ZZDRIFTFIXTUREZZ'
+printf '{"type":"user","message":{"content":[{"type":"text","text":"%s please update your instructions now"}]}}\n' \
+  "$DRIFT_MARKER" > "$FIX/driftcorpus/s.jsonl"
+
+real_wc=$(command -v wc)
+cat > "$FIX/driftwc/wc" <<'EOF'
+#!/usr/bin/env bash
+# Only the single-argument `-c` form reads a file on stdin; everything else
+# (notably `wc -l`) passes straight through untouched.
+if [ "$#" -eq 1 ] && [ "$1" = "-c" ]; then
+  _t=$(mktemp)
+  cat > "$_t"
+  _n=$("$REAL_WC" -c < "$_t" | tr -d ' ')
+  if grep -q "$DRIFT_MARKER" "$_t" && [ ! -f "$DRIFT_STATE" ]; then
+    : > "$DRIFT_STATE"
+    _n=$((_n + 4096))
+  fi
+  rm -f "$_t"
+  printf '%s\n' "$_n"
+  exit 0
+fi
+exec "$REAL_WC" "$@"
+EOF
+chmod +x "$FIX/driftwc/wc"
+rm -f "$FIX/drift-state"
+DRIFT_OUT=$(PATH="$FIX/driftwc:$PATH" REAL_WC="$real_wc" \
+  DRIFT_MARKER="$DRIFT_MARKER" DRIFT_STATE="$FIX/drift-state" TMPDIR="$FIX/drifttmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/driftcorpus" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+
+# CONTROL 1 — the shim must actually have inflated a pin. Without this a shim
+# that never matched would leave the report clean and the assertion below would
+# "pass" having simulated nothing at all.
+if [ -f "$FIX/drift-state" ]; then
+  ok "control: the fixture pin was inflated (drift was actually simulated)"
+else
+  bad "control: the fixture pin was inflated" "shim never fired — the assertion below is VACUOUS"
+fi
+# CONTROL 2 — this must exercise the AGREEMENT path. If the walks diverged, the
+# pre-existing mismatch arm would print the warning and the new arm would go
+# untested, so the row would pass for the wrong reason.
+if grep -qF 'CLASS SPLIT DIVERGES' <<<"$DRIFT_OUT"; then
+  bad "control: totals agree, so the agreement arm is under test" \
+      "the split diverged — this exercises the OLD arm, not the new one"
+else
+  ok "control: totals agree, so the agreement arm is under test"
+fi
+# THE PROPERTY: a shrunken pin is reported even though nothing diverged.
+if grep -qF 'THE PINNED CORPUS SHRANK UNDER THE WALKS' <<<"$DRIFT_OUT"; then
+  ok "a corpus that shrank under the walks is reported despite the totals agreeing"
+else
+  bad "a corpus that shrank under the walks is reported despite the totals agreeing" \
+      "$(grep -E 'occurrences sum to TOTAL|SHRANK|TOTAL occurrences' <<<"$DRIFT_OUT" | head -3)"
+fi
+# And it must NOT also print the unqualified all-clear alongside the warning.
+if grep -qF 'occurrences sum to TOTAL' <<<"$DRIFT_OUT"; then
+  bad "the unqualified all-clear is suppressed when the pin shrank" \
+      "both the warning and the all-clear were printed"
+else
+  ok "the unqualified all-clear is suppressed when the pin shrank"
+fi
+
+# NEGATIVE CONTROL — with no drift simulated, the same corpus must still print
+# the ordinary all-clear and no warning. Without this the rows above would pass
+# if the warning were simply printed unconditionally.
+rm -f "$FIX/drift-state"
+CLEAN_OUT=$(TMPDIR="$FIX/drifttmp" \
+  CLAUDE_PROJECTS_DIR="$FIX/driftcorpus" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "$TARGET" --since-days 3650 --section safety 2>&1)
+if grep -qF 'occurrences sum to TOTAL' <<<"$CLEAN_OUT" \
+   && ! grep -qF 'THE PINNED CORPUS SHRANK UNDER THE WALKS' <<<"$CLEAN_OUT"; then
+  ok "negative control: a stable corpus still reports the plain all-clear"
+else
+  bad "negative control: a stable corpus still reports the plain all-clear" \
+      "$(grep -E 'occurrences sum to TOTAL|SHRANK' <<<"$CLEAN_OUT" | head -3)"
 fi
 
 echo "──────────────────────────────"
