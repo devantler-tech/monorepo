@@ -496,9 +496,14 @@ continues — every dispatch, indefinitely.
 whose repair is **unavailable** (no path exists for that lane), **refused**, or **fenced** (declined
 because performing it now would be unsafe) is surfaced on a declared *Maintainer channel* once the
 same lane has been observed in that state on **two consecutive runs that checked it**, whichever
-instance ran them — any instance can check any lane, so the evidence does not restart per lane.
-Record each observation in durable memory, since consecutiveness is what distinguishes a rollout
-still settling from staleness nothing is advancing; one observation is reported as it is today, so a
+instance ran them — any instance can check any lane, so the evidence does not restart per instance.
+🔴 **Both observations must be of the SAME lane.** Cross-INSTANCE evidence counts; cross-LANE evidence
+never does — one Codex reading and one Cursor reading are two lanes drifting once each, not one lane
+drifting twice, and reading them as persistence would escalate a condition that has not persisted
+anywhere.
+
+Record each observation in durable memory, since consecutiveness is what distinguishes a rollout still
+settling from staleness nothing is advancing; one observation is reported as it is today, so a
 transient reading never pages the maintainer.
 
 🔴 **A FENCED repair counts toward that exactly as a failed one does.** Fencing is frequently the

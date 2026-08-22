@@ -125,6 +125,15 @@ assert_contains "${section}" 'two consecutive runs that checked it' \
 assert_contains "${section}" 'whichever instance ran them' \
   'observations of one lane must count across instances, not restart per instance'
 
+
+# Lane identity. Cross-INSTANCE counting (above) and cross-LANE counting are opposite requirements,
+# and the sentence that grants the first is one word away from granting the second — the first draft of
+# this clause said "does not restart per lane", which would let one Codex reading and one Cursor reading
+# satisfy the counter, escalating a condition that persisted on neither. Pinned separately because the
+# cross-instance assertion above passes either way.
+assert_contains "${section}" 'Both observations must be of the SAME lane' \
+  'the two observations must be of one lane — cross-instance evidence counts, cross-lane evidence never does'
+
 assert_contains "${section}" 'Record each observation in durable memory' \
   'consecutiveness must be made measurable, or the bound cannot be evaluated by a later run'
 
