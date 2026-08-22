@@ -1536,4 +1536,22 @@ case "${rc}:${out}" in
     fail "two declared runtime assets on a matching install must exit 0 and report CURRENT, got ${rc}: ${out}" ;;
 esac
 
+# A verdict alone is not enough: the selector must include every declared asset. Mutating the
+# second entry must therefore produce DRIFT and name that asset, or the guard can run successfully
+# while silently leaving part of the loaded surface unchecked.
+printf '#!/bin/sh\necho tampered\n' > "${multi_install}/scripts/forge-readonly-guard.sh"
+chmod +x "${multi_install}/scripts/forge-readonly-guard.sh"
+set +e
+out="$("${script}" --repo-root "${tmp}/multi" --gitlink "${multi_gitlink}" \
+                   --installed "${multi_install}" 2>&1)"; rc=$?
+set -e
+[ "${rc}" -eq 1 ] \
+  || fail "drift in the second declared runtime asset must exit 1, got ${rc}: ${out}"
+case "${out}" in
+  *"DRIFT"*"scripts/forge-readonly-guard.sh"*)
+    ok "drift in the second declared runtime asset is selected and named" ;;
+  *)
+    fail "drift in the second declared runtime asset was not named: ${out}" ;;
+esac
+
 echo "plugin-definition-currency: ${pass_count} assertions passed"
