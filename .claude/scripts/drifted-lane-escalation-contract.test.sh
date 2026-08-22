@@ -116,77 +116,38 @@ for state in '**unavailable**' '**refused**' '**fenced**' '**failed**'; do
 done
 
 # ---------------------------------------------------------------------------
-# 2. The bound, and the fenced case that the bound exists to capture.
+# 2. The latch, and why it is an ISSUE rather than a counter.
+#
+# An earlier revision of this clause escalated after two consecutive sightings. That bound forced a
+# durable cross-run counter, and review then found a real defect in every mechanism a counter needs:
+# a store both machine-local lanes can write, a record format, a run identity fine enough to separate
+# two checkers inside one minute, an idempotent hand-off between notifying and recording — and, worst,
+# a FORGEABLE escalation, because a count living in a comment body on a public issue can be fabricated
+# or suppressed by any commenter. The open issue replaces all of it with one authenticated, idempotent
+# question. These assertions exist to stop a later edit reintroducing the counter.
 # ---------------------------------------------------------------------------
-assert_contains "${section}" 'two consecutive runs that checked it' \
-  'escalation must be bounded, so one transient reading never pages the maintainer'
+assert_contains "${section}" 'The OPEN ISSUE is the latch. Do NOT build a counter.' \
+  'the latch must be the open issue — a counter reintroduces the forgeable, non-idempotent class'
 
-# Cross-instance evidence must keep counting. Scoping the bound per instance would discard the
-# sibling's observations of the same lane and double the time to escalate — and this deployment
-# reached three observations across two instances before the rule existed, so per-instance scoping is
-# the reading that would have kept it silent.
-assert_contains "${section}" 'whichever instance ran them' \
-  'observations of one lane must count across instances, not restart per instance'
+assert_contains "${section}" 'opens a tracking issue for that lane' \
+  'the escalating run must open the tracking issue, or there is no durable latch at all'
 
+# Ordering. The channel and the issue are separate systems and nothing makes them atomic, so the rule
+# has to choose which half-completed state self-corrects. Issue-then-notify leaves a visible "not yet
+# told"; notify-then-issue loses the fact that anyone was told and re-notifies forever.
+assert_contains "${section}" 'open the issue FIRST, then' \
+  'the ordering must be issue-then-notify, so a crash between them is recoverable rather than silent'
 
-# Lane identity. Cross-INSTANCE counting (above) and cross-LANE counting are opposite requirements,
-# and the sentence that grants the first is one word away from granting the second — the first draft of
-# this clause said "does not restart per lane", which would let one Codex reading and one Cursor reading
-# satisfy the counter, escalating a condition that persisted on neither. Pinned separately because the
-# cross-instance assertion above passes either way.
-assert_contains "${section}" 'Both observations must be of the SAME lane' \
-  'the two observations must be of one lane — cross-instance evidence counts, cross-lane evidence never does'
+assert_contains "${section}" 'Close the issue when that lane next reads' \
+  'closing on CURRENT is the reset — without it a recovered lane stays escalated forever'
 
-# The counter must be readable by whoever checks NEXT. Durable memory alone cannot carry it: each
-# instance boots into its own private store and only the Agent Improver has a mandated sibling
-# cross-read, so a memory-only count either fails to fire across instances or reaches for a sibling's
-# private state. Pinned as the structured line, because "record it somewhere" decays back into memory.
-assert_contains "${section}" 'repository-visible line on the tracking issue' \
-  'the sighting must be recorded where any instance on any lane can read it, not only in private memory'
+# The forgeability finding, kept as prose so the reasoning survives a later "simplification" that
+# might otherwise move the state back into a comment body.
+assert_contains "${section}" 'forgeable escalation' \
+  'the clause must record WHY the state is not a comment body — a public count can be forged or suppressed'
 
-assert_contains "${section}" '**Lane drift:**' \
-  'the repository-visible record must have a fixed structure, or a later run cannot parse the count'
-
-# The record must be able to REPRESENT the latch and the reset, or the paragraph below demands state
-# the format cannot hold. Each field is pinned separately because each carries a distinct mechanic and
-# a "simplification" would drop them one at a time:
-#   - a minute-resolution timestamp, because a DATE cannot identify an hourly run, so two sightings in
-#     one day are indistinguishable and the two-consecutive-runs bound becomes unevaluable;
-#   - CURRENT as a state VALUE, because the reset is an event that must be recorded — without a line
-#     for it a recovered-then-re-drifted lane looks identical to one that never recovered;
-#   - escalated=, which IS the latch: without it, notify-on-transition is evaluable only by the run
-#     that did the notifying.
-assert_contains "${section}" 'observed <YYYY-MM-DDThh:mmZ>' \
-  'the record must carry a minute-resolution timestamp — a date cannot identify an hourly run'
-
-assert_contains "${section}" 'escalated=<yes|no>' \
-  'the record must carry the latch, or the next checker cannot tell a delivered escalation from an undelivered one'
-
-assert_contains "${section}" 'failed|CURRENT>' \
-  'CURRENT must be a recordable state, or the reset event has nowhere to live'
-
-# Who may write it. `app/cursor` gets 403 on comments, so the cloud instance cannot record a sighting
-# at all; without this the protocol would require a write that one instance provably cannot perform,
-# and a Cursor observation would either vanish or be forced through a violation.
-assert_contains "${section}" 'recording instance must be one that CAN write the tracking issue' \
-  'the recording instance must be one that can actually write — app/cursor gets 403 on comments'
-
-assert_contains "${section}" 'A sighting that cannot be written is not a sighting' \
-  'an unwritable observation must not count, or it silently advances or stalls the bound'
-
-# The latch. Without it the bound is satisfied by EVERY run after the second, so a persistently
-# drifted lane pages the maintainer on every dispatch — precisely the status-message traffic the
-# last-resort channel forbids. This is the assertion that keeps the rule from becoming a spam source.
-assert_contains "${section}" 'notify only on the transition' \
-  'escalation must fire on the transition into the state, never repeatedly while it persists'
-
-# And the reset. Without a clear, DRIFT -> CURRENT -> DRIFT reads as persistence, so the rule would
-# escalate a lane that recovered and re-drifted as though it had never recovered.
-assert_contains "${section}" 'Clear the latch and the count on the first non-qualifying check' \
-  'a non-qualifying check must reset the counter, or a recovered-then-redrifted lane reads as persistent'
-
-assert_contains "${section}" 'FENCED repair counts toward that exactly as a failed one does' \
-  'a fenced repair must count toward the bound — this is the case the whole clause exists for'
+assert_contains "${section}" 'A FENCED repair is a QUALIFYING state exactly as a failed one is' \
+  'a fenced repair must qualify — this is the case the whole clause exists for'
 
 # ---------------------------------------------------------------------------
 # 3. The rule stays ADDITIVE. Without these, tightening this into a halt reads as an improvement.
@@ -217,20 +178,46 @@ assert_contains "${section}" 'rollouts, surface it on a declared *Maintainer cha
 # 5. The premise must stay TRUE of the scripts, or the contract becomes a story about code that
 #    changed underneath it. If a lane selector is ever added to the refresh path, this test fails and
 #    whoever added it updates the prose in the same change.
+#
+#    These probe BEHAVIOUR, not source spelling. An earlier version grepped for the literal case-arm
+#    `--runtime)`, which a valid `--runtime=*`, a short alias, or parsing delegated to a helper would
+#    all slip past — CI would stay green while the contract went on claiming no selector exists, which
+#    is precisely the drift this section is supposed to catch. Asking the CLI is spelling-independent.
+#    It is also safe: both scripts reject an unknown option during argument parsing, before any
+#    network, filesystem, or control-plane action.
 # ---------------------------------------------------------------------------
-if [ -r "${refresh}" ]; then
-  if grep -qE -- '--runtime\)' "${refresh}"; then
-    fail "plugin-definition-refresh.sh now accepts --runtime, so the contract's 'takes no runtime selector' premise is stale — update the prose in this change"
-  fi
+if [ -x "${refresh}" ]; then
+  # Probe BOTH spellings. `--runtime codex` alone is still spelling-dependent: a script that parses
+  # only `--runtime=<v>` rejects the space form as unknown while happily accepting the selector — which
+  # is the exact blind spot that retiring the source-grep was supposed to close. Verified by ablation:
+  # adding a `--runtime=*` arm passes a space-form-only probe.
+  for spelling in "--runtime codex" "--runtime=codex"; do
+    # shellcheck disable=SC2086 # deliberate word-splitting: each spelling is one or two argv entries
+    refresh_out="$("${refresh}" ${spelling} 2>&1)" && refresh_rc=0 || refresh_rc=$?
+    case "${refresh_out}" in
+      *"unknown argument"*) ;;
+      *)
+        fail "plugin-definition-refresh.sh no longer rejects '${spelling}' (rc=${refresh_rc}), so the contract's 'takes no runtime selector' premise is stale — update the prose in this change"
+        ;;
+    esac
+  done
 else
-  fail "cannot read ${refresh} — the premise this contract rests on is unverifiable"
+  fail "cannot execute ${refresh} — the premise this contract rests on is unverifiable"
 fi
 
-if [ -r "${currency}" ]; then
-  grep -qE -- '--runtime\)' "${currency}" ||
-    fail "plugin-definition-currency.sh no longer accepts --runtime, so the three-lane detection the contract assumes is gone"
+if [ -x "${currency}" ]; then
+  currency_out="$("${currency}" --runtime __contract_probe__ 2>&1)" && currency_rc=0 || currency_rc=$?
+  case "${currency_out}" in
+    *"unknown argument"*)
+      fail "plugin-definition-currency.sh no longer accepts --runtime (rc=${currency_rc}), so the three-lane detection the contract assumes is gone"
+      ;;
+    *)
+      # It accepted the option and rejected the VALUE (or failed later), which is what we need: the
+      # selector exists. Anything other than "unknown argument" proves the flag is parsed.
+      ;;
+  esac
 else
-  fail "cannot read ${currency} — the premise this contract rests on is unverifiable"
+  fail "cannot execute ${currency} — the premise this contract rests on is unverifiable"
 fi
 
-echo "drifted-lane-escalation contract: PASS — condition-keyed escalation, bounded, fenced-counts, additive, and both script premises verified"
+echo "drifted-lane-escalation contract: PASS — condition-keyed escalation, issue-latched, additive, and both script premises verified behaviourally"

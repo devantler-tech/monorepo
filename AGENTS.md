@@ -496,58 +496,47 @@ continues — every dispatch, indefinitely.
 whose repair is **unavailable** (no path exists for that lane), **refused**, **fenced** (declined
 because performing it now would be unsafe), or **failed** (attempted and did not leave the install on
 the pin — including an `UNKNOWN` that produced no verdict at all) is surfaced on a declared
-*Maintainer channel* once the same lane has been observed in that state on **two consecutive runs that
-checked it**, whichever instance ran them — any instance can check any lane, so the evidence does not
-restart per instance.
-🔴 **Both observations must be of the SAME lane.** Cross-INSTANCE evidence counts; cross-LANE evidence
-never does — one Codex reading and one Cursor reading are two lanes drifting once each, not one lane
-drifting twice, and reading them as persistence would escalate a condition that has not persisted
-anywhere.
+*Maintainer channel*, and the run **opens a tracking issue for that lane's drift** if one is not
+already open.
 
-🔴 **Record the sighting where the NEXT checker can read it — durable memory ALONE cannot carry this
-counter.** Each instance boots into its own private store and only the Agent Improver has a mandated
-sibling cross-read, so a count kept solely in native memory either fails to fire when the next checker
-runs on another instance, or reaches for a sibling's private state to make it fire. Record each
-sighting as a structured, repository-visible line on the tracking issue for that lane's drift:
+🔴 **The OPEN ISSUE is the latch. Do NOT build a counter.** An earlier draft of this clause escalated
+only after two consecutive sightings, and that bound forced a durable cross-run counter — which in turn
+forces everything a counter needs: a shared store both machine-local lanes can write, a record format,
+a run identity fine enough to separate two checkers inside one minute, authentication so that a public
+comment cannot forge a count, and an idempotent hand-off between notifying and recording. Review found
+a real hole in each of those in turn, the worst being a **forgeable escalation**: with the count living
+in a comment body on a public issue, any commenter could post two well-formed lines to page the
+maintainer, or a recovery line to suppress a real drift. The open issue dissolves the whole class —
+*is there an open drift issue for this lane* is one authenticated, idempotent question GitHub already
+answers, and an issue is something only a writer can create rather than a body a reader must trust.
 
-```
-**Lane drift:** <lane> | <unavailable|refused|fenced|failed|CURRENT> | observed <YYYY-MM-DDThh:mmZ> | escalated=<yes|no>
-```
+🔴 **Order the two steps so a crash is RECOVERABLE rather than silent: open the issue FIRST, then
+notify**, and record on the issue that the notification was delivered. The two are separate systems and
+nothing makes them atomic, so the only question worth deciding is which half-completed state
+self-corrects. Failing after the issue exists leaves an open issue saying the maintainer has not been
+told — the next run sees that and finishes the job. Failing the other way round loses the fact that
+anyone was ever notified, so every later run notifies again.
 
-Every instance on every lane can read that; the supporting detail stays in durable memory. This
-granularity is already the publishable half under *Sensitive information stays private*: that a named
-lane is degraded, and since when, is publishable; quota, account, and reset detail is not.
+🔴 **Close the issue when that lane next reads `CURRENT`.** That is the reset, and it is what stops a
+recovered lane being escalated forever. A lane that recovers and drifts again gets a **new** issue,
+which is correct: it is a new occurrence, so its notification is a new transition rather than a repeat.
 
-🔴 **Every field carries one of the mechanics above, so none of them is droppable.** A **date alone
-cannot identify an hourly run**, so two sightings on one day would be indistinguishable and "two
-consecutive runs" unevaluable — hence the **minute-resolution UTC timestamp**. `CURRENT` is a state
-value rather than an absence because *the reset is an event that has to be recorded*: without a line
-for it, a recovered-then-re-drifted lane is indistinguishable from one that never recovered.
-`escalated=` is the latch itself — it is what tells the next checker that the maintainer has already
-been told, and without it the notify-on-transition rule cannot be evaluated by anyone but the run that
-did the notifying.
+⚠️ **Only the maintainer CHANNEL is latched — every observation is still reported.** A later run adds
+what it saw to the existing issue instead of opening a second one. That is ordinary issue hygiene, not
+a counter, and nothing downstream reads it as one.
 
-🔴 **The recording instance must be one that CAN write the tracking issue — that is not every
-instance.** `app/cursor` gets 403 on comments (see *Writer namespaces*), so the Cursor cloud instance
-cannot write this line at all. That costs nothing here, because the Cursor **lane** is checked by
-reading the plugin submodule's `refs/remotes/origin/main`, which a machine-local run does anyway: the
-cloud lane is a lane to be *checked*, never a required *checker*. If the cloud instance does observe a
-drift it cannot record, it reports it and the next machine-local run records it — the same
-local-does-what-the-cloud-cannot pattern as boarding the cloud instance's issues. **A sighting that
-cannot be written is not a sighting**: it never counts toward the bound, so an unwritable observation
-can neither silently advance the counter nor silently stall it.
+⚠️ **A lane a run cannot write for is a lane it cannot escalate.** `app/cursor` gets 403 on comments
+(*Writer namespaces*), so the Cursor cloud instance can neither open nor update a drift issue; it
+reports what it saw and a machine-local run carries it, the same local-does-what-the-cloud-cannot
+pattern as boarding that instance's issues.
+🔴 **A gap this clause does NOT close, stated rather than papered over: nothing obliges either
+machine-local schedule to run `--runtime cursor`.** The per-instance command table assigns each
+instance its own runtime, so a Cursor-lane drift can go unchecked entirely and this escalation would
+never be reached for it. Assigning every lane a writable scheduled checker needs the submodule-init
+dependency that `--runtime cursor` carries, so it is tracked with the other repair-path work
+([#2997](https://github.com/devantler-tech/monorepo/issues/2997)) rather than smuggled in here.
 
-🔴 **LATCH the escalation, and CLEAR it — escalating is a transition, never a repeat.** After the
-second qualifying run, every later run also satisfies the bound, so an unlatched rule pages the
-maintainer on **every dispatch** — exactly the status-message traffic *Maintainer channels* forbids on
-the last-resort channel. So notify only on the transition **into** the escalated state, record on that
-same repository-visible line that it was delivered, and stay silent while the lane remains there.
-**Clear the latch and the count on the first non-qualifying check of that lane** — `CURRENT`, or a
-repair that succeeds. `DRIFT → CURRENT → DRIFT` is two separate first sightings rather than
-persistence, and only a record that also captures the non-qualifying check can tell those apart, so
-record that one too.
-
-🔴 **A FENCED repair counts toward that exactly as a failed one does.** Fencing is frequently the
+🔴 **A FENCED repair is a QUALIFYING state exactly as a failed one is.** Fencing is frequently the
 correct call — the Codex remove/add hot-swap can leave that lane with no definition at all, which is
 worse than the drift — but a decision that is right every time and recorded as nothing is
 indistinguishable from a repair that was never needed. That is precisely what makes the staleness
@@ -557,7 +546,7 @@ unbounded, and it is the same shape as the `2` UNKNOWN that must never read as `
 not licence to perform a repair that was fenced as unsafe. The fallback is unchanged: read the
 reviewed definition at the pinned gitlink and follow it.
 
-**Measured 2026-08-22 — which is also why the bound is two observations rather than one.** The Claude
+**Measured 2026-08-22 — this is the condition the clause was written from.** The Claude
 lane read `CURRENT` (11 of 11 pinned files, 4.4.8) while the Codex lane read `DRIFT` (3 of 11;
 installed 4.4.2), the differing files being `agents/portfolio-surveyor.agent.md` plus two runtime
 assets. The consumer pin moved past that install at 2026-08-21T21:58:16Z (#2977), and the Codex
