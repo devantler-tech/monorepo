@@ -91,6 +91,13 @@ grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
 # Measured on ksail#6625 at head b31be12e7f (monorepo#2991).
 grep -Fq 'app/<slug>' "${surveyor}" ||
   fail "surveyor does not tell the caller which author spelling the exemption classifier compares against (monorepo#2991)"
+# Presence of the correct spelling alone is a weak guard: a later rewrite could keep `app/<slug>`
+# and drop the warning, restoring the ambiguity this fixes. Pin the REST form that must be refused
+# and the consequence that makes refusing it matter, so the assertion tracks the whole contract.
+grep -Fq '<slug>[bot]' "${surveyor}" ||
+  fail "surveyor does not name the REST author spelling that must NOT be passed (monorepo#2991)"
+grep -Fq 'matches no arm' "${surveyor}" ||
+  fail "surveyor does not state that the REST spelling is well-formed but matches no classifier arm, so the cost of the mistake is invisible (monorepo#2991)"
 # An empty review object is the container GitHub creates for a reply to an existing
 # review thread. It is authored by the bot, anchored to the current head, and has zero
 # findings — so a green-review test that does not require a substantive body reports a
