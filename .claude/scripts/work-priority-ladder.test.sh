@@ -357,6 +357,8 @@ assert_prose 'unable to reach merge without a new agent action' \
   "${constitution_flat}" "contract does not define the dependency-PR intervention boundary"
 assert_prose 'convert the PR to draft before the first adaptation push' \
   "${constitution_flat}" "contract lacks a durable draft fence for an adapted bot head"
+assert_prose 'disable any existing auto-merge request, and confirm both states' \
+  "${constitution_flat}" "contract does not require auto-merge and draft fences to be confirmed before adaptation"
 assert_prose 'Draft state is the durable fence' \
   "${constitution_flat}" "contract relies on auto-merge disarming that automation can reverse"
 assert_prose 'Promote from draft and re-arm only after the adapted head satisfies that review gate' \
