@@ -147,6 +147,33 @@ assert_contains "${section}" 'repository-visible line on the tracking issue' \
 assert_contains "${section}" '**Lane drift:**' \
   'the repository-visible record must have a fixed structure, or a later run cannot parse the count'
 
+# The record must be able to REPRESENT the latch and the reset, or the paragraph below demands state
+# the format cannot hold. Each field is pinned separately because each carries a distinct mechanic and
+# a "simplification" would drop them one at a time:
+#   - a minute-resolution timestamp, because a DATE cannot identify an hourly run, so two sightings in
+#     one day are indistinguishable and the two-consecutive-runs bound becomes unevaluable;
+#   - CURRENT as a state VALUE, because the reset is an event that must be recorded — without a line
+#     for it a recovered-then-re-drifted lane looks identical to one that never recovered;
+#   - escalated=, which IS the latch: without it, notify-on-transition is evaluable only by the run
+#     that did the notifying.
+assert_contains "${section}" 'observed <YYYY-MM-DDThh:mmZ>' \
+  'the record must carry a minute-resolution timestamp — a date cannot identify an hourly run'
+
+assert_contains "${section}" 'escalated=<yes|no>' \
+  'the record must carry the latch, or the next checker cannot tell a delivered escalation from an undelivered one'
+
+assert_contains "${section}" 'failed|CURRENT>' \
+  'CURRENT must be a recordable state, or the reset event has nowhere to live'
+
+# Who may write it. `app/cursor` gets 403 on comments, so the cloud instance cannot record a sighting
+# at all; without this the protocol would require a write that one instance provably cannot perform,
+# and a Cursor observation would either vanish or be forced through a violation.
+assert_contains "${section}" 'recording instance must be one that CAN write the tracking issue' \
+  'the recording instance must be one that can actually write — app/cursor gets 403 on comments'
+
+assert_contains "${section}" 'A sighting that cannot be written is not a sighting' \
+  'an unwritable observation must not count, or it silently advances or stalls the bound'
+
 # The latch. Without it the bound is satisfied by EVERY run after the second, so a persistently
 # drifted lane pages the maintainer on every dispatch — precisely the status-message traffic the
 # last-resort channel forbids. This is the assertion that keeps the rule from becoming a spam source.

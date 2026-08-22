@@ -508,11 +508,34 @@ anywhere.
 counter.** Each instance boots into its own private store and only the Agent Improver has a mandated
 sibling cross-read, so a count kept solely in native memory either fails to fire when the next checker
 runs on another instance, or reaches for a sibling's private state to make it fire. Record each
-sighting as a structured, repository-visible line on the tracking issue for that lane's drift —
-`**Lane drift:** <lane> | <unavailable|refused|fenced|failed> | observed <YYYY-MM-DD>` — which every
-instance on every lane can read, and keep the supporting detail in durable memory. This granularity is
-already the publishable half under *Sensitive information stays private*: that a named lane is
-degraded, and since when, is publishable; quota, account, and reset detail is not.
+sighting as a structured, repository-visible line on the tracking issue for that lane's drift:
+
+```
+**Lane drift:** <lane> | <unavailable|refused|fenced|failed|CURRENT> | observed <YYYY-MM-DDThh:mmZ> | escalated=<yes|no>
+```
+
+Every instance on every lane can read that; the supporting detail stays in durable memory. This
+granularity is already the publishable half under *Sensitive information stays private*: that a named
+lane is degraded, and since when, is publishable; quota, account, and reset detail is not.
+
+🔴 **Every field carries one of the mechanics above, so none of them is droppable.** A **date alone
+cannot identify an hourly run**, so two sightings on one day would be indistinguishable and "two
+consecutive runs" unevaluable — hence the **minute-resolution UTC timestamp**. `CURRENT` is a state
+value rather than an absence because *the reset is an event that has to be recorded*: without a line
+for it, a recovered-then-re-drifted lane is indistinguishable from one that never recovered.
+`escalated=` is the latch itself — it is what tells the next checker that the maintainer has already
+been told, and without it the notify-on-transition rule cannot be evaluated by anyone but the run that
+did the notifying.
+
+🔴 **The recording instance must be one that CAN write the tracking issue — that is not every
+instance.** `app/cursor` gets 403 on comments (see *Writer namespaces*), so the Cursor cloud instance
+cannot write this line at all. That costs nothing here, because the Cursor **lane** is checked by
+reading the plugin submodule's `refs/remotes/origin/main`, which a machine-local run does anyway: the
+cloud lane is a lane to be *checked*, never a required *checker*. If the cloud instance does observe a
+drift it cannot record, it reports it and the next machine-local run records it — the same
+local-does-what-the-cloud-cannot pattern as boarding the cloud instance's issues. **A sighting that
+cannot be written is not a sighting**: it never counts toward the bound, so an unwritable observation
+can neither silently advance the counter nor silently stall it.
 
 🔴 **LATCH the escalation, and CLEAR it — escalating is a transition, never a repeat.** After the
 second qualifying run, every later run also satisfies the bound, so an unlatched rule pages the
