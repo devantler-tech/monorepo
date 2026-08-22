@@ -20,6 +20,7 @@ keeping them healthy *and* moving them forward.
 | KSail (Go CLI) | `devantler-tech/ksail` | `applications/ksail` | [AGENTS.md](https://github.com/devantler-tech/ksail/blob/main/AGENTS.md) |
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | [AGENTS.md](https://github.com/devantler-tech/platform/blob/main/AGENTS.md) |
 | devantler.tech site | `devantler-tech/monorepo` | `docs/` + repo root | this file |
+| GitHub organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | [AGENTS.md](https://github.com/devantler-tech/.github/blob/main/AGENTS.md) |
 | Go template | `devantler-tech/go-template` | `templates/go-template` | [AGENTS.md](https://github.com/devantler-tech/go-template/blob/main/AGENTS.md) |
 | .NET template | `devantler-tech/dotnet-template` | `templates/dotnet-template` | [AGENTS.md](https://github.com/devantler-tech/dotnet-template/blob/main/AGENTS.md) |
 | Platform-tenant template | `devantler-tech/platform-tenant-template` | `templates/platform-tenant-template` | [AGENTS.md](https://github.com/devantler-tech/platform-tenant-template/blob/main/AGENTS.md) |
@@ -46,6 +47,13 @@ keeping them healthy *and* moving them forward.
 > the public board is a maintainer call (see *Every issue belongs on the board*). Determine it live
 > from `gh api repos/devantler-tech/<repo> --jq .private` at the moment you need it, never from this
 > table.
+
+> **Archived repositories are outside the active portfolio.** Determine `.archived` live during
+> discovery and omit archived repositories from every health, PR, issue, and automation census even
+> when stale open artifacts remain. They are read-only historical evidence until the maintainer both
+> unarchives and explicitly restores them to the portfolio; do not infer restoration from an old PR
+> or issue. `devantler-tech/data-product` is archived and must therefore not be considered by future
+> runs.
 
 **World at Ruin — newest product, bootstrapped 2026-07-16** (maintainer direction the same day). A
 cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** as a
