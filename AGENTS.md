@@ -495,10 +495,11 @@ continues — every dispatch, indefinitely.
 **So escalate on the CONDITION, not on a tool's exit code.** A lane whose currency reads `DRIFT` and
 whose repair is **unavailable** (no path exists for that lane), **refused**, or **fenced** (declined
 because performing it now would be unsafe) is surfaced on a declared *Maintainer channel* once the
-same lane has been observed in that state on **two consecutive runs that checked it**. Record each
-observation in durable memory, since consecutiveness is what distinguishes a rollout still settling
-from staleness nothing is advancing; one observation is reported as it is today, so a transient
-reading never pages the maintainer.
+same lane has been observed in that state on **two consecutive runs that checked it**, whichever
+instance ran them — any instance can check any lane, so the evidence does not restart per lane.
+Record each observation in durable memory, since consecutiveness is what distinguishes a rollout
+still settling from staleness nothing is advancing; one observation is reported as it is today, so a
+transient reading never pages the maintainer.
 
 🔴 **A FENCED repair counts toward that exactly as a failed one does.** Fencing is frequently the
 correct call — the Codex remove/add hot-swap can leave that lane with no definition at all, which is

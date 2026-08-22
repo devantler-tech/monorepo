@@ -118,6 +118,13 @@ done
 assert_contains "${section}" 'two consecutive runs that checked it' \
   'escalation must be bounded, so one transient reading never pages the maintainer'
 
+# Cross-instance evidence must keep counting. Scoping the bound per instance would discard the
+# sibling's observations of the same lane and double the time to escalate — and this deployment
+# reached three observations across two instances before the rule existed, so per-instance scoping is
+# the reading that would have kept it silent.
+assert_contains "${section}" 'whichever instance ran them' \
+  'observations of one lane must count across instances, not restart per instance'
+
 assert_contains "${section}" 'Record each observation in durable memory' \
   'consecutiveness must be made measurable, or the bound cannot be evaluated by a later run'
 
