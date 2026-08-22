@@ -649,10 +649,10 @@ public and private — no per-repo loop needed to enumerate):
      2026-07-18), and KSail release bumps (maintainer direction 2026-07-13, ksail#6095). Apply this
      exemption **only** when the checked-in exact classifier exits 0:
      `.claude/scripts/programmed-bot-review-exemption.sh "$repo" "$author_login" "$headRefName" "$title" "$headRefOid" "$files_json" "$commits_json" "$skill_owners_json"`.
-     Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the author in the
-     GraphQL App spelling `app/<slug>` (`app/ksail-bot`), never the REST `<slug>[bot]` the
-     deepening query returns: every arm compares `app/…`, so REST spelling is well-formed,
-     matches no arm, exits 1, and spends a metered lane on a trusted bump (monorepo#2991).
+     Pass the repository basename (`ksail`, not `devantler-tech/ksail`) and the author exactly as
+     that repo's arm compares it: `app/<slug>` for App-authored arms (`app/ksail-bot`), plain
+     `devantler` for the homebrew-tap cask arms. Never the REST `<slug>[bot]` the deepening
+     query returns: well-formed, matches no arm, exits 1, spends a metered lane (monorepo#2991).
      For an installed-skill updater PR (any changed path under `.agents/skills/`), `skill_owners_json`
      is **required**: a compact JSON object mapping each changed skill root (`.agents/skills/<name>`)
      to that skill's own `metadata.github-repo`, read from its `SKILL.md` frontmatter **at

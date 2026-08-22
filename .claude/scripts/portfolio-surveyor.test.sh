@@ -98,6 +98,12 @@ grep -Fq '<slug>[bot]' "${surveyor}" ||
   fail "surveyor does not name the REST author spelling that must NOT be passed (monorepo#2991)"
 grep -Fq 'matches no arm' "${surveyor}" ||
   fail "surveyor does not state that the REST spelling is well-formed but matches no classifier arm, so the cost of the mistake is invisible (monorepo#2991)"
+# The App spelling is NOT universal: the classifier's homebrew-tap arms compare a plain `devantler`
+# user login, not an `app/...` identity. Telling the caller that "every arm" uses the App spelling
+# would break the GoReleaser cask PRs in exactly the way this fix exists to prevent — they would
+# exit 1 and consume the metered lanes the carve-out protects. Pin the per-arm distinction.
+grep -Fq 'for the homebrew-tap cask arms' "${surveyor}" ||
+  fail "surveyor generalises the App author spelling across all arms, but the homebrew-tap arms compare a plain devantler login (monorepo#2991)"
 # An empty review object is the container GitHub creates for a reply to an existing
 # review thread. It is authored by the bot, anchored to the current head, and has zero
 # findings — so a green-review test that does not require a substantive body reports a
