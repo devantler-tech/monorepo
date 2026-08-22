@@ -80,6 +80,30 @@ grep -Fq '`app/botantler-1` is narrowly trusted only for programmed agent-skills
   fail "constitution either misses botantler updater PRs or trusts the App globally"
 grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
   fail "surveyor cannot report a programmed bot review exemption"
+
+# The classifier's arms compare the author against the GraphQL App spelling (`app/ksail-bot`,
+# `app/botantler-1`), but the deepening query the surveyor runs is REST, which reports the same
+# identity as `ksail-bot[bot]`. Passing the REST spelling is a WELL-FORMED payload that simply
+# fails to match, so the classifier exits 1 — "external/static-only candidate" — and the surveyor
+# reports a trusted release bump as review-bearing. That spends a metered review lane (CodeRabbit,
+# Codex weekly, Bugbot monthly) on a PR the carve-out exists to keep off them. A malformed payload
+# would exit 2, so a 1 localises the fault to argument construction rather than a missing field.
+# Measured on ksail#6625 at head b31be12e7f (monorepo#2991).
+grep -Fq 'app/<slug>' "${surveyor}" ||
+  fail "surveyor does not tell the caller which author spelling the exemption classifier compares against (monorepo#2991)"
+# Presence of the correct spelling alone is a weak guard: a later rewrite could keep `app/<slug>`
+# and drop the warning, restoring the ambiguity this fixes. Pin the REST form that must be refused
+# and the consequence that makes refusing it matter, so the assertion tracks the whole contract.
+grep -Fq '<slug>[bot]' "${surveyor}" ||
+  fail "surveyor does not name the REST author spelling that must NOT be passed (monorepo#2991)"
+grep -Fq 'matches no arm' "${surveyor}" ||
+  fail "surveyor does not state that the REST spelling is well-formed but matches no classifier arm, so the cost of the mistake is invisible (monorepo#2991)"
+# The App spelling is NOT universal: the classifier's homebrew-tap arms compare a plain `devantler`
+# user login, not an `app/...` identity. Telling the caller that "every arm" uses the App spelling
+# would break the GoReleaser cask PRs in exactly the way this fix exists to prevent — they would
+# exit 1 and consume the metered lanes the carve-out protects. Pin the per-arm distinction.
+grep -Fq 'for the homebrew-tap cask arms' "${surveyor}" ||
+  fail "surveyor generalises the App author spelling across all arms, but the homebrew-tap arms compare a plain devantler login (monorepo#2991)"
 # An empty review object is the container GitHub creates for a reply to an existing
 # review thread. It is authored by the bot, anchored to the current head, and has zero
 # findings — so a green-review test that does not require a substantive body reports a
