@@ -482,6 +482,46 @@ fail-open as the drift itself. When the script cannot resolve its CLI, or a refu
 rollouts, surface it on a declared *Maintainer channel* rather than leaving a silently superseded
 definition in place.
 
+🔴 **Both of those triggers name exit states of the REFRESH script, and that script exists for ONE
+lane — so on the other two the escalation is unreachable by construction.**
+`plugin-definition-currency.sh` takes `--runtime claude|codex|cursor`, but
+`plugin-definition-refresh.sh` takes no runtime selector at all: it hardcodes its plugins root to the
+Claude configuration directory and dies unless it resolves an executable `claude` CLI. So "run it on
+a `DRIFT`" names nothing runnable on the Codex or Cursor lane, and *cannot resolve its CLI* and *a
+refusal persists across rollouts* both describe a script that is never invoked there. A run that
+follows this section exactly therefore detects the drift, reports it into a private store, and
+continues — every dispatch, indefinitely.
+
+**So escalate on the CONDITION, not on a tool's exit code.** A lane whose currency reads `DRIFT` and
+whose repair is **unavailable** (no path exists for that lane), **refused**, or **fenced** (declined
+because performing it now would be unsafe) is surfaced on a declared *Maintainer channel* once the
+same lane has been observed in that state on **two consecutive runs that checked it**. Record each
+observation in durable memory, since consecutiveness is what distinguishes a rollout still settling
+from staleness nothing is advancing; one observation is reported as it is today, so a transient
+reading never pages the maintainer.
+
+🔴 **A FENCED repair counts toward that exactly as a failed one does.** Fencing is frequently the
+correct call — the Codex remove/add hot-swap can leave that lane with no definition at all, which is
+worse than the drift — but a decision that is right every time and recorded as nothing is
+indistinguishable from a repair that was never needed. That is precisely what makes the staleness
+unbounded, and it is the same shape as the `2` UNKNOWN that must never read as `CURRENT`.
+
+⚠️ **This adds an obligation and removes none.** A `DRIFT` is still never a run-stopper, and this is
+not licence to perform a repair that was fenced as unsafe. The fallback is unchanged: read the
+reviewed definition at the pinned gitlink and follow it.
+
+**Measured 2026-08-22 — which is also why the bound is two observations rather than one.** The Claude
+lane read `CURRENT` (11 of 11 pinned files, 4.4.8) while the Codex lane read `DRIFT` (3 of 11;
+installed 4.4.2), the differing files being `agents/portfolio-surveyor.agent.md` plus two runtime
+assets. The consumer pin moved past that install at 2026-08-21T21:58:16Z (#2977), and the Codex
+scheduler store records **24 Agentic Engineer and 2 Agent Improver dispatches** on the superseded copy
+since — every one of them delegating its survey to a superseded surveyor definition. Two Agent
+Improver dispatches on that lane saw the `DRIFT`, correctly fenced the hot-swap, and continued,
+because nothing obliged them to do anything further ([#2997](https://github.com/devantler-tech/monorepo/issues/2997)).
+[#2929](https://github.com/devantler-tech/monorepo/issues/2929) and
+[#2973](https://github.com/devantler-tech/monorepo/issues/2973) are what make a repair *possible* on a
+given lane; this clause is what a run owes while it is not.
+
 ### Agent definition locations
 
 The Agent Improver may change only the surfaces named here. A path being readable does not make it a

@@ -38,6 +38,7 @@ jobs:
       git-safety-contract: ${{ steps.filter.outputs.git-safety-contract }}
       rung-type-filter-contract: ${{ steps.filter.outputs.rung-type-filter-contract }}
       definition-load-budget-contract: ${{ steps.filter.outputs.definition-load-budget-contract }}
+      drifted-lane-escalation-contract: ${{ steps.filter.outputs.drifted-lane-escalation-contract }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
@@ -297,6 +298,15 @@ jobs:
               # would otherwise skip the job entirely.
               - '.claude/agents/portfolio-surveyor.md'
               - '.claude/scripts/definition-load-budget-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            drifted-lane-escalation-contract:
+              - 'AGENTS.md'
+              # Both scripts are listed because assertion 5 checks the contract's PREMISE against
+              # them: a pull request that gives the refresh path a --runtime selector, or removes it
+              # from the currency check, must run this job and update the prose in the same change.
+              - '.claude/scripts/plugin-definition-refresh.sh'
+              - '.claude/scripts/plugin-definition-currency.sh'
+              - '.claude/scripts/drifted-lane-escalation-contract.test.sh'
               - '.github/workflows/ci.yaml'
             plugin-definition-currency:
               - 'AGENTS.md'
@@ -1106,6 +1116,21 @@ jobs:
       - name: Verify the definition load budget contract
         run: bash .claude/scripts/definition-load-budget-contract.test.sh
 
+  test-drifted-lane-escalation-contract:
+    name: Test drifted lane escalation contract
+    needs: changes
+    if: needs.changes.outputs.drifted-lane-escalation-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the drifted lane escalation contract
+        run: bash .claude/scripts/drifted-lane-escalation-contract.test.sh
+
   test-one-verb-per-bash-call-contract:
     name: Test one verb per bash call contract
     needs: changes
@@ -1427,6 +1452,7 @@ jobs:
       - test-git-safety-contract
       - test-rung-type-filter-contract
       - test-definition-load-budget-contract
+      - test-drifted-lane-escalation-contract
       - test-plugin-definition-currency
       - test-plugin-definition-refresh
       - test-codex-lane-liveness
@@ -1478,6 +1504,7 @@ jobs:
             ${{ needs.test-git-safety-contract.result }}
             ${{ needs.test-rung-type-filter-contract.result }}
             ${{ needs.test-definition-load-budget-contract.result }}
+            ${{ needs.test-drifted-lane-escalation-contract.result }}
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-plugin-definition-refresh.result }}
             ${{ needs.test-codex-lane-liveness.result }}
