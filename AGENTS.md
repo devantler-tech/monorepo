@@ -493,18 +493,36 @@ follows this section exactly therefore detects the drift, reports it into a priv
 continues — every dispatch, indefinitely.
 
 **So escalate on the CONDITION, not on a tool's exit code.** A lane whose currency reads `DRIFT` and
-whose repair is **unavailable** (no path exists for that lane), **refused**, or **fenced** (declined
-because performing it now would be unsafe) is surfaced on a declared *Maintainer channel* once the
-same lane has been observed in that state on **two consecutive runs that checked it**, whichever
-instance ran them — any instance can check any lane, so the evidence does not restart per instance.
+whose repair is **unavailable** (no path exists for that lane), **refused**, **fenced** (declined
+because performing it now would be unsafe), or **failed** (attempted and did not leave the install on
+the pin — including an `UNKNOWN` that produced no verdict at all) is surfaced on a declared
+*Maintainer channel* once the same lane has been observed in that state on **two consecutive runs that
+checked it**, whichever instance ran them — any instance can check any lane, so the evidence does not
+restart per instance.
 🔴 **Both observations must be of the SAME lane.** Cross-INSTANCE evidence counts; cross-LANE evidence
 never does — one Codex reading and one Cursor reading are two lanes drifting once each, not one lane
 drifting twice, and reading them as persistence would escalate a condition that has not persisted
 anywhere.
 
-Record each observation in durable memory, since consecutiveness is what distinguishes a rollout still
-settling from staleness nothing is advancing; one observation is reported as it is today, so a
-transient reading never pages the maintainer.
+🔴 **Record the sighting where the NEXT checker can read it — durable memory ALONE cannot carry this
+counter.** Each instance boots into its own private store and only the Agent Improver has a mandated
+sibling cross-read, so a count kept solely in native memory either fails to fire when the next checker
+runs on another instance, or reaches for a sibling's private state to make it fire. Record each
+sighting as a structured, repository-visible line on the tracking issue for that lane's drift —
+`**Lane drift:** <lane> | <unavailable|refused|fenced|failed> | observed <YYYY-MM-DD>` — which every
+instance on every lane can read, and keep the supporting detail in durable memory. This granularity is
+already the publishable half under *Sensitive information stays private*: that a named lane is
+degraded, and since when, is publishable; quota, account, and reset detail is not.
+
+🔴 **LATCH the escalation, and CLEAR it — escalating is a transition, never a repeat.** After the
+second qualifying run, every later run also satisfies the bound, so an unlatched rule pages the
+maintainer on **every dispatch** — exactly the status-message traffic *Maintainer channels* forbids on
+the last-resort channel. So notify only on the transition **into** the escalated state, record on that
+same repository-visible line that it was delivered, and stay silent while the lane remains there.
+**Clear the latch and the count on the first non-qualifying check of that lane** — `CURRENT`, or a
+repair that succeeds. `DRIFT → CURRENT → DRIFT` is two separate first sightings rather than
+persistence, and only a record that also captures the non-qualifying check can tell those apart, so
+record that one too.
 
 🔴 **A FENCED repair counts toward that exactly as a failed one does.** Fencing is frequently the
 correct call — the Codex remove/add hot-swap can leave that lane with no definition at all, which is

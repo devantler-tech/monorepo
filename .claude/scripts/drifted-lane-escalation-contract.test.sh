@@ -105,9 +105,12 @@ assert_contains "${section}" 'escalate on the CONDITION, not on a tool' \
 assert_contains "${section}" 'takes no runtime selector' \
   'the section must record WHY the exit-code form is unreachable — the refresh tool has no lane selector'
 
-# The three ways a repair fails to happen. Each is pinned separately: a single catch-all word could
-# later be narrowed to the two that are easy to detect, silently dropping the fenced case.
-for state in '**unavailable**' '**refused**' '**fenced**'; do
+# The FOUR ways a repair fails to happen. Each is pinned separately: a single catch-all word could
+# later be narrowed to the two that are easy to detect, silently dropping the others. **failed** is the
+# one an enumeration naturally omits — a refresh that runs and errors is neither unavailable, refused,
+# nor fenced, so without it an ordinary repair failure keeps the unbounded-silence path the clause
+# exists to close, while the fenced-counts sentence below already presupposes that failed is in the set.
+for state in '**unavailable**' '**refused**' '**fenced**' '**failed**'; do
   assert_contains "${section}" "${state}" \
     "the escalating condition must enumerate the repair state ${state}"
 done
@@ -134,8 +137,26 @@ assert_contains "${section}" 'whichever instance ran them' \
 assert_contains "${section}" 'Both observations must be of the SAME lane' \
   'the two observations must be of one lane — cross-instance evidence counts, cross-lane evidence never does'
 
-assert_contains "${section}" 'Record each observation in durable memory' \
-  'consecutiveness must be made measurable, or the bound cannot be evaluated by a later run'
+# The counter must be readable by whoever checks NEXT. Durable memory alone cannot carry it: each
+# instance boots into its own private store and only the Agent Improver has a mandated sibling
+# cross-read, so a memory-only count either fails to fire across instances or reaches for a sibling's
+# private state. Pinned as the structured line, because "record it somewhere" decays back into memory.
+assert_contains "${section}" 'repository-visible line on the tracking issue' \
+  'the sighting must be recorded where any instance on any lane can read it, not only in private memory'
+
+assert_contains "${section}" '**Lane drift:**' \
+  'the repository-visible record must have a fixed structure, or a later run cannot parse the count'
+
+# The latch. Without it the bound is satisfied by EVERY run after the second, so a persistently
+# drifted lane pages the maintainer on every dispatch — precisely the status-message traffic the
+# last-resort channel forbids. This is the assertion that keeps the rule from becoming a spam source.
+assert_contains "${section}" 'notify only on the transition' \
+  'escalation must fire on the transition into the state, never repeatedly while it persists'
+
+# And the reset. Without a clear, DRIFT -> CURRENT -> DRIFT reads as persistence, so the rule would
+# escalate a lane that recovered and re-drifted as though it had never recovered.
+assert_contains "${section}" 'Clear the latch and the count on the first non-qualifying check' \
+  'a non-qualifying check must reset the counter, or a recovered-then-redrifted lane reads as persistent'
 
 assert_contains "${section}" 'FENCED repair counts toward that exactly as a failed one does' \
   'a fenced repair must count toward the bound — this is the case the whole clause exists for'
