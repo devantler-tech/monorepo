@@ -1185,7 +1185,11 @@ jobs:
     name: Test plugin definition currency
     needs: changes
     if: needs.changes.outputs.plugin-definition-currency == 'true'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:
@@ -1193,6 +1197,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Both OSes are required: scheduled runs execute on macOS, where BSD awk rejects a literal
+      # newline in `-v`, while the Linux runner's GNU awk accepts the same input.
       - name: Verify the plugin definition currency check
         run: bash .claude/scripts/plugin-definition-currency.test.sh
 
