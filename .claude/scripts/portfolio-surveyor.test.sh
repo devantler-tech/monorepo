@@ -80,6 +80,17 @@ grep -Fq '`app/botantler-1` is narrowly trusted only for programmed agent-skills
   fail "constitution either misses botantler updater PRs or trusts the App globally"
 grep -Fq 'green_review=exempt-programmed-bot' "${surveyor}" ||
   fail "surveyor cannot report a programmed bot review exemption"
+
+# The classifier's arms compare the author against the GraphQL App spelling (`app/ksail-bot`,
+# `app/botantler-1`), but the deepening query the surveyor runs is REST, which reports the same
+# identity as `ksail-bot[bot]`. Passing the REST spelling is a WELL-FORMED payload that simply
+# fails to match, so the classifier exits 1 — "external/static-only candidate" — and the surveyor
+# reports a trusted release bump as review-bearing. That spends a metered review lane (CodeRabbit,
+# Codex weekly, Bugbot monthly) on a PR the carve-out exists to keep off them. A malformed payload
+# would exit 2, so a 1 localises the fault to argument construction rather than a missing field.
+# Measured on ksail#6625 at head b31be12e7f (monorepo#2991).
+grep -Fq 'app/<slug>' "${surveyor}" ||
+  fail "surveyor does not tell the caller which author spelling the exemption classifier compares against (monorepo#2991)"
 # An empty review object is the container GitHub creates for a reply to an existing
 # review thread. It is authored by the bot, anchored to the current head, and has zero
 # findings — so a green-review test that does not require a substantive body reports a
