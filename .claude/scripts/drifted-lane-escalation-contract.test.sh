@@ -161,6 +161,15 @@ assert_contains "${section}" 'NOT the counter coming back' \
 assert_contains "${section}" 'lowest-numbered' \
   'competing issues must be reconciled deterministically, or a race yields two latches'
 
+# Notification concurrency. The issue tie-break serialises CREATION only; two overlapping runs can
+# both find the issue open and both page down the last-resort channel. Reuses the deployment's existing
+# compare-and-swap rather than describing a new marker protocol in prose.
+assert_contains "${section}" 'CLAIM the delivery before sending' \
+  'notification must be claimed before sending, or overlapping runs both page the maintainer'
+
+assert_contains "${section}" 'agent-claim.sh' \
+  'the delivery claim must reuse the tested compare-and-swap primitive, not an invented marker protocol'
+
 assert_contains "${section}" 'confirm the issue FIRST, then' \
   'the ordering must be issue-then-notify, so a crash between them is recoverable rather than silent'
 
@@ -240,14 +249,25 @@ else
 fi
 
 if [ -x "${currency}" ]; then
+  # POSITIVE verification, not "anything but unknown argument". The negative form treats every other
+  # failure as proof the flag was parsed — so if this script ever drops --runtime AND words its
+  # unknown-option diagnostic differently ("invalid option", a usage dump, a bare exit), the branch
+  # reads that as success and CI passes on a stale three-lane premise. Assert the advertised option
+  # instead, which is the same "read what the tool declares" fix applied to the refresh probe above.
+  currency_help="$("${currency}" --help 2>&1 || true)"
+  case "${currency_help}" in
+    *"--runtime"*) ;;
+    *)
+      fail "plugin-definition-currency.sh --help no longer advertises --runtime, so the three-lane detection the contract assumes is gone"
+      ;;
+  esac
+
+  # And confirm it is really parsed, not merely documented: a bad VALUE must be rejected as a value
+  # rather than as an unknown option.
   currency_out="$("${currency}" --runtime __contract_probe__ 2>&1)" && currency_rc=0 || currency_rc=$?
   case "${currency_out}" in
     *"unknown argument"*)
-      fail "plugin-definition-currency.sh no longer accepts --runtime (rc=${currency_rc}), so the three-lane detection the contract assumes is gone"
-      ;;
-    *)
-      # It accepted the option and rejected the VALUE (or failed later), which is what we need: the
-      # selector exists. Anything other than "unknown argument" proves the flag is parsed.
+      fail "plugin-definition-currency.sh advertises --runtime but rejects it as unknown (rc=${currency_rc}), so the three-lane detection the contract assumes is gone"
       ;;
   esac
 else

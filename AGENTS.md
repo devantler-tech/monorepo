@@ -524,6 +524,17 @@ authenticated open issue for that lane is the latch, and a run holding any other
 duplicate pointing at that one. Because a first sighting never notifies, the worst a lost race costs is
 a duplicate issue that the next run tidies — never a duplicate page.
 
+🔴 **CLAIM the delivery before sending — the issue tie-break serialises CREATION, not NOTIFICATION.**
+Two overlapping runs can both find the authenticated issue already open, both satisfy the ordering
+below, and both page the maintainer down the last-resort channel. Same-lane overlap is normal here, so
+this is an expected path rather than a corner. **Do not invent a marker protocol for it:** acquire
+[`agent-claim.sh`](.claude/scripts/agent-claim.sh) on the drift issue's own number before notifying,
+and retire it after recording delivery. That primitive is already the deployment's atomic
+compare-and-swap — nonce, non-forced push, tip comparison, a two-hour lease and evidence-gated
+takeover — which is precisely an atomic per-lane delivery claim with recovery for an abandoned one. A
+run that loses the claim does not notify; a run that finds delivery already recorded does not notify
+either.
+
 🔴 **Order the two steps so a crash is RECOVERABLE rather than silent: confirm the issue FIRST, then
 notify**, and record on the issue that the notification was delivered. The two are separate systems and
 nothing makes them atomic, so the only question worth deciding is which half-completed state
