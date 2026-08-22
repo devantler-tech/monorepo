@@ -50,10 +50,9 @@ keeping them healthy *and* moving them forward.
 
 > **Archived repositories are outside the active portfolio.** Determine `.archived` live during
 > discovery and omit archived repositories from every health, PR, issue, and automation census even
-> when stale open artifacts remain. They are read-only historical evidence until the maintainer both
-> unarchives and explicitly restores them to the portfolio; do not infer restoration from an old PR
-> or issue. `devantler-tech/data-product` is archived and must therefore not be considered by future
-> runs.
+> when stale open artifacts remain. They are read-only historical evidence while that live flag is
+> true; never infer current work from an old PR or issue. `devantler-tech/data-product` is archived,
+> so every future run must omit it while it remains archived.
 
 **World at Ruin — newest product, bootstrapped 2026-07-16** (maintainer direction the same day). A
 cloud-native MMORPG the maintainer wants to exist, built **almost entirely by agents** as a
