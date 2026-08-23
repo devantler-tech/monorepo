@@ -135,8 +135,24 @@ assert_contains "${section}" 'existence proves nothing on a PUBLIC repository' \
 assert_contains "${section}" "exactly **\`devantler\`**" \
   'the machine-local agent identity must be named, not merely "an agent"'
 
-assert_contains "${section}" "exactly **\`app/cursor\`**" \
+assert_contains "${section}" "**\`app/cursor\`**" \
   'the cloud identity must be accepted — it files issues, and it is the only checker of its own lane'
+
+# Both spellings. GitHub renders this App differently per surface, so a run reconciling through REST
+# sees cursor[bot]; an app/cursor-only check rejects the authentic tracker there and files the
+# duplicate the reuse rule exists to prevent.
+assert_contains "${section}" "**\`cursor[bot]\`** on REST" \
+  'the REST spelling of the cloud identity must be accepted, or a REST-side lookup rejects its own issue'
+
+# Reconciliation must belong to the reader, not the creator: a creator that dies between filing and
+# cleaning up leaves an orphan that nothing else is looking for.
+assert_contains "${section}" 'closes ALL higher-numbered authenticated duplicates' \
+  'every lookup must reconcile all duplicates, or a crashed creator orphans one permanently'
+
+# Creation must be synchronised with recovery. Otherwise a run that saw DRIFT files after an
+# overlapping run has already seen CURRENT and found nothing to close.
+assert_contains "${section}" 'RE-READ currency immediately before filing' \
+  'the creator must revalidate currency, or a recovered lane gets tracked from a stale observation'
 
 assert_contains "${section}" 'The Cursor cloud lane files its own issue' \
   'the contract must not claim the cloud instance cannot open an issue — it can, and does so elsewhere'
@@ -210,17 +226,19 @@ assert_contains "${section}" 'rollouts, surface it on a declared *Maintainer cha
 # ---------------------------------------------------------------------------
 if [ -x "${refresh}" ]; then
   # Probe every spelling a selector could plausibly take, AND read the CLI's own advertised option
-  # surface. Enumerating spellings alone is a losing game — the source-grep missed `--runtime=*`, the
-  # space-only probe missed it too (both caught by ablation), and a short `-r` would slip past both.
-  # So the enumeration covers what we can name, and the --help scan covers what we cannot: if the CLI
-  # ever advertises a runtime/lane selector under any spelling, this fails and the prose gets updated
-  # in the same change.
+  # surface. Enumerating spellings alone is a losing game — a source-grep missed `--runtime=*`, a
+  # space-only probe missed it too, and a short `-r` would slip past both — so the enumeration covers
+  # what can be named and the --help scan covers what cannot.
   #
-  # Safe to invoke: the script rejects an unknown option during argument parsing, before any network,
-  # filesystem, or control-plane action (verified: rc=2, "unknown argument").
+  # 🔴 EVERY probe passes --dry-run, and that is a SAFETY requirement rather than tidiness. These
+  # invocations are inert today only because the option is rejected during argument parsing. The moment
+  # the selector this test exists to detect actually EXISTS, parsing succeeds and the run continues into
+  # CLI resolution, marketplace refresh and potentially a plugin update — so the guard would mutate a
+  # developer's live runtime at exactly the moment it fires. --dry-run makes the failing path
+  # side-effect-free: the script exits 2 without applying anything (verified).
   for spelling in "--runtime codex" "--runtime=codex" "-r codex" "-r=codex"; do
     # shellcheck disable=SC2086 # deliberate word-splitting: each spelling is one or two argv entries
-    refresh_out="$("${refresh}" ${spelling} 2>&1)" && refresh_rc=0 || refresh_rc=$?
+    refresh_out="$("${refresh}" --dry-run ${spelling} 2>&1)" && refresh_rc=0 || refresh_rc=$?
     case "${refresh_out}" in
       *"unknown argument"*) ;;
       *)
@@ -257,14 +275,20 @@ if [ -x "${currency}" ]; then
       ;;
   esac
 
-  # And confirm it is really parsed, not merely documented: a bad VALUE must be rejected as a value
-  # rather than as an unknown option.
+  # Confirm the selector is really PARSED, not merely documented — and require the specific
+  # unsupported-value result rather than "anything except unknown argument". The permissive form lets a
+  # parser that has dropped --runtime pass, so long as its generic option error happens to be worded
+  # differently and the manually maintained help still advertises the flag. Both the exit status and the
+  # diagnostic are asserted, so a documented-but-unparsed selector cannot satisfy this contract.
   currency_out="$("${currency}" --runtime __contract_probe__ 2>&1)" && currency_rc=0 || currency_rc=$?
   case "${currency_out}" in
-    *"unknown argument"*)
-      fail "plugin-definition-currency.sh advertises --runtime but rejects it as unknown (rc=${currency_rc}), so the three-lane detection the contract assumes is gone"
+    *"unsupported runtime '__contract_probe__'"*) ;;
+    *)
+      fail "plugin-definition-currency.sh did not reject an invalid --runtime value with its unsupported-runtime diagnostic (rc=${currency_rc}), so the selector is advertised but not parsed"
       ;;
   esac
+  [ "${currency_rc}" = "2" ] ||
+    fail "plugin-definition-currency.sh returned ${currency_rc} for an invalid --runtime value, not the documented 2 — the selector's contract has changed"
 else
   fail "cannot execute ${currency} — the premise this contract rests on is unverifiable"
 fi
