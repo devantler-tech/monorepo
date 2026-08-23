@@ -258,6 +258,10 @@ jobs:
               - '.github/workflows/ci.yaml'
             maintainer-preflight:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
+              # The loader is read and asserted against by this test, so a change to it alone must
+              # run the job. Omitting it is how the GraphQL-identity correction turned the test red
+              # without CI noticing: the loader moved, the assertion did not, and nothing ran.
+              - '.claude/loaders/cursor-daily-ai-engineer.md'
               - '.claude/scripts/maintainer-preflight.test.sh'
             latency-discipline-contract:
               - 'AGENTS.md'

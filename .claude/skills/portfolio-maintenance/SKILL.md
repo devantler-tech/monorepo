@@ -84,7 +84,10 @@ card.
    failure cannot be misread as a bad keychain login. Always pass `--hostname github.com` so
    `GH_HOST` cannot redirect the fallback to an unrelated enterprise host.
    Compare `viewer.login` with this deployment's exact expected identity on the API surface:
-   `devantler` for a machine-local lane. For the Cursor cloud lane, the GraphQL API identity is `cursor[bot]`.
+   `devantler` for a machine-local lane. For the Cursor cloud lane, the GraphQL API identity is the
+   BARE `cursor` -- REST `user.login` returns `cursor[bot]`, and `app/cursor` is a search-qualifier
+   INPUT that no read hands back. Requiring `cursor[bot]` on the GraphQL fallback rejected the
+   legitimate identity and stopped the dispatch; accept the spelling the surface being read returns.
    Its `gh auth status`, PR-author, and search identity remains `app/cursor`.
    A mismatch is `wrong GitHub identity` and must not be described as an invalid credential.
    A REST 5xx (or rate-limit) followed by a successful, expected-identity GraphQL
