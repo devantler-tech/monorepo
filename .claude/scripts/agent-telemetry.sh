@@ -3086,11 +3086,13 @@ if want efficiency; then
     fi
     echo "  explicit sleep/poll calls .. ${SLEEPS}   (contract: arm a watcher, never busy-wait)"
     # The raw total above cannot answer the question the contract actually asks,
-    # because it scores a CONTRACT-COMPLIANT backgrounded watcher (`sleep N &&
-    # check`, run_in_background) identically to a foreground busy-wait — and the
-    # improver's own runs emit several compliant watchers each, landing as
-    # self-noise in the very bucket used to judge the agents. These lines split
-    # the two. This SHARPENS the measurement; it removes nothing.
+    # because it scores a BACKGROUNDED poller (`sleep N && check`, or a hand-rolled
+    # loop, under run_in_background) identically to a foreground busy-wait. Both are
+    # violations, but DIFFERENT ones with different costs — the foreground form
+    # blocks the turn, the backgrounded form holds the session open through its
+    # completion notification — so they are counted separately below and neither is
+    # compliant. These lines split them. This SHARPENS the measurement; it removes
+    # nothing.
     echo "    ├ foreground launch ...... ${SLEEP_FG}   [Claude, synchronous]"
     echo "    ├ background launch ...... ${SLEEP_BG}   [Claude, run_in_background]"
     echo "    └ launch mode unknown .... ${SLEEP_CX}   [Codex — see gap note below]"
@@ -3122,14 +3124,19 @@ if want efficiency; then
     echo "  ⇒ FOREGROUND ∧ remote-adjacent . ${WT_FGREM}   [baseline-continuity component]"
     echo "  ⇒ FOREGROUND ∧ task-output-adjacent ${WT_FGTASK}   [redundant runtime-task poll]"
     echo "          of which UNCHAINED (task-output, fg) ${WT_FGTASK_NEXT}"
-    # The aggregate remote-next bucket mixes in compliant BACKGROUND watchers and
-    # unattributed Codex sleeps, so it moves when neither the rule nor foreground
-    # behaviour changed. Only this foreground-only figure tests the unchained-wait
-    # tightening — trend THIS, never the aggregate.
+    # The aggregate remote-next bucket mixes BACKGROUND pollers (counted on their
+    # own line above, and a violation in their own right) with unattributed Codex
+    # sleeps, so it moves when neither the rule nor foreground behaviour changed.
+    # Only this foreground-only figure tests the unchained-wait tightening — trend
+    # THIS, never the aggregate.
     echo "      of which UNCHAINED (fg) ... ${WT_FGNEXT}   [tests the #2262 rule]"
     if [ "$SF_COUNT" -gt 0 ]; then
       echo "    per-session (Claude, n=${SF_COUNT}): $(awk -v a="$WT_FGALL" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← the recognised-poll metric to trend"
       echo "    remote-only continuity (n=${SF_COUNT}): $(awk -v a="$WT_FGREM" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session"
+      # A RATE, not a raw count: window session counts swing, so WT_BGREM alone can
+      # fall while per-run polling rises. This is the series the backgrounded-poller
+      # baseline is trended on.
+      echo "    backgrounded-poller (n=${SF_COUNT}): $(awk -v a="$WT_BGREM" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← trend THIS for the poller rule"
     fi
     if [ "$WT_TOT" != "$SLEEPS" ]; then
       echo "    ⚠️  wait-target total ${WT_TOT} != launch-mode total ${SLEEPS} —"

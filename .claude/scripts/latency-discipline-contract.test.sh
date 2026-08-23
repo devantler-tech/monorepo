@@ -96,13 +96,12 @@ assert_bullet '`Monitor` with an until-loop' \
   "latency bullet forbids the poll without naming the runtime waiter to use instead"
 
 # ---------------------------------------------------------------------------
-# THIRD MIGRATION: the poll loop moved INSIDE a `run_in_background` call.
+# THE BACKGROUNDED POLLER: a hand-rolled poll loop inside a `run_in_background` call —
+# `for i in $(seq 1 40); do gh ...; sleep 30; done` with run_in_background:true.
 #
-# Assertions 1-4 close the two earlier spellings (chained `sleep N && <poll>`, and the standalone
-# `sleep` polling a backgrounded task's OUTPUT FILE). Neither reaches a hand-rolled loop placed
-# WITHIN the backgrounded command itself — `for i in $(seq 1 40); do gh ...; sleep 30; done` with
-# run_in_background:true. That form satisfies every sentence above while reproducing the identical
-# waste, and the enforcement hook lives in `rtk` and cannot see inside a backgrounded command.
+# Assertions 1-4 constrain a FOREGROUND `sleep` and a poll of a backgrounded task's OUTPUT FILE.
+# Neither reaches this shape: it is not a foreground sleep and polls no output file, so it satisfies
+# all of them while producing the same waste, and the `rtk` enforcement hook does not stop it.
 #
 # Measured over the 7 days to 2026-08-23 across 176 Agentic Engineer runs: 560 of 904 backgrounded
 # Bash launches (62%) carried such a loop; 240 idles waiting on one totalled 28.0h; runs using a
@@ -111,7 +110,7 @@ assert_bullet '`Monitor` with an until-loop' \
 #
 # Each assertion below pins a DIFFERENT load-bearing half, because any one alone is satisfiable
 # while the behaviour survives: naming the shape without the mechanism reads as style advice, and
-# naming both without the alternative is the bare prohibition that caused migrations 1 and 2.
+# naming both without the alternative leaves a bare prohibition, which is reliably worked around.
 
 # 5. Backgrounding does not launder the wait. Without this, `run_in_background` remains a documented
 #    escape from a rule the same bullet states two paragraphs earlier.
@@ -124,15 +123,14 @@ assert_bullet 'resurrects the session' \
   "latency bullet does not state that a backgrounded poller's completion notification resurrects the session and keeps the run open — which is why the measured cost lands on the following dispatch"
 
 # 7. The operative rule, and the alternative. A prohibition that does not name what to do instead is
-#    the DevEx tax this repo's own hardening rule forbids, and is precisely what pushed this
-#    behaviour into its second and third spellings.
+#    the DevEx tax this repo's own hardening rule forbids, and is what makes a rule get worked
+#    around rather than followed.
 assert_bullet 'never launch a poller and then end your turn' \
   "latency bullet does not forbid the one combination that gets neither the work nor the run-end (launch a poller, then end the turn)"
 
-# 8. BOTH permitted alternatives, because assertion 7 pins only the prohibition. The whole argument
-#    for this rule is that a bare prohibition is what pushed the behaviour into its second and third
-#    spellings, so the alternatives are the load-bearing half — and a future edit could strip them
-#    while 7 still passed. (Raised by CodeRabbit on #3002; the finding was valid.)
+# 8. BOTH permitted alternatives, because assertion 7 pins only the prohibition. A bare prohibition
+#    is reliably worked around, so the alternatives are the load-bearing half — and a future edit
+#    could strip them while 7 still passed. (Raised by CodeRabbit on #3002; the finding was valid.)
 assert_bullet 'arm `Monitor` and go do it' \
   "latency bullet forbids the poller-then-end-turn combination without naming the Monitor alternative for when other work IS actionable"
 
