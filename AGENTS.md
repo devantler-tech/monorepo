@@ -851,7 +851,7 @@ account** and kills every automation on it at the same instant. So a mixed `OK` 
 verdict is the *expected* rendering of one account-wide kill — read that `OK` as an artifact of the
 automation's cadence, **never as evidence that the other is healthy**. Measured 2026-08-23T22:03Z:
 `agent-improver` read `OK` while its own newest dispatch was a **15-second stub with no inbox item**,
-carrying the same cause class as the seven `daily-ai-engineer` stubs beside it. The window fills
+carrying the same cause class as the six consecutive `daily-ai-engineer` stubs in that window. The window fills
 fastest on the busiest automation, so the check is **least sensitive on the lowest-cadence one** —
 twice-daily `agent-improver` needs ~12h to show two stubs against ~1h for the hourly lane, which is
 exactly where each missed dispatch costs most. Resolve the scope from the cause class
