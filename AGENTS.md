@@ -3843,13 +3843,13 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   notification arrives. A bare `sleep` is legitimate only as a **local timer for a process whose
   completion nothing will report** (e.g. bounding a backgrounded windowed render before killing
   it), never as a wait for a remote system to change state.
-  🔴 **The loop moved INSIDE the backgrounded call — same busy-wait, third migration of one
-  behaviour, so read this as the CLASS and not the spelling.** Chaining was blocked, so it became a
-  standalone `sleep`; that was named, so it became `run_in_background: true` wrapping a hand-rolled
-  `for i in $(seq 1 40); do gh pr view …; sleep 30; done` poller over CI, a review, or a merge
-  state. That form satisfies every sentence above — it is not a foreground `sleep`, and it does not
-  poll a backgrounded task's output file — while reproducing the identical waste, and the
-  enforcement hook does not stop it: all 560 ran. **`run_in_background` moves the wait
+  🔴 **A hand-rolled poll loop is this same busy-wait wherever it runs — including inside a
+  `run_in_background` call.** Read the rule as the CLASS, never as any one spelling: each narrower
+  reading has in turn been worked around, so a shape-specific rule is what lets this return. The
+  live shape is `run_in_background: true` wrapping `for i in $(seq 1 40); do gh pr view …; sleep 30;
+  done` over CI, a review, or a merge state. It satisfies every sentence above — not a foreground
+  `sleep`, not a poll of a backgrounded task's output file — while reproducing the identical waste,
+  and the enforcement hook does not stop it: all 560 ran. **`run_in_background` moves the wait
   out of the guard's VIEW, never out of the RUN.** Measured over the 7 days to 2026-08-23:
   **560 of 904 backgrounded Bash launches (62%)** carried such a loop.
   🔴 **Its real cost is the NEXT dispatch, not its own wait.** A backgrounded poller's completion
@@ -3865,6 +3865,12 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   nor the run-end. If something else is actionable, arm `Monitor` and go do it. If nothing is,
   **end the run**: rung 1 of *The work-selection ladder* guarantees the next tick collects the PR,
   and a run that ends on time is what makes that tick exist.
+  🔴 **Ending the run REQUIRES stopping every in-flight watcher first — `TaskStop`, not merely a
+  closing message.** The resurrection above is unconditional, so a watcher left armed reopens the
+  session after you believed the run was over, rebuilding the same idle window and taking the next
+  slot with it; measured in the same window, **6 idles (1.09h, mean 10.9min) woke on a watcher that
+  had simply TIMED OUT**, having taught the run nothing. Either `TaskStop` the watcher before the
+  final turn, or do not arm one when no follow-up work depends on it.
 - **Long-pole first.** Push the change with the **slowest CI first** so its bake overlaps everything
   else; do the fast-CI and no-CI work (issue triage, review-thread replies, memory, reports) during
   the bake. Reversing this — fast item first, slow item last — buys a guaranteed idle tail, which is

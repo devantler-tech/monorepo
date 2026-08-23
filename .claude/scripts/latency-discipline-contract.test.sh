@@ -143,4 +143,12 @@ assert_bullet 'arm `Monitor` and go do it' \
 assert_bullet '**end the run**: rung 1 of' \
   "latency bullet does not name the run-termination alternative for when nothing else is actionable, with the rung-1 guarantee that makes ending safe"
 
+# 9. Ending the run is not achievable by intent alone. The resurrection in assertion 6 is
+#    unconditional, so "end the run" while a watcher is still armed does NOT end it — the session
+#    reopens and the idle window is rebuilt. Measured in the same window: 6 idles (1.09h) woke on a
+#    watcher that had merely TIMED OUT, i.e. runs that believed they were finished and were not.
+#    Without this, the rule's own remedy preserves the defect it targets. (Raised by Codex on #3002.)
+assert_bullet 'TaskStop' \
+  "latency bullet tells the run to end without requiring in-flight watchers to be stopped first — but the resurrection it documents is unconditional, so an armed watcher reopens the session and rebuilds the idle window"
+
 echo "latency discipline contract: OK"
