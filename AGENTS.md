@@ -844,6 +844,23 @@ account detail that stay in the private operator notes.
 A `1` is reported and its cause pursued; it is never a run-stopper, and the remedy may lie outside
 agent authority.
 
+🔴 **A per-automation `OK` is NOT lane health when another automation on the SAME runtime account is
+not producing for an account-scoped cause.** The check classifies **per automation**, over that
+automation's newest two settled runs; a `quota/billing` or `credentials/auth` refusal is **per
+account** and kills every automation on it at the same instant. So a mixed `OK` + `NOT-PRODUCING`
+verdict is the *expected* rendering of one account-wide kill — read that `OK` as an artifact of the
+automation's cadence, **never as evidence that the other is healthy**. Measured 2026-08-23T22:03Z:
+`agent-improver` read `OK` while its own newest dispatch was a **15-second stub with no inbox item**,
+carrying the same cause class as the seven `daily-ai-engineer` stubs beside it. The window fills
+fastest on the busiest automation, so the check is **least sensitive on the lowest-cadence one** —
+twice-daily `agent-improver` needs ~12h to show two stubs against ~1h for the hourly lane, which is
+exactly where each missed dispatch costs most. Resolve the scope from the cause class
+`codex_error_info` already gives you: when it is account-scoped, treat **every** automation on that
+account as not producing until the cause clears. An undetermined scope is **UNKNOWN, never `OK`** —
+a positive assertion of health for a lane whose remaining dispatches are already guaranteed to die is
+worse than silence, and it is the same absence-as-evidence class as reading `last_run_at`, one level
+down.
+
 The deployed Cursor Automation has no supported local write surface. Its reviewed source is
 `.claude/loaders/cursor-daily-ai-engineer.md`; after that source merges, use a declared Maintainer
 channel for the UI paste rather than claiming the server-side prompt changed. Marketplace/plugin
