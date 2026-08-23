@@ -29,8 +29,10 @@
 #      drift on three lanes; `plugin-definition-refresh.sh` repairs one and takes no runtime selector,
 #      so an exit-code trigger is unreachable on the other two.
 #   2. The tracked issue is AUTHENTICATED. This repository is public, so opening an issue needs no write
-#      access and existence alone establishes nothing; only author `devantler` plus the canonical
-#      disclosure counts, and that test extends to every field a run reads back.
+#      access and existence alone establishes nothing. An issue counts only on BOTH halves of the
+#      own-output test: an accepted agent author — `devantler` for a machine-local lane, or the cloud
+#      App as `app/cursor` (GraphQL/gh) or `cursor[bot]` (REST) — AND the canonical disclosure. That
+#      test extends to every field a run reads back.
 #   3. A FENCED repair qualifies exactly as a failed one does. Fencing is usually correct, so it reads
 #      as a non-event, and a decision recorded as nothing is what makes the staleness unbounded.
 #   4. The rule stays ADDITIVE: a DRIFT is never a run-stopper and the reviewed-definition fallback
@@ -195,8 +197,8 @@ assert_contains "${section}" 'Close the issue when that lane next reads' \
 # The cloud lane can CREATE an issue but its measured write matrix returns 403 for CLOSING one, so its
 # tracker has no reset unless a machine-local run performs it. Without this the round-9 fix (Cursor
 # files its own issue) produces a tracker nobody can close.
-assert_contains "${section}" 'CURSOR-filed tracker is reset by a MACHINE-LOCAL run' \
-  'a Cursor-filed tracker needs a writable closer, or it stays open after the drift clears'
+assert_contains "${section}" "EVERY close on a Cursor-filed tracker is a MACHINE-LOCAL run" \
+  'every close on a Cursor tracker needs a writable lane — reset AND duplicate reconciliation, since that lane cannot close at all'
 
 # Scope. The clause deliberately stops short of paging, and that decision has to stay legible or a
 # later editor reads the absence as an omission and re-adds the delivery protocol this removed.

@@ -547,10 +547,14 @@ test is applied to it too — a field is not trustworthy because the object carr
 lane being tracked forever. A lane that recovers and drifts again gets a new issue, which is correct: it
 is a new occurrence.
 
-🔴 **A CURSOR-filed tracker is reset by a MACHINE-LOCAL run, because that lane cannot close it.** The
-Cursor loader's measured write matrix records `gh issue create` working while **closing an issue returns
-403**, so the cloud instance can open its own drift issue and can never close it. Its recovery
-observation is therefore an input a machine-local run consumes, exactly as boarding is.
+🔴 **EVERY close on a Cursor-filed tracker is a MACHINE-LOCAL run's job, because that lane cannot close
+at all.** The Cursor loader's measured write matrix records `gh issue create` working while **closing an
+issue returns 403**, so the cloud instance can open its own drift issue and can never close one — its
+own or anyone's. That covers **both** closes this clause requires: the reset on `CURRENT`, and the
+duplicate reconciliation two paragraphs up, which two overlapping Cursor dispatches can otherwise leave
+open indefinitely. State it as the capability rather than per-operation, so a later close added here
+inherits the handoff instead of needing its own carve-out. Cursor's observations are inputs a
+machine-local run consumes, exactly as boarding is.
 ⚠️ **This makes the missing `--runtime cursor` checker below CONSEQUENTIAL, not merely a detection gap.**
 Until some machine-local schedule reads that lane, a Cursor-filed tracker has nobody who can close it
 and sits open as apparently actionable work after the drift has cleared — a false positive that outlasts
