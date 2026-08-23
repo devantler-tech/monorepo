@@ -598,6 +598,15 @@ it does not need.
 Cursor-lane drift is detected only if that lane's own dispatch checks it. Assigning every lane a
 writable scheduled checker needs the submodule-init dependency that `--runtime cursor` carries, so it
 is tracked with the other repair-path work (#2997) rather than smuggled in here.
+⚠️ **But an OPEN Cursor-filed tracker DOES oblige one, or this clause creates state nothing can
+reset.** Detection may stay lane-local; the RESET cannot, because the reset is a close and that lane
+cannot close at all. So while a Cursor-filed tracker is open, the machine-local run that already owns
+its close **runs `--runtime cursor` itself** and closes on `CURRENT`. That is deliberately narrower
+than a scheduled checker for every lane: the obligation is scoped to the lifetime of a tracker that
+already exists, so the submodule-init dependency is paid only when there is something to reset —
+never on an ordinary tick. Without it a recovered Cursor lane is tracked forever by an issue whose
+only reset path nobody is required to reach, which is a worse failure than the silence this clause
+replaced: a stale open issue reads as a live condition.
 🔴 **A FENCED repair is a QUALIFYING state exactly as a failed one is.** Fencing is frequently the
 correct call — the Codex remove/add hot-swap can leave that lane with no definition at all, which is
 worse than the drift — but a decision that is right every time and recorded as nothing is

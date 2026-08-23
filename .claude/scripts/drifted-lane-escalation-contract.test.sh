@@ -221,6 +221,14 @@ assert_contains "${section}" 'carries no new state' \
 assert_contains "${section}" "EVERY close on a Cursor-filed tracker is a MACHINE-LOCAL run" \
   'every close on a Cursor tracker needs a writable lane — reset AND duplicate reconciliation, since that lane cannot close at all'
 
+# The close handoff above says WHO closes; this says the reset is REACHABLE at all. Detection may stay
+# lane-local, but nothing obliges a machine-local schedule to run `--runtime cursor`, so a Cursor
+# tracker filed on DRIFT would never see the CURRENT that closes it — the clause would create state
+# nothing can reset, and a stale open issue reads as a live condition. Pinned separately because the
+# handoff assertion passes with the reachability gap wide open.
+assert_contains "${section}" 'runs `--runtime cursor` itself' \
+  'an open Cursor tracker must oblige the machine-local closer to run that lane check, or the reset is unreachable'
+
 # Scope. The clause deliberately stops short of paging, and that decision has to stay legible or a
 # later editor reads the absence as an omission and re-adds the delivery protocol this removed.
 assert_contains "${section}" 'does NOT page a maintainer channel' \
