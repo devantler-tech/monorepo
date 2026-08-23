@@ -51,7 +51,10 @@ machine-local engineer.
 >    REST 5xx, rate limit, HTML/non-JSON service response, or other non-credential failure, run the
 >    bounded same-credential fallback
 >    `gh api graphql --hostname github.com -f query='{viewer{login}}'`.
->    The GraphQL API identity is `cursor[bot]`; the CLI/PR/search identity remains `app/cursor`.
+>    The GraphQL API identity is the BARE `cursor` -- measured on four independent GraphQL
+>    surfaces; REST `user.login` is `cursor[bot]`, and `app/cursor` is a search-qualifier INPUT no
+>    read returns. Requiring `cursor[bot]` here rejected the legitimate fallback and stopped the
+>    dispatch. Accept the spelling the surface being read actually returns.
 >    Continue only when the observable
 >    REST result or GraphQL fallback proves that exact deployment identity. A different identity, or
 >    transport failure on both probes, is a hard stop. Never unset `GH_TOKEN`/`GITHUB_TOKEN`: the App
@@ -60,7 +63,10 @@ machine-local engineer.
 > 2. **Bootstrap guard:** if `AGENTS.md` is missing, **STOP and report** "consumer contract not on
 >    main; no action taken." If the `libraries/agent-plugins` submodule is uninitialised, initialise
 >    it with `.claude/scripts/submodule-init.sh libraries/agent-plugins`. Then refresh the declared
->    reviewed source with `git -C libraries/agent-plugins fetch origin main --quiet` and verify
+>    reviewed source with
+>    `git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main --quiet` -- the
+>    explicit refspec, because a bare `fetch origin main` guarantees only `FETCH_HEAD` and can leave
+>    the remote-tracking ref STALE, which is exactly what the next line reads -- and verify
 >    `refs/remotes/origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md` resolves. If either
 >    operation fails, **STOP and report** "reviewed plugin definition unavailable; no action taken."
 > 3. **Read and follow `AGENTS.md`, then load the portable role with

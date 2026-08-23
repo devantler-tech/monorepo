@@ -396,4 +396,27 @@ else
   fail "cannot execute ${currency} — the premise this contract rests on is unverifiable"
 fi
 
+
+# ---------------------------------------------------------------------------
+# 9. THE DEPLOYED CURSOR LOADER carries the same two facts, not just this contract.
+#     Establishing a fact in AGENTS.md while the boot path still runs the old command
+#     leaves the defect fully live: the loader is what the cloud lane actually executes.
+#     Both of these were found live on the loader after the contract had already been
+#     corrected here.
+# ---------------------------------------------------------------------------
+loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
+[ -r "${loader}" ] || fail "cannot read ${loader} — the deployed Cursor boot path is unverifiable"
+loader_text="$(tr '\n' ' ' <"${loader}" | tr -s '[:space:]' ' ')"
+[ "${#loader_text}" -gt 2000 ] || fail "loader captured only ${#loader_text} chars — the read is broken"
+
+# A bare `git fetch origin main` guarantees only FETCH_HEAD; the very next step of the loader reads
+# refs/remotes/origin/main, so with remote.origin.fetch unset the boot loads a STALE reviewed
+# definition while reporting success.
+assert_contains "${loader_text}" 'main:refs/remotes/origin/main' \
+  'the Cursor loader must pin an explicit refspec for the ref its next step reads, not a generic fetch that only guarantees FETCH_HEAD'
+
+# GraphQL returns the BARE `cursor`; requiring `cursor[bot]` on the GraphQL fallback rejects the
+# authentic identity and hard-stops the dispatch, which is the failure this fallback exists to avoid.
+assert_contains "${loader_text}" 'The GraphQL API identity is the BARE `cursor`' \
+  'the Cursor loader must accept the spelling the GraphQL surface actually returns, or its own fallback path rejects the authentic identity'
 echo "drifted-lane-escalation contract: PASS — condition-keyed escalation, issue-latched, additive, and both script premises verified behaviourally"
