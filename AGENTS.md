@@ -547,6 +547,15 @@ test is applied to it too — a field is not trustworthy because the object carr
 lane being tracked forever. A lane that recovers and drifts again gets a new issue, which is correct: it
 is a new occurrence.
 
+🔴 **A CURSOR-filed tracker is reset by a MACHINE-LOCAL run, because that lane cannot close it.** The
+Cursor loader's measured write matrix records `gh issue create` working while **closing an issue returns
+403**, so the cloud instance can open its own drift issue and can never close it. Its recovery
+observation is therefore an input a machine-local run consumes, exactly as boarding is.
+⚠️ **This makes the missing `--runtime cursor` checker below CONSEQUENTIAL, not merely a detection gap.**
+Until some machine-local schedule reads that lane, a Cursor-filed tracker has nobody who can close it
+and sits open as apparently actionable work after the drift has cleared — a false positive that outlasts
+the condition, rather than the self-correcting one-dispatch residual above.
+
 🔴 **This clause tracks drift; it does NOT page a maintainer channel, and that boundary is deliberate.**
 A page that could be trusted would need a delivery record that cannot be forged, an ordering whose crash
 window does not re-page, an arbitration token distinct from the work claim, and closure serialised
