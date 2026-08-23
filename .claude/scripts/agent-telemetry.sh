@@ -2744,7 +2744,13 @@ if want efficiency; then
     # Background is a different violation from foreground, not compliance: a
     # detached remote poll lands in WT_BGREM, which the contract forbids. A trailing `&` must not match `&&`: the negative lookbehind
     # is spelled as "not an ampersand before it" because POSIX ERE has none.
-    DETACH_RE='([^&]|^)&[[:space:]]*$|([^&]|^)&[[:space:]]+disown([[:space:]]+[^;&|]+)?[[:space:]]*$'
+    # A `disown` may be separated from its `&` by ordinary PID bookkeeping:
+    # `cmd & pid=$!; disown "$pid"` is the standard detached form. Requiring
+    # `disown` to sit IMMEDIATELY after the `&` reported that as foreground,
+    # inflating the FG baseline and hiding the poller from WT_BGREM. Only simple
+    # assignments may intervene, so a real command between the two still ends
+    # the binding.
+    DETACH_RE='([^&]|^)&[[:space:]]*$|([^&]|^)&[[:space:]]*([[:alnum:]_]+=[^;&|[:space:]]*[[:space:]]*;?[[:space:]]*)*disown([[:space:]]+[^;&|]+)?[[:space:]]*$'
     # A loop BACK-EDGE makes a poll that sits textually BEFORE the sleep run
     # again AFTER it: `while ! gh pr checks 7; do sleep 30; done` is the canonical
     # busy-wait, yet a strictly forward scan sees no remote tool after the sleep
@@ -3025,7 +3031,7 @@ if want efficiency; then
         # make that call, and the intent is what this metric measures.
         if (pending) {
           if (irem) { n_next += pending; if (pcls=="FG") { fg_rem += pending; fg_next += pending } else if (pcls=="BG") bg_rem += pending }
-          else if (itask) { n_task_next += pending; if (pcls=="FG") { fg_task += pending; fg_task_next += pending } }
+          else if (itask) { n_task_next += pending; if (pcls=="FG") { fg_task += pending; fg_task_next += pending } else if (pcls=="BG") bg_task += pending }
           else        n_none += pending
           pending = 0
         }
@@ -3038,7 +3044,7 @@ if want efficiency; then
           if (lines[i] !~ sre) continue
           n_tot++
           if (remote_after(i)) { n_same++; if (ec=="FG") fg_rem++; else if (ec=="BG") bg_rem++ }
-          else if (task_output_after(i)) { n_task_same++; if (ec=="FG") fg_task++ }
+          else if (task_output_after(i)) { n_task_same++; if (ec=="FG") fg_task++; else if (ec=="BG") bg_task++ }
           else                 { pending++; pcls = ec }
         }
         nlines = 0; buf = ""; started = 0
@@ -3053,13 +3059,18 @@ if want efficiency; then
                  started = 1; addline(substr($0, i+1)); next }
                  { if (started) addline($0) }
       END { classify(); resolve()
-            printf "%d %d %d %d %d %d %d %d %d %d %d", n_tot, n_same, n_next, n_task_same, n_task_next, n_none, fg_rem, fg_next, fg_task, fg_task_next, bg_rem }')
+            printf "%d %d %d %d %d %d %d %d %d %d %d %d", n_tot, n_same, n_next, n_task_same, n_task_next, n_none, fg_rem, fg_next, fg_task, fg_task_next, bg_rem, bg_task }')
     # `read`, not `set --`: the latter would clobber the script's positional
     # parameters. (A here-string is a bash/zsh extension — fine under this
     # file's bash shebang, and never to be copied into a /bin/sh script.)
-    read -r WT_TOT WT_SAME WT_NEXT WT_TASK_SAME WT_TASK_NEXT WT_NONE WT_FGREM WT_FGNEXT WT_FGTASK WT_FGTASK_NEXT WT_BGREM <<< "$WT"
+    read -r WT_TOT WT_SAME WT_NEXT WT_TASK_SAME WT_TASK_NEXT WT_NONE WT_FGREM WT_FGNEXT WT_FGTASK WT_FGTASK_NEXT WT_BGREM WT_BGTASK <<< "$WT"
     WT_NOREMOTE=$((WT_TASK_SAME + WT_TASK_NEXT + WT_NONE))
     WT_FGALL=$((WT_FGREM + WT_FGTASK))
+    # Mirrors WT_FGALL: a BACKGROUNDED runtime-task-output poll is the same
+    # violation as a backgrounded remote poll, so the estimate is the sum of
+    # both. Counting only the remote half attributed a backgrounded task poll to
+    # no launch class at all, so the estimate read 0 over a real poller.
+    WT_BGALL=$((WT_BGREM + WT_BGTASK))
     # The total is the SUM of the classes, not a separate scan. That makes
     # class-vs-total drift impossible instead of detectable — and a drift
     # warning over a sum would be a vacuous guard, which is worse than none.
@@ -3122,7 +3133,9 @@ if want efficiency; then
     # This is its own violation — the contract forbids a hand-rolled poll loop
     # wherever it runs, and the backgrounded form additionally holds the session
     # open through its completion notification, taking the next dispatch slot.
-    echo "  ⇒ BACKGROUND ∧ remote-adjacent . ${WT_BGREM}   [BACKGROUNDED-POLLER ESTIMATE]"
+    echo "  ⇒ BACKGROUND ∧ recognised-poll-adjacent ... ${WT_BGALL}   [BACKGROUNDED-POLLER ESTIMATE]"
+    echo "  ⇒ BACKGROUND ∧ remote-adjacent . ${WT_BGREM}   [baseline-continuity component]"
+    echo "  ⇒ BACKGROUND ∧ task-output-adjacent ${WT_BGTASK}   [redundant runtime-task poll, backgrounded]"
     echo "  ⇒ FOREGROUND ∧ remote-adjacent . ${WT_FGREM}   [baseline-continuity component]"
     echo "  ⇒ FOREGROUND ∧ task-output-adjacent ${WT_FGTASK}   [redundant runtime-task poll]"
     echo "          of which UNCHAINED (task-output, fg) ${WT_FGTASK_NEXT}"
@@ -3138,7 +3151,7 @@ if want efficiency; then
       # A RATE, not a raw count: window session counts swing, so WT_BGREM alone can
       # fall while per-run polling rises. This is the series the backgrounded-poller
       # baseline is trended on.
-      echo "    backgrounded-poller (n=${SF_COUNT}): $(awk -v a="$WT_BGREM" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← trend THIS for the poller rule"
+      echo "    backgrounded-poller (n=${SF_COUNT}): $(awk -v a="$WT_BGALL" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← trend THIS for the poller rule"
     fi
     if [ "$WT_TOT" != "$SLEEPS" ]; then
       echo "    ⚠️  wait-target total ${WT_TOT} != launch-mode total ${SLEEPS} —"

@@ -3271,6 +3271,40 @@ if grep -qE 'FOREGROUND.*remote-adjacent \.+ 1' <<<"$OUT" \
   ok "disown changes class only after a real backgrounding operator"
 else bad "disown changes class only after a real backgrounding operator" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND|BACKGROUND')"; fi
 
+# A `disown` bound to its backgrounding operator through ORDINARY PID
+# BOOKKEEPING is still shell detachment. `cmd & pid=$!; disown "$pid"` is the
+# standard detached form -- the shell returns immediately and the poller keeps
+# running -- so requiring `disown` to sit IMMEDIATELY after the `&` reports it
+# as foreground, inflating the FG baseline and hiding the poller from the
+# backgrounded-poller estimate that is supposed to catch it.
+mkdir -p "$FIX/wtdisownpid"
+cat > "$FIX/wtdisownpid/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"dp1","name":"Bash","input":{"command":"sleep 30 && gh pr checks 7 & pid=$!; disown \"$pid\""}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtdisownpid" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'FOREGROUND .*remote-adjacent \.+ 0' <<<"$OUT" \
+   && grep -qE 'BACKGROUND .*remote-adjacent \.+ 1' <<<"$OUT"; then
+  ok "disown bound through PID bookkeeping still counts as detachment"
+else bad "disown bound through PID bookkeeping still counts as detachment" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND|BACKGROUND')"; fi
+
+# A BACKGROUNDED runtime-task-output poll is the same violation as a foreground
+# one and must reach the backgrounded-poller estimate. Counting it only in the
+# no-remote-poll totals attributes it to no launch class at all, so the estimate
+# reads 0 over a real backgrounded poller -- the direction that looks like
+# compliance.
+mkdir -p "$FIX/wtbgtask"
+cat > "$FIX/wtbgtask/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"bt1","name":"Bash","input":{"command":"sleep 10 && cat /private/tmp/claude-501/-Users-example-project/tasks/task-123.output","run_in_background":true}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtbgtask" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'BACKGROUND ∧ task-output-adjacent \.* *1' <<<"$OUT" \
+   && grep -qE 'BACKGROUNDED-POLLER ESTIMATE' <<<"$OUT" \
+   && [ "$(grep -oE 'recognised-poll-adjacent \.+ [0-9]+ +\[BACKGROUNDED-POLLER ESTIMATE\]' <<<"$OUT" | grep -oE '[0-9]+' | head -1)" = "1" ]; then
+  ok "a backgrounded task-output poll reaches the backgrounded-poller estimate"
+else bad "a backgrounded task-output poll reaches the backgrounded-poller estimate" "$(printf '%s' "$OUT" | grep -E 'BACKGROUND|FOREGROUND')"; fi
+
 # ...and `&&` must not read as a trailing `&`, or every chained busy-wait would
 # be excused as detached — the loosening this rule most easily becomes.
 mkdir -p "$FIX/wtandand"
