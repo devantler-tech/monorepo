@@ -2737,13 +2737,13 @@ if want efficiency; then
     # would misread `cat local > task.output` as polling the task.
     TASK_SEGMENT_RE='^[[:space:]]*(/usr/bin/|/bin/)?(cat|tail|head|wc)([[:space:]]|$)'
     TASK_OUTPUT_PATH_RE='/(private/)?tmp/claude-[0-9]+/[^[:space:];|&]+/tasks/[[:alnum:]_-]+\.output'
-    # Shell-level detachment. `nohup … &`, `setsid`, or a trailing `&` returns the
-    # tool call immediately, so the agent is NOT foreground-blocked — it belongs to
+    # Shell-level detachment. A trailing `&` or disowning a background job
+    # returns the tool call immediately, so the agent is NOT foreground-blocked — it belongs to
     # the BACKGROUND class, which the `run_in_background` flag alone cannot see.
     # Background is a different violation from foreground, not compliance: a
     # detached remote poll lands in WT_BGREM, which the contract forbids. A trailing `&` must not match `&&`: the negative lookbehind
     # is spelled as "not an ampersand before it" because POSIX ERE has none.
-    DETACH_RE='(^|[[:space:]])(nohup|setsid|disown)([[:space:]]|$)|([^&]|^)&[[:space:]]*$'
+    DETACH_RE='(^|[[:space:]])disown([[:space:]]|$)|([^&]|^)&[[:space:]]*$'
     # A loop BACK-EDGE makes a poll that sits textually BEFORE the sleep run
     # again AFTER it: `while ! gh pr checks 7; do sleep 30; done` is the canonical
     # busy-wait, yet a strictly forward scan sees no remote tool after the sleep

@@ -3236,6 +3236,23 @@ if grep -qE 'remote poll, same command \.+ 1' <<<"$OUT" \
   ok "a shell-DETACHED watcher is counted as backgrounded, not foreground"
 else bad "a shell-DETACHED watcher is counted as backgrounded, not foreground" "$(printf '%s' "$OUT" | grep -E 'remote poll|FOREGROUND|BACKGROUND')"; fi
 
+# `nohup` and `setsid` change signal/session handling but remain synchronous by
+# themselves. Treating either word as detachment moves an ordinary foreground
+# busy-wait into the background bucket even though the invoking shell waits.
+# The production change this catches is widening the shell-detachment predicate
+# from an actual trailing `&` to a mere command prefix.
+mkdir -p "$FIX/wtbareprefix"
+cat > "$FIX/wtbareprefix/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d2","name":"Bash","input":{"command":"sleep 30 && nohup gh pr checks 7"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d3","name":"Bash","input":{"command":"sleep 30 && setsid gh pr checks 7"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtbareprefix" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'FOREGROUND.*remote-adjacent \.+ 2' <<<"$OUT" \
+   && grep -qE 'BACKGROUND .*remote-adjacent \.+ 0' <<<"$OUT"; then
+  ok "bare nohup and setsid remain foreground without an actual detachment"
+else bad "bare nohup and setsid remain foreground without an actual detachment" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND|BACKGROUND')"; fi
+
 # ...and `&&` must not read as a trailing `&`, or every chained busy-wait would
 # be excused as detached — the loosening this rule most easily becomes.
 mkdir -p "$FIX/wtandand"
