@@ -95,4 +95,64 @@ refute_bullet 'a process you yourself started' \
 assert_bullet '`Monitor` with an until-loop' \
   "latency bullet forbids the poll without naming the runtime waiter to use instead"
 
+# ---------------------------------------------------------------------------
+# THE BACKGROUNDED POLLER: a hand-rolled poll loop inside a `run_in_background` call —
+# `for i in $(seq 1 40); do gh ...; sleep 30; done` with run_in_background:true.
+#
+# Assertions 1-4 constrain a FOREGROUND `sleep` and a poll of a backgrounded task's OUTPUT FILE.
+# Neither reaches this shape: it is not a foreground sleep and polls no output file, so it satisfies
+# all of them while producing the same waste, and the `rtk` enforcement hook does not stop it.
+#
+# Measured over the 7 days to 2026-08-23 across 176 Agentic Engineer runs: 560 of 904 backgrounded
+# Bash launches (62%) carried such a loop; 240 idles waiting on one totalled 28.0h; runs using a
+# poll loop ran a median 62.8min against 42.4min, overrunning the hourly slot 54% against 29%; and
+# all 9 dropped dispatches (of 179 slots) were overlap-blocked by a still-open run.
+#
+# Each assertion below pins a DIFFERENT load-bearing half, because any one alone is satisfiable
+# while the behaviour survives: naming the shape without the mechanism reads as style advice, and
+# naming both without the alternative leaves a bare prohibition, which is reliably worked around.
+
+# 5. Backgrounding does not launder the wait. Without this, `run_in_background` remains a documented
+#    escape from a rule the same bullet states two paragraphs earlier.
+assert_bullet 'never out of the RUN' \
+  "latency bullet does not say that backgrounding moves a poll loop out of the guard's view but not out of the run — so wrapping the loop in run_in_background still reads as compliant"
+
+# 6. The RESURRECTION mechanism. This is what makes the poller cost the NEXT dispatch rather than
+#    only its own wait, and it is the half an agent cannot deduce from the prohibition alone.
+assert_bullet 'resurrects the session' \
+  "latency bullet does not state that a backgrounded poller's completion notification resurrects the session and keeps the run open — which is why the measured cost lands on the following dispatch"
+
+# 7. The operative rule, and the alternative. A prohibition that does not name what to do instead is
+#    the DevEx tax this repo's own hardening rule forbids, and is what makes a rule get worked
+#    around rather than followed.
+assert_bullet 'never launch a poller and then end your turn' \
+  "latency bullet does not forbid the one combination that gets neither the work nor the run-end (launch a poller, then end the turn)"
+
+# 8. BOTH permitted alternatives, because assertion 7 pins only the prohibition. A bare prohibition
+#    is reliably worked around, so the alternatives are the load-bearing half — and a future edit
+#    could strip them while 7 still passed. (Raised by CodeRabbit on #3002; the finding was valid.)
+assert_bullet 'arm `Monitor` and go do it' \
+  "latency bullet forbids the poller-then-end-turn combination without naming the Monitor alternative for when other work IS actionable"
+
+# NOTE the anchor. The obvious 'end the run' is VACUOUS here: the bare phrase already occurs earlier
+# in this same bullet ("or end the run and let the next tick collect the result"), so it would pass
+# with this sentence deleted — measured, 2 occurrences. Anchor on the run-end alternative's own
+# clause instead, which is unique to it.
+assert_bullet '**end the run**: rung 1 of' \
+  "latency bullet does not name the run-termination alternative for when nothing else is actionable, with the rung-1 guarantee that makes ending safe"
+
+# 9. Ending the run is not achievable by intent alone. The resurrection in assertion 6 is
+#    unconditional, so "end the run" while a watcher is still armed does NOT end it — the session
+#    reopens and the idle window is rebuilt. Measured in the same window: 6 idles (1.09h) woke on a
+#    watcher that had merely TIMED OUT, i.e. runs that believed they were finished and were not.
+#    Without this, the rule's own remedy preserves the defect it targets. (Raised by Codex on #3002.)
+# Anchor on the REQUIREMENT, not the tool name. A bare 'TaskStop' presence check
+# passes on "Ending the run NEVER requires ... TaskStop" — it admits the exact
+# inversion it claims to prevent. (Raised by Codex on #3002; same weak-anchor
+# class as the vacuous 'end the run' anchor rejected two assertions above.)
+assert_bullet 'Ending the run REQUIRES stopping every in-flight watcher first' \
+  "latency bullet does not REQUIRE in-flight watchers to be stopped before ending — but the resurrection it documents is unconditional, so an armed watcher reopens the session and rebuilds the idle window"
+assert_bullet '`TaskStop`, not merely a' \
+  "latency bullet states the stop requirement without naming TaskStop as the mechanism, leaving 'end the run' achievable by intent alone"
+
 echo "latency discipline contract: OK"
