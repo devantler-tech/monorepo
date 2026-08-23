@@ -24,15 +24,23 @@
 # Three properties are pinned here, and the second and third are the ones a well-meaning edit would
 # drop first:
 #
-#   1. Escalation is keyed to the CONDITION (drift + no available/safe repair), not to a tool's exit
-#      code, and it is BOUNDED so one transient reading never pages the maintainer.
-#   2. A FENCED repair counts toward that bound exactly as a failed one does. Fencing is usually the
-#      correct call, so it reads as a non-event — and a decision recorded as nothing is what makes
-#      the staleness unbounded. Without this assertion the clause could be narrowed to "failed or
-#      refused" and lose the case it was written for.
-#   3. The rule stays ADDITIVE. A `DRIFT` must remain a non-run-stopper and the reviewed-definition
-#      fallback must survive, or a later tightening turns a reporting obligation into a halt — the
-#      fail-closed direction this contract rejects everywhere else.
+#   1. The obligation is keyed to the CONDITION — a lane reading DRIFT whose repair is unavailable,
+#      refused, fenced or failed — never to a tool's exit code. `plugin-definition-currency.sh` detects
+#      drift on three lanes; `plugin-definition-refresh.sh` repairs one and takes no runtime selector,
+#      so an exit-code trigger is unreachable on the other two.
+#   2. The tracked issue is AUTHENTICATED. This repository is public, so opening an issue needs no write
+#      access and existence alone establishes nothing; only author `devantler` plus the canonical
+#      disclosure counts, and that test extends to every field a run reads back.
+#   3. A FENCED repair qualifies exactly as a failed one does. Fencing is usually correct, so it reads
+#      as a non-event, and a decision recorded as nothing is what makes the staleness unbounded.
+#   4. The rule stays ADDITIVE: a DRIFT is never a run-stopper and the reviewed-definition fallback
+#      survives, or a later tightening turns a reporting obligation into a halt.
+#   5. The scripts' premises stay true, verified against the CLIs rather than their source spelling.
+#
+# The clause tracks drift as an issue and does not page a maintainer channel; that is deliberate scope,
+# recorded in the prose and asserted below, because sound delivery needs an unforgeable delivery
+# record, a crash-safe ordering, an arbitration token distinct from the work claim, and closure
+# serialised against sending — none of which prose can carry.
 #
 # Assertions are scoped to the currency section rather than the whole file: `AGENTS.md` discusses
 # drift, fencing and maintainer channels elsewhere, so an unscoped match would pass on unrelated
@@ -99,7 +107,7 @@ section="$(extract_section 'Refresh only through the runtime' '### Agent definit
 # ---------------------------------------------------------------------------
 # 1. The rule is keyed to the condition, and the reachability defect is named.
 # ---------------------------------------------------------------------------
-assert_contains "${section}" 'escalate on the CONDITION, not on a tool' \
+assert_contains "${section}" 'act on the CONDITION, not on a tool' \
   'the escalation must be keyed to the condition rather than to a refresh-tool exit code'
 
 assert_contains "${section}" 'takes no runtime selector' \
@@ -116,65 +124,34 @@ for state in '**unavailable**' '**refused**' '**fenced**' '**failed**'; do
 done
 
 # ---------------------------------------------------------------------------
-# 2. The latch, and why it is an ISSUE rather than a counter.
-#
-# An earlier revision of this clause escalated after two consecutive sightings. That bound forced a
-# durable cross-run counter, and review then found a real defect in every mechanism a counter needs:
-# a store both machine-local lanes can write, a record format, a run identity fine enough to separate
-# two checkers inside one minute, an idempotent hand-off between notifying and recording — and, worst,
-# a FORGEABLE escalation, because a count living in a comment body on a public issue can be fabricated
-# or suppressed by any commenter. The open issue replaces all of it with one authenticated, idempotent
-# question. These assertions exist to stop a later edit reintroducing the counter.
+# 2. The tracked issue, and the authentication that makes reading it meaningful.
 # ---------------------------------------------------------------------------
-# AUTHENTICATION. This repository is PUBLIC, so opening an issue needs no write access — an outside
-# account can file a plausible lane-drift issue to suppress a real escalation, or close one to provoke
-# a false page. An earlier revision claimed an issue is "something only a writer can create"; that was
-# measured false and is why this assertion exists rather than a comment.
-assert_contains "${section}" 'existence alone proves nothing on a PUBLIC repository' \
+assert_contains "${section}" 'existence proves nothing on a PUBLIC repository' \
   'the clause must state that issue existence is not self-authenticating on a public repo'
 
 assert_contains "${section}" "author is exactly **\`devantler\`**" \
-  'the latch must bind to the authenticated writer identity, not merely to a matching description'
+  'the tracked issue must bind to the authenticated writer identity, not merely to a matching description'
 
 assert_contains "${section}" '🤖 Generated by the' \
-  'the latch must require the canonical disclosure — the second half of the own-output test'
+  'the issue must require the canonical disclosure — the second half of the own-output test'
 
-assert_contains "${section}" 'opens a tracking issue for that lane' \
-  'the escalating run must open the tracking issue, or there is no durable latch at all'
+# The authentication rule has to generalise, or the next field added here inherits the same gap.
+assert_contains "${section}" 'applies to EVERY field a run reads back' \
+  'the authentication test must extend to any state a later edit adds, not only the issue'
 
-# PERSISTENCE. Without this the first qualifying reading pages immediately, and for an unattended run
-# the only channel available is the last-resort one — which Maintainer channels reserves for genuine
-# blockers, not a rollout that is still settling.
-assert_contains "${section}" 'first sighting opens the issue and pages NOBODY' \
-  'a first sighting must not page — a transient reading is exactly what this must not escalate'
-
-assert_contains "${section}" 'an authenticated issue is already open' \
-  'persistence must be read off the already-open issue, which is what makes the second sighting the page'
-
-# ...but persistence must NOT be re-implemented as a tally. That distinction is the whole reason the
-# counter was removed, and a later editor reading "second sighting" could easily reintroduce one.
-assert_contains "${section}" 'NOT the counter coming back' \
-  'the clause must distinguish reading persistence off one object from accumulating a count'
-
-# RACE. Check-then-create is not atomic and overlapping same-lane runs are explicitly normal here, so
-# two runs can both find nothing and both file. GitHub has no uniqueness constraint to lean on.
-assert_contains "${section}" 'lowest-numbered' \
-  'competing issues must be reconciled deterministically, or a race yields two latches'
-
-# Notification concurrency. The issue tie-break serialises CREATION only; two overlapping runs can
-# both find the issue open and both page down the last-resort channel. Reuses the deployment's existing
-# compare-and-swap rather than describing a new marker protocol in prose.
-assert_contains "${section}" 'CLAIM the delivery before sending' \
-  'notification must be claimed before sending, or overlapping runs both page the maintainer'
-
-assert_contains "${section}" 'agent-claim.sh' \
-  'the delivery claim must reuse the tested compare-and-swap primitive, not an invented marker protocol'
-
-assert_contains "${section}" 'confirm the issue FIRST, then' \
-  'the ordering must be issue-then-notify, so a crash between them is recoverable rather than silent'
+assert_contains "${section}" 'tracked, repository-visible issue' \
+  'the qualifying condition must produce a tracked issue — that artifact IS the fix'
 
 assert_contains "${section}" 'Close the issue when that lane next reads' \
-  'closing on CURRENT is the reset — without it a recovered lane stays escalated forever'
+  'closing on CURRENT is the reset — without it a recovered lane stays tracked forever'
+
+# Scope. The clause deliberately stops short of paging, and that decision has to stay legible or a
+# later editor reads the absence as an omission and re-adds the delivery protocol this removed.
+assert_contains "${section}" 'does NOT page the maintainer' \
+  'the deliberate scope limit must be stated, or the absence of paging reads as an oversight'
+
+assert_contains "${section}" 'separate decision' \
+  'the paging question must be recorded as deferred rather than silently dropped'
 
 assert_contains "${section}" 'A FENCED repair is a QUALIFYING state exactly as a failed one is' \
   'a fenced repair must qualify — this is the case the whole clause exists for'
@@ -255,10 +232,13 @@ if [ -x "${currency}" ]; then
   # reads that as success and CI passes on a stale three-lane premise. Assert the advertised option
   # instead, which is the same "read what the tool declares" fix applied to the refresh probe above.
   currency_help="$("${currency}" --help 2>&1 || true)"
+  # Assert the option AND its exact advertised VALUE SET. Checking the words separately is vacuous:
+  # "cursor" and "codex" both appear in this script's surrounding help prose, so a usage line that had
+  # quietly dropped a lane still satisfies a word-by-word scan — verified by ablation.
   case "${currency_help}" in
-    *"--runtime"*) ;;
+    *"--runtime claude|codex|cursor"*) ;;
     *)
-      fail "plugin-definition-currency.sh --help no longer advertises --runtime, so the three-lane detection the contract assumes is gone"
+      fail "plugin-definition-currency.sh --help no longer advertises the exact three-lane selector, so the three-lane detection the contract assumes is gone"
       ;;
   esac
 
