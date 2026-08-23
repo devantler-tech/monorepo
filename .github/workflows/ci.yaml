@@ -310,6 +310,11 @@ jobs:
               # from the currency check, must run this job and update the prose in the same change.
               - '.claude/scripts/plugin-definition-refresh.sh'
               - '.claude/scripts/plugin-definition-currency.sh'
+              # This test asserts the loader's explicit fetch refspec and is the only guard that
+              # does, so a change to the loader alone must run it. The sibling maintainer-preflight
+              # filter needed the same entry for the same reason — fixing one and not the other is
+              # how a guard loses sight of its own subject.
+              - '.claude/loaders/cursor-daily-ai-engineer.md'
               - '.claude/scripts/drifted-lane-escalation-contract.test.sh'
               - '.github/workflows/ci.yaml'
             plugin-definition-currency:

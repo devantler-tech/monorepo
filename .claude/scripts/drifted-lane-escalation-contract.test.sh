@@ -244,6 +244,11 @@ assert_contains "${section}" 'governs EVERY field a run reads back' \
 # The tracker is identified by an exact marker, never by resemblance. Without this, any authenticated
 # issue discussing drift on that lane — including this change's own follow-up — can be selected as the
 # tracker and then closed by the reset.
+# The marker's VALUE must be canonical too, not just its shape: it is the tracker's sole identity, so
+# two runs rendering the lane differently each conclude no tracker exists and file their own.
+assert_contains "${section}" 'exactly one of `claude`, `codex`, `cursor`' \
+  'the lane token in the marker must be canonical, or differing renderings produce duplicate trackers'
+
 assert_contains "${section}" '**Lane drift tracker:**' \
   'the tracker must be identified by an exact marker, or the reset can close an unrelated drift issue'
 

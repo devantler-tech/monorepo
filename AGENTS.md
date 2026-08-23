@@ -517,7 +517,11 @@ transient, and the resolved verdict governs. Neither state is a run-stopper, exa
 every lane and enters the ordinary work queue like anything else.
 
 🔴 **IDENTIFY the tracker by an exact MARKER, never by resemblance.** A lane's tracker carries the line
-`**Lane drift tracker:** <lane>` in its body, and only an issue carrying it is one. Selecting by
+`**Lane drift tracker:** <lane>` in its body, and only an issue carrying it is one. **`<lane>` is
+exactly one of `claude`, `codex`, `cursor`** — the same token the currency check takes as
+`--runtime`. The marker is the tracker's sole identity, so a run that rendered it `codex/*` or
+`Codex machine-local` would fail to match a tracker that already exists and file a second one,
+which is the duplication the lookup rule exists to prevent. Selecting by
 description would sweep in any authenticated issue that happens to discuss drift on that lane — this
 change's own follow-up issue among them — and the reset would then close work the clause explicitly
 says must stay open. An occurrence tracker and an issue *about* the mechanism are different things, and
@@ -637,8 +641,16 @@ rather than that lane. **Fetch that ref in the submodule immediately before the 
 explicit refspec that updates the ref the check actually reads:**
 
 ```sh
+.claude/scripts/submodule-init.sh libraries/agent-plugins   # EMPTY in a fresh worktree — fetch fails without this
 git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main
 ```
+
+🔴 **The init line is not optional setup — without it this reset path is dead on every fresh
+dispatch.** A machine-local closer runs in the per-run worktree this contract mandates, where that
+submodule is empty, so `git -C` has no repository to fetch into and the currency check degrades to
+`UNKNOWN`. An `UNKNOWN` is reported and never treated as `CURRENT`, so the tracker is never closed —
+and the Cursor lane, which cannot close its own, has no other closer. The dependency being documented
+elsewhere does not discharge it here: this is the one place the fetch is actually issued.
 
 🔴 **A generic `git fetch origin main` is NOT sufficient — it is guaranteed only to write
 `FETCH_HEAD`.** It updates `refs/remotes/origin/main` merely as an *opportunistic* side effect of the

@@ -88,7 +88,8 @@ card.
    BARE `cursor` -- REST `user.login` returns `cursor[bot]`, and `app/cursor` is a search-qualifier
    INPUT that no read hands back. Requiring `cursor[bot]` on the GraphQL fallback rejected the
    legitimate identity and stopped the dispatch; accept the spelling the surface being read returns.
-   Its `gh auth status`, PR-author, and search identity remains `app/cursor`.
+   `app/cursor` is what you PASS IN as a search qualifier or PR-author filter; do not expect it back
+   from `gh auth status` or any other read, which is the mistake the line above exists to stop.
    A mismatch is `wrong GitHub identity` and must not be described as an invalid credential.
    A REST 5xx (or rate-limit) followed by a successful, expected-identity GraphQL
    `viewer.login` proves the login valid. Never report that saved login as invalid.
