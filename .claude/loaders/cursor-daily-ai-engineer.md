@@ -53,8 +53,7 @@ machine-local engineer.
 >    `gh api graphql --hostname github.com -f query='{viewer{login}}'`.
 >    The GraphQL API identity is the BARE `cursor` -- measured on four independent GraphQL
 >    surfaces; REST `user.login` is `cursor[bot]`, and `app/cursor` is a search-qualifier INPUT no
->    read returns. Requiring `cursor[bot]` here rejected the legitimate fallback and stopped the
->    dispatch. Accept the spelling the surface being read actually returns.
+>    read returns. Match the identity spelling returned by the surface being read.
 >    Continue only when the observable
 >    REST result or GraphQL fallback proves that exact deployment identity. A different identity, or
 >    transport failure on both probes, is a hard stop. Never unset `GH_TOKEN`/`GITHUB_TOKEN`: the App

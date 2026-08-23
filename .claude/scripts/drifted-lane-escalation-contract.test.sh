@@ -112,6 +112,14 @@ assert_contains() {
   esac
 }
 
+assert_not_contains() {
+  haystack="$1"; needle="$2"; label="$3"
+  case "${haystack}" in
+    *"${needle}"*) fail "${label} — must not contain: ${needle}" ;;
+    *) ;;
+  esac
+}
+
 section="$(extract_section 'Refresh only through the runtime' '### Agent definition locations')"
 
 # A flattened empty capture collapses to a single space, which would satisfy nothing below while
@@ -124,6 +132,12 @@ section="$(extract_section 'Refresh only through the runtime' '### Agent definit
 # ---------------------------------------------------------------------------
 assert_contains "${section}" 'act on the CONDITION, not on a tool' \
   'the escalation must be keyed to the condition rather than to a refresh-tool exit code'
+
+assert_contains "${section}" 'For the Claude lane only, run it on a `DRIFT`' \
+  'the refresh imperative must be scoped to the only runtime whose control plane the tool can drive'
+
+assert_not_contains "${section}" 'Run it on a `DRIFT`; a `1` or `2`' \
+  'an unconditional refresh imperative lets Codex invoke the Claude-only control plane'
 
 assert_contains "${section}" 'takes no runtime selector' \
   'the section must record WHY the exit-code form is unreachable — the refresh tool has no lane selector'
@@ -260,6 +274,9 @@ assert_contains "${section}" 'lowest-numbered' \
 
 assert_contains "${section}" 'tracked, repository-visible issue' \
   'the qualifying condition must produce a tracked issue — that artifact IS the fix'
+
+assert_contains "${section}" 'creation, lookup, duplicate reconciliation, observation updates, and reset all use `devantler-tech/monorepo`' \
+  'the full tracker lifecycle must use one canonical repository, or repo-local lookup and issue-number ordering cannot converge'
 
 assert_contains "${section}" 'Close the issue when that lane next reads' \
   'closing on CURRENT is the reset — without it a recovered lane stays tracked forever'
@@ -424,4 +441,7 @@ assert_contains "${loader_text}" 'git -C libraries/agent-plugins fetch origin ma
 # authentic identity and hard-stops the dispatch, which is the failure this fallback exists to avoid.
 assert_contains "${loader_text}" 'The GraphQL API identity is the BARE `cursor`' \
   'the Cursor loader must accept the spelling the GraphQL surface actually returns, or its own fallback path rejects the authentic identity'
+
+assert_not_contains "${loader_text}" 'rejected the legitimate fallback and stopped the dispatch' \
+  'the deployed loader must state current identity rules without carrying a past-failure narrative in every dispatch'
 echo "drifted-lane-escalation contract: PASS — condition-keyed escalation, issue-latched, additive, and both script premises verified behaviourally"

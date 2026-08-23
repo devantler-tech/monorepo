@@ -449,9 +449,11 @@ supply that revision, or the apply ran and the post-apply check still does not r
 `2` is UNKNOWN — no verdict produced: no CLI, an unreadable pin or marketplace, a plugin id naming a
 different marketplace than the clone being gated, a concurrent run holding the lock, a marketplace
 worktree whose bytes do not provably match the pinned commit, an unavailable verifier, or
-`--dry-run`, since a simulation asserts nothing about the install. Run it on a `DRIFT`; a `1` or `2`
-is reported, never a run-stopper, and you continue by **reading** the reviewed definition at the
-pinned gitlink and following it, exactly as above.
+`--dry-run`, since a simulation asserts nothing about the install. **For the Claude lane only, run it
+on a `DRIFT`;** a `1` or `2` is reported, never a run-stopper, and you continue by **reading** the
+reviewed definition at the pinned gitlink and following it, exactly as above. On Codex or Cursor, do
+not invoke this Claude-only tool: proceed directly to the condition-based tracker below while using
+the reviewed definition.
 
 ⚠️ **Running the refresh never makes the pin active for THIS run — do not report it as if it had.**
 On a `1` or `2` the installed definition is unchanged by construction, so the runtime is still
@@ -515,6 +517,12 @@ the recovery being unavailable, refused, fenced, or attempted and still not yiel
 `UNKNOWN` a run *does* resolve to `CURRENT` or `DRIFT` in the same tick is not tracked; it was a
 transient, and the resolved verdict governs. Neither state is a run-stopper, exactly as before. That issue is the artifact; it is discoverable by
 every lane and enters the ordinary work queue like anything else.
+
+🔴 **The canonical tracker repository is exactly `devantler-tech/monorepo`: creation, lookup, duplicate
+reconciliation, observation updates, and reset all use `devantler-tech/monorepo`.** Product selection
+does not change this destination. Issue numbers and repo-local searches converge only inside one
+repository, so choosing a tracker repository per run would defeat both reuse and the lowest-numbered
+tie-break below.
 
 🔴 **IDENTIFY the tracker by an exact MARKER, never by resemblance.** A lane's tracker carries the line
 `**Lane drift tracker:** <lane>` in its body, and only an issue carrying it is one. **`<lane>` is
