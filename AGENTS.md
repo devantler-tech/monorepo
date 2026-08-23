@@ -633,7 +633,21 @@ of the caller's *local* plugin submodule, and the script contains no `git fetch`
 2026-08-23 across its whole source). That remote-tracking ref is only as fresh as whatever this
 machine last happened to fetch, so a stale local ref can read `CURRENT` and close a tracker while the
 Cursor lane is still executing a superseded revision — closing on evidence about *this* checkout
-rather than that lane. **Fetch that ref in the submodule immediately before the check**, and on a
+rather than that lane. **Fetch that ref in the submodule immediately before the check, with an
+explicit refspec that updates the ref the check actually reads:**
+
+```sh
+git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main
+```
+
+🔴 **A generic `git fetch origin main` is NOT sufficient — it is guaranteed only to write
+`FETCH_HEAD`.** It updates `refs/remotes/origin/main` merely as an *opportunistic* side effect of the
+remote's configured fetch refspec, so the freshness of the one ref this check consumes depends on a
+submodule's remote configuration that nothing here controls. Measured 2026-08-23 on a local fixture
+whose remote had genuinely advanced: with `remote.origin.fetch` configured the remote-tracking ref
+advanced, and with it **unset the same command left that ref stale while `FETCH_HEAD` was current** —
+so the check reads the stale ref, reports `CURRENT`, and closes the tracker on evidence that predates
+the drift. The explicit refspec updates the consumed ref by construction, in both configurations. On a
 failed fetch treat the result as `UNKNOWN` and leave the tracker open; a close is the one action here
 that discards state, so it fails closed.
 

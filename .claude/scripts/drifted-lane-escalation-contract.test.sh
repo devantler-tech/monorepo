@@ -147,6 +147,14 @@ assert_contains "${section}" 'does NOT fetch' \
 assert_contains "${section}" 'Fetch that ref in the submodule immediately before the check' \
   'the reset must require a fresh ref before closing a Cursor tracker'
 
+# A generic `git fetch origin main` writes FETCH_HEAD and updates refs/remotes/origin/main only as an
+# opportunistic side effect of the remote's configured fetch refspec. Measured 2026-08-23: with
+# remote.origin.fetch unset the ref stayed STALE while FETCH_HEAD was current, so the check would read
+# the stale ref and close the tracker on pre-drift evidence. Pin the explicit refspec, which updates
+# the consumed ref by construction rather than depending on submodule remote config nothing here owns.
+assert_contains "${section}" 'main:refs/remotes/origin/main' \
+  'the reset must pin an explicit refspec that updates the ref the check reads, not a generic fetch that only guarantees FETCH_HEAD'
+
 assert_contains "${section}" 'never what the drifted dispatch actually loaded' \
   'the close must not overstate a sibling read as verification of what the Cursor lane loaded'
 
