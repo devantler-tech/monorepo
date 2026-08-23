@@ -95,4 +95,38 @@ refute_bullet 'a process you yourself started' \
 assert_bullet '`Monitor` with an until-loop' \
   "latency bullet forbids the poll without naming the runtime waiter to use instead"
 
+# ---------------------------------------------------------------------------
+# THIRD MIGRATION: the poll loop moved INSIDE a `run_in_background` call.
+#
+# Assertions 1-4 close the two earlier spellings (chained `sleep N && <poll>`, and the standalone
+# `sleep` polling a backgrounded task's OUTPUT FILE). Neither reaches a hand-rolled loop placed
+# WITHIN the backgrounded command itself — `for i in $(seq 1 40); do gh ...; sleep 30; done` with
+# run_in_background:true. That form satisfies every sentence above while reproducing the identical
+# waste, and the enforcement hook lives in `rtk` and cannot see inside a backgrounded command.
+#
+# Measured over the 7 days to 2026-08-23 across 176 Agentic Engineer runs: 560 of 904 backgrounded
+# Bash launches (62%) carried such a loop; 240 idles waiting on one totalled 28.0h; runs using a
+# poll loop ran a median 62.8min against 42.4min, overrunning the hourly slot 54% against 29%; and
+# all 9 dropped dispatches (of 179 slots) were overlap-blocked by a still-open run.
+#
+# Each assertion below pins a DIFFERENT load-bearing half, because any one alone is satisfiable
+# while the behaviour survives: naming the shape without the mechanism reads as style advice, and
+# naming both without the alternative is the bare prohibition that caused migrations 1 and 2.
+
+# 5. Backgrounding does not launder the wait. Without this, `run_in_background` remains a documented
+#    escape from a rule the same bullet states two paragraphs earlier.
+assert_bullet 'never out of the RUN' \
+  "latency bullet does not say that backgrounding moves a poll loop out of the guard's view but not out of the run — so wrapping the loop in run_in_background still reads as compliant"
+
+# 6. The RESURRECTION mechanism. This is what makes the poller cost the NEXT dispatch rather than
+#    only its own wait, and it is the half an agent cannot deduce from the prohibition alone.
+assert_bullet 'resurrects the session' \
+  "latency bullet does not state that a backgrounded poller's completion notification resurrects the session and keeps the run open — which is why the measured cost lands on the following dispatch"
+
+# 7. The operative rule, and the alternative. A prohibition that does not name what to do instead is
+#    the DevEx tax this repo's own hardening rule forbids, and is precisely what pushed this
+#    behaviour into its second and third spellings.
+assert_bullet 'never launch a poller and then end your turn' \
+  "latency bullet does not forbid the one combination that gets neither the work nor the run-end (launch a poller, then end the turn)"
+
 echo "latency discipline contract: OK"
