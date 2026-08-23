@@ -129,4 +129,18 @@ assert_bullet 'resurrects the session' \
 assert_bullet 'never launch a poller and then end your turn' \
   "latency bullet does not forbid the one combination that gets neither the work nor the run-end (launch a poller, then end the turn)"
 
+# 8. BOTH permitted alternatives, because assertion 7 pins only the prohibition. The whole argument
+#    for this rule is that a bare prohibition is what pushed the behaviour into its second and third
+#    spellings, so the alternatives are the load-bearing half — and a future edit could strip them
+#    while 7 still passed. (Raised by CodeRabbit on #3002; the finding was valid.)
+assert_bullet 'arm `Monitor` and go do it' \
+  "latency bullet forbids the poller-then-end-turn combination without naming the Monitor alternative for when other work IS actionable"
+
+# NOTE the anchor. The obvious 'end the run' is VACUOUS here: the bare phrase already occurs earlier
+# in this same bullet ("or end the run and let the next tick collect the result"), so it would pass
+# with this sentence deleted — measured, 2 occurrences. Anchor on the run-end alternative's own
+# clause instead, which is unique to it.
+assert_bullet '**end the run**: rung 1 of' \
+  "latency bullet does not name the run-termination alternative for when nothing else is actionable, with the rung-1 guarantee that makes ending safe"
+
 echo "latency discipline contract: OK"
