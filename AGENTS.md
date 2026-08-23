@@ -449,9 +449,11 @@ supply that revision, or the apply ran and the post-apply check still does not r
 `2` is UNKNOWN — no verdict produced: no CLI, an unreadable pin or marketplace, a plugin id naming a
 different marketplace than the clone being gated, a concurrent run holding the lock, a marketplace
 worktree whose bytes do not provably match the pinned commit, an unavailable verifier, or
-`--dry-run`, since a simulation asserts nothing about the install. Run it on a `DRIFT`; a `1` or `2`
-is reported, never a run-stopper, and you continue by **reading** the reviewed definition at the
-pinned gitlink and following it, exactly as above.
+`--dry-run`, since a simulation asserts nothing about the install. **For the Claude lane only, run it
+on a `DRIFT`;** a `1` or `2` is reported, never a run-stopper, and you continue by **reading** the
+reviewed definition at the pinned gitlink and following it, exactly as above. On Codex or Cursor, do
+not invoke this Claude-only tool: proceed directly to the condition-based tracker below while using
+the reviewed definition.
 
 ⚠️ **Running the refresh never makes the pin active for THIS run — do not report it as if it had.**
 On a `1` or `2` the installed definition is unchanged by construction, so the runtime is still
@@ -481,6 +483,230 @@ currency check confirms it. Reading the apply-time `0` as "this run is current" 
 fail-open as the drift itself. When the script cannot resolve its CLI, or a refusal persists across
 rollouts, surface it on a declared *Maintainer channel* rather than leaving a silently superseded
 definition in place.
+
+🔴 **Both of those triggers name exit states of the REFRESH script, and that script exists for ONE
+lane — so on the other two the escalation is unreachable by construction.**
+`plugin-definition-currency.sh` takes `--runtime claude|codex|cursor`, but
+`plugin-definition-refresh.sh` takes no runtime selector at all, and — importantly for anyone designing
+the repair path — the reason is **not** a fixed filesystem root. It accepts `--plugins-root`, so the
+directory is configurable; what makes it Claude-only is that it resolves and drives the **Claude CLI's
+control plane**, dying unless it finds an executable `claude`. A repair path for another lane therefore
+needs that lane's own control plane, not a different directory. So "run it on
+a `DRIFT`" names nothing runnable on the Codex or Cursor lane, and *cannot resolve its CLI* and *a
+refusal persists across rollouts* both describe a script that is never invoked there. A run that
+follows this section exactly therefore detects the drift, reports it into a private store, and
+continues — every dispatch, indefinitely.
+
+**So act on the CONDITION, not on a tool's exit code.** A lane whose currency reads `DRIFT` and whose
+repair is **unavailable** (no path exists for that lane), **refused**, **fenced** (declined because
+performing it now would be unsafe), or **failed** (attempted and did not leave the install on the pin —
+including an `UNKNOWN` that produced no verdict at all) gets a **tracked, repository-visible issue** for
+that lane's drift, and the observation recorded on it.
+
+🔴 **An unresolved currency `UNKNOWN` qualifies TOO, and keying only on `DRIFT` reopens the exact
+silence this clause closes.** Read literally, the trigger needs the check to *read* `DRIFT` — so a lane
+whose currency itself exits `2` never satisfies it, opens no tracker, and reports privately forever.
+That is not a hypothetical corner: the per-instance table above makes **more than one cached version**
+under Codex an `UNKNOWN` by design, and the same `2` covers a missing store, an unreadable pin, and an
+unavailable verifier. Those are lanes whose loaded definition is *unverifiable*, which is why `2` is
+already defined as UNCHECKED and never as current — a state at least as bad as a known drift, since
+nothing even establishes which definition is being served.
+
+So the trigger is: **`DRIFT`, or an `UNKNOWN` that this run's prescribed recovery did not resolve** —
+the recovery being unavailable, refused, fenced, or attempted and still not yielding a verdict. An
+`UNKNOWN` a run *does* resolve to `CURRENT` or `DRIFT` in the same tick is not tracked; it was a
+transient, and the resolved verdict governs. Neither state is a run-stopper, exactly as before. That issue is the artifact; it is discoverable by
+every lane and enters the ordinary work queue like anything else.
+
+🔴 **The canonical tracker repository is exactly `devantler-tech/monorepo`: creation, lookup, duplicate
+reconciliation, observation updates, and reset all use `devantler-tech/monorepo`.** Product selection
+does not change this destination. Issue numbers and repo-local searches converge only inside one
+repository, so choosing a tracker repository per run would defeat both reuse and the lowest-numbered
+tie-break below.
+
+🔴 **IDENTIFY the tracker by an exact MARKER, never by resemblance.** A lane's tracker carries the line
+`**Lane drift tracker:** <lane>` in its body, and only an issue carrying it is one. **`<lane>` is
+exactly one of `claude`, `codex`, `cursor`** — the same token the currency check takes as
+`--runtime`. The marker is the tracker's sole identity, so a run that rendered it `codex/*` or
+`Codex machine-local` would fail to match a tracker that already exists and file a second one,
+which is the duplication the lookup rule exists to prevent. Selecting by
+description would sweep in any authenticated issue that happens to discuss drift on that lane — this
+change's own follow-up issue among them — and the reset would then close work the clause explicitly
+says must stay open. An occurrence tracker and an issue *about* the mechanism are different things, and
+nothing but a marker separates them.
+
+🔴 **FIND the lane's existing marked, authenticated issue before opening one — one occurrence, one issue.**
+Overlapping same-lane runs are normal here, so a run that only ever creates produces duplicate queue
+items and duplicate remediation for a single drift. Look first; record the observation on what you find.
+Two runs can still both find nothing and both file, because check-then-create is not atomic and GitHub
+offers no uniqueness constraint — so the tie-break is deterministic rather than a lock: the
+**lowest-numbered** authenticated open issue for that lane is the one.
+🔴 **Every lookup closes ALL higher-numbered authenticated duplicates, not just one the run happens to
+hold.** A rule that only tells a creator to clean up its own leaves an orphan whenever that creator dies
+between filing and cleaning — permanently, because nothing else is looking. Reconciliation therefore
+belongs to whoever next reads the lane, who can see every duplicate, rather than to the run that made
+one.
+
+🔴 **RE-READ currency immediately before filing.** A run that observed `DRIFT` may be about to publish a
+tracker for a lane that has since recovered: an overlapping run can read `CURRENT` while no issue yet
+exists, find nothing to close, and exit — after which the first run files from its stale observation and
+the recovered lane stays tracked, and possibly remediated, until some later check clears it. The
+recheck costs one currency read and is the only thing standing between a stale observation and a
+published one.
+
+⚠️ **The recheck NARROWS that window; it does not close it — and the residual is accepted deliberately.**
+Reading currency and creating an issue are two operations and nothing makes them atomic, so a run can
+still confirm `DRIFT`, have an overlapping run observe `CURRENT` and find nothing to close, and then
+publish a tracker for a lane that has recovered. What bounds it is the reset below: **the next currency
+read on that lane closes the issue**, so the exposure is one dispatch, and the wrong state is
+self-correcting rather than permanent — unlike an orphaned duplicate or a forged suppression, which is
+why those got mechanisms and this gets a sentence. Closing it properly would need either a lock GitHub
+does not offer, or a published recovery marker — another piece of state to authenticate, expire and
+reconcile, which is the class this clause exists without.
+
+🔴 **AUTHENTICATE it — existence proves nothing on a PUBLIC repository.** Opening an issue here needs no
+write access, so anyone can file a plausible lane-drift issue and any field a reader trusts unchecked
+can be forged. An issue counts only when **both** halves of the own-output test *Untrusted input*
+defines hold: its author is an agent identity — exactly **`devantler`** for a machine-local lane, or the
+cloud lane's App — *and* its body begins with that identity's canonical `> 🤖 Generated by the`
+disclosure. Everything else matching the description is untrusted data.
+🔴 **The cloud App answers to THREE spellings, and no surface returns more than one — match the one
+your OWN surface produces.** Measured 2026-08-23 against live artifacts, including `platform#2812`
+read both ways:
+
+| surface | spelling | direction |
+|---|---|---|
+| search qualifier | **`app/cursor`** | what you **pass in** (`--author app/cursor`, `author:app/cursor`) |
+| REST `user.login` | **`cursor[bot]`** | what a read **returns** |
+| GraphQL `author.login` | **`cursor`** | what a read **returns** (bare, `__typename: Bot`) |
+
+`app/cursor` is a query *input* and is never what a read hands back; GraphQL returns the **bare**
+`cursor`, not the bracketed REST form. Accept all three, and never assume the spelling from one
+surface appears on another: a run reconciling through REST that checks only `app/cursor`, or one
+reconciling through GraphQL that checks only `cursor[bot]`, rejects the authentic tracker and files
+the duplicate the reuse rule above exists to prevent.
+⚠️ **The same test governs EVERY field a run reads back, not only the issue.** Authentication is a
+property of each value that changes what a run does, so any state added here is untrusted until this
+test is applied to it too — a field is not trustworthy because the object carrying it was checked.
+
+🔴 **Close the issue when that lane next reads `CURRENT`** — that is the reset, and it stops a recovered
+lane being tracked forever. A lane that recovers and drifts again gets a new issue, which is correct: it
+is a new occurrence.
+
+🔴 **EVERY close on a Cursor-filed tracker is a MACHINE-LOCAL run's job, because that lane cannot close
+at all.** The Cursor loader's measured write matrix records `gh issue create` working while **closing an
+issue returns 403**, so the cloud instance can open its own drift issue and can never close one — its
+own or anyone's. That covers **both** closes this clause requires: the reset on `CURRENT`, and the
+duplicate reconciliation two paragraphs up, which two overlapping Cursor dispatches can otherwise leave
+open indefinitely. State it as the capability rather than per-operation, so a later close added here
+inherits the handoff instead of needing its own carve-out. Cursor's observations are inputs a
+machine-local run consumes, exactly as boarding is.
+⚠️ **A REPEAT `DRIFT` observation from Cursor needs no handoff, because it carries no new state.** The
+tracker's existence already records that the lane is drifting, and the one-issue rule correctly stops a
+second one being filed — so a later Cursor sighting of the same condition is not lost information, it is
+the same information. Only a **recovery** observation changes state, and that is the close handed to a
+machine-local run above.
+⚠️ **This makes the missing `--runtime cursor` checker below CONSEQUENTIAL, not merely a detection gap.**
+Until some machine-local schedule reads that lane, a Cursor-filed tracker has nobody who can close it
+and sits open as apparently actionable work after the drift has cleared — a false positive that outlasts
+the condition, rather than the self-correcting one-dispatch residual above.
+
+🔴 **This clause tracks drift; it does NOT page a maintainer channel, and that boundary is deliberate.**
+A page that could be trusted would need a delivery record that cannot be forged, an ordering whose crash
+window does not re-page, an arbitration token distinct from the work claim, and closure serialised
+against sending — four coupled distributed-systems properties, over two systems nothing makes atomic,
+expressed in prose. A rule that satisfies three of the four is worse than none, because it reads as
+protection while silently re-paging or suppressing. The tracked authenticated issue needs none of them
+and answers the defect this section exists for: the drift is no longer a private note nobody outside the
+run can see. **Whether persistent drift should also page a human, and with what delivery semantics, is a
+separate decision** — tracked on
+[#2997](https://github.com/devantler-tech/monorepo/issues/2997), not smuggled in here.
+
+⚠️ **The Cursor cloud lane files its own issue.** `app/cursor` gets 403 on **Projects** and on comments,
+review requests and PR-state mutations (*Writer namespaces*) — issue **creation** is none of those, and
+this contract already relies on it elsewhere, which is why a local run has to board what that instance
+files. So a Cursor-lane drift produces a Cursor-authored issue, authenticated by that instance's own
+disclosure, and a machine-local run boards it and adds any later observation the cloud instance cannot
+comment. **Do not discard the only scheduled observation of that lane** on the strength of a permission
+it does not need.
+🔴 **A gap this clause does NOT close: nothing obliges either machine-local schedule to run
+`--runtime cursor`.** The per-instance command table assigns each instance its own runtime, so a
+Cursor-lane drift is detected only if that lane's own dispatch checks it. Assigning every lane a
+writable scheduled checker needs the submodule-init dependency that `--runtime cursor` carries, so it
+is tracked with the other repair-path work (#2997) rather than smuggled in here.
+⚠️ **But an OPEN Cursor-filed tracker DOES oblige one, or this clause creates state nothing can
+reset.** Detection may stay lane-local; the RESET cannot, because the reset is a close and that lane
+cannot close at all. So while a Cursor-filed tracker is open, the machine-local run that already owns
+its close **runs `--runtime cursor` itself** and closes on `CURRENT`.
+
+🔴 **That read is a SIBLING checkout's, and `plugin-definition-currency.sh` does NOT fetch — so refresh
+the ref first or the close is unfounded.** `--runtime cursor` resolves `refs/remotes/origin/main` out
+of the caller's *local* plugin submodule, and the script contains no `git fetch` at all (verified
+2026-08-23 across its whole source). That remote-tracking ref is only as fresh as whatever this
+machine last happened to fetch, so a stale local ref can read `CURRENT` and close a tracker while the
+Cursor lane is still executing a superseded revision — closing on evidence about *this* checkout
+rather than that lane. **Fetch that ref in the submodule immediately before the check, with an
+explicit refspec that updates the ref the check actually reads:**
+
+```sh
+.claude/scripts/submodule-init.sh libraries/agent-plugins   # EMPTY in a fresh worktree — fetch fails without this
+git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main
+```
+
+🔴 **The init line is not optional setup — without it this reset path is dead on every fresh
+dispatch.** A machine-local closer runs in the per-run worktree this contract mandates, where that
+submodule is empty, so `git -C` has no repository to fetch into and the currency check degrades to
+`UNKNOWN`. An `UNKNOWN` is reported and never treated as `CURRENT`, so the tracker is never closed —
+and the Cursor lane, which cannot close its own, has no other closer. The dependency being documented
+elsewhere does not discharge it here: this is the one place the fetch is actually issued.
+
+🔴 **A generic `git fetch origin main` is NOT sufficient — it is guaranteed only to write
+`FETCH_HEAD`.** It updates `refs/remotes/origin/main` merely as an *opportunistic* side effect of the
+remote's configured fetch refspec, so the freshness of the one ref this check consumes depends on a
+submodule's remote configuration that nothing here controls. Measured 2026-08-23 on a local fixture
+whose remote had genuinely advanced: with `remote.origin.fetch` configured the remote-tracking ref
+advanced, and with it **unset the same command left that ref stale while `FETCH_HEAD` was current** —
+so the check reads the stale ref, reports `CURRENT`, and closes the tracker on evidence that predates
+the drift. The explicit refspec updates the consumed ref by construction, in both configurations. On a
+failed fetch treat the result as `UNKNOWN` and leave the tracker open; a close is the one action here
+that discards state, so it fails closed.
+
+⚠️ **Even freshly fetched, this is a PROXY and the close must not overstate it.** The Cursor loader
+reads that ref in its own cloud checkout at *its* boot, so `origin/main == pin` establishes what that
+lane will load on its **next** dispatch — never what the drifted dispatch actually loaded, and never
+that a run has since served the pin. That is still the right basis for a reset, because the tracker
+records a condition that has now been removed at its source; but record the close as *the lane's
+source ref is on the pin*, not as *Cursor is verified current*. An attestation produced by the Cursor
+lane itself is the only thing that would carry the stronger claim, and none exists — it belongs with
+the other repair-path work in #2997 rather than being implied by a sibling's read.
+
+That reset obligation is deliberately narrower
+than a scheduled checker for every lane: it is scoped to the lifetime of a tracker that
+already exists, so the submodule-init dependency is paid only when there is something to reset —
+never on an ordinary tick. Without it a recovered Cursor lane is tracked forever by an issue whose
+only reset path nobody is required to reach, which is a worse failure than the silence this clause
+replaced: a stale open issue reads as a live condition.
+🔴 **A FENCED repair is a QUALIFYING state exactly as a failed one is.** Fencing is frequently the
+correct call — the Codex remove/add hot-swap can leave that lane with no definition at all, which is
+worse than the drift — but a decision that is right every time and recorded as nothing is
+indistinguishable from a repair that was never needed. That is precisely what makes the staleness
+unbounded, and it is the same shape as the `2` UNKNOWN that must never read as `CURRENT`.
+
+⚠️ **This adds an obligation and removes none.** A `DRIFT` is still never a run-stopper, and this is
+not licence to perform a repair that was fenced as unsafe. The fallback is unchanged: read the
+reviewed definition at the pinned gitlink and follow it.
+
+**Measured 2026-08-22 — this is the condition the clause was written from.** The Claude
+lane read `CURRENT` (11 of 11 pinned files, 4.4.8) while the Codex lane read `DRIFT` (3 of 11;
+installed 4.4.2), the differing files being `agents/portfolio-surveyor.agent.md` plus two runtime
+assets. The consumer pin moved past that install at 2026-08-21T21:58:16Z (#2977), and the Codex
+scheduler store records **24 Agentic Engineer and 2 Agent Improver dispatches** on the superseded copy
+since — every one of them delegating its survey to a superseded surveyor definition. Two Agent
+Improver dispatches on that lane saw the `DRIFT`, correctly fenced the hot-swap, and continued,
+because nothing obliged them to do anything further ([#2997](https://github.com/devantler-tech/monorepo/issues/2997)).
+[#2929](https://github.com/devantler-tech/monorepo/issues/2929) and
+[#2973](https://github.com/devantler-tech/monorepo/issues/2973) are what make a repair *possible* on a
+given lane; this clause is what a run owes while it is not.
 
 ### Agent definition locations
 

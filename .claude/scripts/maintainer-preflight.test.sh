@@ -72,8 +72,8 @@ grep -Fq 'Reject explicit authentication failures before inspecting the response
 grep -Fq "Compare \`viewer.login\` with this deployment's exact expected identity" "${run_loop}" ||
   fail "GraphQL fallback does not use the deployment-scoped expected identity"
 
-grep -Fq "GraphQL API identity is \`cursor[bot]\`" "${run_loop}" ||
-  fail "GraphQL fallback uses Cursor's PR-author identity instead of its API identity"
+grep -Fq "GraphQL API identity is the" "${run_loop}" && grep -Fq "BARE \`cursor\`" "${run_loop}" ||
+  fail "GraphQL fallback does not pin the measured BARE cursor identity (cursor[bot] is the REST spelling)"
 
 grep -Fq "A mismatch is \`wrong GitHub identity\`" "${run_loop}" ||
   fail "GraphQL fallback does not classify the wrong-identity case"
@@ -100,8 +100,8 @@ grep -Fq 'gh api --include --hostname github.com user' "${cursor_loader}" ||
 grep -Fq "generic \`gh auth status\` invalid-token message is not conclusive" "${cursor_loader}" ||
   fail "Cursor boot gate can still collapse a REST outage into an invalid-token verdict"
 
-grep -Fq "GraphQL API identity is \`cursor[bot]\`" "${cursor_loader}" ||
-  fail "Cursor boot gate does not pin the measured API identity"
+grep -Fq "GraphQL API identity is the BARE \`cursor\`" "${cursor_loader}" ||
+  fail "Cursor boot gate does not pin the measured BARE cursor GraphQL identity"
 
 if grep -Fq "Confirm \`gh auth status\` authenticates **\`app/cursor\`**" "${cursor_loader}"; then
   fail "Cursor loader still hard-stops before the observable API fallback"
