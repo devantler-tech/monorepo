@@ -518,6 +518,16 @@ the recovered lane stays tracked, and possibly remediated, until some later chec
 recheck costs one currency read and is the only thing standing between a stale observation and a
 published one.
 
+⚠️ **The recheck NARROWS that window; it does not close it — and the residual is accepted deliberately.**
+Reading currency and creating an issue are two operations and nothing makes them atomic, so a run can
+still confirm `DRIFT`, have an overlapping run observe `CURRENT` and find nothing to close, and then
+publish a tracker for a lane that has recovered. What bounds it is the reset below: **the next currency
+read on that lane closes the issue**, so the exposure is one dispatch, and the wrong state is
+self-correcting rather than permanent — unlike an orphaned duplicate or a forged suppression, which is
+why those got mechanisms and this gets a sentence. Closing it properly would need either a lock GitHub
+does not offer, or a published recovery marker — another piece of state to authenticate, expire and
+reconcile, which is the class this clause exists without.
+
 🔴 **AUTHENTICATE it — existence proves nothing on a PUBLIC repository.** Opening an issue here needs no
 write access, so anyone can file a plausible lane-drift issue and any field a reader trusts unchecked
 can be forged. An issue counts only when **both** halves of the own-output test *Untrusted input*

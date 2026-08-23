@@ -154,6 +154,11 @@ assert_contains "${section}" 'closes ALL higher-numbered authenticated duplicate
 assert_contains "${section}" 'RE-READ currency immediately before filing' \
   'the creator must revalidate currency, or a recovered lane gets tracked from a stale observation'
 
+# ...and the residual the recheck leaves. Stating it is what stops a later reader taking the recheck
+# for atomicity and "simplifying" the reset away — the reset is the only thing bounding it.
+assert_contains "${section}" 'NARROWS that window; it does not close it' \
+  'the clause must admit the recheck is not atomic, or the reset that bounds it looks redundant'
+
 assert_contains "${section}" 'The Cursor cloud lane files its own issue' \
   'the contract must not claim the cloud instance cannot open an issue — it can, and does so elsewhere'
 
