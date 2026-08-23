@@ -3231,9 +3231,10 @@ EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtdetach" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'remote poll, same command \.+ 1' <<<"$OUT" \
-   && grep -qE 'FOREGROUND.*remote-adjacent \.+ 0' <<<"$OUT"; then
-  ok "a shell-DETACHED watcher is remote-adjacent but NOT a foreground violation"
-else bad "a shell-DETACHED watcher is remote-adjacent but NOT a foreground violation" "$(printf '%s' "$OUT" | grep -E 'remote poll|FOREGROUND')"; fi
+   && grep -qE 'FOREGROUND.*remote-adjacent \.+ 0' <<<"$OUT" \
+   && grep -qE 'BACKGROUND .*remote-adjacent \.+ 1' <<<"$OUT"; then
+  ok "a shell-DETACHED watcher is counted as backgrounded, not foreground"
+else bad "a shell-DETACHED watcher is counted as backgrounded, not foreground" "$(printf '%s' "$OUT" | grep -E 'remote poll|FOREGROUND|BACKGROUND')"; fi
 
 # ...and `&&` must not read as a trailing `&`, or every chained busy-wait would
 # be excused as detached — the loosening this rule most easily becomes.
