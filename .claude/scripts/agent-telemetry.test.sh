@@ -3122,8 +3122,9 @@ if grep -qE 'no remote poll adjacent \.+ 1' <<<"$OUT"; then
   ok "a LOCAL git subcommand does not count as a remote poll"
 else bad "a LOCAL git subcommand does not count as a remote poll" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
-# The aggregate remote-next bucket mixes in compliant background watchers, so it
-# cannot test a foreground rule. Only the foreground-only figure can.
+# The aggregate remote-next bucket mixes in BACKGROUND pollers — counted on their
+# own line as their own violation — so it cannot test a foreground rule. Only the
+# foreground-only figure can.
 mkdir -p "$FIX/wtfgnext"
 cat > "$FIX/wtfgnext/s.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"q1","name":"Bash","input":{"command":"sleep 45","run_in_background":true}}]}}
@@ -3214,9 +3215,10 @@ if grep -qE 'remote poll, same command \.+ 1' <<<"$OUT"; then
   ok "...but a curl at a REMOTE host still counts"
 else bad "...but a curl at a REMOTE host still counts" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
-# Shell-level detachment is a compliant way to arm a watcher; run_in_background
-# cannot see it, so the tool flag alone reported the compliant shape as the
-# violation.
+# Shell-level detachment puts a watcher in the BACKGROUND class; run_in_background
+# cannot see it, so the tool flag alone reported the backgrounded shape as the
+# FOREGROUND violation. It is still a violation — the backgrounded one — and lands
+# in WT_BGREM; the classes must not be confused with each other.
 # NOTE the fixture shape: a `sh -c 'sleep …'` watcher is NOT usable here, because
 # SLEEP_RE only recognises `sleep` at a line start or after a shell separator and
 # a quote is neither — such a sleep is invisible to the counter entirely. That is

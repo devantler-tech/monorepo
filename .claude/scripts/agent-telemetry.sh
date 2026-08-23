@@ -2738,9 +2738,10 @@ if want efficiency; then
     TASK_SEGMENT_RE='^[[:space:]]*(/usr/bin/|/bin/)?(cat|tail|head|wc)([[:space:]]|$)'
     TASK_OUTPUT_PATH_RE='/(private/)?tmp/claude-[0-9]+/[^[:space:];|&]+/tasks/[[:alnum:]_-]+\.output'
     # Shell-level detachment. `nohup … &`, `setsid`, or a trailing `&` returns the
-    # tool call immediately, so the agent is NOT foreground-blocked — that is a
-    # compliant way to arm a watcher, and the `run_in_background` flag alone
-    # cannot see it. A trailing `&` must not match `&&`: the negative lookbehind
+    # tool call immediately, so the agent is NOT foreground-blocked — it belongs to
+    # the BACKGROUND class, which the `run_in_background` flag alone cannot see.
+    # Background is a different violation from foreground, not compliance: a
+    # detached remote poll lands in WT_BGREM, which the contract forbids. A trailing `&` must not match `&&`: the negative lookbehind
     # is spelled as "not an ampersand before it" because POSIX ERE has none.
     DETACH_RE='(^|[[:space:]])(nohup|setsid|disown)([[:space:]]|$)|([^&]|^)&[[:space:]]*$'
     # A loop BACK-EDGE makes a poll that sits textually BEFORE the sleep run
@@ -2793,8 +2794,8 @@ if want efficiency; then
       # Quote-stripping has a HARD EXCEPTION, and it is the whole reason this is
       # not a one-line gsub: `sh -c "sleep 30 && gh pr checks"` carries a REAL
       # command inside quotes, and it is the standard shape for arming a detached
-      # watcher. Blanking every quoted body would erase that poll and report the
-      # compliant watcher as a permitted local timer — trading a small
+      # watcher. Blanking every quoted body would erase that poll and report a
+      # backgrounded poller as a permitted local timer — trading a small
       # over-count for a large under-count on exactly the shape the detachment
       # rule above exists to recognise. So a command passing `-c` to a shell
       # keeps its quoted text; everything else has literals blanked.
