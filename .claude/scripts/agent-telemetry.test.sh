@@ -3253,6 +3253,24 @@ if grep -qE 'FOREGROUND.*remote-adjacent \.+ 2' <<<"$OUT" \
   ok "bare nohup and setsid remain foreground without an actual detachment"
 else bad "bare nohup and setsid remain foreground without an actual detachment" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND|BACKGROUND')"; fi
 
+# `disown` only changes the launch class when it follows a real backgrounding
+# operator for the poller. A later bare `disown` runs after a synchronous poll
+# has already completed and must not retroactively reclassify that poll.
+# The production change this catches is treating any `disown` token as proof
+# of shell detachment rather than binding it to a preceding single `&`.
+mkdir -p "$FIX/wtdisown"
+cat > "$FIX/wtdisown/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d4","name":"Bash","input":{"command":"sleep 30 && gh pr checks 7; disown"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d5","name":"Bash","input":{"command":"sleep 30 && gh pr checks 8 & disown"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"d6","name":"Bash","input":{"command":"sleep 30 && gh pr checks 9 & disown -h %1"}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtdisown" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'FOREGROUND.*remote-adjacent \.+ 1' <<<"$OUT" \
+   && grep -qE 'BACKGROUND .*remote-adjacent \.+ 2' <<<"$OUT"; then
+  ok "disown changes class only after a real backgrounding operator"
+else bad "disown changes class only after a real backgrounding operator" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND|BACKGROUND')"; fi
+
 # ...and `&&` must not read as a trailing `&`, or every chained busy-wait would
 # be excused as detached — the loosening this rule most easily becomes.
 mkdir -p "$FIX/wtandand"
