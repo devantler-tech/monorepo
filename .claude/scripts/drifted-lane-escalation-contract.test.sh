@@ -161,6 +161,13 @@ assert_contains "${section}" 'does NOT fetch' \
 assert_contains "${section}" 'Fetch that ref in the submodule immediately before the check' \
   'the reset must require a fresh ref before closing a Cursor tracker'
 
+# In a fresh worktree `libraries/agent-plugins` is EMPTY, so the fetch below has no repository to
+# update and the reset path is dead before the refspec ever matters. Pinning only the refspec leaves
+# a later edit free to drop the init while this contract still passes -- the guard would then assert
+# the second half of a two-step sequence whose first half no longer runs.
+assert_contains "${section}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
+  'the reset must populate the submodule before fetching, or the fetch has no repository to update'
+
 # A generic `git fetch origin main` writes FETCH_HEAD and updates refs/remotes/origin/main only as an
 # opportunistic side effect of the remote's configured fetch refspec. Measured 2026-08-23: with
 # remote.origin.fetch unset the ref stayed STALE while FETCH_HEAD was current, so the check would read
@@ -430,6 +437,11 @@ loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
 [ -r "${loader}" ] || fail "cannot read ${loader} — the deployed Cursor boot path is unverifiable"
 loader_text="$(tr '\n' ' ' <"${loader}" | tr -s '[:space:]' ' ')"
 [ "${#loader_text}" -gt 2000 ] || fail "loader captured only ${#loader_text} chars — the read is broken"
+
+# Same two-step sequence on the deployed loader: the bootstrap guard must initialise the submodule
+# before it fetches, or a fresh cloud checkout fetches into nothing.
+assert_contains "${loader_text}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
+  'the Cursor loader must initialise the submodule before fetching, or the fetch has no repository to update'
 
 # A bare `git fetch origin main` guarantees only FETCH_HEAD; the very next step of the loader reads
 # refs/remotes/origin/main, so with remote.origin.fetch unset the boot loads a STALE reviewed
