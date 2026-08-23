@@ -3849,7 +3849,7 @@ window, unnoticed. The work was never the bottleneck; the **scheduling** was.
   `for i in $(seq 1 40); do gh pr view …; sleep 30; done` poller over CI, a review, or a merge
   state. That form satisfies every sentence above — it is not a foreground `sleep`, and it does not
   poll a backgrounded task's output file — while reproducing the identical waste, and the
-  enforcement hook cannot see inside a backgrounded command. **`run_in_background` moves the wait
+  enforcement hook does not stop it: all 560 ran. **`run_in_background` moves the wait
   out of the guard's VIEW, never out of the RUN.** Measured over the 7 days to 2026-08-23:
   **560 of 904 backgrounded Bash launches (62%)** carried such a loop.
   🔴 **Its real cost is the NEXT dispatch, not its own wait.** A backgrounded poller's completion
