@@ -2968,9 +2968,13 @@ if grep -qE 'remote poll, next command \.+ 0' <<<"$OUT"; then
   ok "adjacency does NOT cross a transcript boundary"
 else bad "adjacency does NOT cross a transcript boundary" "$(printf '%s' "$OUT" | grep -E 'remote poll|no remote')"; fi
 
-# THE metric: only the CROSS of the two dimensions is a verdict. A backgrounded
-# sleep polling a remote system is the compliant watcher the contract mandates;
-# scoring it as a violation is what made the old foreground count unusable.
+# THE metric: only the CROSS of the two dimensions is a verdict — but the cross
+# now separates TWO violations, not violation-vs-compliant. A backgrounded sleep
+# polling a remote system is the backgrounded poller *Latency discipline* also
+# forbids (monorepo#3001): it holds the session open via its completion
+# notification. It must stay OUT of the foreground primary (folding it would move
+# that series for a definitional reason and break comparability) and must be
+# counted in its own BACKGROUNDED-POLLER bucket.
 mkdir -p "$FIX/wtcross2"
 cat > "$FIX/wtcross2/s.jsonl" <<'EOF'
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"sleep 300 && gh pr checks 1","run_in_background":true}}]}}
@@ -2978,8 +2982,32 @@ EOF
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtcross2" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'FOREGROUND.*remote-adjacent \.+ 0' <<<"$OUT"; then
-  ok "a BACKGROUND remote poll is NOT counted as the busy-wait violation"
-else bad "a BACKGROUND remote poll is NOT counted as the busy-wait violation" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
+  ok "a BACKGROUND remote poll does NOT move the FOREGROUND primary (baseline continuity)"
+else bad "a BACKGROUND remote poll does NOT move the FOREGROUND primary (baseline continuity)" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
+# ...and it IS counted as its own violation. Without this the contract forbids the
+# shape while the metric that would detect it reports clean — the exact
+# contract/telemetry contradiction monorepo#3002 was opened to remove.
+if grep -qE 'BACKGROUND .*remote-adjacent \.+ 1' <<<"$OUT"; then
+  ok "a BACKGROUND remote poll IS counted in the backgrounded-poller estimate"
+else bad "a BACKGROUND remote poll IS counted in the backgrounded-poller estimate" "$(printf '%s' "$OUT" | grep -E 'BACKGROUND')"; fi
+
+# The DOMINANT real-world shape, and the one the contract change actually names:
+# a hand-rolled `for ... sleep N ... done` loop inside run_in_background. Measured
+# 560 of 904 backgrounded launches. The `sleep 300 && gh` fixture above is the
+# chained form; without this, the loop form could stop being counted and both the
+# metric and its test would still read clean.
+mkdir -p "$FIX/wtbgloop"
+cat > "$FIX/wtbgloop/s.jsonl" <<'EOF'
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"for i in $(seq 1 40); do gh pr checks 1 --repo o/r; sleep 30; done","run_in_background":true}}]}}
+EOF
+OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtbgloop" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+      bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
+if grep -qE 'BACKGROUND .*remote-adjacent \.+ 1' <<<"$OUT"; then
+  ok "a backgrounded hand-rolled POLL LOOP is counted in the backgrounded-poller estimate"
+else bad "a backgrounded hand-rolled POLL LOOP is counted in the backgrounded-poller estimate" "$(printf '%s' "$OUT" | grep -E 'BACKGROUND|sleep')"; fi
+if grep -qE 'FOREGROUND.*remote-adjacent \.+ 0' <<<"$OUT"; then
+  ok "the poll-loop form likewise does not move the FOREGROUND primary"
+else bad "the poll-loop form likewise does not move the FOREGROUND primary" "$(printf '%s' "$OUT" | grep -E 'FOREGROUND')"; fi
 OUT=$(CLAUDE_PROJECTS_DIR="$FIX/wtremote" CODEX_HOME="$FIX/nocodex" MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
       bash "$TARGET" --since-days 3650 --section efficiency 2>&1)
 if grep -qE 'FOREGROUND.*remote-adjacent \.+ 1' <<<"$OUT"; then

@@ -148,7 +148,13 @@ assert_bullet '**end the run**: rung 1 of' \
 #    reopens and the idle window is rebuilt. Measured in the same window: 6 idles (1.09h) woke on a
 #    watcher that had merely TIMED OUT, i.e. runs that believed they were finished and were not.
 #    Without this, the rule's own remedy preserves the defect it targets. (Raised by Codex on #3002.)
-assert_bullet 'TaskStop' \
-  "latency bullet tells the run to end without requiring in-flight watchers to be stopped first — but the resurrection it documents is unconditional, so an armed watcher reopens the session and rebuilds the idle window"
+# Anchor on the REQUIREMENT, not the tool name. A bare 'TaskStop' presence check
+# passes on "Ending the run NEVER requires ... TaskStop" — it admits the exact
+# inversion it claims to prevent. (Raised by Codex on #3002; same weak-anchor
+# class as the vacuous 'end the run' anchor rejected two assertions above.)
+assert_bullet 'Ending the run REQUIRES stopping every in-flight watcher first' \
+  "latency bullet does not REQUIRE in-flight watchers to be stopped before ending — but the resurrection it documents is unconditional, so an armed watcher reopens the session and rebuilds the idle window"
+assert_bullet '`TaskStop`, not merely a' \
+  "latency bullet states the stop requirement without naming TaskStop as the mechanism, leaving 'end the run' achievable by intent alone"
 
 echo "latency discipline contract: OK"

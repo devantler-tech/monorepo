@@ -2760,9 +2760,12 @@ if want efficiency; then
           tag = substr($0, 2, i-2); rest = substr($0, i+1)
           # A command-first line keeps its LAUNCH CLASS after the \003 marker, so
           # the wait-target pass can cross the two dimensions. Neither alone is a
-          # verdict: a BACKGROUND sleep polling a remote system is the compliant
-          # watcher the contract mandates, while a FOREGROUND one is the busy-wait
-          # it forbids. Only the cross identifies the violation.
+          # verdict, and the two launch classes are now DIFFERENT violations, not
+          # violation-vs-compliant: a FOREGROUND sleep polling a remote system is
+          # the classic busy-wait, while a BACKGROUND one is the backgrounded
+          # poller *Latency discipline* also forbids — it holds the session open
+          # via its completion notification. Only the cross tells them apart, and
+          # each is counted in its own bucket so the FG baseline stays comparable.
           if (tag ~ /\*$/) { sub(/\*$/, "", tag); print "\003" tag "\002" rest }
           else print rest
         }'
@@ -2998,10 +3001,12 @@ if want efficiency; then
       #  end the quote and break the whole script far from here.)
       # EFFECTIVE class, not the launch flag. A watcher detached inside an
       # otherwise synchronous call (`nohup sh -c "sleep 30 && gh pr checks 7" &`)
-      # returns immediately, so the agent never blocks — it is the compliant
-      # watcher, and scoring it FOREGROUND would report the contract-following
-      # behaviour as the violation. `run_in_background` cannot see shell-level
-      # detachment, so the command text has to.
+      # returns immediately, so the agent does not block on it synchronously —
+      # a different shape from a foreground busy-wait, and scored as BG so the
+      # FG baseline keeps measuring what it always measured. It is NOT thereby
+      # compliant: a backgrounded remote poll lands in WT_BGREM, which the
+      # contract forbids in its own right. `run_in_background` cannot see
+      # shell-level detachment, so the command text has to.
       function eff_cls(   e) {
         if (cls != "FG") return cls
         e = exec_text(buf)
@@ -3017,7 +3022,7 @@ if want efficiency; then
         # A DENIED command still counts here: the sleep before it was waiting to
         # make that call, and the intent is what this metric measures.
         if (pending) {
-          if (irem) { n_next += pending; if (pcls=="FG") { fg_rem += pending; fg_next += pending } }
+          if (irem) { n_next += pending; if (pcls=="FG") { fg_rem += pending; fg_next += pending } else if (pcls=="BG") bg_rem += pending }
           else if (itask) { n_task_next += pending; if (pcls=="FG") { fg_task += pending; fg_task_next += pending } }
           else        n_none += pending
           pending = 0
@@ -3030,7 +3035,7 @@ if want efficiency; then
         for (i = 1; i <= nlines; i++) {
           if (lines[i] !~ sre) continue
           n_tot++
-          if (remote_after(i)) { n_same++; if (ec=="FG") fg_rem++ }
+          if (remote_after(i)) { n_same++; if (ec=="FG") fg_rem++; else if (ec=="BG") bg_rem++ }
           else if (task_output_after(i)) { n_task_same++; if (ec=="FG") fg_task++ }
           else                 { pending++; pcls = ec }
         }
@@ -3046,11 +3051,11 @@ if want efficiency; then
                  started = 1; addline(substr($0, i+1)); next }
                  { if (started) addline($0) }
       END { classify(); resolve()
-            printf "%d %d %d %d %d %d %d %d %d %d", n_tot, n_same, n_next, n_task_same, n_task_next, n_none, fg_rem, fg_next, fg_task, fg_task_next }')
+            printf "%d %d %d %d %d %d %d %d %d %d %d", n_tot, n_same, n_next, n_task_same, n_task_next, n_none, fg_rem, fg_next, fg_task, fg_task_next, bg_rem }')
     # `read`, not `set --`: the latter would clobber the script's positional
     # parameters. (A here-string is a bash/zsh extension — fine under this
     # file's bash shebang, and never to be copied into a /bin/sh script.)
-    read -r WT_TOT WT_SAME WT_NEXT WT_TASK_SAME WT_TASK_NEXT WT_NONE WT_FGREM WT_FGNEXT WT_FGTASK WT_FGTASK_NEXT <<< "$WT"
+    read -r WT_TOT WT_SAME WT_NEXT WT_TASK_SAME WT_TASK_NEXT WT_NONE WT_FGREM WT_FGNEXT WT_FGTASK WT_FGTASK_NEXT WT_BGREM <<< "$WT"
     WT_NOREMOTE=$((WT_TASK_SAME + WT_TASK_NEXT + WT_NONE))
     WT_FGALL=$((WT_FGREM + WT_FGTASK))
     # The total is the SUM of the classes, not a separate scan. That makes
@@ -3107,6 +3112,13 @@ if want efficiency; then
     echo "    │  ├ background-task output poll, next command .. ${WT_TASK_NEXT}   [redundant wait, UNCHAINED]"
     echo "    │  └ no recognised poll adjacent .............. ${WT_NONE}   [local-timer candidate]"
     echo "  ⇒ FOREGROUND ∧ recognised-poll-adjacent ... ${WT_FGALL}   [PRIMARY BUSY-WAIT ESTIMATE]"
+    # The backgrounded poller. Counted SEPARATELY rather than folded into
+    # WT_FGALL on purpose: folding would move the primary series for a
+    # definitional reason and destroy its comparability with every prior run.
+    # This is its own violation — the contract forbids a hand-rolled poll loop
+    # wherever it runs, and the backgrounded form additionally holds the session
+    # open through its completion notification, taking the next dispatch slot.
+    echo "  ⇒ BACKGROUND ∧ remote-adjacent . ${WT_BGREM}   [BACKGROUNDED-POLLER ESTIMATE]"
     echo "  ⇒ FOREGROUND ∧ remote-adjacent . ${WT_FGREM}   [baseline-continuity component]"
     echo "  ⇒ FOREGROUND ∧ task-output-adjacent ${WT_FGTASK}   [redundant runtime-task poll]"
     echo "          of which UNCHAINED (task-output, fg) ${WT_FGTASK_NEXT}"
