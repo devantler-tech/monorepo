@@ -112,6 +112,23 @@ assert_contains() {
   esac
 }
 
+
+# Presence of both commands is not the property that matters: reversed, the fetch
+# runs against an uninitialised submodule and fails, which is the broken state
+# itself. Assert the ORDER by requiring the init to appear in the text that
+# precedes the fetch -- two independent assert_contains calls pass either way.
+assert_order() {
+  haystack="$1"; first="$2"; second="$3"; label="$4"
+  prefix="${haystack%%"${second}"*}"
+  if [ "${prefix}" = "${haystack}" ]; then
+    fail "${label} — expected to find: ${second}"
+  fi
+  case "${prefix}" in
+    *"${first}"*) ;;
+    *) fail "${label} — expected '${first}' to appear BEFORE '${second}'" ;;
+  esac
+}
+
 assert_not_contains() {
   haystack="$1"; needle="$2"; label="$3"
   case "${haystack}" in
@@ -175,6 +192,10 @@ assert_contains "${section}" '.claude/scripts/submodule-init.sh libraries/agent-
 # the consumed ref by construction rather than depending on submodule remote config nothing here owns.
 assert_contains "${section}" 'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
   'the reset must pin an explicit refspec that updates the ref the check reads, not a generic fetch that only guarantees FETCH_HEAD'
+
+assert_order "${section}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
+  'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
+  'the reset must initialise the submodule BEFORE fetching, or the fetch runs against an empty checkout'
 
 assert_contains "${section}" 'never what the drifted dispatch actually loaded' \
   'the close must not overstate a sibling read as verification of what the Cursor lane loaded'
@@ -448,6 +469,10 @@ assert_contains "${loader_text}" '.claude/scripts/submodule-init.sh libraries/ag
 # definition while reporting success.
 assert_contains "${loader_text}" 'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
   'the Cursor loader must pin an explicit refspec for the ref its next step reads, not a generic fetch that only guarantees FETCH_HEAD'
+
+assert_order "${loader_text}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
+  'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
+  'the Cursor loader must initialise the submodule BEFORE fetching, or the fetch runs against an empty checkout'
 
 # GraphQL returns the BARE `cursor`; requiring `cursor[bot]` on the GraphQL fallback rejects the
 # authentic identity and hard-stops the dispatch, which is the failure this fallback exists to avoid.
