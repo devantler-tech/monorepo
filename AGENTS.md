@@ -648,7 +648,7 @@ explicit refspec that updates the ref the check actually reads:**
 
 ```sh
 .claude/scripts/submodule-init.sh libraries/agent-plugins   # EMPTY in a fresh worktree — fetch fails without this
-git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main
+git -C libraries/agent-plugins fetch --no-prune origin main:refs/remotes/origin/main
 ```
 
 🔴 **The init line is not optional setup — without it this reset path is dead on every fresh
@@ -665,9 +665,22 @@ submodule's remote configuration that nothing here controls. Measured 2026-08-23
 whose remote had genuinely advanced: with `remote.origin.fetch` configured the remote-tracking ref
 advanced, and with it **unset the same command left that ref stale while `FETCH_HEAD` was current** —
 so the check reads the stale ref, reports `CURRENT`, and closes the tracker on evidence that predates
-the drift. The explicit refspec updates the consumed ref by construction, in both configurations. On a
-failed fetch treat the result as `UNKNOWN` and leave the tracker open; a close is the one action here
-that discards state, so it fails closed.
+the drift. The explicit refspec is what updates the consumed ref in both configurations — but only
+together with `--no-prune`, for the reason below. On a failed fetch treat the result as `UNKNOWN` and
+leave the tracker open; a close is the one action here that discards state, so it fails closed.
+
+🔴 **`--no-prune` is LOAD-BEARING: without it the prescribed fetch DELETES the ref it exists to
+update.** `fetch.prune` is set globally on this host, and a command-line refspec makes git compute
+prune candidates against *that* refspec alone — so the configured `+refs/heads/*:refs/remotes/origin/*`
+destination is pruned in the same run. Git reports both `- [deleted] (none) -> origin/main` and
+`= [up to date] main -> origin/main`: the update is a no-op computed against the pre-prune value, so
+the **delete is what survives**, and the command exits `0`. Measured 2026-08-24 on an isolated
+fixture with `fetch.prune=true` in every arm — prescribed form ⇒ ref **ABSENT**; `--no-prune` ⇒
+preserved; and with `fetch.prune=false` the prescribed form is fine, which isolates prune as the
+cause rather than the refspec. The consequence is not cosmetic: `--runtime cursor` then resolves a
+**missing** ref, degrades to `UNKNOWN`, and an `UNKNOWN` is never `CURRENT` — so the tracker can
+never be closed and this reset path is **structurally unreachable**. It also deletes a
+remote-tracking ref shared by every worktree of that repository, so the damage outlives the run.
 
 ⚠️ **Even freshly fetched, this is a PROXY and the close must not overstate it.** The Cursor loader
 reads that ref in its own cloud checkout at *its* boot, so `origin/main == pin` establishes what that

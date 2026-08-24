@@ -189,12 +189,14 @@ assert_contains "${section}" '.claude/scripts/submodule-init.sh libraries/agent-
 # opportunistic side effect of the remote's configured fetch refspec. Measured 2026-08-23: with
 # remote.origin.fetch unset the ref stayed STALE while FETCH_HEAD was current, so the check would read
 # the stale ref and close the tracker on pre-drift evidence. Pin the explicit refspec, which updates
-# the consumed ref by construction rather than depending on submodule remote config nothing here owns.
-assert_contains "${section}" 'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
-  'the reset must pin an explicit refspec that updates the ref the check reads, not a generic fetch that only guarantees FETCH_HEAD'
+# the consumed ref rather than depending on submodule remote config nothing here owns. --no-prune is
+# pinned WITH it: measured 2026-08-24, fetch.prune (global here) makes a command-line refspec prune
+# that same ref in the same run, so the prescribed form DELETED refs/remotes/origin/main and exited 0.
+assert_contains "${section}" 'git -C libraries/agent-plugins fetch --no-prune origin main:refs/remotes/origin/main' \
+  'the reset must pin an explicit refspec AND --no-prune; without --no-prune fetch.prune deletes the very ref the check reads'
 
 assert_order "${section}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
-  'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
+  'git -C libraries/agent-plugins fetch --no-prune origin main:refs/remotes/origin/main' \
   'the reset must initialise the submodule BEFORE fetching, or the fetch runs against an empty checkout'
 
 assert_contains "${section}" 'never what the drifted dispatch actually loaded' \
@@ -466,12 +468,13 @@ assert_contains "${loader_text}" '.claude/scripts/submodule-init.sh libraries/ag
 
 # A bare `git fetch origin main` guarantees only FETCH_HEAD; the very next step of the loader reads
 # refs/remotes/origin/main, so with remote.origin.fetch unset the boot loads a STALE reviewed
-# definition while reporting success.
-assert_contains "${loader_text}" 'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
-  'the Cursor loader must pin an explicit refspec for the ref its next step reads, not a generic fetch that only guarantees FETCH_HEAD'
+# definition while reporting success. --no-prune is pinned with it because fetch.prune otherwise
+# prunes that very ref during the same fetch (measured 2026-08-24), deleting what the next step reads.
+assert_contains "${loader_text}" 'git -C libraries/agent-plugins fetch --no-prune origin main:refs/remotes/origin/main' \
+  'the Cursor loader must pin an explicit refspec AND --no-prune; without --no-prune fetch.prune deletes the ref its next step reads'
 
 assert_order "${loader_text}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
-  'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
+  'git -C libraries/agent-plugins fetch --no-prune origin main:refs/remotes/origin/main' \
   'the Cursor loader must initialise the submodule BEFORE fetching, or the fetch runs against an empty checkout'
 
 # GraphQL returns the BARE `cursor`; requiring `cursor[bot]` on the GraphQL fallback rejects the
@@ -481,4 +484,58 @@ assert_contains "${loader_text}" 'The GraphQL API identity is the BARE `cursor`'
 
 assert_not_contains "${loader_text}" 'rejected the legitimate fallback and stopped the dispatch' \
   'the deployed loader must state current identity rules without carrying a past-failure narrative in every dispatch'
+
+# ---------------------------------------------------------------------------
+# BEHAVIOURAL: --no-prune is load-bearing, not decoration.
+#
+# The two text pins above can be stripped by anyone who reads `--no-prune` as
+# redundant next to an explicit refspec. It is not. `fetch.prune` makes git
+# compute prune candidates against the COMMAND-LINE refspec alone, so the
+# configured +refs/heads/*:refs/remotes/origin/* destination is pruned in the
+# same run; git emits both "- [deleted] (none) -> origin/main" and
+# "= [up to date] main -> origin/main", the update is a no-op computed against
+# the pre-prune value, and the DELETE survives — at exit 0.
+#
+# The RED arm below IS the ablation: it must reproduce the deletion, or the
+# GREEN arm proves nothing. Config is isolated via GIT_CONFIG_GLOBAL/SYSTEM so
+# the result does not depend on the host's ~/.gitconfig, and there is no network.
+command -v git >/dev/null 2>&1 || fail 'git is required to verify the --no-prune premise behaviourally'
+
+prune_fixture=$(mktemp -d) || fail 'could not create the --no-prune fixture directory'
+trap 'rm -rf "${prune_fixture}"' EXIT
+
+(
+  export GIT_CONFIG_GLOBAL="${prune_fixture}/gitconfig"
+  export GIT_CONFIG_SYSTEM=/dev/null
+  printf '[user]\n\tname=t\n\temail=t@t\n[init]\n\tdefaultBranch=main\n' > "${GIT_CONFIG_GLOBAL}"
+  git init -q --bare "${prune_fixture}/remote.git" || exit 90
+  git init -q "${prune_fixture}/src" || exit 90
+  git -C "${prune_fixture}/src" commit -q --allow-empty -m seed || exit 90
+  git -C "${prune_fixture}/src" branch -M main || exit 90
+  git -C "${prune_fixture}/src" remote add origin "${prune_fixture}/remote.git" || exit 90
+  git -C "${prune_fixture}/src" push -q origin main || exit 90
+) || fail 'could not build the --no-prune fixture remote'
+
+# Returns the post-fetch state of refs/remotes/origin/main, or the literal ABSENT.
+prune_arm() {
+  arm_dir="${prune_fixture}/arm-$1"; shift
+  (
+    export GIT_CONFIG_GLOBAL="${prune_fixture}/gitconfig"
+    export GIT_CONFIG_SYSTEM=/dev/null
+    git clone -q "${prune_fixture}/remote.git" "${arm_dir}" >/dev/null 2>&1 || exit 90
+    git -C "${arm_dir}" config fetch.prune true || exit 90
+    git -C "${arm_dir}" rev-parse --verify -q refs/remotes/origin/main >/dev/null 2>&1 || exit 91
+    git -C "${arm_dir}" fetch "$@" origin main:refs/remotes/origin/main >/dev/null 2>&1
+    git -C "${arm_dir}" rev-parse --verify -q refs/remotes/origin/main >/dev/null 2>&1 \
+      && echo PRESENT || echo ABSENT
+  )
+}
+
+red_state=$(prune_arm red)
+[ "${red_state}" = "ABSENT" ] || fail \
+  "the --no-prune ABLATION did not fire: without the flag refs/remotes/origin/main was ${red_state}, expected ABSENT. Either git's prune semantics changed (re-derive the rationale; the flag stays, it is harmless) or this fixture stopped exercising the hazard — do NOT drop --no-prune on the strength of this arm passing"
+
+green_state=$(prune_arm green --no-prune)
+[ "${green_state}" = "PRESENT" ] || fail \
+  "with --no-prune the reset fetch must PRESERVE refs/remotes/origin/main, got ${green_state} — the prescribed lane-reset command would leave the currency check reading a missing ref, degrade it to UNKNOWN, and make the Cursor tracker unclosable"
 echo "drifted-lane-escalation contract: PASS — condition-keyed escalation, issue-latched, additive, and both script premises verified behaviourally"
