@@ -131,6 +131,9 @@ read_blob() {
 
 status=0
 matched=0
+# Process substitution, not a here-document: an unquoted heredoc would expand `$` and backticks in a
+# path, and a quoted one would not expand `$paths` at all. This keeps the loop in the current shell,
+# so `status` and `matched` survive it.
 while IFS= read -r p; do
   [ -n "$p" ] || continue
   skill="${p#"$prefix"}"; skill="${skill%/SKILL.md}"
@@ -144,9 +147,7 @@ while IFS= read -r p; do
     || { printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue; }
   case "$owner" in ""|null) owner="LOCAL" ;; esac
   printf '%s\t%s\t%s\n' "$owner" "$skill" "$p"
-done <<EOF
-$paths
-EOF
+done < <(printf '%s\n' "$paths")
 
 if [ -n "$ONLY_SKILL" ] && [ "$matched" -eq 0 ]; then
   die "no skill named '$ONLY_SKILL' under '$prefix' at $PIN"
