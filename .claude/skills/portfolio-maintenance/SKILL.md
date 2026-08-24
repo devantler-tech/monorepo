@@ -281,9 +281,16 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   command-invocation reply** — identified positively by `user.login` **and** the
   `<!-- CodeRabbit review command invocation: … -->` marker, never any durable bot comment mentioning
   a limit — especially when the auto-generated summary is the satisfier, since a refusal refreshes it
-  to name the current head. And bind that marker to **this** request: a not-run marker defeats a green
-  only while it is at least as new as the satisfying artifact, or a spent refusal from an earlier
-  round vetoes a genuine later green.
+  to name the current head. A refusal in that reply defeats the green **whatever the summary says**.
+  🔴 **Bind it to this request by its ROUND — never by comparing it with the satisfying artifact.**
+  The refusal is what *causes* the summary to refresh (measured 3 s on monorepo#3016, 4 s on
+  platform#3344), so the summary is **always** the newer of the two and an artifact-timestamp test can
+  never let the refusal win: it would re-accept the refreshed summary as a green with no review behind
+  it, which is the exact fail-open this rule exists to close. The refusal counts when it postdates the
+  newest authenticated `<!-- review-request-head: <sha> provider=cr -->` marker at this head; one
+  older than that marker belongs to an earlier round and is spent, so it cannot veto a genuine later
+  green. The artifact-timestamp comparison stays where it works — the **transient commit status**,
+  whose `updated_at` is judged against the artifact per the status table in `AGENTS.md`.
   Report an older completion as stale, and a current-head CodeRabbit review carrying
   findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual

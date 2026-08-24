@@ -179,12 +179,35 @@ for direction_file in "${surveyor}" "${maintenance_skill}" "${parity_checklist}"
   assert_prose "${direction_file}" 'defeats the green' \
     "${direction_file} lost the statement that a not-run marker defeats a green"
 done
-# The transient status must be bound to THIS request, or a spent refusal from an earlier round vetoes
+# The transient STATUS must be bound to THIS request, or a spent refusal from an earlier round vetoes
 # a genuine later green — the fail-closed this change would otherwise re-introduce one round later.
-for staleness_file in "${constitution}" "${surveyor}" "${maintenance_skill}" "${parity_checklist}"; do
+# Scope matters: this recency test is correct for the status and WRONG for the durable reply (below).
+for staleness_file in "${constitution}" "${surveyor}" "${parity_checklist}"; do
   assert_prose "${staleness_file}" 'at least as new as the' \
-    "${staleness_file} does not bind the not-run marker to the artifact's recency, so a spent refusal still vetoes a green"
+    "${staleness_file} does not bind the status not-run marker to the artifact's recency, so a spent refusal still vetoes a green"
 done
+# ...and that recency test must stay pinned to the STATUS field it compares. Left unscoped it reads as
+# a general rule and migrates onto the durable reply, where it is a fail-open (see the round binding
+# immediately below) — which is exactly how it reached the maintenance skill.
+for status_scoped_file in "${constitution}" "${surveyor}" "${parity_checklist}"; do
+  assert_prose "${status_scoped_file}" 'status `updated_at`' \
+    "${status_scoped_file} does not tie the artifact-recency test to the status updated_at, so it can migrate onto the durable reply"
+done
+# The DURABLE REPLY is bound by ROUND, never by artifact recency. A refusal is what CAUSES the
+# auto-generated summary to refresh — measured 3 s on monorepo#3016 and 4 s on platform#3344 — so the
+# summary is ALWAYS newer than the refusal and an artifact-timestamp test can never let the refusal
+# win. Applied to the reply it therefore re-accepts the refreshed summary as a green with no review
+# behind it: the exact fail-open #3015 exists to close, reintroduced by the fix for it.
+assert_prose "${maintenance_skill}" 'defeats the green **whatever the summary says**' \
+  "the maintenance skill lets the refreshed summary outrank the refusal that refreshed it"
+assert_prose "${maintenance_skill}" 'Bind it to this request by its ROUND' \
+  "the maintenance skill does not bind the durable refusal by round, so it has no spent-refusal protection"
+assert_prose "${maintenance_skill}" 'postdates the newest authenticated' \
+  "the maintenance skill does not key the durable refusal on the request marker, so its round test is unfalsifiable"
+# NEGATIVE CONTROL for the reintroduction path: the reply-scoped artifact-recency wording must stay
+# GONE from the maintenance skill, not merely be supplemented by the round binding.
+assert_absent "${maintenance_skill}" 'defeats a green only while it is at least as new as the satisfying artifact' \
+  "the reply-scoped artifact-recency test is back in the maintenance skill, re-opening the summary fail-open"
 # The refusal read must be scoped to a positively identified command-invocation reply. An unscoped
 # "durable bot comment" match is a blocklist over arbitrary prose: any coderabbitai[bot] body that
 # mentions a limit would veto a real green.
