@@ -67,9 +67,12 @@ plugin carries them (or an explicit, tested subset):
    read from CodeRabbit's newest same-head **command-invocation reply**, identified positively by
    `user.login` plus the `<!-- CodeRabbit review command invocation: … -->` marker — never any durable
    bot comment that mentions a limit. A refusal in **that** reply defeats the green **whatever the
-   summary says**, and it is scoped to the current round by taking the *newest* such reply at this
-   head — never by comparing it with the satisfying artifact, since the refusal is what refreshes the
-   summary, so the summary is always newer and that comparison could never let the refusal win. The
+   summary says**, and it is bound to the current round by the **request marker** — it counts only
+   when it postdates the newest authenticated `review-request-head … provider=cr` marker at this
+   head, because newest-at-this-head alone does not identify a round and an earlier round's refusal
+   would otherwise veto a genuine later green. It is never bound by comparing it with the satisfying
+   artifact, since the refusal is what refreshes the summary, so the summary is always newer and that
+   comparison could never let the refusal win. The
    artifact-recency comparison belongs to the **transient status** alone — a status not-run marker
    defeats a green only while it is at least as new as the satisfying artifact
    (status `updated_at` vs the artifact's `submitted_at`/`updated_at`); a spent one is uninformative,

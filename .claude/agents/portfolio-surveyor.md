@@ -781,6 +781,13 @@ public and private — no per-repo loop needed to enumerate):
      positively (`user.login == "coderabbitai[bot]"` **and** the
      `<!-- CodeRabbit review command invocation: … -->` marker), never any durable bot comment that
      happens to mention a limit.
+     🔴 **Newest-at-this-head does NOT establish the current round — bind the reply to the request
+     marker.** A head can carry several request rounds, so the newest such reply can still belong to
+     an earlier one and would then veto a genuine later green (fail-closed). Count a refusal only
+     when it postdates the newest authenticated `<!-- review-request-head: <sha> provider=cr -->`
+     marker at this head; one older than that marker is spent. Never bind it by comparing it with the
+     satisfying artifact: the refusal is what *refreshes* the summary, so the summary is always newer
+     and that test could never let the refusal win — a fail-open.
      🔴 **Bind the not-run marker to THIS request, or the rule re-introduces a fail-closed.** The
      status reports the last event at that head, so a spent refusal can outlive the round that
      produced it: a `Review rate limited` only defeats a green while it is **at least as new as the

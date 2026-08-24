@@ -4080,7 +4080,7 @@ in full. The trend is **monotonic, not a spike**: daily medians ran **155,212 �
 engineering plugin contract* retains it only until digest parity, and *Agent definition locations*
 allows it to carry **only its named deployment/provider delta** — generic role logic changes at its
 owning upstream. That parity gate was reached: `agent-plugins#78` closed **COMPLETED 2026-07-25**.
-The overlay then grew **61,144 B → 150,495 B (+146%)**, because generic refinements (the `4b`–`4e`
+The overlay then grew **61,144 B → 151,167 B (+147%)**, because generic refinements (the `4b`–`4e`
 items in [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
 were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
 closed, pushing the file's own deletion further away, and charging every hourly dispatch for it.

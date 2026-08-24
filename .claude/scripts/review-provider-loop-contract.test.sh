@@ -202,8 +202,13 @@ assert_prose "${maintenance_skill}" 'defeats the green **whatever the summary sa
   "the maintenance skill lets the refreshed summary outrank the refusal that refreshed it"
 assert_prose "${maintenance_skill}" 'Bind it to this request by its ROUND' \
   "the maintenance skill does not bind the durable refusal by round, so it has no spent-refusal protection"
-assert_prose "${maintenance_skill}" 'postdates the newest authenticated' \
-  "the maintenance skill does not key the durable refusal on the request marker, so its round test is unfalsifiable"
+# ...and this binding must hold on EVERY surface that reads the refusal, not just the run procedure.
+# Newest-at-this-head does not identify a round: a head carries several request rounds, so an earlier
+# round's refusal can still be the newest reply and would veto a genuine later green (fail-closed).
+for round_bound_file in "${maintenance_skill}" "${surveyor}" "${parity_checklist}"; do
+  assert_prose "${round_bound_file}" 'postdates the newest authenticated' \
+    "${round_bound_file} does not key the durable refusal on the request marker, so its round test is unfalsifiable"
+done
 # NEGATIVE CONTROL for the reintroduction path: the reply-scoped artifact-recency wording must stay
 # GONE from the maintenance skill, not merely be supplemented by the round binding.
 assert_absent "${maintenance_skill}" 'defeats a green only while it is at least as new as the satisfying artifact' \
