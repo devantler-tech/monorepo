@@ -60,6 +60,23 @@ skill_file "$P/lookalike/SKILL.md" 'metadata:
   github-repo: https://github.com/devantler-tech/agent-skills-v2' 'lookalike body'
 skill_file "$P/misplaced/SKILL.md" 'github-repo: https://github.com/devantler-tech/agent-skills' 'key outside metadata'
 
+# A SECOND plugin. The resolver's default used to hard-code one plugin name, so every skill bundled
+# by another plugin answered "no skill named X" — while the run that asked looked like it had checked
+# the whole bundle. `AGENTS.md` routes ownership for skills in other plugins by name (astro,
+# git-commit, refactor, test-driven-development, find-skills), so one-plugin scope is a wrong answer
+# to the question the helper exists to answer, not a smaller one.
+skill_file "$plug/plugins/other-plugin/skills/elsewhere/SKILL.md" 'metadata:
+  github-repo: https://github.com/third-party/other-skills' 'bundled by a different plugin'
+
+# A body far larger than a pipe buffer. The frontmatter reads used to be fed with
+# `printf ... | yq`, and yq stops reading once it has the front matter, so printf took SIGPIPE and
+# `pipefail` turned a perfectly good read into a non-zero status — which the `|| meta_kind=""`
+# fallback then converted into UNKNOWN. Every real skill is far bigger than the fixtures were, so
+# the whole forge path answered UNKNOWN for every skill while this suite passed on small bodies.
+# The size is what makes this fixture a test rather than a duplicate of `synced`.
+skill_file "$plug/plugins/agentic-engineering/skills/bigbody/SKILL.md" 'metadata:
+  github-repo: https://github.com/devantler-tech/agent-skills' "$(yes 'filler line that pushes this body past any pipe buffer' | head -4000)"
+
 # A revision carrying ONLY well-formed declarations. It exists so the suite can assert a plain
 # exit 0: with the malformed fixtures below folded into the same commit, EVERY end-to-end arm
 # required exit 2, and a regression that always answered UNKNOWN/2 would have passed the whole
@@ -266,6 +283,29 @@ assert_eq 'a wholly well-formed revision exits 0' 0 "$RC_C"
 assert_contains 'clean revision resolves the synced skill' "$OUT_C" 'https://github.com/devantler-tech/agent-skills	synced'
 assert_contains 'clean revision resolves the local skill'  "$OUT_C" 'LOCAL	local'
 assert_not_contains 'clean revision reports no UNKNOWN'    "$OUT_C" 'UNKNOWN'
+
+# ---- 9b. EVERY PLUGIN BY DEFAULT, and a body bigger than a pipe buffer.
+# Both of these were live defects that this suite passed straight over: the resolver enumerated one
+# hard-coded plugin, and the frontmatter read broke on any body large enough to make `printf | yq`
+# take SIGPIPE. Together they meant the documented bare command answered UNKNOWN for all six real
+# skills and could not see the other twenty at all — while every assertion above stayed green,
+# because the fixtures were single-plugin and a few hundred bytes long.
+assert_contains 'default enumerates OTHER plugins, not just one' "$OUT_C" \
+  'https://github.com/third-party/other-skills	elsewhere'
+assert_contains 'a body larger than a pipe buffer still resolves' "$OUT_C" \
+  'https://github.com/devantler-tech/agent-skills	bigbody'
+assert_not_contains 'a large body is never UNKNOWN' "$OUT_C" 'UNKNOWN	bigbody'
+
+# --plugin still NARROWS. The default widened; the selector must not have lost the ability to scope,
+# and it must compare the name literally rather than as a pattern.
+set +e
+OUT_S="$("$SUT" --repo-root "$cons_clean" --source submodule --submodule-path libraries/agent-plugins \
+          --plugin agentic-engineering 2>/dev/null)"
+RC_S=$?
+set -e
+assert_eq 'an explicit --plugin still exits 0' 0 "$RC_S"
+assert_contains '--plugin keeps its own plugin'  "$OUT_S" 'bigbody'
+assert_not_contains '--plugin excludes the other plugin' "$OUT_S" 'elsewhere'
 
 # ---- 10. A NON-STRING declaration is UNKNOWN, never an owner. yq renders every scalar as text, so
 #     a tag-blind reader emits `false` in the owner column and exits 0 — malformed input answered

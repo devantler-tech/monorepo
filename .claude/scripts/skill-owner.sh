@@ -33,7 +33,7 @@ set -euo pipefail
 
 PROG="${0##*/}"
 SUBMODULE_PATH="libraries/agent-plugins"
-PLUGIN_NAME="agentic-engineering"
+PLUGIN_NAME=""            # empty = every plugin bundled at the pin
 SOURCE="auto"
 ONLY_SKILL=""
 FILTER_ONLY=0
@@ -61,27 +61,43 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if [ -n "$PLUGIN_NAME" ]; then SCOPE_DESC="plugins/$PLUGIN_NAME/skills/"; else SCOPE_DESC="plugins/*/skills/ (every plugin)"; fi
 case "$SOURCE" in auto|submodule|forge) ;; *) usage_die "--source must be auto, submodule or forge" ;; esac
 
 command -v yq >/dev/null 2>&1 || die "yq is required to read skill frontmatter structurally"
 
-prefix="plugins/$PLUGIN_NAME/skills/"
+PLUGIN_ROOT="plugins/"
+SCOPE_DESC=""             # set after argument parsing, for messages only
 
 # PLUGIN_NAME is caller-supplied via --plugin, so it must never reach a regular expression: a name
 # containing `.` or `*` would match OTHER plugins' skills, which is a silent wrong answer rather than
-# an error. Compare the prefix LITERALLY, then validate only the remaining shape.
+# an error. Compare it LITERALLY, then validate only the remaining shape.
+#
+# The default enumerates EVERY plugin, because ownership is a per-FILE question across the whole
+# bundle: `AGENTS.md`'s routing inventory names skills bundled by other plugins (astro, git-commit,
+# refactor, test-driven-development, find-skills), and a resolver that silently covered one plugin
+# would answer UNKNOWN for them while looking like it had checked. Scoping to one plugin is opt-in
+# via --plugin, never the default.
 select_skill_paths() { # stdin: candidate paths -> stdout: plugins/<plugin>/skills/<skill>/SKILL.md
-  local line rest
+  local line rest plug r1 seg2 r2 sk leaf
   while IFS= read -r line; do
-    case "$line" in "$prefix"*) rest="${line#"$prefix"}" ;; *) continue ;; esac
-    case "$rest" in */*/*) continue ;; esac          # a nested path, not <skill>/SKILL.md
-    case "$rest" in */SKILL.md) ;; *) continue ;; esac
-    [ -n "${rest%/SKILL.md}" ] || continue           # an empty skill segment
+    case "$line" in "$PLUGIN_ROOT"*) rest="${line#"$PLUGIN_ROOT"}" ;; *) continue ;; esac
+    # Segment-by-segment, so a deeper path cannot pass: `leaf` must be exactly SKILL.md, which a
+    # nested `<skill>/sub/SKILL.md` fails because its leaf still carries a slash.
+    plug="${rest%%/*}"; r1="${rest#*/}"
+    [ "$r1" != "$rest" ] || continue                 # no second segment
+    [ -n "$plug" ] || continue
+    if [ -n "$PLUGIN_NAME" ] && [ "$plug" != "$PLUGIN_NAME" ]; then continue; fi
+    seg2="${r1%%/*}"; r2="${r1#*/}"
+    [ "$r2" != "$r1" ] || continue                   # no third segment
+    [ "$seg2" = skills ] || continue
+    sk="${r2%%/*}"; leaf="${r2#*/}"
+    [ "$leaf" != "$r2" ] || continue                 # no fourth segment
+    [ "$leaf" = SKILL.md ] || continue
+    [ -n "$sk" ] || continue                         # an empty skill segment
     printf '%s\n' "$line"
   done
 }
-
-
 if [ "$FILTER_ONLY" = 1 ]; then
   select_skill_paths
   exit 0
@@ -110,7 +126,7 @@ paths=""
 try_submodule() {
   [ -e "$sub" ] || return 1
   git -C "$sub" --no-replace-objects cat-file -e "$PIN^{commit}" 2>/dev/null || return 1
-  paths="$(git -C "$sub" --no-replace-objects ls-tree -r --name-only "$PIN" -- "$prefix" 2>/dev/null \
+  paths="$(git -C "$sub" --no-replace-objects ls-tree -r --name-only "$PIN" -- "$PLUGIN_ROOT" 2>/dev/null \
              | select_skill_paths || true)"
   resolved_source="submodule"
   return 0
@@ -147,7 +163,7 @@ esac
 # An EMPTY enumeration is UNKNOWN, never an all-LOCAL listing. This is the whole point of the
 # helper: the shape that used to be produced by an unpopulated submodule was silence, and silence
 # read as "nothing is synced".
-[ -n "$paths" ] || die "enumerated NO skills under '$prefix' at $PIN via $resolved_source — UNKNOWN, never 'nothing is synced'"
+[ -n "$paths" ] || die "enumerated NO skills under '$SCOPE_DESC' at $PIN via $resolved_source — UNKNOWN, never 'nothing is synced'"
 
 read_blob() {
   case "$resolved_source" in
@@ -163,7 +179,7 @@ matched=0
 # so `status` and `matched` survive it.
 while IFS= read -r p; do
   [ -n "$p" ] || continue
-  skill="${p#"$prefix"}"; skill="${skill%/SKILL.md}"
+  _rest="${p#"$PLUGIN_ROOT"}"; _sk="${_rest#*/}"; _sk="${_sk#skills/}"; skill="${_sk%/SKILL.md}"
   if [ -n "$ONLY_SKILL" ] && [ "$skill" != "$ONLY_SKILL" ]; then continue; fi
   matched=$((matched + 1))
   body="$(read_blob "$p")" || { printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue; }
@@ -182,19 +198,25 @@ while IFS= read -r p; do
   # declaration, the same fail-open this block exists to close, one level up. Measured: all three
   # yield `false` from the has() form. The tag discriminates cleanly — `!!map` is a real mapping and
   # `!!null` is genuinely absent; anything else is malformed and therefore UNKNOWN.
-  meta_kind="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata | tag' 2>/dev/null)" || meta_kind=""
+  # Herestring, NEVER `printf ... | yq`. yq stops reading once it has the front matter, so on any
+  # body larger than the pipe buffer printf takes SIGPIPE and `pipefail` turns a successful read
+  # into a non-zero status — which the `|| ...=""` fallbacks below then report as UNKNOWN. Real
+  # skills are 5–32 KB, so the piped form answered UNKNOWN for EVERY skill on the forge path while
+  # the suite passed on few-hundred-byte fixtures. `skill-owner.test.sh` pins this with a fixture
+  # deliberately larger than a pipe buffer.
+  meta_kind="$(yq --front-matter=extract '.metadata | tag' 2>/dev/null <<<"$body")" || meta_kind=""
   case "$meta_kind" in
     '!!map') ;;
     '!!null') printf 'LOCAL\t%s\t%s\n' "$skill" "$p"; continue ;;
     *) printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue ;;
   esac
-  present="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata | has("github-repo")' 2>/dev/null)" \
+  present="$(yq --front-matter=extract '.metadata | has("github-repo")' 2>/dev/null <<<"$body")" \
     || { printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue; }
   case "$present" in
     false) owner="LOCAL" ;;
     true)
-      kind="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata.github-repo | tag' 2>/dev/null)" || kind=""
-      owner="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata.github-repo' 2>/dev/null)" || owner=""
+      kind="$(yq --front-matter=extract '.metadata.github-repo | tag' 2>/dev/null <<<"$body")" || kind=""
+      owner="$(yq --front-matter=extract '.metadata.github-repo' 2>/dev/null <<<"$body")" || owner=""
       case "$kind" in
         # A repository slug is a STRING. yq renders a scalar of any tag as text, so accepting
         # !!int/!!float/!!bool would print `false` or `42` as though it were an owner and exit 0 —
@@ -213,7 +235,7 @@ while IFS= read -r p; do
 done < <(printf '%s\n' "$paths")
 
 if [ -n "$ONLY_SKILL" ] && [ "$matched" -eq 0 ]; then
-  die "no skill named '$ONLY_SKILL' under '$prefix' at $PIN"
+  die "no skill named '$ONLY_SKILL' under '$SCOPE_DESC' at $PIN"
 fi
 
 printf '%s: source=%s pin=%s skills=%d\n' "$PROG" "$resolved_source" "$PIN" "$matched" >&2
