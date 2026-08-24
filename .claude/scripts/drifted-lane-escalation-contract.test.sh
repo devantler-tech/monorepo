@@ -533,7 +533,12 @@ refspec_arm() {
     git -C "${arm_dir}" config fetch.prune true || exit 90
     git -C "${arm_dir}" rev-parse --verify -q refs/remotes/origin/main >/dev/null 2>&1 || exit 91
     for _ in 1 2 3; do
-      git -C "${arm_dir}" fetch "$@" >/dev/null 2>&1
+      # A SWALLOWED fetch failure is a false positive, not a detail: the clone
+      # already left refs/remotes/origin/main in place, so if every fetch fails
+      # the GREEN arm still reads 'present present present' and passes having
+      # never performed a successful fetch. Fail loudly instead, keeping stderr
+      # for diagnosis rather than discarding it.
+      git -C "${arm_dir}" fetch "$@" >/dev/null 2>>"${refspec_fixture}/fetch.err" || exit 92
       if git -C "${arm_dir}" rev-parse --verify -q refs/remotes/origin/main >/dev/null 2>&1
       then printf 'present '
       else printf 'ABSENT '
@@ -543,18 +548,21 @@ refspec_arm() {
 }
 
 red_runs=$(refspec_arm red origin 'main:refs/remotes/origin/main') || fail \
-  "the refspec RED arm could not run its fixture (git init/clone/config failed), so neither arm observed anything. This is an infrastructure failure, NOT evidence that the refspec is sound"
-case "${red_runs}" in
-  *ABSENT*) ;;
-  *) fail "the refspec ABLATION did not fire: the short form left refs/remotes/origin/main present on all three runs (${red_runs}), so the GREEN arm below proves nothing. Either git's prune semantics changed — re-derive the rationale, and KEEP the fully-qualified refspec, which is correct either way — or this fixture stopped exercising the hazard" ;;
-esac
+  "the refspec RED arm could not run its fixture (git init/clone/config/fetch failed), so neither arm observed anything. This is an infrastructure failure, NOT evidence that the refspec is sound; see ${refspec_fixture}/fetch.err if the fetch was the step that failed"
+# Match the EXACT alternation, not merely "contains ABSENT". A substring test
+# also accepts 'present present ABSENT ', which is a single late failure rather
+# than the delete/restore/delete oscillation this arm exists to demonstrate —
+# and it is that oscillation, not one bad run, that makes a manual spot-check
+# after "simplifying" the refspec roughly a coin flip.
+[ "${red_runs}" = "ABSENT present ABSENT " ] || fail \
+  "the refspec ABLATION did not fire as expected: the short form should oscillate 'ABSENT present ABSENT ', got '${red_runs}'. If it is all-present, git's prune semantics changed — re-derive the rationale, and KEEP the fully-qualified refspec, which is correct either way. Any other sequence means this fixture no longer reproduces the oscillation, so the GREEN arm below proves nothing"
 
 green_runs=$(refspec_arm green origin '+refs/heads/main:refs/remotes/origin/main') || fail \
-  "the refspec GREEN arm could not run its fixture (git init/clone/config failed), so it observed nothing. This is an infrastructure failure, NOT evidence that the refspec is sound"
+  "the refspec GREEN arm could not run its fixture (git init/clone/config/fetch failed), so it observed nothing. This is an infrastructure failure, NOT evidence that the refspec is sound; see ${refspec_fixture}/fetch.err if the fetch was the step that failed"
 # Match the FULL expected shape, never merely "no ABSENT". A fixture that dies
-# early (clone/config failure) prints NOTHING, and an absence test would read
-# that empty string as success — the arm would pass hardest exactly when it
-# observed least. Three explicit 'present' tokens are the only passing value.
+# early prints NOTHING, and an absence test would read that empty string as
+# success — the arm would pass hardest exactly when it observed least. Three
+# explicit 'present' tokens are the only passing value.
 [ "${green_runs}" = "present present present " ] || fail \
   "the fully-qualified refspec must keep refs/remotes/origin/main present on EVERY run; expected 'present present present ', got '${green_runs}' (an EMPTY value means the fixture itself failed, not that the refspec is sound) — otherwise the lane reset leaves the currency check reading a missing ref, exits 2 UNKNOWN, and a Cursor drift tracker can never be closed"
 echo "drifted-lane-escalation contract: PASS — condition-keyed escalation, issue-latched, additive, and both script premises verified behaviourally"
