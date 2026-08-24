@@ -142,7 +142,7 @@ grep -Fq 'uninformative status' "${surveyor}" ||
   fail "surveyor lost the uninformative-status class, so an absent or auto-review-disabled CodeRabbit status defeats a real green (#3015)"
 grep -Fq 'no CodeRabbit status at all' "${surveyor}" ||
   fail "surveyor does not name the ABSENT-status case that must not defeat a green (#3015)"
-grep -Fq 'durable' "${surveyor}" ||
+grep -Fq 'read a refusal from the durable' "${surveyor}" ||
   fail "surveyor does not read a refusal from the durable reply body, so a transient status can lose it (#3015)"
 if grep -Fq 'fails closed to `none`' "${surveyor}"; then
   fail "surveyor still fails an absent CodeRabbit status closed to none — retired by #3015"
