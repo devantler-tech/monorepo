@@ -38,6 +38,19 @@ assert_absent() {
   fi
 }
 
+# Some review-loop rules repeat the same vocabulary in distinct phases. Assert inside the operative
+# phase so a correct explanation elsewhere cannot mask a contradictory instruction where the action
+# is actually chosen.
+assert_section_prose() {
+  local file="$1" start="$2" end="$3" phrase="$4" message="$5"
+  awk -v start="${start}" -v end="${end}" '
+    index($0, start) { in_section = 1 }
+    in_section { print }
+    in_section && index($0, end) { exit }
+  ' "${file}" | tr '\n' ' ' | tr -s '[:space:]' ' ' | grep -Fq -- "${phrase}" ||
+    fail "${message}"
+}
+
 grep -Fq 'CodeRabbit > Codex > Cursor Bugbot' "${constitution}" ||
   fail "constitution does not preserve the provider order"
 grep -Fq 'STOP on the first successful current-head review' "${constitution}" ||
@@ -163,6 +176,8 @@ assert_absent "${surveyor}" 'fails closed to `none`' \
   "surveyor still fails an absent CodeRabbit status closed to none (#3015)"
 assert_prose "${surveyor}" 'uninformative status' \
   "surveyor lost the uninformative-status class (#3015)"
+assert_absent "${surveyor}" '**And** the head must also carry a CodeRabbit commit status whose `description` begins `Review completed`' \
+  "surveyor still makes the transient Review-completed status a required green-review conjunct (#3015)"
 assert_prose "${maintenance_skill}" 'uninformative status' \
   "portfolio-maintenance lost the uninformative-status class (#3015)"
 assert_prose "${parity_checklist}" 'uninformative status' \
@@ -218,7 +233,7 @@ assert_prose "${maintenance_skill}" 'Bind it to this request by its ROUND' \
 # ...and this binding must hold on EVERY surface that reads the refusal, not just the run procedure.
 # Newest-at-this-head does not identify a round: a head carries several request rounds, so an earlier
 # round's refusal can still be the newest reply and would veto a genuine later green (fail-closed).
-for round_bound_file in "${maintenance_skill}" "${surveyor}" "${parity_checklist}"; do
+for round_bound_file in "${constitution}" "${maintenance_skill}" "${surveyor}" "${parity_checklist}"; do
   assert_prose "${round_bound_file}" 'postdates the newest authenticated' \
     "${round_bound_file} does not key the durable refusal on the request marker, so its round test is unfalsifiable"
 done
@@ -578,6 +593,11 @@ assert_prose "${constitution}" 'a refusal justifies skipping only when THIS roun
 # however correct the later prose is. A rule is what its operative sentence says.
 assert_prose "${constitution}" 'A refusal you cannot attribute to this round is **not** a reason to skip' \
   "the operative skip instruction is unqualified, so a durable prior-round refusal skips CodeRabbit before the round test is reached"
+assert_section_prose "${constitution}" '**READ a lane' '**Only one provider request may be active at a time' \
+  'newest same-head command-invocation reply' \
+  "the pre-trigger quota probe ignores the durable refusal reply and repeats a spent same-round CodeRabbit request"
+assert_absent "${constitution}" 'The status is durable and outlives the quota window' \
+  "constitution still calls the transient status durable after moving refusal evidence to the reply"
 # ...and the marker test must NOT be claimed mechanical on its payload alone. At an unchanged SHA the
 # previous round's marker is indistinguishable from this round's by head, provider, comment id or
 # timestamp, so a durable refusal postdates the OLD marker just as well and the restarted round's

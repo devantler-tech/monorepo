@@ -714,13 +714,14 @@ public and private — no per-repo loop needed to enumerate):
      genuine current review and reports `green_review=none` over a real green (monorepo#2819;
      measured 2026-08-13 on four substantive bodies across monorepo#2810 and #2723). Strip only the
      LEADING comments and keep the match anchored — a marker further in is not a review, and an
-     empty container still fails. **And** the head must also carry a CodeRabbit commit status whose
-     `description` begins `Review completed`, or CodeRabbit's substantive auto-generated summary comment
-     (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after the
-     authenticated request and naming `headRefOid`, or its **command-invocation reply comment carrying
-     a verdict** — a body stating `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of
-     `headRefOid`**, together with `I found no actionable issues`, updated after that request — only
-     when its threads, review-body sections, and explicit ancillary problem count are all zero.
+     empty container still fails. Treat that review object, CodeRabbit's substantive
+     auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated
+     after the authenticated request and naming `headRefOid`, and its **command-invocation reply comment
+     carrying a verdict** as three alternative substantive artifacts; the review object does **not**
+     require a `Review completed` status conjunct. The verdict reply must state
+     `Reviewed pull request #<n> at <sha>` with `<sha>` a **prefix of `headRefOid`**, together with
+     `I found no actionable issues`, and be updated after that request. Report any alternative green
+     only when its threads, review-body sections, and explicit ancillary problem count are all zero.
      **All three artifacts must have `user.login == "coderabbitai[bot]"`**: the reply is matched on
      plain prose, so without the author bind any account could post those phrases and be read green.
      **Discriminate a command reply on SUBSTANCE, never on comment type: a reply carrying no verdict
