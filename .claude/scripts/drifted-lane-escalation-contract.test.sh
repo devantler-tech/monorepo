@@ -485,4 +485,76 @@ assert_contains "${loader_text}" 'The GraphQL API identity is the BARE `cursor`'
 
 assert_not_contains "${loader_text}" 'rejected the legitimate fallback and stopped the dispatch' \
   'the deployed loader must state current identity rules without carrying a past-failure narrative in every dispatch'
+
+# ---------------------------------------------------------------------------
+# BEHAVIOURAL: the fully-qualified refspec is load-bearing, not verbosity.
+#
+# The assertions above pin `+refs/heads/main:refs/remotes/origin/main` as TEXT.
+# That is weak here, because the defect it guards OSCILLATES: with fetch.prune
+# on, the short form `main:refs/remotes/origin/main` deletes the ref on some
+# invocations and restores it on others. So `+refs/heads/main:` reads as
+# needless verbosity next to a short form that visibly works, and a manual
+# spot-check after "simplifying" it has roughly even odds of looking fine.
+#
+# The RED arm below IS what gives the GREEN arm meaning: it must reproduce the
+# deletion. If it ever stops, this says so loudly rather than going quietly
+# green. No network; GIT_CONFIG_GLOBAL/SYSTEM are isolated so the verdict does
+# not depend on the host's ~/.gitconfig.
+command -v git >/dev/null 2>&1 || fail 'git is required to verify the refspec premise behaviourally'
+
+refspec_fixture=$(mktemp -d) || fail 'could not create the refspec fixture directory'
+trap 'rm -rf "${refspec_fixture}"' EXIT
+
+(
+  export GIT_CONFIG_GLOBAL="${refspec_fixture}/gitconfig"
+  export GIT_CONFIG_SYSTEM=/dev/null
+  printf '[user]\n\tname=t\n\temail=t@t\n[init]\n\tdefaultBranch=main\n' > "${GIT_CONFIG_GLOBAL}"
+  git init -q --bare "${refspec_fixture}/remote.git" || exit 90
+  git init -q "${refspec_fixture}/src" || exit 90
+  git -C "${refspec_fixture}/src" commit -q --allow-empty -m seed || exit 90
+  git -C "${refspec_fixture}/src" branch -M main || exit 90
+  git -C "${refspec_fixture}/src" remote add origin "${refspec_fixture}/remote.git" || exit 90
+  git -C "${refspec_fixture}/src" push -q origin main || exit 90
+  # A second upstream branch, so prune has a realistic namespace to reverse-map
+  # rather than a single-ref special case.
+  git -C "${refspec_fixture}/src" branch other || exit 90
+  git -C "${refspec_fixture}/src" push -q origin other || exit 90
+) || fail 'could not build the refspec fixture remote'
+
+# Three consecutive fetches; prints one word per run: present or ABSENT.
+# Three (not one) because the defect alternates — a single run cannot tell a
+# stable form from a form that merely happened to land on a good invocation.
+refspec_arm() {
+  arm_dir="${refspec_fixture}/arm-$1"; shift
+  (
+    export GIT_CONFIG_GLOBAL="${refspec_fixture}/gitconfig"
+    export GIT_CONFIG_SYSTEM=/dev/null
+    git clone -q "${refspec_fixture}/remote.git" "${arm_dir}" >/dev/null 2>&1 || exit 90
+    git -C "${arm_dir}" config fetch.prune true || exit 90
+    git -C "${arm_dir}" rev-parse --verify -q refs/remotes/origin/main >/dev/null 2>&1 || exit 91
+    for _ in 1 2 3; do
+      git -C "${arm_dir}" fetch "$@" >/dev/null 2>&1
+      if git -C "${arm_dir}" rev-parse --verify -q refs/remotes/origin/main >/dev/null 2>&1
+      then printf 'present '
+      else printf 'ABSENT '
+      fi
+    done
+  )
+}
+
+red_runs=$(refspec_arm red origin 'main:refs/remotes/origin/main') || fail \
+  "the refspec RED arm could not run its fixture (git init/clone/config failed), so neither arm observed anything. This is an infrastructure failure, NOT evidence that the refspec is sound"
+case "${red_runs}" in
+  *ABSENT*) ;;
+  *) fail "the refspec ABLATION did not fire: the short form left refs/remotes/origin/main present on all three runs (${red_runs}), so the GREEN arm below proves nothing. Either git's prune semantics changed — re-derive the rationale, and KEEP the fully-qualified refspec, which is correct either way — or this fixture stopped exercising the hazard" ;;
+esac
+
+green_runs=$(refspec_arm green origin '+refs/heads/main:refs/remotes/origin/main') || fail \
+  "the refspec GREEN arm could not run its fixture (git init/clone/config failed), so it observed nothing. This is an infrastructure failure, NOT evidence that the refspec is sound"
+# Match the FULL expected shape, never merely "no ABSENT". A fixture that dies
+# early (clone/config failure) prints NOTHING, and an absence test would read
+# that empty string as success — the arm would pass hardest exactly when it
+# observed least. Three explicit 'present' tokens are the only passing value.
+[ "${green_runs}" = "present present present " ] || fail \
+  "the fully-qualified refspec must keep refs/remotes/origin/main present on EVERY run; expected 'present present present ', got '${green_runs}' (an EMPTY value means the fixture itself failed, not that the refspec is sound) — otherwise the lane reset leaves the currency check reading a missing ref, exits 2 UNKNOWN, and a Cursor drift tracker can never be closed"
 echo "drifted-lane-escalation contract: PASS — condition-keyed escalation, issue-latched, additive, and both script premises verified behaviourally"
