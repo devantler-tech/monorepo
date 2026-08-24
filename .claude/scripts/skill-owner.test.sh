@@ -219,6 +219,11 @@ run --plugin no-such-plugin
 assert_eq 'empty enumeration exits 2' 2 "$RC"
 assert_eq 'empty enumeration prints NO rows' '' "$OUT"
 assert_contains 'empty enumeration says UNKNOWN, not "nothing is synced"' "$ERR" 'UNKNOWN'
+# The message must name WHAT was not established. `SCOPE_DESC` was computed from --plugin and then
+# blanked again further down, so both `die` paths reported `under ''` — losing the one detail a
+# fail-closed diagnostic exists to carry, on the exact paths a reader reaches only when something
+# went wrong. Nothing asserted the scope text, so it regressed silently.
+assert_contains 'empty enumeration names the SCOPE it could not establish' "$ERR" "plugins/no-such-plugin/skills/"
 
 # ---- 7. --skill naming nothing is UNKNOWN, not an empty success
 run --skill absent
@@ -503,6 +508,51 @@ assert_contains 'fixture: it emitted a real path before dying' "$poison_out" '/s
 # The contract: a failed enumeration is UNKNOWN (exit 2), never a partial answer at exit 0.
 assert_eq 'a failed enumeration is UNKNOWN, never a partial listing' 2 "$RC_P"
 assert_not_contains 'a failed enumeration prints no ownership rows' "$OUT_P" 'synced'
+
+
+# ---- 14. THE SAME FAILURE ON THE SUBMODULE ARM. Case 13 proves the mechanism on the forge path,
+#      where `jq` supplies an emits-then-fails enumerator for free. `git ls-tree` will not fail
+#      part-way on demand, so that arm needs a shim — and without one the two arms carry the same
+#      four-line fix with only ONE of them pinned, which is exactly how a later "simplification"
+#      restores `|| true` on the untested half and nothing goes red.
+#      The shim poisons ONLY the enumeration call (the one carrying both `-r` and `--name-only`) and
+#      delegates everything else — the gitlink read, `cat-file -e` — to the real git, so the arm
+#      still exercises the real resolver rather than a mock of it.
+real_git="$(command -v git)"
+[ -n "$real_git" ] || { echo "FAIL: could not resolve the real git for the shim" >&2; exit 1; }
+git_shim_bin="$tmp/gitbin"
+mkdir -p "$git_shim_bin"
+cat > "$git_shim_bin/git" <<GITSHIM
+#!/usr/bin/env bash
+if [ "\${FAKE_GIT_POISON:-0}" = 1 ]; then
+  _r=0; _n=0
+  for _a in "\$@"; do
+    [ "\$_a" = "-r" ] && _r=1
+    [ "\$_a" = "--name-only" ] && _n=1
+  done
+  if [ "\$_r" = 1 ] && [ "\$_n" = 1 ]; then
+    # Emit a REAL, selectable path, then fail — the shape the empty-list guard cannot catch.
+    printf '%s\n' 'plugins/agentic-engineering/skills/synced/SKILL.md'
+    exit 1
+  fi
+fi
+exec "$real_git" "\$@"
+GITSHIM
+chmod +x "$git_shim_bin/git"
+
+# The shim must be INERT when not poisoning, or a pass here would prove nothing about the fix.
+set +e
+OUT_S0="$(PATH="$git_shim_bin:$PATH" FAKE_GIT_POISON=0 \
+          "$SUT" --repo-root "$cons" --source submodule --submodule-path libraries/agent-plugins 2>/dev/null)"
+RC_S0=$?
+OUT_S="$(PATH="$git_shim_bin:$PATH" FAKE_GIT_POISON=1 \
+         "$SUT" --repo-root "$cons" --source submodule --submodule-path libraries/agent-plugins 2>/dev/null)"
+RC_S=$?
+set -e
+assert_contains 'shim is inert when not poisoning (control)' "$OUT_S0" 'https://github.com/devantler-tech/agent-skills	synced'
+assert_eq       'shim is inert when not poisoning: exit unchanged' 2 "$RC_S0"
+assert_eq 'submodule: a failed enumeration is UNKNOWN, never a partial listing' 2 "$RC_S"
+assert_not_contains 'submodule: a failed enumeration prints no ownership rows' "$OUT_S" 'synced'
 
 printf '\nskill-owner: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

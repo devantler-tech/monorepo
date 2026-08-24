@@ -67,7 +67,10 @@ case "$SOURCE" in auto|submodule|forge) ;; *) usage_die "--source must be auto, 
 command -v yq >/dev/null 2>&1 || die "yq is required to read skill frontmatter structurally"
 
 PLUGIN_ROOT="plugins/"
-SCOPE_DESC=""             # set after argument parsing, for messages only
+# NOTE: SCOPE_DESC is computed above, from PLUGIN_NAME. It is deliberately NOT re-initialised here:
+# both `die` messages interpolate it, so blanking it after the fact left them naming an empty scope —
+# "enumerated NO skills under '' at <pin>" — on exactly the fail-closed paths whose whole job is to
+# tell a reader WHAT could not be established.
 
 # PLUGIN_NAME is caller-supplied via --plugin, so it must never reach a regular expression: a name
 # containing `.` or `*` would match OTHER plugins' skills, which is a silent wrong answer rather than
