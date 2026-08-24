@@ -134,6 +134,44 @@ assert_prose "${maintenance_skill}" 'Review skipped: automatic reviews are disab
 # absent from it is one the overlay removal drops silently.
 assert_prose "${parity_checklist}" 'CodeRabbit commit-status description discriminator' \
   "removing the surveyor overlay would silently drop the status discriminator"
+
+# 🔴 The status is TRANSIENT and, where auto-review is disabled, PERMANENTLY UNINFORMATIVE — so it
+# cannot be a required conjunct (monorepo#3015). Measured 2026-08-24:
+#   * platform#3311 @ cd7f1c00eb — CodeRabbit posted 2 real findings; description
+#     `Review skipped: automatic reviews are disabled`. A head CodeRabbit certainly reviewed is the
+#     control, so the description cannot evidence whether an on-demand review ran.
+#   * platform#3311 @ a2ada72723 — finding-free verdict; same description, `updated_at` 23:13:31Z
+#     POSTDATING the 23:08:53Z request, so freshness is not the discriminator either.
+#   * ksail / actions — NO CodeRabbit status at all (unfiltered controls: 0 commit statuses, and
+#     43 check-runs on the ksail head with no CodeRabbit check). Absence is a fourth state.
+#   * platform#3344 @ e94216b3 — CodeRabbit replied `Review rate limited` at 20:49:29Z (still
+#     readable in the comment today); the status at that head now reads the disabled default,
+#     `updated_at` 21:06:55Z. The status LOST the refusal.
+# Requiring `Review completed` therefore fails CLOSED on every real review here, and reading the
+# status later fails OPEN on a refusal. Both directions are guarded below.
+assert_absent "${constitution}" 'is a not-run marker in the same family as a rate-limit marker' \
+  "constitution still classes the auto-review-disabled default as a not-run marker (#3015)"
+assert_prose "${constitution}" 'uninformative status' \
+  "constitution does not name the uninformative-status class that must not defeat a green (#3015)"
+assert_prose "${constitution}" 'no status at all' \
+  "constitution does not treat an ABSENT CodeRabbit status as uninformative (#3015)"
+assert_prose "${constitution}" 'durable record of a refusal is the reply comment body' \
+  "constitution does not move refusal detection onto the durable reply body (#3015)"
+assert_absent "${surveyor}" 'or `Review rate limited` when none did' \
+  "surveyor still claims the skipped description evidences that no review ran (#3015)"
+assert_absent "${surveyor}" 'fails closed to `none`' \
+  "surveyor still fails an absent CodeRabbit status closed to none (#3015)"
+assert_prose "${surveyor}" 'uninformative status' \
+  "surveyor lost the uninformative-status class (#3015)"
+assert_prose "${maintenance_skill}" 'uninformative status' \
+  "portfolio-maintenance lost the uninformative-status class (#3015)"
+assert_prose "${parity_checklist}" 'uninformative status' \
+  "removing the surveyor overlay would silently drop the uninformative-status split (#3015)"
+# NEGATIVE CONTROL, kept as prose so it cannot be quietly dropped: a rate-limited head must still
+# report `green_review=none`, and the check that proves it must read the durable reply body — a
+# status-based control passes vacuously once the status has reverted to the default.
+assert_prose "${constitution}" 'a rate-limit, quota, or service marker saying the review did not run is rejected whatever its shape' \
+  "constitution lost the artifact-level refusal rejection that the durable control depends on"
 for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
   if grep -Fq 'premerge=' "${contract_file}"; then
     fail "standalone CodeRabbit pre-merge readiness state remains in ${contract_file}"

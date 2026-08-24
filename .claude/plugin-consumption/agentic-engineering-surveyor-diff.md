@@ -56,12 +56,16 @@ plugin carries them (or an explicit, tested subset):
    `**Reviewed commit:**` marker), fails closed when unattributable, and is **not** cleared by a
    newer `Didn't find any major issues` comment. Without this the pentad reads fully clear over an
    open P2 — measured on monorepo#2559.
-4c. **CodeRabbit commit-status description discriminator** (monorepo#2676) — the `CodeRabbit` status
-   is `state: success` for a completed review, for `Review skipped: automatic reviews are disabled`,
-   and for a rate-limit refusal alike. Auto-review is disabled deployment-wide, so the skipped form
-   is the default state of every head: the status corroborates run-completion only when its
-   `description` begins `Review completed`, and never satisfies the gate on its own. Without this a
-   state-only check reports every never-reviewed PR as green.
+4c. **CodeRabbit commit-status description discriminator** (monorepo#2676 / #3015) — the `CodeRabbit`
+   status is `state: success` for a completed review, for `Review skipped: automatic reviews are
+   disabled`, and for a rate-limit refusal alike, so a state-only check reports every never-reviewed
+   PR as green. Read the `description` and sort it into three classes: `Review completed` evidences a
+   run and corroborates the artifact; an explicit not-run marker defeats the green; the disabled
+   default — or **no status at all** — is an **uninformative status** that must NOT defeat it, since
+   auto-review is disabled deployment-wide and some repositories publish no such status. The status
+   never satisfies the gate on its own, and being transient it can lose a refusal, so a refusal is
+   read from the durable `coderabbitai[bot]` reply body. Without this the check fails closed on every
+   real review and open on a refusal read later.
 4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713 / #2819) — a review
    object counts only when its body begins `**Actionable comments posted:` **after stripping any
    leading HTML comments and the whitespace around them**; an empty object is a reply

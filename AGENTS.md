@@ -1679,11 +1679,44 @@ too while `reviews.fail_commit_status: false` is in force (see *Local review rou
 `CodeRabbit / failure` wording describes the same refusal with that lever off). A green keyed on
 `context == "CodeRabbit" && state == "success"`
 therefore marks **every never-reviewed PR as reviewed** — a fail-open on the promotion gate reachable
-by following the surface list literally. So read the `description`, never the `state`:
-`Review completed` is the only value that evidences a run, and
-`Review skipped: automatic reviews are disabled` is a not-run marker in the same family as a
-rate-limit marker. The status is a **required corroborator, never a satisfier** — it proves only that
-*a* run completed, so a green still needs the real artifact its row names, positively identified.
+by following the surface list literally. So read the `description`, never the `state` — and sort what
+it says into **three** classes, not two:
+
+| `description` | class | effect on a green |
+|---|---|---|
+| `Review completed` | evidences a run | corroborates the artifact |
+| `Review rate limited`, or another explicit marker that the review did not run | **not-run marker** | **defeats the green** |
+| `Review skipped: automatic reviews are disabled`, or **no status at all** | **uninformative status** | **must NOT defeat the green** |
+
+🔴 **That third row is the correction, and it is not a loosening — the status is a corroborator only
+while it is INFORMATIVE, never a required conjunct.** Reading the disabled default as a not-run
+marker makes the conjunct **unsatisfiable wherever auto-review is off**, which here is everywhere.
+Measured 2026-08-24 (monorepo#3015): on `platform#3311` the head where CodeRabbit posted **two real
+findings** (`cd7f1c00eb`) and the head where it returned a finding-free verdict (`a2ada72723`) carry
+the **identical** disabled default — the first is the control, so the description cannot report
+whether an on-demand review ran; and its `updated_at` (23:13:31Z) *postdates* the 23:08:53Z request,
+so freshness does not discriminate either. `ksail` and `actions` publish **no** CodeRabbit status at
+all (unfiltered controls: zero commit statuses, and 43 check-runs on the `ksail` head with no
+CodeRabbit check), which is why absence joins that row rather than failing closed. So requiring
+`Review completed` fails **CLOSED on every real review here, permanently** — sending the run down
+into weekly-limited Codex and monthly-limited Bugbot on a head CodeRabbit has already reviewed, the
+exact cheapest-lane-first inversion the lane order exists to prevent.
+
+🔴 **And the status is TRANSIENT, so it fails OPEN in the other direction: the durable record of a
+refusal is the reply comment body.** On `platform#3344` @ `e94216b3` CodeRabbit replied
+`Review rate limited` at 20:49:29Z, yet that head's status **today** reads the disabled default
+(`updated_at` 21:06:55Z) — a later event reverted it and **the status lost the refusal**. A field
+that expires cannot corroborate a durable decision. The refusal itself is permanent, in CodeRabbit's
+command-invocation reply (`⚠️ Action not completed` / `Review rate limited`), and the artifact rule
+above already rejects any artifact carrying such a marker. What that rule alone does **not** catch is
+the **auto-generated summary** satisfier: a refusal *refreshes* the summary so it names the current
+head — measured four seconds after that refusal, naming the full
+`e94216b3b4705771303af9c95a1e7cf7f5460a71`. So whenever the summary is the satisfier, also read the
+**newest same-head `coderabbitai[bot]` command reply**; a refusal marker there defeats the green
+whatever the summary says. That closes the fail-open on a record that does not expire, which is
+precisely what the transient status could never do. The status remains a **required corroborator,
+never a satisfier** *when it is informative* — it proves only that *a* run completed, so a green
+still needs the real artifact its row names, positively identified.
 
 ⚠️ **Bugbot's green is a status check, NOT a review object and NOT a comment** — a gate or survey that
 sweeps only `pulls/<n>/reviews` and `issues/<n>/comments` is **structurally blind** to it and will
@@ -4024,7 +4057,7 @@ in full. The trend is **monotonic, not a spike**: daily medians ran **155,212 �
 engineering plugin contract* retains it only until digest parity, and *Agent definition locations*
 allows it to carry **only its named deployment/provider delta** — generic role logic changes at its
 owning upstream. That parity gate was reached: `agent-plugins#78` closed **COMPLETED 2026-07-25**.
-The overlay then grew **61,144 B → 148,356 B (+143%)**, because generic refinements (the `4b`–`4e`
+The overlay then grew **61,144 B → 149,568 B (+145%)**, because generic refinements (the `4b`–`4e`
 items in [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
 were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
 closed, pushing the file's own deletion further away, and charging every hourly dispatch for it.

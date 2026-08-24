@@ -761,11 +761,24 @@ public and private — no per-repo loop needed to enumerate):
      (monorepo#2819) and is followed by a blank line, so stripping the comment alone still leaves the
      body starting with a newline and an anchored match still fails. Both are part of the match rather
      than an allowance. The status stays a **required corroborator**
-     of run-completion — it reads `Review completed` for a review that ran and `Review skipped: …` or
-     `Review rate limited` when none did, and note that `state=success` accompanies all three, so
+     of run-completion **only while it is INFORMATIVE** — `Review completed` evidences a run;
+     `Review rate limited`, or another explicit marker that the review did not run, defeats the
+     green; and `Review skipped: automatic reviews are disabled` (the portfolio-wide default,
+     since auto-review is off everywhere) or **no CodeRabbit status at all** is an
+     **uninformative status** that must NOT defeat it. `state=success` accompanies every case, so
      the `description` is the discriminator, never the state.
-     Keep the exclusions as defense in depth. A head carrying **no** CodeRabbit status at all
-     fails closed to `none`.
+     🔴 **Do not fail an uninformative status closed** (monorepo#3015): a head where CodeRabbit
+     posted two real findings carries the identical disabled default, and `ksail`/`actions` publish
+     no CodeRabbit status at all (unfiltered controls: zero commit statuses; 43 check-runs on the
+     `ksail` head, none CodeRabbit), so failing closed reports `green_review=none` over every real
+     review and burns weekly-limited Codex and monthly-limited Bugbot on an already-reviewed head.
+     🔴 **The status is also TRANSIENT — read a refusal from the durable `coderabbitai[bot]` reply
+     body instead.** On `platform#3344` @ `e94216b3` CodeRabbit replied `Review rate limited`, and
+     that head's status now reads the disabled default: the status lost the refusal, while the reply
+     is permanent. A refusal also *refreshes* the auto-generated summary so it names the current
+     head, so when the summary is the satisfier, check the newest same-head reply for a refusal
+     marker before reporting `cr@<sha>`.
+     Keep the exclusions as defense in depth.
      Report an older completion as `cr-stale@<sha>`. A
      **current-head CodeRabbit review that carries findings** (a `COMMENTED`/`CHANGES_REQUESTED`
      review with unresolved threads or actionable comments) is `cr-findings@<sha>` — report its
