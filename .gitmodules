@@ -82,7 +82,3 @@
 	path = libraries/kyverno-policies
 	url = git@github.com:devantler-tech/kyverno-policies.git
 	branch = main
-[submodule "applications/doggy-countdown"]
-	path = applications/doggy-countdown
-	url = git@github.com:devantler-tech/doggy-countdown.git
-	branch = main
