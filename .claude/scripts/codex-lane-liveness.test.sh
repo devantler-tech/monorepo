@@ -398,7 +398,7 @@ expect_out "unparsable run row" "a negative duration must report as an unparsabl
 
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 46 ]; then
+if [ "$asserts" -lt 52 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi
