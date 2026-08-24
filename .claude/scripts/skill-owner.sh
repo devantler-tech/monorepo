@@ -36,6 +36,7 @@ SUBMODULE_PATH="libraries/agent-plugins"
 PLUGIN_NAME="agentic-engineering"
 SOURCE="auto"
 ONLY_SKILL=""
+FILTER_ONLY=0
 
 die()  { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
 usage_die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
@@ -48,6 +49,11 @@ while [ $# -gt 0 ]; do
     --source)         need $# "$1"; SOURCE="$2";         shift 2 ;;
     --skill)          need $# "$1"; ONLY_SKILL="$2";     shift 2 ;;
     --repo-root)      need $# "$1"; REPO_ROOT_OVERRIDE="$2"; shift 2 ;;
+    # Test seam. The literal-vs-regex distinction below is only observable on the forge path, where
+    # a whole tree listing is filtered in-process; on the submodule path git's pathspec has already
+    # filtered literally, so nothing hermetic can exercise it end to end. This mode applies the
+    # selector to candidate paths on stdin so the property can be proven without a network call.
+    --filter-only)    FILTER_ONLY=1; shift ;;
     -h|--help)
       sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
@@ -58,6 +64,28 @@ done
 case "$SOURCE" in auto|submodule|forge) ;; *) usage_die "--source must be auto, submodule or forge" ;; esac
 
 command -v yq >/dev/null 2>&1 || die "yq is required to read skill frontmatter structurally"
+
+prefix="plugins/$PLUGIN_NAME/skills/"
+
+# PLUGIN_NAME is caller-supplied via --plugin, so it must never reach a regular expression: a name
+# containing `.` or `*` would match OTHER plugins' skills, which is a silent wrong answer rather than
+# an error. Compare the prefix LITERALLY, then validate only the remaining shape.
+select_skill_paths() { # stdin: candidate paths -> stdout: plugins/<plugin>/skills/<skill>/SKILL.md
+  local line rest
+  while IFS= read -r line; do
+    case "$line" in "$prefix"*) rest="${line#"$prefix"}" ;; *) continue ;; esac
+    case "$rest" in */*/*) continue ;; esac          # a nested path, not <skill>/SKILL.md
+    case "$rest" in */SKILL.md) ;; *) continue ;; esac
+    [ -n "${rest%/SKILL.md}" ] || continue           # an empty skill segment
+    printf '%s\n' "$line"
+  done
+}
+
+
+if [ "$FILTER_ONLY" = 1 ]; then
+  select_skill_paths
+  exit 0
+fi
 
 if [ -n "${REPO_ROOT_OVERRIDE:-}" ]; then
   REPO_ROOT="$REPO_ROOT_OVERRIDE"
@@ -74,7 +102,6 @@ gitlink_line="$(git -C "$REPO_ROOT" --no-replace-objects ls-tree HEAD "$SUBMODUL
 PIN="$(printf '%s' "$gitlink_line" | awk '$2=="commit"{print $3}')"
 [ -n "$PIN" ] || die "no gitlink for '$SUBMODULE_PATH' at HEAD — cannot establish the pinned revision"
 
-prefix="plugins/$PLUGIN_NAME/skills/"
 sub="$REPO_ROOT/$SUBMODULE_PATH"
 
 resolved_source=""
@@ -84,7 +111,7 @@ try_submodule() {
   [ -e "$sub" ] || return 1
   git -C "$sub" --no-replace-objects cat-file -e "$PIN^{commit}" 2>/dev/null || return 1
   paths="$(git -C "$sub" --no-replace-objects ls-tree -r --name-only "$PIN" -- "$prefix" 2>/dev/null \
-             | grep -E "^${prefix}[^/]+/SKILL\.md$" || true)"
+             | select_skill_paths || true)"
   resolved_source="submodule"
   return 0
 }
@@ -104,7 +131,7 @@ try_forge() {
     true) return 1 ;;
   esac
   paths="$(printf '%s' "$raw" | jq -r '.tree[] | select(.type=="blob") | .path' 2>/dev/null \
-             | grep -E "^${prefix}[^/]+/SKILL\.md$" || true)"
+             | select_skill_paths || true)"
   FORGE_SLUG="$slug"
   resolved_source="forge"
   return 0
@@ -143,9 +170,28 @@ while IFS= read -r p; do
   [ -n "$body" ] || { printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue; }
   # Structural frontmatter read, never a grep: a grep matches a URL that merely appears in the BODY,
   # accepts a value living under some other mapping, and cannot tell an absent key from an empty one.
-  owner="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata.github-repo // "LOCAL"' 2>/dev/null)" \
+  #
+  # ABSENT and PRESENT-BUT-INVALID are different answers and must not collapse. `// "LOCAL"` maps an
+  # explicit `github-repo: ""` or `github-repo: {…}` onto LOCAL, which asserts local authorship from a
+  # malformed declaration — the same fail-open direction as an empty enumeration. So ask whether the
+  # key exists first, and accept only a non-empty scalar as a value.
+  present="$(printf '%s\n' "$body" | yq --front-matter=extract '(.metadata // {}) | has("github-repo")' 2>/dev/null)" \
     || { printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue; }
-  case "$owner" in ""|null) owner="LOCAL" ;; esac
+  case "$present" in
+    false) owner="LOCAL" ;;
+    true)
+      kind="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata.github-repo | tag' 2>/dev/null)" || kind=""
+      owner="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata.github-repo' 2>/dev/null)" || owner=""
+      case "$kind" in
+        '!!str'|'!!int'|'!!float'|'!!bool') ;;
+        *) owner="" ;;
+      esac
+      if [ -z "$owner" ] || [ "$owner" = null ]; then
+        printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue
+      fi
+      ;;
+    *) printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue ;;
+  esac
   printf '%s\t%s\t%s\n' "$owner" "$skill" "$p"
 done < <(printf '%s\n' "$paths")
 

@@ -59,6 +59,13 @@ skill_file "$P/local/SKILL.md" '' 'see https://github.com/devantler-tech/agent-s
 skill_file "$P/lookalike/SKILL.md" 'metadata:
   github-repo: https://github.com/devantler-tech/agent-skills-v2' 'lookalike body'
 skill_file "$P/misplaced/SKILL.md" 'github-repo: https://github.com/devantler-tech/agent-skills' 'key outside metadata'
+# PRESENT but not a usable value. `// "LOCAL"` would map both of these onto LOCAL, asserting local
+# authorship from a malformed declaration — absent and invalid are different answers.
+skill_file "$P/emptyval/SKILL.md" 'metadata:
+  github-repo: ""' 'declared empty'
+skill_file "$P/mapval/SKILL.md" 'metadata:
+  github-repo:
+    url: https://github.com/devantler-tech/agent-skills' 'declared as a mapping'
 git -C "$plug" add -A >/dev/null
 git -C "$plug" commit -qm fixture
 PIN="$(git -C "$plug" rev-parse HEAD)"
@@ -100,7 +107,15 @@ run() { # -> stdout on fd1, stderr captured, RC in $RC
 
 printf 'skill-owner behavioural suite\n'
 
-# The helper reads the submodule's object store, which in this fixture lives at $plug.
+# ---- 0. THE ORIGINATING SHAPE: the submodule directory exists but is EMPTY, exactly as in a fresh
+#     per-run worktree. This is the case the old glob answered with silence and an exit 0, so assert
+#     it first, against the real empty directory, before any symlink makes the objects reachable.
+run
+assert_eq 'empty submodule exits 2, never 0' 2 "$RC"
+assert_eq 'empty submodule prints NO ownership rows' '' "$OUT"
+assert_contains 'empty submodule is reported, not silent' "$ERR" 'pinned tree'
+
+# The remaining arms need the pinned objects, which in this fixture live at $plug.
 # Point the submodule path at it directly so `git -C <sub>` finds the pinned commit.
 rm -rf "$cons/libraries/agent-plugins"
 mkdir -p "$cons/libraries"
@@ -108,7 +123,7 @@ ln -s "$plug" "$cons/libraries/agent-plugins"
 
 # ---- 1. GREEN: ownership resolves per file, from the pinned tree
 run
-assert_eq 'green: a fully readable pinned tree exits 0' 0 "$RC"
+assert_eq 'green: malformed declarations make the listing exit 2, never 0' 2 "$RC"
 assert_contains 'synced skill reports its upstream' "$OUT" 'https://github.com/devantler-tech/agent-skills	synced'
 assert_contains 'skill with no metadata reports LOCAL' "$OUT" 'LOCAL	local'
 
@@ -123,6 +138,12 @@ assert_contains 'lookalike prints its own url' "$OUT" 'https://github.com/devant
 # ---- 4. The key must live under `metadata`, not merely somewhere in the frontmatter
 assert_contains 'top-level github-repo is not metadata.github-repo' "$OUT" 'LOCAL	misplaced'
 
+# ---- 4b. PRESENT-BUT-INVALID is UNKNOWN, never LOCAL — absent and malformed are different answers
+assert_contains 'an empty github-repo value is UNKNOWN' "$OUT" 'UNKNOWN	emptyval'
+assert_not_contains 'an empty github-repo value is never LOCAL' "$OUT" 'LOCAL	emptyval'
+assert_contains 'a non-scalar github-repo value is UNKNOWN' "$OUT" 'UNKNOWN	mapval'
+assert_not_contains 'a non-scalar github-repo value is never LOCAL' "$OUT" 'LOCAL	mapval'
+
 # ---- 5. An unreadable/empty skill is UNKNOWN, never LOCAL — separate revision, separate fixture
 cons_empty="$tmp/cons_empty"
 mk_consumer "$cons_empty" "$PIN_EMPTY"
@@ -135,6 +156,25 @@ assert_eq 'a tree with an unreadable skill exits 2, never 0' 2 "$RC_E"
 assert_contains 'empty skill body reports UNKNOWN' "$OUT_E" 'UNKNOWN	empty'
 assert_not_contains 'empty skill is never reported LOCAL' "$OUT_E" 'LOCAL	empty'
 assert_contains 'the readable siblings are still reported' "$OUT_E" 'LOCAL	local'
+
+# ---- 5b. --plugin is caller data, never a pattern. Exercised through the selector directly: on the
+#      submodule path git's pathspec has ALREADY filtered literally, so an end-to-end run there
+#      passes whether the selector is literal or a regex — it cannot discriminate. The forge path
+#      filters a whole tree listing in process, which is where an interpolated ERE would silently
+#      answer for the wrong plugin, so the property is proven against the selector itself.
+CAND='plugins/agentic-engineering/skills/a/SKILL.md
+plugins/other/skills/b/SKILL.md
+plugins/agentic-engineering/skills/deep/nested/SKILL.md
+plugins/agentic-engineering/skills//SKILL.md
+plugins/agentic-engineering/skills/a/OTHER.md'
+
+sel() { printf '%s\n' "$CAND" | "$SUT" --filter-only --plugin "$1"; }
+
+assert_eq 'literal plugin name selects exactly its own well-formed skill' \
+  'plugins/agentic-engineering/skills/a/SKILL.md' "$(sel agentic-engineering)"
+assert_eq 'a dot in a plugin name is literal, not any-char' '' "$(sel 'agentic.engineering')"
+assert_eq 'a regex-metacharacter plugin name matches nothing' '' "$(sel '.*')"
+assert_eq 'another plugin is never selected' 'plugins/other/skills/b/SKILL.md' "$(sel other)"
 
 # ---- 6. THE CORE DEFECT: an empty enumeration is UNKNOWN, never an all-LOCAL listing
 run --plugin no-such-plugin
@@ -152,20 +192,39 @@ assert_eq 'unknown --skill prints no rows' '' "$OUT"
 #     helper would read a different gitlink while `rev-parse HEAD` still printed the expected one.
 cons2="$tmp/cons2"
 mk_consumer "$cons2" "$PIN"
-rm -rf "$cons2/libraries/agent-plugins"; mkdir -p "$cons2/libraries"; ln -s "$plug" "$cons2/libraries/agent-plugins"
 git -C "$plug" commit -q --allow-empty -m other
 OTHER="$(git -C "$plug" rev-parse HEAD)"
 decoy="$tmp/decoy"; mk_consumer "$decoy" "$OTHER"
 DECOY_HEAD="$(git -C "$decoy" rev-parse HEAD)"
-git -C "$cons2" fetch -q "$decoy" main 2>/dev/null || true
-if git -C "$cons2" cat-file -e "$DECOY_HEAD^{commit}" 2>/dev/null; then
-  git -C "$cons2" replace -f "$(git -C "$cons2" rev-parse HEAD)" "$DECOY_HEAD" >/dev/null 2>&1 || true
+# A fixture that fails to BUILD must fail the suite. An `else ok "skipped"` here would turn every
+# future breakage of this arm into a silent pass — the exact vacuous-control shape these assertions
+# exist to prevent.
+# Fetch BEFORE the submodule path becomes a symlink: git refuses to walk a symlinked submodule path
+# and would abort the fetch. (The original `|| true` here masked exactly that.)
+git -C "$cons2" fetch -q "$decoy" main
+rm -rf "$cons2/libraries/agent-plugins"; mkdir -p "$cons2/libraries"; ln -s "$plug" "$cons2/libraries/agent-plugins"
+git -C "$cons2" cat-file -e "$DECOY_HEAD^{commit}" \
+  || { bad 'replacement-object fixture' "decoy commit $DECOY_HEAD unreachable in cons2"; DECOY_HEAD=""; }
+if [ -n "$DECOY_HEAD" ]; then
+  git -C "$cons2" replace -f "$(git -C "$cons2" rev-parse HEAD)" "$DECOY_HEAD" >/dev/null
+  # The replacement must actually take effect, or the arm proves nothing.
+  if [ "$(git -C "$cons2" rev-parse 'HEAD^{tree}')" = "$(git -C "$cons2" --no-replace-objects rev-parse 'HEAD^{tree}')" ]; then
+    bad 'replacement-object fixture' 'the replace ref did not change what HEAD resolves to'
+  else
+    ok 'replacement-object fixture actually redirects HEAD'
+  fi
   set +e
   ERRR="$("$SUT" --repo-root "$cons2" --source submodule --submodule-path libraries/agent-plugins 2>&1 >/dev/null)"
+  RC_R=$?
   set -e
+  # This arm is about WHICH pin is resolved, so it must reach the summary line rather than die early.
+  # The exit code itself is whatever the fixture's contents imply (2 here, because the same fixture
+  # carries the deliberately malformed declarations), so assert reaching the report, not a code.
+  case "$RC_R" in
+    0|2) ok 'replacement-object arm reached its summary line' ;;
+    *)   bad 'replacement-object arm reached its summary line' "died early with rc=$RC_R" ;;
+  esac
   assert_contains 'replacement object cannot rewrite the resolved pin' "$ERRR" "pin=$PIN"
-else
-  ok 'replacement-object arm skipped (decoy commit unavailable)'
 fi
 
 printf '\nskill-owner: %d passed, %d failed\n' "$PASS" "$FAIL"

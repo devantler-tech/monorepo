@@ -1550,6 +1550,7 @@ jobs:
             ${{ needs.test-rung-type-filter-contract.result }}
             ${{ needs.test-definition-load-budget-contract.result }}
             ${{ needs.test-drifted-lane-escalation-contract.result }}
+            ${{ needs.test-skill-owner.result }}
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-plugin-definition-refresh.result }}
             ${{ needs.test-codex-lane-liveness.result }}
