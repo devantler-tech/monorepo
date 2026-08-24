@@ -38,6 +38,36 @@ assert_absent() {
   fi
 }
 
+# Some review-loop rules repeat the same vocabulary in distinct phases. Assert inside the operative
+# phase so a correct explanation elsewhere cannot mask a contradictory instruction where the action
+# is actually chosen.
+assert_section_prose() {
+  local file="$1" start="$2" end="$3" phrase="$4" message="$5"
+  local section
+  if ! section="$(awk -v start="${start}" -v end="${end}" '
+    index($0, start) { in_section = 1; found_start = 1 }
+    in_section { print }
+    in_section && index($0, end) { found_end = 1; exit }
+    END { if (!found_start || !found_end) exit 2 }
+  ' "${file}")"; then
+    fail "${message} (section delimiter missing)"
+  fi
+  printf '%s\n' "${section}" | tr '\n' ' ' | tr -s '[:space:]' ' ' | grep -Fq -- "${phrase}" ||
+    fail "${message}"
+}
+
+# Prove the section helper fails closed at its boundary. Without the end marker the old helper
+# scanned to EOF, so matching vocabulary in a later section could satisfy an operative-phase guard.
+section_fixture="$(mktemp)"
+trap 'rm -f "${section_fixture}"' EXIT
+printf '%s\n' 'OPERATIVE START' 'unrelated line' 'required phrase outside the missing boundary' >"${section_fixture}"
+if (assert_section_prose "${section_fixture}" 'OPERATIVE START' 'OPERATIVE END' \
+  'required phrase' 'fixture delimiter missing') 2>/dev/null; then
+  fail "assert_section_prose accepted a phrase after a missing end delimiter"
+fi
+rm -f "${section_fixture}"
+trap - EXIT
+
 grep -Fq 'CodeRabbit > Codex > Cursor Bugbot' "${constitution}" ||
   fail "constitution does not preserve the provider order"
 grep -Fq 'STOP on the first successful current-head review' "${constitution}" ||
@@ -134,6 +164,115 @@ assert_prose "${maintenance_skill}" 'Review skipped: automatic reviews are disab
 # absent from it is one the overlay removal drops silently.
 assert_prose "${parity_checklist}" 'CodeRabbit commit-status description discriminator' \
   "removing the surveyor overlay would silently drop the status discriminator"
+
+# 🔴 The status is TRANSIENT and, where auto-review is disabled, PERMANENTLY UNINFORMATIVE — so it
+# cannot be a required conjunct (monorepo#3015). Measured 2026-08-24:
+#   * platform#3311 @ cd7f1c00eb — CodeRabbit posted 2 real findings; description
+#     `Review skipped: automatic reviews are disabled`. A head CodeRabbit certainly reviewed is the
+#     control, so the description cannot evidence whether an on-demand review ran.
+#   * platform#3311 @ a2ada72723 — finding-free verdict; same description, `updated_at` 23:13:31Z
+#     POSTDATING the 23:08:53Z request, so freshness is not the discriminator either.
+#   * ksail / actions — NO CodeRabbit status at all (unfiltered controls: 0 commit statuses, and
+#     43 check-runs on the ksail head with no CodeRabbit check). Absence is a fourth state.
+#   * platform#3344 @ e94216b3 — CodeRabbit replied `Review rate limited` at 20:49:29Z (still
+#     readable in the comment today); the status at that head now reads the disabled default,
+#     `updated_at` 21:06:55Z. The status LOST the refusal.
+# Requiring `Review completed` therefore fails CLOSED on every real review here, and reading the
+# status later fails OPEN on a refusal. Both directions are guarded below.
+assert_absent "${constitution}" 'is a not-run marker in the same family as a rate-limit marker' \
+  "constitution still classes the auto-review-disabled default as a not-run marker (#3015)"
+assert_prose "${constitution}" 'uninformative status' \
+  "constitution does not name the uninformative-status class that must not defeat a green (#3015)"
+assert_prose "${constitution}" 'no status at all' \
+  "constitution does not treat an ABSENT CodeRabbit status as uninformative (#3015)"
+assert_prose "${constitution}" 'durable record of a refusal is the reply comment body' \
+  "constitution does not move refusal detection onto the durable reply body (#3015)"
+assert_absent "${surveyor}" 'or `Review rate limited` when none did' \
+  "surveyor still claims the skipped description evidences that no review ran (#3015)"
+assert_absent "${surveyor}" 'fails closed to `none`' \
+  "surveyor still fails an absent CodeRabbit status closed to none (#3015)"
+assert_prose "${surveyor}" 'uninformative status' \
+  "surveyor lost the uninformative-status class (#3015)"
+assert_absent "${surveyor}" '**And** the head must also carry a CodeRabbit commit status whose `description` begins `Review completed`' \
+  "surveyor still makes the transient Review-completed status a required green-review conjunct (#3015)"
+assert_prose "${maintenance_skill}" 'uninformative status' \
+  "portfolio-maintenance lost the uninformative-status class (#3015)"
+assert_prose "${parity_checklist}" 'uninformative status' \
+  "removing the surveyor overlay would silently drop the uninformative-status split (#3015)"
+# 🔴 DIRECTION, not vocabulary. The assertions above are presence checks, so on their own they would
+# still pass if a document named the uninformative class and then said it defeats a green. These bind
+# the EFFECT of each class, in both directions, so the loosening and the protection are asserted
+# together and neither can be dropped alone (CodeRabbit, #3016).
+assert_prose "${constitution}" 'must NOT defeat the green' \
+  "constitution names the uninformative class but never states that it must not defeat a green"
+assert_prose "${constitution}" 'defeats the green' \
+  "constitution no longer states that an explicit not-run marker DEFEATS a green — the protection was dropped with the loosening"
+for direction_file in "${surveyor}" "${maintenance_skill}" "${parity_checklist}"; do
+  assert_prose "${direction_file}" 'defeats the green' \
+    "${direction_file} lost the statement that a not-run marker defeats a green"
+done
+# 🔴 BOTH directions, in EVERY consumer — not the loosening in one document and the protection in the
+# rest. Asserting `must NOT defeat` only on the constitution leaves the other three bound solely by
+# `defeats the green`, which describes the not-run case; a regression that makes an UNINFORMATIVE
+# status defeat a green therefore passes this suite, and the surveyor is the document that actually
+# emits `green_review`. That regression is the original defect restored — `green_review=none` over
+# real CodeRabbit reviews, then weekly-limited Codex and monthly-limited Bugbot spent on an
+# already-reviewed head (CodeRabbit, #3016). The phrase is `must NOT defeat` rather than the
+# constitution's longer `must NOT defeat the green` because all three consumers write it as
+# "an **uninformative status** that must NOT defeat it".
+for uninformative_direction_file in "${surveyor}" "${maintenance_skill}" "${parity_checklist}"; do
+  assert_prose "${uninformative_direction_file}" 'must NOT defeat' \
+    "${uninformative_direction_file} names the uninformative class but never states that it must not defeat a green — the loosening was dropped while the protection stayed"
+done
+# The transient STATUS must be bound to THIS request, or a spent refusal from an earlier round vetoes
+# a genuine later green — the fail-closed this change would otherwise re-introduce one round later.
+# Scope matters: this recency test is correct for the status and WRONG for the durable reply (below).
+for staleness_file in "${constitution}" "${surveyor}" "${parity_checklist}"; do
+  assert_prose "${staleness_file}" 'at least as new as the' \
+    "${staleness_file} does not bind the status not-run marker to the artifact's recency, so a spent refusal still vetoes a green"
+done
+# ...and that recency test must stay pinned to the STATUS field it compares. Left unscoped it reads as
+# a general rule and migrates onto the durable reply, where it is a fail-open (see the round binding
+# immediately below) — which is exactly how it reached the maintenance skill.
+for status_scoped_file in "${constitution}" "${surveyor}" "${parity_checklist}"; do
+  assert_prose "${status_scoped_file}" 'status `updated_at`' \
+    "${status_scoped_file} does not tie the artifact-recency test to the status updated_at, so it can migrate onto the durable reply"
+done
+# The DURABLE REPLY is bound by ROUND, never by artifact recency. A refusal is what CAUSES the
+# auto-generated summary to refresh — measured 3 s on monorepo#3016 and 4 s on platform#3344 — so the
+# summary is ALWAYS newer than the refusal and an artifact-timestamp test can never let the refusal
+# win. Applied to the reply it therefore re-accepts the refreshed summary as a green with no review
+# behind it: the exact fail-open #3015 exists to close, reintroduced by the fix for it.
+assert_prose "${maintenance_skill}" 'defeats the green **whatever the summary says**' \
+  "the maintenance skill lets the refreshed summary outrank the refusal that refreshed it"
+assert_prose "${maintenance_skill}" 'Bind it to this request by its ROUND' \
+  "the maintenance skill does not bind the durable refusal by round, so it has no spent-refusal protection"
+# ...and this binding must hold on EVERY surface that reads the refusal, not just the run procedure.
+# Newest-at-this-head does not identify a round: a head carries several request rounds, so an earlier
+# round's refusal can still be the newest reply and would veto a genuine later green (fail-closed).
+for round_bound_file in "${constitution}" "${maintenance_skill}" "${surveyor}" "${parity_checklist}"; do
+  assert_prose "${round_bound_file}" 'postdates the newest authenticated' \
+    "${round_bound_file} does not key the durable refusal on the request marker, so its round test is unfalsifiable"
+done
+# NEGATIVE CONTROL for the reintroduction path: the reply-scoped artifact-recency wording must stay
+# GONE from the maintenance skill, not merely be supplemented by the round binding.
+assert_absent "${maintenance_skill}" 'defeats a green only while it is at least as new as the satisfying artifact' \
+  "the reply-scoped artifact-recency test is back in the maintenance skill, re-opening the summary fail-open"
+# The refusal read must be scoped to a positively identified command-invocation reply. An unscoped
+# "durable bot comment" match is a blocklist over arbitrary prose: any coderabbitai[bot] body that
+# mentions a limit would veto a real green.
+for scoped_file in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
+  assert_prose "${scoped_file}" 'newest same-head command-invocation reply' \
+    "${scoped_file} does not scope the refusal read to a positively identified command reply"
+done
+# And the surveyor must still emit the refusal OUTCOME, not merely describe the input.
+assert_prose "${surveyor}" 'green_review=none' \
+  "surveyor no longer names the green_review=none outcome, so the refusal path has no asserted result"
+# NEGATIVE CONTROL, kept as prose so it cannot be quietly dropped: a rate-limited head must still
+# report `green_review=none`, and the check that proves it must read the durable reply body — a
+# status-based control passes vacuously once the status has reverted to the default.
+assert_prose "${constitution}" 'a rate-limit, quota, or service marker saying the review did not run is rejected whatever its shape' \
+  "constitution lost the artifact-level refusal rejection that the durable control depends on"
 for contract_file in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
   if grep -Fq 'premerge=' "${contract_file}"; then
     fail "standalone CodeRabbit pre-merge readiness state remains in ${contract_file}"
@@ -471,6 +610,11 @@ assert_prose "${constitution}" 'a refusal justifies skipping only when THIS roun
 # however correct the later prose is. A rule is what its operative sentence says.
 assert_prose "${constitution}" 'A refusal you cannot attribute to this round is **not** a reason to skip' \
   "the operative skip instruction is unqualified, so a durable prior-round refusal skips CodeRabbit before the round test is reached"
+assert_section_prose "${constitution}" '**READ a lane' '**Only one provider request may be active at a time' \
+  'newest same-head command-invocation reply' \
+  "the pre-trigger quota probe ignores the durable refusal reply and repeats a spent same-round CodeRabbit request"
+assert_absent "${constitution}" 'The status is durable and outlives the quota window' \
+  "constitution still calls the transient status durable after moving refusal evidence to the reply"
 # ...and the marker test must NOT be claimed mechanical on its payload alone. At an unchanged SHA the
 # previous round's marker is indistinguishable from this round's by head, provider, comment id or
 # timestamp, so a durable refusal postdates the OLD marker just as well and the restarted round's

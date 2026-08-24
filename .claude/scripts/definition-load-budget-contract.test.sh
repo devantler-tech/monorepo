@@ -14,9 +14,12 @@
 # Why the OVERLAY specifically, and not AGENTS.md. This file is declared temporary: the contract
 # retains it only until digest parity and allows it to carry only its named deployment/provider
 # delta, with generic role logic changing at its owning upstream. That parity gate was reached —
-# agent-plugins#78 closed COMPLETED on 2026-07-25 — and the overlay then grew 61,144 B -> 148,356 B
-# (+143%) because generic refinements were appended here instead of upstreamed, re-opening the gap
-# #78 had just closed. Growth in a file whose declared destination is deletion is always worth a
+# agent-plugins#78 closed COMPLETED on 2026-07-25 — and the overlay then grew 61,144 B -> 150,495 B
+# (+146%) as measured on 2026-08-19, because generic refinements were appended here instead of
+# upstreamed, re-opening the gap #78 had just closed. That endpoint is a DATED measurement and is
+# deliberately not chased on every raise: `CEILING_OVERLAY_BYTES` below is always the current figure,
+# and assertion 5 is what keeps it agreeing with AGENTS.md.
+# Growth in a file whose declared destination is deletion is always worth a
 # deliberate decision. AGENTS.md is deliberately NOT gated: rules legitimately accrete there, and a
 # ratchet firing on every definition PR — safety fixes included — would train the raise into a
 # reflex and destroy the signal this guard exists to produce.
@@ -35,7 +38,7 @@ overlay="${repo_root}/.claude/agents/portfolio-surveyor.md"
 
 # The recorded high-water mark, in bytes. Raise this ONLY together with the figure quoted in
 # AGENTS.md's *Context & token discipline* section (assertion 5 enforces that pairing).
-CEILING_OVERLAY_BYTES=148356
+CEILING_OVERLAY_BYTES=151249
 
 fail() {
   echo "definition-load budget contract: FAIL — $*" >&2
@@ -96,14 +99,17 @@ grep -qF 'raise the ceiling' "${constitution}" ||
 grep -qF 'never vetoes mandated' "${constitution}" ||
   fail "AGENTS.md no longer states that the ceiling never vetoes mandated work"
 
-# 5. CONSERVATION: the ceiling in this file and the byte figure quoted in AGENTS.md must agree.
-# This is what stops a silent raise here from drifting away from the evidence over there.
+# 5. CONSERVATION: keep the dated measurement distinct from the current enforced high-water mark,
+# and require that current mark to agree with this file's ceiling. Otherwise each raise rewrites the
+# historical endpoint, or the live ceiling silently drifts away from the evidence over there.
 # `|| true` is load-bearing: under `set -euo pipefail` a no-match grep makes this whole
 # substitution non-zero, which killed the script BEFORE the explicit check below could report it —
 # a guard that cannot announce its own failure. Caught by ablation A5b.
-documented="$(grep -oE '61,144 B → [0-9,]+ B' "${constitution}" | head -1 | sed -E 's/.*→ ([0-9,]+) B/\1/' | tr -d ',' || true)"
+grep -qF '61,144 B → 150,495 B (+146%)' "${constitution}" ||
+  fail "AGENTS.md no longer preserves the dated 2026-08-19 overlay measurement separately from the live ceiling"
+documented="$(grep -oE 'enforced high-water mark is now [0-9,]+ B' "${constitution}" | head -1 | sed -E 's/.*now ([0-9,]+) B/\1/' | tr -d ',' || true)"
 [ -n "${documented}" ] ||
-  fail "could not find the overlay size figure in AGENTS.md (expected the '61,144 B → <N> B' form) — assertions 2-4 anchor on that section, so its loss makes this guard unverifiable"
+  fail "could not find the current enforced high-water mark in AGENTS.md — assertions 2-4 anchor on that section, so its loss makes this guard unverifiable"
 [ "${documented}" = "${CEILING_OVERLAY_BYTES}" ] ||
   fail "ceiling drift: this test allows ${CEILING_OVERLAY_BYTES} B but AGENTS.md documents ${documented} B. Raise both together, or the recorded evidence stops describing the enforced limit."
 

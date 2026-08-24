@@ -126,10 +126,37 @@ grep -Fq '`**Actionable comments posted:`' "${surveyor}" ||
   fail "surveyor does not positively identify a CodeRabbit review artifact, so a non-empty non-review body still passes"
 grep -Fq 'the status only proves a run completed' "${surveyor}" ||
   fail "surveyor treats the head status as proof the matched object is a substantive review"
-# Literal Markdown code spans; command substitution is intentionally disabled.
-# shellcheck disable=SC2016
-grep -Fq 'fails closed to `none`' "${surveyor}" ||
-  fail "surveyor does not fail closed when the head carries no CodeRabbit status"
+# 🔴 RETIRED (monorepo#3015): this used to require `fails closed to `none`` for a head carrying no
+# CodeRabbit status. That is the WRONG direction — an absent status, like the portfolio-wide
+# `Review skipped: automatic reviews are disabled` default, is UNINFORMATIVE rather than evidence
+# that no review ran. `ksail` and `actions` publish no CodeRabbit commit status at all (unfiltered
+# controls: zero commit statuses; 43 check-runs on the `ksail` head, none of them CodeRabbit), so
+# failing closed there reports `green_review=none` over every real review and burns weekly-limited
+# Codex and monthly-limited Bugbot on an already-reviewed head. The protection that guard was
+# credited with — catching a refusal whose refreshed summary names the current head — is preserved
+# and strengthened below, because it now reads the DURABLE reply body instead of a status that is
+# transient and has been measured losing a refusal (platform#3344 @ e94216b3).
+# These four phrases carry no backticks, so they need no SC2016 suppression. The retired-phrase
+# check below does contain a Markdown code span; it is built with ANSI-C quoting rather than
+# suppressed, so ShellCheck stays fully enabled on this file (never disable a check — fix the cause).
+grep -Fq 'uninformative status' "${surveyor}" ||
+  fail "surveyor lost the uninformative-status class, so an absent or auto-review-disabled CodeRabbit status defeats a real green (#3015)"
+grep -Fq 'no CodeRabbit status at all' "${surveyor}" ||
+  fail "surveyor does not name the ABSENT-status case that must not defeat a green (#3015)"
+# DIRECTION, not just vocabulary. The two checks above are presence-only, so the surveyor could name
+# the uninformative class and then say it DEFEATS a green and still pass — the original defect
+# restored in the one document that actually emits `green_review` (CodeRabbit, #3016). Single-line
+# literal: this suite greps without the whitespace normalisation the loop contract applies.
+grep -Fq 'must NOT defeat' "${surveyor}" ||
+  fail "surveyor names the uninformative-status class but never states that it must not defeat a green (#3015)"
+grep -Fq 'newest same-head command-invocation reply' "${surveyor}" ||
+  fail "surveyor does not scope the refusal read to a positively identified command-invocation reply, so any durable bot comment mentioning a limit would veto a green (#3015)"
+grep -Fq 'at least as new as the' "${surveyor}" ||
+  fail "surveyor does not bind the not-run marker to this request, so a spent refusal from an earlier round vetoes a genuine later green (#3015)"
+retired_phrase=$'fails closed to `none`'
+if grep -Fq -- "${retired_phrase}" "${surveyor}"; then
+  fail "surveyor still fails an absent CodeRabbit status closed to none — retired by #3015"
+fi
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq 'the `description` is the discriminator, never the state' "${surveyor}" ||

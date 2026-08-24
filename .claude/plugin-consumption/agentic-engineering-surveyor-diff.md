@@ -56,12 +56,28 @@ plugin carries them (or an explicit, tested subset):
    `**Reviewed commit:**` marker), fails closed when unattributable, and is **not** cleared by a
    newer `Didn't find any major issues` comment. Without this the pentad reads fully clear over an
    open P2 — measured on monorepo#2559.
-4c. **CodeRabbit commit-status description discriminator** (monorepo#2676) — the `CodeRabbit` status
-   is `state: success` for a completed review, for `Review skipped: automatic reviews are disabled`,
-   and for a rate-limit refusal alike. Auto-review is disabled deployment-wide, so the skipped form
-   is the default state of every head: the status corroborates run-completion only when its
-   `description` begins `Review completed`, and never satisfies the gate on its own. Without this a
-   state-only check reports every never-reviewed PR as green.
+4c. **CodeRabbit commit-status description discriminator** (monorepo#2676 / #3015) — the `CodeRabbit`
+   status is `state: success` for a completed review, for `Review skipped: automatic reviews are
+   disabled`, and for a rate-limit refusal alike, so a state-only check reports every never-reviewed
+   PR as green. Read the `description` and sort it into three classes: `Review completed` evidences a
+   run and corroborates the artifact; an explicit not-run marker defeats the green; the disabled
+   default — or **no status at all** — is an **uninformative status** that must NOT defeat it, since
+   auto-review is disabled deployment-wide and some repositories publish no such status. The status
+   never satisfies the gate on its own, and being transient it can lose a refusal, so a refusal is
+   read from CodeRabbit's newest same-head **command-invocation reply**, identified positively by
+   `user.login` plus the `<!-- CodeRabbit review command invocation: … -->` marker — never any durable
+   bot comment that mentions a limit. A refusal in **that** reply defeats the green **whatever the
+   summary says**, and it is bound to the current round by the **request marker** — it counts only
+   when it postdates the newest authenticated `review-request-head … provider=cr` marker at this
+   head, because newest-at-this-head alone does not identify a round and an earlier round's refusal
+   would otherwise veto a genuine later green. It is never bound by comparing it with the satisfying
+   artifact, since the refusal is what refreshes the summary, so the summary is always newer and that
+   comparison could never let the refusal win. The
+   artifact-recency comparison belongs to the **transient status** alone — a status not-run marker
+   defeats a green only while it is at least as new as the satisfying artifact
+   (status `updated_at` vs the artifact's `submitted_at`/`updated_at`); a spent one is uninformative,
+   as is `Review in progress` or any unlisted value. Without this the check fails closed on every real
+   review, open on a refusal read later, and closed again on a stale refusal.
 4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713 / #2819) — a review
    object counts only when its body begins `**Actionable comments posted:` **after stripping any
    leading HTML comments and the whitespace around them**; an empty object is a reply

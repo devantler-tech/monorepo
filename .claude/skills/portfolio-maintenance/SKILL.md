@@ -271,9 +271,26 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   `state`.** `state` is `success` for a completed review, for `Review skipped: automatic reviews are
   disabled` (the default state of every head, since auto-review is disabled portfolio-wide), and —
   while `fail_commit_status: false` is in force — for a rate-limit refusal alike, so a state-only
-  check reads every never-reviewed PR as green. Only a
-  `description` beginning `Review completed` evidences a run, and it corroborates the artifact rather
-  than replacing it.
+  check reads every never-reviewed PR as green. A `description` beginning `Review completed`
+  evidences a run and corroborates the artifact rather than replacing it; `Review rate limited` (or
+  another explicit not-run marker) defeats the green; and the disabled default, or **no status at
+  all**, is an **uninformative status** that must NOT defeat it (monorepo#3015 — a head where
+  CodeRabbit posted two real findings carries that same default, and some repos publish no
+  CodeRabbit status at all), as is `Review in progress` or any other unlisted value. The status is
+  also transient and can lose a refusal, so read a refusal from CodeRabbit's **newest same-head
+  command-invocation reply** — identified positively by `user.login` **and** the
+  `<!-- CodeRabbit review command invocation: … -->` marker, never any durable bot comment mentioning
+  a limit — especially when the auto-generated summary is the satisfier, since a refusal refreshes it
+  to name the current head. A refusal in that reply defeats the green **whatever the summary says**.
+  🔴 **Bind it to this request by its ROUND — never by comparing it with the satisfying artifact.**
+  The refusal is what *causes* the summary to refresh (measured 3 s on monorepo#3016, 4 s on
+  platform#3344), so the summary is **always** the newer of the two and an artifact-timestamp test can
+  never let the refusal win: it would re-accept the refreshed summary as a green with no review behind
+  it, which is the exact fail-open this rule exists to close. The refusal counts when it postdates the
+  newest authenticated `<!-- review-request-head: <sha> provider=cr -->` marker at this head; one
+  older than that marker belongs to an earlier round and is spent, so it cannot veto a genuine later
+  green. The artifact-timestamp comparison stays where it works — the **transient commit status**,
+  whose `updated_at` is judged against the artifact per the status table in `AGENTS.md`.
   Report an older completion as stale, and a current-head CodeRabbit review carrying
   findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual

@@ -714,13 +714,14 @@ public and private — no per-repo loop needed to enumerate):
      genuine current review and reports `green_review=none` over a real green (monorepo#2819;
      measured 2026-08-13 on four substantive bodies across monorepo#2810 and #2723). Strip only the
      LEADING comments and keep the match anchored — a marker further in is not a review, and an
-     empty container still fails. **And** the head must also carry a CodeRabbit commit status whose
-     `description` begins `Review completed`, or CodeRabbit's substantive auto-generated summary comment
-     (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated after the
-     authenticated request and naming `headRefOid`, or its **command-invocation reply comment carrying
-     a verdict** — a body stating `Reviewed pull request #<n> at <sha>` whose `<sha>` is a **prefix of
-     `headRefOid`**, together with `I found no actionable issues`, updated after that request — only
-     when its threads, review-body sections, and explicit ancillary problem count are all zero.
+     empty container still fails. Treat that review object, CodeRabbit's substantive
+     auto-generated summary comment (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`) updated
+     after the authenticated request and naming `headRefOid`, and its **command-invocation reply comment
+     carrying a verdict** as three alternative substantive artifacts; the review object does **not**
+     require a `Review completed` status conjunct. The verdict reply must state
+     `Reviewed pull request #<n> at <sha>` with `<sha>` a **prefix of `headRefOid`**, together with
+     `I found no actionable issues`, and be updated after that request. Report any alternative green
+     only when its threads, review-body sections, and explicit ancillary problem count are all zero.
      **All three artifacts must have `user.login == "coderabbitai[bot]"`**: the reply is matched on
      plain prose, so without the author bind any account could post those phrases and be read green.
      **Discriminate a command reply on SUBSTANCE, never on comment type: a reply carrying no verdict
@@ -761,11 +762,41 @@ public and private — no per-repo loop needed to enumerate):
      (monorepo#2819) and is followed by a blank line, so stripping the comment alone still leaves the
      body starting with a newline and an anchored match still fails. Both are part of the match rather
      than an allowance. The status stays a **required corroborator**
-     of run-completion — it reads `Review completed` for a review that ran and `Review skipped: …` or
-     `Review rate limited` when none did, and note that `state=success` accompanies all three, so
+     of run-completion **only while it is INFORMATIVE** — `Review completed` evidences a run;
+     `Review rate limited`, or another explicit marker that the review did not run, defeats the
+     green; and `Review skipped: automatic reviews are disabled` (the portfolio-wide default,
+     since auto-review is off everywhere) or **no CodeRabbit status at all** is an
+     **uninformative status** that must NOT defeat it. `state=success` accompanies every case, so
      the `description` is the discriminator, never the state.
-     Keep the exclusions as defense in depth. A head carrying **no** CodeRabbit status at all
-     fails closed to `none`.
+     🔴 **Do not fail an uninformative status closed** (monorepo#3015): a head where CodeRabbit
+     posted two real findings carries the identical disabled default, and `ksail`/`actions` publish
+     no CodeRabbit status at all (unfiltered controls: zero commit statuses; 43 check-runs on the
+     `ksail` head, none CodeRabbit), so failing closed reports `green_review=none` over every real
+     review and burns weekly-limited Codex and monthly-limited Bugbot on an already-reviewed head.
+     🔴 **The status is also TRANSIENT — read a refusal from the durable command-invocation reply
+     instead.** On `platform#3344` @ `e94216b3` CodeRabbit replied `Review rate limited`, and
+     that head's status now reads the disabled default: the status lost the refusal, while the reply
+     is permanent. A refusal also *refreshes* the auto-generated summary so it names the current
+     head, so when the summary is the satisfier, check for a refusal marker before reporting
+     `cr@<sha>` — in CodeRabbit's **newest same-head command-invocation reply**, identified
+     positively (`user.login == "coderabbitai[bot]"` **and** the
+     `<!-- CodeRabbit review command invocation: … -->` marker), never any durable bot comment that
+     happens to mention a limit.
+     🔴 **Newest-at-this-head does NOT establish the current round — bind the reply to the request
+     marker.** A head can carry several request rounds, so the newest such reply can still belong to
+     an earlier one and would then veto a genuine later green (fail-closed). Count a refusal only
+     when it postdates the newest authenticated `<!-- review-request-head: <sha> provider=cr -->`
+     marker at this head; one older than that marker is spent. Never bind it by comparing it with the
+     satisfying artifact: the refusal is what *refreshes* the summary, so the summary is always newer
+     and that test could never let the refusal win — a fail-open.
+     🔴 **Bind the not-run marker to THIS request, or the rule re-introduces a fail-closed.** The
+     status reports the last event at that head, so a spent refusal can outlive the round that
+     produced it: a `Review rate limited` only defeats a green while it is **at least as new as the
+     satisfying artifact** (status `updated_at` vs the artifact's `submitted_at`/`updated_at`). Once
+     the artifact postdates it, it is spent and uninformative. Every other description —
+     `Review in progress` (observed live on monorepo#3016) or anything unlisted — is uninformative
+     too; only an explicit review-did-not-run marker adds information the artifact test lacks.
+     Keep the exclusions as defense in depth.
      Report an older completion as `cr-stale@<sha>`. A
      **current-head CodeRabbit review that carries findings** (a `COMMENTED`/`CHANGES_REQUESTED`
      review with unresolved threads or actionable comments) is `cr-findings@<sha>` — report its

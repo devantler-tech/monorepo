@@ -1696,11 +1696,70 @@ too while `reviews.fail_commit_status: false` is in force (see *Local review rou
 `CodeRabbit / failure` wording describes the same refusal with that lever off). A green keyed on
 `context == "CodeRabbit" && state == "success"`
 therefore marks **every never-reviewed PR as reviewed** — a fail-open on the promotion gate reachable
-by following the surface list literally. So read the `description`, never the `state`:
-`Review completed` is the only value that evidences a run, and
-`Review skipped: automatic reviews are disabled` is a not-run marker in the same family as a
-rate-limit marker. The status is a **required corroborator, never a satisfier** — it proves only that
-*a* run completed, so a green still needs the real artifact its row names, positively identified.
+by following the surface list literally. So read the `description`, never the `state` — and sort what
+it says into **three** classes, not two — and bind every class to **this** request, because the field
+is transient and reports only whatever CodeRabbit last wrote at that head:
+
+| `description` | class | effect on a green |
+|---|---|---|
+| `Review completed` | evidences a run | corroborates the artifact |
+| `Review rate limited`, or another explicit marker that the review did not run, **and not older than the satisfying artifact** | **not-run marker** | **defeats the green** |
+| `Review skipped: automatic reviews are disabled`; **no status at all**; `Review in progress` or any other value; **or a not-run marker the artifact POSTDATES** | **uninformative status** | **must NOT defeat the green** |
+
+🔴 **The staleness binding in rows 2 and 3 is load-bearing — without it this rule introduces its own
+fail-closed.** Because the status reports the last event rather than this one, an `e94216b3`-style
+refusal can still be sitting at a head where a **later** re-request then succeeded; classifying on the
+description alone would let that spent refusal veto a genuine current green, which is the same
+false-negative this section exists to remove, one round later. So a not-run marker defeats a green
+only while it is **at least as new as the artifact** being judged (compare the status `updated_at`
+against the artifact's `submitted_at`/`updated_at`); once the artifact postdates it, the marker is
+spent and the row-3 treatment applies. Everything unlisted falls to row 3 as well — `Review in
+progress` was observed live on `monorepo#3016` at 01:47:59Z — because only an explicit
+review-did-not-run marker carries information the artifact test does not already have.
+
+🔴 **That third row is the correction, and it is not a loosening — the status is a corroborator only
+while it is INFORMATIVE, never a required conjunct.** The description is **UNRELIABLE, not merely
+sometimes-absent**: it reports whatever CodeRabbit last wrote at that head, which may or may not be
+the review you are asking about. Measured 2026-08-24 (monorepo#3015): on `platform#3311` the head
+where CodeRabbit posted **two real findings** (`cd7f1c00eb`) and the head where it returned a
+finding-free verdict (`a2ada72723`) **both** read the disabled default — the first is the control, so
+the description demonstrably fails to report a review that certainly ran; and that head's
+`updated_at` (23:13:31Z) *postdates* the 23:08:53Z request, so freshness does not discriminate
+either. `ksail` and `actions` publish **no** CodeRabbit status at all (unfiltered controls: zero
+commit statuses, and 43 check-runs on the `ksail` head with no CodeRabbit check), which is why
+absence joins that row rather than failing closed.
+⚠️ **It is NOT categorically unsatisfiable, and claiming that would be easy to disprove and lose the
+argument on.** Measured the same day on `monorepo#3013` @ `e5415972fa`, the description **did** reach
+`Review completed` (00:47:59Z) for a review that ran. That is precisely the problem: requiring the
+conjunct is a **coin-flip on the same signal**, so a run following it reports `green_review=none` on
+an unpredictable share of genuinely reviewed heads and walks down into weekly-limited Codex and
+monthly-limited Bugbot on work CodeRabbit already reviewed — the exact cheapest-lane-first inversion
+the lane order exists to prevent. A required conjunct that is right only sometimes is a false-negative
+generator, not a safeguard.
+
+🔴 **And the status is TRANSIENT, so it fails OPEN in the other direction: the durable record of a
+refusal is the reply comment body.** On `platform#3344` @ `e94216b3` CodeRabbit replied
+`Review rate limited` at 20:49:29Z, yet that head's status **today** reads the disabled default
+(`updated_at` 21:06:55Z) — a later event reverted it and **the status lost the refusal**. A field
+that expires cannot corroborate a durable decision. The refusal itself is permanent, in CodeRabbit's
+command-invocation reply (`⚠️ Action not completed` / `Review rate limited`), and the artifact rule
+above already rejects any artifact carrying such a marker. What that rule alone does **not** catch is
+the **auto-generated summary** satisfier: a refusal *refreshes* the summary so it names the current
+head — measured four seconds after that refusal, naming the full
+`e94216b3b4705771303af9c95a1e7cf7f5460a71`. So whenever the summary is the satisfier, also read
+CodeRabbit's **newest same-head command-invocation reply** — identified positively, exactly as a
+review object is: `user.login == "coderabbitai[bot]"`, carrying the
+`<!-- CodeRabbit review command invocation: … -->` marker, and newest among those at this head. A
+refusal marker in **that** comment defeats the green whatever the summary says. **Do not widen this
+to "a durable bot comment"**: any `coderabbitai[bot]` body can mention a rate limit — a stale
+summary, an unrelated notice — so an unscoped match is a blocklist over arbitrary prose and would
+veto real greens. **The reply belongs to this round only when it postdates the newest authenticated
+CodeRabbit request marker at this head, and that marker is newer than the round's newest restarting
+artifact.** An earlier round's durable refusal never defeats a later round's green. Positive
+identification of the artifact is the rule here as everywhere else. That closes the fail-open on a record that does not expire, which is
+precisely what the transient status could never do. The status remains a **required corroborator,
+never a satisfier** *when it is informative* — it proves only that *a* run completed, so a green
+still needs the real artifact its row names, positively identified.
 
 ⚠️ **Bugbot's green is a status check, NOT a review object and NOT a comment** — a gate or survey that
 sweeps only `pulls/<n>/reviews` and `issues/<n>/comments` is **structurally blind** to it and will
@@ -1937,7 +1996,7 @@ result at the current head — self-promotion is forbidden before that. Request 
   maintainer instruction. This carve-out covers **only** an exact-match review trigger; every other
   comment you author keeps its inline disclosure line.
 
-- **READ a lane's quota state before spending a request on it — the status says so for free.**
+- **READ a lane's quota state before spending a request on it — its artifacts say so for free.**
   Rediscovering a refusal by *posting a trigger* costs a trigger comment, an ack read, a status read
   and a marker write to learn something a free read already knew. Measured 2026-08-08 over 8 recent
   monorepo PRs: **54 review requests produced 16 actual CodeRabbit reviews**, with **17 rate-limit
@@ -1945,16 +2004,22 @@ result at the current head — self-promotion is forbidden before that. Request 
   each round re-requesting CodeRabbit first because that is what lane priority says. **Only the
   same-head repeats are recoverable** — see the sizing note below, which is deliberately narrower than
   those totals.
-  **A CodeRabbit REFUSAL is readable with NO write**: the head's `CodeRabbit` commit status
-  carries it in its `description` — `Review rate limited` (a quota refusal),
-  `Review skipped: automatic reviews are disabled` (the never-reviewed default), or `Review completed`
-  (a run happened). So **before each CodeRabbit trigger, read that description on that PR's head**; if
-  it reads as a quota refusal **that this round itself produced** — by the round-provenance test below,
-  which is part of this instruction rather than a later refinement of it — do not post the trigger for
-  that round: advance to Codex for that PR and record the usual `cr:no-gate@<sha>`.
+  **A CodeRabbit REFUSAL is readable with NO write**: before each CodeRabbit trigger, read the
+  **newest same-head command-invocation reply** that postdates this round's authenticated request
+  marker, as well as the head's transient `CodeRabbit` commit-status description. The reply is the
+  durable evidence: `Review rate limited` or another explicit did-not-run marker in that positively
+  identified reply survives after the status reverts to the disabled default. The status remains a
+  secondary negative signal — `Review rate limited` is a quota refusal,
+  `Review skipped: automatic reviews are disabled` is the never-reviewed default, and
+  `Review completed` says a run happened — but it never overrides the reply. If the reply or a
+  refusal status whose `updated_at` postdates that request marker records a refusal **that this round
+  itself produced** — by the round-provenance test below, which is part of this instruction rather
+  than a later refinement of it — do not post another trigger for that round: advance to Codex for
+  that PR and record the usual `cr:no-gate@<sha>`.
   **A refusal you cannot attribute to this round is **not** a reason to skip — ask.** The status is
-  durable and outlives the quota window, so an unqualified reading of this paragraph sends a same-SHA
-  restart (a refutation that changes no files) straight to the **weekly-limited** lane while the
+  transient while the reply is durable and outlives the quota window, so an unqualified reading of
+  this paragraph sends a same-SHA restart (a refutation that changes no files) straight to the
+  **weekly-limited** lane while the
   **free** one has long recovered. An operative sentence is what actually gets executed, so the
   qualification belongs here, not only in the elaboration below.
   🔴 **This read is a NEGATIVE filter only. It can show the lane refusing HERE; it can never show the
@@ -4041,10 +4106,13 @@ in full. The trend is **monotonic, not a spike**: daily medians ran **155,212 �
 engineering plugin contract* retains it only until digest parity, and *Agent definition locations*
 allows it to carry **only its named deployment/provider delta** — generic role logic changes at its
 owning upstream. That parity gate was reached: `agent-plugins#78` closed **COMPLETED 2026-07-25**.
-The overlay then grew **61,144 B → 148,356 B (+143%)**, because generic refinements (the `4b`–`4e`
-items in [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
+The overlay then grew **61,144 B → 150,495 B (+146%)** as measured on 2026-08-19, because generic
+refinements (the `4b`–`4e` items in
+[`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
 were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
-closed, pushing the file's own deletion further away, and charging every hourly dispatch for it.
+closed, pushing the file's own deletion further away, and charging every hourly dispatch for it. Its
+**enforced high-water mark is now 151,249 B**; that is the live ratchet ceiling, not a rewrite of the
+dated measurement.
 
 **So a new surveyor refinement goes UPSTREAM unless it is a genuine deployment fact.**
 [`definition-load-budget-contract.test.sh`](.claude/scripts/definition-load-budget-contract.test.sh)
