@@ -43,13 +43,30 @@ assert_absent() {
 # is actually chosen.
 assert_section_prose() {
   local file="$1" start="$2" end="$3" phrase="$4" message="$5"
-  awk -v start="${start}" -v end="${end}" '
-    index($0, start) { in_section = 1 }
+  local section
+  if ! section="$(awk -v start="${start}" -v end="${end}" '
+    index($0, start) { in_section = 1; found_start = 1 }
     in_section { print }
-    in_section && index($0, end) { exit }
-  ' "${file}" | tr '\n' ' ' | tr -s '[:space:]' ' ' | grep -Fq -- "${phrase}" ||
+    in_section && index($0, end) { found_end = 1; exit }
+    END { if (!found_start || !found_end) exit 2 }
+  ' "${file}")"; then
+    fail "${message} (section delimiter missing)"
+  fi
+  printf '%s\n' "${section}" | tr '\n' ' ' | tr -s '[:space:]' ' ' | grep -Fq -- "${phrase}" ||
     fail "${message}"
 }
+
+# Prove the section helper fails closed at its boundary. Without the end marker the old helper
+# scanned to EOF, so matching vocabulary in a later section could satisfy an operative-phase guard.
+section_fixture="$(mktemp)"
+trap 'rm -f "${section_fixture}"' EXIT
+printf '%s\n' 'OPERATIVE START' 'unrelated line' 'required phrase outside the missing boundary' >"${section_fixture}"
+if (assert_section_prose "${section_fixture}" 'OPERATIVE START' 'OPERATIVE END' \
+  'required phrase' 'fixture delimiter missing') 2>/dev/null; then
+  fail "assert_section_prose accepted a phrase after a missing end delimiter"
+fi
+rm -f "${section_fixture}"
+trap - EXIT
 
 grep -Fq 'CodeRabbit > Codex > Cursor Bugbot' "${constitution}" ||
   fail "constitution does not preserve the provider order"

@@ -99,14 +99,17 @@ grep -qF 'raise the ceiling' "${constitution}" ||
 grep -qF 'never vetoes mandated' "${constitution}" ||
   fail "AGENTS.md no longer states that the ceiling never vetoes mandated work"
 
-# 5. CONSERVATION: the ceiling in this file and the byte figure quoted in AGENTS.md must agree.
-# This is what stops a silent raise here from drifting away from the evidence over there.
+# 5. CONSERVATION: keep the dated measurement distinct from the current enforced high-water mark,
+# and require that current mark to agree with this file's ceiling. Otherwise each raise rewrites the
+# historical endpoint, or the live ceiling silently drifts away from the evidence over there.
 # `|| true` is load-bearing: under `set -euo pipefail` a no-match grep makes this whole
 # substitution non-zero, which killed the script BEFORE the explicit check below could report it —
 # a guard that cannot announce its own failure. Caught by ablation A5b.
-documented="$(grep -oE '61,144 B → [0-9,]+ B' "${constitution}" | head -1 | sed -E 's/.*→ ([0-9,]+) B/\1/' | tr -d ',' || true)"
+grep -qF '61,144 B → 150,495 B (+146%)' "${constitution}" ||
+  fail "AGENTS.md no longer preserves the dated 2026-08-19 overlay measurement separately from the live ceiling"
+documented="$(grep -oE 'enforced high-water mark is now [0-9,]+ B' "${constitution}" | head -1 | sed -E 's/.*now ([0-9,]+) B/\1/' | tr -d ',' || true)"
 [ -n "${documented}" ] ||
-  fail "could not find the overlay size figure in AGENTS.md (expected the '61,144 B → <N> B' form) — assertions 2-4 anchor on that section, so its loss makes this guard unverifiable"
+  fail "could not find the current enforced high-water mark in AGENTS.md — assertions 2-4 anchor on that section, so its loss makes this guard unverifiable"
 [ "${documented}" = "${CEILING_OVERLAY_BYTES}" ] ||
   fail "ceiling drift: this test allows ${CEILING_OVERLAY_BYTES} B but AGENTS.md documents ${documented} B. Raise both together, or the recorded evidence stops describing the enforced limit."
 

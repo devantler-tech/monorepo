@@ -4106,10 +4106,13 @@ in full. The trend is **monotonic, not a spike**: daily medians ran **155,212 �
 engineering plugin contract* retains it only until digest parity, and *Agent definition locations*
 allows it to carry **only its named deployment/provider delta** — generic role logic changes at its
 owning upstream. That parity gate was reached: `agent-plugins#78` closed **COMPLETED 2026-07-25**.
-The overlay then grew **61,144 B → 151,249 B (+147%)**, because generic refinements (the `4b`–`4e`
-items in [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
+The overlay then grew **61,144 B → 150,495 B (+146%)** as measured on 2026-08-19, because generic
+refinements (the `4b`–`4e` items in
+[`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
 were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
-closed, pushing the file's own deletion further away, and charging every hourly dispatch for it.
+closed, pushing the file's own deletion further away, and charging every hourly dispatch for it. Its
+**enforced high-water mark is now 151,249 B**; that is the live ratchet ceiling, not a rewrite of the
+dated measurement.
 
 **So a new surveyor refinement goes UPSTREAM unless it is a genuine deployment fact.**
 [`definition-load-budget-contract.test.sh`](.claude/scripts/definition-load-budget-contract.test.sh)
