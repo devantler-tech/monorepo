@@ -80,6 +80,13 @@ skill_file "$P/mapval/SKILL.md" 'metadata:
 # looking row, which is the fail-open direction this helper exists to close.
 skill_file "$P/boolval/SKILL.md" 'metadata:
   github-repo: false' 'declared as a bool'
+# `metadata` present but NOT a mapping. `(.metadata // {})` maps these onto `{}`, so a has()-only
+# reader answers false and reports LOCAL with exit 0 — local authorship asserted from malformed
+# input. Three shapes because the `//` alternative fires on `false` specifically, and a scalar and
+# a number take a different path through yq than a bool does.
+skill_file "$P/metafalse/SKILL.md" 'metadata: false' 'metadata is a bool'
+skill_file "$P/metaint/SKILL.md" 'metadata: 42' 'metadata is a number'
+skill_file "$P/metastr/SKILL.md" 'metadata: "nope"' 'metadata is a string'
 git -C "$plug" add -A >/dev/null
 git -C "$plug" commit -qm "fixture + malformed declarations"
 PIN="$(git -C "$plug" rev-parse HEAD)"
@@ -266,6 +273,13 @@ assert_not_contains 'clean revision reports no UNKNOWN'    "$OUT_C" 'UNKNOWN'
 run  # $OUT is shared: later arms narrow it, so re-read the full listing for this assertion
 assert_contains 'a non-string github-repo value is UNKNOWN' "$OUT" 'UNKNOWN	boolval'
 assert_not_contains 'a non-string value never becomes an owner row' "$OUT" 'false	boolval'
+# ---- 10b. A present-but-NON-MAPPING `metadata` is UNKNOWN, never LOCAL. This is the same fail-open
+#      as 4b/10 one level up: the container is malformed rather than the value, and a has()-only
+#      reader cannot tell that from an absent key.
+assert_contains 'metadata: false is UNKNOWN'  "$OUT" 'UNKNOWN	metafalse'
+assert_contains 'metadata: 42 is UNKNOWN'     "$OUT" 'UNKNOWN	metaint'
+assert_contains 'metadata: "nope" is UNKNOWN' "$OUT" 'UNKNOWN	metastr'
+assert_not_contains 'a non-mapping metadata is never LOCAL' "$OUT" 'LOCAL	metafalse'
 
 # ---- 11. THE FORGE FALLBACK, exercised hermetically. This is the path the whole change exists for:
 #     in a fresh per-run worktree the submodule is empty, so `try_forge` is what actually answers.
@@ -315,10 +329,20 @@ TREECMD
 chmod +x "$tree_cmd"
 
 blobs="$tmp/blobs"; mkdir -p "$blobs"
-git -C "$plug" ls-tree -r --name-only "$PIN" | while IFS= read -r bp; do
+# A failed extraction must ABORT. Suppressing it lets the fake `gh` serve an empty/missing blob for
+# boolval, which produces the same `UNKNOWN boolval` the malformed-value arm asserts — so that arm
+# would pass for the wrong reason, which is the exact defect this suite exists to catch.
+# `while` in a pipeline runs in a subshell, so a failure inside it cannot exit the script: collect
+# the paths first, then loop in THIS shell.
+blob_paths="$(git -C "$plug" ls-tree -r --name-only "$PIN")"
+[ -n "$blob_paths" ] || { echo "FAIL: no blob paths enumerated for the forge fixture" >&2; exit 1; }
+while IFS= read -r bp; do
   [ -n "$bp" ] || continue
-  git -C "$plug" show "$PIN:$bp" > "$blobs/$(printf '%s' "$bp" | tr '/' '_')" 2>/dev/null || true
-done
+  git -C "$plug" show "$PIN:$bp" > "$blobs/$(printf '%s' "$bp" | tr '/' '_')" \
+    || { echo "FAIL: could not extract forge blob fixture for $bp" >&2; exit 1; }
+done <<BLOBS
+$blob_paths
+BLOBS
 
 # The consumer's submodule directory is EMPTY here — the fresh-worktree shape — so the forge path
 # is the only one that can answer.
@@ -343,6 +367,9 @@ assert_contains 'forge path reports source=forge'        "$ERR_F" 'source=forge'
 assert_contains 'forge path resolves the synced skill'   "$OUT_F" 'https://github.com/devantler-tech/agent-skills	synced'
 assert_contains 'forge path resolves the local skill'    "$OUT_F" 'LOCAL	local'
 assert_contains 'forge path still fails closed on a malformed value' "$OUT_F" 'UNKNOWN	boolval'
+# Rows alone are not the contract: a caller reads the EXIT STATUS. If the forge path printed
+# UNKNOWN and still exited 0, the assertion above would pass while every caller saw success.
+assert_eq 'forge path exits 2 when a value is malformed' 2 "$RC_F"
 # The slug must come from .gitmodules, not a constant: mk_consumer points the url at $plug.
 assert_eq 'forge slug is derived from .gitmodules' "$(basename "$plug")" "$(sed 's@.*/@@' "$tmp/ghslug")"
 # Ablation: a truncated tree is a PARTIAL listing. Accepting it would drop skills silently, which is

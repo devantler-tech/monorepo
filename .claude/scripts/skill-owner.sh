@@ -175,7 +175,20 @@ while IFS= read -r p; do
   # explicit `github-repo: ""` or `github-repo: {…}` onto LOCAL, which asserts local authorship from a
   # malformed declaration — the same fail-open direction as an empty enumeration. So ask whether the
   # key exists first, and accept only a non-empty scalar as a value.
-  present="$(printf '%s\n' "$body" | yq --front-matter=extract '(.metadata // {}) | has("github-repo")' 2>/dev/null)" \
+  # `metadata` itself must be a MAPPING before asking what it contains. `(.metadata // {})` maps a
+  # present-but-non-mapping value onto `{}` — the `//` alternative fires on `false` and `null` alike —
+  # so `metadata: false`, `metadata: 42` and `metadata: "str"` all answer has("github-repo") == false
+  # and would be reported LOCAL with exit 0. That asserts local authorship from a malformed
+  # declaration, the same fail-open this block exists to close, one level up. Measured: all three
+  # yield `false` from the has() form. The tag discriminates cleanly — `!!map` is a real mapping and
+  # `!!null` is genuinely absent; anything else is malformed and therefore UNKNOWN.
+  meta_kind="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata | tag' 2>/dev/null)" || meta_kind=""
+  case "$meta_kind" in
+    '!!map') ;;
+    '!!null') printf 'LOCAL\t%s\t%s\n' "$skill" "$p"; continue ;;
+    *) printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue ;;
+  esac
+  present="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata | has("github-repo")' 2>/dev/null)" \
     || { printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue; }
   case "$present" in
     false) owner="LOCAL" ;;
