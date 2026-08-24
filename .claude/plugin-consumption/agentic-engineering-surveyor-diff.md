@@ -66,13 +66,12 @@ plugin carries them (or an explicit, tested subset):
    never satisfies the gate on its own, and being transient it can lose a refusal, so a refusal is
    read from CodeRabbit's newest same-head **command-invocation reply**, identified positively by
    `user.login` plus the `<!-- CodeRabbit review command invocation: … -->` marker — never any durable
-   bot comment that mentions a limit. A refusal in that reply defeats the green **whatever the summary
-   says**, and it is bound to this request by its **round** — it counts when it postdates the newest
-   authenticated `review-request-head … provider=cr` marker at this head, and a refusal older than
-   that marker is spent. It is **not** bound by comparing it with the satisfying artifact: the refusal
-   is what refreshes the summary, so the summary is always newer and that test could never let the
-   refusal win. The artifact-recency comparison belongs to the **transient status** alone — a status
-   not-run marker defeats a green only while it is at least as new as the satisfying artifact
+   bot comment that mentions a limit. A refusal in **that** reply defeats the green **whatever the
+   summary says**, and it is scoped to the current round by taking the *newest* such reply at this
+   head — never by comparing it with the satisfying artifact, since the refusal is what refreshes the
+   summary, so the summary is always newer and that comparison could never let the refusal win. The
+   artifact-recency comparison belongs to the **transient status** alone — a status not-run marker
+   defeats a green only while it is at least as new as the satisfying artifact
    (status `updated_at` vs the artifact's `submitted_at`/`updated_at`); a spent one is uninformative,
    as is `Review in progress` or any unlisted value. Without this the check fails closed on every real
    review, open on a refusal read later, and closed again on a stale refusal.
