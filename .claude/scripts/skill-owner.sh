@@ -126,8 +126,17 @@ paths=""
 try_submodule() {
   [ -e "$sub" ] || return 1
   git -C "$sub" --no-replace-objects cat-file -e "$PIN^{commit}" 2>/dev/null || return 1
-  paths="$(git -C "$sub" --no-replace-objects ls-tree -r --name-only "$PIN" -- "$PLUGIN_ROOT" 2>/dev/null \
-             | select_skill_paths || true)"
+  # NOT `|| true`. `select_skill_paths` returns 0 even when it matches nothing, so the only status
+  # this pipeline can carry is the ENUMERATOR's — exactly the one that must not be swallowed. An
+  # enumerator that emits some paths and THEN fails leaves `paths` non-empty, so the empty-list guard
+  # below cannot catch it, and the resolver would print an authoritative-looking SUBSET and exit 0.
+  # A partial listing is the same fail-open as an empty one: absence of a row is a claim about the
+  # enumeration, and a half-finished enumeration cannot support it.
+  if ! paths="$(git -C "$sub" --no-replace-objects ls-tree -r --name-only "$PIN" -- "$PLUGIN_ROOT" 2>/dev/null \
+                  | select_skill_paths)"; then
+    paths=""   # discard the partial listing; it must never reach the caller
+    return 1
+  fi
   resolved_source="submodule"
   return 0
 }
@@ -146,8 +155,14 @@ try_forge() {
   case "$(printf '%s' "$raw" | jq -r '.truncated // false')" in
     true) return 1 ;;
   esac
-  paths="$(printf '%s' "$raw" | jq -r '.tree[] | select(.type=="blob") | .path' 2>/dev/null \
-             | select_skill_paths || true)"
+  # Same reasoning as try_submodule: preserve the pipeline status. `jq` STREAMS `.tree[]`, so a
+  # malformed element part-way through the array prints every path before it and THEN exits non-zero
+  # — a partial listing that is non-empty, which `|| true` would have converted into success.
+  if ! paths="$(printf '%s' "$raw" | jq -r '.tree[] | select(.type=="blob") | .path' 2>/dev/null \
+                  | select_skill_paths)"; then
+    paths=""
+    return 1
+  fi
   FORGE_SLUG="$slug"
   resolved_source="forge"
   return 0

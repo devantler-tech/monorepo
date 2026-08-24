@@ -346,6 +346,15 @@ case "${2:-}" in
       "$FAKE_GH_TREE_CMD" | jq '{truncated:true, tree:[.tree[]|select(.path|endswith("/synced/SKILL.md"))]}'
       exit 0
     fi
+    if [ "${FAKE_GH_POISON:-0}" = 1 ]; then
+      # A tree whose FIRST element is a real blob and whose second is a number. `jq` streams
+      # `.tree[]`, so it prints the valid path and only THEN dies indexing a number — the
+      # "emits, then fails" shape. `truncated:false`, so the truncation guard cannot catch it and
+      # this arm tests only the pipeline-status handling.
+      "$FAKE_GH_TREE_CMD" \
+        | jq -c '{truncated:false, tree:([.tree[]|select(.path|endswith("/synced/SKILL.md"))] + [42])}'
+      exit 0
+    fi
     "$FAKE_GH_TREE_CMD"
     ;;
   */contents/*)
@@ -458,6 +467,43 @@ assert_eq 'auto exits 2 when a value is malformed' 2 "$RC_A"
 # probe left the single-needle form green.)
 assert_not_contains 'auto never claims the empty submodule answered' "$ERR_A" 'source=submodule'
 assert_not_contains 'auto never attributes a died run to the submodule' "$ERR_A" 'via submodule'
+
+# ---- 13. A FAILED enumeration that already EMITTED rows. Case 11's truncation arm covers a tree
+#      the forge itself declares partial; this covers the other way an enumeration goes partial —
+#      the pipeline dies part-way through. `|| true` on the enumeration pipeline converted exactly
+#      this into success: `paths` is NON-EMPTY, so the empty-enumeration guard cannot fire, and the
+#      resolver printed an authoritative-looking subset and exited 0. Absence of a row would then be
+#      a claim the enumeration never established — the defect this helper exists to close, reached
+#      through the one door the empty-list guard does not cover.
+run_poison() { # -> OUT_P / RC_P
+  set +e
+  OUT_P="$(PATH="$fake_bin:$PATH" GH_CALL_LOG="$tmp/ghcalls_p" GH_SLUG_SEEN="$tmp/ghslug_p" \
+           FAKE_GH_TREE_CMD="$tree_cmd" FAKE_GH_BLOBS="$blobs" FAKE_GH_TRUNCATED=0 FAKE_GH_POISON=1 \
+           "$SUT" --repo-root "$cons_forge" --source forge --submodule-path libraries/agent-plugins \
+           2>"$tmp/err_p")"
+  RC_P=$?
+  set -e
+}
+
+: > "$tmp/ghcalls_p"; : > "$tmp/ghslug_p"
+run_poison
+# The fixture is only a fixture if it really emits-then-fails. Assert that directly against the same
+# shim the SUT used, so a poison payload that silently became well-formed (or empty) cannot leave
+# the two assertions below passing for the wrong reason.
+set +e
+poison_out="$(PATH="$fake_bin:$PATH" GH_CALL_LOG=/dev/null GH_SLUG_SEEN=/dev/null \
+              FAKE_GH_TREE_CMD="$tree_cmd" FAKE_GH_TRUNCATED=0 FAKE_GH_POISON=1 \
+              gh api "repos/x/y/git/trees/deadbeef?recursive=1" 2>/dev/null \
+              | jq -r '.tree[] | select(.type=="blob") | .path' 2>/dev/null)"
+poison_rc=$?
+set -e
+if [ "$poison_rc" -ne 0 ]; then poison_failed=1; else poison_failed=0; fi
+assert_eq       'fixture: the poisoned enumeration FAILS'      1 "$poison_failed"
+assert_contains 'fixture: it emitted a real path before dying' "$poison_out" '/synced/SKILL.md'
+# The contract: a failed enumeration is UNKNOWN (exit 2), never a partial answer at exit 0.
+assert_eq 'a failed enumeration is UNKNOWN, never a partial listing' 2 "$RC_P"
+assert_not_contains 'a failed enumeration prints no ownership rows' "$OUT_P" 'synced'
+
 printf '\nskill-owner: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 printf 'skill-owner contract: PASS — ownership is per-file, structural, and fails closed on an empty enumeration\n'
