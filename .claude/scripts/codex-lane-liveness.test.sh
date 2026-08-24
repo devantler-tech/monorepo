@@ -63,14 +63,14 @@ run_seq=0
 
 # add_run <db> <automation> <ended_ms_ago> <duration_s> <inbox:yes|no>
 add_run() {
-  local db=$1 auto=$2 ago=$3 dur=$4 inbox=$5
-  add_run_ms "$db" "$auto" "$ago" "$(( dur * 1000 ))" "$inbox"
+  local db=$1 auto=$2 ago=$3 dur=$4 inbox=$5 status=${6:-PENDING_REVIEW}
+  add_run_ms "$db" "$auto" "$ago" "$(( dur * 1000 ))" "$inbox" "$status"
 }
 
-# add_run_ms <db> <automation> <ended_ms_ago> <duration_MS> <inbox:yes|no>
+# add_run_ms <db> <automation> <ended_ms_ago> <duration_MS> <inbox:yes|no> [status]
 # Millisecond-precision variant, so a fixture can sit just above a whole-second stub threshold.
 add_run_ms() {
-  local db=$1 auto=$2 ago=$3 dur_ms=$4 inbox=$5
+  local db=$1 auto=$2 ago=$3 dur_ms=$4 inbox=$5 status=${6:-PENDING_REVIEW}
   local ended=$(( NOW_MS - ago )) created
   created=$(( ended - dur_ms ))
   run_seq=$(( run_seq + 1 ))
@@ -83,7 +83,7 @@ add_run_ms() {
   esac
   sqlite3 "$db" "INSERT INTO automation_runs
     (thread_id,automation_id,status,thread_title,inbox_title,inbox_summary,last_error,created_at,updated_at)
-    VALUES ('t-$auto-$run_seq-$ago-$dur_ms','$auto','PENDING_REVIEW','Run',$title,'sum','PRIVATE-ERROR-PAYLOAD',$created,$ended);"
+    VALUES ('t-$auto-$run_seq-$ago-$dur_ms','$auto','$status','Run',$title,'sum','PRIVATE-ERROR-PAYLOAD',$created,$ended);"
 }
 
 run_check() {
@@ -141,6 +141,18 @@ add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
 add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
 run_check "$db"
 expect_rc 0 "an in-flight short run must not be classified as a stub"
+
+# --- 3b. stale updated_at does not make an active run terminal ----------------------------------
+# `updated_at` is not a heartbeat. A long-running turn can retain a timestamp older than the grace
+# boundary while its row remains IN_PROGRESS. If that active row enters the two-run window beside a
+# real terminal stub, both look short and inbox-less even though the older terminal run was healthy.
+db=$TMP/stale-active.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  3 no IN_PROGRESS
+add_run "$db" lane-a $(( GRACE_MS + 120000 )) 4 no
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 900 yes
+run_check "$db"
+expect_rc 0 "an IN_PROGRESS row must not be classified after its updated_at ages past grace"
+expect_out "OK" "terminal history containing a healthy run must remain OK"
 
 # --- 4. duration alone is not enough -----------------------------------------------------------
 db=$TMP/fastok.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
@@ -204,6 +216,16 @@ expect_rc 2 "a renamed column must be UNKNOWN, not a pass"
 # column and still exits 2, so an exit-code-only assertion cannot tell a diagnosed schema drift from
 # an opaque query error — and would pass with the schema check removed entirely.
 expect_out "unexpected schema" "schema drift must be diagnosed as such, not as an opaque read failure"
+
+# The run status is what separates active rows from terminal history. A schema without that column
+# cannot safely classify anything, even when every other field still permits the old query to run.
+db=$TMP/status-schema.db; mkstore "$db"; add_automation "$db" lane-a ACTIVE
+add_run "$db" lane-a $(( GRACE_MS + 60000 ))  900 yes
+add_run "$db" lane-a $(( GRACE_MS + 900000 )) 800 yes
+sqlite3 "$db" "ALTER TABLE automation_runs RENAME COLUMN status TO run_state;"
+run_check "$db"
+expect_rc 2 "a missing run status must be UNKNOWN, not a classification without terminality"
+expect_out "automation_runs.status is missing" "run-status schema drift must name the missing dependency"
 
 # --- 12. no ACTIVE automations is UNKNOWN ------------------------------------------------------
 db=$TMP/none.db; mkstore "$db"; add_automation "$db" lane-b PAUSED
@@ -376,7 +398,7 @@ expect_out "unparsable run row" "a negative duration must report as an unparsabl
 
 echo "codex-lane-liveness.test.sh: $asserts assertions, $fails failure(s)"
 # A floor on the count, so deleting a whole section cannot leave the suite green and silent.
-if [ "$asserts" -lt 46 ]; then
+if [ "$asserts" -lt 52 ]; then
   echo "FAIL: only $asserts assertions ran — a section is missing" >&2
   exit 1
 fi

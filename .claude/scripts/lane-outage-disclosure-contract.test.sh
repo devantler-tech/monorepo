@@ -146,4 +146,35 @@ assert_contains "${liveness}" 'defence in depth' \
 assert_contains "${liveness}" 'codex_error_info' \
   'the clause must name the per-turn field that carries the cause, so a NOT-PRODUCING verdict is not re-diagnosed by hand each time'
 
+# ---------------------------------------------------------------------------
+# 3. A per-automation OK must not read as health when the cause is ACCOUNT-scoped.
+#
+# Measured 2026-08-23T22:03Z, live: the check reported
+#     OK             agent-improver     — 1/2 newest settled runs are stubs
+#     NOT-PRODUCING  daily-ai-engineer  — newest 2 settled runs all ended within 60s
+# while BOTH automations were dead of one `quota/billing` refusal. agent-improver's own
+# newest dispatch (17:00:36Z) was a 15s stub with no inbox item — as dead as its sibling.
+#
+# The check classifies per automation over that automation's newest 2 settled runs; the
+# cause is per ACCOUNT. So a mixed verdict is the EXPECTED rendering of one account-wide
+# kill, and the window fills slowest on the LOWEST-cadence automation (twice-daily
+# agent-improver needs ~12h to show two stubs, against ~1h hourly). The check is therefore
+# least sensitive exactly where each missed dispatch costs most.
+#
+# An OK there is worse than silence: a POSITIVE assertion of health for a lane whose every
+# remaining dispatch in the window is already guaranteed to die — the same
+# absence-as-evidence class as reading last_run_at, one level down.
+# ---------------------------------------------------------------------------
+
+assert_contains "${liveness}" 'account-scoped' \
+  'the clause must name the account-scoped cause case, or a mixed verdict reads as one surviving lane'
+
+assert_contains "${liveness}" 'never as evidence that the other is healthy' \
+  'an OK beside a NOT-PRODUCING on the same account must be explicitly refused as health evidence'
+
+# Fails CLOSED. Without this the obvious repair — treat an undetermined scope as OK — would
+# satisfy the two assertions above while restoring the exact fail-open they exist to close.
+assert_contains "${liveness}" 'UNKNOWN, never `OK`' \
+  'an undetermined account scope must fail closed to UNKNOWN, not to OK'
+
 echo "lane-outage-disclosure contract: PASS"

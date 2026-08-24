@@ -139,7 +139,8 @@ probe=$(sq "SELECT 1,2;") || die_unknown "scheduler store probe query failed"
 # return empty, and an empty result set reads exactly like "no stubs found" — a silent pass in the
 # one case the check exists for.
 for spec in "automations:id" "automations:status" "automation_runs:automation_id" \
-            "automation_runs:created_at" "automation_runs:updated_at" "automation_runs:inbox_title"; do
+            "automation_runs:status" "automation_runs:created_at" "automation_runs:updated_at" \
+            "automation_runs:inbox_title"; do
   tbl=${spec%%:*}; col=${spec#*:}
   have=$(sq "SELECT COUNT(*) FROM pragma_table_info('${tbl}') WHERE name='${col}';") \
     || die_unknown "could not read schema for ${tbl}"
@@ -197,7 +198,10 @@ while IFS= read -r id; do
 
   # Only SETTLED runs are classified. An in-flight run is short BECAUSE it is still running — most
   # acutely when the checking run inspects its own row — so classifying it would make the guard fire
-  # on a healthy lane every time it ran. This is the trap that would have made the check useless.
+  # on a healthy lane every time it ran. The grace boundary alone cannot establish terminality:
+  # updated_at is not a heartbeat, so a long-running IN_PROGRESS row can age past it unchanged.
+  # Status cannot distinguish a healthy terminal run from a terminal stub (both are PENDING_REVIEW),
+  # but it does identify the active state that must never enter the classifier.
   # The duration is selected in RAW MILLISECONDS and compared in milliseconds. Dividing by 1000 here
   # truncates, so a run lasting `STUB_SECONDS * 1000 + 999` ms would report as exactly STUB_SECONDS
   # and be counted a stub — a run that is genuinely over the threshold classified as under it, which
@@ -205,7 +209,9 @@ while IFS= read -r id; do
   rows=$(sq "SELECT (updated_at - created_at) AS dur_ms,
                     CASE WHEN inbox_title IS NULL OR trim(inbox_title) = '' THEN 1 ELSE 0 END AS no_inbox
              FROM automation_runs
-             WHERE automation_id = '${id}' AND updated_at <= ${settled_before}
+             WHERE automation_id = '${id}'
+               AND status != 'IN_PROGRESS'
+               AND updated_at <= ${settled_before}
              ORDER BY updated_at DESC
              LIMIT ${CONSECUTIVE};") || die_unknown "could not read runs for ${id}"
 
