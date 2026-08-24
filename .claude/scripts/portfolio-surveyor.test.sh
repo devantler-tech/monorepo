@@ -126,10 +126,27 @@ grep -Fq '`**Actionable comments posted:`' "${surveyor}" ||
   fail "surveyor does not positively identify a CodeRabbit review artifact, so a non-empty non-review body still passes"
 grep -Fq 'the status only proves a run completed' "${surveyor}" ||
   fail "surveyor treats the head status as proof the matched object is a substantive review"
+# 🔴 RETIRED (monorepo#3015): this used to require `fails closed to `none`` for a head carrying no
+# CodeRabbit status. That is the WRONG direction — an absent status, like the portfolio-wide
+# `Review skipped: automatic reviews are disabled` default, is UNINFORMATIVE rather than evidence
+# that no review ran. `ksail` and `actions` publish no CodeRabbit commit status at all (unfiltered
+# controls: zero commit statuses; 43 check-runs on the `ksail` head, none of them CodeRabbit), so
+# failing closed there reports `green_review=none` over every real review and burns weekly-limited
+# Codex and monthly-limited Bugbot on an already-reviewed head. The protection that guard was
+# credited with — catching a refusal whose refreshed summary names the current head — is preserved
+# and strengthened below, because it now reads the DURABLE reply body instead of a status that is
+# transient and has been measured losing a refusal (platform#3344 @ e94216b3).
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
-grep -Fq 'fails closed to `none`' "${surveyor}" ||
-  fail "surveyor does not fail closed when the head carries no CodeRabbit status"
+grep -Fq 'uninformative status' "${surveyor}" ||
+  fail "surveyor lost the uninformative-status class, so an absent or auto-review-disabled CodeRabbit status defeats a real green (#3015)"
+grep -Fq 'no CodeRabbit status at all' "${surveyor}" ||
+  fail "surveyor does not name the ABSENT-status case that must not defeat a green (#3015)"
+grep -Fq 'durable' "${surveyor}" ||
+  fail "surveyor does not read a refusal from the durable reply body, so a transient status can lose it (#3015)"
+if grep -Fq 'fails closed to `none`' "${surveyor}"; then
+  fail "surveyor still fails an absent CodeRabbit status closed to none — retired by #3015"
+fi
 # Literal Markdown code spans; command substitution is intentionally disabled.
 # shellcheck disable=SC2016
 grep -Fq 'the `description` is the discriminator, never the state' "${surveyor}" ||

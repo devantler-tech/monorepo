@@ -1689,18 +1689,24 @@ it says into **three** classes, not two:
 | `Review skipped: automatic reviews are disabled`, or **no status at all** | **uninformative status** | **must NOT defeat the green** |
 
 🔴 **That third row is the correction, and it is not a loosening — the status is a corroborator only
-while it is INFORMATIVE, never a required conjunct.** Reading the disabled default as a not-run
-marker makes the conjunct **unsatisfiable wherever auto-review is off**, which here is everywhere.
-Measured 2026-08-24 (monorepo#3015): on `platform#3311` the head where CodeRabbit posted **two real
-findings** (`cd7f1c00eb`) and the head where it returned a finding-free verdict (`a2ada72723`) carry
-the **identical** disabled default — the first is the control, so the description cannot report
-whether an on-demand review ran; and its `updated_at` (23:13:31Z) *postdates* the 23:08:53Z request,
-so freshness does not discriminate either. `ksail` and `actions` publish **no** CodeRabbit status at
-all (unfiltered controls: zero commit statuses, and 43 check-runs on the `ksail` head with no
-CodeRabbit check), which is why absence joins that row rather than failing closed. So requiring
-`Review completed` fails **CLOSED on every real review here, permanently** — sending the run down
-into weekly-limited Codex and monthly-limited Bugbot on a head CodeRabbit has already reviewed, the
-exact cheapest-lane-first inversion the lane order exists to prevent.
+while it is INFORMATIVE, never a required conjunct.** The description is **UNRELIABLE, not merely
+sometimes-absent**: it reports whatever CodeRabbit last wrote at that head, which may or may not be
+the review you are asking about. Measured 2026-08-24 (monorepo#3015): on `platform#3311` the head
+where CodeRabbit posted **two real findings** (`cd7f1c00eb`) and the head where it returned a
+finding-free verdict (`a2ada72723`) **both** read the disabled default — the first is the control, so
+the description demonstrably fails to report a review that certainly ran; and that head's
+`updated_at` (23:13:31Z) *postdates* the 23:08:53Z request, so freshness does not discriminate
+either. `ksail` and `actions` publish **no** CodeRabbit status at all (unfiltered controls: zero
+commit statuses, and 43 check-runs on the `ksail` head with no CodeRabbit check), which is why
+absence joins that row rather than failing closed.
+⚠️ **It is NOT categorically unsatisfiable, and claiming that would be easy to disprove and lose the
+argument on.** Measured the same day on `monorepo#3013` @ `e5415972fa`, the description **did** reach
+`Review completed` (00:47:59Z) for a review that ran. That is precisely the problem: requiring the
+conjunct is a **coin-flip on the same signal**, so a run following it reports `green_review=none` on
+an unpredictable share of genuinely reviewed heads and walks down into weekly-limited Codex and
+monthly-limited Bugbot on work CodeRabbit already reviewed — the exact cheapest-lane-first inversion
+the lane order exists to prevent. A required conjunct that is right only sometimes is a false-negative
+generator, not a safeguard.
 
 🔴 **And the status is TRANSIENT, so it fails OPEN in the other direction: the durable record of a
 refusal is the reply comment body.** On `platform#3344` @ `e94216b3` CodeRabbit replied
