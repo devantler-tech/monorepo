@@ -767,8 +767,9 @@ definition surface, and an installed/cache copy is never an authoring target.
   `zsh` the body never executes and prints nothing, while under `bash` the unmatched glob is passed
   through literally, so the loop iterates **once** on a nonexistent path and exits **0**. Neither
   shell produces an ownership row and neither says the enumeration failed, so "no rows" reads as
-  "nothing is synced" — the exact inverse of the truth here, where **5 of the 6** bundled skills are
-  upstream-authored. The helper reads the pinned tree from a source that exists in a fresh worktree
+  "nothing is synced" — the exact inverse of the truth here, where **every** bundled skill declares
+  an upstream owner (five `devantler-tech/agent-skills`, one third party) and **none is `LOCAL`**.
+  The helper reads the pinned tree from a source that exists in a fresh worktree
   (the populated submodule at the gitlink, else the forge at that revision, the same way a reviewed
   definition is read) and exits **2 UNKNOWN** rather than printing an all-`LOCAL` listing it could
   not establish. ⚠️ **An empty or failed listing is UNKNOWN, never "everything is local"** — absence
