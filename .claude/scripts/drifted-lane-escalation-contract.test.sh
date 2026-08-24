@@ -185,16 +185,20 @@ assert_contains "${section}" 'Fetch that ref in the submodule immediately before
 assert_contains "${section}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
   'the reset must populate the submodule before fetching, or the fetch has no repository to update'
 
-# A generic `git fetch origin main` writes FETCH_HEAD and updates refs/remotes/origin/main only as an
-# opportunistic side effect of the remote's configured fetch refspec. Measured 2026-08-23: with
+# The source side must be FULLY QUALIFIED, and both halves of that are load-bearing. A generic
+# `git fetch origin main` writes FETCH_HEAD and updates refs/remotes/origin/main only as an
+# opportunistic side effect of the remote's configured fetch refspec: measured 2026-08-23, with
 # remote.origin.fetch unset the ref stayed STALE while FETCH_HEAD was current, so the check would read
-# the stale ref and close the tracker on pre-drift evidence. Pin the explicit refspec, which updates
-# the consumed ref by construction rather than depending on submodule remote config nothing here owns.
-assert_contains "${section}" 'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
-  'the reset must pin an explicit refspec that updates the ref the check reads, not a generic fetch that only guarantees FETCH_HEAD'
+# the stale ref and close the tracker on pre-drift evidence. But the SHORT form
+# `main:refs/remotes/origin/main` is worse than stale — measured 2026-08-24 (#3033), under
+# fetch.prune=true it DELETES the ref, oscillating delete/restore/delete across invocations, so about
+# half of attempts leave the check with no ref to read and it exits 2 UNKNOWN. Pin `+refs/heads/main:`,
+# which updates the consumed ref by construction and is prune-stable across repeated runs.
+assert_contains "${section}" 'git -C libraries/agent-plugins fetch origin '"'"'+refs/heads/main:refs/remotes/origin/main'"'"'' \
+  'the reset must pin the FULLY-QUALIFIED refspec: a generic fetch guarantees only FETCH_HEAD, and the short-form source is deleted by prune on alternate invocations'
 
 assert_order "${section}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
-  'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
+  'git -C libraries/agent-plugins fetch origin '"'"'+refs/heads/main:refs/remotes/origin/main'"'"'' \
   'the reset must initialise the submodule BEFORE fetching, or the fetch runs against an empty checkout'
 
 assert_contains "${section}" 'never what the drifted dispatch actually loaded' \
@@ -467,11 +471,11 @@ assert_contains "${loader_text}" '.claude/scripts/submodule-init.sh libraries/ag
 # A bare `git fetch origin main` guarantees only FETCH_HEAD; the very next step of the loader reads
 # refs/remotes/origin/main, so with remote.origin.fetch unset the boot loads a STALE reviewed
 # definition while reporting success.
-assert_contains "${loader_text}" 'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
-  'the Cursor loader must pin an explicit refspec for the ref its next step reads, not a generic fetch that only guarantees FETCH_HEAD'
+assert_contains "${loader_text}" 'git -C libraries/agent-plugins fetch origin '"'"'+refs/heads/main:refs/remotes/origin/main'"'"'' \
+  'the Cursor loader must pin the FULLY-QUALIFIED refspec for the ref its next step reads: a generic fetch guarantees only FETCH_HEAD, and the short-form source is deleted by prune on alternate invocations'
 
 assert_order "${loader_text}" '.claude/scripts/submodule-init.sh libraries/agent-plugins' \
-  'git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main' \
+  'git -C libraries/agent-plugins fetch origin '"'"'+refs/heads/main:refs/remotes/origin/main'"'"'' \
   'the Cursor loader must initialise the submodule BEFORE fetching, or the fetch runs against an empty checkout'
 
 # GraphQL returns the BARE `cursor`; requiring `cursor[bot]` on the GraphQL fallback rejects the

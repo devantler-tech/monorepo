@@ -63,9 +63,10 @@ machine-local engineer.
 >    main; no action taken." If the `libraries/agent-plugins` submodule is uninitialised, initialise
 >    it with `.claude/scripts/submodule-init.sh libraries/agent-plugins`. Then refresh the declared
 >    reviewed source with
->    `git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main --quiet`. The
->    explicit refspec is required because the next step reads `refs/remotes/origin/main`, and only
->    this form updates that ref. Then verify
+>    `git -C libraries/agent-plugins fetch origin '+refs/heads/main:refs/remotes/origin/main' --quiet`. The
+>    fully-qualified refspec is required because the next step reads `refs/remotes/origin/main`: a bare
+>    fetch guarantees only `FETCH_HEAD`, and the short form `main:refs/remotes/origin/main` is DELETED by
+>    prune on alternate invocations. Then verify
 >    `refs/remotes/origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md` resolves. If either
 >    operation fails, **STOP and report** "reviewed plugin definition unavailable; no action taken."
 > 3. **Read and follow `AGENTS.md`, then load the portable role with
