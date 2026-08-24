@@ -59,6 +59,15 @@ skill_file "$P/local/SKILL.md" '' 'see https://github.com/devantler-tech/agent-s
 skill_file "$P/lookalike/SKILL.md" 'metadata:
   github-repo: https://github.com/devantler-tech/agent-skills-v2' 'lookalike body'
 skill_file "$P/misplaced/SKILL.md" 'github-repo: https://github.com/devantler-tech/agent-skills' 'key outside metadata'
+
+# A revision carrying ONLY well-formed declarations. It exists so the suite can assert a plain
+# exit 0: with the malformed fixtures below folded into the same commit, EVERY end-to-end arm
+# required exit 2, and a regression that always answered UNKNOWN/2 would have passed the whole
+# suite while the documented success path was unreachable.
+git -C "$plug" add -A >/dev/null
+git -C "$plug" commit -qm "well-formed fixture" >/dev/null
+PIN_CLEAN="$(git -C "$plug" rev-parse HEAD)"
+
 # PRESENT but not a usable value. `// "LOCAL"` would map both of these onto LOCAL, asserting local
 # authorship from a malformed declaration — absent and invalid are different answers.
 skill_file "$P/emptyval/SKILL.md" 'metadata:
@@ -66,8 +75,13 @@ skill_file "$P/emptyval/SKILL.md" 'metadata:
 skill_file "$P/mapval/SKILL.md" 'metadata:
   github-repo:
     url: https://github.com/devantler-tech/agent-skills' 'declared as a mapping'
+# A non-STRING scalar. yq renders any scalar as text, so a tag-blind reader prints `false` as
+# though it were a repository and exits 0 — a malformed declaration answered with a well-formed
+# looking row, which is the fail-open direction this helper exists to close.
+skill_file "$P/boolval/SKILL.md" 'metadata:
+  github-repo: false' 'declared as a bool'
 git -C "$plug" add -A >/dev/null
-git -C "$plug" commit -qm fixture
+git -C "$plug" commit -qm "fixture + malformed declarations"
 PIN="$(git -C "$plug" rev-parse HEAD)"
 
 # A second revision that ALSO carries an unreadable (empty) skill. Kept out of the clean revision so
@@ -227,6 +241,115 @@ if [ -n "$DECOY_HEAD" ]; then
   assert_contains 'replacement object cannot rewrite the resolved pin' "$ERRR" "pin=$PIN"
 fi
 
+
+# ---- 9. THE SUCCESS PATH IS REACHABLE. Every end-to-end arm above asserts exit 2, because the
+#     fixture they share carries the deliberately malformed declarations. That alone would let a
+#     regression which always answered UNKNOWN/2 pass the entire suite while the documented exit 0
+#     was unreachable — a suite that cannot distinguish "fails closed correctly" from "never
+#     succeeds". So assert the well-formed revision on its own.
+cons_clean="$tmp/cons_clean"
+mk_consumer "$cons_clean" "$PIN_CLEAN"
+rm -rf "$cons_clean/libraries/agent-plugins"; mkdir -p "$cons_clean/libraries"
+ln -s "$plug" "$cons_clean/libraries/agent-plugins"
+set +e
+OUT_C="$("$SUT" --repo-root "$cons_clean" --source submodule --submodule-path libraries/agent-plugins 2>"$tmp/err_c")"
+RC_C=$?
+set -e
+assert_eq 'a wholly well-formed revision exits 0' 0 "$RC_C"
+assert_contains 'clean revision resolves the synced skill' "$OUT_C" 'https://github.com/devantler-tech/agent-skills	synced'
+assert_contains 'clean revision resolves the local skill'  "$OUT_C" 'LOCAL	local'
+assert_not_contains 'clean revision reports no UNKNOWN'    "$OUT_C" 'UNKNOWN'
+
+# ---- 10. A NON-STRING declaration is UNKNOWN, never an owner. yq renders every scalar as text, so
+#     a tag-blind reader emits `false` in the owner column and exits 0 — malformed input answered
+#     with a well-formed looking row, which is harder to notice than an outright error.
+run  # $OUT is shared: later arms narrow it, so re-read the full listing for this assertion
+assert_contains 'a non-string github-repo value is UNKNOWN' "$OUT" 'UNKNOWN	boolval'
+assert_not_contains 'a non-string value never becomes an owner row' "$OUT" 'false	boolval'
+
+# ---- 11. THE FORGE FALLBACK, exercised hermetically. This is the path the whole change exists for:
+#     in a fresh per-run worktree the submodule is empty, so `try_forge` is what actually answers.
+#     Every arm above forces `--source submodule`, so a regression in slug derivation, tree
+#     enumeration, the truncation guard or the blob read would ship undetected while CI stayed
+#     green. A fake `gh` on PATH covers all four without a network call or a token.
+fake_bin="$tmp/bin"
+mkdir -p "$fake_bin"
+# The fake serves the two calls try_forge makes, and records the slug it was asked for so the arm
+# can prove the slug was DERIVED from .gitmodules rather than hard-coded.
+cat > "$fake_bin/gh" <<'FAKEGH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$GH_CALL_LOG"
+case "${2:-}" in
+  */git/trees/*)
+    slug="${2#repos/}"; slug="${slug%%/git/trees/*}"
+    printf '%s\n' "$slug" > "$GH_SLUG_SEEN"
+    if [ "${FAKE_GH_TRUNCATED:-0}" = 1 ]; then
+      # A PARTIAL listing, never an empty one. An empty tree is caught by the empty-enumeration
+      # guard instead, so the truncation arm would pass even with the truncation guard removed —
+      # i.e. pass for the wrong reason. One real skill here means dropping the guard yields a
+      # plausible-looking short listing and exit 0, which is the silent drop being guarded against.
+      "$FAKE_GH_TREE_CMD" | jq '{truncated:true, tree:[.tree[]|select(.path|endswith("/synced/SKILL.md"))]}'
+      exit 0
+    fi
+    "$FAKE_GH_TREE_CMD"
+    ;;
+  */contents/*)
+    path="${2#*/contents/}"; path="${path%%\?*}"
+    cat "$FAKE_GH_BLOBS/$(printf '%s' "$path" | tr '/' '_')"
+    ;;
+  *) exit 1 ;;
+esac
+FAKEGH
+chmod +x "$fake_bin/gh"
+
+# Serve the tree and the blobs straight out of the fixture repo at PIN, so the fake reports what
+# the pinned revision actually contains rather than a hand-written listing that could drift.
+tree_cmd="$tmp/tree_cmd"
+cat > "$tree_cmd" <<TREECMD
+#!/usr/bin/env bash
+set -euo pipefail
+git -C "$plug" ls-tree -r --name-only "$PIN" \
+  | jq -R -s '{truncated:false, tree:[splits("\n")|select(length>0)|{type:"blob", path:.}]}'
+TREECMD
+chmod +x "$tree_cmd"
+
+blobs="$tmp/blobs"; mkdir -p "$blobs"
+git -C "$plug" ls-tree -r --name-only "$PIN" | while IFS= read -r bp; do
+  [ -n "$bp" ] || continue
+  git -C "$plug" show "$PIN:$bp" > "$blobs/$(printf '%s' "$bp" | tr '/' '_')" 2>/dev/null || true
+done
+
+# The consumer's submodule directory is EMPTY here — the fresh-worktree shape — so the forge path
+# is the only one that can answer.
+cons_forge="$tmp/cons_forge"
+mk_consumer "$cons_forge" "$PIN"
+mkdir -p "$cons_forge/libraries/agent-plugins"
+
+run_forge() { # -> OUT_F / RC_F / ERR_F
+  set +e
+  OUT_F="$(PATH="$fake_bin:$PATH" GH_CALL_LOG="$tmp/ghcalls" GH_SLUG_SEEN="$tmp/ghslug" \
+           FAKE_GH_TREE_CMD="$tree_cmd" FAKE_GH_BLOBS="$blobs" FAKE_GH_TRUNCATED="${1:-0}" \
+           "$SUT" --repo-root "$cons_forge" --source forge --submodule-path libraries/agent-plugins \
+           2>"$tmp/err_f")"
+  RC_F=$?
+  ERR_F="$(cat "$tmp/err_f")"
+  set -e
+}
+
+: > "$tmp/ghcalls"; : > "$tmp/ghslug"
+run_forge 0
+assert_contains 'forge path reports source=forge'        "$ERR_F" 'source=forge'
+assert_contains 'forge path resolves the synced skill'   "$OUT_F" 'https://github.com/devantler-tech/agent-skills	synced'
+assert_contains 'forge path resolves the local skill'    "$OUT_F" 'LOCAL	local'
+assert_contains 'forge path still fails closed on a malformed value' "$OUT_F" 'UNKNOWN	boolval'
+# The slug must come from .gitmodules, not a constant: mk_consumer points the url at $plug.
+assert_eq 'forge slug is derived from .gitmodules' "$(basename "$plug")" "$(sed 's@.*/@@' "$tmp/ghslug")"
+# Ablation: a truncated tree is a PARTIAL listing. Accepting it would drop skills silently, which is
+# the same "absence read as an answer" defect the helper exists to close.
+run_forge 1
+assert_eq 'a truncated forge tree is UNKNOWN, never a partial listing' 2 "$RC_F"
+assert_not_contains 'a truncated forge tree prints no ownership rows' "$OUT_F" 'synced'
 printf '\nskill-owner: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 printf 'skill-owner contract: PASS — ownership is per-file, structural, and fails closed on an empty enumeration\n'

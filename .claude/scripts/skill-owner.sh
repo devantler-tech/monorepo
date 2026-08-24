@@ -183,7 +183,11 @@ while IFS= read -r p; do
       kind="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata.github-repo | tag' 2>/dev/null)" || kind=""
       owner="$(printf '%s\n' "$body" | yq --front-matter=extract '.metadata.github-repo' 2>/dev/null)" || owner=""
       case "$kind" in
-        '!!str'|'!!int'|'!!float'|'!!bool') ;;
+        # A repository slug is a STRING. yq renders a scalar of any tag as text, so accepting
+        # !!int/!!float/!!bool would print `false` or `42` as though it were an owner and exit 0 —
+        # the same fail-open direction as an all-LOCAL listing, and harder to spot because the row
+        # looks well-formed. A non-string declaration is malformed, so it is UNKNOWN.
+        '!!str') ;;
         *) owner="" ;;
       esac
       if [ -z "$owner" ] || [ "$owner" = null ]; then
