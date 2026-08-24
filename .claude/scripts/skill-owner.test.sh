@@ -377,6 +377,47 @@ assert_eq 'forge slug is derived from .gitmodules' "$(basename "$plug")" "$(sed 
 run_forge 1
 assert_eq 'a truncated forge tree is UNKNOWN, never a partial listing' 2 "$RC_F"
 assert_not_contains 'a truncated forge tree prints no ownership rows' "$OUT_F" 'synced'
+
+# ---- 12. THE AUTOMATIC TRANSITION, not merely the forced forge mode. Case 11 pins the forge
+# implementation by passing `--source forge`, so it proves nothing about `auto) try_submodule ||
+# try_forge` — the branch a real run actually takes. A fresh per-run worktree never passes a
+# --source flag, so if that fallback stopped working every caller would lose the answer while case
+# 11 stayed green. Reuses the SAME empty-submodule consumer, changing only the flag.
+run_auto() { # -> OUT_A / RC_A / ERR_A
+  set +e
+  OUT_A="$(PATH="$fake_bin:$PATH" GH_CALL_LOG="$tmp/ghcalls_a" GH_SLUG_SEEN="$tmp/ghslug_a" \
+           FAKE_GH_TREE_CMD="$tree_cmd" FAKE_GH_BLOBS="$blobs" FAKE_GH_TRUNCATED=0 \
+           "$SUT" --repo-root "$cons_forge" --source auto --submodule-path libraries/agent-plugins \
+           2>"$tmp/err_a")"
+  RC_A=$?
+  ERR_A="$(cat "$tmp/err_a")"
+  set -e
+}
+
+: > "$tmp/ghcalls_a"; : > "$tmp/ghslug_a"
+run_auto
+# The transition itself: `auto` must REPORT the source it fell through to. Asserting only the rows
+# would pass if `auto` had somehow answered from the submodule, which is the regression this case
+# exists to catch.
+assert_contains 'auto falls back and reports source=forge' "$ERR_A" 'source=forge'
+# The fallback must be REAL, not inferred from the label: the forge shim has to have been called.
+# An empty call log with a `source=forge` line would mean the source was mislabelled.
+assert_eq 'auto actually invoked the forge shim' 1 "$(grep -c 'git/trees' "$tmp/ghcalls_a" | tr -d ' ')"
+# Same answers as the forced arm — the flag must select a path, never change the verdict.
+assert_contains 'auto resolves the synced skill' "$OUT_A" 'https://github.com/devantler-tech/agent-skills	synced'
+assert_contains 'auto resolves the local skill'  "$OUT_A" 'LOCAL	local'
+assert_eq 'auto exits 2 when a value is malformed' 2 "$RC_A"
+# An empty submodule DIRECTORY still satisfies `[ -e "$sub" ]`, so the fallback hinges on the
+# `cat-file -e` probe. `git -C <empty-submodule-dir>` walks UP to the consumer repo, which does not
+# carry the plugin's commit — pinning that here means a future change to the probe cannot silently
+# start resolving against the parent repository and calling it the submodule.
+# BOTH spellings are checked: a spurious submodule success is reported as `source=submodule` only on
+# the path that reaches the summary line. When it enumerates nothing it dies first, and the
+# attribution survives only as `via submodule` — so asserting the summary spelling alone leaves this
+# guard unable to fire in exactly the case it is written for. (Proven by ablation: neutralising the
+# probe left the single-needle form green.)
+assert_not_contains 'auto never claims the empty submodule answered' "$ERR_A" 'source=submodule'
+assert_not_contains 'auto never attributes a died run to the submodule' "$ERR_A" 'via submodule'
 printf '\nskill-owner: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 printf 'skill-owner contract: PASS — ownership is per-file, structural, and fails closed on an empty enumeration\n'
