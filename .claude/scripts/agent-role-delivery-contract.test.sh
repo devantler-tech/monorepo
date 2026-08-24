@@ -322,8 +322,8 @@ grep -Fq 'agentic-engineer.agent.md' "${cursor_loader}" ||
   fail "Cursor adapter does not resolve the canonical plugin role"
 grep -Fq '.claude/scripts/submodule-init.sh libraries/agent-plugins' "${cursor_loader}" ||
   fail "Cursor adapter does not pass the plugin path to submodule-init"
-grep -Fq 'git -C libraries/agent-plugins fetch origin main' "${cursor_loader}" ||
-  fail "Cursor adapter does not refresh the reviewed plugin default branch before loading it"
+grep -Fq 'git -C libraries/agent-plugins fetch --no-prune origin main' "${cursor_loader}" ||
+  fail "Cursor adapter does not refresh the reviewed plugin default branch with --no-prune, so fetch.prune deletes the ref the next step reads"
 grep -Fq 'git -C libraries/agent-plugins show refs/remotes/origin/main:plugins/agentic-engineering/agents/agentic-engineer.agent.md' \
   "${cursor_loader}" ||
   fail "Cursor adapter does not load the agent from the refreshed reviewed plugin ref"
