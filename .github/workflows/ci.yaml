@@ -39,6 +39,7 @@ jobs:
       rung-type-filter-contract: ${{ steps.filter.outputs.rung-type-filter-contract }}
       definition-load-budget-contract: ${{ steps.filter.outputs.definition-load-budget-contract }}
       drifted-lane-escalation-contract: ${{ steps.filter.outputs.drifted-lane-escalation-contract }}
+      skill-owner: ${{ steps.filter.outputs.skill-owner }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
@@ -316,6 +317,19 @@ jobs:
               # how a guard loses sight of its own subject.
               - '.claude/loaders/cursor-daily-ai-engineer.md'
               - '.claude/scripts/drifted-lane-escalation-contract.test.sh'
+              - '.github/workflows/ci.yaml'
+            skill-owner:
+              # AGENTS.md carries the provenance rule this helper answers, so a PR editing only
+              # those rules must still run the job — otherwise the changed contract ships unchecked.
+              - 'AGENTS.md'
+              - '.claude/scripts/skill-owner.sh'
+              - '.claude/scripts/skill-owner.test.sh'
+              # The pinned plugin revision is what the helper enumerates, so a gitlink bump must
+              # re-run it.
+              - '.gitmodules'
+              - 'libraries/agent-plugins'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
             plugin-definition-currency:
               - 'AGENTS.md'
@@ -1215,6 +1229,27 @@ jobs:
       - name: Verify the git safety contract
         run: bash .claude/scripts/git-safety-contract.test.sh
 
+  test-skill-owner:
+    name: Test skill owner
+    needs: changes
+    if: needs.changes.outputs.skill-owner == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Both OSes are required: scheduled runs execute on macOS, whose BSD userland differs from the
+      # Linux runner's GNU one in exactly the places this helper parses git output.
+      - name: Verify the skill ownership resolver
+        run: bash .claude/scripts/skill-owner.test.sh
+
   test-plugin-definition-currency:
     name: Test plugin definition currency
     needs: changes
@@ -1462,6 +1497,7 @@ jobs:
       - test-rung-type-filter-contract
       - test-definition-load-budget-contract
       - test-drifted-lane-escalation-contract
+      - test-skill-owner
       - test-plugin-definition-currency
       - test-plugin-definition-refresh
       - test-codex-lane-liveness

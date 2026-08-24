@@ -753,14 +753,38 @@ definition surface, and an installed/cache copy is never an authoring target.
   than `metadata`. Ask for the exact YAML path instead:
 
   ```sh
-  # who owns each bundled skill (empty/null ⇒ authored in agent-plugins, safe to edit there):
-  for f in libraries/agent-plugins/plugins/*/skills/*/SKILL.md; do
-    printf '%s\t%s\n' "$(yq --front-matter=extract '.metadata.github-repo // "LOCAL"' "$f")" "$f"
-  done
+  .claude/scripts/skill-owner.sh                        # every bundled skill
+  .claude/scripts/skill-owner.sh --skill <skill-name>   # one of them
   ```
 
   Anything printing `https://github.com/devantler-tech/agent-skills` is **synced** — edit it upstream
   in that repo. `LOCAL` means it is authored in `agent-plugins`.
+
+  🔴 **Ask the helper, NOT a glob over the submodule working tree — that command cannot run where
+  this rule applies, and it fails in the direction that looks like an answer.** Runs work in per-run
+  worktrees (*Execution model*), where `libraries/agent-plugins` is **empty**, so a
+  `for f in libraries/agent-plugins/plugins/*/skills/*/SKILL.md` loop enumerates nothing: under
+  `zsh` the body never executes and prints nothing, while under `bash` the unmatched glob is passed
+  through literally, so the loop iterates **once** on a nonexistent path and exits **0**. Neither
+  shell produces an ownership row and neither says the enumeration failed, so "no rows" reads as
+  "nothing is synced" — the exact inverse of the truth here, where **5 of the 6** bundled skills are
+  upstream-authored. The helper reads the pinned tree from a source that exists in a fresh worktree
+  (the populated submodule at the gitlink, else the forge at that revision, the same way a reviewed
+  definition is read) and exits **2 UNKNOWN** rather than printing an all-`LOCAL` listing it could
+  not establish. ⚠️ **An empty or failed listing is UNKNOWN, never "everything is local"** — absence
+  of rows is a claim about the enumeration, exactly as an empty filtered read is elsewhere.
+
+  🔴 **Resolve ownership when you NAME a target repository, not only when you edit a file.** The
+  obligation above attaches to editing, which happens hours or days after the repository name was
+  written into an issue body, a PR description, a routing note or a carry-forward — and from that
+  moment it is read as settled by whoever picks the work up. So a target repository named in any
+  routing artifact is a **claim resolved by the helper at the moment it is written**, and it is
+  never inherited from memory or from an existing artifact without re-resolving. Measured
+  2026-08-24: [#3006](https://github.com/devantler-tech/monorepo/issues/3006) — the portfolio's
+  largest open efficiency issue — routed its fix to `portfolio-maintenance` in
+  `devantler-tech/agent-plugins`, where the file is a **synced artifact** whose every change since
+  2026-07-22 was authored by `botantler-1[bot]`. The implementer's work would have been reverted by
+  the daily `update-agent-skills` workflow with no conflict, no CI failure and no signal.
 
   Change generic behaviour in the **owning** repository first. The rollout then differs by owner, and
   **the skills path has an extra hop that is easy to skip**:
