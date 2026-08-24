@@ -143,6 +143,12 @@ grep -Fq 'uninformative status' "${surveyor}" ||
   fail "surveyor lost the uninformative-status class, so an absent or auto-review-disabled CodeRabbit status defeats a real green (#3015)"
 grep -Fq 'no CodeRabbit status at all' "${surveyor}" ||
   fail "surveyor does not name the ABSENT-status case that must not defeat a green (#3015)"
+# DIRECTION, not just vocabulary. The two checks above are presence-only, so the surveyor could name
+# the uninformative class and then say it DEFEATS a green and still pass — the original defect
+# restored in the one document that actually emits `green_review` (CodeRabbit, #3016). Single-line
+# literal: this suite greps without the whitespace normalisation the loop contract applies.
+grep -Fq 'must NOT defeat' "${surveyor}" ||
+  fail "surveyor names the uninformative-status class but never states that it must not defeat a green (#3015)"
 grep -Fq 'newest same-head command-invocation reply' "${surveyor}" ||
   fail "surveyor does not scope the refusal read to a positively identified command-invocation reply, so any durable bot comment mentioning a limit would veto a green (#3015)"
 grep -Fq 'at least as new as the' "${surveyor}" ||

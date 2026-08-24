@@ -15,8 +15,11 @@
 # retains it only until digest parity and allows it to carry only its named deployment/provider
 # delta, with generic role logic changing at its owning upstream. That parity gate was reached —
 # agent-plugins#78 closed COMPLETED on 2026-07-25 — and the overlay then grew 61,144 B -> 150,495 B
-# (+143%) because generic refinements were appended here instead of upstreamed, re-opening the gap
-# #78 had just closed. Growth in a file whose declared destination is deletion is always worth a
+# (+143%) as measured on 2026-08-19, because generic refinements were appended here instead of
+# upstreamed, re-opening the gap #78 had just closed. That endpoint is a DATED measurement and is
+# deliberately not chased on every raise: `CEILING_OVERLAY_BYTES` below is always the current figure,
+# and assertion 5 is what keeps it agreeing with AGENTS.md.
+# Growth in a file whose declared destination is deletion is always worth a
 # deliberate decision. AGENTS.md is deliberately NOT gated: rules legitimately accrete there, and a
 # ratchet firing on every definition PR — safety fixes included — would train the raise into a
 # reflex and destroy the signal this guard exists to produce.

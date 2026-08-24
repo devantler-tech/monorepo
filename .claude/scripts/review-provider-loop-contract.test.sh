@@ -179,6 +179,19 @@ for direction_file in "${surveyor}" "${maintenance_skill}" "${parity_checklist}"
   assert_prose "${direction_file}" 'defeats the green' \
     "${direction_file} lost the statement that a not-run marker defeats a green"
 done
+# 🔴 BOTH directions, in EVERY consumer — not the loosening in one document and the protection in the
+# rest. Asserting `must NOT defeat` only on the constitution leaves the other three bound solely by
+# `defeats the green`, which describes the not-run case; a regression that makes an UNINFORMATIVE
+# status defeat a green therefore passes this suite, and the surveyor is the document that actually
+# emits `green_review`. That regression is the original defect restored — `green_review=none` over
+# real CodeRabbit reviews, then weekly-limited Codex and monthly-limited Bugbot spent on an
+# already-reviewed head (CodeRabbit, #3016). The phrase is `must NOT defeat` rather than the
+# constitution's longer `must NOT defeat the green` because all three consumers write it as
+# "an **uninformative status** that must NOT defeat it".
+for uninformative_direction_file in "${surveyor}" "${maintenance_skill}" "${parity_checklist}"; do
+  assert_prose "${uninformative_direction_file}" 'must NOT defeat' \
+    "${uninformative_direction_file} names the uninformative class but never states that it must not defeat a green — the loosening was dropped while the protection stayed"
+done
 # The transient STATUS must be bound to THIS request, or a spent refusal from an earlier round vetoes
 # a genuine later green — the fail-closed this change would otherwise re-introduce one round later.
 # Scope matters: this recency test is correct for the status and WRONG for the durable reply (below).
