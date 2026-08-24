@@ -14,7 +14,7 @@
 # Why the OVERLAY specifically, and not AGENTS.md. This file is declared temporary: the contract
 # retains it only until digest parity and allows it to carry only its named deployment/provider
 # delta, with generic role logic changing at its owning upstream. That parity gate was reached —
-# agent-plugins#78 closed COMPLETED on 2026-07-25 — and the overlay then grew 61,144 B -> 149,568 B
+# agent-plugins#78 closed COMPLETED on 2026-07-25 — and the overlay then grew 61,144 B -> 150,495 B
 # (+143%) because generic refinements were appended here instead of upstreamed, re-opening the gap
 # #78 had just closed. Growth in a file whose declared destination is deletion is always worth a
 # deliberate decision. AGENTS.md is deliberately NOT gated: rules legitimately accrete there, and a
@@ -35,7 +35,7 @@ overlay="${repo_root}/.claude/agents/portfolio-surveyor.md"
 
 # The recorded high-water mark, in bytes. Raise this ONLY together with the figure quoted in
 # AGENTS.md's *Context & token discipline* section (assertion 5 enforces that pairing).
-CEILING_OVERLAY_BYTES=149568
+CEILING_OVERLAY_BYTES=150495
 
 fail() {
   echo "definition-load budget contract: FAIL — $*" >&2

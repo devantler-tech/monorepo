@@ -276,9 +276,14 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
   another explicit not-run marker) defeats the green; and the disabled default, or **no status at
   all**, is an **uninformative status** that must NOT defeat it (monorepo#3015 — a head where
   CodeRabbit posted two real findings carries that same default, and some repos publish no
-  CodeRabbit status at all). The status is also transient and can lose a refusal, so read a refusal
-  from the durable `coderabbitai[bot]` reply body — especially when the auto-generated summary is
-  the satisfier, since a refusal refreshes it to name the current head.
+  CodeRabbit status at all), as is `Review in progress` or any other unlisted value. The status is
+  also transient and can lose a refusal, so read a refusal from CodeRabbit's **newest same-head
+  command-invocation reply** — identified positively by `user.login` **and** the
+  `<!-- CodeRabbit review command invocation: … -->` marker, never any durable bot comment mentioning
+  a limit — especially when the auto-generated summary is the satisfier, since a refusal refreshes it
+  to name the current head. And bind that marker to **this** request: a not-run marker defeats a green
+  only while it is at least as new as the satisfying artifact, or a spent refusal from an earlier
+  round vetoes a genuine later green.
   Report an older completion as stale, and a current-head CodeRabbit review carrying
   findings as `cr-findings@<sha>`. For Codex, sweep
   paginated `issues/<n>/comments` plus `pulls/<n>/reviews`/review threads for the latest actual

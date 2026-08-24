@@ -167,6 +167,34 @@ assert_prose "${maintenance_skill}" 'uninformative status' \
   "portfolio-maintenance lost the uninformative-status class (#3015)"
 assert_prose "${parity_checklist}" 'uninformative status' \
   "removing the surveyor overlay would silently drop the uninformative-status split (#3015)"
+# 🔴 DIRECTION, not vocabulary. The assertions above are presence checks, so on their own they would
+# still pass if a document named the uninformative class and then said it defeats a green. These bind
+# the EFFECT of each class, in both directions, so the loosening and the protection are asserted
+# together and neither can be dropped alone (CodeRabbit, #3016).
+assert_prose "${constitution}" 'must NOT defeat the green' \
+  "constitution names the uninformative class but never states that it must not defeat a green"
+assert_prose "${constitution}" 'defeats the green' \
+  "constitution no longer states that an explicit not-run marker DEFEATS a green — the protection was dropped with the loosening"
+for direction_file in "${surveyor}" "${maintenance_skill}" "${parity_checklist}"; do
+  assert_prose "${direction_file}" 'defeats the green' \
+    "${direction_file} lost the statement that a not-run marker defeats a green"
+done
+# The transient status must be bound to THIS request, or a spent refusal from an earlier round vetoes
+# a genuine later green — the fail-closed this change would otherwise re-introduce one round later.
+for staleness_file in "${constitution}" "${surveyor}" "${maintenance_skill}" "${parity_checklist}"; do
+  assert_prose "${staleness_file}" 'at least as new as the' \
+    "${staleness_file} does not bind the not-run marker to the artifact's recency, so a spent refusal still vetoes a green"
+done
+# The refusal read must be scoped to a positively identified command-invocation reply. An unscoped
+# "durable bot comment" match is a blocklist over arbitrary prose: any coderabbitai[bot] body that
+# mentions a limit would veto a real green.
+for scoped_file in "${constitution}" "${surveyor}" "${maintenance_skill}"; do
+  assert_prose "${scoped_file}" 'newest same-head command-invocation reply' \
+    "${scoped_file} does not scope the refusal read to a positively identified command reply"
+done
+# And the surveyor must still emit the refusal OUTCOME, not merely describe the input.
+assert_prose "${surveyor}" 'green_review=none' \
+  "surveyor no longer names the green_review=none outcome, so the refusal path has no asserted result"
 # NEGATIVE CONTROL, kept as prose so it cannot be quietly dropped: a rate-limited head must still
 # report `green_review=none`, and the check that proves it must read the durable reply body — a
 # status-based control passes vacuously once the status has reverted to the default.

@@ -1680,13 +1680,25 @@ too while `reviews.fail_commit_status: false` is in force (see *Local review rou
 `context == "CodeRabbit" && state == "success"`
 therefore marks **every never-reviewed PR as reviewed** — a fail-open on the promotion gate reachable
 by following the surface list literally. So read the `description`, never the `state` — and sort what
-it says into **three** classes, not two:
+it says into **three** classes, not two — and bind every class to **this** request, because the field
+is transient and reports only whatever CodeRabbit last wrote at that head:
 
 | `description` | class | effect on a green |
 |---|---|---|
 | `Review completed` | evidences a run | corroborates the artifact |
-| `Review rate limited`, or another explicit marker that the review did not run | **not-run marker** | **defeats the green** |
-| `Review skipped: automatic reviews are disabled`, or **no status at all** | **uninformative status** | **must NOT defeat the green** |
+| `Review rate limited`, or another explicit marker that the review did not run, **and not older than the satisfying artifact** | **not-run marker** | **defeats the green** |
+| `Review skipped: automatic reviews are disabled`; **no status at all**; `Review in progress` or any other value; **or a not-run marker the artifact POSTDATES** | **uninformative status** | **must NOT defeat the green** |
+
+🔴 **The staleness binding in rows 2 and 3 is load-bearing — without it this rule introduces its own
+fail-closed.** Because the status reports the last event rather than this one, an `e94216b3`-style
+refusal can still be sitting at a head where a **later** re-request then succeeded; classifying on the
+description alone would let that spent refusal veto a genuine current green, which is the same
+false-negative this section exists to remove, one round later. So a not-run marker defeats a green
+only while it is **at least as new as the artifact** being judged (compare the status `updated_at`
+against the artifact's `submitted_at`/`updated_at`); once the artifact postdates it, the marker is
+spent and the row-3 treatment applies. Everything unlisted falls to row 3 as well — `Review in
+progress` was observed live on `monorepo#3016` at 01:47:59Z — because only an explicit
+review-did-not-run marker carries information the artifact test does not already have.
 
 🔴 **That third row is the correction, and it is not a loosening — the status is a corroborator only
 while it is INFORMATIVE, never a required conjunct.** The description is **UNRELIABLE, not merely
@@ -1717,9 +1729,14 @@ command-invocation reply (`⚠️ Action not completed` / `Review rate limited`)
 above already rejects any artifact carrying such a marker. What that rule alone does **not** catch is
 the **auto-generated summary** satisfier: a refusal *refreshes* the summary so it names the current
 head — measured four seconds after that refusal, naming the full
-`e94216b3b4705771303af9c95a1e7cf7f5460a71`. So whenever the summary is the satisfier, also read the
-**newest same-head `coderabbitai[bot]` command reply**; a refusal marker there defeats the green
-whatever the summary says. That closes the fail-open on a record that does not expire, which is
+`e94216b3b4705771303af9c95a1e7cf7f5460a71`. So whenever the summary is the satisfier, also read
+CodeRabbit's **newest same-head command-invocation reply** — identified positively, exactly as a
+review object is: `user.login == "coderabbitai[bot]"`, carrying the
+`<!-- CodeRabbit review command invocation: … -->` marker, and newest among those at this head. A
+refusal marker in **that** comment defeats the green whatever the summary says. **Do not widen this
+to "a durable bot comment"**: any `coderabbitai[bot]` body can mention a rate limit — a stale
+summary, an unrelated notice — so an unscoped match is a blocklist over arbitrary prose and would
+veto real greens. Positive identification of the artifact is the rule here as everywhere else. That closes the fail-open on a record that does not expire, which is
 precisely what the transient status could never do. The status remains a **required corroborator,
 never a satisfier** *when it is informative* — it proves only that *a* run completed, so a green
 still needs the real artifact its row names, positively identified.
@@ -4063,7 +4080,7 @@ in full. The trend is **monotonic, not a spike**: daily medians ran **155,212 �
 engineering plugin contract* retains it only until digest parity, and *Agent definition locations*
 allows it to carry **only its named deployment/provider delta** — generic role logic changes at its
 owning upstream. That parity gate was reached: `agent-plugins#78` closed **COMPLETED 2026-07-25**.
-The overlay then grew **61,144 B → 149,568 B (+145%)**, because generic refinements (the `4b`–`4e`
+The overlay then grew **61,144 B → 150,495 B (+146%)**, because generic refinements (the `4b`–`4e`
 items in [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
 were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
 closed, pushing the file's own deletion further away, and charging every hourly dispatch for it.

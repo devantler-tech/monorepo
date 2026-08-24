@@ -64,8 +64,12 @@ plugin carries them (or an explicit, tested subset):
    default — or **no status at all** — is an **uninformative status** that must NOT defeat it, since
    auto-review is disabled deployment-wide and some repositories publish no such status. The status
    never satisfies the gate on its own, and being transient it can lose a refusal, so a refusal is
-   read from the durable `coderabbitai[bot]` reply body. Without this the check fails closed on every
-   real review and open on a refusal read later.
+   read from CodeRabbit's newest same-head **command-invocation reply**, identified positively by
+   `user.login` plus the `<!-- CodeRabbit review command invocation: … -->` marker — never any durable
+   bot comment that mentions a limit. A not-run marker defeats a green only while it is at least as
+   new as the satisfying artifact; a spent refusal from an earlier round is uninformative, as is
+   `Review in progress` or any unlisted value. Without this the check fails closed on every real
+   review, open on a refusal read later, and closed again on a stale refusal.
 4d. **CodeRabbit review-object positive identification** (monorepo#2620 / #2713 / #2819) — a review
    object counts only when its body begins `**Actionable comments posted:` **after stripping any
    leading HTML comments and the whitespace around them**; an empty object is a reply

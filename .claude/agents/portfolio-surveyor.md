@@ -772,12 +772,22 @@ public and private — no per-repo loop needed to enumerate):
      no CodeRabbit status at all (unfiltered controls: zero commit statuses; 43 check-runs on the
      `ksail` head, none CodeRabbit), so failing closed reports `green_review=none` over every real
      review and burns weekly-limited Codex and monthly-limited Bugbot on an already-reviewed head.
-     🔴 **The status is also TRANSIENT — read a refusal from the durable `coderabbitai[bot]` reply
-     body instead.** On `platform#3344` @ `e94216b3` CodeRabbit replied `Review rate limited`, and
+     🔴 **The status is also TRANSIENT — read a refusal from the durable command-invocation reply
+     instead.** On `platform#3344` @ `e94216b3` CodeRabbit replied `Review rate limited`, and
      that head's status now reads the disabled default: the status lost the refusal, while the reply
      is permanent. A refusal also *refreshes* the auto-generated summary so it names the current
-     head, so when the summary is the satisfier, check the newest same-head reply for a refusal
-     marker before reporting `cr@<sha>`.
+     head, so when the summary is the satisfier, check for a refusal marker before reporting
+     `cr@<sha>` — in CodeRabbit's **newest same-head command-invocation reply**, identified
+     positively (`user.login == "coderabbitai[bot]"` **and** the
+     `<!-- CodeRabbit review command invocation: … -->` marker), never any durable bot comment that
+     happens to mention a limit.
+     🔴 **Bind the not-run marker to THIS request, or the rule re-introduces a fail-closed.** The
+     status reports the last event at that head, so a spent refusal can outlive the round that
+     produced it: a `Review rate limited` only defeats a green while it is **at least as new as the
+     satisfying artifact** (status `updated_at` vs the artifact's `submitted_at`/`updated_at`). Once
+     the artifact postdates it, it is spent and uninformative. Every other description —
+     `Review in progress` (observed live on monorepo#3016) or anything unlisted — is uninformative
+     too; only an explicit review-did-not-run marker adds information the artifact test lacks.
      Keep the exclusions as defense in depth.
      Report an older completion as `cr-stale@<sha>`. A
      **current-head CodeRabbit review that carries findings** (a `COMMENTED`/`CHANGES_REQUESTED`
