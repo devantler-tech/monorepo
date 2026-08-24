@@ -648,7 +648,7 @@ explicit refspec that updates the ref the check actually reads:**
 
 ```sh
 .claude/scripts/submodule-init.sh libraries/agent-plugins   # EMPTY in a fresh worktree — fetch fails without this
-git -C libraries/agent-plugins fetch origin main:refs/remotes/origin/main
+git -C libraries/agent-plugins fetch origin '+refs/heads/main:refs/remotes/origin/main'
 ```
 
 🔴 **The init line is not optional setup — without it this reset path is dead on every fresh
@@ -668,6 +668,20 @@ so the check reads the stale ref, reports `CURRENT`, and closes the tracker on e
 the drift. The explicit refspec updates the consumed ref by construction, in both configurations. On a
 failed fetch treat the result as `UNKNOWN` and leave the tracker open; a close is the one action here
 that discards state, so it fails closed.
+
+🔴 **FULLY QUALIFY THE SOURCE SIDE — the short form `main:refs/remotes/origin/main` DELETES the ref it
+is supposed to refresh.** With `fetch.prune` true — which it is on this host — prune resolves a
+short-form source against the *configured* refspec, concludes the remote-tracking ref has no
+counterpart, and removes it. The giveaway is `- [deleted] (none) -> origin/main` followed by
+`(refs/remotes/origin/HEAD has become dangling)`. Measured 2026-08-24, live while reconciling #3032
+and then reproduced on a minimal two-branch fixture, it **OSCILLATES**: invocation 1 deletes the ref,
+2 restores it, 3 deletes it again. So roughly half of all attempts leave the currency check reading a
+ref that is not there, and it exits `2 UNKNOWN` — never `CURRENT` — so a genuinely recovered Cursor
+lane keeps its tracker open. That is fail-closed, and it is still exactly the failure this reset
+exists to prevent: a stale open tracker reads as a live condition. It also presents as intermittent
+flakiness rather than a broken instruction, because the even-numbered attempts work.
+`+refs/heads/main:refs/remotes/origin/main` is both explicit and prune-safe — verified stable across
+repeated invocations on the same fixture — so it satisfies the paragraph above without this hazard.
 
 ⚠️ **Even freshly fetched, this is a PROXY and the close must not overstate it.** The Cursor loader
 reads that ref in its own cloud checkout at *its* boot, so `origin/main == pin` establishes what that
