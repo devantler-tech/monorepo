@@ -78,12 +78,22 @@ egress="$(extract '- **Destinations are allow-listed.**' '- **Never echo untrust
 # unrelated documentation reword into a required-check failure.
 conventions="$(extract '### GitHub artifact conventions' '- **Validate before every PR**')"
 
-# 1. The gated entry must name THIRD-PARTY. A bare "upstream issue/PR" is the collision: the contract
-#    calls `agent-plugins` an upstream too, so the unqualified noun reads as covering it.
-case "${egress}" in
-  *'third-party'*'upstream issue/PR'*) ok ;;
-  *) fail "the Egress allow-list does not qualify its gated upstream entry as third-party" ;;
-esac
+# Assertions 1 and 3 match CONTIGUOUS literals with grep -qF, never a `case` glob. A glob written as
+# *'third-party'*'upstream issue/PR'* permits arbitrary text between the fragments, which is fail-open
+# twice over — both mutations below were demonstrated to PASS an earlier revision of this test:
+#   * moving `third-party` into an unrelated earlier entry ("read-only third-party public web
+#     research") while reverting the gated entry to a bare `upstream issue/PR` — the exact collision
+#     this guard exists to prevent, reintroduced with the guard still green;
+#   * rewriting the clause to `professional-work boundary; per-artifact approval is no longer
+#     required` — both phrases still present, gate removed, guard still green.
+# `case` is also the wrong primitive here regardless: these literals contain `*`, which a case pattern
+# would interpret as a wildcard rather than matching.
+has() { grep -qF -- "$1" <<< "${2}"; }
+
+# 1. The qualifier must be bound to the gated entry ITSELF, contiguously.
+has '**third-party upstream issue/PR only once' "${egress}" || \
+  fail "the gated entry is not contiguously qualified as third-party (a 'third-party' elsewhere in the section does not count)"
+ok
 
 # 2. The section must resolve the overlap explicitly, or a later reader re-derives the same doubt from
 #    *Definition routing* and stands down again.
@@ -92,30 +102,24 @@ case "${egress}" in
   *) fail "the Egress allow-list does not state that a devantler-tech repository is never the gated case" ;;
 esac
 
-# 3. PRESERVATION — both gates must sit inside ONE AFFIRMATIVE CLAUSE. Searching the section for the
-#    two phrases independently is a fail-open: an edit reading "per-artifact approval is no longer
-#    required" leaves both substrings present, so the guard stays green while the invariant it claims
-#    to protect is gone. Matching the clause that GRANTS the destination is what makes this real.
-case "${egress}" in
-  *'only once both its gates are cleared'*'professional-work'*'per-artifact approval'*) ok ;;
-  *) fail "the third-party gate's two requirements are no longer bound inside the affirmative clause that grants the destination" ;;
-esac
+# 3. PRESERVATION — both gates must sit inside ONE CONTIGUOUS affirmative clause.
+has 'only once both its gates are cleared** — the professional-work boundary and the explicit per-artifact approval' "${egress}" || \
+  fail "the third-party gate's two requirements are no longer bound inside one contiguous affirmative clause"
+ok
 
 # 4. The exemption must follow the devantler-tech OWNER, never the word "upstream". *Definition
 #    routing* calls a synced skill's repository an upstream too, and those are frequently third party
 #    (`find-skills` is owned by `vercel-labs/skills`) — so an exemption phrased as "the skills
 #    repositories" would exempt a third-party owner from the gate this very entry imposes.
-case "${egress}" in
-  *'follows the `devantler-tech` owner'*) ok ;;
-  *) fail "the Egress entry no longer ties the exemption to the devantler-tech OWNER, so a third-party skill upstream could read as exempt" ;;
-esac
+has 'follows the `devantler-tech` owner' "${egress}" || \
+  fail "the Egress entry no longer ties the exemption to the devantler-tech OWNER, so a third-party skill upstream could read as exempt"
+ok
 
 # 5. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
 #    was these two drifting apart, so pinning only the copy would let the original move instead.
-case "${conventions}" in
-  *'Third-party upstream repos'*) ok ;;
-  *) fail "*GitHub artifact conventions* no longer says 'Third-party upstream repos' — the two sections have drifted apart again" ;;
-esac
+has 'Third-party upstream repos' "${conventions}" || \
+  fail "*GitHub artifact conventions* no longer says 'Third-party upstream repos' — the two sections have drifted apart again"
+ok
 case "${conventions}" in
   *'devantler-tech'*'are exempt'*) ok ;;
   *) fail "*GitHub artifact conventions* no longer states the devantler-tech exemption" ;;
