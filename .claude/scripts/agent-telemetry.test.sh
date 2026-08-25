@@ -814,7 +814,8 @@ parity_case "rfc7468_inner_hyphen" \
   "$(printf -- 'boom -----%s FOO-BAR PRIVATE KEY----- SECRETHYPHENLABEL' 'BEGIN')" "SECRETHYPHENLABEL"
 # RFC 7468 `labelchar` is `%x21-2C / %x2E-7E` — every printable character except
 # hyphen-minus. The class above reached only `.` and `/`, so the rest of that
-# production stayed unreachable: a label carrying `+`, `_`, `(`, `)` or `@` was
+# production stayed unreachable: a label carrying `+`, `_`, `(`, `)`, `@`, an
+# apostrophe, or a backslash was
 # matched by neither leg and so was emitted unmasked AND reported clean
 # (monorepo#2926). One case per disjoint region of the production, rather than one
 # per character — `+` and `(`/`)` sit below `,`, `@` sits between `?` and `A`, and
@@ -828,6 +829,10 @@ parity_case "rfc7468_parens" \
   "$(printf -- 'boom -----%s FOO(BAR) PRIVATE KEY----- SECRETPARENSLABEL' 'BEGIN')" "SECRETPARENSLABEL"
 parity_case "rfc7468_at" \
   "$(printf -- 'boom -----%s FOO@BAR PRIVATE KEY----- SECRETATLABEL' 'BEGIN')" "SECRETATLABEL"
+parity_case "rfc7468_apostrophe" \
+  "$(printf -- 'boom -----%s FOO\047BAR PRIVATE KEY----- SECRETAPOSTROPHELABEL' 'BEGIN')" "SECRETAPOSTROPHELABEL"
+parity_case "rfc7468_backslash" \
+  "$(printf -- 'boom -----%s FOO\134BAR PRIVATE KEY----- SECRETBACKSLASHLABEL' 'BEGIN')" "SECRETBACKSLASHLABEL"
 
 # Codex image tools persist rendered images as very large `data:` strings in
 # custom tool outputs. Those strings are encoded binary, not transcript text;
@@ -5775,11 +5780,10 @@ check "shape 8 control: a row outside any key span keeps its tool name" "$S8C" "
 # leak. The two regression CONTROLS below are what pin both directions.
 #
 # ⚠️ SCOPE. This IS RFC 7468's `labelchar` production (%x21-2C / %x2E-7E — every
-# printable character except hyphen-minus), less two that cannot be spelled at
-# all nine sites: the APOSTROPHE, which would terminate the single-quoted shell
-# string carrying the awk program, and the BACKSLASH, whose meaning inside a
-# bracket expression differs between BSD and GNU awk. Both omissions can only
-# under-match, which is the direction this file's governing asymmetry allows.
+# printable character except hyphen-minus). Its source spelling uses range
+# endpoints rather than literal apostrophe/backslash characters, so the same
+# expression remains valid in the single-quoted awk program and in both BSD and
+# GNU ERE consumers.
 # Lowercase is excluded deliberately — see the prose-bridging control below.
 # What is covered includes every label actually registered for private-key
 # material — verified, all eight mask:
@@ -5921,13 +5925,13 @@ check "shape 9 control 4e: same-label nesting still closes at depth 0" "$OUT" "T
 # runs on macOS as well as Linux, so the escape is required rather than
 # cosmetic. Pin the fragment the two spellings SHARE, so one count still covers
 # all nine sites without forcing a single spelling on both contexts.
-SITES_NEW=$(grep -oF -- '0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
+SITES_NEW=$(grep -oF -- '[!-,.-`{-~ ]([!-,.-`{-~ ]|-[!-,.-`{-~ ])*)? *PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
 # The INTERNAL-HYPHEN production is pinned SEPARATELY, because the fragment above
 # stops short of it. A site that widened the class but dropped the `|-CLASS`
 # alternative would still satisfy SITES_NEW while losing the one production RFC
 # 7468 needs most — and losing it silently, since every registered label family
 # spells fine without it.
-SITES_HYPHEN=$(grep -oF -- '|-[]!"#$%&()*+,.' "$TARGET" | grep -c '' || true)
+SITES_HYPHEN=$(grep -oF -- '|-[!-,.-`{-~ ]' "$TARGET" | grep -c '' || true)
 # FOUR rejected spellings are pinned, not just the original: `[A-Z ]*` is the
 # narrow class that could not reach either real family, `[^-]*…[^-]*` is the
 # over-wide one that leaked, and the ` *`-less optional group is the one that
@@ -5944,7 +5948,11 @@ SITES_PRE7468=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY' "$TARGET" | gr
 # RFC 7468 labelchar. A site left on it is masked-but-undetected territory for
 # every other punctuation character the production admits.
 SITES_PRE2926=$(grep -oF -- '[A-Z0-9]([A-Z0-9. ]' "$TARGET" | grep -c '' || true)
-SITES_OLD=$((SITES_OLD + SITES_BAD + SITES_NARROW + SITES_PRE7468 + SITES_PRE2926))
+# SIXTH rejected spelling: the first #2926 implementation omitted apostrophe
+# and backslash. Keeping even one copy preserves the exact masked-but-undetected
+# bypass the parity cases above reproduce.
+SITES_PRE3051=$(grep -oF -- '[]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]' "$TARGET" | grep -c '' || true)
+SITES_OLD=$((SITES_OLD + SITES_BAD + SITES_NARROW + SITES_PRE7468 + SITES_PRE2926 + SITES_PRE3051))
 if [ "$SITES_NEW" -ge 9 ] && [ "$SITES_HYPHEN" -ge 9 ] && [ "$SITES_OLD" -eq 0 ]; then
   ok "shape 9 structural: every private-key marker site uses the one widened label expression"
 else
