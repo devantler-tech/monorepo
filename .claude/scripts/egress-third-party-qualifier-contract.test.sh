@@ -110,7 +110,7 @@ ok
 #    routing* calls a synced skill's repository an upstream too, and those are frequently third party
 #    (`find-skills` is owned by `vercel-labs/skills`) — so an exemption phrased as "the skills
 #    repositories" would exempt a third-party owner from the gate this very entry imposes.
-has 'follows the `devantler-tech` owner' "${egress}" || \
+has 'The exemption follows the `devantler-tech` owner, never the word' "${egress}" || \
   fail "the Egress entry no longer ties the exemption to the devantler-tech OWNER, so a third-party skill upstream could read as exempt"
 ok
 
@@ -120,7 +120,7 @@ ok
 #    half that matters: `skill-owner.sh` exiting 2 means UNKNOWN, never "local". Without that clause an
 #    unresolvable ownership could be read as suite-owned, i.e. exempt, which is the same third-party
 #    fail-open assertion 4 exists to close, one step further down.
-has '`.claude/scripts/skill-owner.sh` — whose exit 2 is UNKNOWN, never "local"' "${egress}" || \
+has 'Resolve ownership with `.claude/scripts/skill-owner.sh` — whose exit 2 is UNKNOWN, never "local"' "${egress}" || \
   fail "the Egress entry no longer names skill-owner.sh with its fail-closed exit-2 semantics, so unresolvable ownership could read as exempt"
 ok
 # 6. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
@@ -138,7 +138,7 @@ ok
 #    autonomous external artifacts while still saying "Third-party upstream repos" and naming the
 #    devantler-tech exemption, leaving the Egress copy contradicting it and this guard, whose whole
 #    purpose is pinning the two together, green. Reproduced before this assertion existed.
-has 'Do not even inspect an external repository until the maintainer confirms' "${conventions}" || \
+has 'Do not even inspect an external repository until the maintainer confirms in the current conversation that it is unrelated to professional work' "${conventions}" || \
   fail "*GitHub artifact conventions* no longer requires the professional-work boundary before inspecting an external repository"
 ok
 has '**never autonomously open an issue or PR** — get explicit approval via the ask tool first' "${conventions}" || \
