@@ -17,6 +17,10 @@
 #                           [--injection-provenance] [--credential-provenance]
 set -uo pipefail
 
+# RFC 7468 label ranges are defined over ASCII code points. Pin the regex locale
+# so BSD and GNU ERE consumers interpret those ranges identically.
+export LC_ALL=C
+
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
