@@ -139,13 +139,13 @@ has 'The exemption follows the `devantler-tech` owner, never the word *upstream*
 ok
 
 
-# 5. The ownership-resolution MECHANISM must survive too. Assertion 4 pins that the exemption follows
-#    the owner, but not HOW a reader resolves one — and the resolver's fail-closed semantics is the
-#    half that matters: `skill-owner.sh` exiting 2 means UNKNOWN, never "local". Without that clause an
-#    unresolvable ownership could be read as suite-owned, i.e. exempt, which is the same third-party
-#    fail-open assertion 4 exists to close, one step further down.
-has 'Resolve ownership with `.claude/scripts/skill-owner.sh` — whose exit 2 is UNKNOWN, never "local"' "${egress}" || \
-  fail "the Egress entry no longer names skill-owner.sh with its fail-closed exit-2 semantics, so unresolvable ownership could read as exempt"
+# 5. Ownership must be AUTHORIZED by the reviewed allowlist, never by the skill's own
+#    `metadata.github-repo`. That field is self-attesting — a third-party release declaring a
+#    `devantler-tech` URL would read back as proof of our ownership and exempt itself from the very
+#    gate this entry imposes. *Agent definition locations* already states this for the updater
+#    carve-out; the Egress entry must not contradict it, and an earlier revision of this PR did.
+has 'Authorization is the reviewed [`.claude/skill-ownership-allowlist.tsv`](.claude/skill-ownership-allowlist.tsv), never the skill'"'"'s own `metadata.github-repo`' "${egress}" || \
+  fail "the Egress entry no longer routes skill ownership to the reviewed allowlist and away from the self-attesting metadata.github-repo — a third-party skill declaring a devantler-tech URL could exempt itself from this very gate"
 ok
 # 6. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
 #    was these two drifting apart, so pinning only the copy would let the original move instead.
@@ -198,10 +198,11 @@ present() { [ -n "$1" ] && [ "$1" != "null" ]; }
 #     skipped path-filtered job is accepted by the aggregate.
 present "$(q ".jobs.\"${JOB}\"")" || \
   fail "ci.yaml has no ${JOB} job — the contract is not checked at all"
-for attr in if needs; do
-  v="$(q ".jobs.\"${JOB}\".\"${attr}\"")"
-  present "${v}" && \
-    fail "the ${JOB} job declares ${attr}: ${v} — it must stay unconditional, or breaking the wiring would skip the very job that reports it"
+# `present` cannot distinguish an absent key from the literal strings "null" or "" — and GitHub
+# evaluates `if: "null"` and `if: ""` as FALSY, skipping the job. Test key EXISTENCE structurally.
+for attr in if needs continue-on-error; do
+  [ "$(q ".jobs.\"${JOB}\" | has(\"${attr}\")")" = "false" ] || \
+    fail "the ${JOB} job declares ${attr}: $(q ".jobs.\"${JOB}\".\"${attr}\"") — it must stay unconditional and unable to mask failure, or breaking the wiring would skip or excuse the very job that reports it"
 done
 
 # (b) it must run EXACTLY the contract script: a wrapper such as `… || true` converts every failure to
@@ -212,6 +213,14 @@ run_cmds="$(q ".jobs.\"${JOB}\".steps[] | select(.run != null) | .run")"
 grep -Fqx -- 'bash .claude/scripts/egress-third-party-qualifier-contract.test.sh' <<< "${run_cmds}" || \
   fail "no step in the ${JOB} job runs exactly 'bash .claude/scripts/egress-third-party-qualifier-contract.test.sh' — a wrapper such as '… || true' converts every contract failure to success"
 
+# (b2) the job must check out THIS PR's head, not a fixed ref. With `ref: main` on the checkout, a PR
+# weakening AGENTS.md, this script, or the workflow would validate the unchanged default branch and
+# the required aggregate would stay green. The default (no ref) is the PR merge ref, which is correct.
+[ "$(q "[.jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\")))] | length")" = "1" ] || \
+  fail "the ${JOB} job does not have exactly one actions/checkout step — what the contract script reads cannot be established"
+[ "$(q "[.jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\"))) | select(.with != null and (.with | has(\"ref\")))] | length")" = "0" ] || \
+  fail "the ${JOB} job's checkout pins a ref — it would validate that ref instead of this pull request's head, so a PR weakening the contract would pass against the unchanged default branch"
+
 # (c) the aggregate must depend on this job, actually evaluate its dependencies, and receive this
 #     job's result UNTRANSFORMED. `needs.<job>.result == 'failure' && 'success' || needs.<job>.result`
 #     contains the reference while handing the action `success` whenever the contract fails.
@@ -221,7 +230,7 @@ grep -Fqx -- "${JOB}" <<< "${status_needs}" || \
 status_if="$(q '.jobs.status.if')"
 [ "${status_if}" = "always()" ] || \
   fail "the status job is not 'if: always()' (got '${status_if}') — a skipped aggregate evaluates no failing dependency, so this job's entry in it would gate nothing"
-agg_results="$(q '.jobs.status.steps[] | select(.uses != null and (.uses | test("devantler-tech/actions/aggregate-job-checks@"))) | .with."job-results"')"
+agg_results="$(q '.jobs.status.steps[] | select(.uses != null and (.uses | test("^devantler-tech/actions/aggregate-job-checks@"))) | .with."job-results"')"
 present "${agg_results}" || \
   fail "the status job has no devantler-tech/actions/aggregate-job-checks step with a job-results input — nothing evaluates the dependency results"
 # job-results is a FOLDED scalar — one line, space-separated — so match the exact token as a
@@ -233,20 +242,18 @@ grep -qF -- "\${{ needs.${JOB}.result }}" <<< "${agg_results}" || \
 # (d) neither this job nor the aggregate may be unable to fail — at JOB level or STEP level. Each of
 #     these was found separately by review, and each satisfies every assertion above.
 for j in "${JOB}" status; do
-  v="$(q ".jobs.\"${j}\".\"continue-on-error\"")"
-  present "${v}" && \
-    fail "the ${j} job sets continue-on-error: ${v} at job level — the run passes even when the job fails, so the guard would not gate"
+  [ "$(q ".jobs.\"${j}\" | has(\"continue-on-error\")")" = "false" ] || \
+    fail "the ${j} job sets continue-on-error at job level — the run passes even when the job fails, so the guard would not gate"
 done
 for spec in \
   "verification step|.jobs.\"${JOB}\".steps[] | select(.run != null and (.run | test(\"egress-third-party-qualifier-contract.test.sh\")))" \
-  "status job's aggregate step|.jobs.status.steps[] | select(.uses != null and (.uses | test(\"aggregate-job-checks@\")))"; do
+  "status job's aggregate step|.jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/actions/aggregate-job-checks@\")))"; do
   what="${spec%%|*}"; path="${spec#*|}"
   [ "$(q "[${path}] | length")" = "1" ] || \
     fail "expected exactly one ${what} in ci.yaml — its failure-masking settings cannot be checked, so an OK here would be vacuous"
   for attr in continue-on-error if shell; do
-    v="$(q "${path} | .\"${attr}\"")"
-    present "${v}" && \
-      fail "the ${what} sets ${attr}: ${v} — it could report success without its command failing, so the guard would not gate"
+    [ "$(q "[${path} | select(has(\"${attr}\"))] | length")" = "0" ] || \
+      fail "the ${what} sets ${attr} — it could report success without its command failing, so the guard would not gate"
   done
 done
 ok
