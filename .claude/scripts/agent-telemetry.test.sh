@@ -812,6 +812,22 @@ parity_case "rfc7468_solidus" \
   "$(printf -- 'boom -----%s FOO/BAR PRIVATE KEY----- SECRETSOLIDUSLABEL' 'BEGIN')" "SECRETSOLIDUSLABEL"
 parity_case "rfc7468_inner_hyphen" \
   "$(printf -- 'boom -----%s FOO-BAR PRIVATE KEY----- SECRETHYPHENLABEL' 'BEGIN')" "SECRETHYPHENLABEL"
+# RFC 7468 `labelchar` is `%x21-2C / %x2E-7E` — every printable character except
+# hyphen-minus. The class above reached only `.` and `/`, so the rest of that
+# production stayed unreachable: a label carrying `+`, `_`, `(`, `)` or `@` was
+# matched by neither leg and so was emitted unmasked AND reported clean
+# (monorepo#2926). One case per disjoint region of the production, rather than one
+# per character — `+` and `(`/`)` sit below `,`, `@` sits between `?` and `A`, and
+# `_` sits above `Z`, so a class that reaches all four cannot have widened only a
+# contiguous slice of the range.
+parity_case "rfc7468_plus" \
+  "$(printf -- 'boom -----%s FOO+BAR PRIVATE KEY----- SECRETPLUSLABEL' 'BEGIN')" "SECRETPLUSLABEL"
+parity_case "rfc7468_underscore" \
+  "$(printf -- 'boom -----%s FOO_BAR PRIVATE KEY----- SECRETUNDERSCORELABEL' 'BEGIN')" "SECRETUNDERSCORELABEL"
+parity_case "rfc7468_parens" \
+  "$(printf -- 'boom -----%s FOO(BAR) PRIVATE KEY----- SECRETPARENSLABEL' 'BEGIN')" "SECRETPARENSLABEL"
+parity_case "rfc7468_at" \
+  "$(printf -- 'boom -----%s FOO@BAR PRIVATE KEY----- SECRETATLABEL' 'BEGIN')" "SECRETATLABEL"
 
 # Codex image tools persist rendered images as very large `data:` strings in
 # custom tool outputs. Those strings are encoded binary, not transcript text;
@@ -5758,12 +5774,15 @@ check "shape 8 control: a row outside any key span keeps its tool name" "$S8C" "
 # precise rule silently becomes a substring match, and here it silently became a
 # leak. The two regression CONTROLS below are what pin both directions.
 #
-# ⚠️ SCOPE, STATED PLAINLY SO THIS IS NOT MISREAD AS AN RFC 7468 IMPLEMENTATION.
-# It is NOT one, deliberately. RFC 7468's `labelchar` (%x21-2C / %x2E-7E) also
-# admits punctuation this class rejects, and the grammar permits an INTERNAL
-# hyphen-minus; `FOO/BAR PRIVATE KEY` and `FOO-BAR PRIVATE KEY` are therefore
-# spec-legal and are NOT matched here. What IS covered is every label actually
-# registered for private-key material — verified, all eight mask:
+# ⚠️ SCOPE. This IS RFC 7468's `labelchar` production (%x21-2C / %x2E-7E — every
+# printable character except hyphen-minus), less two that cannot be spelled at
+# all nine sites: the APOSTROPHE, which would terminate the single-quoted shell
+# string carrying the awk program, and the BACKSLASH, whose meaning inside a
+# bracket expression differs between BSD and GNU awk. Both omissions can only
+# under-match, which is the direction this file's governing asymmetry allows.
+# Lowercase is excluded deliberately — see the prose-bridging control below.
+# What is covered includes every label actually registered for private-key
+# material — verified, all eight mask:
 #   PRIVATE KEY · ENCRYPTED PRIVATE KEY · RSA PRIVATE KEY · DSA PRIVATE KEY
 #   EC PRIVATE KEY · OPENSSH PRIVATE KEY · PGP PRIVATE KEY BLOCK
 #   X9.42 DH PRIVATE KEY
@@ -5893,8 +5912,8 @@ check "shape 9 control 4e: same-label nesting still closes at depth 0" "$OUT" "T
 # lines reports 8 for the 9 real sites, so a line-based floor of 9 can only be
 # satisfied by adding a tenth site. This assertion caught exactly that mistake
 # in its own first draft.
-# The label admits `/` and an INTERNAL hyphen (one immediately followed by an
-# alphanumeric, so it can never eat the `-----` fence). That expression has TWO
+# The label admits RFC 7468 punctuation and an INTERNAL hyphen (one immediately
+# followed by a label character, so it can never eat the `-----` fence). That
 # spellings by CONTEXT, not by choice: awk regex literals and the marker `sed`
 # rules must escape the solidus, while the two detector variables are plain
 # shell strings with no delimiter to escape. BSD awk rejects a bare `/` inside a
@@ -5902,7 +5921,13 @@ check "shape 9 control 4e: same-label nesting still closes at depth 0" "$OUT" "T
 # runs on macOS as well as Linux, so the escape is required rather than
 # cosmetic. Pin the fragment the two spellings SHARE, so one count still covers
 # all nine sites without forcing a single spelling on both contexts.
-SITES_NEW=$(grep -oF -- '-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
+SITES_NEW=$(grep -oF -- '0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?' "$TARGET" | grep -c '' || true)
+# The INTERNAL-HYPHEN production is pinned SEPARATELY, because the fragment above
+# stops short of it. A site that widened the class but dropped the `|-CLASS`
+# alternative would still satisfy SITES_NEW while losing the one production RFC
+# 7468 needs most — and losing it silently, since every registered label family
+# spells fine without it.
+SITES_HYPHEN=$(grep -oF -- '|-[]!"#$%&()*+,.' "$TARGET" | grep -c '' || true)
 # FOUR rejected spellings are pinned, not just the original: `[A-Z ]*` is the
 # narrow class that could not reach either real family, `[^-]*…[^-]*` is the
 # over-wide one that leaked, and the ` *`-less optional group is the one that
@@ -5915,12 +5940,16 @@ SITES_NARROW=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)?PRIVATE KEY' "$TARGET" | grep 
 # solidus nor an internal hyphen — masked-but-undetected territory if a site is
 # left on it.
 SITES_PRE7468=$(grep -oF -- '([A-Z0-9][A-Z0-9. ]*)? *PRIVATE KEY' "$TARGET" | grep -c '' || true)
-SITES_OLD=$((SITES_OLD + SITES_BAD + SITES_NARROW + SITES_PRE7468))
-if [ "$SITES_NEW" -ge 9 ] && [ "$SITES_OLD" -eq 0 ]; then
+# FIFTH rejected spelling: the pre-#2926 class, which reached only `.` and `/` of
+# RFC 7468 labelchar. A site left on it is masked-but-undetected territory for
+# every other punctuation character the production admits.
+SITES_PRE2926=$(grep -oF -- '[A-Z0-9]([A-Z0-9. ]' "$TARGET" | grep -c '' || true)
+SITES_OLD=$((SITES_OLD + SITES_BAD + SITES_NARROW + SITES_PRE7468 + SITES_PRE2926))
+if [ "$SITES_NEW" -ge 9 ] && [ "$SITES_HYPHEN" -ge 9 ] && [ "$SITES_OLD" -eq 0 ]; then
   ok "shape 9 structural: every private-key marker site uses the one widened label expression"
 else
   bad "shape 9 structural: every private-key marker site uses the one widened label expression" \
-      "widened=$SITES_NEW (expected >=9) narrow-remaining=$SITES_OLD (expected 0)"
+      "widened=$SITES_NEW (expected >=9) hyphen-rule=$SITES_HYPHEN (expected >=9) narrow-remaining=$SITES_OLD (expected 0)"
 fi
 
 # ── ablations — each proving ONE branch load-bearing ─────────────────────────

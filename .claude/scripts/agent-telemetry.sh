@@ -757,7 +757,7 @@ function mask_line(s) {
 # spaces collapse because the marker regex tolerates a repeated space before the
 # label, so `RSA  PRIVATE KEY` must still pair with `RSA PRIVATE KEY`. A label
 # that fails to pair does not close, so the span runs on and masks MORE — the
-# safe side, and why this needs no character-class widening to be correct.
+# safe side, and why widening the class below could only ever mask MORE.
 function labelkey(m) {
   sub(/^-----(BEGIN|END) */, "", m)
   sub(/-----$/, "", m)
@@ -783,7 +783,7 @@ END {
   # over-masking, which is the direction the governing asymmetry above demands.
   for (i = 1; i <= n; i++) {
     s = L[i]; out = ""
-    while (match(s, /-----BEGIN ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/)) {
+    while (match(s, /-----BEGIN ([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]|-[]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?-----/)) {
       bs = RSTART; bl = RLENGTH
       head = substr(s, 1, bs - 1)
       oplbl = labelkey(substr(s, bs, bl))
@@ -793,7 +793,7 @@ END {
       # U[] flag below, and this program has paid for that class enough times.
       scan = substr(s, bs + bl)
       depth = 1; closed = 0
-      while (depth > 0 && match(scan, /-----(BEGIN|END) ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/)) {
+      while (depth > 0 && match(scan, /-----(BEGIN|END) ([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]|-[]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?-----/)) {
         mark = substr(scan, RSTART, RLENGTH)
         scan = substr(scan, RSTART + RLENGTH)
         # 🔴 ANY opener DEEPENS the span, whatever its label; only a MATCHING closer
@@ -889,7 +889,7 @@ END {
     close_at = 0; close_end = 0; bdepth = U[i]
     for (j = i + 1; j <= n && close_at == 0; j++) {
       bscan = L[j]; bdrop = 0
-      while (match(bscan, /-----END ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/)) {
+      while (match(bscan, /-----END ([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]|-[]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?-----/)) {
         # Absolute end offset of this marker in L[j], accumulated as `bscan` is
         # consumed. The closing line is masked UP TO the marker that actually
         # balanced the depth, not the first one on the line — closing at the
@@ -999,9 +999,9 @@ redact() {
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
     -e 's/(AKIA[0-9A-Z]{4})[0-9A-Z]+/\1…<redacted>/g' \
     -e 's/(xox[baprs]-[A-Za-z0-9]{4})[A-Za-z0-9-]+/\1…<redacted>/g' \
-    -e 's/-----BEGIN ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----([^-]|-[^-])*(-----END ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----)?/<redacted-private-key>/g' \
-    -e 's/-----(BEGIN|END) ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/<redacted-private-key>/g' \
-    -e 's/(-----BEGIN ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----)[^-]*/\1<redacted-key-material>/g' \
+    -e 's/-----BEGIN ([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]|-[]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?-----([^-]|-[^-])*(-----END ([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]|-[]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?-----)?/<redacted-private-key>/g' \
+    -e 's/-----(BEGIN|END) ([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]|-[]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?-----/<redacted-private-key>/g' \
+    -e 's/(-----BEGIN ([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]([]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ]|-[]!"#$%&()*+,.\/0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?-----)[^-]*/\1<redacted-key-material>/g' \
     -e 's/(eyJ[A-Za-z0-9_-]{6})[A-Za-z0-9_.-]{20,}/\1…<redacted-jwt>/g' \
     -e 's/((secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^"'"'"'[:space:],}]{8,}/\1<redacted>/gI'
 }
@@ -1030,7 +1030,7 @@ sha256_digest() {
 # form), each time reporting a real leak as "clean". The test suite asserts a
 # sample of EVERY numbered shape is both detected AND redacted; add to both
 # lists together or the test fails.
-CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN ([A-Z0-9]([A-Z0-9. ]|/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN ([]!"#$%&()*+,./0-9:;<=>?@A-Z[^_`{|}~ ]([]!"#$%&()*+,./0-9:;<=>?@A-Z[^_`{|}~ ]|-[]!"#$%&()*+,./0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 
 # TABLE variant of CRED_RE — identical shapes, but the prefix-identified ones
 # (gh?_ / github_pat_ / AKIA / xox / eyJ) are BOUNDARY-ANCHORED: the char before
@@ -1047,7 +1047,7 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # between the detector and redact() has already broken twice; a second hand-kept
 # copy of this alternation would be the third.
 CRED_PREFIX_SHAPES_RE='(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
-CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([A-Z0-9]([A-Z0-9. ]|/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([]!"#$%&()*+,./0-9:;<=>?@A-Z[^_`{|}~ ]([]!"#$%&()*+,./0-9:;<=>?@A-Z[^_`{|}~ ]|-[]!"#$%&()*+,./0-9:;<=>?@A-Z[^_`{|}~ ])*)? *PRIVATE KEY( BLOCK)?-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 
 # BLOB-EMBEDDED EVIDENCE (#2522). The boundary anchor above rejects a token
 # preceded by [A-Za-z0-9_-]. It cannot reject one whose boundary char is `+`,
