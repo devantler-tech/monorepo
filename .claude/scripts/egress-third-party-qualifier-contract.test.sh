@@ -157,34 +157,63 @@ workflow="${repo_root}/.github/workflows/ci.yaml"
 # to prevent, reintroduced one level up.
 [ -r "${workflow}" ] || \
   fail "ci.yaml is missing or unreadable at ${workflow} — this job's own wiring cannot be verified, so an OK here would be vacuous"
-# Each needle below must be UNIQUE in ci.yaml, or a whole-file grep proves nothing about THIS job.
-# `    needs: changes` is the counter-example — it appears on 47 jobs, so a file-wide check for it
-# passed with the declaration deleted from this job. It is verified inside the job block instead, and
-# the uniqueness assertion here stops a future non-unique needle being added silently.
-for wiring in \
-  '            egress-third-party-qualifier-contract:|paths-filter entry' \
-  '      egress-third-party-qualifier-contract: ${{ steps.filter.outputs.egress-third-party-qualifier-contract }}|changes-job outputs declaration (its absence makes the job skip silently)' \
-  '  test-egress-third-party-qualifier-contract:|job definition' \
-  '      - test-egress-third-party-qualifier-contract|status job needs: entry (its absence stops the job gating the merge)' \
-  '            ${{ needs.test-egress-third-party-qualifier-contract.result }}|status job job-results entry' \
-  "    if: needs.changes.outputs.egress-third-party-qualifier-contract == 'true'|job if: condition (an 'if: false' leaves the aggregate green-by-skip while the guard never runs)" \
-  '        run: bash .claude/scripts/egress-third-party-qualifier-contract.test.sh|job run: command (a replaced command would execute something else entirely)'; do
-  needle="${wiring%%|*}"; what="${wiring#*|}"
-  hits="$(grep -cFx -- "${needle}" "${workflow}" || true)"
-  [ "${hits}" = "1" ] || \
-    fail "ci.yaml has ${hits} line(s) matching this job's ${what} — expected exactly 1; a non-unique needle cannot verify THIS job"
-done
-
-# Job-level settings that are NOT unique file-wide must be checked inside this job's own block.
+# Every needle is matched inside the block that OWNS it. Neither file-wide presence nor file-wide
+# uniqueness is sufficient: a line MOVED to a different job is still unique, so with `if: false` on
+# this job and the expected condition copied verbatim onto another job, a uniqueness-only check
+# passed while this job never executed. Reproduced. Extract the block, then match within it.
 job_block="$(awk '
   /^  test-egress-third-party-qualifier-contract:$/ { f = 1; next }
   f && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { f = 0 }
   f { print }
 ' "${workflow}")"
-[ -n "${job_block}" ] || \
-  fail "ci.yaml has no job block for this job — its settings cannot be verified, so an OK here would be vacuous"
-grep -Fqx -- '    needs: changes' <<< "${job_block}" || \
-  fail "this job is missing 'needs: changes' — without it needs.changes.outputs.* is empty, the if: never activates, and the job is silently skipped"
+status_block="$(awk '
+  /^  status:$/ { f = 1; next }
+  f && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { f = 0 }
+  f { print }
+' "${workflow}")"
+changes_block="$(awk '
+  /^  changes:$/ { f = 1; next }
+  f && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { f = 0 }
+  f { print }
+' "${workflow}")"
+for pair in "job_block:${job_block}" "status_block:${status_block}" "changes_block:${changes_block}"; do
+  [ -n "${pair#*:}" ] || \
+    fail "ci.yaml has no ${pair%%:*} for this job — its wiring cannot be verified, so an OK here would be vacuous"
+done
+
+# THIS job's own settings, inside THIS job's block.
+for wiring in \
+  '    needs: changes|needs: changes declaration (without it needs.changes.outputs.* is empty, the if: never activates, and the job is silently skipped)' \
+  "    if: needs.changes.outputs.egress-third-party-qualifier-contract == 'true'|if: condition (an 'if: false' leaves the aggregate green-by-skip while the guard never runs)" \
+  '        run: bash .claude/scripts/egress-third-party-qualifier-contract.test.sh|run: command (a replaced command would execute something else entirely)'; do
+  needle="${wiring%%|*}"; what="${wiring#*|}"
+  grep -Fqx -- "${needle}" <<< "${job_block}" || \
+    fail "this job's block is missing its ${what} — the guard would not gate"
+done
+
+# The aggregate's entries, inside the status job's block.
+for wiring in \
+  '      - test-egress-third-party-qualifier-contract|needs: entry (its absence stops the job gating the merge)' \
+  '            ${{ needs.test-egress-third-party-qualifier-contract.result }}|job-results entry'; do
+  needle="${wiring%%|*}"; what="${wiring#*|}"
+  grep -Fqx -- "${needle}" <<< "${status_block}" || \
+    fail "the status job is missing this job's ${what} — the guard would not gate"
+done
+
+# The changes job's output declaration, inside the changes job's block.
+grep -Fqx -- '      egress-third-party-qualifier-contract: ${{ steps.filter.outputs.egress-third-party-qualifier-contract }}' <<< "${changes_block}" || \
+  fail "the changes job is missing this job's outputs declaration — needs.changes.outputs.* would be empty and the job would skip silently"
+
+# The job and filter keys themselves define their blocks, so their presence is what the extractions
+# above already prove; assert uniqueness so a duplicate key cannot make an extraction ambiguous.
+for key in \
+  '  test-egress-third-party-qualifier-contract:|job definition' \
+  '            egress-third-party-qualifier-contract:|paths-filter entry'; do
+  needle="${key%%|*}"; what="${key#*|}"
+  hits="$(grep -cFx -- "${needle}" "${workflow}" || true)"
+  [ "${hits}" = "1" ] || \
+    fail "ci.yaml has ${hits} line(s) matching this job's ${what} — expected exactly 1; a duplicate key makes the block extraction ambiguous"
+done
 # The filter must cover every surface this test reads — checked INSIDE THIS JOB'S OWN FILTER BLOCK,
 # never file-wide. `- 'AGENTS.md'` appears under 28 other filters, so a whole-file `grep -Fqx` passes
 # even after the entry is deleted from THIS filter, leaving an AGENTS.md-only edit to skip the guard
