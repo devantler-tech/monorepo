@@ -115,7 +115,16 @@ has 'follows the `devantler-tech` owner' "${egress}" || \
   fail "the Egress entry no longer ties the exemption to the devantler-tech OWNER, so a third-party skill upstream could read as exempt"
 ok
 
-# 5. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
+
+# 5. The ownership-resolution MECHANISM must survive too. Assertion 4 pins that the exemption follows
+#    the owner, but not HOW a reader resolves one — and the resolver's fail-closed semantics is the
+#    half that matters: `skill-owner.sh` exiting 2 means UNKNOWN, never "local". Without that clause an
+#    unresolvable ownership could be read as suite-owned, i.e. exempt, which is the same third-party
+#    fail-open assertion 4 exists to close, one step further down.
+has '`.claude/scripts/skill-owner.sh` — whose exit 2 is UNKNOWN, never "local"' "${egress}" || \
+  fail "the Egress entry no longer names skill-owner.sh with its fail-closed exit-2 semantics, so unresolvable ownership could read as exempt"
+ok
+# 6. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
 #    was these two drifting apart, so pinning only the copy would let the original move instead.
 has 'Third-party upstream repos' "${conventions}" || \
   fail "*GitHub artifact conventions* no longer says 'Third-party upstream repos' — the two sections have drifted apart again"
@@ -125,5 +134,5 @@ case "${conventions}" in
   *) fail "*GitHub artifact conventions* no longer states the devantler-tech exemption" ;;
 esac
 
-[ "${passed}" -eq 6 ] || fail "expected 6 assertions, ran ${passed}"
+[ "${passed}" -eq 7 ] || fail "expected 7 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
