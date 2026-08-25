@@ -194,57 +194,75 @@ yq '.' "${workflow}" >/dev/null 2>&1 || \
   fail "ci.yaml does not parse as YAML — its wiring cannot be verified"
 
 JOB='test-egress-third-party-qualifier-contract'
-q() { yq -r "$1" "${workflow}" 2>/dev/null; }
+# Named wf_q, not q: a real `q` binary exists on PATH here, so a helper named q that is called before
+# its definition silently runs an unrelated CLI — and the failures surface as "command not found" for
+# `fail`, which does not abort, so the test still prints PASS. Encountered exactly that while editing.
+wf_q() { yq -r "$1" "${workflow}" 2>/dev/null; }
 present() { [ -n "$1" ] && [ "$1" != "null" ]; }
 
 # (a) the job must exist and be UNCONDITIONAL — any `if:` or `needs:` reintroduces a skip path, and a
 #     skipped path-filtered job is accepted by the aggregate.
-present "$(q ".jobs.\"${JOB}\"")" || \
+present "$(wf_q ".jobs.\"${JOB}\"")" || \
   fail "ci.yaml has no ${JOB} job — the contract is not checked at all"
 # `present` cannot distinguish an absent key from the literal strings "null" or "" — and GitHub
 # evaluates `if: "null"` and `if: ""` as FALSY, skipping the job. Test key EXISTENCE structurally.
 for attr in if needs continue-on-error; do
-  [ "$(q ".jobs.\"${JOB}\" | has(\"${attr}\")")" = "false" ] || \
-    fail "the ${JOB} job declares ${attr}: $(q ".jobs.\"${JOB}\".\"${attr}\"") — it must stay unconditional and unable to mask failure, or breaking the wiring would skip or excuse the very job that reports it"
+  [ "$(wf_q ".jobs.\"${JOB}\" | has(\"${attr}\")")" = "false" ] || \
+    fail "the ${JOB} job declares ${attr}: $(wf_q ".jobs.\"${JOB}\".\"${attr}\"") — it must stay unconditional and unable to mask failure, or breaking the wiring would skip or excuse the very job that reports it"
 done
 
 # (b) it must run EXACTLY the contract script: a wrapper such as `… || true` converts every failure to
 #     success while still containing the filename.
 # Materialise before matching: `q … | grep -q` under pipefail reports failure when grep exits
 # on a match and SIGPIPEs yq, so a present value reads as absent.
-run_cmds="$(q ".jobs.\"${JOB}\".steps[] | select(.run != null) | .run")"
+run_cmds="$(wf_q ".jobs.\"${JOB}\".steps[] | select(.run != null) | .run")"
 grep -Fqx -- 'bash .claude/scripts/egress-third-party-qualifier-contract.test.sh' <<< "${run_cmds}" || \
   fail "no step in the ${JOB} job runs exactly 'bash .claude/scripts/egress-third-party-qualifier-contract.test.sh' — a wrapper such as '… || true' converts every contract failure to success"
 
 # (b2) the job must check out THIS PR's head, not a fixed ref. With `ref: main` on the checkout, a PR
 # weakening AGENTS.md, this script, or the workflow would validate the unchanged default branch and
 # the required aggregate would stay green. The default (no ref) is the PR merge ref, which is correct.
-[ "$(q "[.jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\")))] | length")" = "1" ] || \
+[ "$(wf_q "[.jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\")))] | length")" = "1" ] || \
   fail "the ${JOB} job does not have exactly one actions/checkout step — what the contract script reads cannot be established"
-[ "$(q "[.jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\"))) | select(.with != null and (.with | has(\"ref\")))] | length")" = "0" ] || \
+[ "$(wf_q "[.jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\"))) | select(.with != null and (.with | has(\"ref\")))] | length")" = "0" ] || \
   fail "the ${JOB} job's checkout pins a ref — it would validate that ref instead of this pull request's head, so a PR weakening the contract would pass against the unchanged default branch"
+# `ref:` is not the only redirect: `repository:` replaces the workspace with another repo's default
+# branch, so the exact command would run an attacker-supplied no-op. Allow ONLY the key this step
+# legitimately needs, rather than blocklisting the redirects we happened to think of.
+bad_with="$(wf_q ".jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\"))) | .with | keys | .[] | select(. != \"persist-credentials\")")"
+[ -z "${bad_with}" ] || \
+  fail "the ${JOB} job's checkout sets $(printf '%s' "${bad_with}" | tr '\n' ' ')— only persist-credentials is permitted, because keys such as repository: or ref: redirect what the contract script reads"
+
+# BASH_ENV is sourced by the non-interactive runner shell BEFORE the run command, so a checked-in file
+# containing `exit 0` short-circuits the verification with a success. Settable at workflow, job and
+# step level, and invisible to the shell:/if:/continue-on-error checks.
+for scope in '.env' ".jobs.\"${JOB}\".env" ".jobs.\"${JOB}\".steps[].env"; do
+  [ "$(wf_q "[${scope} | select(. != null) | select(has(\"BASH_ENV\"))] | length")" = "0" ] || \
+    fail "BASH_ENV is set at ${scope} — bash sources it before the verification command runs, so a file containing 'exit 0' would pass the contract without checking anything"
+done
+
 
 # (b3) no INHERITED shell override, and no injected step. A workflow- or job-level
 # `defaults.run.shell` of `bash {0} || true` applies to the verification step without any step-level
 # `shell:`, and a step inserted after Checkout can overwrite the script so the exact command runs a
 # replacement that checks nothing. Both leave every other assertion satisfied.
 for path in ".defaults.run.shell" ".jobs.\"${JOB}\".defaults.run.shell"; do
-  [ "$(q "[${path}] | map(select(. != null)) | length")" = "0" ] || \
+  [ "$(wf_q "[${path}] | map(select(. != null)) | length")" = "0" ] || \
     fail "a defaults.run.shell is set at ${path} — it is inherited by the verification step and a template such as 'bash {0} || true' converts every contract failure to success"
 done
-[ "$(q ".jobs.\"${JOB}\".steps | length")" = "2" ] || \
+[ "$(wf_q ".jobs.\"${JOB}\".steps | length")" = "2" ] || \
   fail "the ${JOB} job does not have exactly two steps (checkout, verify) — an injected step can overwrite the script so the exact command runs a replacement that checks nothing"
 
 # (c) the aggregate must depend on this job, actually evaluate its dependencies, and receive this
 #     job's result UNTRANSFORMED. `needs.<job>.result == 'failure' && 'success' || needs.<job>.result`
 #     contains the reference while handing the action `success` whenever the contract fails.
-status_needs="$(q '.jobs.status.needs[]?')"
+status_needs="$(wf_q '.jobs.status.needs[]?')"
 grep -Fqx -- "${JOB}" <<< "${status_needs}" || \
   fail "the status job does not list ${JOB} in needs: — its failures would not gate the merge"
-status_if="$(q '.jobs.status.if')"
+status_if="$(wf_q '.jobs.status.if')"
 [ "${status_if}" = "always()" ] || \
   fail "the status job is not 'if: always()' (got '${status_if}') — a skipped aggregate evaluates no failing dependency, so this job's entry in it would gate nothing"
-agg_results="$(q '.jobs.status.steps[] | select(.uses != null and (.uses | test("^devantler-tech/actions/aggregate-job-checks@"))) | .with."job-results"')"
+agg_results="$(wf_q '.jobs.status.steps[] | select(.uses != null and (.uses | test("^devantler-tech/actions/aggregate-job-checks@"))) | .with."job-results"')"
 present "${agg_results}" || \
   fail "the status job has no devantler-tech/actions/aggregate-job-checks step with a job-results input — nothing evaluates the dependency results"
 # job-results is a FOLDED scalar — one line, space-separated — so match the exact token as a
@@ -256,17 +274,17 @@ grep -qF -- "\${{ needs.${JOB}.result }}" <<< "${agg_results}" || \
 # (d) neither this job nor the aggregate may be unable to fail — at JOB level or STEP level. Each of
 #     these was found separately by review, and each satisfies every assertion above.
 for j in "${JOB}" status; do
-  [ "$(q ".jobs.\"${j}\" | has(\"continue-on-error\")")" = "false" ] || \
+  [ "$(wf_q ".jobs.\"${j}\" | has(\"continue-on-error\")")" = "false" ] || \
     fail "the ${j} job sets continue-on-error at job level — the run passes even when the job fails, so the guard would not gate"
 done
 for spec in \
   "verification step|.jobs.\"${JOB}\".steps[] | select(.run != null and (.run | test(\"egress-third-party-qualifier-contract.test.sh\")))" \
   "status job's aggregate step|.jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/actions/aggregate-job-checks@\")))"; do
   what="${spec%%|*}"; path="${spec#*|}"
-  [ "$(q "[${path}] | length")" = "1" ] || \
+  [ "$(wf_q "[${path}] | length")" = "1" ] || \
     fail "expected exactly one ${what} in ci.yaml — its failure-masking settings cannot be checked, so an OK here would be vacuous"
   for attr in continue-on-error if shell; do
-    [ "$(q "[${path} | select(has(\"${attr}\"))] | length")" = "0" ] || \
+    [ "$(wf_q "[${path} | select(has(\"${attr}\"))] | length")" = "0" ] || \
       fail "the ${what} sets ${attr} — it could report success without its command failing, so the guard would not gate"
   done
 done
