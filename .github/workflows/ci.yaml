@@ -24,6 +24,7 @@ jobs:
       worktree-cleanup: ${{ steps.filter.outputs.worktree-cleanup }}
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
+      blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
@@ -140,6 +141,11 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/submodule-pin-currency.sh'
               - '.claude/scripts/submodule-pin-currency.test.sh'
+              - '.github/workflows/ci.yaml'
+            blocked-label-blocker-line:
+              - 'AGENTS.md'
+              - '.claude/scripts/blocked-label-blocker-line.sh'
+              - '.claude/scripts/blocked-label-blocker-line.test.sh'
               - '.github/workflows/ci.yaml'
             memory-hygiene:
               - 'AGENTS.md'
@@ -764,6 +770,28 @@ jobs:
       # `pwd -P`, which differs under macOS /private/tmp symlinks.
       - name: Verify the submodule pin currency check
         run: bash .claude/scripts/submodule-pin-currency.test.sh
+
+  test-blocked-label-blocker-line:
+    name: Test blocked-label blocker line
+    needs: changes
+    if: needs.changes.outputs.blocked-label-blocker-line == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hand-built JSON payloads through the --input seam only -- no network and no real issue
+      # touched. Both OSes because the check joins soft-wrapped lines with awk and strips CR,
+      # and BSD and GNU awk/grep differ on exactly that ground.
+      - name: Verify the blocked-label blocker-line check
+        run: bash .claude/scripts/blocked-label-blocker-line.test.sh
 
   test-pipefail-grep-guard:
     name: Test pipefail grep guard
@@ -1482,6 +1510,7 @@ jobs:
       - test-worktree-cleanup
       - test-submodule-init
       - test-submodule-pin-currency
+      - test-blocked-label-blocker-line
       - test-pipefail-grep-guard
       - test-maintainer-preflight
       - test-memory-hygiene
@@ -1535,6 +1564,7 @@ jobs:
             ${{ needs.test-worktree-cleanup.result }}
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
+            ${{ needs.test-blocked-label-blocker-line.result }}
             ${{ needs.test-pipefail-grep-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
