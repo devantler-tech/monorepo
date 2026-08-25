@@ -144,11 +144,11 @@ ok
 #    `devantler-tech` URL would read back as proof of our ownership and exempt itself from the very
 #    gate this entry imposes. *Agent definition locations* already states this for the updater
 #    carve-out; the Egress entry must not contradict it, and an earlier revision of this PR did.
-has 'A skill'"'"'s own `metadata.github-repo` NEVER authorizes this exemption' "${egress}" || \
-  fail "the Egress entry no longer states that a skill's self-attested metadata.github-repo cannot authorize the exemption — a third-party skill declaring a devantler-tech URL could exempt itself from this very gate"
+has 'This exemption does NOT extend to a synced skill'"'"'s upstream at all, because no reviewed source maps a bundled skill to its owner.' "${egress}" || \
+  fail "the Egress entry no longer withholds the exemption from synced skill upstreams — the only skill-to-owner association is the self-attesting metadata.github-repo, so any exemption resting on it is attacker-grantable"
 ok
-has 'Fail closed: treat a synced skill'"'"'s upstream as third-party unless that repository is itself named as a `devantler-tech` repository by the *Portfolio map*' "${egress}" || \
-  fail "the Egress entry no longer fails closed on unestablished skill ownership — an unresolvable upstream could be treated as suite-owned and therefore exempt"
+has 'route a synced skill'"'"'s fix as third-party' "${egress}" || \
+  fail "the Egress entry no longer routes a synced skill's fix as third-party — it would be exempted on an ownership claim no reviewed source establishes"
 ok
 # 6. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
 #    was these two drifting apart, so pinning only the copy would let the original move instead.
@@ -281,17 +281,24 @@ for j in "${JOB}" status; do
   [ "$(wf_q ".jobs.\"${j}\" | has(\"continue-on-error\")")" = "false" ] || \
     fail "the ${j} job sets continue-on-error at job level — the run passes even when the job fails, so the guard would not gate"
 done
-for spec in \
-  "verification step|.jobs.\"${JOB}\".steps[] | select(.run != null and (.run | test(\"egress-third-party-qualifier-contract.test.sh\")))" \
-  "status job's aggregate step|.jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/actions/aggregate-job-checks@\")))"; do
-  what="${spec%%|*}"; path="${spec#*|}"
+# The steps this guard depends on must carry ONLY the keys they legitimately need. A blocklist kept
+# losing: `continue-on-error`, then a step-level `if:`, then `shell:`, then `working-directory:`
+# (which makes the exact `run:` text execute a different file entirely). Each satisfies every other
+# assertion, because the command still matches. Enumerate what is permitted instead.
+check_step_keys() { # check_step_keys <yq-path> <description> <allowed-csv>
+  local path="$1" what="$2" allowed="$3" extra
   [ "$(wf_q "[${path}] | length")" = "1" ] || \
-    fail "expected exactly one ${what} in ci.yaml — its failure-masking settings cannot be checked, so an OK here would be vacuous"
-  for attr in continue-on-error if shell; do
-    [ "$(wf_q "[${path} | select(has(\"${attr}\"))] | length")" = "0" ] || \
-      fail "the ${what} sets ${attr} — it could report success without its command failing, so the guard would not gate"
-  done
-done
+    fail "expected exactly one ${what} in ci.yaml — its settings cannot be checked, so an OK here would be vacuous"
+  extra="$(wf_q "${path} | keys | .[]" | grep -vxF -e "${allowed//,/$'\n'}" || true)"
+  [ -z "${extra}" ] || \
+    fail "the ${what} sets $(printf '%s' "${extra}" | tr '\n' ' ')— only ${allowed} are permitted, because keys such as working-directory:, shell:, env:, if: and continue-on-error: change what runs or whether its failure counts"
+}
+check_step_keys ".jobs.\"${JOB}\".steps[] | select(.run != null and (.run | test(\"egress-third-party-qualifier-contract.test.sh\")))" \
+  "verification step" "name,run"
+check_step_keys ".jobs.changes.steps[] | select(.id == \"filter\")" \
+  "paths-filter producer step" "name,id,uses,with"
+check_step_keys ".jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/actions/aggregate-job-checks@\")))" \
+  "status job's aggregate step" "name,uses,with"
 ok
 [ "${passed}" -eq 12 ] || fail "expected 12 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
