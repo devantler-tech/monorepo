@@ -702,9 +702,14 @@ write_hook_registry() {
 }
 run_surveyor_hook() {
   local payload="$1"
-  printf '%s\n' "${payload}" |
-    CLAUDE_CONFIG_DIR="${hook_config}" GH_TELEMETRY="${GH_TELEMETRY-}" \
-      "${surveyor_hook_resolver}"
+  if [ "${GH_TELEMETRY+x}" = x ]; then
+    printf '%s\n' "${payload}" |
+      CLAUDE_CONFIG_DIR="${hook_config}" GH_TELEMETRY="${GH_TELEMETRY}" \
+        "${surveyor_hook_resolver}"
+  else
+    printf '%s\n' "${payload}" |
+      CLAUDE_CONFIG_DIR="${hook_config}" "${surveyor_hook_resolver}"
+  fi
 }
 
 write_hook_registry "${plugin_root}"
@@ -727,6 +732,21 @@ case "${write_output}" in
 esac
 
 unset GH_TELEMETRY
+telemetry_probe="${hook_tmp}/telemetry-probe.sh"
+# shellcheck disable=SC2016  # fixture must inspect its own child environment
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'cat >/dev/null' \
+  'if [ "${GH_TELEMETRY+x}" = x ]; then printf "set\\n"; else printf "unset\\n"; fi' \
+  > "${telemetry_probe}"
+chmod +x "${telemetry_probe}"
+real_surveyor_hook_resolver="${surveyor_hook_resolver}"
+surveyor_hook_resolver="${telemetry_probe}"
+telemetry_presence="$(run_surveyor_hook '{}')"
+surveyor_hook_resolver="${real_surveyor_hook_resolver}"
+[ "${telemetry_presence}" = unset ] ||
+  fail "consumer surveyor hook test helper synthesizes GH_TELEMETRY when the runtime leaves it absent"
+
 set +e
 telemetry_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
 telemetry_status=$?
@@ -757,6 +777,26 @@ set -e
 case "${tampered_output}" in
   *'sha256 does not match desired state'*) ;;
   *) fail "consumer surveyor hook refused a drifted adapter without an actionable digest reason" ;;
+esac
+
+# The guard can execute the sibling default-branch classifier for one admitted
+# command shape. Verify that transitive executable before any candidate command,
+# even when this particular command would not reach it.
+tampered_classifier_plugin="${hook_tmp}/tampered-classifier-plugin"
+cp -R "${plugin_root}" "${tampered_classifier_plugin}"
+printf '\n# unreviewed drift\n' >> \
+  "${tampered_classifier_plugin}/scripts/classify-default-branch-ci-runs.sh"
+chmod +x "${tampered_classifier_plugin}/scripts/classify-default-branch-ci-runs.sh"
+write_hook_registry "${tampered_classifier_plugin}"
+set +e
+tampered_classifier_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+tampered_classifier_status=$?
+set -e
+[ "${tampered_classifier_status}" -eq 2 ] ||
+  fail "consumer surveyor hook trusted a transitive classifier whose bytes differ from desired state (exit ${tampered_classifier_status})"
+case "${tampered_classifier_output}" in
+  *'scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state'*) ;;
+  *) fail "consumer surveyor hook refused a drifted classifier without an actionable digest reason" ;;
 esac
 
 jq -e '

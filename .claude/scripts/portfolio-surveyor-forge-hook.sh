@@ -76,8 +76,10 @@ verify_asset() {
     die "runtime asset ${relative_path} sha256 does not match desired state"
 }
 
+classifier_relative="scripts/classify-default-branch-ci-runs.sh"
 guard_relative="scripts/forge-readonly-guard.sh"
 adapter_relative="scripts/surveyor-forge-readonly.sh"
+verify_asset "${classifier_relative}"
 verify_asset "${guard_relative}"
 verify_asset "${adapter_relative}"
 
