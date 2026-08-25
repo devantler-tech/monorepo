@@ -1175,6 +1175,21 @@ governs the issue work that follows.) Two rules enforce that:
    remove the `blocked` label and blocker line and resume oldest-first; otherwise update the
    `last-verified` result. A missing, malformed, or merely prose "waiting on upstream" record is
    under-specified for (b) — repair the line and verify it (or unblock) rather than skipping.
+
+   🔴 **The label and the line are not coupled by anything, so CHECK them rather than assuming.** A
+   live claim expires after ~2h, so a wrongly-skipped issue comes back; a **label never expires**,
+   so an issue carrying `blocked` with no re-verifiable record is skipped by every lane, every tick,
+   indefinitely, and nothing revisits it. Measured 2026-08-25: **6 of 25** open blocked-labelled
+   issues carried no conforming record, and **half of those were not blocked at all** — one had been
+   waiting on a dependency that shipped five weeks earlier, another was a `security`+`bug` issue
+   parked 23 days with nothing behind it. Run
+   [`.claude/scripts/blocked-label-blocker-line.sh --org devantler-tech`](.claude/scripts/blocked-label-blocker-line.sh)
+   when a run reaches issue triage; each row it reports as `MISSING` or `MALFORMED` is an issue to
+   repair or unblock, exactly as the sentence above requires. Exit `1` means findings, `2` means
+   UNKNOWN — a failed or timed-out read, never a clean sweep.
+   ⚠️ **Verify before repairing.** Adding a well-formed line to an issue whose dependency has already
+   shipped makes the skip look *more* legitimate on every future tick, which is worse than the
+   missing line was.
    **A "maintainer decision" is NOT a skip reason — don't block yourself on it.** The maintainer does
    **not** want to make issue-level decisions, and a passive "gated / awaiting-maintainer / needs a
    decision" note in a report or memory *never reaches him* — that passive parking **is** the

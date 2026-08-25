@@ -219,7 +219,7 @@ cat >"$TMP/idioms.json" <<'EOF'
  {"repo":"b","number":2,"body":"**Blocker:** maintainer authority - an org admin must set the property | last-verified 2026-08-25: still false"},
  {"repo":"c","number":3,"body":"**Blocker:** crossplane-contrib/provider-upjet-github (a settings resource) | last-verified 2026-08-25: not shipped"},
  {"repo":"d","number":4,"body":"**Blocker:** child #3274 (installation token) | last-verified 2026-08-24: not provisioned"},
- {"repo":"e","number":5,"body":"**Blocker:** codex-provider-quota | last-verified 2026-08-19: still limited"}]
+ {"repo":"e","number":5,"body":"**Blocker:** maintainer authority (an account-scoped provider quota) | last-verified 2026-08-19: still limited"}]
 EOF
 expect_rc "every identifier idiom in live use still CONFORMS" 0 "$TMP/idioms.json"
 
@@ -261,6 +261,63 @@ if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -q 'MISSING'; then
   ok "control: the same page without the flag is evaluated normally"
 else
   bad "control: the same page without the flag is evaluated normally" "rc=$RC; out: ${OUT:0:200}"
+fi
+
+# ------------------------------------------------------------------ 15. prose that LOOKS like an id
+# An earlier revision accepted any hyphenated token as the identifier, so an ordinary compound
+# word satisfied it. This is the reviewer's counterexample and it must stay rejected: there is no
+# syntactic way to separate a deliberate slug from an incidental compound word, which is why the
+# slug form was removed rather than narrowed.
+cat >"$TMP/hyphen-prose.json" <<'EOF'
+[{"repo":"p","number":21,"body":"**Blocker:** waiting on third-party response | last-verified 2026-08-25: no response"}]
+EOF
+expect_rc "hyphenated prose is not an identifier" 1 "$TMP/hyphen-prose.json"
+
+# CONTROL: the same sentence carrying a real identifier must still pass, so the case above is
+# shown to turn on the identifier rather than on the surrounding prose.
+cat >"$TMP/hyphen-prose-ok.json" <<'EOF'
+[{"repo":"p","number":22,"body":"**Blocker:** waiting on third-party response from owner/repo#7 | last-verified 2026-08-25: no response"}]
+EOF
+expect_rc "control: the same prose WITH an identifier conforms" 0 "$TMP/hyphen-prose-ok.json"
+
+# ------------------------------------------------------------------ 16. the date must be a calendar date
+# Digit counting alone accepts 2026-99-99, so a record that cannot represent a real verification
+# date was reported as a clean verdict.
+cat >"$TMP/baddate.json" <<'EOF'
+[{"repo":"p","number":23,"body":"**Blocker:** owner/repo#7 | last-verified 2026-99-99: nope"}]
+EOF
+expect_rc "an impossible date is MALFORMED" 1 "$TMP/baddate.json"
+
+cat >"$TMP/baddate2.json" <<'EOF'
+[{"repo":"p","number":24,"body":"**Blocker:** owner/repo#7 | last-verified 2026-13-01: nope"}]
+EOF
+expect_rc "month 13 is MALFORMED" 1 "$TMP/baddate2.json"
+
+# CONTROL: a boundary date that IS real must still pass, so the range check is not simply
+# rejecting everything.
+cat >"$TMP/gooddate.json" <<'EOF'
+[{"repo":"p","number":25,"body":"**Blocker:** owner/repo#7 | last-verified 2026-12-31: nope"}]
+EOF
+expect_rc "control: a real boundary date conforms" 0 "$TMP/gooddate.json"
+
+# ------------------------------------------------------------------ 17. archived repos are out of scope
+# Archived repositories are outside the active portfolio and their open issues must not be able
+# to fail this check. Assert the qualifier reaches the query, using a gh stub that records argv.
+mkdir -p "$TMP/bin2"
+cat >"$TMP/bin2/gh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${ARGV_LOG:?}"
+cat <<'JSON'
+{"total_count":0,"incomplete_results":false,"items":[]}
+JSON
+EOF
+chmod +x "$TMP/bin2/gh"
+: >"$TMP/argv.log"
+ARGV_LOG="$TMP/argv.log" PATH="$TMP/bin2:$PATH" "$CHECK" --org devantler-tech >/dev/null 2>&1
+if grep -q 'archived:false' "$TMP/argv.log"; then
+  ok "the org query excludes archived repositories"
+else
+  bad "the org query excludes archived repositories" "argv: $(cat "$TMP/argv.log")"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

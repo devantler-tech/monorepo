@@ -97,18 +97,20 @@ esac
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
-# What counts as NAMING a dependency. The contract's own shape is
-# `<owner/repo#N-or-release-id>`, but that grammar alone rejects the idiom actually in use:
-# measured 2026-08-25 across all 22 live blocker lines, 10 of them (45%) name an authority
-# rather than a repository ("maintainer authority - ..."), and one names a bare repository with
-# no issue number. Requiring `owner/repo#N` would therefore report nearly half of the portfolio's
-# correct, live-verified records as malformed -- and a check that fires on correct work is one
-# people learn to ignore, then delete.
+# What counts as NAMING a dependency. The contract's shape is `<owner/repo#N-or-release-id>`,
+# but that grammar alone rejects the idiom actually in use: measured 2026-08-25 across all live
+# blocker lines, 10 of them name an authority ("maintainer authority - ...") rather than a
+# repository, and one names a bare repository path with no issue number. Requiring `owner/repo#N`
+# would report nearly half of the portfolio's correct, live-verified records as malformed, and a
+# check that fires on correct work is one people learn to ignore, then delete.
 #
-# So this rejects what the contract actually calls out -- a "merely prose 'waiting on upstream'
-# record" -- by requiring at least one token that names something: an issue reference, a
-# repository path, the established authority idiom, or a slug-shaped identifier.
-IDENTIFIER_RE='#[0-9]+|maintainer authority|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+|(^|[[:space:]])[A-Za-z0-9]+([._-][A-Za-z0-9]+)+([[:space:]]|$)'
+# These three forms are exhaustive and, unlike a slug pattern, none of them can be satisfied by
+# ordinary prose. An earlier revision also accepted any hyphenated token, which meant
+# `**Blocker:** waiting on third-party response | last-verified ...` CONFORMED because
+# "third-party" looked like an identifier -- precisely the prose-only record this check exists to
+# expose. There is no syntactic way to tell a deliberate slug from an incidental compound word,
+# so the slug form is gone rather than approximated.
+IDENTIFIER_RE='#[0-9]+|maintainer authority|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+'
 
 # ---------------------------------------------------------------- acquire payload
 payload=""
@@ -126,7 +128,7 @@ else
   # actually fetched, so a truncated or rate-limited read is UNKNOWN rather than a short
   # clean-looking list. This is the unfiltered-control discipline applied to our own read.
   raw=""
-  if ! raw="$(gh api "search/issues?q=org:${ORG}+is:issue+state:open+label:blocked&per_page=100" \
+  if ! raw="$(gh api "search/issues?q=org:${ORG}+is:issue+state:open+label:blocked+archived:false&per_page=100" \
     --paginate 2>/dev/null)"; then
     die "forge read failed -- UNKNOWN, never zero"
   fi
@@ -215,7 +217,7 @@ while [ "$i" -lt "$count" ]; do
     [ "$QUIET" = 1 ] || printf 'MISSING    %s#%s\n' "$repo" "$num"
     bad=$((bad + 1))
   elif printf '%s\n' "$logical" |
-    grep -qE '^\*\*Blocker:\*\* .+ \| last-verified [0-9]{4}-[0-9]{2}-[0-9]{2}: .+$' &&
+    grep -qE '^\*\*Blocker:\*\* .+ \| last-verified [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01]): .+$' &&
     printf '%s\n' "${logical%% | last-verified *}" | grep -qE "$IDENTIFIER_RE"; then
     [ "$QUIET" = 1 ] || printf 'CONFORMS   %s#%s\n' "$repo" "$num"
   else
