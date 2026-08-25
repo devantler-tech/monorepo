@@ -76,7 +76,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     -h | --help)
-      sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) usage_die "unknown argument '$1'" ;;
@@ -85,6 +85,15 @@ done
 
 [ -n "$ORG" ] || [ -n "$INPUT" ] || usage_die "either --org or --input is required"
 [ -z "$ORG" ] || [ -z "$INPUT" ] || usage_die "--org and --input are mutually exclusive"
+
+# The org name is interpolated into a search URL, so constrain it to the shape GitHub actually
+# allows rather than trusting the caller. It is operator-supplied rather than issue-derived, but
+# a value that reaches a query unvalidated is the pattern this contract rules out generally, and
+# an unencoded `+`, `&` or space would silently rewrite the query rather than fail.
+case "$ORG" in
+  "") : ;;
+  *[!A-Za-z0-9._-]*) usage_die "--org must match [A-Za-z0-9._-]+ (got '$ORG')" ;;
+esac
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
 

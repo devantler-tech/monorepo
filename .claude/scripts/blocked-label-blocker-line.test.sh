@@ -162,6 +162,16 @@ OUT="$("$CHECK" --org 2>&1)"
 RC=$?
 if [ "$RC" = 2 ]; then ok "--org without a value is UNKNOWN(2)"; else bad "--org without a value is UNKNOWN(2)" "rc=$RC"; fi
 
+# The org name reaches a search URL, so a value outside GitHub's allowed shape is refused rather
+# than interpolated. An unencoded space or `&` would silently rewrite the query instead of failing.
+OUT="$("$CHECK" --org 'foo bar&x' 2>&1)"
+RC=$?
+if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'must match'; then
+  ok "malformed --org is refused"
+else
+  bad "malformed --org is refused" "rc=$RC; out: ${OUT:0:150}"
+fi
+
 # ------------------------------------------------------------------ 11. stdin seam
 OUT="$("$CHECK" --input - <"$TMP/good.json" 2>&1)"
 RC=$?
