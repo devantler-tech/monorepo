@@ -105,12 +105,28 @@ expect_rc "join stops at the blank line" 1 "$TMP/stops.json"
 # raising SIGPIPE; under pipefail the substitution returns 141 and set -e aborts the whole run.
 # It is invisible on small fixtures because a short body fits the pipe buffer, so this case uses
 # a body far larger than it. Exit 141 (or any rc>1) here is the regression.
-python3 - "$TMP/big.json" <<'PY'
-import json, sys
-body = ("filler line that is here only to exceed the pipe buffer\n" * 6000) \
-       + "\n**Blocker:** owner/repo#7 | last-verified 2026-08-01: not shipped\n"
-json.dump([{"repo": "big", "number": 11, "body": body}], open(sys.argv[1], "w"))
-PY
+# AGENTS.md: all scripting here is bash or Go, never Python -- so the oversized body is
+# built with the shell and jq (already a hard dependency) rather than a python3 one-liner.
+i=0
+while [ "$i" -lt 6000 ]; do
+  echo "filler line that is here only to exceed the pipe buffer"
+  i=$((i + 1))
+done >"$TMP/big.txt"
+{
+  echo
+  echo "**Blocker:** owner/repo#7 | last-verified 2026-08-01: not shipped"
+} >>"$TMP/big.txt"
+jq -Rs '[{repo: "big", number: 11, body: .}]' <"$TMP/big.txt" >"$TMP/big.json"
+
+# A fixture that silently failed to build would make the case below pass for the wrong
+# reason -- the regression it guards is only reachable with a body well past the pipe
+# buffer (64 KiB here), so assert the size rather than assume the loop ran.
+big_bytes=$(wc -c <"$TMP/big.txt" | tr -d " ")
+if [ "${big_bytes:-0}" -gt 200000 ]; then
+  ok "oversized fixture built (${big_bytes} bytes)"
+else
+  bad "oversized fixture built" "only ${big_bytes:-0} bytes -- the SIGPIPE case would be vacuous"
+fi
 run "$TMP/big.json"
 if [ "$RC" = 0 ]; then
   ok "large body does not raise SIGPIPE (rc=0)"
