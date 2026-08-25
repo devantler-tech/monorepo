@@ -144,11 +144,11 @@ ok
 #    `devantler-tech` URL would read back as proof of our ownership and exempt itself from the very
 #    gate this entry imposes. *Agent definition locations* already states this for the updater
 #    carve-out; the Egress entry must not contradict it, and an earlier revision of this PR did.
-has 'This exemption does NOT extend to a synced skill'"'"'s upstream at all, because no reviewed source maps a bundled skill to its owner.' "${egress}" || \
-  fail "the Egress entry no longer withholds the exemption from synced skill upstreams — the only skill-to-owner association is the self-attesting metadata.github-repo, so any exemption resting on it is attacker-grantable"
+has 'Ownership comes from the reviewed census in *Agent definition locations*, never from the skill'"'"'s own `metadata.github-repo`' "${egress}" || \
+  fail "the Egress entry no longer routes skill ownership to the reviewed census and away from the self-attesting metadata.github-repo — a third-party skill declaring a devantler-tech URL could exempt itself from this very gate"
 ok
-has 'route a synced skill'"'"'s fix as third-party' "${egress}" || \
-  fail "the Egress entry no longer routes a synced skill's fix as third-party — it would be exempted on an ownership claim no reviewed source establishes"
+has 'A bundled skill the census does not name has no reviewed owner: route its fix as third-party' "${egress}" || \
+  fail "the Egress entry no longer fails closed for a bundled skill the reviewed census does not name — an unnamed skill could be exempted on no reviewed basis at all"
 ok
 # 6. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
 #    was these two drifting apart, so pinning only the copy would let the original move instead.
@@ -214,6 +214,11 @@ present "$(wf_q ".jobs.\"${JOB}\"")" || \
 job_extra="$(wf_q ".jobs.\"${JOB}\" | keys | .[] | select(. != \"name\" and . != \"runs-on\" and . != \"permissions\" and . != \"steps\")")"
 [ -z "${job_extra}" ] || \
   fail "the ${JOB} job sets $(printf '%s' "${job_extra}" | tr '\n' ' ')— only name, runs-on, permissions and steps are permitted, because keys such as if:, needs:, container:, env: and continue-on-error: change whether the guard runs, what it runs in, or whether its failure counts"
+# The aggregate job needs the same treatment: a `container:` on `status` supplies the image its
+# composite action runs in, and the job-key allowlist above covers only this contract's own job.
+status_extra="$(wf_q '.jobs.status | keys | .[] | select(. != "name" and . != "runs-on" and . != "if" and . != "needs" and . != "permissions" and . != "steps")')"
+[ -z "${status_extra}" ] || \
+  fail "the status job sets $(printf '%s' "${status_extra}" | tr '\n' ' ')— only name, runs-on, if, needs, permissions and steps are permitted, because keys such as container:, env: and continue-on-error: change what the aggregate runs in or whether its failure counts"
 # An allowlisted KEY still says nothing about its VALUE — the same gap review found in the wiring
 # queries. `runs-on` may name a self-hosted runner that supplies a no-op `bash` or `yq`, and
 # `persist-credentials: true` leaves the checkout token in git config for the PR-head script that runs
