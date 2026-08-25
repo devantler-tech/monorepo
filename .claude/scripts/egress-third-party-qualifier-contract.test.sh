@@ -326,13 +326,14 @@ for scope in '.env' ".jobs.\"${JOB}\".env" ".jobs.\"${JOB}\".steps[].env"; do
 done
 
 
-# (b3) no INHERITED shell override, and no injected step. A workflow- or job-level
-# `defaults.run.shell` of `bash {0} || true` applies to the verification step without any step-level
-# `shell:`, and a step inserted after Checkout can overwrite the script so the exact command runs a
-# replacement that checks nothing. Both leave every other assertion satisfied.
-for path in ".defaults.run.shell" ".jobs.\"${JOB}\".defaults.run.shell"; do
-  [ "$(wf_q "[${path}] | map(select(. != null)) | length")" = "0" ] || \
-    fail "a defaults.run.shell is set at ${path} — it is inherited by the verification step and a template such as 'bash {0} || true' converts every contract failure to success"
+# NO `defaults` may be inherited by the verification step, at either scope. These arrived one key at a
+# time — `defaults.run.shell` (a `bash {0} || true` template converts every failure to success) and
+# then `defaults.run.working-directory` (the exact `run:` text executes a different file entirely) —
+# and `defaults.run` has no key that is safe to inherit here. Neither scope declares any today, so
+# require exactly that rather than blocklisting the keys we happen to have thought of.
+for scope in '.defaults' ".jobs.\"${JOB}\".defaults"; do
+  [ "$(wf_q "[${scope} | select(. != null)] | length")" = "0" ] || \
+    fail "a defaults block is set at ${scope} — it is inherited by the verification step, where run.shell converts a failure to success and run.working-directory makes the exact command execute a different file"
 done
 [ "$(wf_q ".jobs.\"${JOB}\".steps | length")" = "2" ] || \
   fail "the ${JOB} job does not have exactly two steps (checkout, verify) — an injected step can overwrite the script so the exact command runs a replacement that checks nothing"
