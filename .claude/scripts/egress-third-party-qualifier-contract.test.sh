@@ -253,12 +253,12 @@ grep -Fqx -- '    if: always()' <<< "${status_block}" || \
 # The aggregate's own action step must be able to fail too: with continue-on-error it can report a
 # failed dependency while the required status job still succeeds. Reproduced.
 aggregate_step="$(awk '
-  /^      - / { if (has_uses) { printf "%s", step; exit } step = ""; has_uses = 0 }
-  { step = step $0 "\n"; if ($0 ~ /^        uses:/) has_uses = 1 }
-  END { if (has_uses) printf "%s", step }
+  /^      - / { if (has_agg) { printf "%s", step; exit } step = ""; has_agg = 0 }
+  { step = step $0 "\n"; if ($0 ~ /^        uses: devantler-tech\/actions\/aggregate-job-checks@/) has_agg = 1 }
+  END { if (has_agg) printf "%s", step }
 ' <<< "${status_block}")"
 [ -n "${aggregate_step}" ] || \
-  fail "the status job has no action step — its result cannot gate, so an OK here would be vacuous"
+  fail "the status job has no devantler-tech/actions/aggregate-job-checks step — nothing evaluates the dependency results, so this job's entry in them would gate nothing"
 step_can_fail "${aggregate_step}" "status job's aggregate step"
 
 # The output expression is only meaningful while the step that PRODUCES it exists under that id.
