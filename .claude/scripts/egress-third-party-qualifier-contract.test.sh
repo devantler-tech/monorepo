@@ -144,8 +144,11 @@ ok
 #    `devantler-tech` URL would read back as proof of our ownership and exempt itself from the very
 #    gate this entry imposes. *Agent definition locations* already states this for the updater
 #    carve-out; the Egress entry must not contradict it, and an earlier revision of this PR did.
-has 'Authorization is the reviewed [`.claude/skill-ownership-allowlist.tsv`](.claude/skill-ownership-allowlist.tsv), never the skill'"'"'s own `metadata.github-repo`' "${egress}" || \
-  fail "the Egress entry no longer routes skill ownership to the reviewed allowlist and away from the self-attesting metadata.github-repo — a third-party skill declaring a devantler-tech URL could exempt itself from this very gate"
+has 'A skill'"'"'s own `metadata.github-repo` NEVER authorizes this exemption' "${egress}" || \
+  fail "the Egress entry no longer states that a skill's self-attested metadata.github-repo cannot authorize the exemption — a third-party skill declaring a devantler-tech URL could exempt itself from this very gate"
+ok
+has 'Fail closed: treat a synced skill'"'"'s upstream as third-party unless that repository is itself named as a `devantler-tech` repository by the *Portfolio map*' "${egress}" || \
+  fail "the Egress entry no longer fails closed on unestablished skill ownership — an unresolvable upstream could be treated as suite-owned and therefore exempt"
 ok
 # 6. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
 #    was these two drifting apart, so pinning only the copy would let the original move instead.
@@ -221,6 +224,17 @@ grep -Fqx -- 'bash .claude/scripts/egress-third-party-qualifier-contract.test.sh
 [ "$(q "[.jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\"))) | select(.with != null and (.with | has(\"ref\")))] | length")" = "0" ] || \
   fail "the ${JOB} job's checkout pins a ref — it would validate that ref instead of this pull request's head, so a PR weakening the contract would pass against the unchanged default branch"
 
+# (b3) no INHERITED shell override, and no injected step. A workflow- or job-level
+# `defaults.run.shell` of `bash {0} || true` applies to the verification step without any step-level
+# `shell:`, and a step inserted after Checkout can overwrite the script so the exact command runs a
+# replacement that checks nothing. Both leave every other assertion satisfied.
+for path in ".defaults.run.shell" ".jobs.\"${JOB}\".defaults.run.shell"; do
+  [ "$(q "[${path}] | map(select(. != null)) | length")" = "0" ] || \
+    fail "a defaults.run.shell is set at ${path} — it is inherited by the verification step and a template such as 'bash {0} || true' converts every contract failure to success"
+done
+[ "$(q ".jobs.\"${JOB}\".steps | length")" = "2" ] || \
+  fail "the ${JOB} job does not have exactly two steps (checkout, verify) — an injected step can overwrite the script so the exact command runs a replacement that checks nothing"
+
 # (c) the aggregate must depend on this job, actually evaluate its dependencies, and receive this
 #     job's result UNTRANSFORMED. `needs.<job>.result == 'failure' && 'success' || needs.<job>.result`
 #     contains the reference while handing the action `success` whenever the contract fails.
@@ -257,5 +271,5 @@ for spec in \
   done
 done
 ok
-[ "${passed}" -eq 11 ] || fail "expected 11 assertions, ran ${passed}"
+[ "${passed}" -eq 12 ] || fail "expected 12 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
