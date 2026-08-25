@@ -133,7 +133,19 @@ has '`devantler-tech` repos are exempt — open drafts/issues there autonomously
 ok
 
 
-# ── 8. THIS JOB'S OWN CI WIRING — a guard that does not gate is not a guard ──────────────────────────
+# 8. The CANONICAL section must still impose BOTH gates. Assertions 6 and 7 pin its vocabulary and its
+#    exemption, but not the requirements themselves — so the source could be rewritten to allow
+#    autonomous external artifacts while still saying "Third-party upstream repos" and naming the
+#    devantler-tech exemption, leaving the Egress copy contradicting it and this guard, whose whole
+#    purpose is pinning the two together, green. Reproduced before this assertion existed.
+has 'Do not even inspect an external repository until the maintainer confirms' "${conventions}" || \
+  fail "*GitHub artifact conventions* no longer requires the professional-work boundary before inspecting an external repository"
+ok
+has '**never autonomously open an issue or PR** — get explicit approval via the ask tool first' "${conventions}" || \
+  fail "*GitHub artifact conventions* no longer requires per-artifact approval before opening an external issue or PR"
+ok
+
+# ── 10. THIS JOB'S OWN CI WIRING — a guard that does not gate is not a guard ──────────────────────────
 # Wiring a contract test into `ci.yaml` takes FIVE edits. Drop the `changes`-job output and the `if:`
 # is never true, so the job reports `skipping` on every run while passing locally. Drop either the
 # `status` job's `needs:` or its `job-results:` entry and the job still RUNS and still prints OK —
@@ -150,7 +162,9 @@ for wiring in \
   '      egress-third-party-qualifier-contract: ${{ steps.filter.outputs.egress-third-party-qualifier-contract }}|changes-job outputs declaration (its absence makes the job skip silently)' \
   '  test-egress-third-party-qualifier-contract:|job definition' \
   '      - test-egress-third-party-qualifier-contract|status job needs: entry (its absence stops the job gating the merge)' \
-  '            ${{ needs.test-egress-third-party-qualifier-contract.result }}|status job job-results entry'; do
+  '            ${{ needs.test-egress-third-party-qualifier-contract.result }}|status job job-results entry' \
+  "    if: needs.changes.outputs.egress-third-party-qualifier-contract == 'true'|job if: condition (an 'if: false' leaves the aggregate green-by-skip while the guard never runs)" \
+  '        run: bash .claude/scripts/egress-third-party-qualifier-contract.test.sh|job run: command (a replaced command would execute something else entirely)'; do
   needle="${wiring%%|*}"; what="${wiring#*|}"
   grep -Fqx -- "${needle}" "${workflow}" || \
     fail "ci.yaml is missing this job's ${what} — the guard would not gate"
@@ -165,5 +179,5 @@ for trigger in \
 done
 ok
 
-[ "${passed}" -eq 8 ] || fail "expected 8 assertions, ran ${passed}"
+[ "${passed}" -eq 10 ] || fail "expected 10 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
