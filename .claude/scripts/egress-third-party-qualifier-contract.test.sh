@@ -101,7 +101,16 @@ has '**A `devantler-tech` repository is never that case**' "${egress}" || \
   fail "the Egress allow-list does not contiguously state that a devantler-tech repository is never the gated case"
 ok
 
-# 3. PRESERVATION — both gates must sit inside ONE CONTIGUOUS affirmative clause.
+# 3. The POSITIVE destination must exist. Everything else here pins that a `devantler-tech` repo is
+#    not the GATED case — but "not third-party" adds no destination of its own, and this section fails
+#    closed. Delete the affirmative entry and every suite-owned issue, PR, comment, review and push
+#    becomes un-sendable: the exact operational failure this guard exists to prevent, arrived at from
+#    the opposite direction. Reproduced before this assertion existed.
+has 'Outbound content goes only to: `devantler-tech` GitHub artifacts (issues, PRs, comments, reviews, pushes)' "${egress}" || \
+  fail "the Egress allow-list no longer names `devantler-tech` GitHub artifacts as a permitted destination — a fail-closed list without it forbids all suite-owned output"
+ok
+
+# 4. PRESERVATION — both gates must sit inside ONE CONTIGUOUS affirmative clause.
 has 'only once both its gates are cleared** — the professional-work boundary and the explicit per-artifact approval' "${egress}" || \
   fail "the third-party gate's two requirements are no longer bound inside one contiguous affirmative clause"
 ok
@@ -214,10 +223,9 @@ grep -Fqx -- '    if: always()' <<< "${status_block}" || \
 # steps.filter.outputs.* then reads an absent output from Checkout, this job is skipped, and the
 # aggregate accepts the skip. Reproduced. Extract the step that carries the id, then check its action.
 producer_step="$(awk '
-  /^      - / { step = ""; has_id = 0 }
+  /^      - / { if (has_id) { printf "%s", step; exit } step = ""; has_id = 0 }
   { step = step $0 "\n"; if ($0 == "        id: filter") has_id = 1 }
-  /^      - / { next }
-  has_id && /dorny\/paths-filter@/ { print step; exit }
+  END { if (has_id) printf "%s", step }
 ' <<< "${changes_block}")"
 grep -qF -- 'dorny/paths-filter@' <<< "${producer_step}" || \
   fail "no single step in the changes job carries BOTH 'id: filter' and the dorny/paths-filter action — steps.filter.outputs.* would read an absent output and this job would skip silently"
@@ -239,11 +247,15 @@ done
 # never file-wide. `- 'AGENTS.md'` appears under 28 other filters, so a whole-file `grep -Fqx` passes
 # even after the entry is deleted from THIS filter, leaving an AGENTS.md-only edit to skip the guard
 # entirely. Reproduced before this scoping existed.
+# Sourced from the PRODUCER STEP, not the workflow. Moving this filter to a second dorny/paths-filter
+# step under a different id leaves it present in the file while
+# steps.filter.outputs.egress-third-party-qualifier-contract is absent, so this job is skipped and the
+# aggregate accepts the skip. Reproduced. The trigger must be produced by the step actually consumed.
 filter_block="$(awk '
   /^            egress-third-party-qualifier-contract:$/ { f = 1; next }
   f && /^            [A-Za-z0-9_-]+:[[:space:]]*$/ { f = 0 }
   f { print }
-' "${workflow}")"
+' <<< "${producer_step}")"
 [ -n "${filter_block}" ] || \
   fail "ci.yaml has no paths-filter block for this job — its triggers cannot be verified, so an OK here would be vacuous"
 for trigger in \
@@ -255,5 +267,5 @@ for trigger in \
 done
 ok
 
-[ "${passed}" -eq 10 ] || fail "expected 10 assertions, ran ${passed}"
+[ "${passed}" -eq 11 ] || fail "expected 11 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
