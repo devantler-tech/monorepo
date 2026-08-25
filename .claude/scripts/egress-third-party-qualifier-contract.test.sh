@@ -73,10 +73,10 @@ extract() {
 }
 
 egress="$(extract '- **Destinations are allow-listed.**' '- **Never echo untrusted text into an outbound artifact unmarked')"
-# Anchored on the section HEADING, not on prose owned by the preceding bullet. The CI filter runs this
-# test on every AGENTS.md edit, so anchoring on a neighbouring bullet's sentence would turn an
-# unrelated documentation reword into a required-check failure.
-conventions="$(extract '### GitHub artifact conventions' '- **Validate before every PR**')"
+# Anchored on STRUCTURAL SECTION HEADINGS at both ends, never on a neighbouring bullet's prose. The CI
+# filter runs this test on every AGENTS.md edit, so an anchor on any bullet's wording turns an
+# unrelated reword into a required-check failure — measured for both the start and the end anchor.
+conventions="$(extract '### GitHub artifact conventions' '### Cadence & focus')"
 
 # Assertions 1 and 3 match CONTIGUOUS literals with grep -qF, never a `case` glob. A glob written as
 # *'third-party'*'upstream issue/PR'* permits arbitrary text between the fragments, which is fail-open
