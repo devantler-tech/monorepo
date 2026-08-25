@@ -22,6 +22,18 @@
 # Assertion 4 pins the two sections' vocabulary together, because drifting apart is the defect class
 # itself — the canonical section was always right and the pointer-site copy silently was not.
 #
+# Three hardenings came from review (Codex, 2026-08-25) and each closed a real hole:
+#   * assertions 3 searched the section for the two gate phrases INDEPENDENTLY, so an edit reading
+#     "per-artifact approval is no longer required" left both substrings present and the guard green
+#     while the invariant was gone. It now matches the affirmative clause that GRANTS the destination.
+#     Proven differentially: with that clause negated, the previous revision of this test PASSES and
+#     this one fails.
+#   * assertion 4 exists because the first draft of the prose exempted "the skills repositories" —
+#     but a synced skill's upstream is frequently third party (`find-skills` is `vercel-labs/skills`),
+#     so that phrasing would have exempted a third-party owner from the very gate this entry imposes.
+#   * the conventions extraction anchored on prose owned by the PRECEDING bullet, so rewording an
+#     unrelated PR-body sentence would have reddened a required check on every AGENTS.md edit.
+#
 # Assertions are scoped to their section, not the whole file: asserting against the whole
 # constitution is a scope hole, because an unrelated passage carrying the phrase would satisfy the
 # check while the real passage stayed wrong.
@@ -61,7 +73,10 @@ extract() {
 }
 
 egress="$(extract '- **Destinations are allow-listed.**' '- **Never echo untrusted text into an outbound artifact unmarked')"
-conventions="$(extract '**edits** too, not just creation.' '- **Validate before every PR**')"
+# Anchored on the section HEADING, not on prose owned by the preceding bullet. The CI filter runs this
+# test on every AGENTS.md edit, so anchoring on a neighbouring bullet's sentence would turn an
+# unrelated documentation reword into a required-check failure.
+conventions="$(extract '### GitHub artifact conventions' '- **Validate before every PR**')"
 
 # 1. The gated entry must name THIRD-PARTY. A bare "upstream issue/PR" is the collision: the contract
 #    calls `agent-plugins` an upstream too, so the unqualified noun reads as covering it.
@@ -71,27 +86,32 @@ case "${egress}" in
 esac
 
 # 2. The section must resolve the overlap explicitly, or a later reader re-derives the same doubt from
-#    *Definition routing* and stands down again. Naming the exemption at the point of use is what makes
-#    the fail-closed rule safe to follow literally.
+#    *Definition routing* and stands down again.
 case "${egress}" in
   *'devantler-tech'*'never that case'*) ok ;;
   *) fail "the Egress allow-list does not state that a devantler-tech repository is never the gated case" ;;
 esac
 
-# 3. PRESERVATION — the third-party gate must still require BOTH gates. This is the assertion that
-#    proves this change disambiguated rather than weakened; if a future edit drops either gate to
-#    "simplify" the entry, this fails.
+# 3. PRESERVATION — both gates must sit inside ONE AFFIRMATIVE CLAUSE. Searching the section for the
+#    two phrases independently is a fail-open: an edit reading "per-artifact approval is no longer
+#    required" leaves both substrings present, so the guard stays green while the invariant it claims
+#    to protect is gone. Matching the clause that GRANTS the destination is what makes this real.
 case "${egress}" in
-  *'professional-work boundary'*) ok ;;
-  *) fail "the Egress allow-list no longer requires the professional-work boundary for third-party artifacts" ;;
-esac
-case "${egress}" in
-  *'per-artifact approval'*) ok ;;
-  *) fail "the Egress allow-list no longer requires per-artifact approval for third-party artifacts" ;;
+  *'only once both its gates are cleared'*'professional-work'*'per-artifact approval'*) ok ;;
+  *) fail "the third-party gate's two requirements are no longer bound inside the affirmative clause that grants the destination" ;;
 esac
 
-# 4. VOCABULARY PIN — the canonical section must keep the wording the Egress entry now mirrors. The
-#    defect was these two drifting apart, so pinning only the copy would let the original move instead.
+# 4. The exemption must follow the devantler-tech OWNER, never the word "upstream". *Definition
+#    routing* calls a synced skill's repository an upstream too, and those are frequently third party
+#    (`find-skills` is owned by `vercel-labs/skills`) — so an exemption phrased as "the skills
+#    repositories" would exempt a third-party owner from the gate this very entry imposes.
+case "${egress}" in
+  *'follows the `devantler-tech` owner'*) ok ;;
+  *) fail "the Egress entry no longer ties the exemption to the devantler-tech OWNER, so a third-party skill upstream could read as exempt" ;;
+esac
+
+# 5. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
+#    was these two drifting apart, so pinning only the copy would let the original move instead.
 case "${conventions}" in
   *'Third-party upstream repos'*) ok ;;
   *) fail "*GitHub artifact conventions* no longer says 'Third-party upstream repos' — the two sections have drifted apart again" ;;
