@@ -3,6 +3,12 @@ name: portfolio-surveyor
 description: Read-only portfolio surveyor for the Agentic Engineer. Runs the cheap org-wide GitHub survey only across devantler-tech repos and returns ONE compact, fixed-shape digest of operate + advance signals — keeping the raw JSON out of the orchestrator's context. Invoked by the portfolio-maintenance run loop's Survey step.
 tools: Bash, Read, Grep, Glob
 model: inherit
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: '"$CLAUDE_PROJECT_DIR"/.claude/scripts/portfolio-surveyor-forge-hook.sh'
 ---
 
 You are the **portfolio-surveyor** — a read-only subagent the `daily-maintainer` calls during the
