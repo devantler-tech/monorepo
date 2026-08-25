@@ -88,6 +88,21 @@ conventions="$(extract '### GitHub artifact conventions' '### Cadence & focus')"
 #     required` — both phrases still present, gate removed, guard still green.
 # `case` is also the wrong primitive here regardless: these literals contain `*`, which a case pattern
 # would interpret as a wildcard rather than matching.
+# A step can satisfy every connectivity assertion and still not be able to fail. Three constructs do
+# it, each found separately by review: `continue-on-error` (step reports success), a step-level `if:`
+# (command never runs), and a `shell:` override such as `bash {0} || true` (command runs, failure
+# swallowed). Any step this guard depends on must be free of all three, so the check is factored here
+# rather than repeated — the previous rounds fixed one step at a time and the next step stayed open.
+step_can_fail() { # step_can_fail <step-text> <description>
+  local step="$1" what="$2"
+  grep -qE '^        continue-on-error:' <<< "${step}" && \
+    fail "the ${what} declares continue-on-error — it would report success whatever its command returns, so the guard would not gate"
+  grep -qE '^        if:' <<< "${step}" && \
+    fail "the ${what} carries a step-level 'if:' — it could be skipped while the job and the required aggregate stay green"
+  grep -qE '^        shell:' <<< "${step}" && \
+    fail "the ${what} overrides 'shell:' — a wrapper such as 'bash {0} || true' converts its failure to success, so the guard would not gate"
+  return 0
+}
 has() { grep -qF -- "$1" <<< "${2}"; }
 
 # 1. The qualifier must be bound to the gated entry ITSELF, contiguously.
@@ -210,10 +225,7 @@ verify_step="$(awk '
 ' <<< "${job_block}")"
 [ -n "${verify_step}" ] || \
   fail "no step in this job runs the contract script — the guard would not gate"
-grep -qE '^        if:' <<< "${verify_step}" && \
-  fail "the verification step carries a step-level 'if:' — it could be skipped while the job and the required aggregate stay green"
-grep -qE '^        shell:' <<< "${verify_step}" && \
-  fail "the verification step overrides 'shell:' — a wrapper such as 'bash {0} || true' runs the command and converts its failure to success, so the guard would not gate"
+step_can_fail "${verify_step}" "verification step"
 ok
 
 # A step marked continue-on-error reports success whatever its command returns, so a later contract
@@ -238,6 +250,16 @@ done
 # the required job is skipped, evaluates nothing, and the two entries asserted above gate nothing.
 grep -Fqx -- '    if: always()' <<< "${status_block}" || \
   fail "the status job is not 'if: always()' — a skipped aggregate evaluates no failing dependency, so this job's entries in it would gate nothing"
+# The aggregate's own action step must be able to fail too: with continue-on-error it can report a
+# failed dependency while the required status job still succeeds. Reproduced.
+aggregate_step="$(awk '
+  /^      - / { if (has_uses) { printf "%s", step; exit } step = ""; has_uses = 0 }
+  { step = step $0 "\n"; if ($0 ~ /^        uses:/) has_uses = 1 }
+  END { if (has_uses) printf "%s", step }
+' <<< "${status_block}")"
+[ -n "${aggregate_step}" ] || \
+  fail "the status job has no action step — its result cannot gate, so an OK here would be vacuous"
+step_can_fail "${aggregate_step}" "status job's aggregate step"
 
 # The output expression is only meaningful while the step that PRODUCES it exists under that id.
 # Renaming `id: filter` makes every steps.filter.outputs.* reference resolve empty, so this job is
@@ -253,6 +275,7 @@ producer_step="$(awk '
 ' <<< "${changes_block}")"
 grep -qE '^        uses: dorny/paths-filter@' <<< "${producer_step}" || \
   fail "no single step in the changes job carries BOTH 'id: filter' and the dorny/paths-filter action — steps.filter.outputs.* would read an absent output and this job would skip silently"
+step_can_fail "${producer_step}" "paths-filter producer step"
 
 grep -Fqx -- '      egress-third-party-qualifier-contract: ${{ steps.filter.outputs.egress-third-party-qualifier-contract }}' <<< "${changes_block}" || \
   fail "the changes job is missing this job's outputs declaration — needs.changes.outputs.* would be empty and the job would skip silently"
