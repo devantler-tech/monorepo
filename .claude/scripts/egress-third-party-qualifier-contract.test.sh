@@ -209,10 +209,18 @@ grep -Fqx -- '    if: always()' <<< "${status_block}" || \
 # The output expression is only meaningful while the step that PRODUCES it exists under that id.
 # Renaming `id: filter` makes every steps.filter.outputs.* reference resolve empty, so this job is
 # skipped and the path-filtered aggregate accepts the skip. Reproduced.
-grep -Fqx -- '        id: filter' <<< "${changes_block}" || \
-  fail "the changes job has no step with 'id: filter' — steps.filter.outputs.* would resolve empty and this job would skip silently"
-grep -qF -- 'dorny/paths-filter@' <<< "${changes_block}" || \
-  fail "the changes job no longer runs dorny/paths-filter — the outputs this job's condition reads would not be produced"
+# The id and the action must be on the SAME STEP. Asserting each occurs somewhere in the changes job
+# is not enough: moving `id: filter` onto the Checkout step leaves both strings present, while
+# steps.filter.outputs.* then reads an absent output from Checkout, this job is skipped, and the
+# aggregate accepts the skip. Reproduced. Extract the step that carries the id, then check its action.
+producer_step="$(awk '
+  /^      - / { step = ""; has_id = 0 }
+  { step = step $0 "\n"; if ($0 == "        id: filter") has_id = 1 }
+  /^      - / { next }
+  has_id && /dorny\/paths-filter@/ { print step; exit }
+' <<< "${changes_block}")"
+grep -qF -- 'dorny/paths-filter@' <<< "${producer_step}" || \
+  fail "no single step in the changes job carries BOTH 'id: filter' and the dorny/paths-filter action — steps.filter.outputs.* would read an absent output and this job would skip silently"
 
 grep -Fqx -- '      egress-third-party-qualifier-contract: ${{ steps.filter.outputs.egress-third-party-qualifier-contract }}' <<< "${changes_block}" || \
   fail "the changes job is missing this job's outputs declaration — needs.changes.outputs.* would be empty and the job would skip silently"
