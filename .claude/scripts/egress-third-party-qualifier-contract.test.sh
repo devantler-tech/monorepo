@@ -233,12 +233,16 @@ bad_with="$(wf_q ".jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | t
 [ -z "${bad_with}" ] || \
   fail "the ${JOB} job's checkout sets $(printf '%s' "${bad_with}" | tr '\n' ' ')— only persist-credentials is permitted, because keys such as repository: or ref: redirect what the contract script reads"
 
-# BASH_ENV is sourced by the non-interactive runner shell BEFORE the run command, so a checked-in file
-# containing `exit 0` short-circuits the verification with a success. Settable at workflow, job and
-# step level, and invisible to the shell:/if:/continue-on-error checks.
+# NO environment may be injected into this job's execution path, at any scope. Individual variables
+# were arriving one review round at a time — `BASH_ENV` (bash sources it before the `run:` command, so
+# a checked-in `exit 0` passes having checked nothing) and then `PATH` (prepend a directory holding a
+# checked-in `bash` and the exact command invokes that no-op instead) — and `SHELLOPTS`, `IFS` and
+# `GIT_*` would have followed. None is visible to the shell:/if:/continue-on-error checks, because the
+# command still matches exactly. All three scopes carry no `env` today, so require exactly that rather
+# than blocklisting the variables we happen to have thought of.
 for scope in '.env' ".jobs.\"${JOB}\".env" ".jobs.\"${JOB}\".steps[].env"; do
-  [ "$(wf_q "[${scope} | select(. != null) | select(has(\"BASH_ENV\"))] | length")" = "0" ] || \
-    fail "BASH_ENV is set at ${scope} — bash sources it before the verification command runs, so a file containing 'exit 0' would pass the contract without checking anything"
+  [ "$(wf_q "[${scope} | select(. != null)] | length")" = "0" ] || \
+    fail "an env is set at ${scope} — variables such as BASH_ENV or PATH redirect what the verification command actually executes while the command itself still matches, so the guard would not gate"
 done
 
 
