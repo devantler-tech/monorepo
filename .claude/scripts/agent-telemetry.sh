@@ -17,9 +17,45 @@
 #                           [--injection-provenance] [--credential-provenance]
 set -uo pipefail
 
-# RFC 7468 label ranges are defined over ASCII code points. Pin the regex locale
-# so BSD and GNU ERE consumers interpret those ranges identically.
-export LC_ALL=C
+# Regex locale. Two constraints pull in opposite directions, and exactly one
+# locale satisfies both:
+#
+#   * The RFC 7468 label class below is spelled as ASCII code-point RANGES
+#     (`[!-,.-`{-~ ]`). A UTF-8 COLLATION locale rejects those outright — BSD
+#     grep exits `invalid character range` and every private-key leg stops
+#     matching — so the locale must be pinned rather than inherited.
+#   * A pin to plain `C` narrows every later `[[:space:]]` to the six ASCII
+#     whitespace characters. The generic credential detector and redact() both
+#     depend on that class, so under `C` a value introduced by Unicode
+#     whitespace (`secret=<U+2003>"..."`) is matched by NEITHER leg: `["]?`
+#     cannot consume the U+2003 lead byte, the value run stops after three
+#     bytes, and the secret is emitted VERBATIM while the scan reports clean.
+#     That is the under-mask direction this file forbids (monorepo#3051).
+#
+# C.UTF-8 is the intersection: ASCII range semantics with Unicode classes.
+export LC_ALL=C.UTF-8
+
+# VERIFY the pin rather than assume it. An unavailable locale degrades silently
+# to C, which is precisely the failing case above — so an unchecked pin is how
+# the previous one shipped a leak. A detector that cannot guarantee its own
+# matching semantics must refuse to run rather than report "clean"; both probes
+# are self-contained and cost two greps at startup.
+verify_regex_locale() {
+  local em
+  em=$(printf '\xe2\x80\x83')   # U+2003 EM SPACE, as bytes: source stays printable
+  # 1. ASCII code-point ranges must COMPILE and match. Fails under a UTF-8
+  #    collation locale, where the range endpoints are collation-ordered.
+  printf 'AZ.+_\n' | grep -qE -e '^[!-,.-`{-~ ]+$' 2>/dev/null || return 1
+  # 2. [[:space:]] must remain Unicode-aware. Fails under plain C.
+  printf 'a%sb\n' "$em" | grep -qE 'a[[:space:]]b' 2>/dev/null || return 2
+  return 0
+}
+verify_regex_locale
+case $? in
+  0) : ;;
+  1) printf '%s\n' "agent-telemetry: FATAL: locale '$LC_ALL' rejects ASCII code-point ranges, so private-key detection cannot work. Install a C.UTF-8 locale." >&2; exit 2 ;;
+  2) printf '%s\n' "agent-telemetry: FATAL: locale '$LC_ALL' is not available (it degraded to C), so [[:space:]] is ASCII-only and credentials separated by Unicode whitespace would be reported clean. Install a C.UTF-8 locale." >&2; exit 2 ;;
+esac
 
 SINCE_DAYS=1
 MAX_FILES=400

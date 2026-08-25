@@ -834,6 +834,23 @@ parity_case "rfc7468_apostrophe" \
 parity_case "rfc7468_backslash" \
   "$(printf -- 'boom -----%s FOO\134BAR PRIVATE KEY----- SECRETBACKSLASHLABEL' 'BEGIN')" "SECRETBACKSLASHLABEL"
 
+# The RFC 7468 label class above is spelled as ASCII code-point RANGES, which a
+# UTF-8 collation locale rejects outright (`grep: invalid character range`), so
+# the regex locale must be pinned. It must NOT be pinned to plain `C`: that also
+# narrows every later `[[:space:]]`, and the generic credential detector and
+# redactor both depend on it. Under `C` a value separated by Unicode whitespace
+# is matched by neither leg, so a real secret is emitted VERBATIM and reported
+# clean — the under-mask direction this file forbids (monorepo#3051).
+# U+2003 EM SPACE is written as its UTF-8 bytes so the source stays printable
+# and the fixture cannot be silently normalised away by an editor.
+# The QUOTE is load-bearing, and an unquoted fixture passes vacuously: without
+# it the U+2003 bytes are simply not excluded by `[^"...[:space:],}]`, so they
+# count as value characters and the row matches under either locale. With it,
+# `["]?` cannot consume the U+2003 lead byte and the value run stops after three
+# bytes, so the shape is missed entirely.
+parity_case "generic_unicode_space" \
+  "config secret=$(printf -- '\xe2\x80\x83')\"__GEN__\"" "__GEN__"
+
 # Codex image tools persist rendered images as very large `data:` strings in
 # custom tool outputs. Those strings are encoded binary, not transcript text;
 # scanning their random byte alphabet produces high-signal credential rows that
