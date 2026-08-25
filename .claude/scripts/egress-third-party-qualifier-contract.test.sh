@@ -200,6 +200,14 @@ for wiring in \
     fail "this job's block is missing its ${what} — the guard would not gate"
 done
 
+# A step marked continue-on-error reports success whatever its command returns, so a later contract
+# violation would fail this script while the job — and therefore the required aggregate — stayed
+# green. Reproduced: adding it to the run step left the guard at PASS. Reject it anywhere in this
+# job, since any step of it carrying the flag has the same effect on the job's conclusion.
+grep -q 'continue-on-error' <<< "${job_block}" && \
+  fail "this job declares continue-on-error — its steps could fail while the job and the required aggregate stay green, so the guard would not gate"
+ok
+
 # The aggregate's entries, inside the status job's block.
 for wiring in \
   '      - test-egress-third-party-qualifier-contract|needs: entry (its absence stops the job gating the merge)' \
@@ -227,7 +235,7 @@ producer_step="$(awk '
   { step = step $0 "\n"; if ($0 == "        id: filter") has_id = 1 }
   END { if (has_id) printf "%s", step }
 ' <<< "${changes_block}")"
-grep -qF -- 'dorny/paths-filter@' <<< "${producer_step}" || \
+grep -qE '^        uses: dorny/paths-filter@' <<< "${producer_step}" || \
   fail "no single step in the changes job carries BOTH 'id: filter' and the dorny/paths-filter action — steps.filter.outputs.* would read an absent output and this job would skip silently"
 
 grep -Fqx -- '      egress-third-party-qualifier-contract: ${{ steps.filter.outputs.egress-third-party-qualifier-contract }}' <<< "${changes_block}" || \
@@ -267,5 +275,5 @@ for trigger in \
 done
 ok
 
-[ "${passed}" -eq 11 ] || fail "expected 11 assertions, ran ${passed}"
+[ "${passed}" -eq 12 ] || fail "expected 12 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
