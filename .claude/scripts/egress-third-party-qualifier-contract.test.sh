@@ -224,6 +224,24 @@ runner="$(wf_q ".jobs.\"${JOB}\".\"runs-on\"")"
 persist="$(wf_q ".jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\"))) | .with.\"persist-credentials\"")"
 [ "${persist}" = "false" ] || \
   fail "the ${JOB} job's checkout sets persist-credentials: ${persist} — the token would remain in git config for the PR-head script that runs next, exposing a credential to checked-out code"
+# `permissions` was allowlisted as a key while its CONTENTS were unchecked, so `id-token: write` would
+# let this PR-head bash step mint an OIDC token it has no need for. Pin the mapping, not the key.
+perms="$(wf_q ".jobs.\"${JOB}\".permissions | to_entries | map(.key + \"=\" + (.value|tostring)) | sort | join(\",\")")"
+[ "${perms}" = "contents=read" ] || \
+  fail "the ${JOB} job's permissions are '${perms}', not exactly contents=read — a wider grant such as id-token: write would be available to a step running this pull request's code"
+
+# The event decides what Checkout's default ref IS. Under `pull_request_target` it defaults to the
+# BASE branch, so the no-ref assertion above would hold while the job validated unchanged
+# default-branch files — and that event also runs with a privileged token.
+events="$(wf_q '.on | keys | .[]' | sort | tr '\n' ',')"
+case ",${events}" in
+  *",pull_request_target,"*) fail "the workflow triggers on pull_request_target — Checkout then defaults to the BASE branch, so this guard would validate unchanged default-branch files while a pull request weakens the contract" ;;
+esac
+case ",${events}" in
+  *",pull_request,"*) ;;
+  *) fail "the workflow does not trigger on pull_request (events: ${events%,}) — this guard would not run against pull requests at all" ;;
+esac
+
 
 
 # (b) it must run EXACTLY the contract script: a wrapper such as `… || true` converts every failure to
