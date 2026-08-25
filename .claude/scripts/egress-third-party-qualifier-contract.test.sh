@@ -200,6 +200,20 @@ for wiring in \
     fail "this job's block is missing its ${what} — the guard would not gate"
 done
 
+# The verification STEP itself must be unconditional. `if: false` on that step skips the command while
+# the job still succeeds, so the aggregate stays green with the contract never exercised — the
+# step-level twin of continue-on-error, and it satisfies every other assertion here. Reproduced.
+verify_step="$(awk '
+  /^      - / { if (has_run) { printf "%s", step; exit } step = ""; has_run = 0 }
+  { step = step $0 "\n"; if ($0 == "        run: bash .claude/scripts/egress-third-party-qualifier-contract.test.sh") has_run = 1 }
+  END { if (has_run) printf "%s", step }
+' <<< "${job_block}")"
+[ -n "${verify_step}" ] || \
+  fail "no step in this job runs the contract script — the guard would not gate"
+grep -qE '^        if:' <<< "${verify_step}" && \
+  fail "the verification step carries a step-level 'if:' — it could be skipped while the job and the required aggregate stay green"
+ok
+
 # A step marked continue-on-error reports success whatever its command returns, so a later contract
 # violation would fail this script while the job — and therefore the required aggregate — stayed
 # green. Reproduced: adding it to the run step left the guard at PASS. Reject it anywhere in this
@@ -275,5 +289,5 @@ for trigger in \
 done
 ok
 
-[ "${passed}" -eq 12 ] || fail "expected 12 assertions, ran ${passed}"
+[ "${passed}" -eq 13 ] || fail "expected 13 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
