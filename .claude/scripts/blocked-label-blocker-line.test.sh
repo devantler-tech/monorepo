@@ -203,5 +203,65 @@ else
   bad "--quiet suppresses rows but keeps the verdict" "rc=$RC; out: ${OUT:0:200}"
 fi
 
+# ------------------------------------------------------------------ 13. the identifier must NAME something
+# A well-formed date and reason are not enough: the contract calls a "merely prose 'waiting on
+# upstream' record" under-specified, and such a line would otherwise satisfy every other check.
+cat >"$TMP/prose-dated.json" <<'EOF'
+[{"repo":"p","number":20,"body":"**Blocker:** waiting on upstream | last-verified 2026-08-01: no response"}]
+EOF
+expect_rc "dated prose with no identifier is MALFORMED" 1 "$TMP/prose-dated.json"
+
+# ...while every identifier idiom actually in use must still pass. Measured across all 22 live
+# blocker lines: 10 name an authority, 8 an owner/repo#N, and the rest a bare repo path, a bare
+# issue reference, or a slug. A rule that rejected any of these would fire on correct work.
+cat >"$TMP/idioms.json" <<'EOF'
+[{"repo":"a","number":1,"body":"**Blocker:** loft-sh/vcluster#3805 | last-verified 2026-08-25: not shipped"},
+ {"repo":"b","number":2,"body":"**Blocker:** maintainer authority - an org admin must set the property | last-verified 2026-08-25: still false"},
+ {"repo":"c","number":3,"body":"**Blocker:** crossplane-contrib/provider-upjet-github (a settings resource) | last-verified 2026-08-25: not shipped"},
+ {"repo":"d","number":4,"body":"**Blocker:** child #3274 (installation token) | last-verified 2026-08-24: not provisioned"},
+ {"repo":"e","number":5,"body":"**Blocker:** codex-provider-quota | last-verified 2026-08-19: still limited"}]
+EOF
+expect_rc "every identifier idiom in live use still CONFORMS" 0 "$TMP/idioms.json"
+
+# ------------------------------------------------------------------ 14. a timed-out search is UNKNOWN
+# GitHub returns partial results with a MATCHING total_count when a search times out, so the
+# fetched-vs-expected comparison agrees on a truncated set. `incomplete_results` is the only
+# field that separates the two, and reading a truncated sweep as clean is the exact fail-open
+# this check exists to prevent. Mocked `gh` so the case is hermetic.
+mkdir -p "$TMP/bin"
+cat >"$TMP/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+# Emits one search page that is TRUNCATED but internally consistent: total_count equals the
+# number of items returned, so only incomplete_results reveals it.
+cat <<'JSON'
+{"total_count":1,"incomplete_results":true,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"body":"no blocker line"}]}
+JSON
+EOF
+chmod +x "$TMP/bin/gh"
+OUT="$(PATH="$TMP/bin:$PATH" "$CHECK" --org devantler-tech 2>&1)"
+RC=$?
+if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -q 'incomplete_results'; then
+  ok "a timed-out search is UNKNOWN(2), not a clean sweep"
+else
+  bad "a timed-out search is UNKNOWN(2), not a clean sweep" "rc=$RC; out: ${OUT:0:200}"
+fi
+
+# CONTROL: the same mocked page WITHOUT the timeout flag must be evaluated normally, so the
+# case above is proven to turn on incomplete_results rather than on the mock being rejected.
+cat >"$TMP/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+cat <<'JSON'
+{"total_count":1,"incomplete_results":false,"items":[{"repository_url":"https://api.github.com/repos/o/r","number":1,"body":"no blocker line"}]}
+JSON
+EOF
+chmod +x "$TMP/bin/gh"
+OUT="$(PATH="$TMP/bin:$PATH" "$CHECK" --org devantler-tech 2>&1)"
+RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -q 'MISSING'; then
+  ok "control: the same page without the flag is evaluated normally"
+else
+  bad "control: the same page without the flag is evaluated normally" "rc=$RC; out: ${OUT:0:200}"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1

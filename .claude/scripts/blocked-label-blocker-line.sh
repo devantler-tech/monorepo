@@ -97,6 +97,19 @@ esac
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
+# What counts as NAMING a dependency. The contract's own shape is
+# `<owner/repo#N-or-release-id>`, but that grammar alone rejects the idiom actually in use:
+# measured 2026-08-25 across all 22 live blocker lines, 10 of them (45%) name an authority
+# rather than a repository ("maintainer authority - ..."), and one names a bare repository with
+# no issue number. Requiring `owner/repo#N` would therefore report nearly half of the portfolio's
+# correct, live-verified records as malformed -- and a check that fires on correct work is one
+# people learn to ignore, then delete.
+#
+# So this rejects what the contract actually calls out -- a "merely prose 'waiting on upstream'
+# record" -- by requiring at least one token that names something: an issue reference, a
+# repository path, the established authority idiom, or a slug-shaped identifier.
+IDENTIFIER_RE='#[0-9]+|maintainer authority|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+|(^|[[:space:]])[A-Za-z0-9]+([._-][A-Za-z0-9]+)+([[:space:]]|$)'
+
 # ---------------------------------------------------------------- acquire payload
 payload=""
 if [ -n "$INPUT" ]; then
@@ -118,6 +131,13 @@ else
     die "forge read failed -- UNKNOWN, never zero"
   fi
   [ -n "$raw" ] || die "forge read returned nothing -- UNKNOWN, never zero"
+
+  # A timed-out search returns whatever it found so far AND a matching total_count, so the
+  # fetched-vs-expected comparison below AGREES on a truncated set and reports a clean sweep.
+  # `incomplete_results` is the only field that distinguishes the two, so it is checked first.
+  if printf '%s' "$raw" | jq -se 'any(.[]; .incomplete_results == true)' >/dev/null 2>&1; then
+    die "search reported incomplete_results (timed out) -- UNKNOWN, never a clean sweep"
+  fi
 
   expected="$(printf '%s' "$raw" | jq -s 'if length==0 then -1 else .[0].total_count end' 2>/dev/null)" ||
     die "could not read total_count -- UNKNOWN"
@@ -195,7 +215,8 @@ while [ "$i" -lt "$count" ]; do
     [ "$QUIET" = 1 ] || printf 'MISSING    %s#%s\n' "$repo" "$num"
     bad=$((bad + 1))
   elif printf '%s\n' "$logical" |
-    grep -qE '^\*\*Blocker:\*\* .+ \| last-verified [0-9]{4}-[0-9]{2}-[0-9]{2}: .+$'; then
+    grep -qE '^\*\*Blocker:\*\* .+ \| last-verified [0-9]{4}-[0-9]{2}-[0-9]{2}: .+$' &&
+    printf '%s\n' "${logical%% | last-verified *}" | grep -qE "$IDENTIFIER_RE"; then
     [ "$QUIET" = 1 ] || printf 'CONFORMS   %s#%s\n' "$repo" "$num"
   else
     [ "$QUIET" = 1 ] || printf 'MALFORMED  %s#%s  >>%s\n' "$repo" "$num" "${logical:0:100}"
