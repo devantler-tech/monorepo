@@ -410,8 +410,14 @@ is_kept() { grep -Fxq "$1" "$keep"; }
 # Cursor/Codex lanes do not use that harness pattern — only apply under namespace=claude.
 is_interactive_slug() {
   [ "$NAMESPACE" = "claude" ] || return 1
-  local last="${1##*-}"
-  [[ "$last" =~ ^[0-9a-f]{6}$ ]]
+  # The harness names every per-session worktree branch `claude/<word>-<word>-<6hex>`
+  # (the maintainer's interactive sessions AND the scheduled routine's own), so that
+  # whole shape stays HANDS-OFF. Match it WHOLE: testing only the trailing segment
+  # also swallowed routine `<area>-<desc>-<6hex>` branches, which could then never be
+  # reaped even with a SHA-matched MERGED PR. Measured on this host 2026-08-25 —
+  # 201 of 1066 local claude/* branches over-exempted, 15 with a merged PR at the
+  # exact head SHA (monorepo#2708).
+  [[ "${1#"$PREFIX"/}" =~ ^[a-z]+-[a-z]+-[0-9a-f]{6}$ ]]
 }
 pr_evidence() { awk -F'\t' -v b="$1" '$1==b{print $2 "\t" $3; exit}' "$prs"; }
 
