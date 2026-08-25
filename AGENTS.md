@@ -3688,11 +3688,10 @@ these are what bound the damage if one ever does. Egress is therefore explicit, 
   fix there is gated exactly like any other third-party artifact. 🔴 **Ownership comes from the
   reviewed census in *Agent definition locations*, never from the skill's own `metadata.github-repo`**
   — that field is **self-attesting**, so a third-party release declaring a `devantler-tech` URL would
-  otherwise exempt itself from the very gate this entry imposes. That census names
-  `agent-improvement/`, `agent-instructions/`, `portfolio-maintenance/`, `product-engineering/` and
-  `self-improvement/` as `devantler-tech/agent-skills`, and `find-skills/` as third-party. It is
-  version-controlled and reviewed, which is what makes it usable here; it is also **dated**, so treat
-  it as the authorization of record and re-verify it when the bundle changes.
+  otherwise exempt itself from the very gate this entry imposes. **Read the census there rather than
+  from a copy** — it is version-controlled and reviewed, which is what makes it usable here, and it is
+  **dated**, so re-verify it when the bundle changes. Restating its contents in this entry would let
+  the two drift silently, with nothing comparing them.
   **A bundled skill the census does not name has no reviewed owner: route its fix as third-party**
   — boundary plus per-artifact approval — until the census or a successor mapping covers it
   ([#3054](https://github.com/devantler-tech/monorepo/issues/3054)).

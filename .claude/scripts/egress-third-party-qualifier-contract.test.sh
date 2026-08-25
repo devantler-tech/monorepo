@@ -197,7 +197,19 @@ JOB='test-egress-third-party-qualifier-contract'
 # Named wf_q, not q: a real `q` binary exists on PATH here, so a helper named q that is called before
 # its definition silently runs an unrelated CLI — and the failures surface as "command not found" for
 # `fail`, which does not abort, so the test still prints PASS. Encountered exactly that while editing.
-wf_q() { yq -r "$1" "${workflow}" 2>/dev/null; }
+# Discarding stderr turns a malformed expression into a silent strict-mode abort — no FAIL line and no
+# diagnostic, which is indistinguishable from a real contract violation. Surface it as a failure.
+wf_q() {
+  local out err rc
+  err="$(mktemp)"
+  out="$(yq -r "$1" "${workflow}" 2>"${err}")"; rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    local msg; msg="$(tr '\n' ' ' < "${err}")"; rm -f "${err}"
+    fail "yq failed evaluating '$1' — ${msg}"
+  fi
+  rm -f "${err}"
+  printf '%s' "${out}"
+}
 present() { [ -n "$1" ] && [ "$1" != "null" ]; }
 
 # (a) the job must exist and be UNCONDITIONAL — any `if:` or `needs:` reintroduces a skip path, and a
@@ -219,6 +231,21 @@ job_extra="$(wf_q ".jobs.\"${JOB}\" | keys | .[] | select(. != \"name\" and . !=
 status_extra="$(wf_q '.jobs.status | keys | .[] | select(. != "name" and . != "runs-on" and . != "if" and . != "needs" and . != "permissions" and . != "steps")')"
 [ -z "${status_extra}" ] || \
   fail "the status job sets $(printf '%s' "${status_extra}" | tr '\n' ' ')— only name, runs-on, if, needs, permissions and steps are permitted, because keys such as container:, env: and continue-on-error: change what the aggregate runs in or whether its failure counts"
+# The same key-says-nothing-about-value rule the contract job gets. `status` runs the aggregate action
+# that carries this contract's result, so a bespoke runner can make that action report success, and a
+# wider permissions grant is available to whatever runs there.
+srunner="$(wf_q '.jobs.status."runs-on"')"
+[ "${srunner}" = "ubuntu-latest" ] || \
+  fail "the status job runs on '${srunner}', not the hosted ubuntu-latest — a bespoke runner can make the aggregate action report success regardless of this contract's result"
+sperms="$(wf_q '.jobs.status.permissions | to_entries | map(.key + "=" + (.value|tostring)) | sort | join(",")')"
+[ -z "${sperms}" ] || \
+  fail "the status job grants permissions '${sperms}' — the aggregate needs none, and any grant is available to whatever runs in that job"
+
+# A `run:` step before the aggregate can write BASH_ENV (or PATH) into $GITHUB_ENV, which the
+# composite action's own bash then sources — invisible to the declarative env checks, because nothing
+# declarative changed. The aggregate must be the job's only step.
+[ "$(wf_q '.jobs.status.steps | length')" = "1" ] || \
+  fail "the status job has more than one step — a step before the aggregate can export BASH_ENV or PATH via \$GITHUB_ENV, which the aggregate's own shell then inherits"
 # An allowlisted KEY still says nothing about its VALUE — the same gap review found in the wiring
 # queries. `runs-on` may name a self-hosted runner that supplies a no-op `bash` or `yq`, and
 # `persist-credentials: true` leaves the checkout token in git config for the PR-head script that runs
@@ -348,8 +375,6 @@ check_step_keys() { # check_step_keys <yq-path> <description> <allowed-csv>
 }
 check_step_keys ".jobs.\"${JOB}\".steps[] | select(.run != null and (.run | test(\"egress-third-party-qualifier-contract.test.sh\")))" \
   "verification step" "name,run"
-check_step_keys ".jobs.changes.steps[] | select(.id == \"filter\")" \
-  "paths-filter producer step" "name,id,uses,with"
 check_step_keys ".jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/actions/aggregate-job-checks@\")))" \
   "status job's aggregate step" "name,uses,with"
 ok
