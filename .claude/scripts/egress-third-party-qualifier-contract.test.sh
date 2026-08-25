@@ -206,10 +206,14 @@ present "$(wf_q ".jobs.\"${JOB}\"")" || \
   fail "ci.yaml has no ${JOB} job — the contract is not checked at all"
 # `present` cannot distinguish an absent key from the literal strings "null" or "" — and GitHub
 # evaluates `if: "null"` and `if: ""` as FALSY, skipping the job. Test key EXISTENCE structurally.
-for attr in if needs continue-on-error; do
-  [ "$(wf_q ".jobs.\"${JOB}\" | has(\"${attr}\")")" = "false" ] || \
-    fail "the ${JOB} job declares ${attr}: $(wf_q ".jobs.\"${JOB}\".\"${attr}\"") — it must stay unconditional and unable to mask failure, or breaking the wiring would skip or excuse the very job that reports it"
-done
+# The job must carry ONLY the keys it needs. A blocklist kept losing here too: `if`/`needs` (a skip
+# path), `continue-on-error` (the run passes though the job failed), `defaults.run.shell` and `env`
+# (redirect what executes), and `container:` — whose image can supply a `bash` that simply returns
+# success while every step and the exact `run:` text stay unchanged. `services`, `strategy` and
+# `uses` would have followed. Enumerate what is permitted.
+job_extra="$(wf_q ".jobs.\"${JOB}\" | keys | .[] | select(. != \"name\" and . != \"runs-on\" and . != \"permissions\" and . != \"steps\")")"
+[ -z "${job_extra}" ] || \
+  fail "the ${JOB} job sets $(printf '%s' "${job_extra}" | tr '\n' ' ')— only name, runs-on, permissions and steps are permitted, because keys such as if:, needs:, container:, env: and continue-on-error: change whether the guard runs, what it runs in, or whether its failure counts"
 
 # (b) it must run EXACTLY the contract script: a wrapper such as `… || true` converts every failure to
 #     success while still containing the filename.
@@ -232,6 +236,21 @@ grep -Fqx -- 'bash .claude/scripts/egress-third-party-qualifier-contract.test.sh
 bad_with="$(wf_q ".jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\"))) | .with | keys | .[] | select(. != \"persist-credentials\")")"
 [ -z "${bad_with}" ] || \
   fail "the ${JOB} job's checkout sets $(printf '%s' "${bad_with}" | tr '\n' ' ')— only persist-credentials is permitted, because keys such as repository: or ref: redirect what the contract script reads"
+# Both validated actions must be pinned to an immutable full commit SHA. `actions/checkout@main`
+# satisfies a repository-prefix test while the action's contents can change after review — which
+# could alter what is checked out or whether a failure gates the merge. This mirrors the repository's
+# own action-pinning requirement.
+for spec in \
+  "checkout|.jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\"))) | .uses" \
+  "aggregate action|.jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/actions/aggregate-job-checks@\"))) | .uses"; do
+  what="${spec%%|*}"; path="${spec#*|}"
+  ref="$(wf_q "${path}")"
+  case "${ref##*@}" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) fail "the ${what} is pinned to '${ref##*@}', not a full commit SHA — a mutable ref can change after review, altering what is checked out or whether a failure gates the merge" ;;
+  esac
+done
+
 
 # NO environment may be injected into this job's execution path, at any scope. Individual variables
 # were arriving one review round at a time — `BASH_ENV` (bash sources it before the `run:` command, so
