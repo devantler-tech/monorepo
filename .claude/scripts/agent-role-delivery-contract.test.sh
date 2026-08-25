@@ -175,6 +175,7 @@ canonical_surveyor="${plugin_agents}/portfolio-surveyor.agent.md"
 canonical_improver="${plugin_agents}/agent-improver.agent.md"
 canonical_ci_classifier="${plugin_scripts}/classify-default-branch-ci-runs.sh"
 canonical_forge_guard="${plugin_scripts}/forge-readonly-guard.sh"
+canonical_surveyor_hook="${plugin_scripts}/surveyor-forge-readonly.sh"
 [ -f "${canonical_surveyor}" ] ||
   fail "pinned plugin does not bundle portfolio-surveyor.agent.md"
 [ -f "${canonical_improver}" ] ||
@@ -189,6 +190,11 @@ if [ ! -f "${canonical_forge_guard}" ] \
   || [ -L "${canonical_forge_guard}" ]; then
   fail "pinned plugin does not bundle the regular executable read-only forge guard"
 fi
+if [ ! -f "${canonical_surveyor_hook}" ] \
+  || [ ! -x "${canonical_surveyor_hook}" ] \
+  || [ -L "${canonical_surveyor_hook}" ]; then
+  fail "pinned plugin does not bundle the regular executable surveyor forge-guard hook adapter"
+fi
 grep -Fq '../scripts/classify-default-branch-ci-runs.sh' "${canonical_surveyor}" ||
   fail "pinned portfolio surveyor does not delegate default-branch CI to the bundled classifier"
 grep -Fq 'refuses partial or capped' "${canonical_surveyor}" ||
@@ -198,7 +204,7 @@ grep -Fq 'manual dispatch, and GitHub-managed dynamic runs' "${canonical_surveyo
 declared_runtime_asset_sha() {
   jq -er --arg path "$1" '
     .spec.source.requiredRuntimeAssets
-    | select(type == "array" and length == 2)
+    | select(type == "array" and length == 3)
     | map(select(
           type == "object"
           and keys == ["executable", "path", "sha256"]
@@ -211,11 +217,12 @@ declared_runtime_asset_sha() {
 }
 for runtime_asset in \
   "scripts/classify-default-branch-ci-runs.sh:${canonical_ci_classifier}" \
-  "scripts/forge-readonly-guard.sh:${canonical_forge_guard}"; do
+  "scripts/forge-readonly-guard.sh:${canonical_forge_guard}" \
+  "scripts/surveyor-forge-readonly.sh:${canonical_surveyor_hook}"; do
   runtime_asset_path="${runtime_asset%%:*}"
   canonical_runtime_asset="${runtime_asset#*:}"
   if ! declared_runtime_asset_sha="$(declared_runtime_asset_sha "${runtime_asset_path}")"; then
-    fail "consumer desired state does not carry exactly two executable path-and-digest surveyor runtime assets including ${runtime_asset_path}"
+    fail "consumer desired state does not carry exactly three executable path-and-digest surveyor runtime assets including ${runtime_asset_path}"
   fi
   [ "${declared_runtime_asset_sha}" = "$(sha256_bytes "${canonical_runtime_asset}")" ] ||
     fail "consumer desired-state ${runtime_asset_path} sha256 does not match the pinned executable bytes"
