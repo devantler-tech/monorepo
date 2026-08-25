@@ -9,8 +9,10 @@
 #   - unrecognised MODE exits non-zero
 #   - dry-run leaves the manifest byte-identical (and still reports would-delete counts)
 #   - apply mode records then deletes
-#   - the HANDS-OFF exemption matches ONLY `<word>-<word>-<6hex>`, so a spent
-#     routine `<area>-<desc>-<6hex>` branch is still reaped (monorepo#2708)
+#   - the HANDS-OFF exemption matches the harness slug shape `<word>-<word>-<6hex>`
+#     WHOLE, so a spent routine branch carrying THREE OR MORE word segments plus a
+#     6-hex suffix is still reaped. A two-segment routine slug is shape-identical to
+#     a harness branch and stays exempt — a pinned, deliberate residual (monorepo#2708)
 # Hermetic: local bare "origin" + stubbed `gh` on PATH. No network.
 set -Eeuo pipefail
 
@@ -576,6 +578,22 @@ manifest="$tmp/manifest-2708b"; : >"$manifest"
 out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
 report "control: interactive <word>-<word>-<6hex> survives identical MERGED evidence (#2708)" \
   "$(git -C "$work" rev-parse --verify --quiet "refs/heads/claude/gracious-wescoff-5b1c60" >/dev/null && echo yes || echo no)" \
+  "rc=$rc out=$out"
+git -C "$work" checkout -q -f main
+
+# RESIDUAL, pinned deliberately: a routine slug with exactly two word segments and a
+# 6-hex suffix is byte-indistinguishable from a harness slug, so it stays exempt. This
+# asserts the known limit rather than a wish — closing it needs branch-name provenance,
+# not shape, and erring toward KEEP is the safe direction (monorepo#2708).
+git -C "$work" checkout -q -f main
+res_sha=$(mk_remote_branch "claude/area-desc-123456")
+git -C "$work" checkout -q main
+: >"$OPEN_HEADS_FILE"
+printf '%s\tMERGED\t%s\n' "claude/area-desc-123456" "$res_sha" >"$PR_EVIDENCE_FILE"
+manifest="$tmp/manifest-2708c"; : >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
+report "residual: a two-segment routine slug is shape-identical to a harness branch and stays exempt (#2708)" \
+  "$(git -C "$work" rev-parse --verify --quiet "refs/heads/claude/area-desc-123456" >/dev/null && echo yes || echo no)" \
   "rc=$rc out=$out"
 git -C "$work" checkout -q -f main
 

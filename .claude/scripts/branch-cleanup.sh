@@ -413,8 +413,10 @@ is_interactive_slug() {
   # The harness names every per-session worktree branch `claude/<word>-<word>-<6hex>`
   # (the maintainer's interactive sessions AND the scheduled routine's own), so that
   # whole shape stays HANDS-OFF. Match it WHOLE: testing only the trailing segment
-  # also swallowed routine `<area>-<desc>-<6hex>` branches, which could then never be
-  # reaped even with a SHA-matched MERGED PR. Measured on this host 2026-08-25 —
+  # also swallowed longer routine `<area>-<desc>-<6hex>` names, which could then never
+  # be reaped even with a SHA-matched MERGED PR. A routine slug that is itself exactly
+  # two words plus a 6-hex suffix stays exempt: it is shape-identical to a harness
+  # branch, and erring toward KEEP is the safe direction. Measured on this host 2026-08-25 —
   # 201 of 1066 local claude/* branches over-exempted, 15 with a merged PR at the
   # exact head SHA (monorepo#2708).
   [[ "${1#"$PREFIX"/}" =~ ^[a-z]+-[a-z]+-[0-9a-f]{6}$ ]]
