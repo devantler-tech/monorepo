@@ -6857,6 +6857,115 @@ else
       "$(grep -E 'occurrences sum to TOTAL|SHRANK' <<<"$CLEAN_OUT" | head -3)"
 fi
 
+
+# ── #2817: the wait-target pass must survive an invalid byte, and a pass that
+#    FAILS must report UNKNOWN rather than a trendable zero ────────────────────
+#
+# Two halves, failing in opposite directions. The locale is pinned to C.UTF-8 so
+# the credential detector's [[:space:]] stays Unicode-aware — but under any
+# multibyte locale awk converts each record to wide characters, so ONE invalid
+# byte anywhere in the corpus raises `towc: multibyte conversion failure`, exits
+# 2, and drops every LATER record. The shell then read empty fields, and empty
+# arithmetic prints `0.00/session` — a clean-looking zero that trends as
+# "busy-waiting solved" rather than "the counter did not run".
+echo
+echo "efficiency: invalid-byte resilience + fail-closed reporting (#2817)"
+
+mkdir -p "$FIX/b2817ctl" "$FIX/b2817bad" "$FIX/b2817nocodex/sessions"
+
+eff2817() { # $1 = corpus dir ; $2 = optional script override
+  CLAUDE_PROJECTS_DIR="$1" CODEX_HOME="$FIX/b2817nocodex" \
+  MONOREPO_DIR="$FIX/monorepo" HOME="$FIX" \
+  bash "${2:-$TARGET}" --since-days 3650 --max-files 50 --section efficiency 2>&1
+}
+
+WAIT_CMD_2817='{"type":"assistant","message":{"content":[{"type":"tool_use","id":"z9","name":"Bash","input":{"command":"sleep 30 && gh pr checks 123"}}]}}'
+
+# CONTROL. Without this row the invalid-byte assertion below would pass equally
+# well if the classifier had simply stopped counting everything.
+printf '%s\n' "$WAIT_CMD_2817" > "$FIX/b2817ctl/s.jsonl"
+OUT=$(eff2817 "$FIX/b2817ctl")
+if grep -qE 'recognised-poll-adjacent \.\.\. 1   \[PRIMARY BUSY-WAIT' <<<"$OUT"; then
+  ok "control: a clean corpus classifies its one foreground busy-wait"
+else
+  bad "control: a clean corpus classifies its one foreground busy-wait" \
+      "$(grep -F 'PRIMARY BUSY-WAIT' <<<"$OUT" | head -1)"
+fi
+
+# The SAME corpus plus an invalid UTF-8 byte in an EARLIER record. Order is
+# load-bearing: awk aborts AT the bad record, so only a byte placed BEFORE the
+# countable command can demonstrate the loss.
+B2817=$(printf '\x92')
+{ printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"z1\",\"name\":\"Bash\",\"input\":{\"command\":\"echo bad${B2817}byte\"}}]}}"
+  printf '%s\n' "$WAIT_CMD_2817"
+} > "$FIX/b2817bad/s.jsonl"
+OUT=$(eff2817 "$FIX/b2817bad")
+if grep -qE 'recognised-poll-adjacent \.\.\. 1   \[PRIMARY BUSY-WAIT' <<<"$OUT"; then
+  ok "an invalid byte no longer aborts the wait-target pass"
+else
+  bad "an invalid byte no longer aborts the wait-target pass" \
+      "$(grep -E 'PRIMARY BUSY-WAIT|towc' <<<"$OUT" | head -2)"
+fi
+nocheck "no multibyte abort is emitted for an invalid byte" "$OUT" "multibyte conversion failure"
+
+# FAIL-CLOSED. Sabotage the pass so it exits non-zero having emitted nothing —
+# the exact signature of the abort above — and require UNKNOWN everywhere a
+# number would otherwise be trended.
+S2817="$FIX/agent-telemetry-2817-abort.sh"
+sed 's/printf "%d %d %d %d %d %d %d %d %d %d %d %d"/exit 3; printf "%d %d %d %d %d %d %d %d %d %d %d %d"/' \
+  "$TARGET" > "$S2817"
+chmod +x "$S2817"
+if [ "$(grep -Fc 'exit 3; printf "%d %d' "$S2817")" -eq 1 ]; then
+  ok "fail-closed ablation rewrote exactly one call site"
+else
+  bad "fail-closed ablation rewrote exactly one call site" "anchor did not match uniquely"
+fi
+OUT=$(eff2817 "$FIX/b2817ctl" "$S2817")
+if grep -qE 'recognised-poll-adjacent \.\.\. UNKNOWN   \[PRIMARY BUSY-WAIT' <<<"$OUT"; then
+  ok "a failed wait-target pass reports UNKNOWN, not a count"
+else
+  bad "a failed wait-target pass reports UNKNOWN, not a count" \
+      "$(grep -F 'PRIMARY BUSY-WAIT' <<<"$OUT" | head -1)"
+fi
+# Scoped to the THREE wait-target rates, deliberately. A blanket ban on
+# "0.00/session" also caught the launch-mode line's `deferred 0.00/session`,
+# which is a REAL measurement from a different counter that the sabotage does not
+# touch — the assertion would have failed over correct output.
+WTRATES=$(grep -E 'recognised-poll metric to trend|remote-only continuity|backgrounded-poller' <<<"$OUT")
+if grep -qE '[0-9]+\.[0-9]+/session' <<<"$WTRATES"; then
+  bad "a failed pass never prints a trendable wait-target rate" "$WTRATES"
+else
+  ok "a failed pass never prints a trendable wait-target rate"
+fi
+check   "a failed pass says so in words"                         "$OUT" "wait-target pass FAILED"
+
+# A pass that exits 0 but emits a SHORT payload is the other half of the same
+# fail-open: `read` fills the missing fields with empty strings, and empty
+# arithmetic prints 0.00 exactly as an abort does. Exit status alone is not a
+# sufficient test, so the field count is checked too.
+S2817B="$FIX/agent-telemetry-2817-short.sh"
+sed 's/printf "%d %d %d %d %d %d %d %d %d %d %d %d", n_tot/printf "%d", n_tot/' "$TARGET" > "$S2817B"
+chmod +x "$S2817B"
+OUT=$(eff2817 "$FIX/b2817ctl" "$S2817B")
+if grep -qE 'recognised-poll-adjacent \.\.\. UNKNOWN   \[PRIMARY BUSY-WAIT' <<<"$OUT"; then
+  ok "a short wait-target payload also reports UNKNOWN"
+else
+  bad "a short wait-target payload also reports UNKNOWN" \
+      "$(grep -F 'PRIMARY BUSY-WAIT' <<<"$OUT" | head -1)"
+fi
+
+# NEGATIVE CONTROL for all three UNKNOWN rows: the UNMUTATED script on the SAME
+# corpus must print real numbers and no UNKNOWN, so none of them can be
+# satisfied by printing UNKNOWN unconditionally.
+OUT=$(eff2817 "$FIX/b2817ctl")
+nocheck "negative control: a healthy pass prints no UNKNOWN estimate" "$OUT" "recognised-poll-adjacent ... UNKNOWN"
+nocheck "negative control: a healthy pass prints no failure banner"   "$OUT" "wait-target pass FAILED"
+if grep -qE 'per-session \(Claude, n=1\): 1\.00/session' <<<"$OUT"; then
+  ok "negative control: a healthy pass still prints its real rate"
+else
+  bad "negative control: a healthy pass still prints its real rate" \
+      "$(grep -F 'metric to trend' <<<"$OUT" | head -1)"
+fi
 echo "──────────────────────────────"
 echo "  passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

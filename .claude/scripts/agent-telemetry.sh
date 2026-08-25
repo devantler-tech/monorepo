@@ -1621,8 +1621,27 @@ commands_in() {
 # reconciling exactly on a 1-day one. Parameterised rather than duplicated —
 # two hand-maintained copies of this stripper is how detector parity broke six
 # times on the redactor.
+# LOCALE, and why this ONE class of awk opts out of the file-wide C.UTF-8 pin
+# (monorepo#2817). The pin at the top of this file is REQUIRED by the credential
+# detector and redact(): under plain `C`, [[:space:]] narrows to ASCII and a
+# secret introduced by Unicode whitespace is emitted verbatim while the scan
+# reports clean. Nothing below weakens that — `main | redact` is a separate
+# pipeline stage that still runs under the pinned locale, and a command-prefix
+# assignment binds only the command it prefixes.
+#
+# But the pin has a cost the detector does not pay: under ANY multibyte locale
+# awk converts each record to wide characters, so ONE invalid byte anywhere in
+# the corpus raises `towc: multibyte conversion failure`, exits 2, and silently
+# drops every LATER record. The transcript corpus is arbitrary captured bytes,
+# so that is a matter of when, not if. Avoiding [[:space:]] does NOT help — the
+# conversion happens for any regex, which was verified before choosing this fix.
+#
+# So the STRUCTURAL passes below — which parse command text for shape and never
+# judge whether something is a secret — run under `C`, where bytes are bytes.
+# The rule for a future edit: a pass that only counts or classifies may take
+# this prefix; a pass that decides what is sensitive may NOT.
 strip_heredocs() {
-  awk -v resetmark="${1:-}" '
+  LC_ALL=C awk -v resetmark="${1:-}" '
     # resetmark is a SET of line-start marker characters, not one string: the
     # wait-target stream carries BOTH a command marker and a transcript
     # separator, and an unterminated heredoc at the end of one transcript would
@@ -2731,7 +2750,7 @@ if want efficiency; then
     # the tagging without a second traversal.
     # A command's first line keeps a \003 marker so the heredoc stripper can
     # reset its state per command; count_sleeps removes it before matching.
-    class_lines() { printf '%s\n' "$TAGGED" | awk -v c="$1" '
+    class_lines() { printf '%s\n' "$TAGGED" | LC_ALL=C awk -v c="$1" '
         index($0, "\001" c "\002")==1  { print substr($0, length(c)+3); next }
         index($0, "\001" c "*\002")==1 { print "\003" substr($0, length(c)+4) }'; }
     SLEEP_FG=$(class_lines FG | count_sleeps)
@@ -2802,7 +2821,7 @@ if want efficiency; then
     # \004 a file boundary. class_lines deliberately strips both, because the
     # sleep regex is anchored at line start and a marker would break it.
     boundary_lines() {
-      printf '%s\n' "$TAGGED" | awk '
+      printf '%s\n' "$TAGGED" | LC_ALL=C awk '
         index($0, "\001EOF\002")==1 { print "\004"; next }
         {
           i = index($0, "\002"); if (i == 0) next
@@ -2828,7 +2847,7 @@ if want efficiency; then
     # the string over verbatim, which is what keeps ONE regex definition usable
     # by both grep -E and awk instead of forcing a second, drifting copy.
     export SLEEP_RE REMOTE_RE FETCH_RE LOCALHOST_RE TASK_SEGMENT_RE TASK_OUTPUT_PATH_RE DETACH_RE LOOP_RE
-    WT=$(boundary_lines | strip_heredocs $'\003\004' | awk '
+    WT=$(boundary_lines | strip_heredocs $'\003\004' | LC_ALL=C awk '
       BEGIN { sre = ENVIRON["SLEEP_RE"]; rre = ENVIRON["REMOTE_RE"]
               fre = ENVIRON["FETCH_RE"]; lhre = ENVIRON["LOCALHOST_RE"]
               tsre = ENVIRON["TASK_SEGMENT_RE"]; topath = ENVIRON["TASK_OUTPUT_PATH_RE"]
@@ -3101,17 +3120,42 @@ if want efficiency; then
                  { if (started) addline($0) }
       END { classify(); resolve()
             printf "%d %d %d %d %d %d %d %d %d %d %d %d", n_tot, n_same, n_next, n_task_same, n_task_next, n_none, fg_rem, fg_next, fg_task, fg_task_next, bg_rem, bg_task }')
-    # `read`, not `set --`: the latter would clobber the script's positional
-    # parameters. (A here-string is a bash/zsh extension — fine under this
-    # file's bash shebang, and never to be copied into a /bin/sh script.)
-    read -r WT_TOT WT_SAME WT_NEXT WT_TASK_SAME WT_TASK_NEXT WT_NONE WT_FGREM WT_FGNEXT WT_FGTASK WT_FGTASK_NEXT WT_BGREM WT_BGTASK <<< "$WT"
-    WT_NOREMOTE=$((WT_TASK_SAME + WT_TASK_NEXT + WT_NONE))
-    WT_FGALL=$((WT_FGREM + WT_FGTASK))
-    # Mirrors WT_FGALL: a BACKGROUNDED runtime-task-output poll is the same
-    # violation as a backgrounded remote poll, so the estimate is the sum of
-    # both. Counting only the remote half attributed a backgrounded task poll to
-    # no launch class at all, so the estimate read 0 over a real poller.
-    WT_BGALL=$((WT_BGREM + WT_BGTASK))
+    WT_RC=$?
+    # #2817: an ABORTED pass must never render as a measurement. The locale is
+    # pinned to C.UTF-8 because the credential detector needs [[:space:]] to stay
+    # Unicode-aware — but under ANY multibyte locale awk converts each record to
+    # wide characters, so a single invalid byte in the corpus exits it non-zero
+    # having emitted nothing (or, killed mid-write, a short payload). `read` then
+    # leaves the missing fields EMPTY, and awk arithmetic treats an empty operand
+    # as 0, so the primary estimate printed `0.00/session` — a clean-looking zero
+    # that trends as "busy-waiting solved" rather than "the counter did not run".
+    # Exit status alone is NOT a sufficient test, because a short write can still
+    # exit 0, so the full 12-field payload is required as well.
+    WT_OK=1
+    [ "$WT_RC" -eq 0 ] || WT_OK=0
+    [ "$(printf '%s' "$WT" | wc -w | tr -d ' ')" -eq 12 ] || WT_OK=0
+    if [ "$WT_OK" -eq 1 ]; then
+      # `read`, not `set --`: the latter would clobber the script's positional
+      # parameters. (A here-string is a bash/zsh extension — fine under this
+      # file's bash shebang, and never to be copied into a /bin/sh script.)
+      read -r WT_TOT WT_SAME WT_NEXT WT_TASK_SAME WT_TASK_NEXT WT_NONE WT_FGREM WT_FGNEXT WT_FGTASK WT_FGTASK_NEXT WT_BGREM WT_BGTASK <<< "$WT"
+      WT_NOREMOTE=$((WT_TASK_SAME + WT_TASK_NEXT + WT_NONE))
+      WT_FGALL=$((WT_FGREM + WT_FGTASK))
+      # Mirrors WT_FGALL: a BACKGROUNDED runtime-task-output poll is the same
+      # violation as a backgrounded remote poll, so the estimate is the sum of
+      # both. Counting only the remote half attributed a backgrounded task poll to
+      # no launch class at all, so the estimate read 0 over a real poller.
+      WT_BGALL=$((WT_BGREM + WT_BGTASK))
+    else
+      # EVERY field becomes the same sentinel, derived ones included. A partial
+      # render — some numbers, some blanks — is precisely what let a failed pass
+      # read as data.
+      WT_TOT=UNKNOWN; WT_SAME=UNKNOWN; WT_NEXT=UNKNOWN
+      WT_TASK_SAME=UNKNOWN; WT_TASK_NEXT=UNKNOWN; WT_NONE=UNKNOWN
+      WT_FGREM=UNKNOWN; WT_FGNEXT=UNKNOWN; WT_FGTASK=UNKNOWN; WT_FGTASK_NEXT=UNKNOWN
+      WT_BGREM=UNKNOWN; WT_BGTASK=UNKNOWN
+      WT_NOREMOTE=UNKNOWN; WT_FGALL=UNKNOWN; WT_BGALL=UNKNOWN
+    fi
     # The total is the SUM of the classes, not a separate scan. That makes
     # class-vs-total drift impossible instead of detectable — and a drift
     # warning over a sum would be a vacuous guard, which is worse than none.
@@ -3187,14 +3231,27 @@ if want efficiency; then
     # THIS, never the aggregate.
     echo "      of which UNCHAINED (fg) ... ${WT_FGNEXT}   [tests the #2262 rule]"
     if [ "$SF_COUNT" -gt 0 ]; then
-      echo "    per-session (Claude, n=${SF_COUNT}): $(awk -v a="$WT_FGALL" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← the recognised-poll metric to trend"
-      echo "    remote-only continuity (n=${SF_COUNT}): $(awk -v a="$WT_FGREM" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session"
-      # A RATE, not a raw count: window session counts swing, so WT_BGREM alone can
-      # fall while per-run polling rises. This is the series the backgrounded-poller
-      # baseline is trended on.
-      echo "    backgrounded-poller (n=${SF_COUNT}): $(awk -v a="$WT_BGALL" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← trend THIS for the poller rule"
+      if [ "$WT_OK" -eq 1 ]; then
+        echo "    per-session (Claude, n=${SF_COUNT}): $(awk -v a="$WT_FGALL" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← the recognised-poll metric to trend"
+        echo "    remote-only continuity (n=${SF_COUNT}): $(awk -v a="$WT_FGREM" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session"
+        # A RATE, not a raw count: window session counts swing, so WT_BGREM alone can
+        # fall while per-run polling rises. This is the series the backgrounded-poller
+        # baseline is trended on.
+        echo "    backgrounded-poller (n=${SF_COUNT}): $(awk -v a="$WT_BGALL" -v b="$SF_COUNT" 'BEGIN{printf "%.2f", a/b}')/session   ← trend THIS for the poller rule"
+      else
+        # The sentinel is printed INSTEAD of dividing it: `UNKNOWN/b` in awk is an
+        # unset name over b, which prints 0.00 — the very number this guard exists
+        # to stop rendering.
+        echo "    per-session (Claude, n=${SF_COUNT}): UNKNOWN   ← the recognised-poll metric to trend"
+        echo "    remote-only continuity (n=${SF_COUNT}): UNKNOWN"
+        echo "    backgrounded-poller (n=${SF_COUNT}): UNKNOWN   ← trend THIS for the poller rule"
+      fi
     fi
-    if [ "$WT_TOT" != "$SLEEPS" ]; then
+    if [ "$WT_OK" -eq 0 ]; then
+      echo "    ⚠️  wait-target pass FAILED (exit ${WT_RC}) — every counter above is UNKNOWN."
+      echo "        This is NOT a measurement of zero busy-waiting; it is the absence"
+      echo "        of a measurement. Do not trend it against previous runs."
+    elif [ "$WT_TOT" != "$SLEEPS" ]; then
       echo "    ⚠️  wait-target total ${WT_TOT} != launch-mode total ${SLEEPS} —"
       echo "        the two passes disagree; treat BOTH as unreliable this run."
     fi
