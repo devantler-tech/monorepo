@@ -9,6 +9,10 @@
 #   - unrecognised MODE exits non-zero
 #   - dry-run leaves the manifest byte-identical (and still reports would-delete counts)
 #   - apply mode records then deletes
+#   - the HANDS-OFF exemption matches the harness slug shape `<word>-<word>-<6hex>`
+#     WHOLE, so a spent routine branch carrying THREE OR MORE word segments plus a
+#     6-hex suffix is still reaped. A two-segment routine slug is shape-identical to
+#     a harness branch and stays exempt — a pinned, deliberate residual (monorepo#2708)
 # Hermetic: local bare "origin" + stubbed `gh` on PATH. No network.
 set -Eeuo pipefail
 
@@ -544,6 +548,55 @@ report "negative control: a genuinely failed return to default is still an error
 
 rm -f "$work/blocker-2489.txt"
 git -C "$work" checkout -q -f main >/dev/null 2>&1
+# --- 11. HANDS-OFF exemption must match the harness slug shape WHOLE (#2708) ----
+# Routine branches are `<lane>/<area>-<desc>-<issue>`, but many carry a 6-hex
+# suffix rather than an issue number. A test that looked only at the trailing
+# segment swallowed those too, so a provably spent routine branch — remote-reachable
+# tip, SHA-matched MERGED PR — was exempted forever and local cleanup was a near
+# no-op. The control proves this narrows the exemption rather than removing it.
+git -C "$work" checkout -q -f main
+
+desc_sha=$(mk_remote_branch "claude/agentic-engineer-cadence-cb4550")
+git -C "$work" checkout -q main
+: >"$OPEN_HEADS_FILE"
+printf '%s\tMERGED\t%s\n' "claude/agentic-engineer-cadence-cb4550" "$desc_sha" >"$PR_EVIDENCE_FILE"
+manifest="$tmp/manifest-2708a"; : >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
+report "spent DESCRIPTIVE claude/* ending in 6hex is reaped locally (#2708)" \
+  "$(git -C "$work" rev-parse --verify --quiet "refs/heads/claude/agentic-engineer-cadence-cb4550" >/dev/null && echo no || echo yes)" \
+  "rc=$rc out=$out"
+report "…and recorded that local deletion in the manifest (#2708)" \
+  "$(grep -Fq $'monorepo\tlocal\tclaude/agentic-engineer-cadence-cb4550\t'"$desc_sha" "$manifest" && echo yes || echo no)"
+
+# CONTROL — a genuine harness/interactive slug with IDENTICAL evidence must SURVIVE.
+git -C "$work" checkout -q -f main
+int_sha=$(mk_remote_branch "claude/gracious-wescoff-5b1c60")
+git -C "$work" checkout -q main
+: >"$OPEN_HEADS_FILE"
+printf '%s\tMERGED\t%s\n' "claude/gracious-wescoff-5b1c60" "$int_sha" >"$PR_EVIDENCE_FILE"
+manifest="$tmp/manifest-2708b"; : >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
+report "control: interactive <word>-<word>-<6hex> survives identical MERGED evidence (#2708)" \
+  "$(git -C "$work" rev-parse --verify --quiet "refs/heads/claude/gracious-wescoff-5b1c60" >/dev/null && echo yes || echo no)" \
+  "rc=$rc out=$out"
+git -C "$work" checkout -q -f main
+
+# RESIDUAL, pinned deliberately: a routine slug with exactly two word segments and a
+# 6-hex suffix is byte-indistinguishable from a harness slug, so it stays exempt. This
+# asserts the known limit rather than a wish — closing it needs branch-name provenance,
+# not shape, and erring toward KEEP is the safe direction (monorepo#2708).
+git -C "$work" checkout -q -f main
+res_sha=$(mk_remote_branch "claude/area-desc-123456")
+git -C "$work" checkout -q main
+: >"$OPEN_HEADS_FILE"
+printf '%s\tMERGED\t%s\n' "claude/area-desc-123456" "$res_sha" >"$PR_EVIDENCE_FILE"
+manifest="$tmp/manifest-2708c"; : >"$manifest"
+out="$("$helper" "$work" "monorepo" "$manifest" apply 2>&1)" && rc=0 || rc=$?
+report "residual: a two-segment routine slug is shape-identical to a harness branch and stays exempt (#2708)" \
+  "$(git -C "$work" rev-parse --verify --quiet "refs/heads/claude/area-desc-123456" >/dev/null && echo yes || echo no)" \
+  "rc=$rc out=$out"
+git -C "$work" checkout -q -f main
+
 if [[ "$fail" -ne 0 ]]; then
   echo "branch-cleanup contract: FAILED"
   exit 1
