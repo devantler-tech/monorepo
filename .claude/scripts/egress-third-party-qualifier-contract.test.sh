@@ -212,6 +212,8 @@ verify_step="$(awk '
   fail "no step in this job runs the contract script — the guard would not gate"
 grep -qE '^        if:' <<< "${verify_step}" && \
   fail "the verification step carries a step-level 'if:' — it could be skipped while the job and the required aggregate stay green"
+grep -qE '^        shell:' <<< "${verify_step}" && \
+  fail "the verification step overrides 'shell:' — a wrapper such as 'bash {0} || true' runs the command and converts its failure to success, so the guard would not gate"
 ok
 
 # A step marked continue-on-error reports success whatever its command returns, so a later contract
