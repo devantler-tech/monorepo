@@ -170,15 +170,16 @@ has '**never autonomously open an issue or PR** — get explicit approval via th
 ok
 
 # ── 10. THIS JOB'S OWN CI WIRING — a guard that does not gate is not a guard ─────────────────────────
-# Queried STRUCTURALLY with yq, never by grepping lines out of a textual block. Review demonstrated
-# three ways to satisfy a block-scoped text match without the wiring existing: the exact
-# `job-results` line moved into an unused job-level `env`, the whole filter block moved into an `env`
-# on the same step, and the outputs declaration preserved inside a folded `name`. All three are valid
-# YAML, leave the referenced value ABSENT, and passed. A key path cannot be satisfied that way.
+# Queried STRUCTURALLY with yq, never by grepping lines out of a textual block, and compared to EXACT
+# values. Review demonstrated both failure modes: a value moved into an unused sibling key (valid YAML,
+# referenced value absent) satisfies a block-scoped text match, and a neutralising expression
+# (`… || true`, `… && false`, `false && …`) satisfies a substring match while inverting the meaning.
 #
-# The wiring takes five parts, and three of them fail silently: without the changes-job output the
-# `if:` is never true and the job reports `skipping` on every run; without the status job's `needs:`
-# or its `job-results` entry the job still runs and still prints OK while gating nothing.
+# This job is DELIBERATELY UNCONDITIONAL — no `needs:`, no `if:`, no paths-filter entry. A wiring
+# validator gated on the very chain it validates cannot report its own disconnection: removing the
+# filter or its exported output skips the job, and the aggregate accepts a skipped path-filtered job,
+# so the required check stays green precisely when the wiring broke. Running always costs one fast
+# bash job per PR and removes that whole class.
 workflow="${repo_root}/.github/workflows/ci.yaml"
 # FAIL, never skip: a renamed or unreadable workflow would otherwise bypass every assertion below and
 # still print OK — the vacuous-success mode this guard exists to prevent, one level up.
@@ -190,54 +191,30 @@ yq '.' "${workflow}" >/dev/null 2>&1 || \
   fail "ci.yaml does not parse as YAML — its wiring cannot be verified"
 
 JOB='test-egress-third-party-qualifier-contract'
-FILTER='egress-third-party-qualifier-contract'
-
 q() { yq -r "$1" "${workflow}" 2>/dev/null; }
 present() { [ -n "$1" ] && [ "$1" != "null" ]; }
 
-# (a) the changes job must EXPORT this filter's value from the filter step's outputs
-out_expr="$(q ".jobs.changes.outputs.\"${FILTER}\"")"
-present "${out_expr}" || \
-  fail "jobs.changes.outputs.${FILTER} is absent — needs.changes.outputs.* would be empty, the if: would never be true, and this job would report 'skipping' on every run"
-[ "${out_expr}" = "\${{ steps.filter.outputs.${FILTER} }}" ] || \
-  fail "jobs.changes.outputs.${FILTER} is not exactly the filter's output reference (got '${out_expr}') — an expression such as 'false && …' exports false for every change and the job is permanently skipped"
-
-# (b) the producer step must exist, be the paths-filter action, and DEFINE this filter under with.filters
-prod_uses="$(q ".jobs.changes.steps[] | select(.id == \"filter\") | .uses")"
-present "${prod_uses}" || \
-  fail "the changes job has no step with id 'filter' — steps.filter.outputs.* would resolve empty and this job would skip silently"
-case "${prod_uses}" in
-  dorny/paths-filter@*) ;;
-  *) fail "the step with id 'filter' runs '${prod_uses}', not dorny/paths-filter — it would not produce the outputs this job's condition reads" ;;
-esac
-filters_yaml="$(q ".jobs.changes.steps[] | select(.id == \"filter\") | .with.filters")"
-present "${filters_yaml}" || \
-  fail "the paths-filter step declares no with.filters — this job's trigger cannot exist"
-# with.filters is itself a YAML document; parse it rather than matching text inside it. Materialise
-# the list FIRST — `… | yq | grep -q` under pipefail reports failure when grep exits on an early match
-# and SIGPIPEs yq, so a trigger listed FIRST would read as absent while later ones passed.
-filter_paths="$(printf '%s\n' "${filters_yaml}" | yq -r ".\"${FILTER}\"[]?" 2>/dev/null || true)"
-present "${filter_paths}" || \
-  fail "the paths-filter declares no ${FILTER} filter — this job's triggers cannot exist"
-for trigger in 'AGENTS.md' '.claude/scripts/egress-third-party-qualifier-contract.test.sh' '.github/workflows/ci.yaml'; do
-  grep -Fqx -- "${trigger}" <<< "${filter_paths}" || \
-    fail "the paths-filter's ${FILTER} filter does not list ${trigger} — an edit to that surface would not run the guard"
+# (a) the job must exist and be UNCONDITIONAL — any `if:` or `needs:` reintroduces a skip path, and a
+#     skipped path-filtered job is accepted by the aggregate.
+present "$(q ".jobs.\"${JOB}\"")" || \
+  fail "ci.yaml has no ${JOB} job — the contract is not checked at all"
+for attr in if needs; do
+  v="$(q ".jobs.\"${JOB}\".\"${attr}\"")"
+  present "${v}" && \
+    fail "the ${JOB} job declares ${attr}: ${v} — it must stay unconditional, or breaking the wiring would skip the very job that reports it"
 done
 
-# (c) this job must depend on changes, be conditioned on its output, and run the script
-job_needs="$(q ".jobs.\"${JOB}\".needs | (. // \"\") | (select(type == \"!!seq\") | join(\" \")) // .")"
-case " ${job_needs} " in
-  *" changes "*) ;;
-  *) fail "this job does not declare 'needs: changes' — needs.changes.outputs.* would be empty and the job would be silently skipped" ;;
-esac
-job_if="$(q ".jobs.\"${JOB}\".if")"
-[ "${job_if}" = "needs.changes.outputs.${FILTER} == 'true'" ] || \
-  fail "this job's if: is not exactly \"needs.changes.outputs.${FILTER} == 'true'\" (got '${job_if}') — a condition such as '… && false' skips the job on every change while the aggregate accepts the skip"
-run_cmd="$(q ".jobs.\"${JOB}\".steps[] | select(.run != null) | .run" | grep -Fx -- "bash .claude/scripts/egress-third-party-qualifier-contract.test.sh" || true)"
-present "${run_cmd}" || \
-  fail "no step in this job runs exactly 'bash .claude/scripts/egress-third-party-qualifier-contract.test.sh' — a wrapper such as '… || true' converts every contract failure to success"
+# (b) it must run EXACTLY the contract script: a wrapper such as `… || true` converts every failure to
+#     success while still containing the filename.
+# Materialise before matching: `q … | grep -q` under pipefail reports failure when grep exits
+# on a match and SIGPIPEs yq, so a present value reads as absent.
+run_cmds="$(q ".jobs.\"${JOB}\".steps[] | select(.run != null) | .run")"
+grep -Fqx -- 'bash .claude/scripts/egress-third-party-qualifier-contract.test.sh' <<< "${run_cmds}" || \
+  fail "no step in the ${JOB} job runs exactly 'bash .claude/scripts/egress-third-party-qualifier-contract.test.sh' — a wrapper such as '… || true' converts every contract failure to success"
 
-# (d) the aggregate must depend on this job AND receive its result in the aggregate action's input
+# (c) the aggregate must depend on this job, actually evaluate its dependencies, and receive this
+#     job's result UNTRANSFORMED. `needs.<job>.result == 'failure' && 'success' || needs.<job>.result`
+#     contains the reference while handing the action `success` whenever the contract fails.
 status_needs="$(q '.jobs.status.needs[]?')"
 grep -Fqx -- "${JOB}" <<< "${status_needs}" || \
   fail "the status job does not list ${JOB} in needs: — its failures would not gate the merge"
@@ -247,18 +224,21 @@ status_if="$(q '.jobs.status.if')"
 agg_results="$(q '.jobs.status.steps[] | select(.uses != null and (.uses | test("devantler-tech/actions/aggregate-job-checks@"))) | .with."job-results"')"
 present "${agg_results}" || \
   fail "the status job has no devantler-tech/actions/aggregate-job-checks step with a job-results input — nothing evaluates the dependency results"
-case "${agg_results}" in
-  *"needs.${JOB}.result"*) ;;
-  *) fail "the aggregate action's job-results input does not include needs.${JOB}.result — a failing contract would be omitted from the required check" ;;
-esac
+# job-results is a FOLDED scalar — one line, space-separated — so match the exact token as a
+# substring. The masking form `${{ needs.<job>.result == 'failure' && 'success' || … }}` does not
+# contain it, because `result` is followed by ` ==` rather than ` }}`.
+grep -qF -- "\${{ needs.${JOB}.result }}" <<< "${agg_results}" || \
+  fail "the aggregate action's job-results does not receive exactly '\${{ needs.${JOB}.result }}' — a transformed entry can hand it 'success' while this contract fails"
 
-# (e) none of the three steps this guard depends on may be unable to fail. Each construct was found
-# separately by review, and each satisfies every assertion above: continue-on-error (step reports
-# success), a step-level if: (command never runs), a shell: override such as `bash {0} || true`
-# (command runs, failure swallowed).
+# (d) neither this job nor the aggregate may be unable to fail — at JOB level or STEP level. Each of
+#     these was found separately by review, and each satisfies every assertion above.
+for j in "${JOB}" status; do
+  v="$(q ".jobs.\"${j}\".\"continue-on-error\"")"
+  present "${v}" && \
+    fail "the ${j} job sets continue-on-error: ${v} at job level — the run passes even when the job fails, so the guard would not gate"
+done
 for spec in \
   "verification step|.jobs.\"${JOB}\".steps[] | select(.run != null and (.run | test(\"egress-third-party-qualifier-contract.test.sh\")))" \
-  "paths-filter producer step|.jobs.changes.steps[] | select(.id == \"filter\")" \
   "status job's aggregate step|.jobs.status.steps[] | select(.uses != null and (.uses | test(\"aggregate-job-checks@\")))"; do
   what="${spec%%|*}"; path="${spec#*|}"
   [ "$(q "[${path}] | length")" = "1" ] || \

@@ -39,7 +39,6 @@ jobs:
       rung-type-filter-contract: ${{ steps.filter.outputs.rung-type-filter-contract }}
       definition-load-budget-contract: ${{ steps.filter.outputs.definition-load-budget-contract }}
       drifted-lane-escalation-contract: ${{ steps.filter.outputs.drifted-lane-escalation-contract }}
-      egress-third-party-qualifier-contract: ${{ steps.filter.outputs.egress-third-party-qualifier-contract }}
       skill-owner: ${{ steps.filter.outputs.skill-owner }}
       plugin-definition-currency: ${{ steps.filter.outputs.plugin-definition-currency }}
       plugin-definition-refresh: ${{ steps.filter.outputs.plugin-definition-refresh }}
@@ -318,13 +317,6 @@ jobs:
               # how a guard loses sight of its own subject.
               - '.claude/loaders/cursor-daily-ai-engineer.md'
               - '.claude/scripts/drifted-lane-escalation-contract.test.sh'
-              - '.github/workflows/ci.yaml'
-            egress-third-party-qualifier-contract:
-              # The contract prose and its guard are both subjects: this test pins the Egress
-              # allow-list's third-party qualifier AND the canonical wording in *GitHub artifact
-              # conventions* that it mirrors, so an edit to either section must run it.
-              - 'AGENTS.md'
-              - '.claude/scripts/egress-third-party-qualifier-contract.test.sh'
               - '.github/workflows/ci.yaml'
             skill-owner:
               # AGENTS.md carries the provenance rule this helper answers, so a PR editing only
@@ -1164,8 +1156,6 @@ jobs:
 
   test-egress-third-party-qualifier-contract:
     name: Test egress third party qualifier contract
-    needs: changes
-    if: needs.changes.outputs.egress-third-party-qualifier-contract == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
