@@ -72,7 +72,7 @@ extract() {
   printf '%s' "${out}" | tr '\n' ' ' | tr -s ' '
 }
 
-egress="$(extract '- **Destinations are allow-listed.**' '- **Never echo untrusted text into an outbound artifact unmarked')"
+egress="$(extract '### Egress' '### Sensitive information stays private')"
 # Anchored on STRUCTURAL SECTION HEADINGS at both ends, never on a neighbouring bullet's prose. The CI
 # filter runs this test on every AGENTS.md edit, so an anchor on any bullet's wording turns an
 # unrelated reword into a required-check failure — measured for both the start and the end anchor.
@@ -199,10 +199,8 @@ present() { [ -n "$1" ] && [ "$1" != "null" ]; }
 out_expr="$(q ".jobs.changes.outputs.\"${FILTER}\"")"
 present "${out_expr}" || \
   fail "jobs.changes.outputs.${FILTER} is absent — needs.changes.outputs.* would be empty, the if: would never be true, and this job would report 'skipping' on every run"
-case "${out_expr}" in
-  *"steps.filter.outputs.${FILTER}"*) ;;
-  *) fail "jobs.changes.outputs.${FILTER} does not read steps.filter.outputs.${FILTER} — it would not carry this filter's result" ;;
-esac
+[ "${out_expr}" = "\${{ steps.filter.outputs.${FILTER} }}" ] || \
+  fail "jobs.changes.outputs.${FILTER} is not exactly the filter's output reference (got '${out_expr}') — an expression such as 'false && …' exports false for every change and the job is permanently skipped"
 
 # (b) the producer step must exist, be the paths-filter action, and DEFINE this filter under with.filters
 prod_uses="$(q ".jobs.changes.steps[] | select(.id == \"filter\") | .uses")"
@@ -233,13 +231,11 @@ case " ${job_needs} " in
   *) fail "this job does not declare 'needs: changes' — needs.changes.outputs.* would be empty and the job would be silently skipped" ;;
 esac
 job_if="$(q ".jobs.\"${JOB}\".if")"
-case "${job_if}" in
-  *"needs.changes.outputs.${FILTER}"*) ;;
-  *) fail "this job's if: does not read needs.changes.outputs.${FILTER} (got '${job_if}') — an 'if: false' leaves the aggregate green-by-skip while the guard never runs" ;;
-esac
-run_cmd="$(q ".jobs.\"${JOB}\".steps[] | select(.run != null) | .run" | grep -F 'egress-third-party-qualifier-contract.test.sh' || true)"
+[ "${job_if}" = "needs.changes.outputs.${FILTER} == 'true'" ] || \
+  fail "this job's if: is not exactly \"needs.changes.outputs.${FILTER} == 'true'\" (got '${job_if}') — a condition such as '… && false' skips the job on every change while the aggregate accepts the skip"
+run_cmd="$(q ".jobs.\"${JOB}\".steps[] | select(.run != null) | .run" | grep -Fx -- "bash .claude/scripts/egress-third-party-qualifier-contract.test.sh" || true)"
 present "${run_cmd}" || \
-  fail "no step in this job runs the contract script — the guard would not gate"
+  fail "no step in this job runs exactly 'bash .claude/scripts/egress-third-party-qualifier-contract.test.sh' — a wrapper such as '… || true' converts every contract failure to success"
 
 # (d) the aggregate must depend on this job AND receive its result in the aggregate action's input
 status_needs="$(q '.jobs.status.needs[]?')"
@@ -248,7 +244,7 @@ grep -Fqx -- "${JOB}" <<< "${status_needs}" || \
 status_if="$(q '.jobs.status.if')"
 [ "${status_if}" = "always()" ] || \
   fail "the status job is not 'if: always()' (got '${status_if}') — a skipped aggregate evaluates no failing dependency, so this job's entry in it would gate nothing"
-agg_results="$(q '.jobs.status.steps[] | select(.uses | test("devantler-tech/actions/aggregate-job-checks@")) | .with."job-results"')"
+agg_results="$(q '.jobs.status.steps[] | select(.uses != null and (.uses | test("devantler-tech/actions/aggregate-job-checks@"))) | .with."job-results"')"
 present "${agg_results}" || \
   fail "the status job has no devantler-tech/actions/aggregate-job-checks step with a job-results input — nothing evaluates the dependency results"
 case "${agg_results}" in
