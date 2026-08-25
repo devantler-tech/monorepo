@@ -132,5 +132,38 @@ has '`devantler-tech` repos are exempt — open drafts/issues there autonomously
   fail "*GitHub artifact conventions* no longer contiguously states the devantler-tech exemption"
 ok
 
-[ "${passed}" -eq 7 ] || fail "expected 7 assertions, ran ${passed}"
+
+# ── 8. THIS JOB'S OWN CI WIRING — a guard that does not gate is not a guard ──────────────────────────
+# Wiring a contract test into `ci.yaml` takes FIVE edits. Drop the `changes`-job output and the `if:`
+# is never true, so the job reports `skipping` on every run while passing locally. Drop either the
+# `status` job's `needs:` or its `job-results:` entry and the job still RUNS and still prints OK —
+# while its failures no longer gate the required aggregate check. Both were reproduced against this
+# very PR, so this is measured, not hypothetical.
+workflow="${repo_root}/.github/workflows/ci.yaml"
+# FAIL, never skip: guarding these behind `if [ -r ... ]` would let a renamed or unreadable workflow
+# bypass every assertion below and still print OK — the same vacuous-success mode this guard exists
+# to prevent, reintroduced one level up.
+[ -r "${workflow}" ] || \
+  fail "ci.yaml is missing or unreadable at ${workflow} — this job's own wiring cannot be verified, so an OK here would be vacuous"
+for wiring in \
+  '            egress-third-party-qualifier-contract:|paths-filter entry' \
+  '      egress-third-party-qualifier-contract: ${{ steps.filter.outputs.egress-third-party-qualifier-contract }}|changes-job outputs declaration (its absence makes the job skip silently)' \
+  '  test-egress-third-party-qualifier-contract:|job definition' \
+  '      - test-egress-third-party-qualifier-contract|status job needs: entry (its absence stops the job gating the merge)' \
+  '            ${{ needs.test-egress-third-party-qualifier-contract.result }}|status job job-results entry'; do
+  needle="${wiring%%|*}"; what="${wiring#*|}"
+  grep -Fqx -- "${needle}" "${workflow}" || \
+    fail "ci.yaml is missing this job's ${what} — the guard would not gate"
+done
+# The filter must cover every surface this test reads, or an edit to an unlisted one skips the job.
+for trigger in \
+  "              - 'AGENTS.md'" \
+  "              - '.claude/scripts/egress-third-party-qualifier-contract.test.sh'" \
+  "              - '.github/workflows/ci.yaml'"; do
+  grep -Fqx -- "${trigger}" "${workflow}" || \
+    fail "ci.yaml's paths-filter for this job is missing ${trigger} — an edit to that surface would not run the guard"
+done
+ok
+
+[ "${passed}" -eq 8 ] || fail "expected 8 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
