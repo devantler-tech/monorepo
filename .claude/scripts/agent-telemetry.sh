@@ -17,6 +17,46 @@
 #                           [--injection-provenance] [--credential-provenance]
 set -uo pipefail
 
+# Regex locale. Two constraints pull in opposite directions, and exactly one
+# locale satisfies both:
+#
+#   * The RFC 7468 label class below is spelled as ASCII code-point RANGES
+#     (`[!-,.-`{-~ ]`). A UTF-8 COLLATION locale rejects those outright — BSD
+#     grep exits `invalid character range` and every private-key leg stops
+#     matching — so the locale must be pinned rather than inherited.
+#   * A pin to plain `C` narrows every later `[[:space:]]` to the six ASCII
+#     whitespace characters. The generic credential detector and redact() both
+#     depend on that class, so under `C` a value introduced by Unicode
+#     whitespace (`secret=<U+2003>"..."`) is matched by NEITHER leg: `["]?`
+#     cannot consume the U+2003 lead byte, the value run stops after three
+#     bytes, and the secret is emitted VERBATIM while the scan reports clean.
+#     That is the under-mask direction this file forbids (monorepo#3051).
+#
+# C.UTF-8 is the intersection: ASCII range semantics with Unicode classes.
+export LC_ALL=C.UTF-8
+
+# VERIFY the pin rather than assume it. An unavailable locale degrades silently
+# to C, which is precisely the failing case above — so an unchecked pin is how
+# the previous one shipped a leak. A detector that cannot guarantee its own
+# matching semantics must refuse to run rather than report "clean"; both probes
+# are self-contained and cost two greps at startup.
+verify_regex_locale() {
+  local em
+  em=$(printf '\xe2\x80\x83')   # U+2003 EM SPACE, as bytes: source stays printable
+  # 1. ASCII code-point ranges must COMPILE and match. Fails under a UTF-8
+  #    collation locale, where the range endpoints are collation-ordered.
+  printf 'AZ.+_\n' | grep -qE -e '^[!-,.-`{-~ ]+$' 2>/dev/null || return 1
+  # 2. [[:space:]] must remain Unicode-aware. Fails under plain C.
+  printf 'a%sb\n' "$em" | grep -qE 'a[[:space:]]b' 2>/dev/null || return 2
+  return 0
+}
+verify_regex_locale
+case $? in
+  0) : ;;
+  1) printf '%s\n' "agent-telemetry: FATAL: locale '$LC_ALL' rejects ASCII code-point ranges, so private-key detection cannot work. Install a C.UTF-8 locale." >&2; exit 2 ;;
+  2) printf '%s\n' "agent-telemetry: FATAL: locale '$LC_ALL' is not available (it degraded to C), so [[:space:]] is ASCII-only and credentials separated by Unicode whitespace would be reported clean. Install a C.UTF-8 locale." >&2; exit 2 ;;
+esac
+
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
@@ -750,14 +790,15 @@ function mask_line(s) {
 # emitted everything after it VERBATIM — the under-mask direction the governing
 # asymmetry of this file forbids. Reproduced on the shipped program (#2662).
 #
-# ⚠️ NO SINGLE QUOTES BELOW: this program is a single-quoted shell string, so an
-# apostrophe here terminates it and the rest of the file becomes shell code.
+# ⚠️ NO LITERAL SINGLE QUOTES BELOW: this program is a single-quoted shell
+# string. The label ranges include apostrophe semantically without spelling one,
+# so the shell cannot terminate the program early.
 #
 # The key is the label text alone, so BEGIN and END are comparable. Runs of
 # spaces collapse because the marker regex tolerates a repeated space before the
 # label, so `RSA  PRIVATE KEY` must still pair with `RSA PRIVATE KEY`. A label
 # that fails to pair does not close, so the span runs on and masks MORE — the
-# safe side, and why this needs no character-class widening to be correct.
+# safe side, and why widening the class below could only ever mask MORE.
 function labelkey(m) {
   sub(/^-----(BEGIN|END) */, "", m)
   sub(/-----$/, "", m)
@@ -783,7 +824,7 @@ END {
   # over-masking, which is the direction the governing asymmetry above demands.
   for (i = 1; i <= n; i++) {
     s = L[i]; out = ""
-    while (match(s, /-----BEGIN ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/)) {
+    while (match(s, /-----BEGIN ([!-,.-`{-~ ]([!-,.-`{-~ ]|-[!-,.-`{-~ ])*)? *PRIVATE KEY( BLOCK)?-----/)) {
       bs = RSTART; bl = RLENGTH
       head = substr(s, 1, bs - 1)
       oplbl = labelkey(substr(s, bs, bl))
@@ -793,7 +834,7 @@ END {
       # U[] flag below, and this program has paid for that class enough times.
       scan = substr(s, bs + bl)
       depth = 1; closed = 0
-      while (depth > 0 && match(scan, /-----(BEGIN|END) ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/)) {
+      while (depth > 0 && match(scan, /-----(BEGIN|END) ([!-,.-`{-~ ]([!-,.-`{-~ ]|-[!-,.-`{-~ ])*)? *PRIVATE KEY( BLOCK)?-----/)) {
         mark = substr(scan, RSTART, RLENGTH)
         scan = substr(scan, RSTART + RLENGTH)
         # 🔴 ANY opener DEEPENS the span, whatever its label; only a MATCHING closer
@@ -889,7 +930,7 @@ END {
     close_at = 0; close_end = 0; bdepth = U[i]
     for (j = i + 1; j <= n && close_at == 0; j++) {
       bscan = L[j]; bdrop = 0
-      while (match(bscan, /-----END ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/)) {
+      while (match(bscan, /-----END ([!-,.-`{-~ ]([!-,.-`{-~ ]|-[!-,.-`{-~ ])*)? *PRIVATE KEY( BLOCK)?-----/)) {
         # Absolute end offset of this marker in L[j], accumulated as `bscan` is
         # consumed. The closing line is masked UP TO the marker that actually
         # balanced the depth, not the first one on the line — closing at the
@@ -999,9 +1040,9 @@ redact() {
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
     -e 's/(AKIA[0-9A-Z]{4})[0-9A-Z]+/\1…<redacted>/g' \
     -e 's/(xox[baprs]-[A-Za-z0-9]{4})[A-Za-z0-9-]+/\1…<redacted>/g' \
-    -e 's/-----BEGIN ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----([^-]|-[^-])*(-----END ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----)?/<redacted-private-key>/g' \
-    -e 's/-----(BEGIN|END) ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----/<redacted-private-key>/g' \
-    -e 's/(-----BEGIN ([A-Z0-9]([A-Z0-9. ]|\/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----)[^-]*/\1<redacted-key-material>/g' \
+    -e 's/-----BEGIN ([!-,.-`{-~ ]([!-,.-`{-~ ]|-[!-,.-`{-~ ])*)? *PRIVATE KEY( BLOCK)?-----([^-]|-[^-])*(-----END ([!-,.-`{-~ ]([!-,.-`{-~ ]|-[!-,.-`{-~ ])*)? *PRIVATE KEY( BLOCK)?-----)?/<redacted-private-key>/g' \
+    -e 's/-----(BEGIN|END) ([!-,.-`{-~ ]([!-,.-`{-~ ]|-[!-,.-`{-~ ])*)? *PRIVATE KEY( BLOCK)?-----/<redacted-private-key>/g' \
+    -e 's/(-----BEGIN ([!-,.-`{-~ ]([!-,.-`{-~ ]|-[!-,.-`{-~ ])*)? *PRIVATE KEY( BLOCK)?-----)[^-]*/\1<redacted-key-material>/g' \
     -e 's/(eyJ[A-Za-z0-9_-]{6})[A-Za-z0-9_.-]{20,}/\1…<redacted-jwt>/g' \
     -e 's/((secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?)[^"'"'"'[:space:],}]{8,}/\1<redacted>/gI'
 }
@@ -1030,7 +1071,7 @@ sha256_digest() {
 # form), each time reporting a real leak as "clean". The test suite asserts a
 # sample of EVERY numbered shape is both detected AND redacted; add to both
 # lists together or the test fails.
-CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN ([A-Z0-9]([A-Z0-9. ]|/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{12,}|-----BEGIN ([!-,.-`{-~ ]([!-,.-`{-~ ]|-[!-,.-`{-~ ])*)? *PRIVATE KEY( BLOCK)?-----|xox[baprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 
 # TABLE variant of CRED_RE — identical shapes, but the prefix-identified ones
 # (gh?_ / github_pat_ / AKIA / xox / eyJ) are BOUNDARY-ANCHORED: the char before
@@ -1047,7 +1088,7 @@ CRED_RE='(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{1
 # between the detector and redact() has already broken twice; a second hand-kept
 # copy of this alternation would be the third.
 CRED_PREFIX_SHAPES_RE='(github_pat_[A-Za-z0-9_]{20,}\**|gh[pousr]_[A-Za-z0-9]{16,}\**|AKIA[0-9A-Z]{12,}\**|xox[baprs]-[A-Za-z0-9-]{10,}\**|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
-CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([A-Z0-9]([A-Z0-9. ]|/|-[A-Z0-9])*)? *PRIVATE KEY( BLOCK)?-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
+CRED_TABLE_RE='((^|[^A-Za-z0-9_-])'"$CRED_PREFIX_SHAPES_RE"'|-----BEGIN ([!-,.-`{-~ ]([!-,.-`{-~ ]|-[!-,.-`{-~ ])*)? *PRIVATE KEY( BLOCK)?-----|(secret|token|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^"'"'"'[:space:],}]{8,})'
 
 # BLOB-EMBEDDED EVIDENCE (#2522). The boundary anchor above rejects a token
 # preceded by [A-Za-z0-9_-]. It cannot reject one whose boundary char is `+`,
