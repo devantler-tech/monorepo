@@ -13,6 +13,8 @@ constitution="${repo_root}/AGENTS.md"
 settings="${repo_root}/.claude/settings.json"
 desired_state="${repo_root}/.claude/plugin-consumption/agentic-engineering.desired-state.json"
 engineer_agent="${repo_root}/.claude/agents/daily-maintainer.md"
+surveyor_agent="${repo_root}/.claude/agents/portfolio-surveyor.md"
+surveyor_hook_resolver="${repo_root}/.claude/scripts/portfolio-surveyor-forge-hook.sh"
 cursor_loader="${repo_root}/.claude/loaders/cursor-daily-ai-engineer.md"
 maintenance_overlay="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
 engineering_overlay="${repo_root}/.claude/skills/product-engineering/SKILL.md"
@@ -641,6 +643,162 @@ jq -e '
 ' "${settings}" > /dev/null ||
   fail "runtime settings do not enable only the reviewed agentic-engineering plugin"
 
+# The plugin can ship a tool-neutral guard and Claude's JSON adapter, but only the
+# consumer can attach a hook to this deployment's surveyor. Verify the native agent
+# frontmatter structurally: a project-wide Bash hook would also constrain the engineer's
+# legitimate write lane, while a prose promise would not intercept anything.
+# The hook expands this variable in Claude, not in this test.
+# shellcheck disable=SC2016
+expected_surveyor_hook='"$CLAUDE_PROJECT_DIR"/.claude/scripts/portfolio-surveyor-forge-hook.sh'
+SURVEYOR_HOOK_COMMAND="${expected_surveyor_hook}" yq --front-matter=extract -e '
+  (.hooks | has("PreToolUse"))
+  and (.hooks | keys | length == 1)
+  and (.hooks.PreToolUse | length == 1)
+  and (.hooks.PreToolUse[0] | has("hooks"))
+  and (.hooks.PreToolUse[0] | has("matcher"))
+  and (.hooks.PreToolUse[0] | keys | length == 2)
+  and (.hooks.PreToolUse[0].matcher == "Bash")
+  and (.hooks.PreToolUse[0].hooks | length == 1)
+  and (.hooks.PreToolUse[0].hooks[0] | has("command"))
+  and (.hooks.PreToolUse[0].hooks[0] | has("type"))
+  and (.hooks.PreToolUse[0].hooks[0] | keys | length == 2)
+  and (.hooks.PreToolUse[0].hooks[0].type == "command")
+  and (.hooks.PreToolUse[0].hooks[0].command == strenv(SURVEYOR_HOOK_COMMAND))
+' "${surveyor_agent}" >/dev/null ||
+  fail "portfolio-surveyor does not carry exactly one agent-scoped Bash PreToolUse forge hook"
+
+# GH_TELEMETRY is process state, not command text. The guard deliberately refuses an
+# env-prefixed gh command, so the runtime must supply the disabling value to the shell
+# before the candidate command reaches the hook.
+jq -e '
+  .env == {"GH_TELEMETRY": "0"}
+' "${settings}" >/dev/null ||
+  fail "runtime settings do not export GH_TELEMETRY=0 to the surveyor shell"
+
+if [ ! -f "${surveyor_hook_resolver}" ] \
+  || [ ! -x "${surveyor_hook_resolver}" ] \
+  || [ -L "${surveyor_hook_resolver}" ]; then
+  fail "consumer does not provide a regular executable resolver for the reviewed surveyor hook adapter"
+fi
+
+# Exercise the complete consumer-to-plugin path without running any candidate command.
+# A fixture registry points the resolver at the pinned, reviewed plugin tree already
+# initialised by this contract's CI job. The real adapter and real guard then classify
+# one read and one write, so a resolver that merely finds a file cannot satisfy this.
+hook_tmp="$(mktemp -d)"
+trap 'rm -rf "${hook_tmp}"' EXIT
+hook_config="${hook_tmp}/claude"
+hook_registry="${hook_config}/plugins/installed_plugins.json"
+mkdir -p "$(dirname "${hook_registry}")"
+write_hook_registry() {
+  jq -n --arg install_path "$1" '{
+    version: 2,
+    plugins: {
+      "agentic-engineering@devantler-plugins": [
+        {installPath: $install_path}
+      ]
+    }
+  }' > "${hook_registry}"
+}
+run_surveyor_hook() {
+  local payload="$1"
+  if [ "${GH_TELEMETRY+x}" = x ]; then
+    printf '%s\n' "${payload}" |
+      CLAUDE_CONFIG_DIR="${hook_config}" GH_TELEMETRY="${GH_TELEMETRY}" \
+        "${surveyor_hook_resolver}"
+  else
+    printf '%s\n' "${payload}" |
+      CLAUDE_CONFIG_DIR="${hook_config}" "${surveyor_hook_resolver}"
+  fi
+}
+
+write_hook_registry "${plugin_root}"
+GH_TELEMETRY=0
+export GH_TELEMETRY
+safe_payload='{"tool_input":{"command":"gh pr list --repo devantler-tech/monorepo --state open"}}'
+run_surveyor_hook "${safe_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused a guard-approved forge read"
+
+write_payload='{"tool_input":{"command":"gh pr merge 1 --repo devantler-tech/monorepo"}}'
+set +e
+write_output="$(run_surveyor_hook "${write_payload}" 2>&1)"
+write_status=$?
+set -e
+[ "${write_status}" -eq 2 ] ||
+  fail "consumer surveyor hook did not block a forge write (exit ${write_status})"
+case "${write_output}" in
+  *'gh pr merge is not a read verb'*) ;;
+  *) fail "consumer surveyor hook blocked a write without the reviewed guard's reason" ;;
+esac
+
+unset GH_TELEMETRY
+telemetry_probe="${hook_tmp}/telemetry-probe.sh"
+# shellcheck disable=SC2016  # fixture must inspect its own child environment
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'cat >/dev/null' \
+  'if [ "${GH_TELEMETRY+x}" = x ]; then printf "set\\n"; else printf "unset\\n"; fi' \
+  > "${telemetry_probe}"
+chmod +x "${telemetry_probe}"
+real_surveyor_hook_resolver="${surveyor_hook_resolver}"
+surveyor_hook_resolver="${telemetry_probe}"
+telemetry_presence="$(run_surveyor_hook '{}')"
+surveyor_hook_resolver="${real_surveyor_hook_resolver}"
+[ "${telemetry_presence}" = unset ] ||
+  fail "consumer surveyor hook test helper synthesizes GH_TELEMETRY when the runtime leaves it absent"
+
+set +e
+telemetry_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+telemetry_status=$?
+set -e
+[ "${telemetry_status}" -eq 2 ] ||
+  fail "consumer surveyor hook allowed gh without disabling telemetry (exit ${telemetry_status})"
+case "${telemetry_output}" in
+  *'export GH_TELEMETRY=0 before any gh read'*) ;;
+  *) fail "consumer surveyor hook refused missing telemetry without the reviewed guard's reason" ;;
+esac
+
+# Finding an executable at the registered path is insufficient: the runtime tree is
+# independently mutable and can drift from the reviewed bytes. A changed adapter must
+# fail before use even when its executable bit remains set.
+tampered_plugin="${hook_tmp}/tampered-plugin"
+cp -R "${plugin_root}" "${tampered_plugin}"
+printf '\n# unreviewed drift\n' >> "${tampered_plugin}/scripts/surveyor-forge-readonly.sh"
+chmod +x "${tampered_plugin}/scripts/surveyor-forge-readonly.sh"
+write_hook_registry "${tampered_plugin}"
+GH_TELEMETRY=0
+export GH_TELEMETRY
+set +e
+tampered_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+tampered_status=$?
+set -e
+[ "${tampered_status}" -eq 2 ] ||
+  fail "consumer surveyor hook trusted an adapter whose bytes differ from desired state (exit ${tampered_status})"
+case "${tampered_output}" in
+  *'sha256 does not match desired state'*) ;;
+  *) fail "consumer surveyor hook refused a drifted adapter without an actionable digest reason" ;;
+esac
+
+# The guard can execute the sibling default-branch classifier for one admitted
+# command shape. Verify that transitive executable before any candidate command,
+# even when this particular command would not reach it.
+tampered_classifier_plugin="${hook_tmp}/tampered-classifier-plugin"
+cp -R "${plugin_root}" "${tampered_classifier_plugin}"
+printf '\n# unreviewed drift\n' >> \
+  "${tampered_classifier_plugin}/scripts/classify-default-branch-ci-runs.sh"
+chmod +x "${tampered_classifier_plugin}/scripts/classify-default-branch-ci-runs.sh"
+write_hook_registry "${tampered_classifier_plugin}"
+set +e
+tampered_classifier_output="$(run_surveyor_hook "${safe_payload}" 2>&1)"
+tampered_classifier_status=$?
+set -e
+[ "${tampered_classifier_status}" -eq 2 ] ||
+  fail "consumer surveyor hook trusted a transitive classifier whose bytes differ from desired state (exit ${tampered_classifier_status})"
+case "${tampered_classifier_output}" in
+  *'scripts/classify-default-branch-ci-runs.sh sha256 does not match desired state'*) ;;
+  *) fail "consumer surveyor hook refused a drifted classifier without an actionable digest reason" ;;
+esac
+
 jq -e '
   .spec.guardrails | index(
     "Write-capable roles own selected engineering work from claim through exact-head review and merge; issue-only handoff is allowed only for a named external blocker or missing authority."
@@ -676,5 +834,24 @@ grep -Fq 'run: bash .claude/scripts/agent-role-delivery-contract.test.sh' "${wor
 # shellcheck disable=SC2016
 grep -Fq '${{ needs.test-agent-role-delivery-contract.result }}' "${workflow}" ||
   fail "required checks do not aggregate the agent-role delivery contract"
+
+# Bind each new consumer surface to THIS job's filter. A global grep is insufficient:
+# portfolio-surveyor.md already appears under sibling jobs, so moving it out of this
+# filter would otherwise leave a hook-only regression with no delivery-contract run.
+agent_role_filter="$(awk '
+  $0 == "            agent-role-delivery-contract:" { in_filter = 1; next }
+  in_filter && $0 ~ /^            [a-z0-9-]+:$/ { exit }
+  in_filter { print }
+' "${workflow}")"
+[ -n "${agent_role_filter}" ] ||
+  fail "CI does not define the agent-role-delivery-contract path filter"
+for guarded_surface in \
+  ".claude/agents/portfolio-surveyor.md" \
+  ".claude/scripts/portfolio-surveyor-forge-hook.sh"; do
+  case "${agent_role_filter}" in
+    *"- '${guarded_surface}'"*) ;;
+    *) fail "agent-role delivery contract filter does not run for ${guarded_surface}" ;;
+  esac
+done
 
 echo "agent-role delivery contract: all assertions passed"

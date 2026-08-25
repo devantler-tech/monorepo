@@ -9,5 +9,8 @@
   },
   "enabledPlugins": {
     "agentic-engineering@devantler-plugins": true
+  },
+  "env": {
+    "GH_TELEMETRY": "0"
   }
 }
