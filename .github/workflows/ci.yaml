@@ -1156,6 +1156,19 @@ jobs:
       - name: Verify the drifted lane escalation contract
         run: bash .claude/scripts/drifted-lane-escalation-contract.test.sh
 
+  test-egress-third-party-qualifier-contract:
+    name: Test egress third party qualifier contract
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the egress third party qualifier contract
+        run: bash .claude/scripts/egress-third-party-qualifier-contract.test.sh
+
   test-one-verb-per-bash-call-contract:
     name: Test one verb per bash call contract
     needs: changes
@@ -1499,6 +1512,7 @@ jobs:
       - test-rung-type-filter-contract
       - test-definition-load-budget-contract
       - test-drifted-lane-escalation-contract
+      - test-egress-third-party-qualifier-contract
       - test-skill-owner
       - test-plugin-definition-currency
       - test-plugin-definition-refresh
@@ -1552,6 +1566,7 @@ jobs:
             ${{ needs.test-rung-type-filter-contract.result }}
             ${{ needs.test-definition-load-budget-contract.result }}
             ${{ needs.test-drifted-lane-escalation-contract.result }}
+            ${{ needs.test-egress-third-party-qualifier-contract.result }}
             ${{ needs.test-skill-owner.result }}
             ${{ needs.test-plugin-definition-currency.result }}
             ${{ needs.test-plugin-definition-refresh.result }}
