@@ -214,6 +214,17 @@ present "$(wf_q ".jobs.\"${JOB}\"")" || \
 job_extra="$(wf_q ".jobs.\"${JOB}\" | keys | .[] | select(. != \"name\" and . != \"runs-on\" and . != \"permissions\" and . != \"steps\")")"
 [ -z "${job_extra}" ] || \
   fail "the ${JOB} job sets $(printf '%s' "${job_extra}" | tr '\n' ' ')— only name, runs-on, permissions and steps are permitted, because keys such as if:, needs:, container:, env: and continue-on-error: change whether the guard runs, what it runs in, or whether its failure counts"
+# An allowlisted KEY still says nothing about its VALUE — the same gap review found in the wiring
+# queries. `runs-on` may name a self-hosted runner that supplies a no-op `bash` or `yq`, and
+# `persist-credentials: true` leaves the checkout token in git config for the PR-head script that runs
+# next. Pin both values, not just their presence.
+runner="$(wf_q ".jobs.\"${JOB}\".\"runs-on\"")"
+[ "${runner}" = "ubuntu-latest" ] || \
+  fail "the ${JOB} job runs on '${runner}', not the hosted ubuntu-latest — a self-hosted or bespoke runner can supply a no-op bash or yq, so the verification command would succeed without checking anything"
+persist="$(wf_q ".jobs.\"${JOB}\".steps[] | select(.uses != null and (.uses | test(\"^actions/checkout@\"))) | .with.\"persist-credentials\"")"
+[ "${persist}" = "false" ] || \
+  fail "the ${JOB} job's checkout sets persist-credentials: ${persist} — the token would remain in git config for the PR-head script that runs next, exposing a credential to checked-out code"
+
 
 # (b) it must run EXACTLY the contract script: a wrapper such as `… || true` converts every failure to
 #     success while still containing the filename.
