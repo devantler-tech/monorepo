@@ -97,10 +97,9 @@ ok
 
 # 2. The section must resolve the overlap explicitly, or a later reader re-derives the same doubt from
 #    *Definition routing* and stands down again.
-case "${egress}" in
-  *'devantler-tech'*'never that case'*) ok ;;
-  *) fail "the Egress allow-list does not state that a devantler-tech repository is never the gated case" ;;
-esac
+has '**A `devantler-tech` repository is never that case**' "${egress}" || \
+  fail "the Egress allow-list does not contiguously state that a devantler-tech repository is never the gated case"
+ok
 
 # 3. PRESERVATION — both gates must sit inside ONE CONTIGUOUS affirmative clause.
 has 'only once both its gates are cleared** — the professional-work boundary and the explicit per-artifact approval' "${egress}" || \
@@ -129,10 +128,9 @@ ok
 has 'Third-party upstream repos' "${conventions}" || \
   fail "*GitHub artifact conventions* no longer says 'Third-party upstream repos' — the two sections have drifted apart again"
 ok
-case "${conventions}" in
-  *'devantler-tech'*'are exempt'*) ok ;;
-  *) fail "*GitHub artifact conventions* no longer states the devantler-tech exemption" ;;
-esac
+has '`devantler-tech` repos are exempt — open drafts/issues there autonomously' "${conventions}" || \
+  fail "*GitHub artifact conventions* no longer contiguously states the devantler-tech exemption"
+ok
 
 [ "${passed}" -eq 7 ] || fail "expected 7 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
