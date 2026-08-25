@@ -110,7 +110,7 @@ ok
 #    routing* calls a synced skill's repository an upstream too, and those are frequently third party
 #    (`find-skills` is owned by `vercel-labs/skills`) — so an exemption phrased as "the skills
 #    repositories" would exempt a third-party owner from the gate this very entry imposes.
-has 'The exemption follows the `devantler-tech` owner, never the word' "${egress}" || \
+has 'The exemption follows the `devantler-tech` owner, never the word *upstream*' "${egress}" || \
   fail "the Egress entry no longer ties the exemption to the devantler-tech OWNER, so a third-party skill upstream could read as exempt"
 ok
 
@@ -201,6 +201,19 @@ for wiring in \
 done
 
 # The changes job's output declaration, inside the changes job's block.
+# The aggregate only gates while it actually evaluates its dependencies. With `if: false` on `status`
+# the required job is skipped, evaluates nothing, and the two entries asserted above gate nothing.
+grep -Fqx -- '    if: always()' <<< "${status_block}" || \
+  fail "the status job is not 'if: always()' — a skipped aggregate evaluates no failing dependency, so this job's entries in it would gate nothing"
+
+# The output expression is only meaningful while the step that PRODUCES it exists under that id.
+# Renaming `id: filter` makes every steps.filter.outputs.* reference resolve empty, so this job is
+# skipped and the path-filtered aggregate accepts the skip. Reproduced.
+grep -Fqx -- '        id: filter' <<< "${changes_block}" || \
+  fail "the changes job has no step with 'id: filter' — steps.filter.outputs.* would resolve empty and this job would skip silently"
+grep -qF -- 'dorny/paths-filter@' <<< "${changes_block}" || \
+  fail "the changes job no longer runs dorny/paths-filter — the outputs this job's condition reads would not be produced"
+
 grep -Fqx -- '      egress-third-party-qualifier-contract: ${{ steps.filter.outputs.egress-third-party-qualifier-contract }}' <<< "${changes_block}" || \
   fail "the changes job is missing this job's outputs declaration — needs.changes.outputs.* would be empty and the job would skip silently"
 
