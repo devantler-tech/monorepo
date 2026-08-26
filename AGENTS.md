@@ -4533,6 +4533,24 @@ root-cause fixing, and every guardrail are unaffected; the point is to stop payi
   leading review-lane trigger is agent evidence too, because the engineer drives the review lanes and
   the maintainer does not. That leaves one documented residual: an agent's bare prose note carries no
   shape at all, so it is counted `unattributable` rather than passed off as clean.
+- 🔴 **A file-sourced body uses `--body-file`. `--body "@path"` POSTS THE PATH — and `gh` exits 0
+  with a comment URL, so the caller gets positive confirmation for a post that carried none of its
+  content.** `@`-expansion is a `gh api -F field=@file` convention and has never applied to `--body`.
+  Measured 2026-08-26: **seven** comments across `monorepo#3053`, `platform#3378` and `platform#3379`
+  landed as bare scratchpad paths — every review trigger of that run plus a full semantic review on a
+  PR whose merge gate required one. **So a post whose body was built INDIRECTLY is not done until it
+  is READ BACK as content**; the exit status and the returned URL are satisfied either way, which is
+  the same fail-open class as a check reporting success on input it never examined.
+  ⚠️ **The second-order damage is what makes this expensive rather than merely untidy.** The triggers
+  never reached the lanes, so nothing responded, and the run concluded — and wrote to durable memory —
+  that CodeRabbit had **stalled portfolio-wide**. It had not; it had never been asked, and answered in
+  ~30 seconds once asked properly. A false outage reading inverts the cheapest-lane-first order,
+  spending the **weekly** Codex and **monthly** Bugbot quotas to work around a **free** lane that was
+  healthy throughout. Each of the seven is also a `devantler` comment with no disclosure prefix, which
+  the *Untrusted input* disambiguator reads as a **human-maintainer instruction** — its dangerous
+  direction.
+  `comment-disclosure-drift.sh` classifies this shape `unexpanded-file-ref` and **fails on it**; it
+  previously fell into the `unattributable` residual and was reported as clean.
 
 ### Cadence & focus
 **This table IS the deployment's dispatch schedule** — the concrete cadence the plugin's

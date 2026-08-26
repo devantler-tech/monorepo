@@ -164,12 +164,18 @@ const (
 	// Unattributable means no positive evidence of agent authorship. Reported as
 	// a count only; see the "Known residual gap" note above.
 	Unattributable Verdict = "unattributable"
+	// UnexpandedFileRef means the whole body is an `@`-prefixed filesystem
+	// path — a post whose content never expanded. `--body "@file"` takes the
+	// string literally; only `gh api -F field=@file` reads the file. `gh` exits
+	// 0 and returns a comment URL either way, so this shape is invisible to the
+	// caller and is what makes it worth detecting after the fact.
+	UnexpandedFileRef Verdict = "unexpanded-file-ref"
 )
 
 // violating reports whether a verdict is a defect this guard fails on.
 func (v Verdict) violating() bool {
 	switch v {
-	case SenderMarker, UndisclosedTrigger:
+	case SenderMarker, UndisclosedTrigger, UnexpandedFileRef:
 		return true
 	default:
 		return false
@@ -449,6 +455,29 @@ func isBareTrigger(body string) bool {
 	return bareTriggerExemptBodies[normalise(body)]
 }
 
+// isUnexpandedFileRef reports whether the whole body is an `@`-prefixed
+// filesystem path and nothing else — the shape `gh ... --body "@file"` produces
+// when the caller meant `--body-file`.
+//
+// The test is deliberately narrow, because a false positive here would report a
+// real comment as a failed post. All four conjuncts are required: exactly one
+// content line (more than one means content did land), no whitespace anywhere (a
+// path mentioned in a sentence is a real comment), a leading `@` followed by a
+// path root, and something after that root. A lone `@mention` therefore does not
+// match, and the exempt bare trigger is classified before this is reached.
+func isUnexpandedFileRef(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	if strings.ContainsAny(trimmed, " \t\n\r") {
+		return false
+	}
+	for _, root := range []string{"@/", "@./", "@../"} {
+		if strings.HasPrefix(trimmed, root) && len(trimmed) > len(root) {
+			return true
+		}
+	}
+	return false
+}
+
 // Classify assigns a verdict to one comment body.
 func Classify(body string) Verdict {
 	body = normalise(body)
@@ -458,6 +487,9 @@ func Classify(body string) Verdict {
 	}
 	if isBareTrigger(body) {
 		return BareTrigger
+	}
+	if isUnexpandedFileRef(body) {
+		return UnexpandedFileRef
 	}
 
 	raw, ok := firstContentLine(body)
@@ -800,7 +832,7 @@ func main() {
 	}
 
 	if *all {
-		verdicts := []Verdict{Compliant, BareTrigger, SenderMarker, UndisclosedTrigger, Unattributable}
+		verdicts := []Verdict{Compliant, BareTrigger, SenderMarker, UndisclosedTrigger, UnexpandedFileRef, Unattributable}
 		for _, verdict := range verdicts {
 			fmt.Printf("%-19s %d\n", verdict, report.Counts[verdict])
 		}
