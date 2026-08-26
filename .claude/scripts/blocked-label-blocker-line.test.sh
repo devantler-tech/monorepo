@@ -320,5 +320,84 @@ else
   bad "the org query excludes archived repositories" "argv: $(cat "$TMP/argv.log")"
 fi
 
+# ------------------------------------------------------------------ 18. a URL is not an identifier
+# The contract requires the identifier to be plain local data with no URL, because it may only
+# ever be matched LOCALLY and must never choose a destination. The slug alternative is unanchored,
+# so `github.com/owner` inside a link satisfied it and a record naming nothing but a link
+# CONFORMED -- the indefinite skip this check exists to expose.
+cat >"$TMP/url.json" <<'EOF'
+[{"repo":"p","number":30,"body":"**Blocker:** https://github.com/owner/repo/issues/7 | last-verified 2026-08-25: not shipped"}]
+EOF
+expect_rc "a URL identifier is MALFORMED" 1 "$TMP/url.json"
+
+# A scheme-less URL is the same class and must not slip past a scheme-only test.
+cat >"$TMP/url-bare.json" <<'EOF'
+[{"repo":"p","number":36,"body":"**Blocker:** github.com/owner/repo/issues/7 | last-verified 2026-08-25: not shipped"}]
+EOF
+expect_rc "a scheme-less URL identifier is MALFORMED" 1 "$TMP/url-bare.json"
+
+# CONTROL: a record may legitimately NAME an identifier and also link to it. Rejecting that
+# would fire on correct work, so URL tokens are stripped rather than poisoning the whole record.
+cat >"$TMP/url-plus-id.json" <<'EOF'
+[{"repo":"p","number":37,"body":"**Blocker:** owner/repo#7 (see https://github.com/owner/repo/issues/7) | last-verified 2026-08-25: x"}]
+EOF
+expect_rc "control: a real identifier alongside a link still CONFORMS" 0 "$TMP/url-plus-id.json"
+
+# ------------------------------------------------------------------ 19. the date must be a real day
+# Bounding month and day independently accepts a day that cannot exist in that month, so
+# `2026-02-31` read as a verification date. The date is what makes a skip re-verifiable.
+cat >"$TMP/feb31.json" <<'EOF'
+[{"repo":"p","number":31,"body":"**Blocker:** owner/repo#7 | last-verified 2026-02-31: nope"}]
+EOF
+expect_rc "31 February is MALFORMED" 1 "$TMP/feb31.json"
+
+cat >"$TMP/apr31.json" <<'EOF'
+[{"repo":"p","number":40,"body":"**Blocker:** owner/repo#7 | last-verified 2026-04-31: nope"}]
+EOF
+expect_rc "31 April is MALFORMED" 1 "$TMP/apr31.json"
+
+# Leap years must be computed, not assumed: these two differ ONLY in the year, so a check that
+# hard-coded 28 or 29 days fails one of them.
+cat >"$TMP/feb29-non.json" <<'EOF'
+[{"repo":"p","number":38,"body":"**Blocker:** owner/repo#7 | last-verified 2026-02-29: nope"}]
+EOF
+expect_rc "29 February in a non-leap year is MALFORMED" 1 "$TMP/feb29-non.json"
+
+cat >"$TMP/feb29-leap.json" <<'EOF'
+[{"repo":"p","number":39,"body":"**Blocker:** owner/repo#7 | last-verified 2024-02-29: leap"}]
+EOF
+expect_rc "control: 29 February in a leap year CONFORMS" 0 "$TMP/feb29-leap.json"
+
+# ------------------------------------------------------------------ 20. comments and fences hold no records
+# A marker inside an HTML comment or a fenced example is not a visible status record, so treating
+# it as one leaves the `blocked` label trusted over a body that shows no blocker metadata --
+# recreating the indefinite skip. Note this file's fence handling is deliberate where AGENTS.md
+# declines it for the disclosure classifier: there an unswallowed marker costs a re-askable steer,
+# here it costs an issue parked forever, so the cheap direction is the opposite one.
+cat >"$TMP/in-comment.json" <<'EOF'
+[{"repo":"p","number":32,"body":"real text\n\n<!--\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: stale\n-->\n\nmore"}]
+EOF
+expect_rc "a marker inside an HTML comment is MISSING" 1 "$TMP/in-comment.json"
+expect_out "a commented marker reports MISSING" '^MISSING +p#32' "$TMP/in-comment.json"
+
+cat >"$TMP/in-fence.json" <<'EOF'
+[{"repo":"p","number":33,"body":"Example of the format:\n\n```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n```\n\nend"}]
+EOF
+expect_rc "a marker inside a code fence is MISSING" 1 "$TMP/in-fence.json"
+
+# CONTROL: an inline comment ELSEWHERE in the body must not suppress a real record, so the case
+# above is shown to turn on the marker's context rather than on the body containing a comment.
+cat >"$TMP/comment-elsewhere.json" <<'EOF'
+[{"repo":"p","number":34,"body":"x <!-- hidden --> y\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: real\n\nend"}]
+EOF
+expect_rc "control: a comment elsewhere does not hide a real record" 0 "$TMP/comment-elsewhere.json"
+
+# CONTROL: the fence must TOGGLE, not swallow the rest of the body -- a record after a closed
+# fence is still a record. Without this, "ignore fences" could pass by ignoring everything.
+cat >"$TMP/after-fence.json" <<'EOF'
+[{"repo":"p","number":35,"body":"```\nexample fence\n```\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: real\n\nend"}]
+EOF
+expect_rc "control: a record after a closed fence still CONFORMS" 0 "$TMP/after-fence.json"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1

@@ -112,6 +112,63 @@ command -v jq >/dev/null 2>&1 || die "jq is required"
 # so the slug form is gone rather than approximated.
 IDENTIFIER_RE='#[0-9]+|maintainer authority|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+'
 
+# A URL is NOT an identifier, and the contract is explicit: the blocker record's identifier is
+# "plain local data (no URL or control characters)", matched LOCALLY and never used to choose a
+# destination. Unchecked, the slug alternative above matches a slash-delimited substring of any
+# link -- `github.com/owner` inside `https://github.com/owner/repo/issues/7` -- so a record
+# naming nothing but a link CONFORMED, which is the indefinite skip this check exists to expose.
+#
+# URL-shaped tokens are STRIPPED before the grammar runs rather than rejecting the whole record,
+# because a record may legitimately name a real identifier AND link to it; refusing that would
+# fire on correct work, which is how a check gets ignored and then deleted. A record whose only
+# identifier-looking text was a URL has nothing left to match, so it is MALFORMED.
+URL_TOKEN_RE='([A-Za-z][A-Za-z0-9+.-]*://|//|www\.|[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\.[A-Za-z]{2,}/)[^[:space:]]*'
+
+STRUCTURE_RE='^\*\*Blocker:\*\* .+ \| last-verified [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01]): .+$'
+
+# Digit counting alone accepts `2026-02-31`: month and day are bounded independently, so a day
+# that cannot exist in that month still reads as a verification date. The date is what makes a
+# skip RE-VERIFIABLE, so a value naming no real day is not a record. Computed arithmetically
+# rather than with `date`, whose parsing flags differ between BSD and GNU and would make this
+# check disagree with itself across the two CI runners.
+is_real_date() { # YYYY-MM-DD
+  local y m d max
+  [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || return 1
+  y=$((10#${1:0:4}))
+  m=$((10#${1:5:2}))
+  d=$((10#${1:8:2}))
+  case "$m" in
+    1 | 3 | 5 | 7 | 8 | 10 | 12) max=31 ;;
+    4 | 6 | 9 | 11) max=30 ;;
+    2) if [ "$(((y % 4 == 0 && y % 100 != 0) || y % 400 == 0))" = 1 ]; then max=29; else max=28; fi ;;
+    *) return 1 ;;
+  esac
+  [ "$d" -ge 1 ] && [ "$d" -le "$max" ]
+}
+
+# Matching is done with bash's own `=~` rather than `printf | grep -q`: `grep -q` exits on its
+# first match and can SIGPIPE the writer, which under `set -o pipefail` surfaces as rc=141 on a
+# body large enough to exceed the pipe buffer. Keeping the match in-process removes that class.
+line_conforms() { # <logical line>
+  local logical="$1" ident stripped date_str
+  [[ $logical =~ $STRUCTURE_RE ]] || return 1
+
+  # Control characters cannot occur in a legitimate record and are named by the contract
+  # alongside URLs. Tabs are normalised first so ordinary indentation is not treated as one.
+  case "${logical//$'\t'/ }" in
+    *[[:cntrl:]]*) return 1 ;;
+  esac
+
+  date_str="$(printf '%s\n' "$logical" |
+    sed -n -E 's/.*\| last-verified ([0-9]{4}-[0-9]{2}-[0-9]{2}):.*/\1/p')"
+  [ -n "$date_str" ] || return 1
+  is_real_date "$date_str" || return 1
+
+  ident="${logical%% | last-verified *}"
+  stripped="$(printf '%s\n' "$ident" | sed -E "s#$URL_TOKEN_RE##g")"
+  [[ $stripped =~ $IDENTIFIER_RE ]]
+}
+
 # ---------------------------------------------------------------- acquire payload
 payload=""
 if [ -n "$INPUT" ]; then
@@ -197,11 +254,43 @@ while [ "$i" -lt "$count" ]; do
   # awk reads the FILE directly, so there is no upstream writer to signal and the early-exit
   # SIGPIPE that an earlier revision hit cannot arise here at all.
   logical="$(awk '
-        BEGIN { found = 0; collecting = 0; buf = "" }
+        BEGIN { found = 0; collecting = 0; buf = ""; infence = 0; incomment = 0 }
         {
           line = $0
           sub(/\r$/, "", line)
           if (found) next
+
+          # ---- HTML comment context. A body that keeps an old record inside <!-- --> has no
+          # visible status line, so a marker in there must not satisfy the check. Comments can
+          # open and close mid-line and can span many lines, so consume the commented spans and
+          # keep only what is left OUTSIDE them.
+          out = ""
+          rest = line
+          while (rest != "") {
+            if (incomment) {
+              p = index(rest, "-->")
+              if (p == 0) { rest = ""; break }
+              rest = substr(rest, p + 3)
+              incomment = 0
+            } else {
+              p = index(rest, "<!--")
+              if (p == 0) { out = out rest; rest = ""; break }
+              out = out substr(rest, 1, p - 1)
+              rest = substr(rest, p + 4)
+              incomment = 1
+            }
+          }
+          line = out
+
+          # ---- fenced code block context. A fence shows the SYNTAX as an example; it is not a
+          # record. Toggle on an opening/closing fence and skip everything between.
+          if (line ~ /^[ \t]{0,3}(```|~~~)/) {
+            if (collecting) { found = 1; collecting = 0 }
+            infence = !infence
+            next
+          }
+          if (infence) next
+
           if (collecting) {
             if (line ~ /^[ \t]*$/) { found = 1; collecting = 0; next }
             sub(/^[ \t]+/, "", line)
@@ -216,9 +305,7 @@ while [ "$i" -lt "$count" ]; do
   if [ -z "$logical" ]; then
     [ "$QUIET" = 1 ] || printf 'MISSING    %s#%s\n' "$repo" "$num"
     bad=$((bad + 1))
-  elif printf '%s\n' "$logical" |
-    grep -qE '^\*\*Blocker:\*\* .+ \| last-verified [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01]): .+$' &&
-    printf '%s\n' "${logical%% | last-verified *}" | grep -qE "$IDENTIFIER_RE"; then
+  elif line_conforms "$logical"; then
     [ "$QUIET" = 1 ] || printf 'CONFORMS   %s#%s\n' "$repo" "$num"
   else
     [ "$QUIET" = 1 ] || printf 'MALFORMED  %s#%s  >>%s\n' "$repo" "$num" "${logical:0:100}"
