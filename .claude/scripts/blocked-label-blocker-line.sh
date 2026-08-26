@@ -254,7 +254,7 @@ while [ "$i" -lt "$count" ]; do
   # awk reads the FILE directly, so there is no upstream writer to signal and the early-exit
   # SIGPIPE that an earlier revision hit cannot arise here at all.
   logical="$(awk '
-        BEGIN { found = 0; collecting = 0; buf = ""; infence = 0; incomment = 0 }
+        BEGIN { found = 0; collecting = 0; buf = ""; infence = 0; incomment = 0; fencechar = ""; fencelen = 0 }
         {
           line = $0
           sub(/\r$/, "", line)
@@ -283,11 +283,30 @@ while [ "$i" -lt "$count" ]; do
           line = out
 
           # ---- fenced code block context. A fence shows the SYNTAX as an example; it is not a
-          # record. Toggle on an opening/closing fence and skip everything between.
-          if (line ~ /^[ \t]{0,3}(```|~~~)/) {
-            if (collecting) { found = 1; collecting = 0 }
-            infence = !infence
-            next
+          # record. A fence opens on a run of 3+ backticks or tildes and closes only on a run of
+          # the SAME character, at least as long, carrying no info string (CommonMark). A shorter
+          # or mismatched run is ordinary CONTENT, so the ``` line inside a ```` block does not
+          # end it -- a plain toggle would end the block there and expose the example as a record.
+          if (line ~ /^[ \t]{0,3}(`{3,}|~{3,})/) {
+            m = line
+            sub(/^[ \t]{0,3}/, "", m)
+            fch = substr(m, 1, 1)
+            n = 0
+            while (substr(m, n + 1, 1) == fch) n++
+            info = substr(m, n + 1)
+            gsub(/[ \t]/, "", info)
+            if (!infence) {
+              if (collecting) { found = 1; collecting = 0 }
+              infence = 1
+              fencechar = fch
+              fencelen = n
+              next
+            }
+            if (fch == fencechar && n >= fencelen && info == "") {
+              infence = 0
+              next
+            }
+            # a shorter or mismatched run inside a fence is content, not a close
           }
           if (infence) next
 

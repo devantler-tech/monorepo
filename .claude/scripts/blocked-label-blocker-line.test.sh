@@ -399,5 +399,35 @@ cat >"$TMP/after-fence.json" <<'EOF'
 EOF
 expect_rc "control: a record after a closed fence still CONFORMS" 0 "$TMP/after-fence.json"
 
+# ------------------------------------------------------------------ 21. fence RUN LENGTH and CHARACTER
+# A plain open/close toggle ends the block on the first fence-looking line, so a ``` line INSIDE a
+# ```` block closed it and the example beneath was read as a live record -- the same fail-open the
+# fence handling exists to remove, one level down. CommonMark closes a fence only on a run of the
+# SAME character, at least as long as the opening, carrying no info string.
+#
+# Built with printf rather than a heredoc: the fixtures are made OF fence delimiters, so embedding
+# them in this file's own prose is what makes them easy to get subtly wrong.
+printf 'Example:\n\n````\n```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n```\n````\n\nend\n' >"$TMP/fence4.txt"
+jq -Rs '[{repo:"p",number:50,body:.}]' <"$TMP/fence4.txt" >"$TMP/fence4.json"
+expect_rc "a shorter run inside a longer fence does not close it" 1 "$TMP/fence4.json"
+expect_out "the 4-backtick fence body reports MISSING" '^MISSING +p#50' "$TMP/fence4.json"
+
+# The character must match too: a ``` run cannot close a ~~~ fence.
+printf 'Example:\n\n~~~\n```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n```\n~~~\n\nend\n' >"$TMP/fencex.txt"
+jq -Rs '[{repo:"p",number:52,body:.}]' <"$TMP/fencex.txt" >"$TMP/fencex.json"
+expect_rc "a mismatched fence character does not close it" 1 "$TMP/fencex.json"
+
+# CONTROL: a fence that IS properly closed must release, or "never close" would pass every case
+# above by simply swallowing the rest of the body. The record here sits after a closed 4-backtick
+# fence and must conform.
+printf 'Example:\n\n````\n```\ninner\n```\n````\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: real\n\nend\n' >"$TMP/fenceok.txt"
+jq -Rs '[{repo:"p",number:54,body:.}]' <"$TMP/fenceok.txt" >"$TMP/fenceok.json"
+expect_rc "control: a record after a closed 4-backtick fence CONFORMS" 0 "$TMP/fenceok.json"
+
+# CONTROL: a LONGER closing run is legal, so it must close a shorter fence.
+printf 'Example:\n\n```\ninner\n````\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: real\n\nend\n' >"$TMP/fencelong.txt"
+jq -Rs '[{repo:"p",number:55,body:.}]' <"$TMP/fencelong.txt" >"$TMP/fencelong.json"
+expect_rc "control: a longer closing run closes a shorter fence" 0 "$TMP/fencelong.json"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1
