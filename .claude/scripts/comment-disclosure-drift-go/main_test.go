@@ -1072,7 +1072,7 @@ func TestIsUnexpandedFileRef_RejectsInteriorUnicodeWhitespace(t *testing.T) {
 // The positive control for the test above: a genuine unexpanded file reference,
 // which carries no whitespace of any kind, must still be detected.
 func TestIsUnexpandedFileRef_StillDetectsGenuineFailedPost(t *testing.T) {
-	for _, body := range []string{"@/tmp/x/cr.md", "@./notes/a.md", "@../up/b.md"} {
+	for _, body := range []string{"@/tmp/x/cr.md", "@./notes/a.md", "@../up/b.md", "@/tmp/x/cr.md\n"} {
 		if got := Classify(body); got != UnexpandedFileRef {
 			t.Errorf("Classify(%q) = %v, want %v", body, got, UnexpandedFileRef)
 		}
@@ -1092,6 +1092,12 @@ func TestIsUnexpandedFileRef_RejectsIndentedExample(t *testing.T) {
 		{"four spaces", "    @/tmp/example.md"},
 		{"tab", "\t@/tmp/example.md"},
 		{"leading newline then indent", "\n    @/tmp/example.md"},
+		// The Unicode half of the same class. These are invisible, and an
+		// ASCII-only or leading-only test lets TrimSpace erase them, after
+		// which the body reads as a bare path.
+		{"leading nbsp", "\u00a0@/tmp/example.md"},
+		{"trailing nbsp", "@/tmp/example.md\u00a0"},
+		{"leading ideographic space", "\u3000@/tmp/example.md"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := Classify(tc.body); got == UnexpandedFileRef {

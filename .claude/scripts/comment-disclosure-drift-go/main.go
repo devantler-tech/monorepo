@@ -481,19 +481,24 @@ func isBareTrigger(body string) bool {
 // be told apart without guessing at file extensions. Every measured instance was
 // an absolute path, which is what `--body "@$dir/file.md"` produces.
 func isUnexpandedFileRef(body string) bool {
-	// Trim transport line endings only, so leading indentation is still visible
-	// below. TrimSpace would remove it and make an indented example match.
+	// Trim transport line endings only. TrimSpace here would remove the very
+	// whitespace the next test needs to see.
 	stripped := strings.Trim(body, "\n")
-	// An indented first line is Markdown code-block indentation — someone
-	// showing this shape rather than producing it. A real failed post is flush
-	// left, because gh writes the argument verbatim.
-	if strings.HasPrefix(stripped, " ") || strings.HasPrefix(stripped, "\t") {
+	// Reject ANY outer whitespace. A real failed post is flush left and bare,
+	// because gh writes the argument verbatim, so outer whitespace means
+	// something else: Markdown code-block indentation (someone showing this
+	// shape rather than producing it), or stray padding from a paste. Comparing
+	// against TrimSpace covers the whole Unicode white-space property in both
+	// positions at once — testing only ASCII space and tab, or only the leading
+	// side, leaves an invisible U+00A0 to be trimmed away silently and the body
+	// then read as a bare path.
+	if stripped != strings.TrimSpace(stripped) {
 		return false
 	}
-	trimmed := strings.TrimSpace(stripped)
-	if strings.ContainsFunc(trimmed, unicode.IsSpace) {
+	if strings.ContainsFunc(stripped, unicode.IsSpace) {
 		return false
 	}
+	trimmed := stripped
 	for _, root := range []string{"@/", "@./", "@../", "@~/"} {
 		if strings.HasPrefix(trimmed, root) && len(trimmed) > len(root) {
 			return true
