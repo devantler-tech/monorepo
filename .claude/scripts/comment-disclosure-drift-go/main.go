@@ -55,6 +55,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // canonicalPrefix is the one form that satisfies the contract. Matching is on
@@ -461,7 +462,8 @@ func isBareTrigger(body string) bool {
 //
 // The test is deliberately narrow, because a false positive here would report a
 // real comment as a failed post. All four conjuncts are required: exactly one
-// content line (more than one means content did land), no whitespace anywhere (a
+// content line (more than one means content did land), no Unicode whitespace
+// anywhere (a
 // path mentioned in a sentence is a real comment), a leading `@` followed by a
 // path root, and something after that root. A lone `@mention` therefore does not
 // match, and the exempt bare trigger is classified before this is reached.
@@ -475,7 +477,7 @@ func isBareTrigger(body string) bool {
 // an absolute path, which is what `--body "@$dir/file.md"` produces.
 func isUnexpandedFileRef(body string) bool {
 	trimmed := strings.TrimSpace(body)
-	if strings.ContainsAny(trimmed, " \t\n\r") {
+	if strings.ContainsFunc(trimmed, unicode.IsSpace) {
 		return false
 	}
 	for _, root := range []string{"@/", "@./", "@../"} {

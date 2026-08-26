@@ -466,12 +466,16 @@ func TestExcerpt_TrimsOnRuneBoundaries(t *testing.T) {
 	}
 }
 
-func TestVerdict_OnlyTheTwoShapesViolate(t *testing.T) {
+func TestVerdict_OnlyTheThreeShapesViolate(t *testing.T) {
 	violating := map[Verdict]bool{
 		SenderMarker:       true,
 		UndisclosedTrigger: true,
+		UnexpandedFileRef:  true,
 	}
-	all := []Verdict{Compliant, BareTrigger, SenderMarker, UndisclosedTrigger, Unattributable}
+	all := []Verdict{
+		Compliant, BareTrigger, SenderMarker,
+		UndisclosedTrigger, UnexpandedFileRef, Unattributable,
+	}
 	for _, verdict := range all {
 		if got, want := verdict.violating(), violating[verdict]; got != want {
 			t.Errorf("%q.violating() = %v, want %v", verdict, got, want)
@@ -1040,6 +1044,37 @@ func TestClassify_UnexpandedFileRefControls(t *testing.T) {
 	for body, want := range cases {
 		if got := Classify(body); got != want {
 			t.Errorf("Classify(%q) = %q, want %q", body, got, want)
+		}
+	}
+}
+
+// A path carrying interior Unicode whitespace is NOT a failed post. U+00A0 is
+// invisible and is not ASCII whitespace, so an ASCII-only check let it satisfy
+// the no-whitespace conjunct and reported a real comment as an unexpanded file
+// reference — the false-positive direction isUnexpandedFileRef exists to avoid.
+func TestIsUnexpandedFileRef_RejectsInteriorUnicodeWhitespace(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"nbsp", "@/tmp/a\u00a0note.md"},
+		{"ideographic space", "@/tmp/a\u3000note.md"},
+		{"ascii space control", "@/tmp/a note.md"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Classify(tc.body); got == UnexpandedFileRef {
+				t.Errorf("Classify(%q) = %v, want anything but %v", tc.body, got, UnexpandedFileRef)
+			}
+		})
+	}
+}
+
+// The positive control for the test above: a genuine unexpanded file reference,
+// which carries no whitespace of any kind, must still be detected.
+func TestIsUnexpandedFileRef_StillDetectsGenuineFailedPost(t *testing.T) {
+	for _, body := range []string{"@/tmp/x/cr.md", "@./notes/a.md", "@../up/b.md"} {
+		if got := Classify(body); got != UnexpandedFileRef {
+			t.Errorf("Classify(%q) = %v, want %v", body, got, UnexpandedFileRef)
 		}
 	}
 }
