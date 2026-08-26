@@ -55,6 +55,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // canonicalPrefix is the one form that satisfies the contract. Matching is on
@@ -164,12 +165,18 @@ const (
 	// Unattributable means no positive evidence of agent authorship. Reported as
 	// a count only; see the "Known residual gap" note above.
 	Unattributable Verdict = "unattributable"
+	// UnexpandedFileRef means the whole body is an `@`-prefixed filesystem
+	// path — a post whose content never expanded. `--body "@file"` takes the
+	// string literally; only `gh api -F field=@file` reads the file. `gh` exits
+	// 0 and returns a comment URL either way, so this shape is invisible to the
+	// caller and is what makes it worth detecting after the fact.
+	UnexpandedFileRef Verdict = "unexpanded-file-ref"
 )
 
 // violating reports whether a verdict is a defect this guard fails on.
 func (v Verdict) violating() bool {
 	switch v {
-	case SenderMarker, UndisclosedTrigger:
+	case SenderMarker, UndisclosedTrigger, UnexpandedFileRef:
 		return true
 	default:
 		return false
@@ -449,6 +456,57 @@ func isBareTrigger(body string) bool {
 	return bareTriggerExemptBodies[normalise(body)]
 }
 
+// isUnexpandedFileRef reports whether the whole body is an `@`-prefixed
+// filesystem path and nothing else — the shape `gh ... --body "@file"` produces
+// when the caller meant `--body-file`.
+//
+// The test is deliberately narrow, because a false positive here would report a
+// real comment as a failed post. All four conjuncts are required: exactly one
+// content line (more than one means content did land), no Unicode whitespace
+// anywhere (a
+// path mentioned in a sentence is a real comment), a leading `@` followed by a
+// path root, and something after that root. A lone `@mention` therefore does not
+// match, and the exempt bare trigger is classified before this is reached.
+//
+// `@~/` is included because a shell leaves that tilde literal — it is not at the
+// start of the word — so `--body "@~/notes.md"` posts the path verbatim. It is
+// also unambiguous: a mention cannot begin `@~`, so the root carries no
+// false-positive risk that `@/` does not already carry.
+//
+// Two residuals are accepted rather than closed, both of which fail toward
+// under-reporting. A path containing a space is not matched, because requiring
+// no whitespace is what keeps a path mentioned inside a sentence from being read
+// as a failed post. And a bare relative reference such as `@notes.md` is not
+// matched, because `@name` is also how a mention is written and the two cannot
+// be told apart without guessing at file extensions. Every measured instance was
+// an absolute path, which is what `--body "@$dir/file.md"` produces.
+func isUnexpandedFileRef(body string) bool {
+	// Trim transport line endings only. TrimSpace here would remove the very
+	// whitespace the next test needs to see.
+	stripped := strings.Trim(body, "\n")
+	// Reject ANY outer whitespace. A real failed post is flush left and bare,
+	// because gh writes the argument verbatim, so outer whitespace means
+	// something else: Markdown code-block indentation (someone showing this
+	// shape rather than producing it), or stray padding from a paste. Comparing
+	// against TrimSpace covers the whole Unicode white-space property in both
+	// positions at once — testing only ASCII space and tab, or only the leading
+	// side, leaves an invisible U+00A0 to be trimmed away silently and the body
+	// then read as a bare path.
+	if stripped != strings.TrimSpace(stripped) {
+		return false
+	}
+	if strings.ContainsFunc(stripped, unicode.IsSpace) {
+		return false
+	}
+	trimmed := stripped
+	for _, root := range []string{"@/", "@./", "@../", "@~/"} {
+		if strings.HasPrefix(trimmed, root) && len(trimmed) > len(root) {
+			return true
+		}
+	}
+	return false
+}
+
 // Classify assigns a verdict to one comment body.
 func Classify(body string) Verdict {
 	body = normalise(body)
@@ -458,6 +516,9 @@ func Classify(body string) Verdict {
 	}
 	if isBareTrigger(body) {
 		return BareTrigger
+	}
+	if isUnexpandedFileRef(body) {
+		return UnexpandedFileRef
 	}
 
 	raw, ok := firstContentLine(body)
@@ -800,7 +861,7 @@ func main() {
 	}
 
 	if *all {
-		verdicts := []Verdict{Compliant, BareTrigger, SenderMarker, UndisclosedTrigger, Unattributable}
+		verdicts := []Verdict{Compliant, BareTrigger, SenderMarker, UndisclosedTrigger, UnexpandedFileRef, Unattributable}
 		for _, verdict := range verdicts {
 			fmt.Printf("%-19s %d\n", verdict, report.Counts[verdict])
 		}
