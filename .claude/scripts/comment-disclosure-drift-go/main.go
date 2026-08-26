@@ -468,6 +468,11 @@ func isBareTrigger(body string) bool {
 // path root, and something after that root. A lone `@mention` therefore does not
 // match, and the exempt bare trigger is classified before this is reached.
 //
+// `@~/` is included because a shell leaves that tilde literal — it is not at the
+// start of the word — so `--body "@~/notes.md"` posts the path verbatim. It is
+// also unambiguous: a mention cannot begin `@~`, so the root carries no
+// false-positive risk that `@/` does not already carry.
+//
 // Two residuals are accepted rather than closed, both of which fail toward
 // under-reporting. A path containing a space is not matched, because requiring
 // no whitespace is what keeps a path mentioned inside a sentence from being read
@@ -476,11 +481,20 @@ func isBareTrigger(body string) bool {
 // be told apart without guessing at file extensions. Every measured instance was
 // an absolute path, which is what `--body "@$dir/file.md"` produces.
 func isUnexpandedFileRef(body string) bool {
-	trimmed := strings.TrimSpace(body)
+	// Trim transport line endings only, so leading indentation is still visible
+	// below. TrimSpace would remove it and make an indented example match.
+	stripped := strings.Trim(body, "\n")
+	// An indented first line is Markdown code-block indentation — someone
+	// showing this shape rather than producing it. A real failed post is flush
+	// left, because gh writes the argument verbatim.
+	if strings.HasPrefix(stripped, " ") || strings.HasPrefix(stripped, "\t") {
+		return false
+	}
+	trimmed := strings.TrimSpace(stripped)
 	if strings.ContainsFunc(trimmed, unicode.IsSpace) {
 		return false
 	}
-	for _, root := range []string{"@/", "@./", "@../"} {
+	for _, root := range []string{"@/", "@./", "@../", "@~/"} {
 		if strings.HasPrefix(trimmed, root) && len(trimmed) > len(root) {
 			return true
 		}

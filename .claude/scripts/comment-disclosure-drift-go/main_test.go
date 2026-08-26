@@ -1078,3 +1078,40 @@ func TestIsUnexpandedFileRef_StillDetectsGenuineFailedPost(t *testing.T) {
 		}
 	}
 }
+
+// An INDENTED lone path is a Markdown code-block example — someone documenting
+// this shape, not producing it. A real failed post is flush left, because gh
+// writes the argument verbatim. Trimming before the whitespace test erased the
+// indentation and turned a legitimate comment into a reported failed post,
+// which is the false-positive direction this detector exists to avoid.
+func TestIsUnexpandedFileRef_RejectsIndentedExample(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"four spaces", "    @/tmp/example.md"},
+		{"tab", "\t@/tmp/example.md"},
+		{"leading newline then indent", "\n    @/tmp/example.md"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Classify(tc.body); got == UnexpandedFileRef {
+				t.Errorf("Classify(%q) = %v, want anything but %v", tc.body, got, UnexpandedFileRef)
+			}
+		})
+	}
+}
+
+// A shell leaves this tilde literal because it is not at the start of the word,
+// so --body "@~/notes.md" posts the path verbatim. That is the same failed post
+// as an absolute one and must be caught. A mention cannot begin "@~", so the
+// root adds no false-positive risk.
+func TestIsUnexpandedFileRef_DetectsHomeRelativeRoot(t *testing.T) {
+	if got := Classify("@~/scratch/review.md"); got != UnexpandedFileRef {
+		t.Errorf("Classify(home-relative) = %v, want %v", got, UnexpandedFileRef)
+	}
+	// Control: a bare @mention must still NOT match, so the tilde root did not
+	// widen the detector into mention territory.
+	if got := Classify("@devantler"); got == UnexpandedFileRef {
+		t.Errorf("Classify(mention) = %v, want anything but %v", got, UnexpandedFileRef)
+	}
+}
