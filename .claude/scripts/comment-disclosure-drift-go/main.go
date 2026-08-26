@@ -465,6 +465,14 @@ func isBareTrigger(body string) bool {
 // path mentioned in a sentence is a real comment), a leading `@` followed by a
 // path root, and something after that root. A lone `@mention` therefore does not
 // match, and the exempt bare trigger is classified before this is reached.
+//
+// Two residuals are accepted rather than closed, both of which fail toward
+// under-reporting. A path containing a space is not matched, because requiring
+// no whitespace is what keeps a path mentioned inside a sentence from being read
+// as a failed post. And a bare relative reference such as `@notes.md` is not
+// matched, because `@name` is also how a mention is written and the two cannot
+// be told apart without guessing at file extensions. Every measured instance was
+// an absolute path, which is what `--body "@$dir/file.md"` produces.
 func isUnexpandedFileRef(body string) bool {
 	trimmed := strings.TrimSpace(body)
 	if strings.ContainsAny(trimmed, " \t\n\r") {
