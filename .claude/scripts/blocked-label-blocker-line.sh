@@ -264,23 +264,31 @@ while [ "$i" -lt "$count" ]; do
           # visible status line, so a marker in there must not satisfy the check. Comments can
           # open and close mid-line and can span many lines, so consume the commented spans and
           # keep only what is left OUTSIDE them.
-          out = ""
-          rest = line
-          while (rest != "") {
-            if (incomment) {
-              p = index(rest, "-->")
-              if (p == 0) { rest = ""; break }
-              rest = substr(rest, p + 3)
-              incomment = 0
-            } else {
-              p = index(rest, "<!--")
-              if (p == 0) { out = out rest; rest = ""; break }
-              out = out substr(rest, 1, p - 1)
-              rest = substr(rest, p + 4)
-              incomment = 1
+          #
+          # ONLY outside a fence. Inside a fenced block an <!-- --> run is literal code content,
+          # so stripping it there can forge a closing fence out of a commented prefix followed by
+          # a backtick run -- ending the block early and exposing the example as a live record.
+          # A fence cannot be open while incomment is set: the opener would itself have been
+          # consumed as commented text, so infence == 1 implies incomment == 0 here.
+          if (!infence) {
+            out = ""
+            rest = line
+            while (rest != "") {
+              if (incomment) {
+                p = index(rest, "-->")
+                if (p == 0) { rest = ""; break }
+                rest = substr(rest, p + 3)
+                incomment = 0
+              } else {
+                p = index(rest, "<!--")
+                if (p == 0) { out = out rest; rest = ""; break }
+                out = out substr(rest, 1, p - 1)
+                rest = substr(rest, p + 4)
+                incomment = 1
+              }
             }
+            line = out
           }
-          line = out
 
           # ---- fenced code block context. A fence shows the SYNTAX as an example; it is not a
           # record. A fence opens on a run of 3+ backticks or tildes and closes only on a run of

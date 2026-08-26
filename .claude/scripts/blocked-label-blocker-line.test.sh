@@ -429,5 +429,39 @@ printf 'Example:\n\n```\ninner\n````\n\n**Blocker:** owner/repo#7 | last-verifie
 jq -Rs '[{repo:"p",number:55,body:.}]' <"$TMP/fencelong.txt" >"$TMP/fencelong.json"
 expect_rc "control: a longer closing run closes a shorter fence" 0 "$TMP/fencelong.json"
 
+# ------------------------------------------------------------------ 22. comment stripping vs fence order
+# HTML comments are stripped so a retired record inside <!-- --> cannot satisfy the check. That strip
+# must NOT run inside a fence: there an <!-- --> run is literal code content, so removing it can
+# FORGE a closing delimiter out of a commented prefix followed by a backtick run, ending the block
+# early and exposing the example as a live record. Reported by CodeRabbit on PR #3053 -- the reported
+# 4-backtick fixture did NOT reproduce (the run-length rule already rejects it); the equal-length
+# one did, so both shapes are pinned here.
+printf 'Example:\n\n```\n<!-- x -->```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n```\n\nend\n' >"$TMP/fencecmt.txt"
+jq -Rs '[{repo:"p",number:56,body:.}]' <"$TMP/fencecmt.txt" >"$TMP/fencecmt.json"
+expect_rc "a commented prefix cannot forge a closing fence" 1 "$TMP/fencecmt.json"
+expect_out "the forged-close body reports MISSING" '^MISSING +p#56' "$TMP/fencecmt.json"
+
+# The reported 4-backtick shape, pinned so the run-length rule that already covers it cannot regress.
+printf 'Example:\n\n````\n<!-- ignored -->```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n````\n\nend\n' >"$TMP/fencecmt4.txt"
+jq -Rs '[{repo:"p",number:57,body:.}]' <"$TMP/fencecmt4.txt" >"$TMP/fencecmt4.json"
+expect_rc "a commented prefix cannot forge a shorter closing run either" 1 "$TMP/fencecmt4.json"
+
+# CONTROL: the strip must still run OUTSIDE a fence, or suppressing it there would stop a
+# comment-prefixed line from OPENING one -- exposing the example by the opposite route.
+printf 'Example:\n\n<!-- lead-in -->```\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: example\n```\n\nend\n' >"$TMP/cmtopen.txt"
+jq -Rs '[{repo:"p",number:58,body:.}]' <"$TMP/cmtopen.txt" >"$TMP/cmtopen.json"
+expect_rc "control: a commented prefix still OPENS a fence outside one" 1 "$TMP/cmtopen.json"
+
+# CONTROL: the fence still releases, so a real record after it conforms -- without this, "never
+# close inside a fence" would pass every negative case above by swallowing the whole body.
+printf 'Example:\n\n```\n<!-- x -->```\ninner\n```\n\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: real\n\nend\n' >"$TMP/fencecmtok.txt"
+jq -Rs '[{repo:"p",number:59,body:.}]' <"$TMP/fencecmtok.txt" >"$TMP/fencecmtok.json"
+expect_rc "control: a record after that fence still CONFORMS" 0 "$TMP/fencecmtok.json"
+
+# CONTROL: multi-line comment suppression outside a fence is unchanged by the guard.
+printf '<!--\n**Blocker:** owner/repo#7 | last-verified 2026-08-25: retired\n-->\n\nend\n' >"$TMP/cmtmulti.txt"
+jq -Rs '[{repo:"p",number:60,body:.}]' <"$TMP/cmtmulti.txt" >"$TMP/cmtmulti.json"
+expect_rc "control: a multi-line commented record is still MISSING" 1 "$TMP/cmtmulti.json"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1
