@@ -1454,6 +1454,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Verify gh JSON vocabulary contract
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash .claude/scripts/gh-json-vocabulary-contract.test.sh
 
   test-improver-role-disclosure:
