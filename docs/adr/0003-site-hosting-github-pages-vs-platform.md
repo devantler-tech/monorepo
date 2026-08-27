@@ -39,10 +39,11 @@ Apply it to the build, which is a fact in the repository rather than a judgement
 
 ### Customer sites are not a category exception
 
-A customer site follows the same test. It **may** migrate to Pages, but only when both conditions hold:
+A customer site follows the same test. It **may** migrate to Pages, but only when all three conditions hold:
 
 1. **Integrations keep working.** Umami and any other platform integration must still function from outside the cluster — verified against the real system, not assumed. The Umami ingest path is known to satisfy this.
 2. **DNS stays stable.** The domain does not change, resolves continuously through the migration window, and never flaps.
+3. **HTTPS never breaks.** The domain serves a valid certificate throughout. Pages does not issue its certificate until DNS already points at Pages, so a bare repoint opens a window where visitors reach Pages and get a certificate warning — which is downtime under condition 2, on the site's own front door. A migration needs a handoff that closes that window before traffic moves. Without one, the site is not eligible, however static its build.
 
 Condition 2 needs one clarification on record, because the literal reading is unsatisfiable: moving a host **is** repointing its records, so "DNS does not change" cannot mean "no record is ever edited". The operative reading is **same domain, continuous resolution, no flapping, no downtime**. A migration that cannot meet that does not proceed.
 
@@ -60,7 +61,7 @@ Condition 2 needs one clarification on record, because the literal reading is un
 
 - **A static site on the cluster now needs justification**, and the reverse no longer does. New web properties default to Pages; proposing a platform tenant for static output requires naming the runtime requirement.
 - **[#2062](https://github.com/devantler-tech/monorepo/issues/2062) is closed not planned.** It bundled hosting with an unrelated repository-structure goal, so that half was preserved as [#3086](https://github.com/devantler-tech/monorepo/issues/3086) — extraction only, hosting explicitly staying on Pages — rather than discarded with the epic.
-- **`ascoachingogvaner.dk` becomes a migration candidate**, not a migration. Its DNS is created and continuously reconciled *from inside the cluster* by a per-tenant `external-dns` (Simply.com webhook, OpenBao credentials) pointing at the shared Gateway's load balancer, with cert-manager DNS-01 TLS. That component will reconcile records back and flap the domain unless it is retired before the repoint, and GitHub Pages cannot issue its certificate until DNS already points at it. The cutover is the work; the build change is trivial.
+- **`ascoachingogvaner.dk` becomes a migration candidate**, not a migration. Its DNS is created and continuously reconciled *from inside the cluster* by a per-tenant `external-dns` (Simply.com webhook, OpenBao credentials) pointing at the shared Gateway's load balancer, with cert-manager DNS-01 TLS. That component will reconcile records back and flap the domain unless it is retired before the repoint, and GitHub Pages cannot issue its certificate until DNS already points at it — so retiring `external-dns` satisfies condition 2 but not condition 3, which is the harder half. Designing that certificate handoff **is** the cutover work; the build change is trivial. Until it exists, the site stays a candidate.
 - **Sites on Pages sit outside the platform's posture** — no default-deny NetworkPolicy, no cosign-verified delivery, no VPA, and no entry on the Homepage dashboard. This is accepted deliberately: those controls protect workloads that execute, and static files served by GitHub execute nothing of ours.
 - **The platform keeps hosting what actually needs it**, so its cost tracks genuine runtime requirements rather than habit.
 
