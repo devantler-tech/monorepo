@@ -61,6 +61,18 @@ contains_field() {
   printf '%s\n' "${vocabulary}" | grep -Fqx -- "${field}"
 }
 
+assert_unknown_field() {
+  local field="$1" output status
+  shift
+  status=0
+  output="$(gh "$@" --json "${field}" 2>&1)" || status=$?
+  [ "${status}" -ne 0 ] || fail "gh $* unexpectedly accepted ${field}"
+  case "${output}" in
+    *'Unknown JSON field:'*"${field}"*) ;;
+    *) fail "gh $* rejected ${field} without the expected unknown-field boundary" ;;
+  esac
+}
+
 pr_view_fields="$(vocabulary_for pr view)"
 run_list_fields="$(vocabulary_for run list)"
 search_prs_fields="$(vocabulary_for search prs)"
@@ -81,6 +93,8 @@ contains_field "${pr_view_fields}" mergedAt || fail "pr view vocabulary omitted 
 contains_field "${run_list_fields}" path && fail "run list unexpectedly accepts path; update the measured contract"
 contains_field "${search_prs_fields}" mergedAt &&
   fail "search prs unexpectedly accepts pr-view-only mergedAt; update the measured contract"
+assert_unknown_field path run list
+assert_unknown_field mergedAt search prs
 
 # Self-gate the five pieces required for a path-filtered test to affect the required aggregate job.
 [ -r "${workflow}" ] || fail "ci.yaml is missing; this guard's wiring cannot be verified"
@@ -94,11 +108,22 @@ for wiring in \
   what="${wiring#*|}"
   grep -Fqx -- "${needle}" "${workflow}" || fail "ci.yaml is missing ${what}"
 done
+
+# Scope path assertions to THIS filter. AGENTS.md and ci.yaml occur in many sibling filters, so a
+# workflow-wide grep would stay green if either trigger disappeared from this one.
+filter_block="$(awk '
+  /^            gh-json-vocabulary-contract:/ { inside = 1; print; next }
+  inside && /^            [a-z0-9-]+:/       { exit }
+  inside                                        { print }
+' "${workflow}")"
+[ "$(printf '%s' "${filter_block}" | wc -c)" -gt 100 ] ||
+  fail "could not isolate the gh-json-vocabulary-contract paths filter"
 for trigger in \
   "              - 'AGENTS.md'" \
   "              - '.claude/scripts/gh-json-vocabulary-contract.test.sh'" \
   "              - '.github/workflows/ci.yaml'"; do
-  grep -Fqx -- "${trigger}" "${workflow}" || fail "ci.yaml filter is missing ${trigger# *}"
+  printf '%s\n' "${filter_block}" | grep -Fqx -- "${trigger}" ||
+    fail "ci.yaml filter is missing ${trigger# *}"
 done
 
 echo "gh json vocabulary: OK — exact-subcommand discovery guarded against three live gh vocabularies"
