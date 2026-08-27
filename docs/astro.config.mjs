@@ -131,6 +131,10 @@ export default defineConfig({
           link: "/about/",
         },
         {
+          label: "Agentic Engineering",
+          link: "/agentic-engineering/",
+        },
+        {
           label: "Projects",
           items: [{ autogenerate: { directory: "projects" } }],
         },

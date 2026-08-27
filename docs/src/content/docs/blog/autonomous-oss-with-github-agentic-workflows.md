@@ -18,6 +18,9 @@ cover:
   image: ../../../assets/agentic-workflows.png
 ---
 
+> [!NOTE]
+> This post describes my earlier, KSail-specific GitHub Agentic Workflows setup. The current portfolio-wide process is documented in [Agentic Engineering](/agentic-engineering/) and [How My Agentic Engineer Turns Problems into Proved Working Solutions](/blog/how-my-agentic-engineer-turns-problems-into-proved-working-solutions/).
+
 A Mac Mini runs 24/7 in my house on Funen. It doesn't serve media, it doesn't compile code, it doesn't host a website. Its only job is to fire scheduled prompts at GitHub agents so they can work on [KSail](https://github.com/devantler-tech/ksail) in the background.
 
 Left unsupervised, autonomous agents tend to produce a lot of *output* and not a lot of *outcomes* — PRs that don't compile, issues that duplicate each other, roadmaps that drift from reality. I've hit all of those failure modes running this setup.
