@@ -13,3 +13,15 @@ Committed splash-hero background for `docs/src/content/docs/index.mdx`.
   must be regenerated, rewrite the tool in Go (or replace the image by hand) and update this note.
 
 Closes the acceptance criteria of [#2176](https://github.com/devantler-tech/monorepo/issues/2176).
+
+## `agentic-engineering-process.png`
+
+Cover image and inline diagram for the Agentic Engineering blog post. The Agentic Engineering
+documentation page renders the editable Mermaid source.
+
+- **Origin:** rendered from the Mermaid `block-beta` definition embedded in
+  `docs/src/content/docs/agentic-engineering.mdx`.
+- **Rendering:** light background, three category boxes, and a numbered serpentine activity flow;
+  exported at 3808×2142 (16:9).
+- **Status:** the MDX Mermaid definition is the editable source. Regenerate the PNG from that source
+  whenever the process or diagram changes, and update both in the same change.
