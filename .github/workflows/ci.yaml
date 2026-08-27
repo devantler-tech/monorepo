@@ -46,6 +46,7 @@ jobs:
       codex-lane-liveness: ${{ steps.filter.outputs.codex-lane-liveness }}
       improver-role-disclosure: ${{ steps.filter.outputs.improver-role-disclosure }}
       merge-confirmation-read: ${{ steps.filter.outputs.merge-confirmation-read }}
+      gh-json-vocabulary-contract: ${{ steps.filter.outputs.gh-json-vocabulary-contract }}
       merge-preflight-thread-gate: ${{ steps.filter.outputs.merge-preflight-thread-gate }}
       portfolio-surveyor: ${{ steps.filter.outputs.portfolio-surveyor }}
       product-value: ${{ steps.filter.outputs.product-value }}
@@ -415,6 +416,10 @@ jobs:
               - '.claude/**/*.md'
               - '.claude/**/*.json'
               - '.claude/scripts/merge-confirmation-read.test.sh'
+              - '.github/workflows/ci.yaml'
+            gh-json-vocabulary-contract:
+              - 'AGENTS.md'
+              - '.claude/scripts/gh-json-vocabulary-contract.test.sh'
               - '.github/workflows/ci.yaml'
             improver-role-disclosure:
               - 'AGENTS.md'
@@ -1436,6 +1441,21 @@ jobs:
       - name: Verify the merge-confirmation read contract
         run: bash .claude/scripts/merge-confirmation-read.test.sh
 
+  test-gh-json-vocabulary-contract:
+    name: Test gh JSON vocabulary contract
+    needs: changes
+    if: needs.changes.outputs.gh-json-vocabulary-contract == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify gh JSON vocabulary contract
+        run: bash .claude/scripts/gh-json-vocabulary-contract.test.sh
+
   test-improver-role-disclosure:
     name: Test Improver role disclosure contract
     needs: changes
@@ -1551,6 +1571,7 @@ jobs:
       - test-agent-role-delivery-contract
       - test-work-priority-ladder
       - test-merge-confirmation-read
+      - test-gh-json-vocabulary-contract
       - test-improver-role-disclosure
       - test-merge-preflight-thread-gate
       - test-portfolio-surveyor-contract
@@ -1606,6 +1627,7 @@ jobs:
             ${{ needs.test-agent-role-delivery-contract.result }}
             ${{ needs.test-work-priority-ladder.result }}
             ${{ needs.test-merge-confirmation-read.result }}
+            ${{ needs.test-gh-json-vocabulary-contract.result }}
             ${{ needs.test-improver-role-disclosure.result }}
             ${{ needs.test-merge-preflight-thread-gate.result }}
             ${{ needs.test-portfolio-surveyor-contract.result }}

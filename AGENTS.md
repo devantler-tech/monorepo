@@ -2782,6 +2782,14 @@ prescription, not the field list** — field vocabularies are per-subcommand, so
 `mergedAt` outright (verified) and `state` does not mean the same thing on every surface. (Measured
 2026-07-29 by distinct sessions: 23 of 204 hit `Unknown JSON field: "merged"`, up from 8 of 211 — and
 up ~3.5× **per merge**, so not an artifact of the densified cadence.)
+**Before an ad hoc `gh <subcommand> --json <fields>` read whose exact command is not already prescribed
+by a reviewed definition or known to have succeeded in this run, discover the vocabulary from the same
+subcommand with bare `--json`** (for example, `gh pr view --json` or `gh run list --json`). That local
+diagnostic intentionally exits nonzero after listing the available fields; validate every requested
+field against that output before making the API read. **Never transfer a field list between
+subcommands** or infer that a GraphQL field is accepted by `gh`: one unknown field voids the whole read.
+Reuse an exact command that already succeeded in this run instead of rediscovering it, so the guard does
+not become repeated setup overhead.
 **Stale CodeRabbit CHANGES_REQUESTED is a dismissal one-click, not a re-review loop.** CodeRabbit
 posts re-review results as COMMENTED and structurally never re-APPROVEs after a CHANGES_REQUESTED —
 so a promoted PR whose only blocker is a **`coderabbitai[bot]`-authored** CHANGES_REQUESTED review at
