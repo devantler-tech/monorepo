@@ -16,7 +16,8 @@ Closes the acceptance criteria of [#2176](https://github.com/devantler-tech/mono
 
 ## `agentic-engineering-process.png`
 
-Cover and inline diagram for the Agentic Engineering documentation and blog post.
+Cover image and inline diagram for the Agentic Engineering blog post. The Agentic Engineering
+documentation page renders the editable Mermaid source.
 
 - **Origin:** rendered from the Mermaid `block-beta` definition embedded in
   `docs/src/content/docs/agentic-engineering.mdx`.
