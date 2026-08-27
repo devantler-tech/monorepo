@@ -32,10 +32,21 @@ Apply it to the build, which is a fact in the repository rather than a judgement
 
 | Build output | Host | Rationale |
 |---|---|---|
-| **Static** — no server adapter, no database, no runtime secrets, no server-side auth | **GitHub Pages** | Pages serves it for free; the cluster adds cost and surface for nothing the site needs |
-| **Server-side** — a server adapter, a database, authentication, or secrets read at runtime | **The platform** | Pages structurally cannot host it — this is the "maturity to require it" |
+| **Static** — no server adapter, no runtime database, no runtime secrets, no server-side auth | **GitHub Pages** | Pages serves it for free; the cluster adds cost and surface for nothing the site needs |
+| **Server-side** — a server adapter, a database read at runtime, authentication, or secrets read at runtime | **The platform** | Pages structurally cannot host it — this is the "maturity to require it" |
 
-"Maturity to require it" means a demonstrated runtime requirement, **not** traffic, revenue, customer ownership, branding, or a wish for the platform's posture.
+"Maturity to require it" means a demonstrated runtime requirement, **not** revenue, customer ownership, branding, or a wish for the platform's posture. Traffic is excluded too, with one measured exception named below.
+
+*Runtime* is the operative word in both rows. A build that queries a CMS or a database during CI and then emits only files is **static**: the deployed site runs nothing of ours, and Pages serves the resulting artifact like any other. A database moves a site to the right-hand column only when the *served* site reads it.
+
+### Two gates the build output cannot answer
+
+The build says what Pages **can** serve. Two further gates say what Pages is **allowed** to serve and what it will **keep** serving. Both apply to **every** site this test sends to Pages — portfolio-owned and customer alike, not only customer ones:
+
+- **The host must permit the use.** GitHub's published terms disallow using Pages as a free web-hosting service to run an online business or e-commerce site, or for any site primarily directed at facilitating commercial transactions or providing commercial software as a service. Some monetization is permitted, and GitHub names donation buttons and crowdfunding links as its examples. A brochure site that lists offerings and prices and links out to booking is not obviously on the wrong side of that line; a site that takes payment plainly is. The call is made and recorded *before* a migration, not after a takedown.
+- **The site must fit Pages' capacity.** A published Pages site may be no larger than 1 GB, and bandwidth carries a soft limit of 100 GB per month; above either, GitHub states it may not be able to serve the site. A site at or approaching those ceilings has a hosting requirement Pages cannot meet, so it belongs on the platform even though its build has no server runtime. This is the one traffic-shaped exception to the paragraph above — a published ceiling that can be measured, never a judgement about how important the site is.
+
+Either gate failing sends an otherwise-static site to the platform, or keeps it there. Both are re-answered when a site's use or scale changes, because neither is a property of the build.
 
 ### Customer sites are not a category exception
 
@@ -44,7 +55,7 @@ A customer site follows the same test. It **may** migrate to Pages, but only whe
 1. **Integrations keep working.** Umami and any other platform integration must still function from outside the cluster — verified against the real system, not assumed. The Umami ingest path is known to satisfy this.
 2. **DNS stays stable.** The domain does not change, resolves continuously through the migration window, and never flaps.
 3. **HTTPS never breaks.** The domain serves a valid certificate throughout. Pages does not issue its certificate until DNS already points at Pages, so a bare repoint opens a window where visitors reach Pages and get a certificate warning — which is downtime under condition 2, on the site's own front door. A migration needs a handoff that closes that window before traffic moves. Without one, the site is not eligible, however static its build.
-4. **The host permits the use.** GitHub Pages' published limits disallow using it as free hosting to run an online business, or for a site primarily directed at facilitating commercial transactions or commercial SaaS; donation and crowdfunding links are explicitly fine. A brochure site that lists offerings and prices and links out to booking is not obviously on the wrong side of that line, and a site that takes payment plainly is — so the call is made and recorded *before* a migration, not after a takedown. This condition exists because the build-output test structurally cannot answer it: the build says what Pages **can** serve, never what Pages is **allowed** to serve.
+4. **Both global gates are answered for this site.** The provider-eligibility and capacity gates above are settled and recorded *before* the migration, not after. They are named again here because a customer site is the likeliest place for the first one to fail — a site that advertises a business sits nearest the line — but they are global gates, and an otherwise-static portfolio-owned site is held to them identically.
 
 **Ordering constraint on the cutover itself.** Verify the domain against the organisation in GitHub and bind it to the target repository *before* the DNS change, and keep the verification TXT record in place afterwards. An unverified custom domain pointed at Pages can be claimed by another GitHub account, and the exposure does not end at cutover — it reopens whenever the domain stays configured for Pages while the site is unlinked or disabled, which a deleted repository or a downgraded plan is enough to cause. Verification covers immediate subdomains too, so it is done once per domain rather than once per site.
 
@@ -58,11 +69,11 @@ Condition 2 needs one clarification on record, because the literal reading is un
 | `ksail` docs | static | GitHub Pages | correct today |
 | `platform` docs | static | GitHub Pages | correct today |
 | `wedding-app` | SvelteKit `adapter-node` + Drizzle database | **Platform** | genuinely requires a server — the clearest instance of the test's right-hand column |
-| `ascoachingogvaner.dk` | SvelteKit `adapter-static`, prerendered, no database or runtime secrets | Platform → **Pages, candidate only** | customer site; the build is Pages-shaped, but the site is **not yet eligible** — conditions 2, 3 and 4 are all open. Tracked in [ascoachingogvaner#206](https://github.com/devantler-tech/ascoachingogvaner/issues/206) |
+| `ascoachingogvaner.dk` | SvelteKit `adapter-static`, prerendered, no runtime database or secrets | Platform → **Pages, candidate only** | customer site; the build is Pages-shaped, but the site is **not yet eligible** — conditions 2, 3 and 4 are all open. Tracked in [ascoachingogvaner#206](https://github.com/devantler-tech/ascoachingogvaner/issues/206) |
 
 ## Consequences
 
-- **A static site on the cluster now needs justification**, and the reverse no longer does. New web properties default to Pages; proposing a platform tenant for static output requires naming the runtime requirement.
+- **A static site on the cluster now needs justification**, and the reverse no longer does. New web properties default to Pages; proposing a platform tenant for static output requires naming the runtime requirement, or the global gate that Pages fails.
 - **[#2062](https://github.com/devantler-tech/monorepo/issues/2062) is closed not planned.** It bundled hosting with an unrelated repository-structure goal, so that half was preserved as [#3086](https://github.com/devantler-tech/monorepo/issues/3086) — extraction only, hosting explicitly staying on Pages — rather than discarded with the epic.
 - **`ascoachingogvaner.dk` becomes a migration candidate**, not a migration. Its DNS is created and continuously reconciled *from inside the cluster* by a per-tenant `external-dns` (Simply.com webhook, OpenBao credentials) pointing at the shared Gateway's load balancer, with cert-manager DNS-01 TLS. That component will reconcile records back and flap the domain unless it is retired before the repoint — so retiring `external-dns` is a **prerequisite** for condition 2 rather than satisfaction of it. Removing the component that would overwrite the new records does not by itself show that resolution stays continuous through the cut; that still needs a defined TTL and overlap strategy, plus evidence that both cached-old and newly-resolved traffic keep being served. Condition 2 therefore stays open until that continuity is demonstrated, condition 3 until the certificate handoff is designed, and condition 4 until the usage-policy question is answered for a site that advertises a business. Those three answers **are** the cutover work; the build change is trivial. Until they exist, the site stays a candidate.
 - **Sites on Pages sit outside the platform's posture** — no default-deny NetworkPolicy, no cosign-verified delivery, no VPA, and no entry on the Homepage dashboard. This is accepted deliberately: those controls protect workloads that execute, and static files served by GitHub execute nothing of ours.
