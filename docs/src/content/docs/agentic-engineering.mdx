@@ -42,10 +42,10 @@ block-beta
     columns 1
     SH["<b>SOLUTION</b>"]
     S5["<b>8. Verify the exact change</b><br/>GitHub Actions · required checks · exact head"]
-    S4["<b>7. Review the proposed change</b><br/>Draft pull request · human and AI review"]
+    S4["<b>7. Review the proposed change</b><br/>AI review · optional human steering"]
     S3["<b>6. Test against the identified issue</b><br/>Unit · integration · end-to-end · security"]
     S2["<b>5. Implement an isolated change</b><br/>Git worktree · branch · feature flag"]
-    S1["<b>4. Select the highest-value actionable task</b><br/>Issues · priorities · ownership claims"]
+    S1["<b>4. Select by the fixed priority ladder</b><br/>Breakage → PRs → security → bugs → oldest issue"]
   end
 
   space
@@ -102,10 +102,10 @@ The output is an evidence-backed problem statement, not a guess or a task chosen
 
 The solution begins only after the problem is known.
 
-1. **Select the highest-value actionable task.** Consider impact, urgency, age, dependencies, and whether another engineer already owns the work.
+1. **Select the first actionable task in the fixed priority ladder.** Work top-down through live breakage, open pull requests, security issues, bugs, and then the oldest actionable issue. Do not descend while a higher rung still has actionable work.
 2. **Implement in isolation.** Use a dedicated worktree and branch so concurrent agents cannot overwrite one another.
 3. **Test against the identified issue.** Combine focused tests with the repository's wider lint, integration, end-to-end, and security checks.
-4. **Review the proposed change.** Use a draft pull request for human and AI review without implying that the work is ready.
+4. **Review the proposed change.** Use a draft pull request for required AI review and optional human steering without implying that the work is ready.
 5. **Verify the exact change.** Bind the evidence to the current pull-request head. A review or CI run for an older commit does not clear a newer one.
 
 ## Outcome: prove the working solution

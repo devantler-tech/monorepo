@@ -58,13 +58,13 @@ GitHub Issues and the portfolio Project board are not the source of truth for wh
 
 ## Solution starts with selection, not code
 
-Once the problem is concrete, the agent chooses the highest-value task it can safely act on. Impact matters, but so do urgency, age, dependencies, review state, and whether another engineer already owns the same artifact.
+Once the problem is concrete, the agent selects the first actionable task on a fixed ladder: live breakage, open pull requests, security issues, bugs, then the oldest actionable issue. It never descends while a higher rung still contains actionable work, and it checks whether another engineer already owns the same artifact.
 
 Implementation happens in an isolated Git worktree and branch. That is essential when multiple agents work concurrently: isolation is what turns parallelism from a race into separate, reviewable changes.
 
 Testing is tied back to the issue. A focused regression test proves the reported failure has changed; the repository's wider unit, integration, end-to-end, lint, and security checks look for collateral damage.
 
-The change then moves through a draft pull request, human and AI review, and GitHub Actions. Draft status is useful because it exposes the work without claiming readiness.
+The change then moves through a draft pull request, required AI review, optional human steering, and GitHub Actions. Draft status is useful because it exposes the work without claiming readiness.
 
 ## Verification belongs to the exact change
 
