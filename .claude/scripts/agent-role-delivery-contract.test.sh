@@ -731,6 +731,62 @@ case "${write_output}" in
   *) fail "consumer surveyor hook blocked a write without the reviewed guard's reason" ;;
 esac
 
+# The reviewed guard admits a consuming deployment's own classifier only when this
+# deployment declares it. The declaration is what ACTIVATES the capability, so it is
+# asserted behaviourally: without it the surveyor falls back to hand-deriving PR
+# ownership, which decides whether a `devantler` comment is the maintainer's control
+# channel or the agent's own output.
+consumer_classifier="${repo_root}/.claude/scripts/pr-ownership-disclosure.sh"
+if [ ! -f "${consumer_classifier}" ] \
+  || [ ! -x "${consumer_classifier}" ] \
+  || [ -L "${consumer_classifier}" ]; then
+  fail "consumer does not provide a regular executable PR-ownership classifier"
+fi
+
+classifier_payload="$(jq -nc --arg cls "${consumer_classifier}" '{
+  tool_input: {
+    command: ("gh pr view 1 --repo devantler-tech/monorepo --json body --jq '.body' | "
+      + $cls + " --input -")
+  }
+}')"
+run_surveyor_hook "${classifier_payload}" >/dev/null ||
+  fail "consumer surveyor hook refused the declared PR-ownership classifier"
+
+# The declaration must be NARROW. A blanket "any local program may filter a forge read"
+# would let `cat ~/.config/gh/hosts.yml`-shaped reads through in the same position, so
+# an undeclared program in the identical pipeline shape must still be refused.
+undeclared_payload="$(jq -nc --arg other "${repo_root}/.claude/scripts/memory-hygiene.sh" '{
+  tool_input: {
+    command: ("gh pr view 1 --repo devantler-tech/monorepo --json body | " + $other + " --input -")
+  }
+}')"
+set +e
+undeclared_output="$(run_surveyor_hook "${undeclared_payload}" 2>&1)"
+undeclared_status=$?
+set -e
+[ "${undeclared_status}" -eq 2 ] ||
+  fail "consumer surveyor hook admitted an UNDECLARED local program (exit ${undeclared_status})"
+case "${undeclared_output}" in
+  *'is not on the read-only allowlist'*) ;;
+  *) fail "undeclared program was refused for the wrong reason: ${undeclared_output}" ;;
+esac
+
+# A declared classifier in LEADING position is reading something local, not filtering a
+# forge read — the guard must still require the pipeline to start at the forge.
+leading_payload="$(jq -nc --arg cls "${consumer_classifier}" '{
+  tool_input: {command: ($cls + " --input - | jq .")}
+}')"
+set +e
+leading_output="$(run_surveyor_hook "${leading_payload}" 2>&1)"
+leading_status=$?
+set -e
+[ "${leading_status}" -eq 2 ] ||
+  fail "consumer surveyor hook admitted the classifier in leading position (exit ${leading_status})"
+case "${leading_output}" in
+  *'must begin with a forge command'*) ;;
+  *) fail "leading classifier was refused for the wrong reason: ${leading_output}" ;;
+esac
+
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
 # shellcheck disable=SC2016  # fixture must inspect its own child environment
