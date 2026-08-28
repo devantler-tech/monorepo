@@ -83,9 +83,41 @@ verify_asset "${classifier_relative}"
 verify_asset "${guard_relative}"
 verify_asset "${adapter_relative}"
 
+# The reviewed plugin admits a CONSUMING deployment's own classifier only when
+# that deployment DECLARES it, as an absolute path, in the hook environment.
+# Declaring is a trust assertion the guard cannot verify, so it is pinned here
+# rather than inherited: an inherited value would let anything able to set the
+# surveyor's environment widen the read-only allowlist to a program of its
+# choosing, which is exactly the bypass the SCOPE and GUARD pins above close.
+#
+# Only one program is declared, and it is a READ: pr-ownership-disclosure.sh
+# classifies a `devantler` PR body as the maintainer's interactive work or the
+# routine's own output. Without a route for it the surveyor falls back to
+# hand-deriving that verdict, and that substitution has already misread live
+# maintainer PRs — the verdict decides whether a `devantler` comment is the
+# maintainer's control channel or the agent's own output.
+#
+# Absence fails CLOSED, consistently with DESIRED_STATE above: a checkout that
+# cannot present its own reviewed files does not get a survey. Exiting 0 with
+# the capability silently missing is the worse direction — it returns the
+# surveyor to the hazardous fallback with nothing anywhere saying so.
+consumer_classifier="${REPO_ROOT}/.claude/scripts/pr-ownership-disclosure.sh"
+if [ ! -f "${consumer_classifier}" ] ||
+  [ ! -x "${consumer_classifier}" ] ||
+  [ -L "${consumer_classifier}" ]; then
+  die "consumer classifier is not a regular executable: ${consumer_classifier}"
+fi
+# The guard splits the declaration on ':', so a path containing one would be
+# torn into entries that match nothing — the capability would read as declared
+# while being silently absent. Refuse rather than declare something unparseable.
+case "${consumer_classifier}" in
+  *:*) die "consumer classifier path contains ':' and cannot be declared: ${consumer_classifier}" ;;
+esac
+
 # The frontmatter hook is already scoped to portfolio-surveyor. Clear the
 # adapter's optional identity scope and pin its test override to the verified
 # sibling so inherited environment cannot bypass either half of the wiring.
 SURVEYOR_FORGE_READONLY_SCOPE='' \
 SURVEYOR_FORGE_READONLY_GUARD="${install_path}/${guard_relative}" \
+SURVEYOR_FORGE_READONLY_CLASSIFIERS="${consumer_classifier}" \
   exec "${install_path}/${adapter_relative}"
