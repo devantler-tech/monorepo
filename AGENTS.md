@@ -2651,18 +2651,23 @@ the post-merge `merged` field causes, in the one place the merge gate cannot aff
 it over GraphQL, as its own call:
 
 ```sh
-unresolved=$(
+threads=$(
   set -o pipefail   # WITHOUT this a failed read prints the ALL-CLEAR value: `false | jq -s …` emits 0, exit 0
   gh api graphql --paginate -f owner=devantler-tech -f name=<repo> -F number=<n> -f query='
 query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$number){
       reviewThreads(first:100,after:$endCursor){
+        totalCount
         nodes{isResolved}
         pageInfo{hasNextPage endCursor}
       }}}}' |
-    jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
+    jq -s -r '[.[].data.repository.pullRequest.reviewThreads]
+              | "\([.[].nodes[]]|length) \(.[0].totalCount) \([.[].nodes[]|select(.isResolved==false)]|length)"'
 ) || { echo "thread read FAILED — UNKNOWN, never 0" >&2; exit 1; }
+fetched=${threads%% *}; rest=${threads#* }; total=${rest%% *}; unresolved=${rest##* }
+[ -n "$fetched" ] && [ "$fetched" = "$total" ] ||
+  { echo "thread read TRUNCATED: fetched $fetched of $total — UNKNOWN, never 0" >&2; exit 1; }
 ```
 
 **That must read `0` immediately before the merge — not once, earlier, from the survey.** The survey
@@ -2685,6 +2690,29 @@ threads exceed 100 reports a **partial** count, and the one number this gate dep
 unresolved threads remain. That is the same failure the rule exists to prevent, one level down: a read
 that looks authoritative and is not. Note `--slurp` is **not** usable here — `gh` rejects it together
 with `--jq` — so the pages are slurped with `jq -s` instead.
+
+🔴 **The truncation check is what makes that number TRUSTWORTHY — the cursor and the page size are two
+independent ways to lose threads, and neither loss is visible in the answer.** Measured 2026-08-29
+against `platform#3311` (73 threads), varying only those two:
+
+| `first:` | `--paginate` | fetched | `totalCount` | reported unresolved |
+|---|---|---|---|---|
+| 20 | yes | 73 | 73 | 0 — complete |
+| 20 | **no** | **20** | 73 | **0 — over 53 threads never fetched** |
+| 50 | **no** | **50** | 73 | **0 — over 23 threads never fetched** |
+| 100 | no | 73 | 73 | 0 — complete *only* because 73 < 100 |
+
+So it is the **conjunction** that bites. With the cursor wired a small page is merely slower; without
+it, any page below the thread count truncates — and `first:100` survives today only on headroom
+(sampling the 60 most recently updated PRs in each of monorepo, platform, ksail, actions and
+agent-plugins on 2026-08-28 — **300 PRs — the maximum was 73 and none exceeded 99**). A run that "tidies" the page
+size down while dropping `--paginate` moves this from latent to live, and **nothing in the response
+distinguishes 53 resolved threads from 53 unfetched ones**: both render as `0`, the value the gate
+accepts.
+⚠️ **That is why the read above asserts `fetched == totalCount` instead of trusting either flag.**
+`totalCount` arrives in the same response at **zero extra cost**, so the gate verifies its own
+completeness rather than depending on argv discipline no reviewer can see. Treat a shortfall exactly
+like a failed read: **UNKNOWN, never `0`.**
 ⚠️ **`--repo` is part of the prescription, not an optional convenience** —
 none of those fields carries the *base* repository's identity (`headRepositoryOwner`, where it exists,
 names the contributor's **fork**), so without the flag the command resolves against whatever checkout
