@@ -4232,7 +4232,7 @@ refinements (the `4b`–`4e` items in
 [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
 were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
 closed, pushing the file's own deletion further away, and charging every hourly dispatch for it. Its
-**enforced high-water mark is now 152,000 B**; that is the live ratchet ceiling, not a rewrite of the
+**enforced high-water mark is now 152,059 B**; that is the live ratchet ceiling, not a rewrite of the
 dated measurement.
 
 **So a new surveyor refinement goes UPSTREAM unless it is a genuine deployment fact.**

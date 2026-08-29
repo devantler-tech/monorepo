@@ -514,9 +514,10 @@ public and private — no per-repo loop needed to enumerate):
      refused as command substitution. A relative call is denied `is not on the read-only allowlist`
      — measured on two live surveyor sidechains on 2026-08-29, 14h after the declaration shipped,
      each left with the hand-derivation this rule forbids. The fetching mode —
-     `… --repo <owner>/<repo> --pr <n>` — is **not** a cheaper-or-costlier alternative but a refused
-     one: a declared classifier is admitted only as a filter after a pipe, so leading position is
-     denied `a read must begin with a forge command`. Fetch the body with a forge read and pipe it.
+     `<repo-root>/.claude/scripts/pr-ownership-disclosure.sh --repo <owner>/<repo> --pr <n>` — is
+     **not** a cheaper-or-costlier alternative but a refused one: a declared classifier is admitted
+     only as a filter after a pipe, so leading position is denied `a read must begin with a forge
+     command`. Fetch the body with a forge read and pipe it in.
      ⚠️ **Of the two, branch shape is much the weaker, measured in BOTH directions — report it, but
      let the disclosure decide.** `platform#2985` is a maintainer-interactive PR
      (`Generated with [Claude Code] … in an interactive session`) whose branch is
