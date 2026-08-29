@@ -167,6 +167,12 @@ assert_overlay '[ "$fetched" = "$total" ]' \
   "portfolio-maintenance overlay never compares the fetched node count to totalCount"
 assert_overlay 'thread read TRUNCATED' \
   "portfolio-maintenance overlay does not name a truncated thread read as its own failure mode"
+# The primary block pins the never-zero contract as its own prose sentence; the overlay expresses it
+# only inside the TRUNCATED echo. Asserting it separately makes the two halves independent, so an edit
+# that keeps the "TRUNCATED" wording while dropping "UNKNOWN, never 0" — leaving a short read free to
+# read as a clean zero, which is the whole defect — fails here instead of passing.
+assert_overlay 'UNKNOWN, never 0' \
+  "portfolio-maintenance overlay no longer says a SHORT thread read is UNKNOWN rather than zero"
 
 # ── 3. exception (a) cannot swallow this class ──────────────────────────────────────────────────────
 assert_prose 'real blocker, never staleness' \
