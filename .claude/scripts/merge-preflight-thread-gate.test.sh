@@ -139,6 +139,35 @@ assert_prose '300 PRs — the maximum was 73 and none exceeded 99' \
 assert_prose 'nothing in the response distinguishes 53 resolved threads from 53 unfetched ones' \
   "Merge policy does not state that a truncated read is indistinguishable from a clean one"
 
+# ── 2c. the RUN-LOOP OVERLAY carries a second copy of this preflight — pin it too ───────────────────
+#
+# `.claude/skills/portfolio-maintenance/SKILL.md` restates the same read, and the overlay is what the
+# run loop actually follows. Guarding only AGENTS.md lets the operative copy keep the old, unverified
+# read while this control reports the property held — the exact drift shape the contract's own
+# "update every agent file in the same PR" rule exists to prevent.
+overlay="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
+[ -r "${overlay}" ] || fail "cannot read ${overlay} — the second copy of the preflight is unguarded"
+overlay_flat="$(tr '\n' ' ' < "${overlay}" | tr -s '[:space:]' ' ')"
+# Fail closed if the copy vanished: every assertion below would otherwise pass over an absent read.
+case "${overlay_flat}" in
+  *'reviewThreads(first:100,after:$endCursor)'*) ;;
+  *) fail "portfolio-maintenance overlay no longer carries the GraphQL thread read — assertions would be vacuous" ;;
+esac
+assert_overlay() {
+  case "${overlay_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+# shellcheck disable=SC2016
+assert_overlay 'reviewThreads(first:100,after:$endCursor){ totalCount' \
+  "portfolio-maintenance overlay prescribes a thread read that never requests totalCount"
+# shellcheck disable=SC2016
+assert_overlay '[ "$fetched" = "$total" ]' \
+  "portfolio-maintenance overlay never compares the fetched node count to totalCount"
+assert_overlay 'thread read TRUNCATED' \
+  "portfolio-maintenance overlay does not name a truncated thread read as its own failure mode"
+
 # ── 3. exception (a) cannot swallow this class ──────────────────────────────────────────────────────
 assert_prose 'real blocker, never staleness' \
   "Merge policy does not exclude unresolved threads from the BLOCKED-is-stale carve-out"
