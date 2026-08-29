@@ -809,7 +809,7 @@ relative_classifier_sites="$(awk '
   }
 ' "${surveyor_agent}")"
 [ -z "${relative_classifier_sites}" ] ||
-  fail "surveyor overlay documents a RELATIVE call to the declared classifier, which the guard refuses by construction: ${relative_classifier_sites}"
+  fail "surveyor overlay documents a RELATIVE call to the declared classifier, which the guard refuses by construction. Prescribe the absolute form (\`<repo-root>/.claude/scripts/pr-ownership-disclosure.sh\`), since the guard expands neither \$PWD nor command substitution: ${relative_classifier_sites}"
 
 # Ground that lexical assertion in the guard's own behaviour so it cannot decay into a style
 # rule: the relative form must really be refused, and for this reason.
