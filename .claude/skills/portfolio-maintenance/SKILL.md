@@ -614,6 +614,8 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    carries at zero extra cost — instead of trusting either flag. Without this, a bare `BLOCKED` from an
    unresolved thread is
    indistinguishable from the stale `mergeStateStatus` that exception (a) tells you to merge through,
+   and the refusal that follows gets escalated as a maintainer gate. 🔴 **Do not re-add a
+   `trusted author` condition here** — trust gates **execution**, never the
    merge (contract *Trust gate*), so an external PR that has cleared every evaluation and review gate
    would otherwise be refused at the last step for being external, which is the whole class the
    2026-08-08 widening exists to admit. Exact `renovate[bot]`/`dependabot[bot]` PRs follow the same
