@@ -787,6 +787,48 @@ case "${leading_output}" in
   *) fail "leading classifier was refused for the wrong reason: ${leading_output}" ;;
 esac
 
+# Declaring the classifier only ACTIVATES it if the overlay tells the surveyor to type the
+# same word. The guard compares the declared entry to the invoked program by exact string
+# equality and expands nothing — `$PWD/…` stays a literal and `$(…)` is refused outright —
+# so a relative call site leaves the capability declared and unreachable. Measured
+# 2026-08-29: two real surveyor sidechains were denied
+# `'.claude/scripts/pr-ownership-disclosure.sh' is not on the read-only allowlist`, 14h after
+# the declaration merged, while the assertions above stayed green because they exercise the
+# absolute form the overlay never prescribed. A path token is a documented call site when it
+# contains a separator; `/` is the admitted form and `<…>` a placeholder standing for one.
+relative_classifier_sites="$(awk '
+  {
+    line = $0
+    while (match(line, /[^[:space:]"`'"'"']*pr-ownership-disclosure\.sh/)) {
+      tok = substr(line, RSTART, RLENGTH)
+      if (index(tok, "/") > 0 && substr(tok, 1, 1) != "/" && substr(tok, 1, 1) != "<") {
+        printf "%d:%s\n", NR, tok
+      }
+      line = substr(line, RSTART + RLENGTH)
+    }
+  }
+' "${surveyor_agent}")"
+[ -z "${relative_classifier_sites}" ] ||
+  fail "surveyor overlay documents a RELATIVE call to the declared classifier, which the guard refuses by construction: ${relative_classifier_sites}"
+
+# Ground that lexical assertion in the guard's own behaviour so it cannot decay into a style
+# rule: the relative form must really be refused, and for this reason.
+relative_payload="$(jq -nc '{
+  tool_input: {
+    command: "gh pr view 1 --repo devantler-tech/monorepo --json body --jq .body | .claude/scripts/pr-ownership-disclosure.sh --input -"
+  }
+}')"
+set +e
+relative_output="$(run_surveyor_hook "${relative_payload}" 2>&1)"
+relative_status=$?
+set -e
+[ "${relative_status}" -eq 2 ] ||
+  fail "surveyor hook admitted a RELATIVE classifier call (exit ${relative_status})"
+case "${relative_output}" in
+  *'is not on the read-only allowlist'*) ;;
+  *) fail "relative classifier call was refused for the wrong reason: ${relative_output}" ;;
+esac
+
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
 # shellcheck disable=SC2016  # fixture must inspect its own child environment

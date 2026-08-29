@@ -502,15 +502,21 @@ public and private — no per-repo loop needed to enumerate):
      `#3034` as the worked example. Encode it instead:
 
      ```sh
-     # Reuse the body the deepening query already returned — one API call, not two:
-     printf '%s' "$body" | .claude/scripts/pr-ownership-disclosure.sh --input -   # → interactive|routine|none
+     # Reuse the body the deepening query already returned — one API call, not two.
+     # Type the classifier's ABSOLUTE path: the guard compares its declaration to the
+     # invoked word by exact string equality, so a relative call is refused.
+     printf '%s' "$body" | <repo-root>/.claude/scripts/pr-ownership-disclosure.sh --input -   # → interactive|routine|none
      ```
 
-     Feed it the `body` field from the per-PR deepening command above. The fetching mode —
-     `.claude/scripts/pr-ownership-disclosure.sh --repo <owner>/<repo> --pr <n>` — re-fetches a body
-     already in hand, which spends an extra request per candidate against the survey's own API budget
-     and adds a second failure point that can lose the classification after the primary fetch already
-     succeeded. Keep it only for a one-off check where no body has been fetched.
+     Feed it the `body` field from the per-PR deepening command above. 🔴 **Spell `<repo-root>` out
+     as the literal absolute path of the checkout you are surveying.** The guard expands nothing:
+     `$PWD/…` stays a literal matching no declaration, and `$(git rev-parse --show-toplevel)/…` is
+     refused as command substitution. A relative call is denied `is not on the read-only allowlist`
+     — measured on two live surveyor sidechains on 2026-08-29, 14h after the declaration shipped,
+     each left with the hand-derivation this rule forbids. The fetching mode —
+     `… --repo <owner>/<repo> --pr <n>` — is **not** a cheaper-or-costlier alternative but a refused
+     one: a declared classifier is admitted only as a filter after a pipe, so leading position is
+     denied `a read must begin with a forge command`. Fetch the body with a forge read and pipe it.
      ⚠️ **Of the two, branch shape is much the weaker, measured in BOTH directions — report it, but
      let the disclosure decide.** `platform#2985` is a maintainer-interactive PR
      (`Generated with [Claude Code] … in an interactive session`) whose branch is
