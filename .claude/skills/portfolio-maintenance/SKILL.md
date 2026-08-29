@@ -586,25 +586,36 @@ slice. Record the product's `last_value_review` cursor, not live metrics, in nat
    can post at any moment (on monorepo#2927 the blocking review landed 93 minutes after promotion):
 
    ```sh
-   unresolved=$(
+   threads=$(
      set -o pipefail   # WITHOUT this a FAILED read prints the ALL-CLEAR value: `false | jq -s …` → 0, exit 0
      gh api graphql --paginate -f owner=devantler-tech -f name=<repo> -F number=<n> -f query='
    query($owner:String!,$name:String!,$number:Int!,$endCursor:String){
      repository(owner:$owner,name:$name){
        pullRequest(number:$number){
          reviewThreads(first:100,after:$endCursor){
+           totalCount
            nodes{isResolved}
            pageInfo{hasNextPage endCursor}
          }}}}' |
-       jq -s '[.[].data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length'
+       jq -s -r '[.[].data.repository.pullRequest.reviewThreads]
+                 | "\([.[].nodes[]]|length) \(.[0].totalCount) \([.[].nodes[]|select(.isResolved==false)]|length)"'
    ) || { echo "thread read FAILED — UNKNOWN, never 0" >&2; exit 1; }
+   fetched=${threads%% *}; rest=${threads#* }; total=${rest%% *}; unresolved=${rest##* }
+   [ -n "$fetched" ] && [ "$fetched" = "$total" ] ||
+     { echo "thread read TRUNCATED: fetched $fetched of $total — UNKNOWN, never 0" >&2; exit 1; }
    ```
 
    Merge only on a `0` a **successful** read produced; treat any non-zero exit as UNKNOWN, never as
-   zero. `--paginate` and the cursor are required — a first-page-only read silently under-counts on a
-   PR with more than 100 threads. Without this, a bare `BLOCKED` from an unresolved thread is
+   zero — and treat a **short** read the same way. `--paginate` and the cursor are required, but they
+   are not sufficient: measured on `platform#3311` (73 threads), `first:20` **with** the cursor fetched
+   all 73, while `first:20` **without** it fetched 20 and still reported `unresolved=0` over the 53 it
+   never saw. The cursor and the page size are two independent ways to lose threads and neither loss
+   shows in the answer, so the read asserts `fetched == totalCount` — which the same response already
+   carries at zero extra cost — instead of trusting either flag. Without this, a bare `BLOCKED` from an
+   unresolved thread is
    indistinguishable from the stale `mergeStateStatus` that exception (a) tells you to merge through,
-   and the refusal that follows gets escalated as a maintainer gate. 🔴 **Do not re-add a `trusted author` condition here** — trust gates **execution**, never the
+   and the refusal that follows gets escalated as a maintainer gate. 🔴 **Do not re-add a
+   `trusted author` condition here** — trust gates **execution**, never the
    merge (contract *Trust gate*), so an external PR that has cleared every evaluation and review gate
    would otherwise be refused at the last step for being external, which is the whole class the
    2026-08-08 widening exists to admit. Exact `renovate[bot]`/`dependabot[bot]` PRs follow the same

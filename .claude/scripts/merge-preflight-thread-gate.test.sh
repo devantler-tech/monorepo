@@ -106,6 +106,74 @@ assert_prose 'UNKNOWN, never as zero' \
 assert_prose '`reviewThreads` is NOT a valid `gh pr view --json` field' \
   "Merge policy does not state that reviewThreads is not a gh pr view --json field"
 
+# ── 2b. the read must VERIFY ITS OWN COMPLETENESS ───────────────────────────────────────────────────
+#
+# `--paginate` and the page size are two INDEPENDENT ways to lose threads, and neither loss is visible
+# in the answer — a truncated read and a clean one both render `0`, the value this gate accepts.
+# Measured 2026-08-29 against platform#3311 (73 threads), varying only those two:
+#
+#   first:20  --paginate      -> fetched 73 of 73   (complete; the cursor rescued the small page)
+#   first:20  NO --paginate   -> fetched 20 of 73   -> reported unresolved 0 over 53 unfetched threads
+#   first:50  NO --paginate   -> fetched 50 of 73   -> reported unresolved 0 over 23 unfetched threads
+#   first:100 NO --paginate   -> fetched 73 of 73   (complete ONLY because 73 < 100 — headroom, not design)
+#
+# So section 2's pagination asserts are necessary but NOT sufficient: they pin the argv, and argv
+# discipline is exactly what a later "tidy" edit erodes. `totalCount` arrives in the same response at
+# zero extra cost, so the gate can verify its own completeness instead of trusting either flag.
+# Assert the query REQUESTS it, the prescription COMPARES it, and the shortfall is UNKNOWN — never 0.
+# Markdown/shell literals are intentionally unexpanded here.
+# shellcheck disable=SC2016
+assert_prose 'reviewThreads(first:100,after:$endCursor){ totalCount' \
+  "Merge policy prescribes a thread read that never requests totalCount — truncation is undetectable"
+# shellcheck disable=SC2016
+assert_prose '[ "$fetched" = "$total" ]' \
+  "Merge policy prescribes totalCount but never compares it to the fetched node count"
+assert_prose 'thread read TRUNCATED' \
+  "Merge policy does not name a truncated thread read as its own failure mode"
+assert_prose 'Treat a shortfall exactly like a failed read' \
+  "Merge policy does not say a SHORT read is UNKNOWN rather than zero"
+# Keep the measured headroom in the text. Without it, `first:100` reads as taste and a later run can
+# tidy the page size down — which is precisely the edit that turns this from latent into live.
+assert_prose '300 PRs — the maximum was 73 and none exceeded 99' \
+  "Merge policy states no measured headroom, so the first:100 floor reads as arbitrary"
+assert_prose 'nothing in the response distinguishes 53 resolved threads from 53 unfetched ones' \
+  "Merge policy does not state that a truncated read is indistinguishable from a clean one"
+
+# ── 2c. the RUN-LOOP OVERLAY carries a second copy of this preflight — pin it too ───────────────────
+#
+# `.claude/skills/portfolio-maintenance/SKILL.md` restates the same read, and the overlay is what the
+# run loop actually follows. Guarding only AGENTS.md lets the operative copy keep the old, unverified
+# read while this control reports the property held — the exact drift shape the contract's own
+# "update every agent file in the same PR" rule exists to prevent.
+overlay="${repo_root}/.claude/skills/portfolio-maintenance/SKILL.md"
+[ -r "${overlay}" ] || fail "cannot read ${overlay} — the second copy of the preflight is unguarded"
+overlay_flat="$(tr '\n' ' ' < "${overlay}" | tr -s '[:space:]' ' ')"
+# Fail closed if the copy vanished: every assertion below would otherwise pass over an absent read.
+case "${overlay_flat}" in
+  *'reviewThreads(first:100,after:$endCursor)'*) ;;
+  *) fail "portfolio-maintenance overlay no longer carries the GraphQL thread read — assertions would be vacuous" ;;
+esac
+assert_overlay() {
+  case "${overlay_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+# shellcheck disable=SC2016
+assert_overlay 'reviewThreads(first:100,after:$endCursor){ totalCount' \
+  "portfolio-maintenance overlay prescribes a thread read that never requests totalCount"
+# shellcheck disable=SC2016
+assert_overlay '[ "$fetched" = "$total" ]' \
+  "portfolio-maintenance overlay never compares the fetched node count to totalCount"
+assert_overlay 'thread read TRUNCATED' \
+  "portfolio-maintenance overlay does not name a truncated thread read as its own failure mode"
+# The primary block pins the never-zero contract as its own prose sentence; the overlay expresses it
+# only inside the TRUNCATED echo. Asserting it separately makes the two halves independent, so an edit
+# that keeps the "TRUNCATED" wording while dropping "UNKNOWN, never 0" — leaving a short read free to
+# read as a clean zero, which is the whole defect — fails here instead of passing.
+assert_overlay 'UNKNOWN, never 0' \
+  "portfolio-maintenance overlay no longer says a SHORT thread read is UNKNOWN rather than zero"
+
 # ── 3. exception (a) cannot swallow this class ──────────────────────────────────────────────────────
 assert_prose 'real blocker, never staleness' \
   "Merge policy does not exclude unresolved threads from the BLOCKED-is-stale carve-out"
