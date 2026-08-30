@@ -22,6 +22,47 @@ fail() {
   exit 1
 }
 
+# The compatibility overlay carries a static repo list for live-set reconciliation. Every
+# active product in the canonical Portfolio map must appear there, or the survey reports
+# false REPO-SET-DRIFT immediately after a product is registered.
+mapped_product_repos="$({
+  awk -F '|' '
+    /^## Portfolio map$/ { in_map = 1; next }
+    /^## Stack map$/ { exit }
+    in_map && /^\|/ {
+      repo = $3
+      gsub(/^ +| +$/, "", repo)
+      if (repo ~ /^`devantler-tech\/[^`]+`$/) {
+        sub(/^`devantler-tech\//, "", repo)
+        sub(/`$/, "", repo)
+        print repo
+      }
+    }
+  ' "${constitution}"
+} | LC_ALL=C sort -u)"
+
+overlay_repos="$({
+  awk '
+    /The list:$/ { in_list = 1; next }
+    in_list && /^Archived repos / { exit }
+    in_list {
+      line = $0
+      while (match(line, /`[^`]+`/)) {
+        print substr(line, RSTART + 1, RLENGTH - 2)
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' "${surveyor}"
+} | LC_ALL=C sort -u)"
+
+missing_product_repos="$(comm -23 \
+  <(printf '%s\n' "${mapped_product_repos}") \
+  <(printf '%s\n' "${overlay_repos}"))"
+[ -z "${missing_product_repos}" ] ||
+  fail "surveyor overlay omits mapped portfolio repos: $(printf '%s' "${missing_product_repos}" | tr '\n' ' ')"
+
+echo "portfolio surveyor contract: portfolio-map coverage assertion passed"
+
 for security_definition in "${platform_card}" "${platform_security_surveyor}"; do
   grep -Fq 'Kubescape CR LISTs return spec-stripped skeletons.' "${security_definition}" ||
     fail "${security_definition#"${repo_root}/"} can mistake a Kubescape LIST skeleton for empty scanner output"
