@@ -32,14 +32,23 @@ mapped_product_repos="$({
     in_map && /^\|/ {
       repo = $3
       gsub(/^ +| +$/, "", repo)
-      if (repo ~ /^`devantler-tech\/[^`]+`$/) {
+      if (repo ~ /\*\*archived /) next
+      if (repo ~ /^`devantler-tech\/[^`]+`/) {
         sub(/^`devantler-tech\//, "", repo)
-        sub(/`$/, "", repo)
+        sub(/`.*/, "", repo)
         print repo
       }
     }
   ' "${constitution}"
 } | LC_ALL=C sort -u)"
+
+for annotated_product_repo in homebrew-tap agent-plugins; do
+  printf '%s\n' "${mapped_product_repos}" | grep -Fxq "${annotated_product_repo}" ||
+    fail "portfolio-map parser omits active annotated repository: ${annotated_product_repo}"
+done
+if printf '%s\n' "${mapped_product_repos}" | grep -Fxq 'reusable-workflows'; then
+  fail 'portfolio-map parser includes an explicitly archived repository'
+fi
 
 overlay_repos="$({
   awk '
