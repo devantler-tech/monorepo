@@ -967,10 +967,14 @@ For each selected product:
   was carrying **7** undisclosed comments at the time it was corrected.
 
   ```sh
-  args=(); while IFS= read -r r; do args+=(--repo "$r"); done < <(
-    gh api --paginate 'orgs/devantler-tech/repos?type=all&per_page=100' \
-      --jq '.[] | select(.archived == false) | .full_name'
-  )
+  # Capture FIRST: in `done < <(gh ...)` the discovery's exit status is unobservable,
+  # so a pagination that dies part-way is indistinguishable from a complete list.
+  repos="$(gh api --paginate 'orgs/devantler-tech/repos?type=all&per_page=100' \
+    --jq '.[] | select(.archived == false) | .full_name')" \
+    || { echo 'repository discovery FAILED — UNKNOWN, never a clean sweep' >&2; exit 2; }
+  args=(); while IFS= read -r r; do [ -n "$r" ] && args+=(--repo "$r"); done <<<"$repos"
+  [ "${#args[@]}" -gt 0 ] \
+    || { echo 'repository discovery EMPTY — UNKNOWN, never a clean sweep' >&2; exit 2; }
   .claude/scripts/disclosure-drift-sweep.sh --since <ISO-8601-UTC> "${args[@]}"
   ```
 
@@ -979,9 +983,16 @@ For each selected product:
   under-report this whole check exists to catch, one level up. `--jq` is applied per page here, which
   is safe only because the filter emits one line per repository; an aggregate would count per page.
 
-  An empty or failed derivation is **UNKNOWN, never an empty sweep** — `args` would be empty and the
-  wrapper would exit on usage rather than reporting clean, which is the intended direction; do not
-  "fix" that by falling back to a hard-coded list.
+  An empty or failed derivation is **UNKNOWN, never an empty sweep**; do not "fix" that by falling
+  back to a hard-coded list. 🔴 **Check the discovery's own exit status — "`args` would be empty" is
+  NOT what makes this safe, and relying on it leaves the likelier failure wide open.** `gh api
+  --paginate` streams pages as it goes and stops on the first failed request (a 403 secondary rate
+  limit, a GraphQL partial result), so a mid-pagination failure emits the repositories it already
+  read and *then* exits non-zero. `args` is therefore **non-empty but truncated**, every emptiness
+  guard passes, and the sweep reports `0` clean over a subset — the same silent under-report this
+  check exists to catch, one level down. Reproduced with a stub that prints two repositories and
+  exits 1: the process-substitution form proceeds with 2 as though complete, while the captured form
+  exits UNKNOWN and a success control still proceeds normally.
 
   **Use the sweep wrapper, NOT `comment-disclosure-drift.sh --since` directly.** A bare `--since` call
   exits 1 **routinely** on any repository that uses Bugbot: it can never grant the bare-trigger
