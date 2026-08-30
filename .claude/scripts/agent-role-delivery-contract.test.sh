@@ -794,22 +794,34 @@ esac
 # 2026-08-29: two real surveyor sidechains were denied
 # `'.claude/scripts/pr-ownership-disclosure.sh' is not on the read-only allowlist`, 14h after
 # the declaration merged, while the assertions above stayed green because they exercise the
-# absolute form the overlay never prescribed. A path token is a documented call site when it
-# contains a separator; `/` is the admitted form and `<…>` a placeholder standing for one.
-relative_classifier_sites="$(awk '
-  {
-    line = $0
-    while (match(line, /[^[:space:]"`'"'"']*pr-ownership-disclosure\.sh/)) {
-      tok = substr(line, RSTART, RLENGTH)
-      if (index(tok, "/") > 0 && substr(tok, 1, 1) != "/" && substr(tok, 1, 1) != "<") {
-        printf "%d:%s\n", NR, tok
+# absolute form the overlay never prescribed. Every classifier token is a documented call site;
+# `/` is the admitted form and `<…>` a placeholder standing for one.
+classifier_site_violations() {
+  awk '
+    {
+      line = $0
+      while (match(line, /[^[:space:]"`'"'"']*pr-ownership-disclosure\.sh/)) {
+        tok = substr(line, RSTART, RLENGTH)
+        if (substr(tok, 1, 1) != "/" && substr(tok, 1, 1) != "<") {
+          printf "%d:%s\n", NR, tok
+        }
+        line = substr(line, RSTART + RLENGTH)
       }
-      line = substr(line, RSTART + RLENGTH)
     }
-  }
-' "${surveyor_agent}")"
-[ -z "${relative_classifier_sites}" ] ||
-  fail "surveyor overlay documents a RELATIVE call to the declared classifier, which the guard refuses by construction. Prescribe the absolute form (\`<repo-root>/.claude/scripts/pr-ownership-disclosure.sh\`), since the guard expands neither \$PWD nor command substitution: ${relative_classifier_sites}"
+  ' "$1"
+}
+
+bare_classifier_fixture="${hook_tmp}/surveyor-bare-classifier.md"
+printf '%s\n' 'pr-ownership-disclosure.sh --input -' > "${bare_classifier_fixture}"
+bare_classifier_sites="$(classifier_site_violations "${bare_classifier_fixture}")"
+case "${bare_classifier_sites}" in
+  *'1:pr-ownership-disclosure.sh'*) ;;
+  *) fail "surveyor classifier-site check did not reject a bare classifier command" ;;
+esac
+
+invalid_classifier_sites="$(classifier_site_violations "${surveyor_agent}")"
+[ -z "${invalid_classifier_sites}" ] ||
+  fail "surveyor overlay documents a NON-ABSOLUTE call to the declared classifier, which the guard refuses by construction. Prescribe the absolute form (\`<repo-root>/.claude/scripts/pr-ownership-disclosure.sh\`), since the guard expands neither \$PWD nor command substitution: ${invalid_classifier_sites}"
 
 # Ground that lexical assertion in the guard's own behaviour so it cannot decay into a style
 # rule: the relative form must really be refused, and for this reason.
