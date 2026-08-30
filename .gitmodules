@@ -82,3 +82,7 @@
 	path = libraries/kyverno-policies
 	url = git@github.com:devantler-tech/kyverno-policies.git
 	branch = main
+[submodule "applications/data-product-controller"]
+	path = applications/data-product-controller
+	url = git@github.com:devantler-tech/data-product-controller.git
+	branch = main

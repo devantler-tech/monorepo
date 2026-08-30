@@ -18,6 +18,7 @@ keeping them healthy *and* moving them forward.
 | Product | Repo | Path | Per-repo AGENTS.md |
 |---|---|---|---|
 | KSail (Go CLI) | `devantler-tech/ksail` | `applications/ksail` | [AGENTS.md](https://github.com/devantler-tech/ksail/blob/main/AGENTS.md) |
+| Data Product Controller | `devantler-tech/data-product-controller` | `applications/data-product-controller` | [AGENTS.md](https://github.com/devantler-tech/data-product-controller/blob/main/AGENTS.md) |
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | [AGENTS.md](https://github.com/devantler-tech/platform/blob/main/AGENTS.md) |
 | devantler.tech site | `devantler-tech/monorepo` | `docs/` + repo root | this file |
 | GitHub organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | [AGENTS.md](https://github.com/devantler-tech/.github/blob/main/AGENTS.md) |
@@ -103,6 +104,7 @@ no row are filed on the **default intake repo** below.
 | AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |
 | App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
 | KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
+| Data product controller | Creating, composing, publishing, and exploring reusable data products backed by new or existing data sources | `devantler-tech/data-product-controller` |
 | Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/actions` |
 | AI assistant skills | Teaching the AI assistants new individual skills and behaviours | `devantler-tech/agent-skills` |
 | AI assistant plugin bundles | Bundling skills into installable plugins / marketplace entries for VS Code, Copilot CLI, Claude Code | `devantler-tech/agent-plugins` |
