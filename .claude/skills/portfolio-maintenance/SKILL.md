@@ -968,10 +968,16 @@ For each selected product:
 
   ```sh
   args=(); while IFS= read -r r; do args+=(--repo "$r"); done < <(
-    gh repo list devantler-tech --no-archived --limit 100 --json nameWithOwner --jq '.[].nameWithOwner'
+    gh api --paginate 'orgs/devantler-tech/repos?type=all&per_page=100' \
+      --jq '.[] | select(.archived == false) | .full_name'
   )
   .claude/scripts/disclosure-drift-sweep.sh --since <ISO-8601-UTC> "${args[@]}"
   ```
+
+  Paginate the discovery rather than capping it: a fixed `--limit` drops repositories past the cap
+  with no signal, so the sweep would report a clean result for an incomplete run — the same silent
+  under-report this whole check exists to catch, one level up. `--jq` is applied per page here, which
+  is safe only because the filter emits one line per repository; an aggregate would count per page.
 
   An empty or failed derivation is **UNKNOWN, never an empty sweep** — `args` would be empty and the
   wrapper would exit on usage rather than reporting clean, which is the intended direction; do not
