@@ -795,14 +795,16 @@ esac
 # `'.claude/scripts/pr-ownership-disclosure.sh' is not on the read-only allowlist`, 14h after
 # the declaration merged, while the assertions above stayed green because they exercise the
 # absolute form the overlay never prescribed. Every classifier token is a documented call site;
-# `/` is the admitted form and `<…>` a placeholder standing for one.
+# only the declared absolute path and its exact `<repo-root>/…` documentation form are admitted.
 classifier_site_violations() {
-  awk '
+  awk \
+    -v absolute="${repo_root}/.claude/scripts/pr-ownership-disclosure.sh" \
+    -v documented='<repo-root>/.claude/scripts/pr-ownership-disclosure.sh' '
     {
       line = $0
       while (match(line, /[^[:space:]"`'"'"']*pr-ownership-disclosure\.sh/)) {
         tok = substr(line, RSTART, RLENGTH)
-        if (substr(tok, 1, 1) != "/" && substr(tok, 1, 1) != "<") {
+        if (tok != absolute && tok != documented) {
           printf "%d:%s\n", NR, tok
         }
         line = substr(line, RSTART + RLENGTH)
@@ -817,6 +819,14 @@ bare_classifier_sites="$(classifier_site_violations "${bare_classifier_fixture}"
 case "${bare_classifier_sites}" in
   *'1:pr-ownership-disclosure.sh'*) ;;
   *) fail "surveyor classifier-site check did not reject a bare classifier command" ;;
+esac
+
+unrelated_classifier_fixture="${hook_tmp}/surveyor-unrelated-classifier.md"
+printf '%s\n' '/tmp/pr-ownership-disclosure.sh --input -' > "${unrelated_classifier_fixture}"
+unrelated_classifier_sites="$(classifier_site_violations "${unrelated_classifier_fixture}")"
+case "${unrelated_classifier_sites}" in
+  *'1:/tmp/pr-ownership-disclosure.sh'*) ;;
+  *) fail "surveyor classifier-site check admitted an unrelated absolute classifier path" ;;
 esac
 
 invalid_classifier_sites="$(classifier_site_violations "${surveyor_agent}")"
