@@ -210,6 +210,48 @@ assert_rc "missing --repo is usage error" 2 "$RC"
 run_sweep --since 2026-01-01T00:00:00Z --repo o/r --bogus
 assert_rc "unknown argument is usage error" 2 "$RC"
 
+printf '\n== exit 2: an INCOMPLETE finding record is UNKNOWN, never a silent drop ==\n'
+# A record missing its URL used to be dropped by the emit condition. Alone it was
+# caught by the empty-findings guard; NEXT TO a well-formed record it vanished and
+# the sweep exited 1 reporting only the survivor — under-reporting while looking
+# decisive. The pair below is the shape that regression needs.
+reset_stub
+{
+  finding undisclosed-trigger \
+    "https://github.com/o/r/pull/71#issuecomment-9000071" "@coderabbitai review"
+  printf 'VIOLATION undisclosed-trigger\n    first line: @codex review\n'
+} >"$scratch/stub/sweep.out"
+printf '1\n' >"$scratch/stub/sweep.rc"
+run_sweep --since 2026-01-01T00:00:00Z --repo o/partial-record-repo
+assert_rc "an incomplete record makes the sweep UNKNOWN" 2 "$RC"
+assert_contains "names the shape change" "the guard's output shape changed under us"
+assert_contains "still reports the well-formed finding beside it" "issuecomment-9000071"
+
+printf '\n== exit 2: a record with NO continuation line is UNKNOWN ==\n'
+# Without body_seen the record would carry an empty body, which is not the Bugbot
+# carve-out, so it would be counted REAL — a verdict on a record we cannot read.
+reset_stub
+printf 'VIOLATION undisclosed-trigger https://github.com/o/r/pull/72#issuecomment-9000072\n' \
+  >"$scratch/stub/sweep.out"
+printf '1\n' >"$scratch/stub/sweep.rc"
+run_sweep --since 2026-01-01T00:00:00Z --repo o/no-continuation-repo
+assert_rc "a record without its continuation is UNKNOWN" 2 "$RC"
+assert_absent "it is not counted as a REAL violation" "REAL     https://github.com/o/r/pull/72"
+
+printf '\n== MULTI-REPOSITORY: every repo is swept and UNKNOWN outranks REAL ==\n'
+# Every other case passes a single --repo, so the repository loop itself was never
+# exercised: a regression dropping a repo, or mishandling a mixed verdict, passed.
+reset_stub
+finding undisclosed-trigger \
+  "https://github.com/o/r/pull/73#issuecomment-9000073" "@coderabbitai review" \
+  >"$scratch/stub/sweep.out"
+printf '1\n' >"$scratch/stub/sweep.rc"
+run_sweep --since 2026-01-01T00:00:00Z --repo o/multi-first --repo o/multi-second
+assert_log "the first repository reached the guard" yes "multi-first"
+assert_log "the second repository reached the guard" yes "multi-second"
+assert_rc "two REAL repositories still exit 1" 1 "$RC"
+assert_contains "each repository is counted, not deduplicated" "2 real"
+
 printf '\n%d assertion(s), %d failure(s)\n' "$assertions" "$failures"
 [ "$failures" -eq 0 ] || exit 1
 printf 'disclosure-drift-sweep: OK\n'

@@ -118,11 +118,27 @@ run_drift() {
 # two are joined here rather than matched independently — a finding whose
 # continuation is missing must not silently inherit the previous finding's body.
 parse_findings() { # reads $DRIFT_OUT on stdin
+  # Emits MALFORMED for any record missing a shape, a URL, or its continuation.
+  # The previous form kept `if (url != "")` as the emit condition, which drops
+  # such a record SILENTLY: a lone one is caught downstream by the empty-findings
+  # guard, but one sitting beside a well-formed record simply vanishes and the
+  # sweep under-reports while still exiting 1. The guard always emits all three
+  # fields today, so this changes nothing on real output — it closes the
+  # shape-changed-under-us hole the empty-findings guard only half covers.
   awk '
-    /^VIOLATION / { if (url != "") { print shape "\t" url "\t" body }
-                    shape = $2; url = $3; body = ""; next }
-    /^[[:space:]]+first line:/ { sub(/^[[:space:]]+first line:[[:space:]]*/, ""); body = $0; next }
-    END { if (url != "") print shape "\t" url "\t" body }
+    function emit() {
+      if (shape == "" || url == "" || !body_seen) { print "MALFORMED\t\t"; return }
+      print shape "\t" url "\t" body
+    }
+    /^VIOLATION / {
+      if (seen) emit()
+      shape = $2; url = $3; body = ""; body_seen = 0; seen = 1; next
+    }
+    /^[[:space:]]+first line:/ {
+      sub(/^[[:space:]]+first line:[[:space:]]*/, "")
+      body = $0; body_seen = 1; next
+    }
+    END { if (seen) emit() }
   '
 }
 
@@ -153,6 +169,15 @@ for repo in "${repos[@]}"; do
   fi
 
   while IFS=$'\t' read -r shape url body; do
+    # An incomplete record means the guard's output shape changed under us, so
+    # this repository's result is unverifiable rather than clean. Checked BEFORE
+    # the url test below, which would otherwise `continue` past it silently —
+    # the very drop this record type exists to surface.
+    if [ "$shape" = "MALFORMED" ]; then
+      unknown_count=$((unknown_count + 1))
+      unknown_lines+=("$repo: a finding record was incomplete — the guard's output shape changed under us")
+      continue
+    fi
     [ -n "$url" ] || continue
     # Only Bugbot's exact bare trigger is carve-out eligible. Everything else —
     # including a bare @coderabbitai/@codex trigger — is a violation on sight.
