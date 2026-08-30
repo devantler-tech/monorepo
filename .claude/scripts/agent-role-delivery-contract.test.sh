@@ -833,6 +833,13 @@ invalid_classifier_sites="$(classifier_site_violations "${surveyor_agent}")"
 [ -z "${invalid_classifier_sites}" ] ||
   fail "surveyor overlay documents a NON-ABSOLUTE call to the declared classifier, which the guard refuses by construction. Prescribe the absolute form (\`<repo-root>/.claude/scripts/pr-ownership-disclosure.sh\`), since the guard expands neither \$PWD nor command substitution: ${invalid_classifier_sites}"
 
+# The exact path is not sufficient: the guard also requires the FIRST pipeline segment to be a
+# forge command. Pin the documented call as one admitted unit so a local producer such as `printf`
+# cannot leave the classifier unreachable while the path-only assertion above stays green.
+documented_classifier_call='gh pr view <n> --repo devantler-tech/<repo> --json body --jq .body | <repo-root>/.claude/scripts/pr-ownership-disclosure.sh --input -'
+grep -Fq "${documented_classifier_call}" "${surveyor_agent}" ||
+  fail "surveyor overlay does not prescribe the forge-first classifier call that the read-only guard admits"
+
 # Ground that lexical assertion in the guard's own behaviour so it cannot decay into a style
 # rule: the relative form must really be refused, and for this reason.
 relative_payload="$(jq -nc '{

@@ -2015,11 +2015,11 @@ grep -Fq 'four or more spaces of indentation at the current depth' "${constituti
 # the classifier without saying how to run it.
 grep -Fq '.claude/scripts/pr-ownership-disclosure.sh --repo <owner>/<repo> --pr <n>' "${surveyor}" ||
   fail "portfolio-surveyor.md must carry the full ownership-classifier invocation (#2784)"
-# The PRESCRIBED form reuses the body the deepening query already returned, so pin that invocation
-# too — otherwise the doc could keep only the fetching mode and quietly reintroduce a second API
-# request per candidate against the survey's own budget.
-grep -Fq '.claude/scripts/pr-ownership-disclosure.sh --input -' "${surveyor}" ||
-  fail "portfolio-surveyor.md must prescribe the body-reusing classifier invocation"
+# The PRESCRIBED form must start at the forge. The read-only guard rejects a local producer such as
+# `printf` in leading position even when the classifier path itself is exact, so a filename-only
+# assertion can keep the production call dead while this test stays green.
+grep -Fq 'gh pr view <n> --repo devantler-tech/<repo> --json body --jq .body | <repo-root>/.claude/scripts/pr-ownership-disclosure.sh --input -' "${surveyor}" ||
+  fail "portfolio-surveyor.md must prescribe the forge-first ownership-classifier invocation"
 
 # And the classifier must exist, be executable, and actually pin the two matcher rules — otherwise the
 # delegation above points at nothing and the guarantee is lost rather than moved.
