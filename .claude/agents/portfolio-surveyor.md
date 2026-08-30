@@ -1343,7 +1343,7 @@ public and private — no per-repo loop needed to enumerate):
    by `devantler`. The orchestrator cannot authorise an external repository from survey metadata; only
    the maintainer can clear that boundary in a current interactive conversation.
 
-Portfolio repos (the org-wide search covers them; this is the canonical list to reason over). The
+Portfolio repos (the org-wide search covers them). The
 **authoritative set is the org's live non-archived repo list**: the monorepo `AGENTS.md` portfolio
 map names the *products*, and org/infra repos outside that map (e.g. `maintenance`, `fleet-gitops`,
 `aws`) are in scope too. Reconcile each run with one bounded call —
@@ -1353,7 +1353,7 @@ dropping any repo. (A live repo absent from the portfolio map is *not* drift —
 names only products; flag map drift only when a product row's repo is missing or renamed in the live
 set, and a product row the map itself marks **archived** — e.g. `reusable-workflows` — is an
 intentional tombstone, never drift.) The list:
-`ksail`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
+`ksail`, `data-product-controller`, `platform`, `monorepo`, `.github`, `go-template`, `dotnet-template`,
 `platform-tenant-template`, `platform-template`, `actions`, `homebrew-tap`, `agent-skills`,
 `agent-plugins`, `provider-upjet-unifi`, `kyverno-policies`, `maintenance`, `fleet-gitops`, `aws`,
 `world-at-ruin`, `wedding-app`, `ascoachingogvaner`, `unifi`.
