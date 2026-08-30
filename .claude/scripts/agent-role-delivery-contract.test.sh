@@ -787,6 +787,77 @@ case "${leading_output}" in
   *) fail "leading classifier was refused for the wrong reason: ${leading_output}" ;;
 esac
 
+# Declaring the classifier only ACTIVATES it if the overlay tells the surveyor to type the
+# same word. The guard compares the declared entry to the invoked program by exact string
+# equality and expands nothing — `$PWD/…` stays a literal and `$(…)` is refused outright —
+# so a relative call site leaves the capability declared and unreachable. Measured
+# 2026-08-29: two real surveyor sidechains were denied
+# `'.claude/scripts/pr-ownership-disclosure.sh' is not on the read-only allowlist`, 14h after
+# the declaration merged, while the assertions above stayed green because they exercise the
+# absolute form the overlay never prescribed. Every classifier token is a documented call site;
+# only the declared absolute path and its exact `<repo-root>/…` documentation form are admitted.
+classifier_site_violations() {
+  awk \
+    -v absolute="${repo_root}/.claude/scripts/pr-ownership-disclosure.sh" \
+    -v documented='<repo-root>/.claude/scripts/pr-ownership-disclosure.sh' '
+    {
+      line = $0
+      while (match(line, /[^[:space:]"`'"'"']*pr-ownership-disclosure\.sh/)) {
+        tok = substr(line, RSTART, RLENGTH)
+        if (tok != absolute && tok != documented) {
+          printf "%d:%s\n", NR, tok
+        }
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' "$1"
+}
+
+bare_classifier_fixture="${hook_tmp}/surveyor-bare-classifier.md"
+printf '%s\n' 'pr-ownership-disclosure.sh --input -' > "${bare_classifier_fixture}"
+bare_classifier_sites="$(classifier_site_violations "${bare_classifier_fixture}")"
+case "${bare_classifier_sites}" in
+  *'1:pr-ownership-disclosure.sh'*) ;;
+  *) fail "surveyor classifier-site check did not reject a bare classifier command" ;;
+esac
+
+unrelated_classifier_fixture="${hook_tmp}/surveyor-unrelated-classifier.md"
+printf '%s\n' '/tmp/pr-ownership-disclosure.sh --input -' > "${unrelated_classifier_fixture}"
+unrelated_classifier_sites="$(classifier_site_violations "${unrelated_classifier_fixture}")"
+case "${unrelated_classifier_sites}" in
+  *'1:/tmp/pr-ownership-disclosure.sh'*) ;;
+  *) fail "surveyor classifier-site check admitted an unrelated absolute classifier path" ;;
+esac
+
+invalid_classifier_sites="$(classifier_site_violations "${surveyor_agent}")"
+[ -z "${invalid_classifier_sites}" ] ||
+  fail "surveyor overlay documents a NON-ABSOLUTE call to the declared classifier, which the guard refuses by construction. Prescribe the absolute form (\`<repo-root>/.claude/scripts/pr-ownership-disclosure.sh\`), since the guard expands neither \$PWD nor command substitution: ${invalid_classifier_sites}"
+
+# The exact path is not sufficient: the guard also requires the FIRST pipeline segment to be a
+# forge command. Pin the documented call as one admitted unit so a local producer such as `printf`
+# cannot leave the classifier unreachable while the path-only assertion above stays green.
+documented_classifier_call='gh pr view <n> --repo devantler-tech/<repo> --json body --jq .body | <repo-root>/.claude/scripts/pr-ownership-disclosure.sh --input -'
+grep -Fq "${documented_classifier_call}" "${surveyor_agent}" ||
+  fail "surveyor overlay does not prescribe the forge-first classifier call that the read-only guard admits"
+
+# Ground that lexical assertion in the guard's own behaviour so it cannot decay into a style
+# rule: the relative form must really be refused, and for this reason.
+relative_payload="$(jq -nc '{
+  tool_input: {
+    command: "gh pr view 1 --repo devantler-tech/monorepo --json body --jq .body | .claude/scripts/pr-ownership-disclosure.sh --input -"
+  }
+}')"
+set +e
+relative_output="$(run_surveyor_hook "${relative_payload}" 2>&1)"
+relative_status=$?
+set -e
+[ "${relative_status}" -eq 2 ] ||
+  fail "surveyor hook admitted a RELATIVE classifier call (exit ${relative_status})"
+case "${relative_output}" in
+  *'is not on the read-only allowlist'*) ;;
+  *) fail "relative classifier call was refused for the wrong reason: ${relative_output}" ;;
+esac
+
 unset GH_TELEMETRY
 telemetry_probe="${hook_tmp}/telemetry-probe.sh"
 # shellcheck disable=SC2016  # fixture must inspect its own child environment
