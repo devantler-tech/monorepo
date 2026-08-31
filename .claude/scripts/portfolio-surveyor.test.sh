@@ -2079,15 +2079,27 @@ grep -Fq 'gh pr view <n> --repo devantler-tech/<repo> --json body --jq .body | <
 # (*Execution model*), the shared main checkout's path matches no declaration. Measured: five denials
 # of the absolute form AFTER the absolute-path fix shipped — four on 2026-08-30T20:13 and one on
 # 2026-08-31T07:06:27Z — each from a session running in a worktree that typed the shared path.
-grep -Fq 'is the checkout this survey is RUNNING IN' "${surveyor}" ||
+# Scope every assertion below to the substitution rule ITSELF. Searching the whole document lets a
+# future ambiguous instruction sit INSIDE the rule while an unrelated line elsewhere keeps the
+# positive greps green, and lets any prohibited wording other than the one measured phrase survive
+# untouched — the same "pins the string, not the value" defect this block exists to close, one level
+# up. The block is delimited by the prescribed invocation (already pinned above) and the rule's own
+# closing sentence, so it tracks the rule rather than line numbers.
+_subst_rule=$(sed -n '/pr-ownership-disclosure\.sh --input -/,/Use the exact forge-first pipeline above\./p' "${surveyor}")
+# An empty extraction would make the negative assertion below pass VACUOUSLY, so it is checked
+# first: a checker whose input is empty proves nothing (#3127).
+[ -n "${_subst_rule}" ] ||
+  fail "portfolio-surveyor.md must keep the <repo-root> substitution rule as one extractable block (#3127)"
+grep -Fq '`<repo-root>` is the checkout this survey is RUNNING IN' <<<"${_subst_rule}" ||
   fail "portfolio-surveyor.md must resolve <repo-root> to the checkout the survey RUNS IN (#3127)"
 # The measured wrong answer must be recorded, not merely the right one: a rule that names only the
 # correct value leaves the reading that produced the defect available to the next reader.
-grep -Fq 'never the shared main checkout' "${surveyor}" ||
+grep -Fq 'never the shared main checkout' <<<"${_subst_rule}" ||
   fail "portfolio-surveyor.md must record the shared main checkout as the wrong substitution (#3127)"
-# And the ambiguous phrasing must be GONE. Keeping the positive rule beside the phrase that resolved
-# to the wrong checkout is how a definition accretes two answers to one question.
-grep -Fq 'absolute path of the checkout you' "${surveyor}" &&
+# And no surveyed-checkout phrasing may survive anywhere in the rule. Rejecting a FAMILY rather than
+# the single measured phrase is the point: the defect WAS a wording, so the next one is a different
+# wording.
+grep -Eiq 'absolute path of the checkout you|checkout (you are |being )?survey(ing|ed)|repositor(y|ies) under survey' <<<"${_subst_rule}" &&
   fail "portfolio-surveyor.md must not tell the surveyor to use the checkout it is SURVEYING (#3127)"
 
 # And the classifier must exist, be executable, and actually pin the two matcher rules — otherwise the
