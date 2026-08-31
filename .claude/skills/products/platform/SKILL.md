@@ -22,15 +22,16 @@ maintained once, in the product's own `AGENTS.md`.
 Investigating **how the platform itself is doing** is a first-class part of every Platform run — do it
 **read-only** against the running prod cluster + its observability stack, and **dedupe against the
 accepted "known non-issues" baseline in your native memory** so you don't re-chase by-design/transient
-signals. Pin the context — `kubectl --context=admin@prod …` (the shared kubeconfig drifts across
+signals. Pin the context — resolve it ONCE with `ctx=$(.claude/scripts/prod-kube-context.sh) || exit 2`, then
+pass `--context="$ctx"` to every call (the shared kubeconfig drifts across
 parallel sessions, and its API endpoint can go stale after a control-plane recreate; the refresh recipe
 + healthy baseline counts live in native memory). Query **at least** the following; the list is
 **non-exhaustive — chase any other anomaly** you see:
 
-- **Flux Kustomizations** — `kubectl --context=admin@prod get kustomization -A` (Ready? suspended?
+- **Flux Kustomizations** — `kubectl --context="$ctx" get kustomization -A` (Ready? suspended?
   drifting/last-applied revision? health-check timeouts?). For a stuck/failing reconciliation, the
   `gitops-cluster-debug` skill (Flux MCP server) traces the dependency chain on the live cluster.
-- **Flux HelmReleases** — `kubectl --context=admin@prod get helmrelease -A` (Ready? install/upgrade
+- **Flux HelmReleases** — `kubectl --context="$ctx" get helmrelease -A` (Ready? install/upgrade
   retries exhausted? stuck/pending-upgrade?).
 - **Coroot** — Incidents, Alerts/SLO burn, Traces, Logs, Risks (deployment & health-check risks), and
   **cost optimizations** (Node/cost view). Use its **read API** — the access recipe (project id, auth,
@@ -40,14 +41,14 @@ parallel sessions, and its API endpoint can go stale after a control-plane recre
   producing data first** (a broken scanner reads identically to a compliant cluster). See the dedicated
   **Security posture** section below for the object names, the broken-vs-clean checks, and the
   fix-vs-except ladder.
-- **Kyverno + Policy Reporter** — policy **validation & enforcement**: `kubectl --context=admin@prod
+- **Kyverno + Policy Reporter** — policy **validation & enforcement**: `kubectl --context="$ctx"
   get cpol,pol -A` (policies present? mode Audit vs Enforce?) and `polr,cpolr -A` (PolicyReport /
   ClusterPolicyReport — failing rules and violating resources). **Policy Reporter** aggregates every
   report into a dashboard + read API (SSO UI at `policy-reporter.${domain}`; in-cluster API
   `policy-reporter.policy-reporter.svc:8080`) for a whole-cluster view of failing results. Driving
   those failures to **zero and holding it** is a standing objective — see the dedicated **Policy
   compliance** section below.
-- **Kubernetes events & warnings** — `kubectl --context=admin@prod get events -A
+- **Kubernetes events & warnings** — `kubectl --context="$ctx" get events -A
   --field-selector type=Warning`, plus unhealthy / CrashLooping / Pending pods and abnormal restart
   counts.
 - **Other problems** — node/Talos & etcd-quorum health, Longhorn volume health, cert-manager certs,
@@ -77,7 +78,7 @@ and identity labels; all-zero severities, empty matches, or empty VEX payloads i
 display artifacts, not findings. For CVE coverage, reconcile the result identities and manifest/summary
 pairs against the **current workload/container inventory** before making any cluster-wide claim; an
 absent or stale result is a coverage gap, not zero findings. Before judging payload quality,
-`kubectl get <crd> <name> -n <ns> -o json` by name and **sample 2–3 objects per surface**. For CVE
+`kubectl --context="$ctx" get <crd> <name> -n <ns> -o json` by name and **sample 2–3 objects per surface**. For CVE
 liveness, directly GET both named `vulnerabilitymanifests` and their corresponding
 `vulnerabilitymanifestsummaries`, then cross-check scanner freshness and logs. Never declare the
 scanner broken or the cluster clean from a LIST projection. Sampling proves **liveness only**. If the
@@ -138,7 +139,7 @@ compliant — is a standing objective, not a floor.** This is the admission-time
 
 - **Enumerate every run** via **Policy Reporter** — the dashboard/read API that aggregates all reports
   (SSO UI at `policy-reporter.${domain}`; in-cluster API `policy-reporter.policy-reporter.svc:8080`) —
-  or `kubectl --context=admin@prod get polr,cpolr -A`. **The `fail` count is the zero-and-hold
+  or `kubectl --context="$ctx" get polr,cpolr -A`. **The `fail` count is the zero-and-hold
   target** — treat a **newly introduced** `fail` as a regression to clear promptly, like a red CI
   check, not just the long-standing backlog. **Track `warn` results in a *separate* tally**: they are a
   softer lead signal (a policy still in `Audit` that will graduate to `Enforce`, or a deprecation

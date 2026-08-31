@@ -25,6 +25,7 @@ jobs:
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
+      prod-kube-context: ${{ steps.filter.outputs.prod-kube-context }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
       review-provider-loop-contract: ${{ steps.filter.outputs.review-provider-loop-contract }}
@@ -147,6 +148,13 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/blocked-label-blocker-line.sh'
               - '.claude/scripts/blocked-label-blocker-line.test.sh'
+              - '.github/workflows/ci.yaml'
+            prod-kube-context:
+              - '.claude/scripts/prod-kube-context.sh'
+              - '.claude/scripts/prod-kube-context.test.sh'
+              - '.claude/scripts/finops-snapshot.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
             memory-hygiene:
               - 'AGENTS.md'
@@ -781,6 +789,30 @@ jobs:
       # `pwd -P`, which differs under macOS /private/tmp symlinks.
       - name: Verify the submodule pin currency check
         run: bash .claude/scripts/submodule-pin-currency.test.sh
+
+  test-prod-kube-context:
+    name: Test prod kube context resolver
+    needs: changes
+    if: needs.changes.outputs.prod-kube-context == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hand-built `kubectl config view -o json` payloads through the --input seam only -- no
+      # kubectl, no kubeconfig, no cluster. Both OSes because the resolver splits candidates with
+      # awk on a tab and lowercases with tolower(), and BSD and GNU awk differ on exactly that
+      # ground -- a resolver that picked the admin context on one platform only would be the
+      # least-privilege regression this guards against.
+      - name: Verify the prod kube context resolver
+        run: bash .claude/scripts/prod-kube-context.test.sh
 
   test-blocked-label-blocker-line:
     name: Test blocked-label blocker line
@@ -1556,6 +1588,7 @@ jobs:
       - test-submodule-init
       - test-submodule-pin-currency
       - test-blocked-label-blocker-line
+      - test-prod-kube-context
       - test-pipefail-grep-guard
       - test-maintainer-preflight
       - test-memory-hygiene
@@ -1612,6 +1645,7 @@ jobs:
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-blocked-label-blocker-line.result }}
+            ${{ needs.test-prod-kube-context.result }}
             ${{ needs.test-pipefail-grep-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}

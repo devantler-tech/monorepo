@@ -411,7 +411,7 @@ Configure the plugin surveyor from this repo's `AGENTS.md` contract sections (*P
 product's `weekly`/live cursor in memory — NOT every run), also spawn the read-only
 [`platform-security-surveyor`](../../agents/platform-security-surveyor.md) with the current baseline
 (last recorded posture score / CVE counts / routing state from memory). It runs the bounded
-`kubectl --context admin@prod` pass over the three Kubescape surfaces **liveness-first** — a broken
+`kubectl` pass (context from `.claude/scripts/prod-kube-context.sh`) over the three Kubescape surfaces **liveness-first** — a broken
 scanner reads identically to a compliant cluster, so `0`/empty is treated as "verify the scanner"
 never "clean" — and returns a compact delta digest. Its `deltas_needing_action` feed the Operate
 ladder's security rung (§2 rung 5); GitHub-only runs in between stay blind to live findings by
