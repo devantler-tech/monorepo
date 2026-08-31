@@ -5,7 +5,7 @@
 # from a measurement instead of an impression. Raw JSON never reaches the
 # agent's context; only the digest does.
 #
-# Usage: finops-snapshot.sh [--window 3d] [--context admin@prod] [--top N]
+# Usage: finops-snapshot.sh [--window 3d] [--context <ctx>] [--top N]
 #                           [--port 19003] [--no-port-forward]
 #
 # --window takes OpenCost's own units and ONLY those: d(ays), h(ours),
@@ -29,7 +29,7 @@
 #    without its provenance eventually gets quoted as one that has it.
 set -uo pipefail
 
-WINDOW="3d"; CONTEXT="admin@prod"; TOP="12"; PF=1; PORT="19003"
+WINDOW="3d"; CONTEXT=""; TOP="12"; PF=1; PORT="19003"
 NS="opencost"; SVC="svc/opencost"; API_PORT="9003"
 
 die() { printf 'finops-snapshot: %s\n' "$1" >&2; exit 2; }
@@ -61,6 +61,18 @@ case "$TOP" in ''|*[!0-9]*) die "--top must be a positive integer (got: $TOP)" ;
 command -v kubectl >/dev/null 2>&1 || die "kubectl not found"
 command -v jq      >/dev/null 2>&1 || die "jq not found"
 command -v curl    >/dev/null 2>&1 || die "curl not found"
+
+# Resolve the context unless the caller pinned one. Hard-coding a name here was the bug in
+# monorepo#3122: the literal `admin@prod` does not exist on the agent host, so every run died at its
+# first call. Resolving also keeps the read on the scoped credential rather than the break-glass
+# admin one. Failing closed matters more than a default -- a cost snapshot taken through the wrong
+# cluster is a confident wrong number, which this script's header already calls out as the worst
+# outcome it can produce.
+if [ -z "$CONTEXT" ]; then
+  SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+  CONTEXT=$("$SCRIPT_DIR/prod-kube-context.sh") \
+    || die "could not resolve a kube context; pass --context explicitly (see 'kubectl config get-contexts')"
+fi
 
 # Days in the window, for the /month projection. Pure shell arithmetic on the
 # suffix; awk only for the fractional cases.
