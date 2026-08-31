@@ -41,8 +41,8 @@ in the digest unless you say which one you saw.
   into your output.
 
 ## The probe rule that overrides reflex (learned twice, the hard way)
-**Kubescape CR LISTs return spec-stripped skeletons.** `kubectl get <kubescape-crd> -A -o json` shows
-all-zero severities and empty VEX/matches even when the real objects are full — you MUST `kubectl get
+**Kubescape CR LISTs return spec-stripped skeletons.** `kubectl --context "$ctx" get <kubescape-crd> -A -o json` shows
+all-zero severities and empty VEX/matches even when the real objects are full — you MUST `kubectl --context "$ctx" get
 <crd> <name> -n <ns> -o json` **by name** (sample 2–3 objects per surface) before concluding anything
 about data quality. An all-zero LIST is a *display artifact*, not a finding.
 Use **LIST metadata for coverage and freshness** only: reconcile result names, identity labels,
@@ -63,7 +63,7 @@ identically, so every surface check is **liveness first, values second**.
 ## Survey — three surfaces, liveness-first (object names: platform product card *Security posture*)
 1. **Posture (config scan)** — `configurationscansummaries` / `workloadconfigurationscansummaries`.
    Liveness: scores not `0.00` across frameworks, `controls` not null en masse, objects fresh (check
-   `creationTimestamp`/generation age); on suspicion, `kubectl logs -n kubescape deploy/kubescape
+   `creationTimestamp`/generation age); on suspicion, `kubectl --context "$ctx" logs -n kubescape deploy/kubescape
    --tail=50` for scan aborts. Then: framework scores + the top failed controls (id, name, failing
    count) vs baseline.
 2. **CVE (kubevuln)** — `vulnerabilitymanifestsummaries` / `vulnerabilitymanifests` (+ `openvulnerabilityexchangecontainers`
