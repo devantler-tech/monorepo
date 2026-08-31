@@ -509,12 +509,19 @@ public and private — no per-repo loop needed to enumerate):
      This deliberately repeats the bounded body read for each `devantler` candidate even though the
      per-PR deepening command already returned `body`: the guard cannot establish forge provenance
      for an in-memory value, so `printf '%s' "$body" | …` is refused because its pipeline starts at
-     a local producer. 🔴 **Spell `<repo-root>` out as the literal absolute path of the checkout you
-     are surveying.** The guard expands nothing:
-     `$PWD/…` stays a literal matching no declaration, and `$(git rev-parse --show-toplevel)/…` is
-     refused as command substitution. A relative call is denied `is not on the read-only allowlist`
-     — measured on two live surveyor sidechains on 2026-08-29, 14h after the declaration shipped,
-     each left with the hand-derivation this rule forbids. The fetching mode —
+     a local producer. 🔴 **`<repo-root>` is the checkout this survey is RUNNING IN — the worktree you
+     were dispatched into — never the shared main checkout.** The forge hook declares the classifier at
+     `${REPO_ROOT}/.claude/…` with `REPO_ROOT` resolved from the hook's own location, and the guard
+     compares that declaration to the invoked word by **exact string equality**; every run works in a
+     per-run worktree (*Execution model*), so the shared checkout's path matches **no** declaration.
+     Measured **five** denials after the absolute form shipped — four on 2026-08-30T20:13 and one on
+     2026-08-31T07:06:27Z — each a session running in a worktree that typed the shared path instead.
+     There is **no discovery-free form**: the guard expands nothing, so `$PWD/…` and `${PWD}/…` stay
+     literals matching no declaration and `$(git rev-parse --show-toplevel)/…` is refused as command
+     substitution, and the surveyor cannot look its own checkout up in-band because a working-directory read is
+     denied `a read must begin with a forge command`. A relative call is denied `is not on the
+     read-only allowlist` — measured on two live surveyor sidechains on 2026-08-29, 14h after the
+     declaration shipped, each left with the hand-derivation this rule forbids. The fetching mode —
      `<repo-root>/.claude/scripts/pr-ownership-disclosure.sh --repo <owner>/<repo> --pr <n>` — is
      **not** a cheaper-or-costlier alternative but a refused one: a declared classifier is admitted
      only as a filter after a pipe, so leading position is denied `a read must begin with a forge

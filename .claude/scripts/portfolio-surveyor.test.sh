@@ -2071,6 +2071,25 @@ grep -Fq '.claude/scripts/pr-ownership-disclosure.sh --repo <owner>/<repo> --pr 
 grep -Fq 'gh pr view <n> --repo devantler-tech/<repo> --json body --jq .body | <repo-root>/.claude/scripts/pr-ownership-disclosure.sh --input -' "${surveyor}" ||
   fail "portfolio-surveyor.md must prescribe the forge-first ownership-classifier invocation"
 
+# #3127 — the template above pins the SHAPE and says nothing about what `<repo-root>` must RESOLVE
+# to, so the substitution rule could be (and was) ambiguous with this suite fully green. The guard
+# admits the classifier only when the invoked word is byte-identical to the forge hook's declaration
+# `${REPO_ROOT}/.claude/scripts/pr-ownership-disclosure.sh`, and REPO_ROOT is resolved from the hook's
+# own location — the checkout the survey RUNS IN. Because every run works in a per-run worktree
+# (*Execution model*), the shared main checkout's path matches no declaration. Measured: five denials
+# of the absolute form AFTER the absolute-path fix shipped — four on 2026-08-30T20:13 and one on
+# 2026-08-31T07:06:27Z — each from a session running in a worktree that typed the shared path.
+grep -Fq 'is the checkout this survey is RUNNING IN' "${surveyor}" ||
+  fail "portfolio-surveyor.md must resolve <repo-root> to the checkout the survey RUNS IN (#3127)"
+# The measured wrong answer must be recorded, not merely the right one: a rule that names only the
+# correct value leaves the reading that produced the defect available to the next reader.
+grep -Fq 'never the shared main checkout' "${surveyor}" ||
+  fail "portfolio-surveyor.md must record the shared main checkout as the wrong substitution (#3127)"
+# And the ambiguous phrasing must be GONE. Keeping the positive rule beside the phrase that resolved
+# to the wrong checkout is how a definition accretes two answers to one question.
+grep -Fq 'absolute path of the checkout you' "${surveyor}" &&
+  fail "portfolio-surveyor.md must not tell the surveyor to use the checkout it is SURVEYING (#3127)"
+
 # And the classifier must exist, be executable, and actually pin the two matcher rules — otherwise the
 # delegation above points at nothing and the guarantee is lost rather than moved.
 _classifier="${repo_root}/.claude/scripts/pr-ownership-disclosure.sh"
