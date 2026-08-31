@@ -1588,6 +1588,7 @@ jobs:
       - test-submodule-init
       - test-submodule-pin-currency
       - test-blocked-label-blocker-line
+      - test-prod-kube-context
       - test-pipefail-grep-guard
       - test-maintainer-preflight
       - test-memory-hygiene
@@ -1644,6 +1645,7 @@ jobs:
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-blocked-label-blocker-line.result }}
+            ${{ needs.test-prod-kube-context.result }}
             ${{ needs.test-pipefail-grep-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
