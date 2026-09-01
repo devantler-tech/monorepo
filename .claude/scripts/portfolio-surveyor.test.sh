@@ -2071,6 +2071,37 @@ grep -Fq '.claude/scripts/pr-ownership-disclosure.sh --repo <owner>/<repo> --pr 
 grep -Fq 'gh pr view <n> --repo devantler-tech/<repo> --json body --jq .body | <repo-root>/.claude/scripts/pr-ownership-disclosure.sh --input -' "${surveyor}" ||
   fail "portfolio-surveyor.md must prescribe the forge-first ownership-classifier invocation"
 
+# #3127 — the template above pins the SHAPE and says nothing about what `<repo-root>` must RESOLVE
+# to, so the substitution rule could be (and was) ambiguous with this suite fully green. The guard
+# admits the classifier only when the invoked word is byte-identical to the forge hook's declaration
+# `${REPO_ROOT}/.claude/scripts/pr-ownership-disclosure.sh`, and REPO_ROOT is resolved from the hook's
+# own location — the checkout the survey RUNS IN. Because every run works in a per-run worktree
+# (*Execution model*), the shared main checkout's path matches no declaration. Measured: five denials
+# of the absolute form AFTER the absolute-path fix shipped — four on 2026-08-30T20:13 and one on
+# 2026-08-31T07:06:27Z — each from a session running in a worktree that typed the shared path.
+# Scope every assertion below to the substitution rule ITSELF. Searching the whole document lets a
+# future ambiguous instruction sit INSIDE the rule while an unrelated line elsewhere keeps the
+# positive greps green, and lets any prohibited wording other than the one measured phrase survive
+# untouched — the same "pins the string, not the value" defect this block exists to close, one level
+# up. The block is delimited by the prescribed invocation (already pinned above) and the rule's own
+# closing sentence, so it tracks the rule rather than line numbers.
+_subst_rule=$(sed -n '/pr-ownership-disclosure\.sh --input -/,/Use the exact forge-first pipeline above\./p' "${surveyor}")
+# An empty extraction would make the negative assertion below pass VACUOUSLY, so it is checked
+# first: a checker whose input is empty proves nothing (#3127).
+[ -n "${_subst_rule}" ] ||
+  fail "portfolio-surveyor.md must keep the <repo-root> substitution rule as one extractable block (#3127)"
+grep -Fq '`<repo-root>` is the checkout this survey is RUNNING IN' <<<"${_subst_rule}" ||
+  fail "portfolio-surveyor.md must resolve <repo-root> to the checkout the survey RUNS IN (#3127)"
+# The measured wrong answer must be recorded, not merely the right one: a rule that names only the
+# correct value leaves the reading that produced the defect available to the next reader.
+grep -Fq 'never the shared main checkout' <<<"${_subst_rule}" ||
+  fail "portfolio-surveyor.md must record the shared main checkout as the wrong substitution (#3127)"
+# And no surveyed-checkout phrasing may survive anywhere in the rule. Rejecting a FAMILY rather than
+# the single measured phrase is the point: the defect WAS a wording, so the next one is a different
+# wording.
+grep -Eiq 'absolute path of the checkout you|checkout (you are |being )?survey(ing|ed)|repositor(y|ies) under survey' <<<"${_subst_rule}" &&
+  fail "portfolio-surveyor.md must not tell the surveyor to use the checkout it is SURVEYING (#3127)"
+
 # And the classifier must exist, be executable, and actually pin the two matcher rules — otherwise the
 # delegation above points at nothing and the guarantee is lost rather than moved.
 _classifier="${repo_root}/.claude/scripts/pr-ownership-disclosure.sh"
