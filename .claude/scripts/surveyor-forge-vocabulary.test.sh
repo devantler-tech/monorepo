@@ -86,6 +86,16 @@
 # the WHOLE construct, so a deployment that wires the guard onto the surveyor has
 # this sweep fail closed mid-run. The caller-side fix is to express the sweep
 # without a shell loop; tracked as monorepo#2955.
+#
+# `gh --json` — NOT a prescribed command at all, but a noun phrase. The surveyor
+# definition names the flag when it says every `gh --json` vocabulary is local to its
+# subcommand, and extraction takes any forge-verb-leading code span, so the phrase
+# arrives here looking like a command. The guard refuses it as `gh needs a subcommand
+# to be classified`, which is right: a bare `gh --json` has no subcommand and is not a
+# runnable read, so there is nothing to promote. Pinned `deny` rather than tracked as a
+# gap — unlike every other row here the fix belongs to NEITHER the guard nor the caller,
+# because no caller ever runs this. It surfaces only at consumer rollout, which is why
+# it appears the moment the pin picks up the prose that names the flag.
 
 # `set -o pipefail; fid_status=$(gh api ...)` — the board-coverage census, which the
 # surveyor definition opens with a load-bearing options line. Two statements, so the
@@ -187,6 +197,7 @@ deny	gh api -X GET repos/devantler-tech/monorepo/issues -F body=@/etc/passwd
 deny	gh api --input /etc/passwd repos/devantler-tech/monorepo/issues
 deny	gh api repos/devantler-tech/monorepo/actions/runs --jq '.workflow_runs[]|select(.name == $ENV.RUN_NAME)'
 deny	gh api graphql -f query='mutation { addComment(input:{subjectId:"x", body:"y"}) { clientMutationId } }'
+deny	gh --json
 allow	git log --oneline -20
 allow	git log -1 --format=%cI
 allow	git --no-optional-locks -c core.fsmonitor= status --porcelain
