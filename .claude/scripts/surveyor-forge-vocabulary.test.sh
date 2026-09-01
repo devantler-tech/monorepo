@@ -248,6 +248,9 @@ done <<< "$corpus"
 # the surveyor may execute); the deny row is what keeps the allow row meaningful.
 c3127_declared='/tmp/wt-running/.claude/scripts/pr-ownership-disclosure.sh'
 c3127_shared='/tmp/shared-checkout/.claude/scripts/pr-ownership-disclosure.sh'
+c3127_pwd="\$PWD/.claude/scripts/pr-ownership-disclosure.sh"
+c3127_braced_pwd="\${PWD}/.claude/scripts/pr-ownership-disclosure.sh"
+c3127_top_level="\$(git rev-parse --show-toplevel)/.claude/scripts/pr-ownership-disclosure.sh"
 c3127_read='gh pr view 1 --repo devantler-tech/monorepo --json body --jq .body'
 c3127_verdict() {
   SURVEYOR_FORGE_READONLY_CLASSIFIERS="$c3127_declared" GH_TELEMETRY=0 \
@@ -264,6 +267,24 @@ if [ "$(c3127_verdict "$c3127_shared")" = deny ]; then
 else
   fail=$((fail + 1))
   echo "MISMATCH want=deny got=allow  a classifier path other than the declared one (#3127)"
+fi
+if [ "$(c3127_verdict "$c3127_pwd")" = deny ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "MISMATCH want=deny got=allow  the literal \$PWD classifier path (#3127)"
+fi
+if [ "$(c3127_verdict "$c3127_braced_pwd")" = deny ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "MISMATCH want=deny got=allow  the literal \${PWD} classifier path (#3127)"
+fi
+if [ "$(c3127_verdict "$c3127_top_level")" = deny ]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  echo "MISMATCH want=deny got=allow  the command-substitution classifier path (#3127)"
 fi
 
 total=$((pass + fail))
