@@ -57,6 +57,16 @@ case $? in
   2) printf '%s\n' "agent-telemetry: FATAL: locale '$LC_ALL' is not available (it degraded to C), so [[:space:]] is ASCII-only and credentials separated by Unicode whitespace would be reported clean. Install a C.UTF-8 locale." >&2; exit 2 ;;
 esac
 
+# `redact` sanitizes its input with iconv before the C.UTF-8 awk (see redact()).
+# Fail closed rather than degrade: without it a truncated multibyte fragment
+# kills the redactor mid-stream and empties whatever it was redacting, and the
+# obvious ASCII-only fallback would strip the valid Unicode whitespace the
+# detector above depends on. Checked once, at startup, like the locale.
+if ! command -v iconv >/dev/null 2>&1; then
+  printf '%s\n' "agent-telemetry: FATAL: iconv is required to sanitize redactor input; without it a truncated multibyte sequence silently empties a section. Install iconv." >&2
+  exit 2
+fi
+
 SINCE_DAYS=1
 MAX_FILES=400
 SECTION=all
@@ -1034,7 +1044,31 @@ redact() {
   # The marker sed rules that follow are NOT dead: pass A leaves a stray
   # unpaired END untouched (it scans for a BEGIN first), and rule 2 below is
   # what masks it.
-  awk "$AWK_KEY_REDACT" \
+  # SANITIZE FIRST — drop invalid UTF-8 before the redactor sees it.
+  #
+  # `awk` substr slices BYTES, not characters, on one-true-awk. Callers bound
+  # an error head with `substr($2,1,72)` / `cut -c1-100`, so when that boundary
+  # lands mid-character they hand us a TRUNCATED multibyte fragment. The
+  # redactor runs under the file-wide C.UTF-8 pin (required — see the LOCALE
+  # note above; plain `C` would emit a Unicode-whitespace-introduced secret
+  # verbatim, monorepo#3051), and under any multibyte locale awk converts each
+  # record with towc. One fragment therefore raises
+  #   awk: towc: multibyte conversion failure
+  # and awk exits 2, discarding its WHOLE buffer — measured on the live corpus
+  # as 258 in-window tool errors producing an EMPTY top-signature ranking while
+  # the section still exited 0, on both instances (monorepo#3154).
+  #
+  # The locale is NOT the thing to change: this pass decides what is sensitive,
+  # so monorepo#2817's rule forbids pinning it to `C`. Sanitizing at the ENTRY
+  # fixes every one of the 17 call sites at once rather than per-caller, and is
+  # safe for redaction because `-c` drops only sequences that are already
+  # invalid: every ASCII byte is preserved (so no credential pattern can be
+  # altered) and every VALID multibyte character is passed through unchanged
+  # (so the [[:space:]] protection above is untouched). A mid-stream partial is
+  # dropped silently; awk `print` always terminates its lines, so the
+  # incomplete-at-EOF warning is unreachable here.
+  iconv -c -f UTF-8 -t UTF-8 \
+  | awk "$AWK_KEY_REDACT" \
   | sed -E \
     -e 's/(github_pat_[A-Za-z0-9_]{6})[A-Za-z0-9_]+/\1…<redacted>/g' \
     -e 's/(gh[pousr]_[A-Za-z0-9]{4})[A-Za-z0-9]+/\1…<redacted>/g' \
