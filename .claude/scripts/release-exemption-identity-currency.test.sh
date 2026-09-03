@@ -135,9 +135,49 @@ jq -n --argjson p "$(pinned_commit)" --argjson d "$(drifted_commit)" '
 ' > "$TMP/transition.json"
 expect_rc "post-transition: older matches must NOT mask a drifted head -> DRIFT" 1 "$TMP/transition.json"
 
-# The same fixture judged over a wide enough recency window does find the old matches. This pins
-# WHY the default is small: it is a deliberate sensitivity choice, not an accident.
-expect_rc "same fixture with --recent 18 finds the historical matches -> CURRENT" 0 "$TMP/transition.json" --recent 18
+# Widening the cohort must not rescue a drifted head either: 6 of 18 miss, which is more than the one
+# anomaly tolerated. This pins that --recent scopes WHICH releases are judged, and never relaxes the
+# threshold.
+expect_rc "widening to --recent 18 does not mask the drift -> DRIFT" 1 "$TMP/transition.json" --recent 18
+
+# ---------------------------------------------------------------------------
+# The tolerance boundary, both sides of it. "At most one may miss" is the stated rule, so two misses
+# in a complete cohort is drift even though one release still matches -- this is the case a
+# "matching > 0" threshold gets wrong, and it is reachable: the real transition passes through it.
+# ---------------------------------------------------------------------------
+jq -n --argjson p "$(pinned_commit)" --argjson d "$(drifted_commit)" '[
+  {number: 3, mergedAt: "2026-09-02T00:00:00Z", commits: [$d]},
+  {number: 2, mergedAt: "2026-09-01T00:00:00Z", commits: [$d]},
+  {number: 1, mergedAt: "2026-08-31T00:00:00Z", commits: [$p]}
+]' > "$TMP/two-drifted.json"
+expect_rc "two of three miss -> DRIFT even though one still matches" 1 "$TMP/two-drifted.json"
+expect_out "DRIFT names the threshold it needed" "need 2" "$TMP/two-drifted.json"
+
+# ---------------------------------------------------------------------------
+# A cohort smaller than --recent cannot support the tolerance rule, so it is UNKNOWN rather than a
+# verdict on thinner evidence. Both the one- and two-candidate non-matching cases.
+# ---------------------------------------------------------------------------
+jq -n --argjson d "$(drifted_commit)" '[
+  {number: 1, mergedAt: "2026-09-02T00:00:00Z", commits: [$d]}
+]' > "$TMP/one-candidate.json"
+expect_rc "one non-matching candidate with --recent 3 -> UNKNOWN, not DRIFT" 2 "$TMP/one-candidate.json"
+expect_out "UNKNOWN explains the thin cohort" "fewer than the 3 required" "$TMP/one-candidate.json"
+
+jq -n --argjson d "$(drifted_commit)" '[
+  {number: 2, mergedAt: "2026-09-02T00:00:00Z", commits: [$d]},
+  {number: 1, mergedAt: "2026-09-01T00:00:00Z", commits: [$d]}
+]' > "$TMP/two-candidates.json"
+expect_rc "two non-matching candidates with --recent 3 -> UNKNOWN, not DRIFT" 2 "$TMP/two-candidates.json"
+# Control: the SAME fixture judged at a cohort size it can support IS a verdict, so the case above
+# proves the cohort gate fired rather than the fixture being unreadable.
+expect_rc "control: same two candidates with --recent 2 -> DRIFT" 1 "$TMP/two-candidates.json" --recent 2
+
+# --recent 1 must not pass vacuously: RECENT-1 would be 0, and "at least 0 matches" is every cohort.
+jq -n --argjson d "$(drifted_commit)" '[
+  {number: 1, mergedAt: "2026-09-02T00:00:00Z", commits: [$d]}
+]' > "$TMP/single-drifted.json"
+expect_rc "--recent 1 on a non-matching release -> DRIFT, not a vacuous pass" 1 "$TMP/single-drifted.json" --recent 1
+expect_rc "--recent 1 on a matching release -> CURRENT" 0 "$TMP/all-pinned.json" --recent 1
 
 # ---------------------------------------------------------------------------
 # Tolerance: one anomalous release (an adaptation commit) must not trip the guard.
@@ -167,11 +207,16 @@ expect_rc "input order does not change the verdict -> DRIFT" 1 "$TMP/shuffled.js
 jq -n --argjson p "$(pinned_commit)" '[
   {number: 1, mergedAt: "2020-01-01T00:00:00Z", commits: [$p]}
 ]' > "$TMP/ancient.json"
-OUT="$("$CHECK" --input "$TMP/ancient.json" --classifier "$CLS" --days 30 2>&1)"; RC=$?
+OUT="$("$CHECK" --input "$TMP/ancient.json" --classifier "$CLS" --days 30 --recent 1 2>&1)"; RC=$?
 if [ "$RC" = 2 ]; then ok "--days windows the --input seam too -> UNKNOWN"; else bad "--days windows the --input seam too -> UNKNOWN" "expected rc=2 got rc=$RC; out: ${OUT:0:300}"; fi
+if printf '%s\n' "$OUT" | grep -qE 'no candidate release PR found'; then
+  ok "the window, not the cohort gate, is what excluded it"
+else
+  bad "the window, not the cohort gate, is what excluded it" "out: ${OUT:0:300}"
+fi
 # Control: the SAME fixture with the window disabled is judged normally, so the case above proves
 # the window excluded it rather than the fixture being malformed.
-expect_rc "control: same fixture with --days 0 is judged -> CURRENT" 0 "$TMP/ancient.json"
+expect_rc "control: same fixture with --days 0 is judged -> CURRENT" 0 "$TMP/ancient.json" --recent 1
 
 # ---------------------------------------------------------------------------
 # ABSENCE: an empty candidate set is UNKNOWN, never a clean result.
@@ -205,6 +250,26 @@ if [ "$RC" = 2 ]; then ok "ablation: pin fields unreadable -> UNKNOWN"; else bad
 
 OUT="$("$CHECK" --input "$TMP/all-pinned.json" --classifier "$TMP/does-not-exist.sh" --days 0 2>&1)"; RC=$?
 if [ "$RC" = 2 ]; then ok "ablation: classifier missing -> UNKNOWN"; else bad "ablation: classifier missing -> UNKNOWN" "expected rc=2 got rc=$RC"; fi
+
+# A DROPPED login key is the dangerous ablation, because its extracted value ("") is indistinguishable
+# from the legitimate empty pin. The classifier's own comparison can no longer match any production
+# commit, so the arm is dead -- and a value-only check would compare "" against a payload that
+# normalises a missing login to "" and report CURRENT over it. Both keys, separately.
+for key in author_login committer_login; do
+  DROPPED="$TMP/dropped-$key.sh"
+  grep -v "^[[:space:]]*$key:" "$CLS" > "$DROPPED"
+  OUT="$("$CHECK" --input "$TMP/all-pinned.json" --classifier "$DROPPED" --days 0 2>&1)"; RC=$?
+  if [ "$RC" = 2 ]; then ok "ablation: $key key dropped -> UNKNOWN, never CURRENT"; else bad "ablation: $key key dropped -> UNKNOWN, never CURRENT" "expected rc=2 got rc=$RC; out: ${OUT:0:300}"; fi
+  if printf '%s\n' "$OUT" | grep -qE "declares no $key key"; then
+    ok "ablation: $key names the missing key"
+  else
+    bad "ablation: $key names the missing key" "out: ${OUT:0:300}"
+  fi
+done
+
+# Control: an EMPTY-but-DECLARED login is legitimate and must still be judged, so the two ablations
+# above prove absence was detected rather than emptiness being rejected outright.
+expect_rc "control: empty-but-declared logins are judged normally -> CURRENT" 0 "$TMP/all-pinned.json"
 
 # ---------------------------------------------------------------------------
 # The decoy arms must never supply the pin. If extraction wandered into a neighbouring function the

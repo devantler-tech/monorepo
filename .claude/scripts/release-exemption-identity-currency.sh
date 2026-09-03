@@ -31,10 +31,13 @@
 # is not detection. The live question is whether the arm works NOW, so the verdict keys on the most
 # recent releases and the window only bounds which PRs are considered.
 #
-# WHY MORE THAN ONE RECENT PR. A single non-matching release is not proof of drift: an adaptation
-# commit legitimately takes one PR off its programmed path, which is the carve-out working as
-# designed. Requiring the newest K to ALL miss distinguishes a systematic identity change from one
-# anomalous release.
+# WHY MORE THAN ONE RECENT PR, AND WHERE THE LINE SITS. A single non-matching release is not proof
+# of drift: an adaptation commit legitimately takes one PR off its programmed path, which is the
+# carve-out working as designed. So the rule is "at most ONE of the newest K may miss" -- not "all K
+# must miss", which would tolerate K-1 misses, far weaker than the intent, and would detect a real
+# changeover a release later than necessary: the measured transition passes through [new, new, old]
+# before [new, new, new], and two consecutive releases on a new identity is already systematic.
+# A cohort smaller than K cannot support that judgement at all and is reported UNKNOWN.
 #
 # THE ABSENCE TRAP. "No release PR matched the pin" and "no release PR exists" render identically as
 # an empty result, and only the first is drift. A quiet release train, a renamed branch prefix, or a
@@ -42,11 +45,12 @@
 # work gets ignored, then deleted. So an empty candidate set is UNKNOWN, never DRIFT.
 #
 # Exit codes:
-#   0  CURRENT -- at least one of the most recent releases carries the pinned identity
-#   1  DRIFT   -- releases exist and NONE of the most recent K carries it; the observed identity is
-#      reported alongside the pinned one, so the fix is visible without a second investigation
+#   0  CURRENT -- at most one of the most recent K releases misses the pinned identity
+#   1  DRIFT   -- two or more of the most recent K miss it; the observed identity is reported
+#      alongside the pinned one, so the fix is visible without a second investigation
 #   2  UNKNOWN -- the check could not verify what it claims to verify: bad usage, an unreadable or
-#      unparseable classifier, a failed forge read, or NO candidate release PR at all.
+#      unparseable classifier (including one that has lost a login key), a failed forge read, no
+#      candidate release PR at all, or fewer candidates than --recent.
 #      UNKNOWN is NEVER "no drift" -- it means the question was not answered.
 #
 # Sources, exactly one of:
@@ -123,6 +127,11 @@ pin_field() {
     | head -1
 }
 
+pin_declares() {
+  # Whether the key is DECLARED at all, independent of its value.
+  printf '%s\n' "$arm" | grep -qE "^[[:space:]]*$1:[[:space:]]*\""
+}
+
 PIN_AUTHOR_LOGIN="$(pin_field author_login)"
 PIN_AUTHOR_NAME="$(pin_field author_name)"
 PIN_AUTHOR_EMAIL="$(pin_field author_email)"
@@ -130,11 +139,22 @@ PIN_COMMITTER_LOGIN="$(pin_field committer_login)"
 PIN_COMMITTER_NAME="$(pin_field committer_name)"
 PIN_COMMITTER_EMAIL="$(pin_field committer_email)"
 
-# `author_login`/`committer_login` are legitimately pinned to the empty string, so emptiness cannot
-# distinguish "pinned empty" from "extraction failed" for those two. The three name/email fields are
-# never legitimately empty, so they are what proves the extraction actually ran.
+# The three name/email fields are never legitimately empty, so a non-empty value is what proves the
+# extraction actually ran for them.
 [ -n "$PIN_AUTHOR_NAME" ] && [ -n "$PIN_AUTHOR_EMAIL" ] && [ -n "$PIN_COMMITTER_NAME" ] \
   || die "could not extract the pinned identity from $CLASSIFIER — refusing to report a verdict from an unparsed pin"
+
+# The two login fields are legitimately pinned to the EMPTY STRING, so their value cannot distinguish
+# "pinned empty" from "key absent" -- and those two states are not equivalent. If the classifier's arm
+# has lost a login key, its own exact `jq` object comparison can no longer match any production commit
+# (which always carries both keys), so the arm is broken. This guard would meanwhile compare its empty
+# extracted value against a production payload that normalises a missing login to "", match, and
+# report CURRENT over a dead arm -- the precise fail-open it exists to prevent, one level up. So
+# presence is checked separately from value.
+pin_declares author_login \
+  || die "classifier's matches_ksail_provenance() declares no author_login key — its own comparison cannot match a production commit, so this guard refuses to report a verdict"
+pin_declares committer_login \
+  || die "classifier's matches_ksail_provenance() declares no committer_login key — its own comparison cannot match a production commit, so this guard refuses to report a verdict"
 
 # ---------------------------------------------------------------------------
 # 2. Collect candidate release PRs, newest first.
@@ -236,6 +256,18 @@ if [ "$candidates" -eq 0 ]; then
   exit 2
 fi
 
+# A cohort smaller than RECENT cannot support the verdict this guard promises. The tolerance rule
+# below is "at most one of the newest RECENT may miss"; with fewer than RECENT releases available
+# there is no way to tell one anomalous release from a systematic change, so reporting DRIFT would be
+# exactly the false alarm the absence trap above guards against -- on a thinner evidence base, not a
+# stronger one. Say so instead.
+if [ "$candidates" -lt "$RECENT" ]; then
+  printf '%s: UNKNOWN — only %s candidate release PR(s), fewer than the %s required to judge.\n' "$PROG" "$candidates" "$RECENT" >&2
+  printf '%s: One release cannot distinguish an anomaly from a systematic identity change. Widen\n' "$PROG" >&2
+  printf '%s: --days, or lower --recent if you accept the weaker signal.\n' "$PROG" >&2
+  exit 2
+fi
+
 recent="$(printf '%s' "$payload" | jq --argjson k "$RECENT" '.[0:$k]')" || die "failed to select recent candidates"
 
 matching="$(printf '%s' "$recent" | jq \
@@ -250,12 +282,21 @@ matching="$(printf '%s' "$recent" | jq \
 
 judged="$(printf '%s' "$recent" | jq 'length')" || die "failed to count judged candidates"
 
-if [ "$matching" -gt 0 ]; then
-  say "CURRENT — $matching of the newest $judged release PR(s) carry the pinned identity."
+# Tolerate exactly ONE anomalous release, no more. "All of the newest K must miss" would tolerate
+# K-1 misses, which is far weaker than the stated intent and detects a real changeover a release
+# later than it needs to: at the measured 2026-08-29 transition the cohort goes [new, new, old]
+# before it goes [new, new, new], and two consecutive releases on a new identity is already the
+# systematic change, not an anomaly. The floor of 1 matters at --recent 1, where K-1 would be 0 and
+# every cohort would pass vacuously.
+threshold=$((RECENT - 1))
+[ "$threshold" -ge 1 ] || threshold=1
+
+if [ "$matching" -ge "$threshold" ]; then
+  say "CURRENT — $matching of the newest $judged release PR(s) carry the pinned identity (need $threshold)."
   exit 0
 fi
 
-say "DRIFT — 0 of the newest $judged release PR(s) carry the pinned identity."
+say "DRIFT — only $matching of the newest $judged release PR(s) carry the pinned identity (need $threshold)."
 say ""
 say "newest releases and what they actually carry:"
 printf '%s' "$recent" | jq -r '.[] | "  #\(.number) merged \(.mergedAt // "?")"'
