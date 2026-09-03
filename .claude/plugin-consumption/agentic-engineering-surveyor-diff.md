@@ -132,6 +132,7 @@ refinement to BOTH places** — upstream for the target definition, and here for
 treat "merged upstream + gitlink bumped + install CURRENT" as *not* evidence a surveyor rule is live.
 
 ## Equivalence status (this slice)
+
 Plugin-only parity is not claimed. This slice uses the plugin agent plus the local compatibility
 overlay, so the numbered refinements remain active instead of disappearing from the authoritative
 survey digest. Next slice: upstream those refinements into `devantler-tech/agent-plugins`

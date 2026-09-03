@@ -2796,4 +2796,24 @@ grep -Fq 'Take every timestamp from a payload you already read' <<<"${_safety_bl
   fail "the admitted-call-shape rule must tell the surveyor to take timestamps from payloads, never from \`date\` (#3179)"
 grep -Fq 'never work around the guard' <<<"${_safety_block}" ||
   fail "the admitted-call-shape rule must end on reissuing in the admitted shape, never working around the guard (#3179)"
+# The four phrases above pin the rule's existence and its "fail with the fix" framing; they do NOT pin
+# every clause the guard enforces. A later edit could drop the `for`-loop, `date`, `grep -oE`/`xargs`,
+# or in-band-reduction clause and round 10 would still pass, so the rule would silently stop naming
+# the exact shapes that cost reads. Each required clause is asserted on its own, so the failure names
+# the clause that went missing rather than reporting the block as a whole.
+_shape_clauses=(
+  'output redirection, `;`, `&`, `&&`, a newline, command substitution'
+  'leading program that is neither a forge command nor a reviewed helper'
+  'Emit exactly one forge command per call'
+  'reduce it in-band with `--paginate` and `--jq`'
+  'a pipe into the allowlisted read-only'
+  'never a `for` loop'
+  'Select with `--jq` rather than `grep -oE` or `xargs`'
+  'mark the affected evidence `QUERY-UNKNOWN` and reissue in the'
+)
+for _clause in "${_shape_clauses[@]}"; do
+  grep -Fq -- "${_clause}" <<<"${_safety_block}" ||
+    fail "the admitted-call-shape rule must keep the clause '${_clause}' (#3179)"
+done
+unset _clause _shape_clauses
 echo "portfolio surveyor contract: round-10 admitted-call-shape assertions passed"
