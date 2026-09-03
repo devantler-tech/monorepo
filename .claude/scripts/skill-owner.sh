@@ -28,6 +28,15 @@
 # `LOCAL` means the skill declares no `metadata.github-repo` and is therefore authored in the plugin
 # repository itself. Any other value is printed VERBATIM so a caller can compare it exactly — a
 # prefix-extended lookalike (`agent-skills-v2`) must not be mistaken for the suite upstream.
+#
+# `--check-reviewed [file]` compares what each skill CLAIMS against the REVIEWED mapping in
+# `.claude/bundled-skill-ownership.tsv` (rows `<plugin>\t<skill>\t<owner>`), which lives outside the
+# skills so an upstream cannot grant itself a row. Output rows are
+# `verdict<TAB>reviewed<TAB>claimed<TAB>skill<TAB>path`, where verdict is MATCH, MISMATCH (the claim
+# disagrees with the row — the claim only ever WITHDRAWS, never grants), UNLISTED (bundled but not
+# mapped — treated as third-party until a row is reviewed in), STALE (mapped but no longer bundled),
+# or UNKNOWN (the claim could not be read). Exit 0 only when every row is MATCH; 1 when any row is
+# MISMATCH, UNLISTED or STALE; 2 when anything is UNKNOWN, including a missing or malformed mapping.
 
 set -euo pipefail
 
@@ -37,6 +46,8 @@ PLUGIN_NAME=""            # empty = every plugin bundled at the pin
 SOURCE="auto"
 ONLY_SKILL=""
 FILTER_ONLY=0
+CHECK_REVIEWED=0
+REVIEWED_FILE=""
 
 die()  { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
 usage_die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
@@ -53,9 +64,15 @@ while [ $# -gt 0 ]; do
     # a whole tree listing is filtered in-process; on the submodule path git's pathspec has already
     # filtered literally, so nothing hermetic can exercise it end to end. This mode applies the
     # selector to candidate paths on stdin so the property can be proven without a network call.
+    # Compare every claimed owner against the REVIEWED mapping (default:
+    # .claude/bundled-skill-ownership.tsv under the repo root). Rows become
+    # `verdict<TAB>reviewed<TAB>claimed<TAB>skill<TAB>path`; see --help.
+    --check-reviewed)
+      CHECK_REVIEWED=1; shift
+      if [ $# -gt 0 ]; then case "$1" in --*) ;; *) REVIEWED_FILE="$1"; shift ;; esac; fi ;;
     --filter-only)    FILTER_ONLY=1; shift ;;
     -h|--help)
-      sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) usage_die "unknown argument '$1'" ;;
   esac
@@ -112,6 +129,27 @@ else
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
 [ -d "$REPO_ROOT/.git" ] || [ -f "$REPO_ROOT/.git" ] || die "'$REPO_ROOT' is not a git working tree"
+
+# The reviewed mapping is loaded and validated WHOLE before any skill is compared: a malformed row
+# is a malformed file, not a different owner, because an empty or drifted third field would still
+# compare unequal to the claim and read as a MISMATCH somebody has to chase — or, worse, a duplicate
+# key would let whichever row came last decide. Malformed is UNKNOWN (exit 2), never a verdict.
+REVIEWED_ROWS=""
+if [ "$CHECK_REVIEWED" = 1 ]; then
+  [ -n "$REVIEWED_FILE" ] || REVIEWED_FILE="$REPO_ROOT/.claude/bundled-skill-ownership.tsv"
+  [ -r "$REVIEWED_FILE" ] || die "reviewed mapping '$REVIEWED_FILE' is missing or unreadable — UNKNOWN, never 'nothing is mapped'"
+  REVIEWED_ROWS="$(
+    sed 's/#.*//' "$REVIEWED_FILE" |
+      awk -F'\t' '
+        { sub(/[ \t]+$/, "") }
+        $0 == "" { next }
+        NF != 3 || $1 == "" || $2 == "" || $3 == "" { print "MALFORMED: " $0 > "/dev/stderr"; bad = 1; exit 1 }
+        $1 ~ /\// || $2 ~ /\// { print "MALFORMED: " $0 > "/dev/stderr"; bad = 1; exit 1 }
+        seen[$1 "\t" $2]++ { print "DUPLICATE: " $0 > "/dev/stderr"; bad = 1; exit 1 }
+        { print $1 "\t" $2 "\t" $3 }'
+  )" || die "reviewed mapping '$REVIEWED_FILE' is malformed — UNKNOWN, never a verdict"
+  [ -n "$REVIEWED_ROWS" ] || die "reviewed mapping '$REVIEWED_FILE' names no skill — UNKNOWN, never 'nothing is mapped'"
+fi
 
 # --no-replace-objects: a refs/replace entry for HEAD makes this resolve through the replacement
 # commit while `rev-parse HEAD` still prints the expected value, so the pin would silently name an
@@ -190,6 +228,35 @@ read_blob() {
   esac
 }
 
+# One row per skill, in whichever shape the caller asked for. In the default listing the claim IS
+# the row. Under --check-reviewed the claim is compared against the reviewed row for the same
+# (plugin, skill): equal is MATCH; unequal is MISMATCH, so a self-attested claim can only ever
+# withdraw an ownership the reviewed file granted; no reviewed row is UNLISTED; an unreadable claim
+# stays UNKNOWN whatever the reviewed row says, because unproven is not proven.
+DRIFT=0
+SEEN_KEYS=""
+emit_row() { # <claimed-owner-or-LOCAL-or-UNKNOWN> <skill> <path>
+  local claim="$1" skill="$2" path="$3" plug reviewed verdict
+  if [ "$CHECK_REVIEWED" != 1 ]; then
+    printf '%s\t%s\t%s\n' "$claim" "$skill" "$path"
+    return 0
+  fi
+  plug="${path#"$PLUGIN_ROOT"}"; plug="${plug%%/*}"
+  SEEN_KEYS="${SEEN_KEYS}${plug}	${skill}
+"
+  reviewed="$(printf '%s\n' "$REVIEWED_ROWS" | awk -F'\t' -v p="$plug" -v s="$skill" '$1 == p && $2 == s { print $3; exit }')"
+  if [ "$claim" = UNKNOWN ]; then
+    verdict=UNKNOWN
+  elif [ -z "$reviewed" ]; then
+    verdict=UNLISTED; DRIFT=1
+  elif [ "$claim" = "$reviewed" ]; then
+    verdict=MATCH
+  else
+    verdict=MISMATCH; DRIFT=1
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' "$verdict" "${reviewed:--}" "$claim" "$skill" "$path"
+}
+
 status=0
 matched=0
 # Process substitution, not a here-document: an unquoted heredoc would expand `$` and backticks in a
@@ -200,8 +267,8 @@ while IFS= read -r p; do
   _rest="${p#"$PLUGIN_ROOT"}"; _sk="${_rest#*/}"; _sk="${_sk#skills/}"; skill="${_sk%/SKILL.md}"
   if [ -n "$ONLY_SKILL" ] && [ "$skill" != "$ONLY_SKILL" ]; then continue; fi
   matched=$((matched + 1))
-  body="$(read_blob "$p")" || { printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue; }
-  [ -n "$body" ] || { printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue; }
+  body="$(read_blob "$p")" || { emit_row UNKNOWN "$skill" "$p"; status=2; continue; }
+  [ -n "$body" ] || { emit_row UNKNOWN "$skill" "$p"; status=2; continue; }
   # Structural frontmatter read, never a grep: a grep matches a URL that merely appears in the BODY,
   # accepts a value living under some other mapping, and cannot tell an absent key from an empty one.
   #
@@ -225,11 +292,11 @@ while IFS= read -r p; do
   meta_kind="$(yq --front-matter=extract '.metadata | tag' 2>/dev/null <<<"$body")" || meta_kind=""
   case "$meta_kind" in
     '!!map') ;;
-    '!!null') printf 'LOCAL\t%s\t%s\n' "$skill" "$p"; continue ;;
-    *) printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue ;;
+    '!!null') emit_row LOCAL "$skill" "$p"; continue ;;
+    *) emit_row UNKNOWN "$skill" "$p"; status=2; continue ;;
   esac
   present="$(yq --front-matter=extract '.metadata | has("github-repo")' 2>/dev/null <<<"$body")" \
-    || { printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue; }
+    || { emit_row UNKNOWN "$skill" "$p"; status=2; continue; }
   case "$present" in
     false) owner="LOCAL" ;;
     true)
@@ -244,17 +311,37 @@ while IFS= read -r p; do
         *) owner="" ;;
       esac
       if [ -z "$owner" ] || [ "$owner" = null ]; then
-        printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue
+        emit_row UNKNOWN "$skill" "$p"; status=2; continue
       fi
       ;;
-    *) printf 'UNKNOWN\t%s\t%s\n' "$skill" "$p"; status=2; continue ;;
+    *) emit_row UNKNOWN "$skill" "$p"; status=2; continue ;;
   esac
-  printf '%s\t%s\t%s\n' "$owner" "$skill" "$p"
+  emit_row "$owner" "$skill" "$p"
 done < <(printf '%s\n' "$paths")
 
 if [ -n "$ONLY_SKILL" ] && [ "$matched" -eq 0 ]; then
   die "no skill named '$ONLY_SKILL' under '$SCOPE_DESC' at $PIN"
 fi
 
+
+# A reviewed row the bundle no longer carries is STALE: the file must not outlive the bundle it
+# describes, or a skill re-bundled later under a changed upstream would inherit a row nobody
+# re-reviewed. Only rows inside the requested scope are swept, so a --plugin or --skill run does not
+# report every other plugin's rows as stale.
+if [ "$CHECK_REVIEWED" = 1 ]; then
+  while IFS=$'\t' read -r r_plug r_skill r_owner; do
+    [ -n "$r_plug" ] || continue
+    if [ -n "$PLUGIN_NAME" ] && [ "$r_plug" != "$PLUGIN_NAME" ]; then continue; fi
+    if [ -n "$ONLY_SKILL" ] && [ "$r_skill" != "$ONLY_SKILL" ]; then continue; fi
+    case "$SEEN_KEYS" in *"${r_plug}	${r_skill}
+"*) continue ;; esac
+    printf 'STALE\t%s\t-\t%s\t%s%s/skills/%s/SKILL.md\n' "$r_owner" "$r_skill" "$PLUGIN_ROOT" "$r_plug" "$r_skill"
+    DRIFT=1
+  done <<EOF_ROWS
+$REVIEWED_ROWS
+EOF_ROWS
+  # UNKNOWN outranks drift: a listing that could not be read is not a verdict about drift.
+  if [ "$status" -eq 0 ] && [ "$DRIFT" = 1 ]; then status=1; fi
+fi
 printf '%s: source=%s pin=%s skills=%d\n' "$PROG" "$resolved_source" "$PIN" "$matched" >&2
 exit "$status"

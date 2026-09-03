@@ -139,16 +139,26 @@ has 'The exemption follows the `devantler-tech` owner, never the word *upstream*
 ok
 
 
-# 5. Ownership must be AUTHORIZED by the reviewed allowlist, never by the skill's own
-#    `metadata.github-repo`. That field is self-attesting — a third-party release declaring a
-#    `devantler-tech` URL would read back as proof of our ownership and exempt itself from the very
-#    gate this entry imposes. *Agent definition locations* already states this for the updater
-#    carve-out; the Egress entry must not contradict it, and an earlier revision of this PR did.
-has 'Ownership comes from the reviewed census in *Agent definition locations*, never from the skill'"'"'s own `metadata.github-repo`' "${egress}" || \
-  fail "the Egress entry no longer routes skill ownership to the reviewed census and away from the self-attesting metadata.github-repo — a third-party skill declaring a devantler-tech URL could exempt itself from this very gate"
+# 5. Ownership must be AUTHORIZED by a reviewed mapping the upstream cannot write, never by the
+#    skill's own `metadata.github-repo`. That field is self-attesting — a third-party release
+#    declaring a `devantler-tech` URL would read back as proof of our ownership and exempt itself
+#    from the very gate this entry imposes. The mapping is `.claude/bundled-skill-ownership.tsv`,
+#    checked against the pinned bundle by `skill-owner.sh --check-reviewed` (monorepo#3054); an
+#    earlier revision routed this to a dated prose census, and before that to the field itself.
+# ONE line, deliberately: `has` is a fixed-string grep, and grep -F reads a multi-line pattern as
+# one alternative per line — so a pattern spanning the wrapped sentence would be satisfied by any
+# single line of it, including lines the previous wording shares.
+has 'reviewed mapping [`.claude/bundled-skill-ownership.tsv`](.claude/bundled-skill-ownership.tsv),' "${egress}" || \
+  fail "the Egress entry no longer routes skill ownership to the reviewed mapping and away from the self-attesting metadata.github-repo — a third-party skill declaring a devantler-tech URL could exempt itself from this very gate"
 ok
-has 'A bundled skill the census does not name has no reviewed owner: route its fix as third-party' "${egress}" || \
-  fail "the Egress entry no longer fails closed for a bundled skill the reviewed census does not name — an unnamed skill could be exempted on no reviewed basis at all"
+has '`.claude/scripts/skill-owner.sh --check-reviewed` proves the two still agree' "${egress}" || \
+  fail "the Egress entry no longer names the check that proves the reviewed mapping matches the pinned bundle — a mapping nothing compares is a census by another name"
+ok
+has 'A bundled skill with no reviewed row has no reviewed owner: route its fix as third-party' "${egress}" || \
+  fail "the Egress entry no longer fails closed for a bundled skill the reviewed mapping does not name — an unnamed skill could be exempted on no reviewed basis at all"
+ok
+has 'a `MISMATCH` against the reviewed row revokes it — never grant one' "${egress}" || \
+  fail "the Egress entry no longer states that the skill's own claim can only withdraw an exemption, never grant one"
 ok
 # 6. VOCABULARY PIN — the canonical section must keep the wording the Egress entry mirrors. The defect
 #    was these two drifting apart, so pinning only the copy would let the original move instead.
@@ -379,5 +389,5 @@ check_step_keys ".jobs.\"${JOB}\".steps[] | select(.run != null and (.run | test
 check_step_keys ".jobs.status.steps[] | select(.uses != null and (.uses | test(\"^devantler-tech/actions/aggregate-job-checks@\")))" \
   "status job's aggregate step" "name,uses,with"
 ok
-[ "${passed}" -eq 12 ] || fail "expected 12 assertions, ran ${passed}"
+[ "${passed}" -eq 14 ] || fail "expected 14 assertions, ran ${passed}"
 echo "egress-third-party-qualifier contract: PASS (${passed} assertions)"
