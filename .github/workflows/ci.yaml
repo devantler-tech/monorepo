@@ -354,6 +354,9 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/skill-owner.sh'
               - '.claude/scripts/skill-owner.test.sh'
+              # The reviewed mapping is what --check-reviewed compares the bundle against, so a
+              # row change must re-run the check that proves it still matches the pin.
+              - '.claude/bundled-skill-ownership.tsv'
               # The pinned plugin revision is what the helper enumerates, so a gitlink bump must
               # re-run it.
               - '.gitmodules'
@@ -1371,6 +1374,14 @@ jobs:
       # Linux runner's GNU one in exactly the places this helper parses git output.
       - name: Verify the skill ownership resolver
         run: bash .claude/scripts/skill-owner.test.sh
+      # The live half: every skill bundled at the pinned gitlink must carry a reviewed row that its
+      # own frontmatter still agrees with. This is what makes a newly bundled skill, a dropped one,
+      # or an upstream handover fail the gitlink bump instead of defaulting silently. The token is
+      # read-only and only serves the forge read of the pinned tree.
+      - name: Verify the reviewed bundled-skill ownership mapping matches the pinned bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .claude/scripts/skill-owner.sh --check-reviewed
 
   test-plugin-definition-currency:
     name: Test plugin definition currency

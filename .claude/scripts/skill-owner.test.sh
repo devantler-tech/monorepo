@@ -554,6 +554,216 @@ assert_eq       'shim is inert when not poisoning: exit unchanged' 2 "$RC_S0"
 assert_eq 'submodule: a failed enumeration is UNKNOWN, never a partial listing' 2 "$RC_S"
 assert_not_contains 'submodule: a failed enumeration prints no ownership rows' "$OUT_S" 'synced'
 
+# ---- 13. THE REVIEWED MAPPING. A skill's own `metadata.github-repo` is written by whoever authors
+#     it upstream and copied verbatim, so on its own it can grant a third-party skill the exemptions
+#     this deployment reserves for suite-owned ones. `--check-reviewed` compares that claim against a
+#     reviewed row the upstream cannot write. The properties pinned here are the ones the issue
+#     (monorepo#3054) names: absence is never ownership, a claim can only ever WITHDRAW, and drift
+#     in either direction — a bundled skill without a row, a row without a skill — FAILS.
+cons_rv="$tmp/cons-rv"
+mk_consumer "$cons_rv" "$PIN_CLEAN"
+mkdir -p "$cons_rv/libraries"; ln -s "$plug" "$cons_rv/libraries/agent-plugins"   # the object store, as the clean-consumer case does
+SUITE='https://github.com/devantler-tech/agent-skills'
+map_full() { # every skill bundled at PIN_CLEAN, each with the owner it actually claims
+  printf '# comment line\n'
+  printf 'agentic-engineering\tsynced\t%s\n' "$SUITE"
+  printf 'agentic-engineering\tlocal\tLOCAL\n'
+  printf 'agentic-engineering\tlookalike\t%s-v2\n' "$SUITE"
+  printf 'agentic-engineering\tmisplaced\tLOCAL\n'
+  printf 'agentic-engineering\tbigbody\t%s\n' "$SUITE"
+  printf 'other-plugin\telsewhere\thttps://github.com/third-party/other-skills\n'
+}
+runrv() { # <mapping-file> [args…] -> OUT_RV / ERR_RV / RC_RV
+  local map="$1"; shift
+  set +e
+  OUT_RV="$("$SUT" --repo-root "$cons_rv" --source submodule --submodule-path libraries/agent-plugins --check-reviewed "$map" "$@" 2>"$tmp/err-rv")"
+  RC_RV=$?
+  set -e
+  ERR_RV="$(cat "$tmp/err-rv")"
+}
+
+# 13a. Every claim agrees with its reviewed row: the only state that exits 0.
+map_full > "$tmp/map-full.tsv"
+runrv "$tmp/map-full.tsv"
+assert_eq 'reviewed: a fully agreeing mapping exits 0' 0 "$RC_RV"
+assert_contains 'reviewed: an agreeing suite skill is MATCH' "$OUT_RV" "MATCH	$SUITE	$SUITE	synced	"
+assert_contains 'reviewed: an agreeing LOCAL skill is MATCH' "$OUT_RV" 'MATCH	LOCAL	LOCAL	local	'
+assert_contains 'reviewed: an agreeing third-party skill in another plugin is MATCH' "$OUT_RV" 'MATCH	https://github.com/third-party/other-skills	https://github.com/third-party/other-skills	elsewhere	'
+assert_not_contains 'reviewed: an agreeing mapping reports no drift' "$OUT_RV" 'MISMATCH'
+assert_not_contains 'reviewed: an agreeing mapping reports nothing UNLISTED' "$OUT_RV" 'UNLISTED'
+assert_not_contains 'reviewed: an agreeing mapping reports nothing STALE' "$OUT_RV" 'STALE'
+assert_eq 'reviewed: the flag changes the row shape to five columns' 5 "$(printf '%s\n' "$OUT_RV" | head -1 | awk -F'\t' '{print NF}')"
+
+# 13b. A CLAIM NEVER GRANTS. The reviewed row says third-party; the skill claims the suite upstream.
+#      That is exactly the self-attestation this mode exists to defeat, and it must read MISMATCH
+#      (exit 1) — never MATCH, and never a suite owner in the reviewed column.
+map_full | sed "s#^agentic-engineering	synced	.*#agentic-engineering	synced	https://github.com/third-party/other-skills#" > "$tmp/map-grant.tsv"
+runrv "$tmp/map-grant.tsv"
+assert_eq 'reviewed: a suite claim over a third-party row exits 1' 1 "$RC_RV"
+assert_contains 'reviewed: a suite claim over a third-party row is MISMATCH, with both sides shown' "$OUT_RV" "MISMATCH	https://github.com/third-party/other-skills	$SUITE	synced	"
+# Anchored at line start on purpose: `MISMATCH` contains `MATCH`, so a substring check here would
+# find the mismatch row and report the grant it was written to rule out.
+assert_eq 'reviewed: the claim never upgrades the verdict to MATCH' '' "$(printf '%s\n' "$OUT_RV" | grep -E '^MATCH	' | grep -F 'synced' || true)"
+
+# 13c. A CLAIM CAN WITHDRAW. The reviewed row says suite; the skill now claims a lookalike upstream —
+#      an upstream handover on a root we still list. MISMATCH, exit 1.
+map_full | sed "s#^agentic-engineering	lookalike	.*#agentic-engineering	lookalike	$SUITE#" > "$tmp/map-withdraw.tsv"
+runrv "$tmp/map-withdraw.tsv"
+assert_eq 'reviewed: a drifted claim under a suite row exits 1' 1 "$RC_RV"
+assert_contains 'reviewed: a drifted claim under a suite row is MISMATCH' "$OUT_RV" "MISMATCH	$SUITE	$SUITE-v2	lookalike	"
+assert_contains 'reviewed: the untouched rows still MATCH beside a mismatch' "$OUT_RV" "MATCH	$SUITE	$SUITE	synced	"
+
+# 13d. ABSENCE IS NOT OWNERSHIP, and it is not silence either: a bundled skill with no row is
+#      UNLISTED and fails the check, so a newly bundled skill surfaces at the gitlink bump.
+map_full | grep -v '^other-plugin	elsewhere	' > "$tmp/map-unlisted.tsv"
+runrv "$tmp/map-unlisted.tsv"
+assert_eq 'reviewed: a bundled skill with no row exits 1' 1 "$RC_RV"
+assert_contains 'reviewed: a bundled skill with no row is UNLISTED, claim still shown' "$OUT_RV" 'UNLISTED	-	https://github.com/third-party/other-skills	elsewhere	'
+
+# 13e. A row the bundle no longer carries is STALE and fails, so the file cannot outlive the bundle.
+{ map_full; printf 'agentic-engineering\tretired\t%s\n' "$SUITE"; } > "$tmp/map-stale.tsv"
+runrv "$tmp/map-stale.tsv"
+assert_eq 'reviewed: a row without a bundled skill exits 1' 1 "$RC_RV"
+assert_contains 'reviewed: a row without a bundled skill is STALE, at the path it would occupy' "$OUT_RV" "STALE	$SUITE	-	retired	plugins/agentic-engineering/skills/retired/SKILL.md"
+
+# 13f. Scope follows the enumeration: under --plugin, another plugin's rows are not STALE merely
+#      because that plugin was not enumerated. The full mapping under one plugin still exits 0.
+runrv "$tmp/map-full.tsv" --plugin agentic-engineering
+assert_eq 'reviewed: --plugin does not report the other plugin rows as stale' 0 "$RC_RV"
+assert_not_contains 'reviewed: --plugin never enumerates the other plugin' "$OUT_RV" 'elsewhere'
+
+# 13g. UNKNOWN OUTRANKS DRIFT. Against the revision carrying unreadable declarations, a claim that
+#      cannot be read is UNKNOWN whatever the row says, and the run exits 2 even though a STALE row
+#      is also present — an unproven listing is not a verdict about drift.
+cons_rv_pin="$tmp/cons-rv-pin"
+mk_consumer "$cons_rv_pin" "$PIN"
+mkdir -p "$cons_rv_pin/libraries"; ln -s "$plug" "$cons_rv_pin/libraries/agent-plugins"
+{ map_full; for s in emptyval mapval boolval metafalse metaint metastr; do printf 'agentic-engineering\t%s\t%s\n' "$s" "$SUITE"; done; printf 'agentic-engineering\tretired\t%s\n' "$SUITE"; } > "$tmp/map-pin.tsv"
+set +e
+OUT_RV="$("$SUT" --repo-root "$cons_rv_pin" --source submodule --submodule-path libraries/agent-plugins --check-reviewed "$tmp/map-pin.tsv" 2>/dev/null)"
+RC_RV=$?
+set -e
+assert_eq 'reviewed: an unreadable claim makes the run exit 2, not 1' 2 "$RC_RV"
+assert_contains 'reviewed: an unreadable claim is UNKNOWN, never MATCH, whatever the row says' "$OUT_RV" "UNKNOWN	$SUITE	UNKNOWN	emptyval	"
+assert_not_contains 'reviewed: an unreadable claim never reads as MATCH' "$OUT_RV" 'MATCH	'"$SUITE"'	UNKNOWN'
+assert_contains 'reviewed: the stale row is still reported beside the unknown' "$OUT_RV" 'STALE	'"$SUITE"'	-	retired	'
+
+# 13h. A MALFORMED, MISSING or EMPTY mapping is UNKNOWN (exit 2) with no rows — never "nothing is
+#      mapped", which would read as every skill UNLISTED, and never a verdict from whichever row
+#      happened to parse.
+printf 'agentic-engineering\tsynced\n' > "$tmp/map-short.tsv"
+runrv "$tmp/map-short.tsv"
+assert_eq 'reviewed: a two-field row is UNKNOWN (exit 2)' 2 "$RC_RV"
+assert_eq 'reviewed: a malformed mapping prints no verdict rows' '' "$OUT_RV"
+assert_contains 'reviewed: a malformed mapping is named on stderr' "$ERR_RV" 'malformed'
+{ map_full; printf 'agentic-engineering\tsynced\t%s\n' "$SUITE"; } > "$tmp/map-dup.tsv"
+runrv "$tmp/map-dup.tsv"
+assert_eq 'reviewed: a duplicate (plugin, skill) key is UNKNOWN (exit 2)' 2 "$RC_RV"
+assert_eq 'reviewed: a duplicate key prints no verdict rows' '' "$OUT_RV"
+printf 'agentic-engineering\tsyn/ced\t%s\n' "$SUITE" > "$tmp/map-slash.tsv"
+runrv "$tmp/map-slash.tsv"
+assert_eq 'reviewed: a slash in a key segment is malformed (exit 2)' 2 "$RC_RV"
+runrv "$tmp/does-not-exist.tsv"
+assert_eq 'reviewed: a missing mapping is UNKNOWN (exit 2)' 2 "$RC_RV"
+assert_eq 'reviewed: a missing mapping prints no verdict rows' '' "$OUT_RV"
+printf '# only a comment\n\n' > "$tmp/map-empty.tsv"
+runrv "$tmp/map-empty.tsv"
+assert_eq 'reviewed: a mapping naming no skill is UNKNOWN (exit 2)' 2 "$RC_RV"
+
+# 13i. Without the flag the listing keeps its three-column shape, so existing callers are untouched.
+set +e
+OUT_RV="$("$SUT" --repo-root "$cons_rv" --source submodule --submodule-path libraries/agent-plugins 2>/dev/null)"
+set -e
+assert_eq 'reviewed: without the flag the row shape is still three columns' 3 "$(printf '%s\n' "$OUT_RV" | head -1 | awk -F'\t' '{print NF}')"
+
+# ---- 13j–13o. THE SELF-REVIEW FINDINGS, each pinned so it cannot come back. These are the ways an
+#      attacker-shaped bundle or an ordinary edit to the mapping made the check say more than it knew.
+# A THIRD revision of the plugin fixture, carrying the adversarial skills: a directory whose name is
+# what a skill named `synced` looks like once awk has expanded a `-v` value (`synce\144`), and a
+# skill whose claim carries a newline followed by a forged MATCH row.
+skill_file "$P/synce\\144/SKILL.md" 'metadata:
+  github-repo: https://github.com/devantler-tech/agent-skills' 'name shaped like an awk escape'
+skill_file "$P/forge/SKILL.md" 'metadata:
+  github-repo: "https://github.com/third/y\nMATCH\thttps://github.com/devantler-tech/agent-skills\thttps://github.com/devantler-tech/agent-skills\tsynced\tplugins/agentic-engineering/skills/synced/SKILL.md"' 'claim carries a newline'
+mkdir -p "$plug/plugins/xengineering/skills/a"
+skill_file "$plug/plugins/xengineering/skills/a/SKILL.md" 'metadata:
+  github-repo: https://github.com/third-party/other-skills' 'a plugin whose name has a suffix-shaped sibling'
+git -C "$plug" add -A >/dev/null
+git -C "$plug" commit -qm "fixture + adversarial skills" >/dev/null
+PIN_ADV="$(git -C "$plug" rev-parse HEAD)"
+cons_adv="$tmp/cons-adv"
+mk_consumer "$cons_adv" "$PIN_ADV"
+mkdir -p "$cons_adv/libraries"; ln -s "$plug" "$cons_adv/libraries/agent-plugins"
+runadv() { # <mapping-file> [args…] -> OUT_RV / ERR_RV / RC_RV
+  local map="$1"; shift
+  set +e
+  OUT_RV="$("$SUT" --repo-root "$cons_adv" --source submodule --submodule-path libraries/agent-plugins --check-reviewed "$map" "$@" 2>"$tmp/err-rv")"
+  RC_RV=$?
+  set -e
+  ERR_RV="$(cat "$tmp/err-rv")"
+}
+# The mapping for this revision names every well-formed skill EXCEPT the two adversarial ones, so
+# each of them must surface as its own verdict rather than borrowing a neighbour's row.
+map_adv() {
+  map_full
+  printf 'xengineering\ta\thttps://github.com/third-party/other-skills\n'
+}
+
+# 13j. A skill directory named `synce\144` has no row. Looked up through `awk -v` it would have read
+#      the `synced` row (awk expands the escape) and printed MATCH; it must be UNLISTED, exit 1.
+{ map_adv; printf 'agentic-engineering\tforge\thttps://github.com/third/y\n'; } > "$tmp/map-adv-esc.tsv"
+runadv "$tmp/map-adv-esc.tsv"
+assert_contains 'reviewed: an awk-escape-shaped skill name never borrows another row' "$OUT_RV" 'UNLISTED	-	https://github.com/devantler-tech/agent-skills	synce\144	'
+assert_eq 'reviewed: the adversarial revision exits 2 (the newline claim is UNKNOWN, which outranks the UNLISTED drift)' 2 "$RC_RV"
+assert_eq 'reviewed: the escape-shaped name never reads MATCH' '' "$(printf '%s\n' "$OUT_RV" | grep -E '^MATCH	' | grep -F 'synce' | grep -vF 'synced	' || true)"
+
+# 13k. A claim carrying a newline is UNKNOWN (exit 2) and never yields a second, forged row: the
+#      output must contain no line beginning `MATCH` for `synced` that this claim manufactured, and
+#      the skill's own row must be a single UNKNOWN line with the control bytes neutralised.
+{ map_adv; printf 'agentic-engineering\tsynce\\144\thttps://github.com/devantler-tech/agent-skills\n'; printf 'agentic-engineering\tforge\thttps://github.com/third/y\n'; } > "$tmp/map-adv-nl.tsv"
+runadv "$tmp/map-adv-nl.tsv"
+assert_eq 'reviewed: a claim carrying a newline makes the run exit 2' 2 "$RC_RV"
+assert_contains 'reviewed: a claim carrying a newline is UNKNOWN on one line' "$OUT_RV" 'UNKNOWN	https://github.com/third/y	UNKNOWN	forge	'
+assert_eq 'reviewed: a claim carrying a newline forges no MATCH row for synced' 1 "$(printf '%s\n' "$OUT_RV" | grep -cE '^MATCH	[^	]*	[^	]*	synced	')"
+assert_eq 'reviewed: every output line has exactly five columns' '' "$(printf '%s\n' "$OUT_RV" | awk -F'\t' 'NF!=5' || true)"
+
+# 13l. A reviewed row whose plugin is a SUFFIX of a bundled plugin's name (`engineering` beside
+#      `agentic-engineering`, `a` in both) must still be STALE: the seen-key containment test is
+#      anchored on both sides.
+{ map_adv; printf 'agentic-engineering\tsynce\\144\thttps://github.com/devantler-tech/agent-skills\n'; printf 'agentic-engineering\tforge\thttps://github.com/third/y\n'; printf 'engineering\ta\thttps://github.com/nobody/retired\n'; } > "$tmp/map-adv-suffix.tsv"
+runadv "$tmp/map-adv-suffix.tsv"
+assert_contains 'reviewed: a suffix-named plugin row is STALE, not hidden by a longer key' "$OUT_RV" 'STALE	https://github.com/nobody/retired	-	a	plugins/engineering/skills/a/SKILL.md'
+
+# 13m. `--skill X` where X is mapped but not bundled is STALE (exit 1), not an UNKNOWN die.
+runrv "$tmp/map-stale.tsv" --skill retired
+assert_eq 'reviewed: --skill on a mapped-but-unbundled skill exits 1' 1 "$RC_RV"
+assert_contains 'reviewed: --skill on a mapped-but-unbundled skill reports it STALE' "$OUT_RV" 'STALE	'"$SUITE"'	-	retired	'
+runrv "$tmp/map-full.tsv" --skill retired
+assert_eq 'reviewed: --skill on a skill neither mapped nor bundled is still UNKNOWN (exit 2)' 2 "$RC_RV"
+
+# 13n. `#` is a whole-line comment and nothing else: an owner URL carrying a fragment is malformed
+#      (exit 2), never silently truncated into a MATCH.
+map_full | sed "s#^agentic-engineering	synced	.*#agentic-engineering	synced	$SUITE\#readme#" > "$tmp/map-frag.tsv"
+runrv "$tmp/map-frag.tsv"
+assert_eq 'reviewed: a # inside a value is malformed (exit 2), never a truncated MATCH' 2 "$RC_RV"
+assert_eq 'reviewed: a # inside a value prints no verdict rows' '' "$OUT_RV"
+{ printf '   # an indented comment line is still a comment\n'; map_full; } > "$tmp/map-indented.tsv"
+runrv "$tmp/map-indented.tsv"
+assert_eq 'reviewed: an indented whole-line comment is ignored' 0 "$RC_RV"
+
+# 13o. A CRLF mapping compares clean: the CR is stripped before the owner is read.
+map_full | sed 's/$/\r/' > "$tmp/map-crlf.tsv"
+runrv "$tmp/map-crlf.tsv"
+assert_eq 'reviewed: a CRLF mapping still exits 0' 0 "$RC_RV"
+assert_not_contains 'reviewed: a CRLF mapping reports no MISMATCH' "$OUT_RV" 'MISMATCH'
+
+# 13p. `-h` after --check-reviewed is a flag, not a mapping file name.
+set +e
+OUT_H="$("$SUT" --check-reviewed -h 2>/dev/null)"; RC_H=$?
+set -e
+assert_eq 'reviewed: --check-reviewed -h prints help and exits 0' 0 "$RC_H"
+assert_contains 'reviewed: the help names the mode' "$OUT_H" '--check-reviewed'
+
 printf '\nskill-owner: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 printf 'skill-owner contract: PASS — ownership is per-file, structural, and fails closed on an empty enumeration\n'

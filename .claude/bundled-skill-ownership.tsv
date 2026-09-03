@@ -1,0 +1,44 @@
+# Reviewed owner of every skill bundled by the pinned `libraries/agent-plugins` marketplace.
+#
+# This file is the AUTHORIZATION source for "who owns this bundled skill", and it lives here — in
+# the consumer, under review — rather than inside the skills, because the only other record is the
+# skill's own `metadata.github-repo`: a field written by whoever authors the skill upstream and
+# copied verbatim by the updater. Read on its own, that field lets a third-party release declare a
+# `devantler-tech` URL and grant itself the exemptions this deployment reserves for suite-owned
+# skills. A reviewed row is what an upstream cannot write.
+#
+# The self-attested field may only WITHDRAW: `skill-owner.sh --check-reviewed` compares it against
+# the row and reports MISMATCH when the two disagree, and that check fails. A bundled skill with no
+# row is UNLISTED, which also fails the check, so a newly bundled skill surfaces at the gitlink bump
+# instead of silently defaulting — and until a row is reviewed in, it is treated as third-party. A
+# row naming a skill the bundle no longer carries is STALE and fails the check too, so the file
+# cannot outlive the bundle it describes.
+#
+# Format: <plugin>\t<skill>\t<upstream repository that owns its content>
+# Lines beginning with `#` and blank lines are ignored.
+
+agentic-engineering	agent-improvement	https://github.com/devantler-tech/agent-skills
+agentic-engineering	agent-instructions	https://github.com/devantler-tech/agent-skills
+agentic-engineering	find-skills	https://github.com/vercel-labs/skills
+agentic-engineering	portfolio-maintenance	https://github.com/devantler-tech/agent-skills
+agentic-engineering	product-engineering	https://github.com/devantler-tech/agent-skills
+agentic-engineering	self-improvement	https://github.com/devantler-tech/agent-skills
+engineering-practices	conventional-release	https://github.com/devantler-tech/agent-skills
+engineering-practices	git-commit	https://github.com/github/awesome-copilot
+engineering-practices	refactor	https://github.com/github/awesome-copilot
+engineering-practices	test-driven-development	https://github.com/obra/superpowers
+engineering-practices	ways-of-working	https://github.com/devantler-tech/agent-skills
+frontend-design	astro	https://github.com/astrolicious/agent-skills
+frontend-design	frontend-design	https://github.com/anthropics/skills
+frontend-design	web-design-guidelines	https://github.com/vercel-labs/agent-skills
+github	gh-cli	https://github.com/github/awesome-copilot
+github	gh-stack	https://github.com/github/gh-stack
+github	github-actions-docs	https://github.com/xixu-me/skills
+github	github-issues	https://github.com/github/awesome-copilot
+gitops-kubernetes	gitops-cluster-debug	https://github.com/fluxcd/agent-skills
+gitops-kubernetes	gitops-knowledge	https://github.com/fluxcd/agent-skills
+gitops-kubernetes	gitops-tenant-onboarding	https://github.com/devantler-tech/agent-skills
+go	golang-pro	https://github.com/Jeffallan/claude-skills
+vibe-coding	allowed-stack-guardrail	https://github.com/devantler-tech/agent-skills
+vibe-coding	jargon-free-voice	https://github.com/devantler-tech/agent-skills
+vibe-coding	needs-stack-mapping	https://github.com/devantler-tech/agent-skills
