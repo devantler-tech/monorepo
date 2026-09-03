@@ -79,6 +79,17 @@ drifted_commit() {
  "committer_email":"noreply@github.com"}
 EOF
 }
+# Differs from the pinned identity in committer_email ALONE. Every other field matches, so the two
+# identity lines the guard prints are byte-identical unless they carry the email — which is exactly
+# the case where an operator reading the report cannot see what drifted.
+email_only_drift_commit() {
+  cat <<'INNER'
+{"author_login":"","author_name":"pinned-bot[bot]",
+ "author_email":"pinned-bot[bot]@users.noreply.github.com",
+ "committer_login":"","committer_name":"pinned-bot[bot]",
+ "committer_email":"rotated-bot[bot]@users.noreply.github.com"}
+INNER
+}
 
 # run <payload-file> [extra args...] -> sets RC and OUT
 run() {
@@ -292,6 +303,22 @@ OUT="$("$CHECK" --input "$TMP/all-pinned.json" --classifier "$CLS" --days x 2>&1
 if [ "$RC" = 2 ]; then ok "--days non-numeric rejected -> UNKNOWN"; else bad "--days non-numeric rejected -> UNKNOWN" "got rc=$RC"; fi
 OUT="$("$CHECK" --bogus 2>&1)"; RC=$?
 if [ "$RC" = 2 ]; then ok "unknown argument rejected -> UNKNOWN"; else bad "unknown argument rejected -> UNKNOWN" "got rc=$RC"; fi
+
+# ---------------------------------------------------------------------------
+# An email-only drift must be REPORTED AS A DRIFT and must be READABLE. The verdict alone is not
+# enough here: every other identity field matches, so unless both committer emails are printed the
+# report shows two identical-looking lines and names nothing that actually differs.
+# ---------------------------------------------------------------------------
+jq -n --argjson e "$(email_only_drift_commit)" '[
+  {number:1, mergedAt:"2026-09-01T00:00:00Z", commits:[$e]},
+  {number:2, mergedAt:"2026-08-31T00:00:00Z", commits:[$e]},
+  {number:3, mergedAt:"2026-08-30T00:00:00Z", commits:[$e]}
+]' > "$TMP/email-only-drift.json"
+expect_rc "a committer_email-only difference -> DRIFT" 1 "$TMP/email-only-drift.json"
+expect_out "the PINNED committer email is visible" \
+  "committer=pinned-bot\[bot\] <pinned-bot\[bot\]@users\.noreply\.github\.com>" "$TMP/email-only-drift.json"
+expect_out "the OBSERVED committer email is visible" \
+  "<rotated-bot\[bot\]@users\.noreply\.github\.com>" "$TMP/email-only-drift.json"
 
 printf '\n%s: %d passed, %d failed\n' "${0##*/}" "$pass" "$fail"
 [ "$fail" -eq 0 ]

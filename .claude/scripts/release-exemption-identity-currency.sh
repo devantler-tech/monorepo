@@ -245,7 +245,7 @@ candidates="$(printf '%s' "$payload" | jq 'length')" || die "failed to count can
 say() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 
 say "classifier      : $CLASSIFIER"
-say "pinned identity : author=$PIN_AUTHOR_NAME <$PIN_AUTHOR_EMAIL> login=[$PIN_AUTHOR_LOGIN] committer=$PIN_COMMITTER_NAME"
+say "pinned identity : author=$PIN_AUTHOR_NAME <$PIN_AUTHOR_EMAIL> login=[$PIN_AUTHOR_LOGIN] committer=$PIN_COMMITTER_NAME <$PIN_COMMITTER_EMAIL> login=[$PIN_COMMITTER_LOGIN]"
 if [ -n "$cutoff" ]; then
   say "window          : merged since $cutoff (${DAYS}d)"
 else
@@ -309,7 +309,7 @@ say ""
 say "observed identities:"
 printf '%s' "$recent" | jq -r '
   [ .[] | .commits[]
-    | "  author=\(.author_name) <\(.author_email)> login=[\(.author_login)] committer=\(.committer_name) login=[\(.committer_login)]" ]
+    | "  author=\(.author_name) <\(.author_email)> login=[\(.author_login)] committer=\(.committer_name) <\(.committer_email)> login=[\(.committer_login)]" ]
   | unique | .[]'
 say ""
 say "The exemption arm is unreachable for every genuine release PR while this stands."
