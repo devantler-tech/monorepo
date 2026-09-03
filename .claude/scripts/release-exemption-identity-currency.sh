@@ -122,14 +122,19 @@ arm="$(awk '
 
 pin_field() {
   # `author_name: "value",` -> `value`. An absent field yields empty, which the caller rejects.
-  printf '%s\n' "$arm" \
-    | sed -n "s/^[[:space:]]*$1:[[:space:]]*\"\(.*\)\"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p" \
-    | head -1
+  # NOT piped into `head`: `head -1` exits after its first line, the writer upstream dies of SIGPIPE,
+  # and `set -o pipefail` then reports the pipeline as FAILED precisely when it MATCHED. The race is
+  # decided by how much is left unwritten after the match, so a small `$arm` hides it -- which is
+  # exactly how a latent one survives testing. Take the first line with parameter expansion instead.
+  local all
+  all="$(sed -n "s/^[[:space:]]*$1:[[:space:]]*\"\(.*\)\"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p" <<<"$arm")"
+  printf '%s\n' "${all%%$'\n'*}"
 }
 
 pin_declares() {
   # Whether the key is DECLARED at all, independent of its value.
-  printf '%s\n' "$arm" | grep -qE "^[[:space:]]*$1:[[:space:]]*\""
+  # Herestring, not a pipe, for the same `grep -q` + pipefail reason as above.
+  grep -qE "^[[:space:]]*$1:[[:space:]]*\"" <<<"$arm"
 }
 
 PIN_AUTHOR_LOGIN="$(pin_field author_login)"

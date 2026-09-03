@@ -96,7 +96,7 @@ expect_rc() { # name expected file [extra args...]
 expect_out() { # name pattern file [extra args...]
   local name="$1" pat="$2" file="$3"; shift 3
   run "$file" "$@"
-  if printf '%s\n' "$OUT" | grep -qE "$pat"; then ok "$name"; else bad "$name" "no match for /$pat/; out: ${OUT:0:300}"; fi
+  if grep -qE "$pat" <<<"$OUT"; then ok "$name"; else bad "$name" "no match for /$pat/; out: ${OUT:0:300}"; fi
 }
 
 # ---------------------------------------------------------------------------
@@ -209,7 +209,7 @@ jq -n --argjson p "$(pinned_commit)" '[
 ]' > "$TMP/ancient.json"
 OUT="$("$CHECK" --input "$TMP/ancient.json" --classifier "$CLS" --days 30 --recent 1 2>&1)"; RC=$?
 if [ "$RC" = 2 ]; then ok "--days windows the --input seam too -> UNKNOWN"; else bad "--days windows the --input seam too -> UNKNOWN" "expected rc=2 got rc=$RC; out: ${OUT:0:300}"; fi
-if printf '%s\n' "$OUT" | grep -qE 'no candidate release PR found'; then
+if grep -qE 'no candidate release PR found' <<<"$OUT"; then
   ok "the window, not the cohort gate, is what excluded it"
 else
   bad "the window, not the cohort gate, is what excluded it" "out: ${OUT:0:300}"
@@ -237,7 +237,7 @@ if [ "$RC" = 2 ]; then ok "ablation: arm renamed/absent -> UNKNOWN"; else bad "a
 
 # Assert the ablation fired for the RIGHT REASON: because the arm could not be located, not because
 # something incidental broke. An ablation whose failure is unexplained proves nothing.
-if printf '%s\n' "$OUT" | grep -qE 'could not locate matches_ksail_provenance'; then
+if grep -qE 'could not locate matches_ksail_provenance' <<<"$OUT"; then
   ok "ablation fired for the stated reason"
 else
   bad "ablation fired for the stated reason" "out: ${OUT:0:300}"
@@ -260,7 +260,7 @@ for key in author_login committer_login; do
   grep -v "^[[:space:]]*$key:" "$CLS" > "$DROPPED"
   OUT="$("$CHECK" --input "$TMP/all-pinned.json" --classifier "$DROPPED" --days 0 2>&1)"; RC=$?
   if [ "$RC" = 2 ]; then ok "ablation: $key key dropped -> UNKNOWN, never CURRENT"; else bad "ablation: $key key dropped -> UNKNOWN, never CURRENT" "expected rc=2 got rc=$RC; out: ${OUT:0:300}"; fi
-  if printf '%s\n' "$OUT" | grep -qE "declares no $key key"; then
+  if grep -qE "declares no $key key" <<<"$OUT"; then
     ok "ablation: $key names the missing key"
   else
     bad "ablation: $key names the missing key" "out: ${OUT:0:300}"
@@ -277,7 +277,7 @@ expect_rc "control: empty-but-declared logins are judged normally -> CURRENT" 0 
 # ---------------------------------------------------------------------------
 expect_out "pin comes from the ksail arm, not a neighbouring one" "pinned-bot\[bot\]" "$TMP/all-pinned.json"
 run "$TMP/all-pinned.json"
-if printf '%s\n' "$OUT" | grep -qE 'decoy'; then
+if grep -qE 'decoy' <<<"$OUT"; then
   bad "no decoy identity leaks into the pin" "out: ${OUT:0:300}"
 else
   ok "no decoy identity leaks into the pin"
