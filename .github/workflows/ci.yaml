@@ -25,6 +25,7 @@ jobs:
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
+      release-exemption-identity-currency: ${{ steps.filter.outputs.release-exemption-identity-currency }}
       prod-kube-context: ${{ steps.filter.outputs.prod-kube-context }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
       self-review-contract: ${{ steps.filter.outputs.self-review-contract }}
@@ -148,6 +149,15 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/blocked-label-blocker-line.sh'
               - '.claude/scripts/blocked-label-blocker-line.test.sh'
+              - '.github/workflows/ci.yaml'
+            release-exemption-identity-currency:
+              - '.claude/scripts/release-exemption-identity-currency.sh'
+              - '.claude/scripts/release-exemption-identity-currency.test.sh'
+              # The guard reads its pin OUT OF the classifier, so a change to the classifier can
+              # break the extraction even when the guard itself is untouched.
+              - '.claude/scripts/programmed-bot-review-exemption.sh'
+              # Self-gate on the workflow too, so a change that breaks this
+              # job's own wiring still runs the test it gates.
               - '.github/workflows/ci.yaml'
             prod-kube-context:
               - '.claude/scripts/prod-kube-context.sh'
@@ -835,6 +845,28 @@ jobs:
       # and BSD and GNU awk/grep differ on exactly that ground.
       - name: Verify the blocked-label blocker-line check
         run: bash .claude/scripts/blocked-label-blocker-line.test.sh
+
+  test-release-exemption-identity-currency:
+    name: Test release exemption identity currency
+    needs: changes
+    if: needs.changes.outputs.release-exemption-identity-currency == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hand-built JSON payloads through the --input seam against a synthetic classifier -- no
+      # network and no real PR touched. Both OSes because the guard extracts the pin with awk/sed
+      # and computes its window with `date`, and BSD and GNU differ on exactly that ground.
+      - name: Verify the release-exemption identity currency guard
+        run: bash .claude/scripts/release-exemption-identity-currency.test.sh
 
   test-pipefail-grep-guard:
     name: Test pipefail grep guard
@@ -1588,6 +1620,7 @@ jobs:
       - test-submodule-init
       - test-submodule-pin-currency
       - test-blocked-label-blocker-line
+      - test-release-exemption-identity-currency
       - test-prod-kube-context
       - test-pipefail-grep-guard
       - test-maintainer-preflight
@@ -1645,6 +1678,7 @@ jobs:
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-blocked-label-blocker-line.result }}
+            ${{ needs.test-release-exemption-identity-currency.result }}
             ${{ needs.test-prod-kube-context.result }}
             ${{ needs.test-pipefail-grep-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
