@@ -69,7 +69,7 @@ while [ $# -gt 0 ]; do
     # `verdict<TAB>reviewed<TAB>claimed<TAB>skill<TAB>path`; see --help.
     --check-reviewed)
       CHECK_REVIEWED=1; shift
-      if [ $# -gt 0 ]; then case "$1" in --*) ;; *) REVIEWED_FILE="$1"; shift ;; esac; fi ;;
+      if [ $# -gt 0 ]; then case "$1" in -*) ;; *) REVIEWED_FILE="$1"; shift ;; esac; fi ;;
     --filter-only)    FILTER_ONLY=1; shift ;;
     -h|--help)
       sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'
@@ -139,14 +139,19 @@ if [ "$CHECK_REVIEWED" = 1 ]; then
   [ -n "$REVIEWED_FILE" ] || REVIEWED_FILE="$REPO_ROOT/.claude/bundled-skill-ownership.tsv"
   [ -r "$REVIEWED_FILE" ] || die "reviewed mapping '$REVIEWED_FILE' is missing or unreadable — UNKNOWN, never 'nothing is mapped'"
   REVIEWED_ROWS="$(
-    sed 's/#.*//' "$REVIEWED_FILE" |
-      awk -F'\t' '
+    awk -F'\t' '
+        { sub(/\r$/, "") }
+        /^[ \t]*#/ { next }
         { sub(/[ \t]+$/, "") }
         $0 == "" { next }
-        NF != 3 || $1 == "" || $2 == "" || $3 == "" { print "MALFORMED: " $0 > "/dev/stderr"; bad = 1; exit 1 }
-        $1 ~ /\// || $2 ~ /\// { print "MALFORMED: " $0 > "/dev/stderr"; bad = 1; exit 1 }
-        seen[$1 "\t" $2]++ { print "DUPLICATE: " $0 > "/dev/stderr"; bad = 1; exit 1 }
-        { print $1 "\t" $2 "\t" $3 }'
+        NF != 3 || $1 == "" || $2 == "" || $3 == "" { print "MALFORMED: " $0 > "/dev/stderr"; exit 1 }
+        # A `#` is only ever a whole-line comment here: stripping it mid-line would rewrite a value
+        # (`…/agent-skills#readme` would compare as `…/agent-skills`), and a control character in a
+        # key or value would let one row print as two. Both are malformed, never a different owner.
+        $1 ~ /[#[:cntrl:]]/ || $2 ~ /[#[:cntrl:]]/ || $3 ~ /[#[:cntrl:]]/ { print "MALFORMED: " $0 > "/dev/stderr"; exit 1 }
+        $1 ~ /\// || $2 ~ /\// { print "MALFORMED: " $0 > "/dev/stderr"; exit 1 }
+        seen[$1 "\t" $2]++ { print "DUPLICATE: " $0 > "/dev/stderr"; exit 1 }
+        { print $1 "\t" $2 "\t" $3 }' "$REVIEWED_FILE"
   )" || die "reviewed mapping '$REVIEWED_FILE' is malformed — UNKNOWN, never a verdict"
   [ -n "$REVIEWED_ROWS" ] || die "reviewed mapping '$REVIEWED_FILE' names no skill — UNKNOWN, never 'nothing is mapped'"
 fi
@@ -173,7 +178,7 @@ try_submodule() {
   # below cannot catch it, and the resolver would print an authoritative-looking SUBSET and exit 0.
   # A partial listing is the same fail-open as an empty one: absence of a row is a claim about the
   # enumeration, and a half-finished enumeration cannot support it.
-  if ! paths="$(git -C "$sub" --no-replace-objects ls-tree -r --name-only "$PIN" -- "$PLUGIN_ROOT" 2>/dev/null \
+  if ! paths="$(git -C "$sub" --no-replace-objects ls-tree -r -z --name-only "$PIN" -- "$PLUGIN_ROOT" 2>/dev/null | tr "\0" "\n" \
                   | select_skill_paths)"; then
     paths=""   # discard the partial listing; it must never reach the caller
     return 1
@@ -233,8 +238,27 @@ read_blob() {
 # (plugin, skill): equal is MATCH; unequal is MISMATCH, so a self-attested claim can only ever
 # withdraw an ownership the reviewed file granted; no reviewed row is UNLISTED; an unreadable claim
 # stays UNKNOWN whatever the reviewed row says, because unproven is not proven.
+
+# One row per skill, in whichever shape the caller asked for. In the default listing the claim IS
+# the row. Under --check-reviewed the claim is compared against the reviewed row for the same
+# (plugin, skill): equal is MATCH; unequal is MISMATCH, so a self-attested claim can only ever
+# withdraw an ownership the reviewed file granted; no reviewed row is UNLISTED; an unreadable claim
+# stays UNKNOWN whatever the reviewed row says, because unproven is not proven.
 DRIFT=0
-SEEN_KEYS=""
+SEEN_KEYS="
+"
+# Reviewed-row lookup done in the SHELL, never through `awk -v`: awk expands backslash escapes in
+# -v values, so a skill directory named `synce\144` would look up the `synced` row and read MATCH.
+# `read` and `[ = ]` compare bytes.
+reviewed_owner_for() { # <plugin> <skill> -> stdout: the reviewed owner, or nothing
+  local r_plug r_skill r_owner
+  while IFS=$'\t' read -r r_plug r_skill r_owner; do
+    [ "$r_plug" = "$1" ] && [ "$r_skill" = "$2" ] && { printf '%s' "$r_owner"; return 0; }
+  done <<EOF_ROWS
+$REVIEWED_ROWS
+EOF_ROWS
+  return 0
+}
 emit_row() { # <claimed-owner-or-LOCAL-or-UNKNOWN> <skill> <path>
   local claim="$1" skill="$2" path="$3" plug reviewed verdict
   if [ "$CHECK_REVIEWED" != 1 ]; then
@@ -242,9 +266,17 @@ emit_row() { # <claimed-owner-or-LOCAL-or-UNKNOWN> <skill> <path>
     return 0
   fi
   plug="${path#"$PLUGIN_ROOT"}"; plug="${plug%%/*}"
+  # A tab, newline or other control character in a claim or a key would let one skill print as two
+  # rows — including a forged `MATCH` line for a reader that greps rows. That is UNKNOWN, and the
+  # offending bytes are shown as `?` so the row stays one line.
+  case "${claim}${skill}${plug}" in *[[:cntrl:]]*)
+    claim=UNKNOWN; skill="$(printf '%s' "$skill" | tr '[:cntrl:]' '?')"; path="$(printf '%s' "$path" | tr '[:cntrl:]' '?')"; plug="$(printf '%s' "$plug" | tr '[:cntrl:]' '?')"; status=2 ;;
+  esac
+  # Keys are newline-delimited on BOTH sides so a key that is a suffix of another (`engineering`
+  # inside `agentic-engineering`) cannot satisfy the STALE sweep's containment test.
   SEEN_KEYS="${SEEN_KEYS}${plug}	${skill}
 "
-  reviewed="$(printf '%s\n' "$REVIEWED_ROWS" | awk -F'\t' -v p="$plug" -v s="$skill" '$1 == p && $2 == s { print $3; exit }')"
+  reviewed="$(reviewed_owner_for "$plug" "$skill")"
   if [ "$claim" = UNKNOWN ]; then
     verdict=UNKNOWN
   elif [ -z "$reviewed" ]; then
@@ -319,8 +351,25 @@ while IFS= read -r p; do
   emit_row "$owner" "$skill" "$p"
 done < <(printf '%s\n' "$paths")
 
+mapping_names_skill() { # <skill> -> 0 when a reviewed row (inside any --plugin scope) names it
+  local r_plug r_skill r_owner
+  while IFS=$'\t' read -r r_plug r_skill r_owner; do
+    [ -n "$r_plug" ] || continue
+    if [ -n "$PLUGIN_NAME" ] && [ "$r_plug" != "$PLUGIN_NAME" ]; then continue; fi
+    [ "$r_skill" = "$1" ] && return 0
+  done <<EOF_ROWS
+$REVIEWED_ROWS
+EOF_ROWS
+  return 1
+}
 if [ -n "$ONLY_SKILL" ] && [ "$matched" -eq 0 ]; then
-  die "no skill named '$ONLY_SKILL' under '$SCOPE_DESC' at $PIN"
+  # Under --check-reviewed a skill the mapping names but the bundle no longer carries is exactly
+  # the STALE drift the sweep below reports, so fall through to it instead of dying UNKNOWN.
+  if [ "$CHECK_REVIEWED" = 1 ] && mapping_names_skill "$ONLY_SKILL"; then
+    :
+  else
+    die "no skill named '$ONLY_SKILL' under '$SCOPE_DESC' at $PIN"
+  fi
 fi
 
 
@@ -333,7 +382,8 @@ if [ "$CHECK_REVIEWED" = 1 ]; then
     [ -n "$r_plug" ] || continue
     if [ -n "$PLUGIN_NAME" ] && [ "$r_plug" != "$PLUGIN_NAME" ]; then continue; fi
     if [ -n "$ONLY_SKILL" ] && [ "$r_skill" != "$ONLY_SKILL" ]; then continue; fi
-    case "$SEEN_KEYS" in *"${r_plug}	${r_skill}
+    case "$SEEN_KEYS" in *"
+${r_plug}	${r_skill}
 "*) continue ;; esac
     printf 'STALE\t%s\t-\t%s\t%s%s/skills/%s/SKILL.md\n' "$r_owner" "$r_skill" "$PLUGIN_ROOT" "$r_plug" "$r_skill"
     DRIFT=1
