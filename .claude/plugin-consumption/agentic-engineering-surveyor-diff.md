@@ -117,8 +117,21 @@ plugin carries them (or an explicit, tested subset):
     subtraction; a capped operand withholds only that repository's residual and emits the named
     mandatory-query failure instead of contaminating or suppressing other repositories.
 
-## Equivalence status (this slice)
 
+🔴 **Dispatch topology — this overlay is the definition the survey actually LOADS, so a plugin-side
+surveyor change does not reach the calling path until it is also here.** Measured 2026-09-03 over every
+transcript under `~/.claude/projects` modified in the prior 9 days (496 files): **28 of 29** root-session
+surveyor dispatches since 2026-09-02T12:00Z used the unqualified `subagent_type: portfolio-surveyor`,
+which resolves to this local agent; one used `agentic-engineering:portfolio-surveyor`. The run loop's
+prose (spawn the plugin agent, have it read this file) describes a topology that is not what runs. The
+measured casualty is agent-plugins#182's admitted-call-shape rule: installed on the Claude lane since
+2026-09-02 and absent from this file, it left the five deny families it targets flat at 5.84 → 5.52 per
+dispatch. It is now ported into the Safety block above (monorepo#3179, pinned by round 10 of
+`portfolio-surveyor.test.sh`). **Until monorepo#3180 decides the topology, route every surveyor
+refinement to BOTH places** — upstream for the target definition, and here for the loaded one — and
+treat "merged upstream + gitlink bumped + install CURRENT" as *not* evidence a surveyor rule is live.
+
+## Equivalence status (this slice)
 Plugin-only parity is not claimed. This slice uses the plugin agent plus the local compatibility
 overlay, so the numbered refinements remain active instead of disappearing from the authoritative
 survey digest. Next slice: upstream those refinements into `devantler-tech/agent-plugins`

@@ -2774,3 +2774,26 @@ if grep -Fq 'Drop hits from archived repos' "${surveyor}"; then
 fi
 
 echo "portfolio surveyor contract: round-9 evidence-and-staleness assertions passed"
+
+# ── Round 10: the forge guard's admitted call shape must be in the definition the surveyor LOADS ──
+# Measured 2026-09-03 (monorepo#3179): 28 of 29 root-session surveyor dispatches since 2026-09-02T12Z
+# resolved `subagent_type: portfolio-surveyor` to THIS overlay, so the admitted-shape bullet that
+# agent-plugins#182 added to the PLUGIN definition never reached the calling path, and the five deny
+# families it targets stayed flat at ~5.5-5.8 per dispatch. The rule is pinned here, inside the Safety
+# block, because that block is what the dispatched definition actually carries. The block is extracted
+# between its own heading and the next, so the assertions track the section rather than line numbers;
+# an empty extraction is rejected FIRST because a checker whose input is empty proves nothing.
+_safety_block=$(sed -n '/^## Safety (non-negotiable)/,/^## Survey/p' "${surveyor}")
+[ -n "${_safety_block}" ] ||
+  fail "portfolio-surveyor.md must keep an extractable '## Safety (non-negotiable)' block (#3179)"
+grep -Fq 'Every forge read is one command in one call.' <<<"${_safety_block}" ||
+  fail "portfolio-surveyor.md Safety block must carry the admitted-call-shape rule 'Every forge read is one command in one call.' (#3179)"
+# The rule must name the denied idioms AND the admitted substitute; a rule that only forbids leaves the
+# surveyor to guess, which is the guard's own failure mode ("fail with the fix").
+grep -Fq 'never redirect to a scratch file' <<<"${_safety_block}" ||
+  fail "the admitted-call-shape rule must name the in-band substitute for redirection (#3179)"
+grep -Fq 'Take every timestamp from a payload you already read' <<<"${_safety_block}" ||
+  fail "the admitted-call-shape rule must tell the surveyor to take timestamps from payloads, never from \`date\` (#3179)"
+grep -Fq 'never work around the guard' <<<"${_safety_block}" ||
+  fail "the admitted-call-shape rule must end on reissuing in the admitted shape, never working around the guard (#3179)"
+echo "portfolio surveyor contract: round-10 admitted-call-shape assertions passed"
