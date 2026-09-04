@@ -452,6 +452,7 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/gh-json-vocabulary-contract.test.sh'
               - '.github/workflows/ci.yaml'
+              - '.claude/agents/portfolio-surveyor.md'
             improver-role-disclosure:
               - 'AGENTS.md'
               - '.claude/scripts/improver-role-disclosure-contract.test.sh'

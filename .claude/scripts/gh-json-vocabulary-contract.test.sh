@@ -46,6 +46,45 @@ assert_prose 'one unknown field voids the whole read' \
 assert_prose 'Reuse an exact command that already succeeded in this run' \
   "Merge policy does not bound repeat discovery overhead"
 
+# ── #3207: the overlay is the definition most surveyor dispatches actually load ────────────────
+# agent-plugins#177 added the vocabulary rule to the PLUGIN surveyor agent and it reached this
+# consumer at #3141. It did not stop the failure, because this deployment dispatches bare
+# `portfolio-surveyor` — the local overlay — for 122 of 153 surveyor sidechains in the measured
+# 7d window, and 19 of 20 `Unknown JSON field` occurrences came from those dispatches. #3179 is
+# the identical class one rule earlier (the overlay lacked the forge guard's call-shape rule from
+# agent-plugins#182) and was closed by porting that rule VERBATIM into the overlay. This pins the
+# same port for #177, so a rule meant for the surveyor cannot bind only one of its calling paths.
+overlay="${SURVEYOR_OVERLAY:-${repo_root}/.claude/agents/portfolio-surveyor.md}"
+[ -r "${overlay}" ] || fail "cannot read ${overlay}; the #177 overlay port cannot be verified"
+overlay_flat="$(tr '\n' ' ' < "${overlay}" | tr -s '[:space:]' ' ')"
+[ "${#overlay_flat}" -gt 500 ] || fail "surveyor overlay is implausibly small; assertions would be vacuous"
+
+assert_overlay() {
+  case "${overlay_flat}" in
+    *"$1"*) ;;
+    *) fail "$2" ;;
+  esac
+}
+
+assert_overlay 'Every `gh --json` vocabulary is local to its subcommand' \
+  "surveyor overlay lacks agent-plugins#177's vocabulary rule; a dispatch loading only the overlay is unbound by it"
+assert_overlay 'run that same subcommand with bare `--json` and validate every requested field' \
+  "surveyor overlay does not require discovery against the exact subcommand"
+assert_overlay 'never transfer a field name between subcommands' \
+  "surveyor overlay does not forbid cross-subcommand field transfer"
+assert_overlay 'mark the affected evidence `QUERY-UNKNOWN`' \
+  "surveyor overlay does not preserve the query-error boundary for a failed validated read"
+assert_overlay 'Use the exact literal field lists prescribed by this definition' \
+  "surveyor overlay does not pin the prescribed field-list requirement"
+assert_overlay 'The bare diagnostic intentionally exits nonzero after listing its fields' \
+  "surveyor overlay does not document the bare-diagnostic exit behaviour"
+assert_overlay 'treat a present vocabulary as successful discovery' \
+  "surveyor overlay does not preserve successful nonzero discovery handling"
+assert_overlay 'If the vocabulary is missing or malformed' \
+  "surveyor overlay does not cover malformed-vocabulary discovery"
+assert_overlay 'report the query error — never translate it to an empty result' \
+  "surveyor overlay does not stop a failed read becoming empty evidence"
+
 # `gh <surface> --json` intentionally exits non-zero after printing that surface's available fields.
 # Exercise the installed CLI rather than freezing a hand-written allowlist in this test.
 vocabulary_for() {
@@ -121,7 +160,8 @@ filter_block="$(awk '
 for trigger in \
   "              - 'AGENTS.md'" \
   "              - '.claude/scripts/gh-json-vocabulary-contract.test.sh'" \
-  "              - '.github/workflows/ci.yaml'"; do
+  "              - '.github/workflows/ci.yaml'" \
+  "              - '.claude/agents/portfolio-surveyor.md'"; do
   printf '%s\n' "${filter_block}" | grep -Fqx -- "${trigger}" ||
     fail "ci.yaml filter is missing ${trigger# *}"
 done

@@ -4249,7 +4249,7 @@ refinements (the `4b`–`4e` items in
 [`agentic-engineering-surveyor-diff.md`](.claude/plugin-consumption/agentic-engineering-surveyor-diff.md))
 were appended to the temporary local file instead of upstreamed — re-opening the gap #78 had just
 closed, pushing the file's own deletion further away, and charging every hourly dispatch for it. Its
-**enforced high-water mark is now 155,886 B** (raised 2026-09-04 by monorepo#3192 to keep the temporary overlay aligned with the upstream boundary-safe dependency-summary repair); that is the live ratchet ceiling, not a rewrite of the
+**enforced high-water mark is now 156,920 B** (raised 2026-09-04 by monorepo#3207 to port agent-plugins#177's `gh --json` vocabulary rule into the overlay, which 122 of 153 measured surveyor dispatches load instead of the plugin agent); that is the live ratchet ceiling, not a rewrite of the
 dated measurement.
 
 **So a new surveyor refinement goes UPSTREAM unless it is a genuine deployment fact.**
