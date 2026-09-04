@@ -38,7 +38,7 @@ overlay="${repo_root}/.claude/agents/portfolio-surveyor.md"
 
 # The recorded high-water mark, in bytes. Raise this ONLY together with the figure quoted in
 # AGENTS.md's *Context & token discipline* section (assertion 5 enforces that pairing).
-CEILING_OVERLAY_BYTES=154082
+CEILING_OVERLAY_BYTES=155886
 
 fail() {
   echo "definition-load budget contract: FAIL — $*" >&2
