@@ -74,6 +74,16 @@ assert_overlay 'never transfer a field name between subcommands' \
   "surveyor overlay does not forbid cross-subcommand field transfer"
 assert_overlay 'mark the affected evidence `QUERY-UNKNOWN`' \
   "surveyor overlay does not preserve the query-error boundary for a failed validated read"
+assert_overlay 'Use the exact literal field lists prescribed by this definition' \
+  "surveyor overlay does not pin the prescribed field-list requirement"
+assert_overlay 'The bare diagnostic intentionally exits nonzero after listing its fields' \
+  "surveyor overlay does not document the bare-diagnostic exit behaviour"
+assert_overlay 'treat a present vocabulary as successful discovery' \
+  "surveyor overlay does not preserve successful nonzero discovery handling"
+assert_overlay 'If the vocabulary is missing or malformed' \
+  "surveyor overlay does not cover malformed-vocabulary discovery"
+assert_overlay 'report the query error — never translate it to an empty result' \
+  "surveyor overlay does not stop a failed read becoming empty evidence"
 
 # `gh <surface> --json` intentionally exits non-zero after printing that surface's available fields.
 # Exercise the installed CLI rather than freezing a hand-written allowlist in this test.
