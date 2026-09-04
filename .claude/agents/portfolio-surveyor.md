@@ -1243,6 +1243,22 @@ public and private — no per-repo loop needed to enumerate):
    **Exclude a `Kata` whose named measurement date is still in the FUTURE** — contract skip reason (d)
    makes it not-yet-actionable, and listing it as ready work makes runs either re-skip it every tick or
    measure before the agreed date. Report future-dated Katas separately, with their date.
+   Before nominating any issue as actionable, deepen that candidate once with the exact in-scope
+   issue's server-side dependency summary:
+
+   ```sh
+   gh api graphql -F owner=<owner> -F name=<repo> -F number=<number> \
+     -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){number issueDependenciesSummary{blockedBy totalBlockedBy}}}}' \
+     --jq 'if ((.data.repository.issue|type)!="object" or (.data.repository.issue.number|type)!="number" or (.data.repository.issue.issueDependenciesSummary|type)!="object" or (.data.repository.issue.issueDependenciesSummary.blockedBy|type)!="number" or (.data.repository.issue.issueDependenciesSummary.totalBlockedBy|type)!="number" or .data.repository.issue.issueDependenciesSummary.blockedBy < 0 or .data.repository.issue.issueDependenciesSummary.totalBlockedBy < .data.repository.issue.issueDependenciesSummary.blockedBy) then error("QUERY-UNKNOWN: malformed issue dependency summary") else {number:.data.repository.issue.number,openBlockedBy:.data.repository.issue.issueDependenciesSummary.blockedBy,totalBlockedBy:.data.repository.issue.issueDependenciesSummary.totalBlockedBy} end'
+   ```
+
+   `issueDependenciesSummary.blockedBy` is the count of **open** blocking issues;
+   `totalBlockedBy` includes open and closed blockers. Use only the open count for actionability: a
+   positive value makes the candidate not actionable until those blockers close, while a zero open
+   count does not suppress it. The summary deliberately requests no blocker nodes: a native dependency
+   may point at an out-of-portfolio repository, and fetching its metadata would cross this deployment's
+   portfolio boundary. A missing or malformed summary makes that candidate `QUERY-UNKNOWN`, never
+   unblocked.
    Flag repos with **no open
    `roadmap` issue at all** (strategy-review candidates) — **product repos only** (the ones the
    monorepo `AGENTS.md` portfolio map names): strategy reviews are per *product*, so org/infra
