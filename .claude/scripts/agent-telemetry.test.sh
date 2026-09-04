@@ -252,10 +252,10 @@ run() {
   CODEX_LOADER_PATH="$FIX/codex/automations/daily-ai-engineer/automation.toml" \
   CODEX_IMPROVER_LOADER_PATH="$FIX/codex/automations/agent-improver/automation.toml" \
   CODEX_AUTOMATION_STORE_PATH="$CODEX_AUTOMATION_STORE" \
-  CLAUDE_ENGINEER_MARKER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE:-1750000000}" \
-  CLAUDE_IMPROVER_MARKER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE:-1750000000}" \
-  CODEX_ENGINEER_MARKER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE:-1785238559000}" \
-  CODEX_IMPROVER_MARKER_BASELINE="${CODEX_IMPROVER_MARKER_BASELINE:-1785222863000}" \
+  CLAUDE_ENGINEER_MARKER_BASELINE="${CLAUDE_ENGINEER_MARKER_BASELINE-1750000000}" \
+  CLAUDE_IMPROVER_MARKER_BASELINE="${CLAUDE_IMPROVER_MARKER_BASELINE-1750000000}" \
+  CODEX_ENGINEER_MARKER_BASELINE="${CODEX_ENGINEER_MARKER_BASELINE-1785238559000}" \
+  CODEX_IMPROVER_MARKER_BASELINE="${CODEX_IMPROVER_MARKER_BASELINE-1785222863000}" \
   bash "$TARGET" --since-days 3650 --max-files 50 "$@" 2>&1
 }
 
@@ -325,10 +325,49 @@ check "compares Claude engineer schedule" "$OUT" "claude engineer: expected=*@50
 check "compares Claude improver schedule" "$OUT" "claude improver: expected=0,12@0 actual=0,12@0 MATCH"
 check "compares Codex engineer schedule"  "$OUT" "codex engineer:  expected=*@10 actual=*@10 MATCH"
 check "compares Codex improver schedule"  "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
-check "reports Codex engineer dispatch advance" "$OUT" "MATCH marker=1785238560676 baseline=1785238559000"
-check "reports Codex improver dispatch advance" "$OUT" "MATCH marker=1785222864850 baseline=1785222863000"
+check "reports Codex engineer dispatch advance" "$OUT" "MATCH persistence=CONFIRMED marker=1785238560676 baseline=1785238559000"
+check "reports Codex improver dispatch advance" "$OUT" "MATCH persistence=CONFIRMED marker=1785222864850 baseline=1785222863000"
 check "proves staggered local starts"      "$OUT" "local simultaneous starts/day: 0"
 check "proves hourly engineer slots"       "$OUT" "local engineer slots scheduled/day: 48"
+
+# ── steady state: no marker baseline, every pointer readable (#2621) ──────────
+# THE LIVE CASE, and the one no fixture covered: a *_MARKER_BASELINE exists only
+# on a run that just applied a schedule edit, so an ordinary run has none. The
+# cadence-table comparison and the stagger derivations are pure functions of the
+# four crons and need no baseline; only the persistence claim does. Gating them
+# together made the stagger invariant permanently UNKNOWN in production while
+# every fixture — which supplies baselines — measured cleanly.
+NOBASE() {
+  CLAUDE_ENGINEER_MARKER_BASELINE= CLAUDE_IMPROVER_MARKER_BASELINE= \
+  CODEX_ENGINEER_MARKER_BASELINE= CODEX_IMPROVER_MARKER_BASELINE= \
+  run "$@"
+}
+OUT=$(NOBASE --section drift)
+check "steady state still derives stagger"   "$OUT" "local simultaneous starts/day: 0"
+check "steady state still derives slots"     "$OUT" "local engineer slots scheduled/day: 48"
+check "steady state still compares cadence"  "$OUT" "claude engineer: expected=*@50 actual=*@50 MATCH"
+check "steady state marks persistence unknown" "$OUT" "persistence=UNKNOWN (change marker baseline missing)"
+nocheck "steady state never claims persistence" "$OUT" "persistence=CONFIRMED"
+
+# ABLATION (#2621 acceptance criteria): collide two crons and the collision count
+# must MOVE. A derivation that reports 0 whatever the input is not a measurement.
+sed -i '' 's/BYMINUTE=10/BYMINUTE=50/' "$FIX/codex/automations/daily-ai-engineer/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=50;BYSECOND=0' WHERE id = 'daily-ai-engineer';"
+OUT=$(NOBASE --section drift)
+check "ablation moves the collision count"   "$OUT" "local simultaneous starts/day: 24"
+sed -i '' 's/BYMINUTE=50/BYMINUTE=10/' "$FIX/codex/automations/daily-ai-engineer/automation.toml"
+sqlite3 "$CODEX_AUTOMATION_STORE" \
+  "UPDATE automations SET rrule = 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0' WHERE id = 'daily-ai-engineer';"
+
+# Fail-closed is PRESERVED: an unreadable pointer still suppresses the derivations
+# that depend on it. Only the persistence proof was decoupled, never readability.
+mv "$FIX/codex/automations/agent-improver/automation.toml" \
+   "$FIX/codex/automations/agent-improver/automation.toml.hidden"
+OUT=$(NOBASE --section drift)
+check "unreadable pointer still suppresses stagger" "$OUT" "local simultaneous starts/day: UNKNOWN"
+mv "$FIX/codex/automations/agent-improver/automation.toml.hidden" \
+   "$FIX/codex/automations/agent-improver/automation.toml"
 
 # A cron expansion counts SCHEDULED SLOTS, never dispatches. The Claude runtime
 # declines any dispatch that would overlap the previous run of the same task, so
@@ -459,17 +498,22 @@ mv "$FIX/codex/automations/agent-improver/automation.toml.missing" \
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET last_run_at = NULL WHERE id = 'agent-improver';"
 OUT=$(run --section drift)
-check "missing runtime marker is explicit" "$OUT" "UNKNOWN: codex improver change marker missing"
-nocheck "missing runtime marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
-check "missing runtime marker invalidates parity total" "$OUT" "local simultaneous starts/day: UNKNOWN"
-check "missing runtime marker invalidates dispatch total" "$OUT" "local engineer slots scheduled/day: UNKNOWN"
+check "missing runtime marker is explicit" "$OUT" "MATCH persistence=UNKNOWN (change marker missing)"
+nocheck "missing runtime marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH persistence=CONFIRMED"
+# INVERTED by #2621, deliberately — this pair previously encoded the defect. The
+# fixture nulls only last_run_at, so the cron stays readable and consistent and
+# both derivations remain fully determined. Asserting UNKNOWN here is what made
+# the stagger invariant unmeasurable in steady state. The claim that genuinely
+# needs the marker — persistence — still fails closed, on its own field above.
+check "missing runtime marker still derives stagger" "$OUT" "local simultaneous starts/day: 0"
+check "missing runtime marker still derives slots" "$OUT" "local engineer slots scheduled/day: 48"
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET last_run_at = 1785222864850 WHERE id = 'agent-improver';"
 
 # An unchanged marker is the in-session read-back, not persistence proof.
 OUT=$(CODEX_IMPROVER_MARKER_BASELINE=1785222864850 run --section drift)
-check "unchanged marker is not persistence proof" "$OUT" "UNKNOWN: codex improver change marker did not advance"
-nocheck "unchanged marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH"
+check "unchanged marker is not persistence proof" "$OUT" "MATCH persistence=UNKNOWN (change marker did not advance"
+nocheck "unchanged marker never claims persistence" "$OUT" "codex improver:  expected=7,19@0 actual=7,19@0 MATCH persistence=CONFIRMED"
 
 # The dispatch marker and recurrence must come from one correlated scheduler
 # record. A database-side rewrite cannot be hidden by the desired pointer while

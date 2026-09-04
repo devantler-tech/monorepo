@@ -4421,15 +4421,25 @@ if want drift; then
       echo "    UNKNOWN: $label schedule absent from AGENTS.md cadence table"
     elif [ "$expected" != "$actual" ]; then
       echo "    ⚠️  DRIFT: $label schedule expected=$expected actual=$actual marker=${marker:-missing} baseline=${baseline:-missing}"
-    elif [ -z "$marker" ]; then
-      echo "    UNKNOWN: $label change marker missing"
-    elif [ -z "$baseline" ]; then
-      echo "    UNKNOWN: $label change marker baseline missing"
-    elif ! marker_advanced "$marker" "$baseline"; then
-      echo "    UNKNOWN: $label change marker did not advance (marker=$marker baseline=$baseline)"
     else
-      printf '    %-16s expected=%s actual=%s MATCH marker=%s baseline=%s\n' \
-        "${label}:" "$expected" "$actual" "$marker" "$baseline"
+      # Two INDEPENDENT questions, reported independently (#2621). expected==actual
+      # settles the cadence-table comparison from the pointer alone. Persistence —
+      # "did an applied edit survive a dispatch?" — needs a baseline that exists
+      # only on a run that just applied one, so it still fails closed on its own
+      # field. Collapsing the two previously discarded a known-good cadence and
+      # printed only UNKNOWN, which is what left the stagger invariant unwatched.
+      local persistence
+      if [ -z "$marker" ]; then
+        persistence="UNKNOWN (change marker missing)"
+      elif [ -z "$baseline" ]; then
+        persistence="UNKNOWN (change marker baseline missing)"
+      elif ! marker_advanced "$marker" "$baseline"; then
+        persistence="UNKNOWN (change marker did not advance: marker=$marker baseline=$baseline)"
+      else
+        persistence="CONFIRMED marker=$marker baseline=$baseline"
+      fi
+      printf '    %-16s expected=%s actual=%s MATCH persistence=%s\n' \
+        "${label}:" "$expected" "$actual" "$persistence"
     fi
   }
 
@@ -4452,10 +4462,15 @@ if want drift; then
     fi
   }
 
-  schedule_measured() {
-    local file="$1" expected="$2" actual="$3" marker="$4" baseline="$5"
-    [ -f "$file" ] && [ -n "$expected" ] && [ -n "$actual" ] \
-      && marker_advanced "$marker" "$baseline"
+  # The cadence-table comparison and the stagger derivations depend ONLY on a
+  # readable pointer and a table entry. Deliberately NOT gated on a marker
+  # baseline: that baseline exists only on a run that just applied a schedule
+  # edit, so requiring it here made the stagger invariant — the property this
+  # deployment most needs watched — permanently UNKNOWN in steady state (#2621).
+  # Persistence keeps its own fail-closed verdict in compare_schedule.
+  schedule_cadence_readable() {
+    local file="$1" expected="$2" actual="$3"
+    [ -f "$file" ] && [ -n "$expected" ] && [ -n "$actual" ]
   }
 
   CLAUDE_ENGINEER_EXPECTED=$(cadence_expected Claude 3)
@@ -4515,14 +4530,13 @@ if want drift; then
     '
   }
 
-  if schedule_measured "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
-       "$CLAUDE_ENGINEER_MARKER" "$CLAUDE_ENGINEER_BASELINE" \
-     && schedule_measured "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
-       "$CLAUDE_IMPROVER_MARKER" "$CLAUDE_IMPROVER_BASELINE" \
-     && schedule_measured "$CODEX_LOADER" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
-       "$CODEX_ENGINEER_MARKER" "$CODEX_ENGINEER_BASELINE" \
-     && schedule_measured "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL" \
-       "$CODEX_IMPROVER_MARKER" "$CODEX_IMPROVER_BASELINE"; then
+  # Gated on cadence READABILITY, never on persistence (#2621): these two figures
+  # are pure functions of the four crons. An unreadable or ambiguous pointer still
+  # suppresses them — that fail-closed behaviour is unchanged and tested.
+  if schedule_cadence_readable "$CLAUDE_LOADER" "$CLAUDE_ENGINEER_EXPECTED" "$CLAUDE_ENGINEER_ACTUAL" \
+     && schedule_cadence_readable "$CLAUDE_IMPROVER_LOADER" "$CLAUDE_IMPROVER_EXPECTED" "$CLAUDE_IMPROVER_ACTUAL" \
+     && schedule_cadence_readable "$CODEX_LOADER" "$CODEX_ENGINEER_EXPECTED" "$CODEX_ENGINEER_ACTUAL" \
+     && schedule_cadence_readable "$CODEX_IMPROVER_LOADER" "$CODEX_IMPROVER_EXPECTED" "$CODEX_IMPROVER_ACTUAL"; then
     :
     ALL_SLOTS=$(printf '%s\n' "$CLAUDE_ENGINEER_ACTUAL" "$CLAUDE_IMPROVER_ACTUAL" \
       "$CODEX_ENGINEER_ACTUAL" "$CODEX_IMPROVER_ACTUAL" | expand_schedules)
