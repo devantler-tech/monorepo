@@ -1746,6 +1746,17 @@ done <<EOF
 ${json_specs}
 EOF
 
+# ── GitHub issue dependencies stay inside the portfolio boundary (#3189) ────
+#
+# `issueDependenciesSummary` returns open and total counts without enumerating
+# cross-repository blocker nodes. The old `gh issue view --json blockedBy`
+# surface both failed on connection shape and could cross the declared scope.
+grep -Fq 'issueDependenciesSummary{blockedBy totalBlockedBy}' "${surveyor}" ||
+  fail "surveyor dependency reads do not use the boundary-safe blocker summary (#3189)"
+if grep -Fq -- '--json issueType,blockedBy,assignees' "${surveyor}"; then
+  fail "surveyor dependency reads still enumerate blocker nodes through gh issue view (#3189)"
+fi
+
 # --- GitHub-managed code scanning is not repository breakage (#2536) ----------
 #
 # A default-setup code-scanning run has no workflow file to fix and GitHub refuses to re-run it, so
