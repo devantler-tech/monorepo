@@ -81,6 +81,10 @@ jobs:
             docs-deps:
               - 'docs/package.json'
               - 'docs/package-lock.json'
+              # Self-gate both copies of the audit command so their deliberately
+              # identical behavior is exercised before either workflow can merge.
+              - '.github/workflows/audit-docs.yaml'
+              - '.github/workflows/ci.yaml'
             active-projects:
               # The retired-link guard greps the WHOLE content tree, so it must
               # run for ANY content change — gating it on the two pages the
@@ -570,7 +574,9 @@ jobs:
         run: npm ci
       - name: Audit
         working-directory: docs
-        run: npm audit --omit=dev
+        # Audit the committed resolution directly. npm's installed-tree fallback can
+        # reject a tree that `npm ci` just accepted instead of reporting advisories.
+        run: npm audit --omit=dev --package-lock-only
 
   drift-check-active-projects:
     needs: changes
