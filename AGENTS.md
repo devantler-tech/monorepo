@@ -860,6 +860,19 @@ pointer and must equal that scheduler record before the drift check reports `MAT
 ambiguous store, missing baseline, marker that did not advance, or incomplete recurrence rule is
 `UNKNOWN`, never `MATCH`.
 
+🔴 **That sentence governs the PERSISTENCE verdict — "did an applied edit survive a dispatch?" — and
+never the cadence-table comparison beside it.** The two are independent: `expected == actual` is
+settled by the pointer alone, while persistence needs a baseline that exists only on a run that just
+applied an edit. Requiring the baseline for both made the **stagger invariant** — the property this
+table exists to protect — report `UNKNOWN` on every ordinary run for 33 days, while all four pointers
+were in fact correct (monorepo#2621). So the drift check reports them as separate fields: a cadence
+`MATCH`/`DRIFT` per pointer, and `persistence=CONFIRMED|UNKNOWN` beside it. A missing baseline, an
+unadvanced marker, or a missing marker still yields `persistence=UNKNOWN` — never `CONFIRMED`.
+⚠️ **The readability half is unchanged and still fails closed**: a missing or ambiguous store, a
+pointer that does not equal its scheduler record, or an incomplete recurrence rule yields `UNKNOWN`
+for that pointer *and* suppresses the derived `local simultaneous starts/day` and
+`local engineer slots scheduled/day`. Only the persistence proof was decoupled.
+
 🔴 **`last_run_at` is a DISPATCH marker, never a LIVENESS signal — a fully dead lane advances it
 exactly like a healthy one.** The scheduler records when it *started* a run, not whether the run did
 anything, so when every dispatched turn dies seconds in, `last_run_at` and `next_run_at` both stay
