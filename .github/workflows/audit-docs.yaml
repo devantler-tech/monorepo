@@ -8,10 +8,8 @@ name: Audit - Docs Dependencies
 # unseen and first surface by blocking an automated dependency pull request — which
 # agents may not touch — at which point no single-package bump can clear them.
 #
-# The audit step below is deliberately IDENTICAL to the `Audit` step of ci.yaml's
-# `audit-docs` job. That is what makes this run predict the gate: a weaker audit here
-# would pass while the gate still blocks, recreating exactly the deadlock this exists
-# to prevent. Keep the two in lockstep.
+# Both workflows invoke the same bounded audit wrapper. Its contract test also checks
+# this wiring, so a change to either workflow cannot silently weaken the scheduled copy.
 #
 # This workflow gates nothing. It has no pull_request trigger, is absent from the
 # "CI - Required Checks" aggregation, and adds no latency to any pull request.
@@ -42,11 +40,9 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-          cache: "npm"
-          cache-dependency-path: docs/package-lock.json
-      - name: Install dependencies
+      - name: Test audit wrapper
         working-directory: docs
-        run: npm ci
+        run: ./scripts/audit-dependencies.test.sh
       - name: Audit
         working-directory: docs
-        run: npm audit --omit=dev
+        run: ./scripts/audit-dependencies.sh
