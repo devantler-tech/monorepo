@@ -88,9 +88,13 @@ run "lookalike" "${payload}"
 
 # --- Malformed input fails OPEN for the caller, never into the guard ----------------------
 run "empty" "__EMPTY__"
-[ "${ran}" -eq 0 ] && [ "${rc}" -eq 0 ] || fail_case "empty stdin did not exit 0 without forwarding (ran=${ran} rc=${rc})"
+if [ "${ran}" -ne 0 ] || [ "${rc}" -ne 0 ]; then
+  fail_case "empty stdin did not exit 0 without forwarding (ran=${ran} rc=${rc})"
+fi
 run "garbage" "not json at all {"
-[ "${ran}" -eq 0 ] && [ "${rc}" -eq 0 ] || fail_case "unparseable stdin did not exit 0 without forwarding (ran=${ran} rc=${rc})"
+if [ "${ran}" -ne 0 ] || [ "${rc}" -ne 0 ]; then
+  fail_case "unparseable stdin did not exit 0 without forwarding (ran=${ran} rc=${rc})"
+fi
 
 # --- A missing or non-executable target for a SURVEYOR fails CLOSED -----------------------
 payload="$(jq -cn --argjson p "${write_probe}" '$p + {agent_type: "portfolio-surveyor"}')"
