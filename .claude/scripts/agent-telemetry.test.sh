@@ -351,12 +351,12 @@ nocheck "steady state never claims persistence" "$OUT" "persistence=CONFIRMED"
 
 # ABLATION (#2621 acceptance criteria): collide two crons and the collision count
 # must MOVE. A derivation that reports 0 whatever the input is not a measurement.
-sed -i '' 's/BYMINUTE=10/BYMINUTE=50/' "$FIX/codex/automations/daily-ai-engineer/automation.toml"
+sed -i.bak 's/BYMINUTE=10/BYMINUTE=50/' "$FIX/codex/automations/daily-ai-engineer/automation.toml"
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET rrule = 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=50;BYSECOND=0' WHERE id = 'daily-ai-engineer';"
 OUT=$(NOBASE --section drift)
 check "ablation moves the collision count"   "$OUT" "local simultaneous starts/day: 24"
-sed -i '' 's/BYMINUTE=50/BYMINUTE=10/' "$FIX/codex/automations/daily-ai-engineer/automation.toml"
+sed -i.bak 's/BYMINUTE=50/BYMINUTE=10/' "$FIX/codex/automations/daily-ai-engineer/automation.toml"
 sqlite3 "$CODEX_AUTOMATION_STORE" \
   "UPDATE automations SET rrule = 'RRULE:FREQ=HOURLY;INTERVAL=1;BYMINUTE=10;BYSECOND=0' WHERE id = 'daily-ai-engineer';"
 
