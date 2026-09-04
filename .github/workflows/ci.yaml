@@ -484,6 +484,12 @@ jobs:
               - '.claude/skills/products/monorepo/SKILL.md'
               - '.claude/skills/products/platform/SKILL.md'
               - '.claude/scripts/portfolio-surveyor.test.sh'
+              # The deployment-level hook dispatch is what reaches the PLUGIN surveyor
+              # agent type (frontmatter hooks are ignored there); its test pins the
+              # settings.json wiring, so a change to any of the three re-runs it.
+              - '.claude/scripts/surveyor-hook-dispatch.sh'
+              - '.claude/scripts/surveyor-hook-dispatch.test.sh'
+              - '.claude/settings.json'
               - '.claude/scripts/programmed-bot-review-exemption.sh'
               - '.claude/skill-ownership-allowlist.tsv'
               # The contract test asserts the ownership classifier exists and
@@ -1607,6 +1613,14 @@ jobs:
           persist-credentials: false
       - name: Verify the portfolio surveyor contract
         run: bash .claude/scripts/portfolio-surveyor.test.sh
+      # The read-only forge guard reaches the plugin surveyor type only through the
+      # project-level dispatch hook (monorepo#3057); this pins that the dispatch
+      # forwards exactly the surveyor types, leaves the engineer untouched, and is
+      # actually attached in settings.json.
+      - name: Verify the surveyor hook dispatch
+        run: |
+          shellcheck .claude/scripts/surveyor-hook-dispatch.sh .claude/scripts/surveyor-hook-dispatch.test.sh
+          bash .claude/scripts/surveyor-hook-dispatch.test.sh
 
   status:
     name: "CI - Required Checks"

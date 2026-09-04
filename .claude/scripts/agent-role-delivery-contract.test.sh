@@ -645,8 +645,10 @@ jq -e '
 
 # The plugin can ship a tool-neutral guard and Claude's JSON adapter, but only the
 # consumer can attach a hook to this deployment's surveyor. Verify the native agent
-# frontmatter structurally: a project-wide Bash hook would also constrain the engineer's
-# legitimate write lane, while a prose promise would not intercept anything.
+# frontmatter structurally: an UNSCOPED project-wide Bash hook would also constrain the
+# engineer's legitimate write lane, while a prose promise would not intercept anything.
+# The plugin agent type ignores this frontmatter, so it is reached instead by the
+# agent_type-scoped project hook that surveyor-hook-dispatch.test.sh pins (monorepo#3057).
 # The hook expands this variable in Claude, not in this test.
 # shellcheck disable=SC2016
 expected_surveyor_hook='"$CLAUDE_PROJECT_DIR"/.claude/scripts/portfolio-surveyor-forge-hook.sh'
