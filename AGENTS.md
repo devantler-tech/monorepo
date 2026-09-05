@@ -3395,6 +3395,13 @@ steps, tooling, generators, test harnesses, and one-off helpers. Concretely:
 - **Never introduce a `.py` file or a Python invocation** into any devantler-tech repo. Tests use
   the repo's real test framework (Go test, the stack's native runner), never a Python harness.
   (Generalizes the platform-only direction of 2026-07-12, platform#2608, to the whole portfolio.)
+- **This repository enforces the rule in CI.** `.claude/scripts/python-ban-guard.sh` fails a change
+  that adds a tracked `.py` file or a Python invocation on an executable surface (every tracked
+  file except prose), names this rule and the bash/Go alternative in its message, honours the
+  embedded-interpreter carve-out below by invocation shape, and exempts a file that is *about* the
+  form only when it declares `python-ban-guard: allow-file — <reason>`. The sweep ships latent
+  behind the `ENFORCE_PYTHON_BAN_GUARD` repository variable until #3221 activates it; its
+  self-test runs on every PR regardless.
 - **Go is the preferred scripting language; bash is a legitimate starting point.** Write a small,
   simple script in bash; once it grows in size, logic, or reuse, **migrate it to Go** rather than
   letting bash sprawl — treat "bash first, Go when it grows" as the standard maturation path, and

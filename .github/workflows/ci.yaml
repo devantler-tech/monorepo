@@ -65,6 +65,7 @@ jobs:
       comment-disclosure-drift: ${{ steps.filter.outputs.comment-disclosure-drift }}
       pr-ownership-disclosure: ${{ steps.filter.outputs.pr-ownership-disclosure }}
       pipefail-grep-guard: ${{ steps.filter.outputs.pipefail-grep-guard }}
+      python-ban-guard: ${{ steps.filter.outputs.python-ban-guard }}
       surveyor-forge-vocabulary: ${{ steps.filter.outputs.surveyor-forge-vocabulary }}
     steps:
       - name: Checkout
@@ -515,6 +516,13 @@ jobs:
               # rather than closing it. The sweep is ~9s over the whole
               # repository, so running it unconditionally is the cheaper error.
               - '**'
+            python-ban-guard:
+              # The guard scans EVERY tracked file: a .py file or a python
+              # invocation can land anywhere in the tree, so an enumerated subset
+              # would only move the gap. The sweep is a few seconds over the
+              # whole repository, so running it unconditionally is the cheaper
+              # error here too.
+              - '**'
             product-value:
               - 'AGENTS.md'
               - '**/[Aa][Dd][Rr]/**'
@@ -923,6 +931,45 @@ jobs:
         if: vars.ENFORCE_PIPEFAIL_GREP_GUARD != 'true'
         run: |
           echo "pipefail-grep-guard: enforcement is LATENT (ENFORCE_PIPEFAIL_GREP_GUARD is not 'true')."
+          echo "The self-test ran; the repository-wide sweep did not gate this PR."
+
+  test-python-ban-guard:
+    name: Test python ban guard
+    needs: changes
+    if: needs.changes.outputs.python-ban-guard == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The self-test covers each Python shape the guard must catch, each safe
+      # shape it must leave alone (prose, comments, the blender carve-out, the
+      # allow-file marker), the current tree as a positive control, and an
+      # ablation proving the flagged fixture depends on the invocation pattern.
+      - name: Self-test the guard
+        run: bash .claude/scripts/python-ban-guard.test.sh
+      # ENFORCEMENT IS LATENT, per feature-flag-first delivery: a regex over
+      # every tracked file can block a valid change on a false positive, and
+      # gating the whole repository on that judgement is the risk the flag
+      # holds back. The sweep gates a PR only while the
+      # `ENFORCE_PYTHON_BAN_GUARD` repository variable is `true`; activation is
+      # a separate, reversible step once the guard has run clean on real
+      # traffic. The self-test above is NOT gated. This is a RELEASE flag:
+      # #3221 owns activation and removal, and it expires 2026-10-31, from
+      # which date `python-ban-guard.test.sh` fails so the flag cannot become
+      # permanent debt without someone deciding to keep it.
+      - name: Reject Python on the repository's executable surfaces
+        if: vars.ENFORCE_PYTHON_BAN_GUARD == 'true'
+        run: bash .claude/scripts/python-ban-guard.sh
+      # The OFF state is a real state, so it reports rather than silently doing
+      # nothing: a run in which the sweep did not execute says so.
+      - name: Report that enforcement is latent
+        if: vars.ENFORCE_PYTHON_BAN_GUARD != 'true'
+        run: |
+          echo "python-ban-guard: enforcement is LATENT (ENFORCE_PYTHON_BAN_GUARD is not 'true')."
           echo "The self-test ran; the repository-wide sweep did not gate this PR."
 
   test-maintainer-preflight:
@@ -1652,6 +1699,7 @@ jobs:
       - test-release-exemption-identity-currency
       - test-prod-kube-context
       - test-pipefail-grep-guard
+      - test-python-ban-guard
       - test-maintainer-preflight
       - test-memory-hygiene
       - test-memory-rewrite
@@ -1710,6 +1758,7 @@ jobs:
             ${{ needs.test-release-exemption-identity-currency.result }}
             ${{ needs.test-prod-kube-context.result }}
             ${{ needs.test-pipefail-grep-guard.result }}
+            ${{ needs.test-python-ban-guard.result }}
             ${{ needs.test-maintainer-preflight.result }}
             ${{ needs.test-memory-hygiene.result }}
             ${{ needs.test-memory-rewrite.result }}
