@@ -17,8 +17,18 @@
 #     1. A Python SOURCE file: `*.py`, `*.pyi`, `*.pyw`, or a shebang naming python.
 #     2. A Python INVOCATION on an executable surface — every tracked text file except prose
 #        (`*.md`, `*.mdx`): `python`, `python3`, `python3.12`, `pip`, `pip3` or `pytest` in
-#        command position (line start, or after `|`, `;`, `&`, `(`, a backtick, a quote, or
-#        `exec`/`xargs`/`env`/`sudo`/`time`/`command`/`nohup`), with `#` comments stripped first.
+#        COMMAND POSITION. After `#` comments and quotes are stripped, a line is cut into
+#        command segments at `;`, `|`, `&`, `(`, a backtick, `{`, and at `-c` / `run:` (which
+#        open a nested command); in each segment the first token that is not a `VAR=` prefix, a
+#        `-flag`, or a command-wrapping word (`exec`, `xargs`, `env`, `sudo`, `time`, `command`,
+#        `nohup`, `if`/`then`/`else`/`do`/`while`/`until`/`!`) is the command. So
+#        `bash -c "python3 -m x"` and `FOO=1 python3 x` flag, while `echo "install python3"` and
+#        a YAML `name: Install python deps` do not.
+#        Two known limits of that heuristic, accepted for a ~150-line bash guard: a flag's
+#        ARGUMENT is read as the command (`sudo -u nobody pip3 …` reads `nobody`), and quotes
+#        are stripped before segmenting, so a quoted alternation such as
+#        `grep -E '(npm ci|pytest)'` reads `pytest` as a command — a file that legitimately
+#        lists interpreters as text declares the allow-file marker below.
 #
 # THE CARVE-OUT (#2324) — recognised by INVOCATION, never by file extension
 #   An embedded interpreter that admits only Python is dictated by the host tool, not chosen by
@@ -60,6 +70,22 @@ report() {
 # Print one `path:line: Python invocation `<hit>`` per offending line of $2 (displayed as $1).
 scan_invocations() {
   awk -v path="$1" -v sq="'" '
+    # Index of the first token from `from` that is a command: not empty, not a -flag, not a
+    # VAR= prefix, not a wrapping word. Returns n + 1 when the segment has none.
+    function first_command(tok, from, n,    i, t) {
+      for (i = from; i <= n; i++) {
+        t = tok[i]
+        if (t == "" || t ~ /^-/ || t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || index(wrappers, " " t " ") > 0) continue
+        return i
+      }
+      return n + 1
+    }
+    BEGIN {
+      # The interpreter pattern lives HERE and nowhere else; the self-test ablates this line.
+      interp = "^(python[23]?([.][0-9]+)?|pip3?|pytest)$"
+      # Words that wrap a command rather than being one: the walk skips them and reads on.
+      wrappers = " exec xargs env sudo time command nohup if then elif else do while until ! "
+    }
     {
       line = $0
       # A `#` at line start or after whitespace opens a comment: a commented-out or
@@ -70,19 +96,26 @@ scan_invocations() {
       # Quotes do not hide an invocation: `bash -c "python3 …"` still runs it.
       gsub(/"/, " ", line)
       gsub(sq, " ", line)
-      if (match(line, /(^|[[:space:];&|(`]|exec[[:space:]]+|xargs[[:space:]]+|env[[:space:]]+|sudo[[:space:]]+|time[[:space:]]+|command[[:space:]]+|nohup[[:space:]]+)(python[23]?([.][0-9]+)?|pip3?|pytest)([[:space:]]|$)/)) {
-        # Name the interpreter and its first argument, so the reader sees the form at a glance.
-        rest = substr(line, RSTART)
-        n = split(rest, tok, /[[:space:]]+/)
-        hit = ""
-        for (i = 1; i <= n; i++) {
-          if (hit == "" && tok[i] ~ /^[;&|(`]*(python[23]?([.][0-9]+)?|pip3?|pytest)$/) {
-            hit = tok[i]
-            sub(/^[;&|(`]+/, "", hit)
-            if (i < n && tok[i + 1] != "") hit = hit " " tok[i + 1]
-          }
+      # A YAML `run:` opens a command: cut a new segment there.
+      gsub(/(^|[[:space:]])run:([[:space:]]|$)/, " ; ", line)
+      nseg = split(line, seg, /[;|&(`{]+/)
+      for (s = 1; s <= nseg; s++) {
+        n = split(seg[s], tok, /[[:space:]]+/)
+        i = first_command(tok, 1, n)
+        # A shell given -c runs the string after it: the command is what follows the -c.
+        while (i <= n && tok[i] ~ /^(bash|sh|zsh|dash|ksh)$/) {
+          k = 0
+          for (j = i + 1; j <= n; j++) if (tok[j] == "-c") { k = j; break }
+          if (k == 0) break
+          i = first_command(tok, k + 1, n)
         }
-        printf "%s:%d: Python invocation `%s`\n", path, NR, hit
+        if (i > n) continue
+        if (tok[i] ~ interp) {
+          # Name the interpreter and its first argument, so the reader sees the form at a glance.
+          hit = tok[i]
+          if (i < n && tok[i + 1] != "") hit = hit " " tok[i + 1]
+          printf "%s:%d: Python invocation `%s`\n", path, NR, hit
+        }
       }
     }' "$2"
 }
@@ -92,32 +125,32 @@ while IFS= read -r -d '' path; do
   [ -f "$file" ] || continue                     # a gitlink, or a path missing from the tree
   case "$path" in
     *.py|*.pyi|*.pyw)
-      report "$path: Python source file — $rule"
+      report "$path: Python source file"
       continue ;;
   esac
+  case "$path" in *.md|*.mdx) continue ;; esac  # prose is not an executable surface
   grep -Iq . "$file" 2>/dev/null || continue     # binary, or empty
-  if head -n 1 "$file" | grep -Eq '^#![^[:space:]]*(/|[[:space:]])python[0-9.]*([[:space:]]|$)'; then
-    report "$path: Python source file (its shebang names python) — $rule"
+  if head -n 1 "$file" | grep -Eq '^#![^#]*[/[:space:]]python[0-9.]*([[:space:]]|$)'; then
+    report "$path: Python source file (its shebang names python)"
     continue
   fi
   if grep -Fq 'python-ban-guard: allow-file' "$file"; then
     if grep -Eq 'python-ban-guard: allow-file — [^[:space:]]' "$file"; then
       continue
     fi
-    report "$path: bare \`python-ban-guard: allow-file\` marker carries no reason; a marker states WHY the file is about the form, or it is a finding — $rule"
+    report "$path: bare \`python-ban-guard: allow-file\` marker carries no reason; a marker states WHY the file is about the form, or it is a finding"
     continue
   fi
-  case "$path" in *.md|*.mdx) continue ;; esac  # prose is not an executable surface
   hits="$(scan_invocations "$path" "$file")"
   if [ -n "$hits" ]; then
     while IFS= read -r hit; do
-      report "$hit — $rule"
+      report "$hit"
     done <<<"$hits"
   fi
 done < <(git -C "$top" ls-files -z)
 
 if [ "$findings" -gt 0 ]; then
-  printf 'python-ban-guard: %d finding(s) in %s\n' "$findings" "$top" >&2
+  printf 'python-ban-guard: %d finding(s) in %s\n%s\n' "$findings" "$top" "$rule" >&2
   exit 1
 fi
 echo "python-ban-guard: clean — no Python source file or invocation on a tracked executable surface in $top"

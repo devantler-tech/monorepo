@@ -70,7 +70,7 @@ fi
 # ---------------------------------------------------------------------------
 # 1. Positive control: the real tree is clean, and the guard says so.
 run "$repo_root"
-report "positive control: the repository's current tree passes" "$(yn() { [[ $rc -eq 0 ]]; }; if yn; then echo yes; else echo no; fi)" "rc=$rc: $out"
+report "positive control: the repository's current tree passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
 # 2. A tracked Python source file, by extension and by shebang.
@@ -170,6 +170,35 @@ report "a bare allow-file marker is itself a finding" \
 r="$(mkrepo marker-control)"; addf "$r" tools/about.sh '#!/usr/bin/env bash' '# a comment that is not the marker' "python3 -c 'print(1)'"
 run "$r"
 report "control: without the marker the same file flags" "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 -c`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# ---------------------------------------------------------------------------
+# 7b. Command position: a mention as an ARGUMENT or in a YAML name is not an invocation,
+#     while an interpreter reached through an assignment prefix, a wrapper, a shell -c, or an
+#     env -S shebang is.
+r="$(mkrepo argument-mention)"; addf "$r" tools/m.sh '#!/usr/bin/env bash' 'echo "install python3 first"' '[[ "$lang" == python ]] && echo yes'
+run "$r"
+report "control: python as an argument or an operand is not an invocation" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo yaml-name)"; addf "$r" .github/workflows/ci.yaml 'jobs:' '  t:' '    steps:' '      - name: Install python deps' '        run: npm ci'
+run "$r"
+report "control: a YAML step name mentioning python passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo assignment-prefix)"; addf "$r" tools/a.sh '#!/usr/bin/env bash' 'PYTHONUNBUFFERED=1 python3 serve.py'
+run "$r"
+report "an assignment prefix does not hide the command" "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 serve.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo wrappers)"; addf "$r" tools/w.sh '#!/usr/bin/env bash' 'if python3 -c "import x"; then exit 0; fi' 'sudo pip3 install x'
+run "$r"
+report "if … and sudo … wrappers do not hide the command" \
+  "$([[ $rc -eq 1 && "$out" == *'w.sh:2: Python invocation `python3 -c`'* && "$out" == *'w.sh:3: Python invocation `pip3 install`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo shebang-env-s)"; addf "$r" tools/check '#!/usr/bin/env -S python3 -u' 'print(1)'
+run "$r"
+report "flags an env -S shebang naming python" "$([[ $rc -eq 1 && "$out" == *"shebang names python"* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+r="$(mkrepo prose-marker)"; addf "$r" docs/guard.md 'Declare `python-ban-guard: allow-file` — no, with a reason.'
+run "$r"
+report "control: prose that mentions a bare marker is never a finding" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 # ---------------------------------------------------------------------------
 # 8. Usage and non-repository input fail closed with exit 2.

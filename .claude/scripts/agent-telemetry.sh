@@ -15,6 +15,7 @@
 # Usage: agent-telemetry.sh [--since-days N] [--max-files N] [--section NAME]
 #                           [--signature STRING]
 #                           [--injection-provenance] [--credential-provenance]
+# python-ban-guard: allow-file — its grep alternations list pytest among the commands it detects in transcripts.
 set -uo pipefail
 
 # Regex locale. Two constraints pull in opposite directions, and exactly one
