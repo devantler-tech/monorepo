@@ -165,6 +165,27 @@ run "$r"
 report "control: a real comment after a quoted hash still hides comment text" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
+# Unquoted escapes in command names retain the same executable identity.
+escape_case=0
+for invocation in 'pyt\hon3 tools/check.py' 'pi\p3 install example' \
+  '/usr/bi\n/pyt\hon3 tools/check.py' \
+  '/usr/bi\n/env /usr/bi\n/pyt\hon3 tools/check.py'; do
+  escape_case=$((escape_case + 1))
+  r="$(mkrepo "escaped-command-${escape_case}")"; addf "$r" tools/escaped.sh "$invocation"
+  run "$r"
+  report "unquoted escapes do not hide an interpreter or executable path (${escape_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'tools/escaped.sh:1: Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo escaped-command-controls)"; addf "$r" tools/escaped.sh \
+  'pyt\honics --version' 'pyt\\hon3 tools/check.py' 'pyt\\\hon3 tools/check.py' \
+  '"pyt\hon3" tools/check.py' "'pyt\\hon3' tools/check.py" \
+  '"/usr/bin/pyt\hon3" tools/check.py' '/usr/bin/pyt\\hon3 tools/check.py' \
+  'echo pyt\hon3' 'echo "pyt\hon3"' 'py\ thon3 tools/check.py' \
+  'r\un: python3 tools/check.py'
+run "$r"
+report "control: non-Python commands, quoted literal backslashes and escaped backslashes pass" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
 # Backslash-newline pairs outside single quotes join before token matching.
 r="$(mkrepo continued-bare)"; addf "$r" tools/continued.sh '#!/usr/bin/env bash' 'py\' 'thon3 tools/check.py'
 run "$r"

@@ -26,6 +26,7 @@
 #        a YAML `name: Install python deps` do not. Executable paths are matched by basename.
 #        Dockerfile RUN shell/JSON operands are scanned; RUN is not a wrapper in other files.
 #        Backslash-newline continuations outside single quotes join before matching command names.
+#        Unquoted escapes before executable-name/path characters retain their executable identity.
 #        Two known limits of that heuristic, accepted for a ~150-line bash guard: a flag's
 #        ARGUMENT is read as the command (`sudo -u nobody pip3 …` reads `nobody`), and quotes
 #        are stripped before segmenting, so a quoted alternation such as
@@ -108,6 +109,28 @@ scan_invocations() {
       continues = escaped && quote != sq
       return text
     }
+    # Normalize only unquoted word escapes, before quote stripping loses that
+    # context. Preserve literal backslashes and escapes for shell punctuation.
+    function word_escapes(text,    i, c, following, quote, result) {
+      quote = ""
+      result = ""
+      for (i = 1; i <= length(text); i++) {
+        c = substr(text, i, 1)
+        if (c == "\\" && quote != sq) {
+          following = substr(text, i + 1, 1)
+          if (quote == "" && (following ~ /^[A-Za-z0-9_.-]$/ || following == "/")) result = result following
+          else result = result c following
+          i++
+          continue
+        }
+        if (c == sq || c == "\"") {
+          if (quote == "") quote = c
+          else if (quote == c) quote = ""
+        }
+        result = result c
+      }
+      return result
+    }
     # Index of the first token from `from` that is a command: not empty, not a -flag, not a
     # VAR= prefix, not a wrapping word. Returns n + 1 when the segment has none.
     function first_command(tok, from, n,    i, t) {
@@ -150,12 +173,13 @@ scan_invocations() {
           gsub(/\[|\]|,/, " ", line)
         }
       }
+      # Recognize command prefixes before normalization can change their spelling.
+      gsub(/(^|[[:space:]])run:([[:space:]]|$)/, " ; ", line)
+      if (path ~ /\.ya?ml$/) gsub(/(^|[[:space:]])shell:([[:space:]]|$)/, " ; ", line)
+      line = word_escapes(line)
       # Quotes do not hide an invocation: `bash -c "python3 …"` still runs it.
       gsub(/"/, " ", line)
       gsub(sq, " ", line)
-      # A YAML `run:` opens a command: cut a new segment there.
-      gsub(/(^|[[:space:]])run:([[:space:]]|$)/, " ; ", line)
-      if (path ~ /\.ya?ml$/) gsub(/(^|[[:space:]])shell:([[:space:]]|$)/, " ; ", line)
       nseg = split(line, seg, /[;|&(`{]+/)
       for (s = 1; s <= nseg; s++) {
         n = split(seg[s], tok, /[[:space:]]+/)
