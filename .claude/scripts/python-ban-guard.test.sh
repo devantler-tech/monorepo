@@ -147,6 +147,34 @@ r="$(mkrepo comments-control)"; addf "$r" tools/a.sh '#!/usr/bin/env bash' "pyth
 run "$r"
 report "control: code before the comment marker still flags" "$([[ $rc -eq 1 ]] && echo yes || echo no)" "rc=$rc: $out"
 
+# Hashes inside quotes or escaped as data cannot erase a later command.
+hash_case=0
+for shell_line in 'echo "a # b"; python3 tools/check.py' \
+  "echo 'a # b'; python3 tools/check.py" \
+  'echo a\ #\ b; python3 tools/check.py' \
+  'echo "a \" # b"; python3 tools/check.py'; do
+  hash_case=$((hash_case + 1))
+  r="$(mkrepo "quoted-hash-${hash_case}")"; addf "$r" tools/hash.sh "$shell_line"
+  run "$r"
+  report "a quoted or escaped hash preserves the later invocation (${hash_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo quoted-hash-comment)"; addf "$r" tools/hash.sh \
+  'echo "a # b" # python3 tools/check.py' "echo 'a # b' # python3 tools/check.py"
+run "$r"
+report "control: a real comment after a quoted hash still hides comment text" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# Executable text can contain non-UTF-8 bytes; command syntax is still ASCII.
+r="$(mkrepo invalid-utf8-command)"; addf "$r" tools/bytes.sh "$(printf 'echo "\377"; python3 tools/check.py')"
+LC_ALL=C.UTF-8 run "$r"
+report "an invalid UTF-8 byte cannot crash scanning or hide a later command" \
+  "$([[ $rc -eq 1 && "$out" == *'Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo invalid-utf8-control)"; addf "$r" tools/bytes.sh "$(printf 'echo "\377"; echo safe')"
+LC_ALL=C.UTF-8 run "$r"
+report "control: executable text with an invalid UTF-8 byte can pass" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
 # ---------------------------------------------------------------------------
 # 6. Other executable surfaces and spellings.
 r="$(mkrepo workflow)"; addf "$r" .github/workflows/ci.yaml 'jobs:' '  t:' '    steps:' '      - run: pip install requests' '      - run: |' '          pytest -q'
@@ -176,6 +204,30 @@ report "a workflow Python shell selector is an invocation" \
 r="$(mkrepo bash-shell)"; addf "$r" .github/workflows/ci.yaml 'steps:' '  - shell: bash' '    run: echo safe'
 run "$r"
 report "control: a workflow bash shell selector passes" "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
+# Dockerfile RUN introduces a shell command or an exec-form JSON operand.
+docker_case=0
+for instruction in 'RUN python3 tools/check.py' \
+  'run /usr/bin/python3 tools/check.py' \
+  'RUN --mount=type=cache,target=/cache pip install example' \
+  'RUN ["python3", "tools/check.py"]' \
+  'RUN ["/usr/bin/env", "/bin/sh", "-c", "python3 tools/check.py"]'; do
+  docker_case=$((docker_case + 1))
+  r="$(mkrepo "docker-run-${docker_case}")"; addf "$r" Dockerfile 'FROM scratch' "$instruction"
+  run "$r"
+  report "a Dockerfile RUN operand exposes its Python invocation (${docker_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'Dockerfile:2: Python invocation'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo docker-run-controls)"; addf "$r" Dockerfile \
+  'FROM scratch' 'RUN echo python3' 'RUN ["echo", "python3"]' \
+  'ARG TOOL=python3' 'LABEL example="RUN python3 tools/check.py"'
+run "$r"
+report "control: Dockerfile arguments and metadata do not become commands" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo docker-prefix-scope)"; addf "$r" tools/text.sh 'RUN python3 tools/check.py'
+run "$r"
+report "control: RUN is not a command wrapper outside Dockerfiles" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 r="$(mkrepo piped)"; addf "$r" tools/p.sh '#!/usr/bin/env bash' 'cat data | python3.12 - >out'
 run "$r"
@@ -224,6 +276,20 @@ report "if … and sudo … wrappers do not hide the command" \
 r="$(mkrepo shebang-env-s)"; addf "$r" tools/check '#!/usr/bin/env -S python3 -u' 'print(1)'
 run "$r"
 report "flags an env -S shebang naming python" "$([[ $rc -eq 1 && "$out" == *"shebang names python"* ]] && echo yes || echo no)" "rc=$rc: $out"
+
+shebang_case=0
+for shebang in '#!/usr/bin/env -Spython3 -u' '#!/usr/bin/env --split-string=python3 -u'; do
+  shebang_case=$((shebang_case + 1))
+  r="$(mkrepo "attached-env-python-${shebang_case}")"; addf "$r" tools/check "$shebang" '# entry point fixture only'
+  run "$r"
+  report "an attached env split-string operand exposes the Python shebang (${shebang_case})" \
+    "$([[ $rc -eq 1 && "$out" == *'Python source file (its shebang names python)'* ]] && echo yes || echo no)" "rc=$rc: $out"
+done
+r="$(mkrepo attached-env-shell-control)"; addf "$r" tools/short '#!/usr/bin/env -Sbash -e' 'echo safe'
+addf "$r" tools/long '#!/usr/bin/env --split-string=bash -e' 'echo safe'
+run "$r"
+report "control: attached env split-string shell operands pass" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
 r="$(mkrepo prose-marker)"; addf "$r" docs/guard.md 'Declare `python-ban-guard: allow-file` — no, with a reason.'
 run "$r"

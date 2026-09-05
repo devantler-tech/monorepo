@@ -17,13 +17,14 @@
 #     1. A Python SOURCE file: `*.py`, `*.pyi`, `*.pyw`, or a shebang naming python.
 #     2. A Python INVOCATION on an executable surface — every tracked text file except prose
 #        (`*.md`, `*.mdx`): `python`, `python3`, `python3.12`, `pip`, `pip3` or `pytest` in
-#        COMMAND POSITION. After `#` comments and quotes are stripped, a line is cut into
+#        COMMAND POSITION. After unquoted `#` comments and quotes are stripped, a line is cut into
 #        command segments at `;`, `|`, `&`, `(`, a backtick, `{`, and at `-c` / `run:` (which
 #        open a nested command; YAML `shell:` selects one); in each segment the first token that is not a `VAR=` prefix, a
 #        `-flag`, or a command-wrapping word (`exec`, `xargs`, `env`, `sudo`, `time`, `command`,
 #        `nohup`, `if`/`then`/`else`/`do`/`while`/`until`/`!`) is the command. So
 #        `bash -c "python3 -m x"` and `FOO=1 python3 x` flag, while `echo "install python3"` and
 #        a YAML `name: Install python deps` do not. Executable paths are matched by basename.
+#        Dockerfile RUN shell/JSON operands are scanned; RUN is not a wrapper in other files.
 #        Two known limits of that heuristic, accepted for a ~150-line bash guard: a flag's
 #        ARGUMENT is read as the command (`sudo -u nobody pip3 …` reads `nobody`), and quotes
 #        are stripped before segmenting, so a quoted alternation such as
@@ -78,10 +79,30 @@ report() {
 
 # Print one `path:line: Python invocation `<hit>`` per offending line of $2 (displayed as $1).
 scan_invocations() {
-  awk -v path="$1" -v sq="'" '
+  # Commands use ASCII syntax; unrelated invalid UTF-8 bytes must not abort the scan.
+  LC_ALL=C awk -v path="$1" -v sq="'" '
     function executable_name(token) {
       sub(/^.*\//, "", token)
       return token
+    }
+    # Only an unquoted, unescaped hash at a token boundary starts a comment.
+    function without_comment(text,    i, c, quote, escaped, boundary) {
+      quote = ""
+      escaped = 0
+      boundary = 1
+      for (i = 1; i <= length(text); i++) {
+        c = substr(text, i, 1)
+        if (escaped) { escaped = 0; boundary = 0; continue }
+        if (c == "\\" && quote != sq) { escaped = 1; boundary = 0; continue }
+        if (quote != "") {
+          if (c == quote) quote = ""
+          continue
+        }
+        if (c == sq || c == "\"") { quote = c; boundary = 0; continue }
+        if (c == "#" && boundary) return substr(text, 1, i - 1)
+        boundary = c ~ /[[:space:]]/
+      }
+      return text
     }
     # Index of the first token from `from` that is a command: not empty, not a -flag, not a
     # VAR= prefix, not a wrapping word. Returns n + 1 when the segment has none.
@@ -100,10 +121,19 @@ scan_invocations() {
       wrappers = " exec xargs env sudo time command nohup if then elif else do while until ! "
     }
     {
-      line = $0
-      # A `#` at line start or after whitespace opens a comment: a commented-out or
-      # merely-mentioned invocation is not an executable one.
-      if (match(line, /(^|[[:space:]])#/)) line = substr(line, 1, RSTART - 1)
+      line = without_comment($0)
+      # Dockerfile RUN owns its command operand. JSON punctuation separates argv;
+      # a Python-looking argument of echo remains data, not a command.
+      if (executable_name(path) ~ /^(Dockerfile([.].+)?|.+[.]Dockerfile)$/ &&
+          toupper(line) ~ /^[[:space:]]*RUN[[:space:]]+/) {
+        sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+/, "", line)
+        operand = line
+        while (operand ~ /^[[:space:]]*--[^[:space:]]+[[:space:]]+/) sub(/^[[:space:]]*--[^[:space:]]+[[:space:]]+/, "", operand)
+        if (operand ~ /^[[:space:]]*\[/) {
+          line = operand
+          gsub(/\[|\]|,/, " ", line)
+        }
+      }
       # Quotes do not hide an invocation: `bash -c "python3 …"` still runs it.
       gsub(/"/, " ", line)
       gsub(sq, " ", line)
@@ -142,7 +172,19 @@ while IFS= read -r -d '' path; do
   esac
   case "$path" in *.md|*.mdx) continue ;; esac  # prose is not an executable surface
   grep -Iq . "$file" 2>/dev/null || continue     # binary, or empty
-  if head -n 1 "$file" | grep -Eq '^#![^#]*[/[:space:]]python[0-9.]*([[:space:]]|$)'; then
+  if head -n 1 "$file" | awk '
+    {
+      line = $0
+      # Normalize only the first env split-string option, not an argument of
+      # another interpreter later in the shebang.
+      if (line ~ /^#![[:space:]]*([^[:space:]]*\/)?env[[:space:]]+(-S|--split-string=)/) {
+        sub(/[[:space:]]-S/, " -S ", line)
+        sub(/[[:space:]]--split-string=/, " --split-string ", line)
+      }
+      if (line ~ /^#![^#]*[\/[:space:]]python[0-9.]*([[:space:]]|$)/) found = 1
+    }
+    END { exit !found }
+  '; then
     report "$path: Python source file (its shebang names python)"
     continue
   fi
