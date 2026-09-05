@@ -485,6 +485,7 @@ jobs:
               - '.claude/skills/portfolio-maintenance/SKILL.md'
               - '.claude/skills/product-engineering/SKILL.md'
               - '.claude/skills/products/agent-skills/SKILL.md'
+              - '.claude/skills/products/aws/SKILL.md'
               - '.claude/skills/products/data-product-controller/SKILL.md'
               - '.claude/skills/products/ksail/SKILL.md'
               - '.claude/skills/products/monorepo/SKILL.md'

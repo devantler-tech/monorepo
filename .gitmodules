@@ -86,3 +86,7 @@
 	path = applications/data-product-controller
 	url = git@github.com:devantler-tech/data-product-controller.git
 	branch = main
+[submodule "applications/aws"]
+	path = applications/aws
+	url = git@github.com:devantler-tech/aws.git
+	branch = main
