@@ -109,11 +109,19 @@ class_of() { # <reason>
 
 # ---------------------------------------------------------------- acquire commits
 # Emits TSV: sha \t verified \t reason \t branch
+# The endpoint lists AT MOST 250 commits per pull request whatever the pagination, so a PR past that
+# cap would be examined in part while `examined=` read as the whole. Reaching the cap is UNKNOWN.
+PR_COMMIT_CAP=250
 acquire_pr_commits() { # <repo> <pr> <branch-label>
   # `gh api --jq` rejects jq's own `--arg`, so the pages are piped into jq instead; `--paginate`
   # emits one array per page and `.[]` walks each. `pipefail` is set, so a failed read fails here.
-  gh api "repos/$1/pulls/$2/commits" --paginate |
-    jq -r --arg branch "$3" '.[] | [.sha, (.commit.verification.verified|tostring), (.commit.verification.reason // "missing"), $branch] | @tsv'
+  local out count
+  out="$(gh api "repos/$1/pulls/$2/commits" --paginate |
+    jq -r --arg branch "$3" '.[] | [.sha, (.commit.verification.verified|tostring), (.commit.verification.reason // "missing"), $branch] | @tsv')" || return 1
+  count="$(printf '%s' "$out" | grep -c .)" || true
+  [ "$count" -lt "$PR_COMMIT_CAP" ] \
+    || die "$1#$2 has $count commits, at the $PR_COMMIT_CAP-commit endpoint cap: the report would be TRUNCATED -- UNKNOWN"
+  printf '%s' "$out"
 }
 
 rows=""
