@@ -20,6 +20,7 @@ keeping them healthy *and* moving them forward.
 | KSail (Go CLI) | `devantler-tech/ksail` | `applications/ksail` | [AGENTS.md](https://github.com/devantler-tech/ksail/blob/main/AGENTS.md) |
 | Data Product Controller | `devantler-tech/data-product-controller` | `applications/data-product-controller` | [AGENTS.md](https://github.com/devantler-tech/data-product-controller/blob/main/AGENTS.md) |
 | Platform (GitOps) | `devantler-tech/platform` | `platform` | [AGENTS.md](https://github.com/devantler-tech/platform/blob/main/AGENTS.md) |
+| AWS config tenant | `devantler-tech/aws` | `applications/aws` | [AGENTS.md](https://github.com/devantler-tech/aws/blob/main/AGENTS.md) |
 | devantler.tech site | `devantler-tech/monorepo` | `docs/` + repo root | this file |
 | GitHub organization defaults | `devantler-tech/.github` | `github/devantler-tech/.github-public` | [AGENTS.md](https://github.com/devantler-tech/.github/blob/main/AGENTS.md) |
 | Go template | `devantler-tech/go-template` | `templates/go-template` | [AGENTS.md](https://github.com/devantler-tech/go-template/blob/main/AGENTS.md) |
@@ -103,6 +104,7 @@ no row are filed on the **default intake repo** below.
 | Wedding app | THIS suite's existing deployed wedding website only — its guest pages, RSVPs, schedules, photos and practical info (not new wedding sites in general) | `devantler-tech/wedding-app` |
 | AS Coaching site | THIS suite's existing deployed AS Coaching og Vaner business site only — its pages, offerings, prices, booking information (not new coaching/business sites in general) | `devantler-tech/ascoachingogvaner` |
 | App hosting platform | Running an app or service so people can reach it online — deploys, dashboards, alerts, backups | `devantler-tech/platform` |
+| AWS infrastructure | Changing THIS suite's deployed AWS resources — today the EKS-based CI cluster, and anything else the platform's AWS tenant reconciles through Crossplane (not AWS setups in general) | `devantler-tech/aws` |
 | KSail | Command-line tooling for creating and operating Kubernetes clusters and their workloads | `devantler-tech/ksail` |
 | Data product controller | Creating, composing, publishing, and exploring reusable data products backed by new or existing data sources | `devantler-tech/data-product-controller` |
 | Repo automation | Automatic checks, releases and chores on code repositories | `devantler-tech/actions` |
@@ -3162,8 +3164,10 @@ Two mechanics make this a standing duty rather than something automation handles
   Describing the two steps did not hold, so **use the script — it does both halves and verifies the
   Status by reading it back, exiting non-zero if it did not land**:
   ```sh
-  .claude/scripts/board-add.sh <issue-url> [status]   # default: 📥 Backlog
+  .claude/scripts/board-add.sh <issue-url> [status]   # preserves Status; 📥 Backlog only when unset
   ```
+  With no status argument it preserves an existing Status; an explicit argument deliberately sets
+  or corrects it. Output distinguishes an added card from an existing card left untouched.
   It is idempotent for an issue already on the board, and **refuses a private repo's issue** — project
   5 is public, so that is a maintainer decision, never an agent default.
 - **Board the cloud instance's issues — it cannot board its own.** `app/cursor` gets 403 on Projects,
@@ -4980,6 +4984,27 @@ step:
    store: `/Users/homelab-mac-mini/.codex/automations/daily-ai-engineer/memory.md` for Codex and the
    runtime's native project memory for Claude. These are private runtime stores, never repository
    artifacts, and absolute financial figures live **only** here or in the private channel.
+   **Agent Improver research register and cursor** — the durable store the `agent-improvement` skill's
+   no-change research fallback (its section *3a*) reads, claims and advances. It is the
+   `## Research register` section of the Claude hypothesis store named above: the topic cursor, plus one
+   line per pass recording the topic, the sources checked, and the pass's single disposition — one of
+   the skill's four outcomes (`ENGINEER-CANDIDATE`, `IMPROVER-CANDIDATE`, `RESEARCH-CANDIDATE`,
+   `RESEARCH-NO-CANDIDATE`) or the deferral `QUERY-UNKNOWN` with its blocker named. 🔴 **The single
+   cursor writer is the Claude machine-local Agent Improver.** This deployment's private stores are
+   per-runtime files with no compare-and-set, so the atomic cross-instance claim with a fencing token the
+   skill prefers is unavailable, and its single-writer alternative is what is declared here. The Codex
+   Agent Improver reads the register on its cross-read and **never researches or advances the cursor**:
+   its disposition is the deferral `QUERY-UNKNOWN (not the declared cursor writer)`, recorded in its own
+   ledger — a deferral to the writer, never a blocker to escalate. Research budget: the skill's hard
+   maxima (20 minutes, 12 calls, eight primary sources), with no tighter consumer bound. Routing and
+   lifecycle: an `ENGINEER-CANDIDATE` becomes a well-formed issue on the owning repository per the
+   *Stack map*, filed under the Improver's own disclosure and boarded per *Every issue belongs on the
+   board*; an `IMPROVER-CANDIDATE` stays in the register until a later Improver run establishes measured
+   local evidence for it; a `RESEARCH-CANDIDATE` stays in the register with its uncertainty named and is
+   re-examined by the next pass that reaches its topic, which either promotes it to one of the two queues
+   or closes it as `RESEARCH-NO-CANDIDATE`; `RESEARCH-NO-CANDIDATE` is terminal for that cursor value, so
+   the topic is not re-searched until the rotation returns to it. Absent or malformed, the fallback fails
+   closed to `QUERY-UNKNOWN` with this paragraph named as the blocker.
 2. **The end-of-run report** is a per-run record (products surveyed, what changed with PR links). It is
    **not** an attention channel — he rarely reads it — so anything that needs his action goes via a draft
    PR or `AskUserQuestion` (or, when genuinely blocked in an unattended run, a last-resort Slack ping),

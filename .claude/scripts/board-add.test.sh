@@ -66,13 +66,27 @@ case "$1 ${2:-}" in
                     printf '%s\n' "${STUB_REMAINING:-5000}"
                   fi ;;
   "api graphql")
-                  fail_stage "api graphql" && exit 1
                   # Two different graphql callers: the pre-existing-item probe
                   # (query mentions projectItems) and the status read-back.
                   if grep -q 'projectItems' <<<"$*"; then
-                    printf '%s\n' "${STUB_PREEXISTING-}"
+                    fail_stage "membership" && exit 1
+                    if [ "${STUB_MEMBERSHIP_BAD:-0}" = 1 ]; then
+                      printf '{}\n'
+                    elif [ "${STUB_PAGE_TWO:-0}" = 1 ] && ! grep -q 'after=page2' <<<"$*"; then
+                      printf '%s\n' '{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"id":"foreign","project":{"id":"OTHER","number":5},"fieldValueByName":{"name":"🫴 Ready"}}],"pageInfo":{"hasNextPage":true,"endCursor":"page2"}}}}}}'
+                    else
+                      jq -n --arg id "${STUB_PREEXISTING-}" --arg status "${STUB_EXISTING_STATUS-🫴 Ready}" \
+                        '{data:{repository:{issue:{projectItems:{nodes:(if $id == "" then [] else [{id:$id,project:{id:"PVT_test"},fieldValueByName:(if $status == "" then null else {name:$status} end)}] end),pageInfo:{hasNextPage:false,endCursor:null}}}}}}'
+                    fi
+                  elif grep -q 'query AddedStatus' <<<"$*"; then
+                    fail_stage "added-status" && exit 1
+                    if [ "${STUB_ADDED_BAD:-0}" = 1 ]; then printf '{"data":{"node":null}}\n'; else
+                      jq -n --arg status "${STUB_ADDED_STATUS-}" \
+                        '{data:{node:{id:"PVTI_test",fieldValueByName:(if $status == "" then null else {name:$status} end)}}}'
+                    fi
                   else
-                    printf '%s\n' "${STUB_READBACK-📥 Backlog}"
+                    fail_stage "api graphql" && exit 1
+                    if [ -n "${STUB_STATE:-}" ]; then cat "$STUB_STATE"; else printf '%s\n' "${STUB_READBACK-📥 Backlog}"; fi
                   fi ;;
   "api repos"*|"api "*)
                   # repos/<o>/<r> visibility probe. On the REST budget, which has
@@ -100,6 +114,12 @@ JSON
                   printf '{"id":"%s"}\n' "${STUB_ADD_ID-PVTI_test}" ;;
   "project item-edit")
                   fail_stage "project item-edit" && exit 1
+                  if [ -n "${STUB_STATE:-}" ]; then
+                    case "$*" in
+                      *opt_ready*) printf '🫴 Ready\n' >"$STUB_STATE" ;;
+                      *opt_backlog*) printf '📥 Backlog\n' >"$STUB_STATE" ;;
+                    esac
+                  fi
                   exit "${STUB_EDIT_RC:-0}" ;;
   "project item-delete")
                   exit "${STUB_DELETE_RC:-0}" ;;
@@ -111,6 +131,50 @@ export PATH="$tmp/bin:$PATH"
 
 URL="https://github.com/devantler-tech/example/issues/1"
 run() { set +e; out=$("$script" "$@" 2>&1); rc=$?; set -e; }
+
+# A membership sweep must never flatten progress (monorepo#2506).
+printf '🫴 Ready\n' >"$tmp/state"
+: >"$tmp/log"
+STUB_STATE="$tmp/state" STUB_LOG="$tmp/log" STUB_PREEXISTING=PVTI_test run "$URL"
+check "default sweep preserves existing status" 0 "$rc" "$(cat "$tmp/state")" "🫴 Ready"
+check "existing outcome is explicit" 0 "$rc" "$out" "already-present (status untouched)"
+check "existing item needs no mutation" 0 "$(grep -c 'project item-' "$tmp/log" || true)"
+
+STUB_STATE="$tmp/state" STUB_PREEXISTING=PVTI_test run "$URL" "📥 Backlog"
+check "explicit status still changes existing card" 0 "$rc" "$(cat "$tmp/state")" "📥 Backlog"
+
+STUB_PREEXISTING=PVTI_test STUB_EXISTING_STATUS='' run "$URL"
+check "statusless existing card gets default" 0 "$rc" "$out" "[verified]"
+
+STUB_PREEXISTING=PVTI_test STUB_PAGE_TWO=1 run "$URL"
+check "membership beyond page one preserves status" 0 "$rc" "$out" "already-present (status untouched)"
+
+STUB_PAGE_TWO=1 run "$URL"
+check "another owner's project 5 is not membership" 0 "$rc" "$out" "added"
+
+for mode in failure malformed; do
+  : >"$tmp/log"
+  if [ "$mode" = failure ]; then
+    STUB_LOG="$tmp/log" STUB_FAIL_ON=membership run "$URL"
+  else
+    STUB_LOG="$tmp/log" STUB_MEMBERSHIP_BAD=1 run "$URL"
+  fi
+  check "unreadable membership ($mode) refuses" 2 "$rc"
+  check "unreadable membership ($mode) writes nothing" 0 "$(grep -c 'project item-' "$tmp/log" || true)"
+done
+
+: >"$tmp/log"
+STUB_LOG="$tmp/log" STUB_ADDED_STATUS='👀 In Review' run "$URL"
+check "card appearing during add keeps its status" 0 "$rc" "$out" "status untouched"
+check "racing add never resets status" 0 "$(grep -c 'project item-edit' "$tmp/log" || true)"
+
+: >"$tmp/log"
+STUB_LOG="$tmp/log" STUB_ADDED_BAD=1 run "$URL"
+check "missing added node is unknown, not unset" 2 "$rc"
+check "missing added node prevents status write" 0 "$(grep -c 'project item-edit' "$tmp/log" || true)"
+
+run "$URL"
+check "new item outcome is explicit" 0 "$rc" "$out" "added"
 
 # ── GREEN: the happy path actually succeeds ────────────────────────────────
 STUB_READBACK="📥 Backlog" run "$URL"
