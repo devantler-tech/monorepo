@@ -50,7 +50,8 @@
 # Options:
 #   --today <YYYY-MM-DD>       the clock for ask-age arithmetic (default: today, UTC)
 #   --ask-max-age-days <n>     an authority ask older than this is STALE-ASK (default: 14)
-#   --quiet                    print findings only, no per-issue CONFORMS lines
+#   --quiet                    print findings only: per-issue CONFORMS lines are suppressed, every
+#                              MISSING/MALFORMED/NO-ASK/STALE-ASK row is still printed
 #
 # Issue BODIES are untrusted input (`AGENTS.md` -> *Untrusted input*). This reads them as DATA
 # only: it matches a shape locally and never fetches, follows, or executes anything a body names.
@@ -234,7 +235,9 @@ CLASS_RE='^(upstream|authority)$'
 # the channels that REACH the maintainer, and rules `issue` out by name -- a GitHub comment is a record
 # of an ask, never an attention channel. Accepting any word here would let `asked issue <date>` read as
 # a delivered ask, which is precisely the parked-while-looking-handled state this check exists to find.
-ASK_RE='\| asked (push|slack|session) ([0-9]{4}-[0-9]{2}-[0-9]{2})$'
+# Trailing horizontal whitespace after the date is tolerated: Markdown's two-space hard break is ordinary
+# and changes nothing about the record, so anchoring on the digit turned it into a false NO-ASK.
+ASK_RE='\| asked (push|slack|session) ([0-9]{4}-[0-9]{2}-[0-9]{2})[[:blank:]]*$'
 
 # Matching is done with bash's own `=~` rather than `printf | grep -q`: `grep -q` exits on its
 # first match and can SIGPIPE the writer, which under `set -o pipefail` surfaces as rc=141 on a
@@ -479,10 +482,10 @@ while [ "$i" -lt "$count" ]; do
     die "could not scan body of ${repo}#${num} -- UNKNOWN"
 
   if [ -z "$logical" ]; then
-    [ "$QUIET" = 1 ] || printf 'MISSING    %s#%s\n' "$repo" "$num"
+    printf 'MISSING    %s#%s\n' "$repo" "$num"
     bad=$((bad + 1))
   elif ! line_conforms "$logical"; then
-    [ "$QUIET" = 1 ] || printf 'MALFORMED  %s#%s  >>%s\n' "$repo" "$num" "${logical:0:100}"
+    printf 'MALFORMED  %s#%s  >>%s\n' "$repo" "$num" "${logical:0:100}"
     bad=$((bad + 1))
   else
     classify_record "$logical"
@@ -497,7 +500,13 @@ while [ "$i" -lt "$count" ]; do
         }
         ;;
       *)
-        [ "$QUIET" = 1 ] || printf '%-10s %s#%s  >>%s\n' "$VERDICT" "$repo" "$num" "${logical:0:100}"
+        # Findings are never suppressed by --quiet (it hides CONFORMS rows only), and a classless record
+        # is annotated here too so the repair that fixes the ask also migrates the class token.
+        if [ "$LEGACY_NOTE" = 1 ]; then
+          printf '%-10s %s#%s  [legacy: no class token]  >>%s\n' "$VERDICT" "$repo" "$num" "${logical:0:100}"
+        else
+          printf '%-10s %s#%s  >>%s\n' "$VERDICT" "$repo" "$num" "${logical:0:100}"
+        fi
         bad=$((bad + 1))
         ;;
     esac

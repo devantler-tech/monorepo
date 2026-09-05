@@ -193,14 +193,17 @@ OUT="$("$CHECK" --input - <"$TMP/good.json" 2>&1)"
 RC=$?
 if [ "$RC" = 0 ]; then ok "--input - reads stdin"; else bad "--input - reads stdin" "rc=$RC; ${OUT:0:150}"; fi
 
-# ------------------------------------------------------------------ 12. --quiet suppresses rows, keeps the verdict
+# ------------------------------------------------------------------ 12. --quiet drops CONFORMS rows ONLY: findings and the verdict survive
+# The help text promises "print findings only"; a --quiet that also hid MISSING/MALFORMED/NO-ASK rows
+# left an operator with a count and no issue ids to repair.
 OUT="$("$CHECK" --quiet --input "$TMP/mixed.json" 2>&1)"
 RC=$?
-if [ "$RC" = 1 ] && ! printf '%s\n' "$OUT" | grep -q '^MISSING' &&
+if [ "$RC" = 1 ] && ! printf '%s\n' "$OUT" | grep -q '^CONFORMS' &&
+  printf '%s\n' "$OUT" | grep -qE '^MISSING +b#2' && printf '%s\n' "$OUT" | grep -qE '^MISSING +c#3' &&
   printf '%s\n' "$OUT" | grep -q '2 of 3'; then
-  ok "--quiet suppresses rows but keeps the verdict"
+  ok "--quiet drops CONFORMS rows but keeps every finding row and the verdict"
 else
-  bad "--quiet suppresses rows but keeps the verdict" "rc=$RC; out: ${OUT:0:200}"
+  bad "--quiet drops CONFORMS rows but keeps every finding row and the verdict" "rc=$RC; out: ${OUT:0:200}"
 fi
 
 # ------------------------------------------------------------------ 13. the identifier must NAME something
@@ -655,6 +658,39 @@ if [ "$RC" = 0 ]; then ok "CONTROL: a nine-digit cadence is accepted and evaluat
 # CONTROL: the default cadence still reports that same ask as STALE-ASK, so the bound changed no verdict.
 OUT="$("$CHECK" --input "$TMP/stale-ask.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^STALE-ASK +p#62'; then ok "CONTROL: the default cadence still reports the stale ask"; else bad "CONTROL: the default cadence still reports the stale ask" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 39. --quiet keeps NO-ASK rows too (findings, not CONFORMS)
+OUT="$("$CHECK" --quiet --input "$TMP/cls-legacy-auth.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#10'; then ok "--quiet still prints the NO-ASK row"; else bad "--quiet still prints the NO-ASK row" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: a payload of only CONFORMS rows prints no row at all under --quiet
+OUT="$("$CHECK" --quiet --input "$TMP/good.json" 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && ! printf '%s\n' "$OUT" | grep -qE '^(CONFORMS|MISSING|MALFORMED|NO-ASK|STALE-ASK) '; then ok "CONTROL: --quiet on an all-conforming payload prints no row"; else bad "CONTROL: --quiet on an all-conforming payload prints no row" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 40. the legacy annotation reaches NON-conforming rows too
+# An operator repairing a NO-ASK on a classless record must also be told the class token is missing;
+# annotating only the CONFORMS branch left the migration invisible exactly where it is acted on.
+OUT="$("$CHECK" --input "$TMP/cls-legacy-auth.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#10 +\[legacy: no class token\]'; then ok "a legacy NO-ASK row carries the legacy annotation"; else bad "a legacy NO-ASK row carries the legacy annotation" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: an explicitly classed NO-ASK row carries NO legacy annotation
+cat >"$TMP/cls-explicit-noask.json" <<'JSON'
+[{"repo":"a","number":41,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/cls-explicit-noask.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#41' && ! printf '%s\n' "$OUT" | grep -q 'legacy: no class token'; then ok "CONTROL: an explicitly classed NO-ASK row is not marked legacy"; else bad "CONTROL: an explicitly classed NO-ASK row is not marked legacy" "rc=$RC out=${OUT:0:200}"; fi
+
+# ------------------------------------------------------------------ 41. trailing whitespace after the ask date is not a missing ask
+# Markdown's two-space hard break is ordinary; an end-anchored regex read it as NO-ASK and prompted a repeat ask.
+cat >"$TMP/ask-trailing-ws.json" <<'JSON'
+[{"repo":"a","number":42,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-09-01  "}]
+JSON
+OUT="$("$CHECK" --input "$TMP/ask-trailing-ws.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -qE '^CONFORMS +a#42'; then ok "trailing whitespace after the ask date still conforms"; else bad "trailing whitespace after the ask date still conforms" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: trailing NON-whitespace after the date is still not an ask
+cat >"$TMP/ask-trailing-text.json" <<'JSON'
+[{"repo":"a","number":43,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-09-01 maybe"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/ask-trailing-text.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#43'; then ok "CONTROL: trailing text after the ask date is still NO-ASK"; else bad "CONTROL: trailing text after the ask date is still NO-ASK" "rc=$RC out=${OUT:0:200}"; fi
 
 # ------------------------------------------------------------------ 38. --help documents the class and the ask record
 # A caller following the built-in help must not be led to write a classless authority record, which
