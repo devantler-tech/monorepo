@@ -25,6 +25,7 @@ jobs:
       submodule-init: ${{ steps.filter.outputs.submodule-init }}
       submodule-pin-currency: ${{ steps.filter.outputs.submodule-pin-currency }}
       blocked-label-blocker-line: ${{ steps.filter.outputs.blocked-label-blocker-line }}
+      unsigned-commit-report: ${{ steps.filter.outputs.unsigned-commit-report }}
       release-exemption-identity-currency: ${{ steps.filter.outputs.release-exemption-identity-currency }}
       prod-kube-context: ${{ steps.filter.outputs.prod-kube-context }}
       maintainer-preflight: ${{ steps.filter.outputs.maintainer-preflight }}
@@ -154,6 +155,10 @@ jobs:
               - 'AGENTS.md'
               - '.claude/scripts/blocked-label-blocker-line.sh'
               - '.claude/scripts/blocked-label-blocker-line.test.sh'
+              - '.github/workflows/ci.yaml'
+            unsigned-commit-report:
+              - '.claude/scripts/unsigned-commit-report.sh'
+              - '.claude/scripts/unsigned-commit-report.test.sh'
               - '.github/workflows/ci.yaml'
             release-exemption-identity-currency:
               - '.claude/scripts/release-exemption-identity-currency.sh'
@@ -858,6 +863,51 @@ jobs:
       # and BSD and GNU awk/grep differ on exactly that ground.
       - name: Verify the blocked-label blocker-line check
         run: bash .claude/scripts/blocked-label-blocker-line.test.sh
+
+  test-unsigned-commit-report:
+    name: Test unsigned-commit report
+    needs: changes
+    if: needs.changes.outputs.unsigned-commit-report == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Hand-built commit payloads through the --input seam only -- no network. Both OSes because
+      # the classifier splits TSV with BSD/GNU-divergent tools.
+      - name: Verify the unsigned-commit report
+        run: bash .claude/scripts/unsigned-commit-report.test.sh
+
+  # Non-blocking by design (monorepo#3212): this job reports unsigned or unverifiable commits on
+  # the pull request as warnings and a step summary, and is deliberately NOT part of the required
+  # aggregate below. At ~9% incidence a required check would fail one PR in eleven for a condition
+  # the author cannot fix at commit time; enforcement is devantler-tech/.github#142's decision,
+  # which this standing measurement exists to make possible.
+  report-unsigned-commits:
+    name: Report unsigned commits (non-blocking)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Report unsigned commits on this pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: bash .claude/scripts/unsigned-commit-report.sh --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --head-ref "$HEAD_REF"
 
   test-release-exemption-identity-currency:
     name: Test release exemption identity currency
@@ -1649,6 +1699,7 @@ jobs:
       - test-submodule-init
       - test-submodule-pin-currency
       - test-blocked-label-blocker-line
+      - test-unsigned-commit-report
       - test-release-exemption-identity-currency
       - test-prod-kube-context
       - test-pipefail-grep-guard
@@ -1707,6 +1758,7 @@ jobs:
             ${{ needs.test-submodule-init.result }}
             ${{ needs.test-submodule-pin-currency.result }}
             ${{ needs.test-blocked-label-blocker-line.result }}
+            ${{ needs.test-unsigned-commit-report.result }}
             ${{ needs.test-release-exemption-identity-currency.result }}
             ${{ needs.test-prod-kube-context.result }}
             ${{ needs.test-pipefail-grep-guard.result }}
