@@ -165,6 +165,43 @@ run "$r"
 report "control: a real comment after a quoted hash still hides comment text" \
   "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
 
+# Unquoted backslash-newline pairs join a logical command before token matching.
+r="$(mkrepo continued-bare)"; addf "$r" tools/continued.sh '#!/usr/bin/env bash' 'py\' 'thon3 tools/check.py'
+run "$r"
+report "an unquoted continuation cannot split the interpreter name" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-wrapper)"; addf "$r" tools/continued.sh '#!/usr/bin/env bash' '/usr/bin/env py\' 'th\' 'on3 tools/check.py'
+run "$r"
+report "wrapped names join repeated continuations and retain the first physical line" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-line-numbers)"; addf "$r" tools/continued.sh 'echo sa\' 'fe' 'python3 tools/check.py'
+run "$r"
+report "a command after a joined logical line retains its own physical line" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:3: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continuation-controls)"; addf "$r" tools/continued.sh \
+  'py\\' 'thon3 tools/check.py' \
+  '# py\' 'thon3 tools/check.py' \
+  'echo safe # py\' 'thon3 tools/check.py' \
+  'echo "py\' 'thon3"' \
+  "echo 'py\\" "thon3'" \
+  "'py\\" "thon3'" \
+  'echo py\' 'thon3'
+run "$r"
+report "control: escaped slashes, comments, quoted continuations and arguments stay safe" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-comment)"; addf "$r" tools/continued.sh '# a comment ending in a backslash\' 'python3 tools/check.py'
+run "$r"
+report "a backslash in a comment cannot consume the next command" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-even-slashes)"; addf "$r" tools/continued.sh 'echo safe\\' 'python3 tools/check.py'
+run "$r"
+report "an even number of trailing backslashes cannot consume the next command" \
+  "$([[ $rc -eq 1 && "$out" == *'tools/continued.sh:2: Python invocation `python3 tools/check.py`'* ]] && echo yes || echo no)" "rc=$rc: $out"
+r="$(mkrepo continued-eof)"; addf "$r" tools/continued.sh 'echo safe\'
+run "$r"
+report "control: a trailing continuation at EOF terminates scanning" \
+  "$([[ $rc -eq 0 ]] && echo yes || echo no)" "rc=$rc: $out"
+
 # Executable text can contain non-UTF-8 bytes; command syntax is still ASCII.
 r="$(mkrepo invalid-utf8-command)"; addf "$r" tools/bytes.sh "$(printf 'echo "\377"; python3 tools/check.py')"
 LC_ALL=C.UTF-8 run "$r"

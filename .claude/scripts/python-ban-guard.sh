@@ -25,6 +25,7 @@
 #        `bash -c "python3 -m x"` and `FOO=1 python3 x` flag, while `echo "install python3"` and
 #        a YAML `name: Install python deps` do not. Executable paths are matched by basename.
 #        Dockerfile RUN shell/JSON operands are scanned; RUN is not a wrapper in other files.
+#        Unquoted backslash-newline continuations join before matching command names.
 #        Two known limits of that heuristic, accepted for a ~150-line bash guard: a flag's
 #        ARGUMENT is read as the command (`sudo -u nobody pip3 …` reads `nobody`), and quotes
 #        are stripped before segmenting, so a quoted alternation such as
@@ -86,10 +87,12 @@ scan_invocations() {
       return token
     }
     # Only an unquoted, unescaped hash at a token boundary starts a comment.
+    # Expose an unquoted trailing escape so the caller can join physical lines.
     function without_comment(text,    i, c, quote, escaped, boundary) {
       quote = ""
       escaped = 0
       boundary = 1
+      continues = 0
       for (i = 1; i <= length(text); i++) {
         c = substr(text, i, 1)
         if (escaped) { escaped = 0; boundary = 0; continue }
@@ -102,6 +105,7 @@ scan_invocations() {
         if (c == "#" && boundary) return substr(text, 1, i - 1)
         boundary = c ~ /[[:space:]]/
       }
+      continues = escaped && quote == ""
       return text
     }
     # Index of the first token from `from` that is a command: not empty, not a -flag, not a
@@ -121,7 +125,19 @@ scan_invocations() {
       wrappers = " exec xargs env sudo time command nohup if then elif else do while until ! "
     }
     {
-      line = without_comment($0)
+      first_line = NR
+      logical_line = $0
+      line = without_comment(logical_line)
+      while (continues) {
+        read_status = (getline next_line)
+        if (read_status < 0) {
+          printf "python-ban-guard: %s:%d: cannot read continued command\n", path, first_line > "/dev/stderr"
+          exit 2
+        }
+        if (read_status == 0) break
+        logical_line = substr(logical_line, 1, length(logical_line) - 1) next_line
+        line = without_comment(logical_line)
+      }
       # Dockerfile RUN owns its command operand. JSON punctuation separates argv;
       # a Python-looking argument of echo remains data, not a command.
       if (executable_name(path) ~ /^(Dockerfile([.].+)?|.+[.]Dockerfile)$/ &&
@@ -156,7 +172,7 @@ scan_invocations() {
           # Name the interpreter and its first argument, so the reader sees the form at a glance.
           hit = tok[i]
           if (i < n && tok[i + 1] != "") hit = hit " " tok[i + 1]
-          printf "%s:%d: Python invocation `%s`\n", path, NR, hit
+          printf "%s:%d: Python invocation `%s`\n", path, first_line, hit
         }
       }
     }' "$2"
