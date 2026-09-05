@@ -257,6 +257,13 @@ line_conforms() { # <logical line>
   [ -n "$date_str" ] || return 1
   is_real_date "$date_str" || return 1
 
+  # The result is what follows `: ` up to any ask suffix, and it must say something: `.+` in the
+  # structure regex would otherwise accept the ask suffix itself (or bare whitespace) as the result,
+  # so an authority record with a fresh ask and NO live verification evidence read as conforming.
+  local result="${logical#* | last-verified $date_str: }"
+  result="${result%%| asked *}"
+  [[ $result =~ [^[:space:]] ]] || return 1
+
   ident="${logical%% | last-verified *}"
   stripped="$(printf '%s\n' "$ident" | sed -E "s#$URL_TOKEN_RE##g")"
   [[ $stripped =~ $IDENTIFIER_RE ]]

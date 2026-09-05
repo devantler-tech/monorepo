@@ -692,6 +692,26 @@ JSON
 OUT="$("$CHECK" --input "$TMP/ask-trailing-text.json" --today 2026-09-05 2>&1)"; RC=$?
 if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^NO-ASK +a#43'; then ok "CONTROL: trailing text after the ask date is still NO-ASK"; else bad "CONTROL: trailing text after the ask date is still NO-ASK" "rc=$RC out=${OUT:0:200}"; fi
 
+# ------------------------------------------------------------------ 42. an EMPTY verification result is MALFORMED, ask or no ask
+# `last-verified <date>: | asked push <date>` let the structure regex read the ask suffix as the result,
+# so an authority record with a fresh ask and NO live verification evidence conformed.
+cat >"$TMP/empty-result-ask.json" <<'JSON'
+[{"repo":"a","number":44,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: | asked push 2026-09-01"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/empty-result-ask.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^MALFORMED +a#44'; then ok "an authority record with an ask but no verification result is MALFORMED"; else bad "an authority record with an ask but no verification result is MALFORMED" "rc=$RC out=${OUT:0:200}"; fi
+cat >"$TMP/empty-result-upstream.json" <<'JSON'
+[{"repo":"a","number":45,"body":"**Blocker:** o/r#1 | upstream | last-verified 2026-08-01:   "}]
+JSON
+OUT="$("$CHECK" --input "$TMP/empty-result-upstream.json" 2>&1)"; RC=$?
+if [ "$RC" = 1 ] && printf '%s\n' "$OUT" | grep -qE '^MALFORMED +a#45'; then ok "an upstream record whose result is only whitespace is MALFORMED"; else bad "an upstream record whose result is only whitespace is MALFORMED" "rc=$RC out=${OUT:0:200}"; fi
+# CONTROL: a one-word result with the same ask suffix still conforms
+cat >"$TMP/short-result-ask.json" <<'JSON'
+[{"repo":"a","number":46,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: pending | asked push 2026-09-01"}]
+JSON
+OUT="$("$CHECK" --input "$TMP/short-result-ask.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -qE '^CONFORMS +a#46'; then ok "CONTROL: a real result with the same ask suffix conforms"; else bad "CONTROL: a real result with the same ask suffix conforms" "rc=$RC out=${OUT:0:200}"; fi
+
 # ------------------------------------------------------------------ 38. --help documents the class and the ask record
 # A caller following the built-in help must not be led to write a classless authority record, which
 # the legacy fallback reads as upstream and never asks for an ask.
