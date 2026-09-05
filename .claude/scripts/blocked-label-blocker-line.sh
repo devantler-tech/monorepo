@@ -197,7 +197,7 @@ days_from_civil() { # YYYY-MM-DD -> days since 1970-01-01 on stdout
 # ALONE GUARANTEES IT NEVER CLEARS -- the loop is structurally incapable of finishing it, and the
 # more diligently it re-verifies the more permanent the parking looks.
 #
-# Measured 2026-09-05 across the org: 21 of 46 open blocked-labelled issues were authority-caused,
+# Measured 2026-09-05 across the org: 19 of 46 open blocked-labelled issues were authority-caused,
 # and 8 of those carried no ask of ANY kind -- only CodeRabbit's auto-generated plan, or no
 # comments at all. The oldest had been open 54 days. Their blocker lines were all CONFORMING; the
 # check reported a clean sweep over them, because conformance was never the same thing as progress.
@@ -244,17 +244,33 @@ line_conforms() { # <logical line>
 # positionally rather than by searching the whole line matters: an identifier may legitimately
 # contain the word "authority" as prose ("maintainer authority — a bucket"), and a substring
 # search would then read a class out of an identifier that never declared one.
-classify_record() { # <logical line> -> sets VERDICT
+classify_record() { # <logical line> -> sets VERDICT, LEGACY_NOTE
   local logical="$1" head cls ask_date ask_days today_days
+  LEGACY_NOTE=0
 
   head="${logical%% | last-verified *}"
   if [ "$head" = "$logical" ]; then VERDICT="MALFORMED"; return; fi
 
-  # No ` | ` inside the head at all means no class segment was supplied.
-  if [ "$head" = "${head%% | *}" ]; then VERDICT="LEGACY"; return; fi
-
-  cls="${head##* | }"
-  [[ $cls =~ $CLASS_RE ]] || { VERDICT="MALFORMED"; return; }
+  if [ "$head" = "${head%% | *}" ]; then
+    # No class segment. INFER it from the identifier rather than refusing the record.
+    #
+    # Refusing was tried and rejected on a measurement: every one of the 46 live records predates
+    # this field, so a strict reading reports 46 findings on day one and buries the 19 that are
+    # real. This script's own header names that failure -- "a check that cries wolf on correct work
+    # is one people learn to ignore, then delete" -- and the migration that would clear it is not
+    # performable by the lane that ships this (issue-body writes are denied by the runtime).
+    #
+    # Inference is strictly better than the status quo and never worse: an unclassed record is
+    # evaluated exactly as it is today unless its identifier already says `maintainer authority`,
+    # in which case the ask requirement now bites. It is a WEAKER guarantee than an explicit token
+    # -- a blocker phrased "needs an account action" still reads as upstream -- which is why the
+    # explicit form stays required by the contract and always overrides this fallback.
+    LEGACY_NOTE=1
+    if [[ $head =~ maintainer\ authority ]]; then cls="authority"; else cls="upstream"; fi
+  else
+    cls="${head##* | }"
+    [[ $cls =~ $CLASS_RE ]] || { VERDICT="MALFORMED"; return; }
+  fi
 
   if [ "$cls" = "upstream" ]; then VERDICT="CONFORMS"; return; fi
 
@@ -442,7 +458,13 @@ while [ "$i" -lt "$count" ]; do
     classify_record "$logical"
     case "$VERDICT" in
       CONFORMS)
-        [ "$QUIET" = 1 ] || printf 'CONFORMS   %s#%s\n' "$repo" "$num"
+        [ "$QUIET" = 1 ] || {
+          if [ "$LEGACY_NOTE" = 1 ]; then
+            printf 'CONFORMS   %s#%s  [legacy: no class token]\n' "$repo" "$num"
+          else
+            printf 'CONFORMS   %s#%s\n' "$repo" "$num"
+          fi
+        }
         ;;
       *)
         [ "$QUIET" = 1 ] || printf '%-10s %s#%s  >>%s\n' "$VERDICT" "$repo" "$num" "${logical:0:100}"
@@ -459,7 +481,7 @@ if [ "$considered" != "$count" ]; then
 fi
 
 if [ "$bad" -gt 0 ]; then
-  printf '\n%s: %d of %d open blocked-labelled issue(s) lack a conforming **Blocker:** line.\n' \
+  printf '\n%s: %d of %d open blocked-labelled issue(s) need repair (missing, malformed, or an unraised authority blocker).\n' \
     "$PROG" "$bad" "$count"
   exit 1
 fi

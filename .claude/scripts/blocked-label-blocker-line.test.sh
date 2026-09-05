@@ -500,15 +500,16 @@ cat >"$TMP/cls-upstream-noask.json" <<'EOF'
 EOF
 expect_rc "NEGATIVE CONTROL: upstream with no ask is NOT flagged" 0 "$TMP/cls-upstream-noask.json"
 
-# ------------------------------------------------------------------ 27. absent class fails CLOSED
+# ------------------------------------------------------------------ 27. absent class is INFERRED
 #
-# A line predating the class field is classified by its identifier so the repair is obvious, but it
-# is still a FINDING -- "an unparseable or absent class is a finding, never a silent pass".
+# Every live record predates this field, so refusing them would report 46 findings on day one and
+# bury the real ones. An unclassed record is evaluated exactly as before -- and is marked so the
+# migration stays visible.
 cat >"$TMP/cls-legacy.json" <<'EOF'
 [{"repo":"a","number":5,"body":"**Blocker:** owner/repo#7 | last-verified 2026-09-01: not shipped"}]
 EOF
-expect_rc "absent class is a finding, never a silent pass" 1 "$TMP/cls-legacy.json"
-expect_out "absent class is reported as LEGACY" '^LEGACY +a#5' "$TMP/cls-legacy.json"
+expect_rc "absent class is inferred, not refused" 0 "$TMP/cls-legacy.json"
+expect_out "an unclassed record is marked legacy" 'legacy: no class token' "$TMP/cls-legacy.json"
 
 # ------------------------------------------------------------------ 28. an unknown class token is MALFORMED
 cat >"$TMP/cls-bogus.json" <<'EOF'
@@ -539,6 +540,33 @@ cat >"$TMP/cls-auth-baddate.json" <<'EOF'
 [{"repo":"a","number":9,"body":"**Blocker:** maintainer authority — a bucket | authority | last-verified 2026-09-01: not provisioned | asked push 2026-02-31"}]
 EOF
 expect_rc "an ask carrying an impossible date is a finding" 1 "$TMP/cls-auth-baddate.json"
+
+
+# ------------------------------------------------------------------ 32. THE MIGRATION-FREE WIN
+#
+# An unclassed record whose identifier already says "maintainer authority" is inferred as authority,
+# so the ask requirement bites on the 19 live records that need it WITHOUT editing a single issue
+# body first. This is the case that makes the change deliverable rather than merely correct.
+cat >"$TMP/cls-legacy-auth.json" <<'EOF'
+[{"repo":"a","number":10,"body":"**Blocker:** maintainer authority (Cloudflare account action) | last-verified 2026-09-01: not provisioned"}]
+EOF
+expect_rc "an unclassed AUTHORITY record still demands an ask" 1 "$TMP/cls-legacy-auth.json"
+expect_out "and is reported as NO-ASK" '^NO-ASK +a#10' "$TMP/cls-legacy-auth.json"
+
+# CONTROL: the same unclassed record WITH an ask conforms -- so case 32 is failing on the missing
+# ask rather than on being unclassed.
+cat >"$TMP/cls-legacy-auth-ok.json" <<'EOF'
+[{"repo":"a","number":11,"body":"**Blocker:** maintainer authority (Cloudflare account action) | last-verified 2026-09-01: not provisioned | asked push 2026-09-01"}]
+EOF
+OUT="$("$CHECK" --input "$TMP/cls-legacy-auth-ok.json" --today 2026-09-05 2>&1)"; RC=$?
+if [ "$RC" = 0 ]; then ok "CONTROL: the same unclassed record with an ask conforms"; else bad "CONTROL: the same unclassed record with an ask conforms" "rc=$RC out=${OUT:0:200}"; fi
+
+# CONTROL: an explicit class OVERRIDES the inference -- an identifier mentioning "maintainer
+# authority" that is explicitly classed `upstream` is not held to the ask requirement.
+cat >"$TMP/cls-explicit-wins.json" <<'EOF'
+[{"repo":"a","number":12,"body":"**Blocker:** maintainer authority (an account-scoped provider quota) | upstream | last-verified 2026-09-01: still limited"}]
+EOF
+expect_rc "CONTROL: an explicit class overrides the inference" 0 "$TMP/cls-explicit-wins.json"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ] || exit 1

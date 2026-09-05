@@ -1197,7 +1197,7 @@ governs the issue work that follows.) Two rules enforce that:
    account action, a provider credential, a permission only the maintainer can grant — clears *only
    when a person is asked*, so re-verification alone **guarantees it never clears**: the loop is
    structurally incapable of finishing it, and the more diligently it re-verifies, the more
-   permanent the parking looks. Measured 2026-09-05 org-wide: **21 of 46** open blocked-labelled
+   permanent the parking looks. Measured 2026-09-05 org-wide: **19 of 46** open blocked-labelled
    issues were authority-caused, and **8 of those carried no ask of any kind** — only CodeRabbit's
    auto-generated plan, or no comments at all. The oldest had been open **54 days**. Every one of
    their blocker lines was *conforming*; the check reported a clean sweep over them, because

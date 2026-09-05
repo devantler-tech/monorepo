@@ -177,7 +177,7 @@ assert_prose 're-check it on every run before using (b) to skip' \
   "${constitution_flat}" "contract lets a scheduled date replace per-run blocker verification"
 # Markdown backticks are literal prose, not command substitution.
 # shellcheck disable=SC2016
-assert_prose '`**Blocker:** <owner/repo#N-or-release-id> | last-verified <YYYY-MM-DD>: <result>`' \
+assert_prose '`**Blocker:** <identifier> | <cause-class> | last-verified <YYYY-MM-DD>: <result>`' \
   "${constitution_flat}" "structured blocker line does not limit issue data to identity and status"
 assert_prose 'opencost/opencost#3710' \
   "${constitution_flat}" "blocker example is not a fully qualified cross-repository reference"
