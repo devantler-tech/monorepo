@@ -2828,3 +2828,20 @@ for _clause in "${_shape_clauses[@]}"; do
 done
 unset _clause _shape_clauses
 echo "portfolio surveyor contract: round-10 admitted-call-shape assertions passed"
+
+# ------------------------------------------------------------------ round 11: a Portfolio-map product is never an infra exclusion
+# `aws` became a product row in the Portfolio map (#3216); the overlay's strategy-review exclusion list
+# still named it as org/infra, so an AWS repo with no `roadmap` issue would never surface as a
+# strategy-review candidate. Every repo the exclusion names must be ABSENT from the map's product rows.
+_exclusion_line="$(grep -F 'repos outside the map (' "${surveyor}" | head -1)"
+[ -n "${_exclusion_line}" ] || fail "the overlay lost its strategy-review exclusion sentence (round 11)"
+for _repo in $(printf '%s\n' "${_exclusion_line}" | grep -o '`[^`]*`' | tr -d '`'); do
+  if grep -Eq "^\| [^|]+ \| \`devantler-tech/${_repo}\` \|" "${constitution}"; then
+    fail "the overlay excludes \`${_repo}\` from strategy reviews, but the Portfolio map lists it as a product (round 11)"
+  fi
+done
+# CONTROL: the exclusion still names at least one genuine non-product repo, so the loop is not vacuous
+printf '%s\n' "${_exclusion_line}" | grep -Fq '`fleet-gitops`' ||
+  fail "the strategy-review exclusion no longer names fleet-gitops — the round-11 check would be vacuous"
+unset _exclusion_line _repo
+echo "portfolio surveyor contract: round-11 product-vs-infra exclusion assertions passed"
